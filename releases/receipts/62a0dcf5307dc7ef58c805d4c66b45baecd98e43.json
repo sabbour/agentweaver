@@ -1,0 +1,730 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "62a0dcf5307dc7ef58c805d4c66b45baecd98e43",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "d0c5b4de005b27fb915441d3a04297ae3996eb5cb9eb754eae3f766588fdb516",
+  "appliedAt": "2026-10-12T07:42:29.870Z",
+  "components": [
+    {
+      "id": "Agentweaver.Abstractions",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.AgentHost",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.AgentRuntime",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.Environment",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.EventsAndSessions",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.FoundationProbe",
+      "fromVersion": "0.0.0",
+      "toVersion": "0.0.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Gateway",
+      "fromVersion": "0.1.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.Identity",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.Identity.Broker",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.Knowledge",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.Mcp",
+      "fromVersion": "0.1.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.ObjectStore.AzureBlob",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.Orchestrator",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.Orchestrator.Core",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.Persistence.Postgres",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.Projects.Config",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.Providers",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.Providers.Sandbox.AgentSandbox",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.Providers.Storage.AzureFiles",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.Secrets.AzureKeyVault",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.SourceControl",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.Telemetry",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.Telemetry.AzureMonitor",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    },
+    {
+      "id": "Agentweaver.Web",
+      "fromVersion": "0.0.0",
+      "toVersion": "1.0.0",
+      "bump": "major"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/accepted-runtime-skill-reader.md",
+      "archivedPath": ".changeset/archive/accepted-runtime-skill-reader.md",
+      "sha256": "2dc53a3c8dec840951b4d8f90e6e7cb10e590f611f12617da227cfb01558e710"
+    },
+    {
+      "sourcePath": ".changeset/agent-application-manifest-validation-1878.md",
+      "archivedPath": ".changeset/archive/agent-application-manifest-validation-1878.md",
+      "sha256": "016aa23bb9cef5b599b594bb334d875b46bfeae5961e763edcfb5fe0d0393101"
+    },
+    {
+      "sourcePath": ".changeset/azure-byok-cost-source-1924.md",
+      "archivedPath": ".changeset/archive/azure-byok-cost-source-1924.md",
+      "sha256": "ca0b2ba7ea20d758ef2f8861458132213e3890d171957527f7f45063927f8683"
+    },
+    {
+      "sourcePath": ".changeset/bounded-workplan-fixed-runtime-readiness.md",
+      "archivedPath": ".changeset/archive/bounded-workplan-fixed-runtime-readiness.md",
+      "sha256": "d7414a20cc56bb2d9f7b69d930ea56aa92f1faab563b8419e9c143a1c43c246c"
+    },
+    {
+      "sourcePath": ".changeset/buildtest-capture-document-foundation-1855.md",
+      "archivedPath": ".changeset/archive/buildtest-capture-document-foundation-1855.md",
+      "sha256": "4305519c6b02d3529c477492f0eed3df8e98b34b022b1e980f2f7590f0b2c3dd"
+    },
+    {
+      "sourcePath": ".changeset/buildtest-collector-native-reads.md",
+      "archivedPath": ".changeset/archive/buildtest-collector-native-reads.md",
+      "sha256": "29aee902b133dfd7a83f9a90a7a93286416f04472e74df7308220c2cd18089fd"
+    },
+    {
+      "sourcePath": ".changeset/buildtest-durable-replay.md",
+      "archivedPath": ".changeset/archive/buildtest-durable-replay.md",
+      "sha256": "46bde633de596730b6da96fde9747ec3327879888209ccd6bfe79d8a41da71b6"
+    },
+    {
+      "sourcePath": ".changeset/buildtest-empty-version-two-collector.md",
+      "archivedPath": ".changeset/archive/buildtest-empty-version-two-collector.md",
+      "sha256": "f919cfab1b409f7e287223601573b6260bfd0518e96ac4394bf443761f11d59f"
+    },
+    {
+      "sourcePath": ".changeset/buildtest-native-full-output-admission.md",
+      "archivedPath": ".changeset/archive/buildtest-native-full-output-admission.md",
+      "sha256": "d3ef911b99440d5948d39bd88db9d151fffa1070bcf515a5af80d3eee4063475"
+    },
+    {
+      "sourcePath": ".changeset/buildtest-owner-seed-delivery.md",
+      "archivedPath": ".changeset/archive/buildtest-owner-seed-delivery.md",
+      "sha256": "e02ebb1e50da0c179e18ddff5078938d0660655977907d95d30259d23c148165"
+    },
+    {
+      "sourcePath": ".changeset/buildtest-pinned-sandbox-context.md",
+      "archivedPath": ".changeset/archive/buildtest-pinned-sandbox-context.md",
+      "sha256": "e8d2fb6cbbffa621c3b542733c727b24d7cbb93b2a2a949fd312affac45c32f4"
+    },
+    {
+      "sourcePath": ".changeset/buildtest-source-owner-input.md",
+      "archivedPath": ".changeset/archive/buildtest-source-owner-input.md",
+      "sha256": "e27743a90ac5de8a0eecc8c58f6e958717833e7486e643b526469418e5928943"
+    },
+    {
+      "sourcePath": ".changeset/canvas-contracts-1878.md",
+      "archivedPath": ".changeset/archive/canvas-contracts-1878.md",
+      "sha256": "fa9666bf216f94b91bde84ec2978def14bc09fbd845d9078feb9237ed6c949f4"
+    },
+    {
+      "sourcePath": ".changeset/core-backlog-reviewed-tool-migration-wiring.md",
+      "archivedPath": ".changeset/archive/core-backlog-reviewed-tool-migration-wiring.md",
+      "sha256": "c6de59da6e4d1493c362ce8f4dab8dd47e016d83ae3c51007d30ae7c86aad578"
+    },
+    {
+      "sourcePath": ".changeset/core-suspend-resume.md",
+      "archivedPath": ".changeset/archive/core-suspend-resume.md",
+      "sha256": "6c05c958f4c4441f7ddc25d5808f5e7ffaf6f390e1dbf45ab046bd6ff4dffd79"
+    },
+    {
+      "sourcePath": ".changeset/cosmos-memory-legacy-run-pin.md",
+      "archivedPath": ".changeset/archive/cosmos-memory-legacy-run-pin.md",
+      "sha256": "5a4e4ab12856b9b81e867d97e83f11cd1e2dac7bab382778748585467bb3ad64"
+    },
+    {
+      "sourcePath": ".changeset/cosmos-memory-provider.md",
+      "archivedPath": ".changeset/archive/cosmos-memory-provider.md",
+      "sha256": "d5782ea2a5c9b4f1fb9de4380f032e9858ceb5b6fb6cd09d6b411765dfdfd4e6"
+    },
+    {
+      "sourcePath": ".changeset/decision-lifecycle-1911.md",
+      "archivedPath": ".changeset/archive/decision-lifecycle-1911.md",
+      "sha256": "69fae37d097a9a670820535f90a4143b08fdfae1ddf07630cfb585fb1a67182f"
+    },
+    {
+      "sourcePath": ".changeset/default-workflow-id-1848.md",
+      "archivedPath": ".changeset/archive/default-workflow-id-1848.md",
+      "sha256": "378ea9eabfc4dd281e169c083f3e4832c82948bf4a44eae3217b537e0c063de7"
+    },
+    {
+      "sourcePath": ".changeset/events-selected-runtime-profile.md",
+      "archivedPath": ".changeset/archive/events-selected-runtime-profile.md",
+      "sha256": "41e2504d8a1d6719f8868c7b17bccb447c9eac897ce5d389bbf39d90568ed2e7"
+    },
+    {
+      "sourcePath": ".changeset/first-party-mcp-1858.md",
+      "archivedPath": ".changeset/archive/first-party-mcp-1858.md",
+      "sha256": "3e867ccabaeb1b3cf72c62b6406f17505366ac102dea8857f448234e4db9d184"
+    },
+    {
+      "sourcePath": ".changeset/foundation-probe-private-logs-egress.md",
+      "archivedPath": ".changeset/archive/foundation-probe-private-logs-egress.md",
+      "sha256": "44fbfc45f9db851c9949bdeaf4da67f3e8747b94cee1b3e47841329d1759134b"
+    },
+    {
+      "sourcePath": ".changeset/gateway-bff-1857.md",
+      "archivedPath": ".changeset/archive/gateway-bff-1857.md",
+      "sha256": "3ee20ddb45c52d86c59471d35a0c310340eca659cae437a6ce23b27ce0c362db"
+    },
+    {
+      "sourcePath": ".changeset/gateway-knowledge-idempotency-key.md",
+      "archivedPath": ".changeset/archive/gateway-knowledge-idempotency-key.md",
+      "sha256": "1593b63d0158d554a1180423d458f9869266267c9d42b0e72290d02479440fbb"
+    },
+    {
+      "sourcePath": ".changeset/github-repo-app-1907.md",
+      "archivedPath": ".changeset/archive/github-repo-app-1907.md",
+      "sha256": "9d70096d86a6b6f5ea964e49646ed116ae002786d396cf8a252b24a5c273d389"
+    },
+    {
+      "sourcePath": ".changeset/github-repo-app-web-origin.md",
+      "archivedPath": ".changeset/archive/github-repo-app-web-origin.md",
+      "sha256": "ff65be5fa85030fdf06541a1e39c8d752bb93acc26fb75082e122e9521bd0202"
+    },
+    {
+      "sourcePath": ".changeset/identity-broker-initial-bootstrap.md",
+      "archivedPath": ".changeset/archive/identity-broker-initial-bootstrap.md",
+      "sha256": "cd62b427617e7407a4820e0ba6e658e88c9e83aabe39c0a43a693bdae033611d"
+    },
+    {
+      "sourcePath": ".changeset/knowledge-memory.md",
+      "archivedPath": ".changeset/archive/knowledge-memory.md",
+      "sha256": "727780f30995dedae3e6c8e1f3952fa4a8f469004ff606c6ae4a8e513ff0e829"
+    },
+    {
+      "sourcePath": ".changeset/maf-runtime-registration-discovery-1855.md",
+      "archivedPath": ".changeset/archive/maf-runtime-registration-discovery-1855.md",
+      "sha256": "3da3d98092f8a937cef188c84260f9e313507cc51941d064554e51d576276a5a"
+    },
+    {
+      "sourcePath": ".changeset/marketplace-selected-skill-content.md",
+      "archivedPath": ".changeset/archive/marketplace-selected-skill-content.md",
+      "sha256": "406fecd22b7ed233e03879acbe5614972cc9e48d67756882934b1a96351afb6a"
+    },
+    {
+      "sourcePath": ".changeset/marketplace-selected-skill-gateway.md",
+      "archivedPath": ".changeset/archive/marketplace-selected-skill-gateway.md",
+      "sha256": "872735f8e1b0b845c03e23ebb03cbec250a7014b30105414cb97488f97412120"
+    },
+    {
+      "sourcePath": ".changeset/native-observed-accounting-association.md",
+      "archivedPath": ".changeset/archive/native-observed-accounting-association.md",
+      "sha256": "8ba4aa8b3182f695460b34d163e860f655325e0c1714dcaff848c439328eed7f"
+    },
+    {
+      "sourcePath": ".changeset/native-sessions-journal-1842.md",
+      "archivedPath": ".changeset/archive/native-sessions-journal-1842.md",
+      "sha256": "14869ed36315af47572a9d1ddb98934fcea59dff2d3229ced6c351b5eef9a3a2"
+    },
+    {
+      "sourcePath": ".changeset/native-suspend-evidence-1930.md",
+      "archivedPath": ".changeset/archive/native-suspend-evidence-1930.md",
+      "sha256": "0751e6c32ae3c012b65449f4e57195838f7750faf21728010636715cbe0f83f6"
+    },
+    {
+      "sourcePath": ".changeset/optional-runtime-suspend-startup.md",
+      "archivedPath": ".changeset/archive/optional-runtime-suspend-startup.md",
+      "sha256": "e787fd067bb9eb2d8cd9d0a1c6067f86e4e0bb3c373596c17880d1e1b5e36b31"
+    },
+    {
+      "sourcePath": ".changeset/ordered-guardrails-content-1928.md",
+      "archivedPath": ".changeset/archive/ordered-guardrails-content-1928.md",
+      "sha256": "fc71a888c25e6dfe495461387f638463cc075530bcdfa7575ad86ff7a24b768c"
+    },
+    {
+      "sourcePath": ".changeset/p0-native-bootstrap-readback.md",
+      "archivedPath": ".changeset/archive/p0-native-bootstrap-readback.md",
+      "sha256": "85adb598ed5fc70a38ddc39c2a3f2394db08301dea7069fbb62446047127dbd8"
+    },
+    {
+      "sourcePath": ".changeset/p0-system-pool-autoscaling.md",
+      "archivedPath": ".changeset/archive/p0-system-pool-autoscaling.md",
+      "sha256": "387c99c68e65ebbebea429ffd13ef1ee5f4525e53a53e66cab540b8096032066"
+    },
+    {
+      "sourcePath": ".changeset/p1-agenthost-release-archives.md",
+      "archivedPath": ".changeset/archive/p1-agenthost-release-archives.md",
+      "sha256": "a57dd5f4a3bee8134adee11cca4e6bed2606c101e8eafbd47c144c321834cd33"
+    },
+    {
+      "sourcePath": ".changeset/p1-buildtest-checkpoint-native-receipts-1855.md",
+      "archivedPath": ".changeset/archive/p1-buildtest-checkpoint-native-receipts-1855.md",
+      "sha256": "54c1ce366759fa1cfa8de4901ebdfbd74d143dd9398406607d0f8b1dfdd684a7"
+    },
+    {
+      "sourcePath": ".changeset/p1-egress-contracts-1853.md",
+      "archivedPath": ".changeset/archive/p1-egress-contracts-1853.md",
+      "sha256": "6454491cc17c6b928f9b3467803e3210d0639ee486687525b9415d5fad93a31e"
+    },
+    {
+      "sourcePath": ".changeset/p1-egress-environment-1853.md",
+      "archivedPath": ".changeset/archive/p1-egress-environment-1853.md",
+      "sha256": "a1d90845aa157f6450710784ec4ddb09cd2363da423dfe92355668f325c957d2"
+    },
+    {
+      "sourcePath": ".changeset/p1-egress-projects-context-1853.md",
+      "archivedPath": ".changeset/archive/p1-egress-projects-context-1853.md",
+      "sha256": "57c7111b24f10e985c2378d0bbb117ef543287ba9cbb0a709a3a5f2986723bd3"
+    },
+    {
+      "sourcePath": ".changeset/p1-immutable-row-lock-records.md",
+      "archivedPath": ".changeset/archive/p1-immutable-row-lock-records.md",
+      "sha256": "ca34feff61441f7b48940b0bbcee670c37bf38c4ea7b8ef61c7138085d78fad5"
+    },
+    {
+      "sourcePath": ".changeset/p1-platform-release-composition.md",
+      "archivedPath": ".changeset/archive/p1-platform-release-composition.md",
+      "sha256": "a89cbfd63a0e085b7b2c9569cca37c6b94ae24e3c622c31b70e9377f174c2b1d"
+    },
+    {
+      "sourcePath": ".changeset/p1-product-1-0-0-preparation.md",
+      "archivedPath": ".changeset/archive/p1-product-1-0-0-preparation.md",
+      "sha256": "f5cf8c5461a22e785f11733826b04a27b36864167ce8607f4f4c7a7171089bec"
+    },
+    {
+      "sourcePath": ".changeset/p1-sandbox-leases-1852.md",
+      "archivedPath": ".changeset/archive/p1-sandbox-leases-1852.md",
+      "sha256": "05f2a84e6039fd7c67f15d8a26e13d9ee40f13607c9a9e7c51099fd86fe9b87e"
+    },
+    {
+      "sourcePath": ".changeset/p1-source-control-1854.md",
+      "archivedPath": ".changeset/archive/p1-source-control-1854.md",
+      "sha256": "e562bc3a65c5b3c46334943ff9a41c2afb38828424a70d1499ee40d9b822997f"
+    },
+    {
+      "sourcePath": ".changeset/p1-workflow-catalogs-1843.md",
+      "archivedPath": ".changeset/archive/p1-workflow-catalogs-1843.md",
+      "sha256": "b5f0c17a74870dcfab7453152da1bc94b5224a66e9ba9808a7508d5fc762a08d"
+    },
+    {
+      "sourcePath": ".changeset/p2-decision-lifecycle-parity.md",
+      "archivedPath": ".changeset/archive/p2-decision-lifecycle-parity.md",
+      "sha256": "353969112aa1ded35edd4d158d596b95df06de866afa1ab95bd7bff0cb3a79b9"
+    },
+    {
+      "sourcePath": ".changeset/p2-marketplace-source-import.md",
+      "archivedPath": ".changeset/archive/p2-marketplace-source-import.md",
+      "sha256": "e34084ccce2530f24f79b14b33727a2494262c6725b6ee1103dfc0f982b418af"
+    },
+    {
+      "sourcePath": ".changeset/p2-redis-memory-provider.md",
+      "archivedPath": ".changeset/archive/p2-redis-memory-provider.md",
+      "sha256": "78a47c046215ea53dfbfa5288797ead7bf760e327d89a41e6bef4b127bab08e4"
+    },
+    {
+      "sourcePath": ".changeset/p2-skill-marketplace-1916.md",
+      "archivedPath": ".changeset/archive/p2-skill-marketplace-1916.md",
+      "sha256": "1f1b1a710e1f43dcd675482c87c54e48cef10e9c17764fa6ebcf1dc08cefaffc"
+    },
+    {
+      "sourcePath": ".changeset/p2-skills-marketplace-web.md",
+      "archivedPath": ".changeset/archive/p2-skills-marketplace-web.md",
+      "sha256": "1f3fc69b149f84b4ddd93c7ae22164cdc443ee628ef67d93300d7b9df8fbc0b4"
+    },
+    {
+      "sourcePath": ".changeset/p2-web-skill-inventory.md",
+      "archivedPath": ".changeset/archive/p2-web-skill-inventory.md",
+      "sha256": "0fa906f482601fc177d0daa1c7c0e061ad550fdb918d3dbb933f26f419dced18"
+    },
+    {
+      "sourcePath": ".changeset/p2-workflow-initiation-core-1914.md",
+      "archivedPath": ".changeset/archive/p2-workflow-initiation-core-1914.md",
+      "sha256": "9a656cd4b0f5246124e442f0186295dec9999f70a28140a45c9a4d3a3346657a"
+    },
+    {
+      "sourcePath": ".changeset/pinned-runtime-skills-1912.md",
+      "archivedPath": ".changeset/archive/pinned-runtime-skills-1912.md",
+      "sha256": "c2ee6ec07b373b9a026383863f92d15ddea1890c3323b88f6fe0427a414fb6e8"
+    },
+    {
+      "sourcePath": ".changeset/policy-evaluation-evidence-1846.md",
+      "archivedPath": ".changeset/archive/policy-evaluation-evidence-1846.md",
+      "sha256": "a7a200061948e29a732936774f549da42535b44c740ba1e9722ab17787eb59fe"
+    },
+    {
+      "sourcePath": ".changeset/populated-buildtest-binary-seed-foundation.md",
+      "archivedPath": ".changeset/archive/populated-buildtest-binary-seed-foundation.md",
+      "sha256": "1e1751d3d07161ea32db4e24b510a9dcbc1eb8d4729d646b9f655dfeeeb8fd77"
+    },
+    {
+      "sourcePath": ".changeset/private-reviewed-tool-result-tls.md",
+      "archivedPath": ".changeset/archive/private-reviewed-tool-result-tls.md",
+      "sha256": "c52597f806416257c76919a7853015a0bfef8be9c57676efca6981ffe93fe51b"
+    },
+    {
+      "sourcePath": ".changeset/produced-run-output-read.md",
+      "archivedPath": ".changeset/archive/produced-run-output-read.md",
+      "sha256": "bd3819466dc89d171480a1f0b191539284734d1173bd7ddb8e397a2c6a12f96b"
+    },
+    {
+      "sourcePath": ".changeset/project-skill-inventory-1912.md",
+      "archivedPath": ".changeset/archive/project-skill-inventory-1912.md",
+      "sha256": "eac96c58624846280ac3452b3f6d42c11a452f7d93eb2bdadcbf4120b819d73b"
+    },
+    {
+      "sourcePath": ".changeset/project-skill-inventory-gateway.md",
+      "archivedPath": ".changeset/archive/project-skill-inventory-gateway.md",
+      "sha256": "4370c5da17c5811d2e5e1a82e0b4a2a5064f63cf7f5749f065f891a3a86dc128"
+    },
+    {
+      "sourcePath": ".changeset/projects-config-1844.md",
+      "archivedPath": ".changeset/archive/projects-config-1844.md",
+      "sha256": "6d5f37940746bd2eba2a18dbe230b560299e6f0ad7216a59f683820b83bd1509"
+    },
+    {
+      "sourcePath": ".changeset/projects-config-run-bound-read-1857.md",
+      "archivedPath": ".changeset/archive/projects-config-run-bound-read-1857.md",
+      "sha256": "57641e8c3d80e6e3946758de368a35b28890a51c3f44607a65fc0458ac3f4a8d"
+    },
+    {
+      "sourcePath": ".changeset/projects-config-runtime-profile.md",
+      "archivedPath": ".changeset/archive/projects-config-runtime-profile.md",
+      "sha256": "54c90e8a8803ea8a4f22363d06be2e955fa2182042ffec646574ce7d760d3a45"
+    },
+    {
+      "sourcePath": ".changeset/protected-credential-version-writer.md",
+      "archivedPath": ".changeset/archive/protected-credential-version-writer.md",
+      "sha256": "a3fc83be05d7a8580f7486798667acd6dcb6c299dfcc6bea4e2e4355968dbc75"
+    },
+    {
+      "sourcePath": ".changeset/provider-lifecycle-reports-1922.md",
+      "archivedPath": ".changeset/archive/provider-lifecycle-reports-1922.md",
+      "sha256": "90a1e7415fdc7041150e6d0743a5650958b0dc85bec6b6ba96861a838d10e12e"
+    },
+    {
+      "sourcePath": ".changeset/public-buildtest-checkpoint-identity.md",
+      "archivedPath": ".changeset/archive/public-buildtest-checkpoint-identity.md",
+      "sha256": "2dd7763ccd802e724e595bcdb6796967207e7e398dc9d4c0193d8bbec456a9fd"
+    },
+    {
+      "sourcePath": ".changeset/registry-publication-validation-1919.md",
+      "archivedPath": ".changeset/archive/registry-publication-validation-1919.md",
+      "sha256": "ea568c3c8dfadc5d1ff55ff6703e0c0536f18ebeab6cb30ac182095e0f8a4b02"
+    },
+    {
+      "sourcePath": ".changeset/remote-mcp-credential-recipient-tls.md",
+      "archivedPath": ".changeset/archive/remote-mcp-credential-recipient-tls.md",
+      "sha256": "823e1a6aab644b69e9eaa3b1a11be107b0d301dcf5dcd33e0013996b61f845a3"
+    },
+    {
+      "sourcePath": ".changeset/remote-mcp-environment-1923.md",
+      "archivedPath": ".changeset/archive/remote-mcp-environment-1923.md",
+      "sha256": "b2e98fe8421e3b814c6b323dc3b71342214683c97f7e6ce36f08242533cb2aaf"
+    },
+    {
+      "sourcePath": ".changeset/remote-mcp-oauth-identity-slice.md",
+      "archivedPath": ".changeset/archive/remote-mcp-oauth-identity-slice.md",
+      "sha256": "221fbb3e76d06fe562cb76dcf586c95d1a2e64025d71009d2702f22650cf37cd"
+    },
+    {
+      "sourcePath": ".changeset/remote-mcp-owner-call-integration.md",
+      "archivedPath": ".changeset/archive/remote-mcp-owner-call-integration.md",
+      "sha256": "9f96021a3c245592f263ac325e2aab2fdbb16cc9257c77e031c24a05ad9366a2"
+    },
+    {
+      "sourcePath": ".changeset/remote-mcp-reviewed-call-byte-check.md",
+      "archivedPath": ".changeset/archive/remote-mcp-reviewed-call-byte-check.md",
+      "sha256": "3e0f451bec87b8131e183f136f7126b2d615373e83a2264397c191d2f0c101d3"
+    },
+    {
+      "sourcePath": ".changeset/remote-mcp-tool-call-bytes.md",
+      "archivedPath": ".changeset/archive/remote-mcp-tool-call-bytes.md",
+      "sha256": "2c4ede4e0d74f9013315bb140b13f65560fc78bad075414945d50fd2390c8654"
+    },
+    {
+      "sourcePath": ".changeset/remote-mcp-trusted-owner-tls.md",
+      "archivedPath": ".changeset/archive/remote-mcp-trusted-owner-tls.md",
+      "sha256": "d9652b8ecaa40b38c77ac083bf64e34d4db054e2aced81350c5f7062f9e399d2"
+    },
+    {
+      "sourcePath": ".changeset/retained-source-owner-flows-1908.md",
+      "archivedPath": ".changeset/archive/retained-source-owner-flows-1908.md",
+      "sha256": "9c2a1ec64a7b72b28f5fbb8c6d111473a5fad59f977b8c99e76caf067951b1c7"
+    },
+    {
+      "sourcePath": ".changeset/reviewed-remote-selection-references.md",
+      "archivedPath": ".changeset/archive/reviewed-remote-selection-references.md",
+      "sha256": "eb16b907aec2cee31ab332129677c1d7742a8f0cd2372837698b62ffc6ffd4e3"
+    },
+    {
+      "sourcePath": ".changeset/reviewed-remote-tool-data.md",
+      "archivedPath": ".changeset/archive/reviewed-remote-tool-data.md",
+      "sha256": "aaeac46ccb99dd16d6c7129d8e75e75574bf82985b44922b797370ae210ab9f1"
+    },
+    {
+      "sourcePath": ".changeset/reviewed-team-casting-1913.md",
+      "archivedPath": ".changeset/archive/reviewed-team-casting-1913.md",
+      "sha256": "5069fece2f67c7de2fbeb3c0f942786f781f1689ec075a69f225999d919cbe04"
+    },
+    {
+      "sourcePath": ".changeset/run-bound-knowledge-access-1859.md",
+      "archivedPath": ".changeset/archive/run-bound-knowledge-access-1859.md",
+      "sha256": "ed4eb329d843b1a2fa29bfafb9c2a142c80f50fcf856690c953daf2c6e83f7fe"
+    },
+    {
+      "sourcePath": ".changeset/runtime-readiness-recovery-request.md",
+      "archivedPath": ".changeset/archive/runtime-readiness-recovery-request.md",
+      "sha256": "4dbcfa2d79441606636c24631cf99a9efaaf00dded6a23365093448ccc1941b7"
+    },
+    {
+      "sourcePath": ".changeset/runtime-session-fork-guardrails.md",
+      "archivedPath": ".changeset/archive/runtime-session-fork-guardrails.md",
+      "sha256": "6719d463e4a33150fc23662e82aba23203e182e73b4830cfbc65a68447a84c2e"
+    },
+    {
+      "sourcePath": ".changeset/runtime-workspace-metadata.md",
+      "archivedPath": ".changeset/archive/runtime-workspace-metadata.md",
+      "sha256": "6b1f4a79cca5167e3aa1f31932d3ede0a814548e8b8d09bfcf014c67f454d117"
+    },
+    {
+      "sourcePath": ".changeset/session-tree-explicit-fork.md",
+      "archivedPath": ".changeset/archive/session-tree-explicit-fork.md",
+      "sha256": "5f0820b4f2da8db92197cd56fe7a485b045bf0a3ed4290959b7ef30cef3578b8"
+    },
+    {
+      "sourcePath": ".changeset/trusted-policy-receipts-1846.md",
+      "archivedPath": ".changeset/archive/trusted-policy-receipts-1846.md",
+      "sha256": "054370a1027e70474bd38825f5fe1336f87be68b99d94855c5e2232711c8b2a3"
+    },
+    {
+      "sourcePath": ".changeset/trusted-suspend-workspace-flush.md",
+      "archivedPath": ".changeset/archive/trusted-suspend-workspace-flush.md",
+      "sha256": "4ac62014524c336632c704ce8e33e7c3487b62b62cd6e404bd58d2c97c1fc7b4"
+    },
+    {
+      "sourcePath": ".changeset/typed-coordinator-decisions-1848.md",
+      "archivedPath": ".changeset/archive/typed-coordinator-decisions-1848.md",
+      "sha256": "f0b0f2bf14faed2d70b6b134d7cc87c3f3ddc530f0326a947ff27adcf1e874b0"
+    },
+    {
+      "sourcePath": ".changeset/v1-addressed-messages-1845.md",
+      "archivedPath": ".changeset/archive/v1-addressed-messages-1845.md",
+      "sha256": "f88f57b90929ca842ca640274058501597047ced2669dcf4a559914fd0bd173d"
+    },
+    {
+      "sourcePath": ".changeset/v1-agenthost-image-owned-native-distribution.md",
+      "archivedPath": ".changeset/archive/v1-agenthost-image-owned-native-distribution.md",
+      "sha256": "da68b2f5a562ca05e697573b2dd0d34e2ca95ae5c64708b14c4d472abf2f6885"
+    },
+    {
+      "sourcePath": ".changeset/v1-auth-first-sdk-session.md",
+      "archivedPath": ".changeset/archive/v1-auth-first-sdk-session.md",
+      "sha256": "561229212dda34f1875f0c33b5caa7023d631b25c468b91b4a70751ffdccfb8a"
+    },
+    {
+      "sourcePath": ".changeset/v1-authenticated-agenthost-execution.md",
+      "archivedPath": ".changeset/archive/v1-authenticated-agenthost-execution.md",
+      "sha256": "ea544630eacfe681f08dc0ed03be19fb8f7e476433956802fd8b27c4cf51c7da"
+    },
+    {
+      "sourcePath": ".changeset/v1-authenticated-runtime-bootstrap.md",
+      "archivedPath": ".changeset/archive/v1-authenticated-runtime-bootstrap.md",
+      "sha256": "eac0181c6fffea23784774f27e7ca2f6769b5b85a39c611a54eab34363fc25b4"
+    },
+    {
+      "sourcePath": ".changeset/v1-backlog-graph-readiness-1915.md",
+      "archivedPath": ".changeset/archive/v1-backlog-graph-readiness-1915.md",
+      "sha256": "08725f0b96067e32abf9781b2254767970dea827dd06679ef389ce2112854152"
+    },
+    {
+      "sourcePath": ".changeset/v1-copilot-accounting-storage.md",
+      "archivedPath": ".changeset/archive/v1-copilot-accounting-storage.md",
+      "sha256": "40fa6bc06a3429487ad8e0701c73df8f6d65e955f1a09286c4119c1c4dc67fff"
+    },
+    {
+      "sourcePath": ".changeset/v1-copilot-sdk18.md",
+      "archivedPath": ".changeset/archive/v1-copilot-sdk18.md",
+      "sha256": "ad619e11e55d90501574c18a978a84195bb81fcb9e0383eff45667bca3b91d8e"
+    },
+    {
+      "sourcePath": ".changeset/v1-cost-source-selection.md",
+      "archivedPath": ".changeset/archive/v1-cost-source-selection.md",
+      "sha256": "31aeef726e8ee3bc7389bb0a52c30e9e0799c11a19cddb81e59fc7bc8f057a25"
+    },
+    {
+      "sourcePath": ".changeset/v1-foundation-probe-recorded-span.md",
+      "archivedPath": ".changeset/archive/v1-foundation-probe-recorded-span.md",
+      "sha256": "73249672f1b9c857b6d57bd5c1e06861755327dc3549cb8557d273da37d9ba33"
+    },
+    {
+      "sourcePath": ".changeset/v1-identity-initial-state.md",
+      "archivedPath": ".changeset/archive/v1-identity-initial-state.md",
+      "sha256": "f584cbfaa4886b712f52d0ff33ff1dc5dd9f5797b2b610b91cfe7f560da135dc"
+    },
+    {
+      "sourcePath": ".changeset/v1-identity-managed-routing.md",
+      "archivedPath": ".changeset/archive/v1-identity-managed-routing.md",
+      "sha256": "73402752d4613992da597c04e200ccc0fda706eb157f360f8e895a4a77f1a9b8"
+    },
+    {
+      "sourcePath": ".changeset/v1-native-sdk-reference-accounting.md",
+      "archivedPath": ".changeset/archive/v1-native-sdk-reference-accounting.md",
+      "sha256": "c7ee1eb2a1631c97729df968381f06ef996c51cbd0e9237957339320a442f1b1"
+    },
+    {
+      "sourcePath": ".changeset/v1-native-usage-source-receipt-contract.md",
+      "archivedPath": ".changeset/archive/v1-native-usage-source-receipt-contract.md",
+      "sha256": "ed5a3be547ce1388c675706739e39e34ab9bed8ba2779ec941fafeaee275e9c5"
+    },
+    {
+      "sourcePath": ".changeset/v1-probe-deployment-provenance.md",
+      "archivedPath": ".changeset/archive/v1-probe-deployment-provenance.md",
+      "sha256": "f5bccb35d56b2a030356232b98f4c7745ae6863ec7d080fdfcd1e58fd6420074"
+    },
+    {
+      "sourcePath": ".changeset/v1-probe-frozen-recovery.md",
+      "archivedPath": ".changeset/archive/v1-probe-frozen-recovery.md",
+      "sha256": "fd87f0c2f3a3e1dd3fcfe40b1d9bd723af492dae3adb4c5614c7a995b5e8f401"
+    },
+    {
+      "sourcePath": ".changeset/v1-probe-publication-diagnostics.md",
+      "archivedPath": ".changeset/archive/v1-probe-publication-diagnostics.md",
+      "sha256": "e0b08c805e95ac5f1d8a172ec9dec037ac3f158130f02cdd30625d6362047717"
+    },
+    {
+      "sourcePath": ".changeset/v1-probe-recovery-attempt-two.md",
+      "archivedPath": ".changeset/archive/v1-probe-recovery-attempt-two.md",
+      "sha256": "c836309660a1596b2cdf61d38eb4813246692ac25bf23f89bcb53c2a51368bcd"
+    },
+    {
+      "sourcePath": ".changeset/v1-probe-sampler-publication-guard.md",
+      "archivedPath": ".changeset/archive/v1-probe-sampler-publication-guard.md",
+      "sha256": "6d49159a6f4d4da32153a37fde2f19d8f5d617d47c222f368e0babad871a9f41"
+    },
+    {
+      "sourcePath": ".changeset/v1-runtime-current-placement-context.md",
+      "archivedPath": ".changeset/archive/v1-runtime-current-placement-context.md",
+      "sha256": "033cfe4f20b6fa29dcfc46ba76abf8c3de47c9485cd7d57d3e8a5cca76bb02f7"
+    },
+    {
+      "sourcePath": ".changeset/v1-source-control-output-capture.md",
+      "archivedPath": ".changeset/archive/v1-source-control-output-capture.md",
+      "sha256": "e802675519ef7660fd6338352344c524d3f64725ff8071dd8dae214e5371764e"
+    },
+    {
+      "sourcePath": ".changeset/v1-storage-azure-files-1851.md",
+      "archivedPath": ".changeset/archive/v1-storage-azure-files-1851.md",
+      "sha256": "ca90cd4f91156b201e0fc7f9a4fc23fbd434d2194c67e4e3438aab97fc2d6f65"
+    },
+    {
+      "sourcePath": ".changeset/v1-storage-environment-1851.md",
+      "archivedPath": ".changeset/archive/v1-storage-environment-1851.md",
+      "sha256": "d8406ffa5f6d3340afc1bb6f5207b257c81eaabf7f407b7b478027c34bcbaeaf"
+    },
+    {
+      "sourcePath": ".changeset/v1-storage-volumes-1851.md",
+      "archivedPath": ".changeset/archive/v1-storage-volumes-1851.md",
+      "sha256": "3ff81a710e873f172bc300de230cc6d9858f2f1e4121b5f471045e8aca4560d6"
+    },
+    {
+      "sourcePath": ".changeset/v1-trusted-azure-byok-producer.md",
+      "archivedPath": ".changeset/archive/v1-trusted-azure-byok-producer.md",
+      "sha256": "d7ca9a0712ba8df17d96808ee1e0622689a717c9844c39c115d197a076941987"
+    },
+    {
+      "sourcePath": ".changeset/v1-web-client-1859.md",
+      "archivedPath": ".changeset/archive/v1-web-client-1859.md",
+      "sha256": "b5b874144e9a5fd35c7e741b6607e403bb4f86009b1cbf47ad941cc728d4a2a5"
+    }
+  ]
+}

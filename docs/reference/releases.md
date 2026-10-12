@@ -4,39 +4,38 @@
 
 | Component | Kind | Manifest version |
 | --- | --- | --- |
-| `Agentweaver.Abstractions` | Contract | `0.0.0` |
-| `Agentweaver.Providers` | Library | `0.0.0` |
-| `Agentweaver.SourceControl` | Library | `0.0.0` |
-| `Agentweaver.Orchestrator.Core` | Library | `0.0.0` |
-| `Agentweaver.Persistence.Postgres` | Library | `0.0.0` |
-| `Agentweaver.Secrets.AzureKeyVault` | Library | `0.0.0` |
-| `Agentweaver.Identity` | Library | `0.0.0` |
-| `Agentweaver.AgentRuntime` | Library | `0.0.0` |
-| `Agentweaver.AgentHost` | Service | `0.0.0` |
-| `Agentweaver.Telemetry` | Library | `0.0.0` |
-| `Agentweaver.Telemetry.AzureMonitor` | Library | `0.0.0` |
-| `Agentweaver.ObjectStore.AzureBlob` | Library | `0.0.0` |
-| `Agentweaver.Identity.Broker` | Service | `0.0.0` |
-| `Agentweaver.EventsAndSessions` | Service | `0.0.0` |
-| `Agentweaver.Gateway` | Service | `0.1.0` |
-| `Agentweaver.Mcp` | Service | `0.1.0` |
-| `Agentweaver.Web` | Service | `0.0.0` |
-| `Agentweaver.Orchestrator` | Service | `0.0.0` |
-| `Agentweaver.Environment` | Service | `0.0.0` |
-| `Agentweaver.Providers.Storage.AzureFiles` | Library | `0.0.0` |
-| `Agentweaver.Providers.Sandbox.AgentSandbox` | Library | `0.0.0` |
-| `Agentweaver.Knowledge` | Service | `0.0.0` |
-| `Agentweaver.Projects.Config` | Service | `0.0.0` |
-| `Agentweaver.FoundationProbe` | Acceptance-only service | `0.0.0` |
+| `Agentweaver.Abstractions` | Contract | `1.0.0` |
+| `Agentweaver.Providers` | Library | `1.0.0` |
+| `Agentweaver.SourceControl` | Library | `1.0.0` |
+| `Agentweaver.Orchestrator.Core` | Library | `1.0.0` |
+| `Agentweaver.Persistence.Postgres` | Library | `1.0.0` |
+| `Agentweaver.Secrets.AzureKeyVault` | Library | `1.0.0` |
+| `Agentweaver.Identity` | Library | `1.0.0` |
+| `Agentweaver.AgentRuntime` | Library | `1.0.0` |
+| `Agentweaver.AgentHost` | Service | `1.0.0` |
+| `Agentweaver.Telemetry` | Library | `1.0.0` |
+| `Agentweaver.Telemetry.AzureMonitor` | Library | `1.0.0` |
+| `Agentweaver.ObjectStore.AzureBlob` | Library | `1.0.0` |
+| `Agentweaver.Identity.Broker` | Service | `1.0.0` |
+| `Agentweaver.EventsAndSessions` | Service | `1.0.0` |
+| `Agentweaver.Gateway` | Service | `1.0.0` |
+| `Agentweaver.Mcp` | Service | `1.0.0` |
+| `Agentweaver.Web` | Service | `1.0.0` |
+| `Agentweaver.Orchestrator` | Service | `1.0.0` |
+| `Agentweaver.Environment` | Service | `1.0.0` |
+| `Agentweaver.Providers.Storage.AzureFiles` | Library | `1.0.0` |
+| `Agentweaver.Providers.Sandbox.AgentSandbox` | Library | `1.0.0` |
+| `Agentweaver.Knowledge` | Service | `1.0.0` |
+| `Agentweaver.Projects.Config` | Service | `1.0.0` |
+| `Agentweaver.FoundationProbe` | Acceptance-only service | `0.0.1` |
 
 The manifest pins exact project-reference compatibility but does not pin container
 image digests. The existing Identity Broker image `f989` remains separate from
-this package baseline. Package components use the 0.0.0 initial baseline. Their
-initial release notes come from the archived P0 changesets referenced by the prior
-release receipt.
-The Gateway is a source-only service candidate at `0.1.0`; its manifest entry and
+these prepared source versions. The historical P0 package baseline was `0.0.0`.
+Its initial notes remain in the archived P0 changesets referenced by the prior receipt.
+The Gateway is a source-only service candidate at `1.0.0`; its manifest entry and
 documentation do not claim deployment or live acceptance.
-The first-party MCP host is a source-only service candidate at `0.1.0`; it validates
+The first-party MCP host is a source-only service candidate at `1.0.0`; it validates
 Broker access tokens and delegates to the Gateway, without claiming deployment or
 live acceptance.
 Environment uses its existing executable host and SDK container configuration.
@@ -62,21 +61,39 @@ npm run release:validate
 npm run release:validate -- --base <full-base-commit-sha>
 ```
 
-The base-aware form checks changeset coverage for changed components. CI supplies the pull request base commit.
+The base-aware form checks changeset coverage for changed components.
+Both CI workflows use `npm run release:validate -- --ci` on the integrated checkout.
+For a pull request, the tested commit's ordered parents must match the event base and authored head.
+For an ordinary merge push, those parents must match the previous target and authored head.
+Validation compares their common ancestor with the integrated tested tree, not only with the authored tree.
+A linear push retains its previous-commit comparison.
+Missing or mismatched history fails explicitly.
+The comparison base never comes from a receipt's own claim.
+Preparation receipts and archive-byte checks remain unchanged.
+
+```mermaid
+flowchart LR
+  Event["Verified event and ordered commit parents"] --> SourceBase["Authored source common ancestor"]
+  SourceBase --> Diff["Compare with the integrated tested tree"]
+  Diff --> Guards["Unchanged receipt, archive, and product coverage checks"]
+  Tested["Integrated checkout and exact coverage identity"] --> Diff
+```
 
 `npm run release:plan` writes a source-bound plan under ignored `artifacts/release/`. It does not change component versions.
 
-The user-selected P1 plan targets `1.0.0` for all 23 product components:
+The user-selected P1 plan has applied `1.0.0` source versions for all 23 product components:
 13 packages and 10 service images.
-A fresh major-intent changeset takes precedence over earlier minor and patch records.
-The acceptance-only Probe retains its separate pending `0.0.1` version.
+The canonical application archived its major-intent changeset and the consumed earlier records.
+The acceptance-only Probe has its separate prepared `0.0.1` source version.
 The draft accepts `1.0.0` for all 53 direct dependency relationships, including
 the Probe's product dependencies. It retains each earlier accepted version.
 These declarations retain the reviewed consumer and dependency source.
 They change no runtime code, API contract, or external dependency pin.
 This compatibility decision does not apply to later source changes.
-The checked-in component versions remain unchanged and the manifest remains a draft.
-Planning `1.0.0` versions is not a published platform release.
+The manifest, project version fields and Web version mirrors now contain these versions.
+The preparation receipt is `releases/receipts/62a0dcf5307dc7ef58c805d4c66b45baecd98e43.json`.
+Its source SHA identifies the reviewed plan inputs, not a built or published artifact.
+The manifest remains a draft. No package or image was built or published by this application.
 
 `npm run release:apply` updates manifest versions, project version mirrors, changelog, archive records, and a receipt. It requires a clean tree and a valid source-bound plan.
 
@@ -89,14 +106,29 @@ The full manifest hash remains in the preparation receipt.
 The publisher rejects a receipt prepared with another component selection.
 This selection cannot combine with `--packages-only` or `--foundation-probe-only`.
 
+For a product build, the manual workflow first prepares its approved build inputs.
+It pulls only the three source-pinned Microsoft base images.
+A standard locked npm install fills the cache for the runner's dependencies from the approved 467-entry Web lockfile.
+It retains the committed download destinations and npm's existing integrity checks.
+This preparation runs no dependency install scripts and adds no dependency.
+The runner's Docker builder shares the containerd image store used by the image pulls.
+Preparation checks the actual builder, store, image digests, and clean source before packing.
+It does not change or restart the Docker daemon.
+It requires the runner's existing Buildx tool and does not install a builder or other software.
+If the required shared store is absent, preparation reports that missing setup before any image pull.
+The existing offline Web install and image checks remain unchanged.
+These inputs are prepared on the build runner, not on a developer's machine.
+This preparation does not publish artifacts or deploy services.
+
 ```mermaid
 flowchart LR
   Manifest["Draft manifest with explicit dependency versions"] --> Plan["Plan 23 product versions at 1.0.0"]
-  Plan --> Apply["Reviewed source-only version application"]
+  Plan --> Apply["Applied source versions and preparation receipt"]
   Apply --> Selection["Choose component selection"]
   Selection --> Product["platform-only: product packages and service images"]
   Selection --> Full["Default: all components, including the acceptance Probe"]
-  Product --> Pack["Prepare exact-source artifacts and hashes"]
+  Product --> Inputs["Verify and cache approved build inputs on the same runner"]
+  Inputs --> Pack["Prepare exact-source artifacts and hashes"]
   Full --> Pack
   Pack --> Publish["Approved publication with the same selection"]
   Publish --> Evidence["Actual registry digests"]
@@ -111,5 +143,14 @@ The `platform_only` workflow input defaults to `false`.
 It selects product preparation and matching ordinary publication.
 Both frozen Probe jobs reject a conflicting platform selection before downloading artifacts.
 The protected `v1-publication` environment remains required for ordinary publication.
+
+P1 NuGet publication uses the existing Actions token only with
+`https://nuget.pkg.github.com/sabbour/index.json`.
+The ordinary publish job rejects another destination before artifact download.
+Only that job gains package-write permission; its existing contents-write permission remains.
+It requires manual publication and the protected environment's approval.
+No stored NuGet key or external-feed credential fallback is added.
+Package access, environment configuration and actual publication require separate confirmation.
+The existing registry credential inputs and frozen Probe routes remain unchanged.
 
 The source contains a prepared platform release composition, not an actual deployment or live acceptance gate. Release preparation does not prove Azure acceptance.

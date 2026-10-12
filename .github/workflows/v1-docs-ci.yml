@@ -29,8 +29,9 @@ jobs:
         run: npm run test:docs-diagrams
       - name: Validate release composition
         env:
-          DOCS_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: npm run release:validate -- --base "$DOCS_BASE_SHA"
+          RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          RELEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+        run: npm run release:validate -- --ci
       - name: Build documentation site
         run: npm run docs:build
       - name: Check documentation links and assets

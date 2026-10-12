@@ -1,17 +1,19 @@
 # Foundation release composition (schema version 1)
 
 `foundation.json` is a **draft**, not a release or proof of a deployed service.
-It pins eight independently versioned .NET foundation NuGet packages:
+It records prepared `1.0.0` source versions for 23 product components:
+13 packages and 10 service images. None was built or published by version application.
+The eight original .NET foundation NuGet packages were:
 `Agentweaver.Abstractions`, `Agentweaver.Providers`,
 `Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`,
 `Agentweaver.Identity`, `Agentweaver.Telemetry`,
 `Agentweaver.Telemetry.AzureMonitor`, and `Agentweaver.ObjectStore.AzureBlob`.
-The current package baseline for all eight is `0.0.0`.
-`Agentweaver.Identity.Broker` uses service baseline `0.0.0`; it is not one
+Their historical P0 package baseline was `0.0.0`; its records remain unchanged.
+`Agentweaver.Identity.Broker` now has source version `1.0.0`; it is not one
 of the NuGet packages.
-`Agentweaver.Orchestrator` is also an unpublished service at baseline `0.0.0`;
+`Agentweaver.Orchestrator` is also an unpublished service at source version `1.0.0`;
 its `Agentweaver.Orchestrator.Core` dependency remains a separately versioned library.
-`Agentweaver.FoundationProbe` has a separate initial image component at `0.0.0`.
+`Agentweaver.FoundationProbe` has a separate prepared source version at `0.0.1`.
 The manifest uses the `service` artifact kind for its executable container.
 The Probe remains acceptance-only, not a product service.
 Its exact `tools/Agentweaver.FoundationProbe` project path is the sole tools
@@ -40,6 +42,15 @@ Ordinary product publication still requires the protected `v1-publication` envir
 Preparation uses its existing SDK container configuration.
 These selections do not supply deployment configuration or permission to publish.
 
+For P1, the ordinary publish job uses its existing Actions token as the NuGet API key.
+Its only admitted feed is `https://nuget.pkg.github.com/sabbour/index.json`.
+The job rejects a missing or different feed before artifact download.
+It alone gains package-write permission and retains contents-write permission for durable receipts.
+Manual publication, exact-source checks and the protected `v1-publication` environment remain required.
+No stored NuGet secret or credential fallback for another feed is added.
+The registry credential inputs and separate frozen Probe jobs remain unchanged.
+Source wiring does not prove package access, environment setup or publication.
+
 The user-confirmed initial Probe replacement is one exception to immutable tags.
 Only `ghcr.io/sabbour/agentweaver-foundation-probe:0.0.0` can replace its exact
 approved old index once. The expected old digest is
@@ -62,9 +73,8 @@ Its SHA-256 digest, byte size, media type, and schema must match the descriptor.
 The receipt records the actual pushed digest before later verification steps.
 A later verification error retains that digest in a partial receipt.
 The permanent claim continues to block a second push.
-The pending patch records future ordinary release intent. No release plan or
-version bump runs for this initial replacement.
-The Broker and eight NuGet baselines remain unchanged.
+The earlier patch recorded ordinary release intent. The initial replacement
+did not apply a release plan or change the Broker and eight NuGet baselines.
 
 The sampler-fixed Probe has a separate, default-off legacy replacement path.
 It permits only the current `0.0.0` manifest
@@ -135,9 +145,8 @@ Ordinary publication retains the protected `v1-publication` environment.
 Use the final admitted helper SHA, not the original image-source SHA, for the recovery dispatch.
 These options do not authorize publication, deployment, consent, or fixture creation.
 
-There is no repository-wide version authority, deployable image, local runtime,
-or persona/deployment evidence in this first foundation. The draft cannot be
-published as a platform release.
+This draft contains applied source versions, not published artifacts or deployed
+persona evidence. It cannot be published as an accepted platform release.
 
 The initial package notes are the archived P0 changesets referenced by the
 earlier release receipt. The baseline changeset does not create another version
@@ -162,13 +171,13 @@ to Azure Identity, with no developer-identity fallback. Fake-transport tests cov
 OAuth exchange and exact-version vault requests. Authentication, authorization and
 rotation in a deployed AKS service remain unverified; no new component or version
 is added to the draft manifest.
-The component-scoped Changeset records future minor release intent, not an
-immediate package version bump or a release of the draft platform.
+The earlier component changeset recorded minor intent. Its record is now archived
+in source preparation, not a published platform release.
 
-Each merged foundation change has a record under `.changeset/` with its actual
-component ID and unreleased semver intent. Tooling-only records use empty
-frontmatter; neither kind is a release, version bump, deployed-service claim, or
-substitute for independently verified publication.
+Each product change requires a record under `.changeset/` with its component ID
+and semver intent. Version application moves consumed records to `.changeset/archive/`.
+Tooling-only records use empty frontmatter.
+Neither a record nor its archive proves publication or deployed behavior.
 
 `manifest.schema.json` describes the strict wire shape. The dependency-free
 validator additionally checks unique component IDs and projects, safe project
@@ -180,23 +189,24 @@ must occur in the list; do not infer compatibility from semver proximity.
 Semantic versions have `major.minor.patch` and optional prerelease/build
 suffixes; a prerelease numeric identifier cannot have a leading zero.
 
-The user-selected P1 plan targets `1.0.0` for all 23 product components:
+The user-selected P1 plan has applied `1.0.0` source versions for all 23 product components:
 13 packages and 10 service images.
-The `p1-product-1-0-0-preparation` changeset records major intent for each.
-The canonical planner selects this intent over earlier minor and patch records.
-The acceptance-only Probe keeps its separate pending `0.0.1` version.
+The canonical application archived `p1-product-1-0-0-preparation` and all consumed earlier records.
+The acceptance-only Probe has its separate prepared `0.0.1` source version.
 Use `--platform-only` for product artifact preparation and matching publication.
 The draft accepts `1.0.0` on all 53 direct dependency relationships, including
 the Probe's product dependencies. Earlier accepted versions remain unchanged.
 These declarations retain the reviewed consumer and dependency source.
 They change no runtime code, API contract, external package pin, or artifact selection.
 Later source changes need their own compatibility decision.
-No component version has been applied, and the manifest remains a draft.
-This plan is not a published `1.0.0` platform release or permission to publish.
+The manifest, project version fields and Web mirrors now contain these versions.
+The canonical receipt is `releases/receipts/62a0dcf5307dc7ef58c805d4c66b45baecd98e43.json`.
+It names the reviewed plan source, checksum, applied versions and archived note hashes.
+The manifest remains a draft. This is not a published platform release or permission to publish.
 
 Draft service entries can omit `imageDigest` until publication supplies an actual digest.
 The #1779 candidate registers `Agentweaver.Identity.Broker` as an unpublished service.
-Its current manifest/project baseline is `0.0.0`.
+Its current manifest/project source version is `1.0.0`.
 The record is release intent, not a registry artifact or deployment receipt.
 Do not use a placeholder digest to represent an unpublished service.
 
@@ -210,7 +220,7 @@ external verification before publication. `draft` forbids `evidence` so it
 cannot claim unearned exact-SHA validation. The manual workflow publishes artifacts only.
 Platform release composition, chart wiring, and deployment gates remain future work.
 
-## Draft release impact
+## Historical foundation additions
 
 - Added `Agentweaver.Telemetry` 0.0.0 to the draft foundation composition:
   native OpenTelemetry traces, metrics, and logs with per-service resource identity
@@ -241,14 +251,22 @@ and validate all `.changeset/*.md` records. Run
 an added or modified changeset in that diff for every changed product component.
 Generated `packages.lock.json` updates by themselves do not require a component
 changeset; project and source changes still do.
-CI supplies the PR base SHA (or the previous push SHA) and checks their common
-ancestor against HEAD. An absent or unavailable base is an error, not an
-exemption. Run `npm run test:release` for validator tests. Neither command installs
+Both CI workflows use `npm run release:validate -- --ci`.
+This form verifies the checkout against `GITHUB_SHA` and the event's source history.
+For a PR, the tested merge must have ordered parents `[event base, authored head]`.
+For an ordinary merge push, it requires `[previous target, authored head]`.
+The authored parents' common ancestor is the comparison base.
+The diff still ends at the integrated tested HEAD, so extra integrated product edits need fresh source notes.
+Linear pushes retain the previous-commit comparison.
+Missing history, mismatched parents, or an ambiguous ancestor is an error, not an exemption.
+No receipt chooses the comparison base; genuine preparation and archive guards remain unchanged.
+The checkout, native restore/build/test steps, and exact coverage identity remain unchanged.
+Run `npm run test:release` for validator tests. Neither command installs
 dependencies or contacts the cloud. CI also restores the .NET solution with
 checked-in lock files, builds once, and tests all foundation libraries, including
 the Azure Blob transport adapter.
 
-## Unreleased foundation impact
+## Earlier foundation changes
 
 - #1776 adds the `Agentweaver.Identity` 0.0.0 authorization library. It authorizes
   exact run grants and compares immutable
@@ -402,6 +420,27 @@ The manually dispatched `v1 release pack` GitHub Actions workflow
 (`.github/workflows/v1-release-pack.yml`) validates and prepares the exact dispatch source.
 Dispatch requires the `v1` branch and an `expected_source` equal to the full dispatch SHA.
 The default `publish: false` uploads artifacts only.
+For `platform_only: true`, the pack job first runs `npm run release:prepare-build-inputs`.
+This step requires the exact clean source and the approved Web lockfile hash
+`a6e3ac6dc04086969ba78898057bda4273c3f5491185d15437143cddaef214db`.
+It pulls only the three digest-pinned Microsoft images in the AgentHost and Web Dockerfiles.
+It validates all 467 locked Web dependency entries and their committed HTTPS URLs.
+Only the existing Microsoft npm feeds and `registry.npmjs.org` are permitted.
+It runs standard `npm ci --ignore-scripts --no-audit --no-fund --no-progress`.
+Registry-host replacement is disabled, and npm retains its locked SHA1 and SHA512 integrity checks.
+This install fills npm's cache for the runner's platform; it does not claim every optional-platform tarball was fetched.
+It runs no dependency install scripts and adds no cache library or dependency.
+Its isolated cache is outside the checkout and also supplies the existing offline Web install.
+The product job requires the runner's existing containerd image store and uses the default Docker Buildx driver.
+The image pulls, Buildx native build, and Web build therefore use the same Docker Engine.
+Preparation rejects another builder, a missing shared store, or a wrong local image digest.
+It does not reconfigure or restart the Docker daemon.
+Missing shared-store setup fails before image pulls and requires a separate setup decision.
+Docker 27 or later supplies the existing OCI archive and loaded-image outputs.
+The product path requires an existing Buildx 0.13 or later; it does not install Buildx or fetch a builder image.
+The packer's offline, immutable-image, exact-source, and clean-tree guards remain unchanged.
+Other selections and the frozen Probe jobs retain their existing paths.
+Build-input preparation does not publish, deploy, or change registry credentials.
 Pack artifact names bind the source SHA and workflow run ID, not the attempt number.
 Rerunning failed publication jobs uses the successful pack job's artifact.
 A full rerun replaces that run's pack artifact; a redispatch has a different run ID.

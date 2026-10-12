@@ -167,16 +167,64 @@ export function collectChangesetEntries(root, componentIds, { readdirSync: readd
  * release receipt's claimed `sourceSha` to this same ancestor, rather than trusting the receipt's
  * own say-so.
  */
-export function resolveMergeBase(root, base) {
+export function resolveMergeBase(root, base, comparisonHead = 'HEAD') {
   if (!sha.test(base)) fail('base', 'expected a full lowercase 40-character commit SHA');
+  if (comparisonHead !== 'HEAD' && !sha.test(comparisonHead)) {
+    fail('head', 'expected a full lowercase 40-character commit SHA');
+  }
   const git = (...args) => execFileSync('git', args, {
     cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   }).trim();
   try {
     git('cat-file', '-e', `${base}^{commit}`);
-    return git('merge-base', base, 'HEAD');
+    git('cat-file', '-e', `${comparisonHead}^{commit}`);
+    const ancestors = git('merge-base', '--all', base, comparisonHead).split('\n');
+    if (ancestors.length !== 1 || !sha.test(ancestors[0])) throw new Error('expected one unambiguous merge-base');
+    return ancestors[0];
   } catch (error) {
-    fail('base', `cannot compare ${base} to HEAD: ${error.message}`);
+    fail('base', `cannot compare ${base} to ${comparisonHead}: ${error.message}`);
+  }
+}
+
+export function resolveCiComparisonBase(root, {
+  eventName = process.env.GITHUB_EVENT_NAME,
+  testedSourceSha = process.env.GITHUB_SHA,
+  baseSha = process.env.RELEASE_BASE_SHA,
+  sourceHeadSha = process.env.RELEASE_HEAD_SHA,
+} = {}) {
+  if (!['pull_request', 'push'].includes(eventName) ||
+      !sha.test(testedSourceSha ?? '') || !sha.test(baseSha ?? '')) {
+    fail('CI source', 'expected a pull_request or push event with full tested and base commit SHAs');
+  }
+  const git = (...args) => execFileSync('git', args, {
+    cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
+  try {
+    if (git('rev-parse', 'HEAD') !== testedSourceSha) {
+      fail('CI source', 'checkout HEAD does not match the integrated tested source SHA');
+    }
+    const parents = git('rev-list', '--parents', '-n', '1', testedSourceSha).split(' ').slice(1);
+    let authoredHead;
+    if (eventName === 'pull_request') {
+      if (!sha.test(sourceHeadSha ?? '') || parents.length !== 2 ||
+          parents[0] !== baseSha || parents[1] !== sourceHeadSha) {
+        fail('CI source', 'tested PR merge parents do not match the event base and authored head');
+      }
+      authoredHead = sourceHeadSha;
+    } else {
+      if (sourceHeadSha) fail('CI source', 'push comparison must derive authored history from the tested commit parents');
+      if (parents.length === 2 && parents[0] === baseSha) {
+        authoredHead = parents[1];
+      } else if (parents.length === 1) {
+        git('merge-base', '--is-ancestor', baseSha, testedSourceSha);
+        authoredHead = testedSourceSha;
+      } else {
+        fail('CI source', 'tested push must have linear history or ordered merge parents [before, authored head]');
+      }
+    }
+    return resolveMergeBase(root, baseSha, authoredHead);
+  } catch (error) {
+    fail('CI source', `cannot establish the tested commit's authored comparison: ${error.message}`);
   }
 }
 

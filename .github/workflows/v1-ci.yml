@@ -39,7 +39,8 @@ jobs:
       - name: Validate release composition
         env:
           RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: npm run release:validate -- --base "$RELEASE_BASE_SHA"
+          RELEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+        run: npm run release:validate -- --ci
       - name: Restore locked dependencies
         run: dotnet restore Agentweaver.slnx --locked-mode
       - name: Build foundation

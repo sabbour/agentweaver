@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { applyPlan } from '../apply.mjs';
-import { diffChanges, resolveMergeBase, validateChangesets } from '../changesets.mjs';
+import { diffChanges, resolveCiComparisonBase, resolveMergeBase, validateChangesets } from '../changesets.mjs';
 import { createPlan, planChecksum } from '../plan.mjs';
 
 const csproj = (version, references = []) => `<Project><PropertyGroup><Version>${version}</Version></PropertyGroup>` +
@@ -569,6 +569,169 @@ function commit(dir, message = 'fixture') {
   git(dir, 'add', '-A');
   git(dir, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', message);
 }
+
+function integratedPreparationFixture(t, { corruption, integratedExtra = false, freshNote = false } = {}) {
+  const dir = initRepo(t, { changeset: false });
+  const prior = git(dir, 'rev-parse', 'HEAD');
+  writeFileSync(path.join(dir, '.changeset', 'add-feature.md'), '---\n"Pkg.A": minor\n---\n\nAdd a feature.\n');
+  commit(dir, 'authored release plan');
+  const planSource = git(dir, 'rev-parse', 'HEAD');
+  const mergeCommit = (tree, parents, message) => execFileSync('git', [
+    '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+    'commit-tree', tree, ...parents.flatMap(parent => ['-p', parent]),
+  ], { cwd: dir, encoding: 'utf8', input: `${message}\n` }).trim();
+  const target = mergeCommit(git(dir, 'rev-parse', 'HEAD^{tree}'), [prior, planSource], 'land reviewed plan');
+  applyPlan(createPlan(readManifest(dir), { root: dir }), manifestPath(dir), { root: dir });
+  const receiptPath = path.join(dir, 'releases', 'receipts', `${planSource}.json`);
+  if (corruption) {
+    const receipt = JSON.parse(readFileSync(receiptPath, 'utf8'));
+    if (corruption === 'spoof') receipt.sourceSha = '0'.repeat(40);
+    if (corruption === 'stale' || corruption === 'unrelated') {
+      receipt.sourceSha = corruption === 'stale' ? prior : 'f'.repeat(40);
+      unlinkSync(receiptPath);
+      writeFileSync(path.join(dir, 'releases', 'receipts', `${receipt.sourceSha}.json`), JSON.stringify(receipt));
+    } else if (corruption === 'archive') {
+      writeFileSync(path.join(dir, '.changeset', 'archive', 'add-feature.md'), 'forged archive');
+    } else {
+      writeFileSync(receiptPath, JSON.stringify(receipt));
+    }
+  }
+  commit(dir, 'apply genuine preparation');
+  const authoredHead = git(dir, 'rev-parse', 'HEAD');
+  if (integratedExtra) {
+    writeFileSync(path.join(dir, 'packages', 'Pkg.A', 'IntegratedExtra.cs'), 'class IntegratedExtra {}\n');
+    if (freshNote) writeFileSync(path.join(dir, '.changeset', 'integrated-extra.md'),
+      '---\n"Pkg.A": patch\n---\n\nRecord the integrated extra source change.\n');
+    git(dir, 'add', '-A');
+  }
+  const tested = mergeCommit(git(dir, 'write-tree'), [target, authoredHead], 'integrated tested merge');
+  git(dir, 'switch', '--detach', '-q', tested);
+  return {
+    dir, prior, planSource, target, authoredHead, tested,
+    context: eventName => ({
+      eventName, testedSourceSha: tested, baseSha: target,
+      sourceHeadSha: eventName === 'pull_request' ? authoredHead : '',
+    }),
+  };
+}
+
+for (const eventName of ['pull_request', 'push']) {
+  test(`CI comparison retains the genuine preparation receipt on an integrated ${eventName} merge`, t => {
+    const f = integratedPreparationFixture(t);
+    assert.equal(resolveMergeBase(f.dir, f.target), f.target);
+    assert.equal(resolveMergeBase(f.dir, f.target, f.authoredHead), f.planSource);
+    const ancestorSha = resolveCiComparisonBase(f.dir, f.context(eventName));
+    assert.equal(ancestorSha, f.planSource);
+    const changes = diffChanges(f.dir, ancestorSha);
+    assert.ok(changes.some(({ file, status }) => file === '.changeset/add-feature.md' && status === 'D'));
+    assert.ok(changes.some(({ file, status }) => file === '.changeset/archive/add-feature.md' && status === 'A'));
+    assert.doesNotThrow(() => validateChangesets(readManifest(f.dir), { root: f.dir, changes, ancestorSha }));
+    assert.equal(git(f.dir, 'rev-parse', 'HEAD'), f.tested);
+    assert.notEqual(f.tested, f.authoredHead);
+  });
+
+  for (const corruption of ['spoof', 'stale', 'unrelated', 'archive']) {
+    test(`CI comparison rejects ${corruption} receipt evidence on an integrated ${eventName} merge`, t => {
+      const f = integratedPreparationFixture(t, { corruption });
+      const ancestorSha = resolveCiComparisonBase(f.dir, f.context(eventName));
+      assert.equal(ancestorSha, f.planSource);
+      assert.throws(() => validateChangesets(readManifest(f.dir), {
+        root: f.dir, changes: diffChanges(f.dir, ancestorSha), ancestorSha,
+      }), /sourceSha does not match|stale or unrelated receipt|forged or corrupted/);
+    });
+  }
+
+  for (const freshNote of [false, true]) {
+    test(`CI comparison checks integrated extra product source for ${eventName}, fresh note ${freshNote}`, t => {
+      const f = integratedPreparationFixture(t, { integratedExtra: true, freshNote });
+      assert.throws(() => execFileSync('git', ['cat-file', '-e',
+        `${f.authoredHead}:packages/Pkg.A/IntegratedExtra.cs`], {
+        cwd: f.dir, stdio: ['ignore', 'pipe', 'pipe'],
+      }));
+      const ancestorSha = resolveCiComparisonBase(f.dir, f.context(eventName));
+      const changes = diffChanges(f.dir, ancestorSha);
+      assert.ok(changes.some(({ file }) => file === 'packages/Pkg.A/IntegratedExtra.cs'));
+      const validate = () => validateChangesets(readManifest(f.dir), { root: f.dir, changes, ancestorSha });
+      if (freshNote) assert.doesNotThrow(validate);
+      else assert.throws(validate, /missing new or modified changeset entries for Pkg\.A/);
+      assert.equal(git(f.dir, 'rev-parse', 'HEAD'), f.tested);
+    });
+  }
+}
+
+test('CI comparison preserves linear push coverage and rejects missing or mismatched event history', t => {
+  const f = integratedPreparationFixture(t);
+  git(f.dir, 'switch', '--detach', '-q', f.authoredHead);
+  const linear = { eventName: 'push', testedSourceSha: f.authoredHead, baseSha: f.planSource, sourceHeadSha: '' };
+  assert.equal(resolveCiComparisonBase(f.dir, linear), f.planSource);
+  assert.doesNotThrow(() => validateChangesets(readManifest(f.dir), {
+    root: f.dir, changes: diffChanges(f.dir, f.planSource), ancestorSha: f.planSource,
+  }));
+  git(f.dir, 'switch', '--detach', '-q', f.tested);
+  for (const context of [
+    { ...f.context('pull_request'), sourceHeadSha: '' },
+    { ...f.context('pull_request'), sourceHeadSha: f.prior },
+    { ...f.context('pull_request'), baseSha: f.prior },
+    { ...f.context('pull_request'), testedSourceSha: f.authoredHead },
+    { ...f.context('pull_request'), baseSha: 'e'.repeat(40) },
+    { ...f.context('push'), baseSha: f.planSource },
+    { ...f.context('push'), sourceHeadSha: f.authoredHead },
+    { ...f.context('push'), eventName: 'workflow_dispatch' },
+    { ...f.context('push'), testedSourceSha: '' },
+  ]) assert.throws(() => resolveCiComparisonBase(f.dir, context), /CI source/);
+  git(f.dir, 'switch', '--detach', '-q', f.authoredHead);
+  assert.throws(() => resolveCiComparisonBase(f.dir, { ...linear, baseSha: 'e'.repeat(40) }), /cannot establish/);
+  assert.throws(() => resolveCiComparisonBase(f.dir, { ...linear, baseSha: f.target }), /cannot establish/);
+});
+
+test('both CI workflows validate authored comparison against the integrated tested tree without changing checkout or coverage identity', () => {
+  for (const name of ['v1-ci.yml', 'v1-docs-ci.yml']) {
+    const workflow = readFileSync(path.join('.github', 'workflows', name), 'utf8').replaceAll('\r\n', '\n');
+    const step = workflow.match(/- name: Validate release composition\n([\s\S]*?)(?=\n      - )/)?.[1];
+    assert.ok(step);
+    assert.match(step, /RELEASE_BASE_SHA: \$\{\{ github.event.pull_request.base.sha \|\| github.event.before \}\}/);
+    assert.match(step, /RELEASE_HEAD_SHA: \$\{\{ github.event.pull_request.head.sha \|\| '' \}\}/);
+    assert.match(step, /npm run release:validate -- --ci/);
+    assert.doesNotMatch(workflow, /ref:.*pull_request.head|git checkout|git switch|receipt.*sourceSha/);
+    assert.match(workflow, /uses: actions\/checkout@v4[\s\S]*?fetch-depth: 0/);
+    if (name === 'v1-ci.yml') {
+      assert.match(workflow, /testedSourceSha: process.env.GITHUB_SHA, headSha: process.env.PR_HEAD_SHA/);
+      assert.match(workflow, /dotnet restore Agentweaver.slnx --locked-mode/);
+      assert.match(workflow, /dotnet build Agentweaver.slnx --no-restore/);
+    }
+  }
+});
+
+test('CI validation CLI uses verified event history while retaining the integrated manifest and coverage diff', t => {
+  for (const eventName of ['pull_request', 'push']) {
+    const f = integratedPreparationFixture(t);
+    mkdirSync(path.join(f.dir, 'scripts', 'release'), { recursive: true });
+    for (const name of ['validate.mjs', 'changesets.mjs', 'plan.mjs', 'preparation.mjs']) {
+      writeFileSync(path.join(f.dir, 'scripts', 'release', name), readFileSync(path.join('scripts', 'release', name)));
+    }
+    const context = f.context(eventName);
+    const options = {
+      cwd: f.dir, encoding: 'utf8', env: {
+        ...process.env, GITHUB_EVENT_NAME: eventName, GITHUB_SHA: context.testedSourceSha,
+        RELEASE_BASE_SHA: context.baseSha, RELEASE_HEAD_SHA: context.sourceHeadSha,
+      },
+    };
+    const run = (...args) => spawnSync(process.execPath, [
+      path.join(f.dir, 'scripts', 'release', 'validate.mjs'), manifestPath(f.dir), ...args,
+    ], options);
+    const oldContext = run('--base', f.target);
+    assert.equal(oldContext.status, 1);
+    assert.match(oldContext.stderr, /stale or unrelated receipt/);
+    const fixedContext = run('--ci');
+    assert.equal(fixedContext.status, 0, fixedContext.stderr);
+    assert.match(fixedContext.stdout, /with diff coverage/);
+    assert.equal(git(f.dir, 'rev-parse', 'HEAD'), f.tested);
+    options.env.GITHUB_SHA = f.authoredHead;
+    const mismatched = run('--ci');
+    assert.equal(mismatched.status, 1);
+    assert.match(mismatched.stderr, /checkout HEAD does not match/);
+  }
+});
 
 function snapshot(dir) {
   const entries = [];

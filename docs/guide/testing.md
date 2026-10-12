@@ -2,12 +2,25 @@
 
 The v1 tests use in-memory providers, fake Azure SDK transports, and disposable PostgreSQL. They do not require an Azure subscription.
 
-Pure release checks verify the user-selected P1 plan for 23 product components
+Pure release checks verify the applied P1 source versions for 23 product components
 at `1.0.0`: 13 packages and 10 service images.
-They keep the acceptance-only Probe's pending `0.0.1` version separate.
-They check exact dependency compatibility and confirm that preparation changes
+They keep the acceptance-only Probe's prepared `0.0.1` source version separate.
+They verify the canonical receipt and archived source notes.
+They check exact dependency compatibility and confirm that version application changes
 only version fields and release records, not runtime code or external package pins.
 These checks do not publish artifacts, apply SQL, or prove deployed behavior.
+Workflow source checks verify job-local package permission and the approved GitHub Packages feed.
+They execute the destination guard locally with accepted and rejected values.
+They do not authenticate a token, publish a package or prove registry access.
+Release build-input checks bind the three image references and all 467 dependencies to the approved source.
+They reject source drift, wrong image digests, an isolated builder, and dependency integrity failures before packing.
+A local npm fixture checks a standard locked install followed by offline cache consumption for both existing integrity algorithms.
+These checks run no product image build or publication.
+CI comparison regressions use real controlled Git commits and genuine plan/application receipts.
+They cover the integrated PR merge, ordinary post-merge push, and unchanged linear push.
+They reject forged, stale, unrelated, or changed archive evidence and mismatched event history.
+Extra product edits present only in the integrated tested tree still need fresh source notes.
+Both CI workflows retain that integrated checkout and its exact coverage identity.
 
 Fixed-child store cases compile with the PostgreSQL suite. They check a null
 Open WorkPlan link and a recovered checkpoint association, not runtime permission.
