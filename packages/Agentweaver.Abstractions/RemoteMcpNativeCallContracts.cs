@@ -69,7 +69,8 @@ public static class RemoteMcpNativeCallContract
             throw new ArgumentException("A versioned, bounded Remote MCP result is required.", nameof(result));
         SessionMaterialValidation.ValidateRemoteToolResultProof(request.CurrentCall.Proof);
         SessionMaterialValidation.ValidateRemoteToolResultProof(result.Proof);
-        if (result.Proof != request.CurrentCall.Proof with { ContentClass = result.Proof.ContentClass })
+        if (!SessionMaterialValidation.SameRemoteToolResultProof(
+                result.Proof, request.CurrentCall.Proof with { ContentClass = result.Proof.ContentClass }))
             throw new ArgumentException("The result proof must match the exact reviewed call.", nameof(result));
     }
 }
