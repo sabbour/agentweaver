@@ -102,6 +102,18 @@ It never runs the publisher or writes claims, registry uploads, or tags.
 Its isolated credential directory is temporary and removed after the operations.
 The sanitized result gives only operation names, exit values, and allowlisted error codes.
 Successful login and reads do not prove package-write permission or identify the original failure.
+
+The same workflow has one more default-off input, `agenthost_archive_diagnostic`.
+It checks only the saved AgentHost archive from run `38286624230` (artifact `11763641424`).
+It is not a rebuild, a publication, or an acceptance result.
+Leave `publish`, `platform_only`, and Probe replacement off. The job refuses any other setting.
+It skips preparation, Probe, and publication jobs.
+It needs `refs/heads/v1`, the exact dispatch source, and the first run attempt.
+The dispatch source must differ from the original image source `6b036e11ff211f96cfddcd837be9b5bce75ddb34`.
+The job checks the archive SHA256 before it loads the archive. It then runs only `docker load` and `docker image inspect`.
+The sanitized result gives allowlisted field names, true or false comparisons, and digests.
+It never prints raw inspect output, environment values, full config, or arbitrary labels.
+A well-formed image that does not match gives false comparisons. Malformed data is a failure.
 Ordinary `publish: false` without sampler replacement still prepares release artifacts.
 With `publish: true` and sampler replacement selected, the workflow runs only the separately approved recovery attempt.
 Both sampler selections skip preparation. The recovery job downloads the same original artifact from run `37409181340`.

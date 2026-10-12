@@ -191,9 +191,9 @@ test('publication command reports an allowlisted stage and code without native o
 
 test('workflow diagnostic is isolated, read-only and pinned to the original artifact without a build or publisher', () => {
   const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8').replaceAll('\r\n', '\n');
-  const diagnostic = workflow.slice(workflow.indexOf('\n  diagnose-probe-sampler:'), workflow.indexOf('\n  publish:'));
-  assert.match(workflow, /pack:\n\s+if: \$\{\{ !inputs\.foundation_probe_sampler_replacement \}\}/);
-  assert.match(diagnostic, /!inputs\.publish && inputs\.foundation_probe_sampler_replacement/);
+  const diagnostic = workflow.slice(workflow.indexOf('\n  diagnose-probe-sampler:'), workflow.indexOf(  '\n  diagnose-agenthost-archive:'));
+    assert.match(workflow, /pack:\n\s+if: \$\{\{ !inputs\.foundation_probe_sampler_replacement && !inputs\.agenthost_archive_diagnostic \}\}/);
+    assert.match(diagnostic, /!inputs\.publish && inputs\.foundation_probe_sampler_replacement && !inputs\.agenthost_archive_diagnostic/);
   for (const permission of ['contents', 'actions', 'packages']) assert.match(diagnostic, new RegExp(`${permission}: read`));
   assert.match(diagnostic, /github-token: \$\{\{ github.token \}\}/);
   assert.match(diagnostic, /run-id: 37409181340/);

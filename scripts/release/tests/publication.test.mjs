@@ -775,9 +775,9 @@ test('existing Linux workflow defaults off and isolates the approved sampler rou
   assert.match(workflow, /args\+=\(--foundation-probe-only\); fi/);
   assert.match(workflow, /npm run release:pack -- "\$\{args\[@\]\}"/);
   assert.match(workflow, /probe-publication-recovery\.mjs artifacts\/release\/frozen-probe/);
-  assert.match(workflow, /if: \$\{\{ inputs\.publish && inputs\.foundation_probe_sampler_replacement \}\}/);
+  assert.match(workflow, /if: \$\{\{ inputs\.publish && inputs\.foundation_probe_sampler_replacement && !inputs\.agenthost_archive_diagnostic \}\}/);
   assert.ok(workflow.includes(currentProbeDigest));
-  assert.equal((workflow.match(/fetch-depth: 0/g) ?? []).length, 4);
+  assert.equal((workflow.match(/fetch-depth: 0/g) ?? []).length, 5);
   const ordinary = workflow.slice(workflow.indexOf('\n  publish:'), workflow.indexOf('\n  publish-probe-sampler:'));
   const sampler = workflow.slice(workflow.indexOf('\n  publish-probe-sampler:'));
   assert.match(ordinary, /permissions:\r?\n\s+contents: write\r?\n\s+packages: write/);
