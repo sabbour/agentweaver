@@ -431,13 +431,15 @@ Registry-host replacement is disabled, and npm retains its locked SHA1 and SHA51
 This install fills npm's cache for the runner's platform; it does not claim every optional-platform tarball was fetched.
 It runs no dependency install scripts and adds no cache library or dependency.
 Its isolated cache is outside the checkout and also supplies the existing offline Web install.
-The product job requires the runner's existing containerd image store and uses the default Docker Buildx driver.
-The image pulls, Buildx native build, and Web build therefore use the same Docker Engine.
-Preparation rejects another builder, a missing shared store, or a wrong local image digest.
-It does not reconfigure or restart the Docker daemon.
-Missing shared-store setup fails before image pulls and requires a separate setup decision.
-Docker 27 or later supplies the existing OCI archive and loaded-image outputs.
-The product path requires an existing Buildx 0.13 or later; it does not install Buildx or fetch a builder image.
+For `platform_only: true`, the workflow starts Docker Engine `v29.9.0` with the official `docker/setup-docker-action` `v5.5.0`.
+The action is pinned to commit `2bf61fb9464cc67f0cbdeabed6aa0380accd1c70`.
+The action enables `containerd-snapshotter` in its temporary Docker daemon.
+The workflow points the default local Docker context at that daemon's Unix socket.
+The pack job then uses the default Docker Buildx builder.
+Image pulls, the Buildx build, and the Web build use the same Docker Engine.
+Preparation still rejects another builder, a missing shared image store, or a wrong local image digest.
+The action stops its daemon at the end of the job and does not change the runner's preinstalled daemon.
+The product path still requires Buildx `0.13` or later. It does not install Buildx or fetch a builder image.
 The packer's offline, immutable-image, exact-source, and clean-tree guards remain unchanged.
 Other selections and the frozen Probe jobs retain their existing paths.
 Build-input preparation does not publish, deploy, or change registry credentials.
