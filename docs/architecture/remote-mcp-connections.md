@@ -67,6 +67,114 @@ Configuration revisions and saved catalog rows are immutable. Disable, removal, 
 
 The Cilium Environment provider enforces L3/L4 egress only. Remote MCP needs L7 mediation, so this provider does not authorize or execute MCP requests.
 
+Separate optional TLS profiles register Environment's fixed Identity and
+Orchestrator owner clients. They require explicit existing service identities,
+certificate files, peer pins, and bounded timeouts; an ordinary bearer cannot
+select these service roles. Their HTTP handlers disable redirects and cookies.
+The matching private listeners reject another
+service or port before reading a proof. These registrations do not supply
+current applied L7 evidence or enable a send.
+
+Environment's reviewed-tool recipient is separately disabled by default.
+`Environment:RemoteMcpCallVerification:EnableReviewedToolRecipient` enables its
+`Kestrel:Endpoints:RemoteMcpReviewedToolTransport:Url` listener.
+It reuses the configured Orchestrator service identity and certificate pins.
+Its port must match that profile's `ListenerPort` and differ from every other listener.
+It cannot share the Identity verification listener or accept the Identity peer.
+`RequireOrchestratorPeer` rejects missing configuration, ordinary HTTPS,
+the wrong port, or another service before the receiving route reads the proof.
+This source registration does not map a route or authenticate the original actor.
+It does not establish network enforcement, issue credentials, or enable remote sends.
+
+## Internal reviewed-call contracts
+
+`RemoteMcpCurrentCallVerificationRequest` carries the full `RemoteToolResultProof`
+and a matching `tools/call` binding. It has no caller-defined wire digest or RPC
+identity. The native handler must read and check the actual bounded request bytes.
+The reviewed `NativeCallId` remains separate from the transport's RPC ID.
+
+The Orchestrator's `IReviewedRemoteToolTransport.SendAsync` receives the original
+`HttpContext`, full owner-built proof, selected snapshot, and copied request bytes.
+The caller repeats current authority checks after serialization and before this handoff.
+The receiving host must authenticate that context and repeat owner and network checks.
+The proof and MCP request metadata do not establish actor or network authority.
+A transport denial returns no result and does not trigger a fallback or retry.
+This source handoff does not register a native transport or enable the SDK hook.
+
+Identity's `RemoteMcpCurrentCallVerificationClient.VerifyAsync` authenticates the
+original actor with the Broker validation scheme. It forwards that actor's bearer
+to the fixed Environment owner over the separate service TLS profile.
+The acknowledgment binds the complete proof, call, snapshot, and current policy.
+Identity must repeat this read after a credential wait and reject changed authority.
+This acknowledgment alone does not permit credential delivery.
+
+Environment's current-call verifier is disabled by default.
+`Environment:RemoteMcpCallVerification:EnableCurrentCallVerifier` maps
+`POST /internal/remote-mcp/current-call/verify` only when explicitly enabled.
+Startup then requires both existing trusted owner TLS profiles and the validated
+`Environment:NetworkPolicy:RemoteMcpManagedGateway` options below.
+
+| Option | Required value |
+| --- | --- |
+| `ProviderId` | Exact selected managed gateway provider ID. |
+| `AdapterVersion` | Exact selected adapter version. |
+| `OptionsSchemaVersion` | `1`. |
+| `OptionsRevision` | Exact selected options revision. |
+| `GatewayEndpoint` | Canonical HTTPS gateway endpoint. |
+
+The verifier uses the configured Environment authentication authority as the actor issuer.
+It requires the Identity peer on its private listener before reading the request.
+It accepts only `application/json` and limits the actual body to 2 MiB.
+The limit also applies when the request has no declared length or writable server limit.
+An oversized body returns `413` before JSON parsing or verifier creation.
+It forwards the authenticated actor to the fixed Orchestrator owner, reads the
+current runtime registration, and verifies the full reviewed-call proof.
+It then reads current gateway state and repeats current authority checks.
+The scoped reader and verifier share one process-wide managed gate instance.
+No route applies a gate or changes network rules.
+Current in-process state cannot prove forced network enforcement.
+Without that proof, the verifier returns a denial and no acknowledgment.
+The missing-enforcement response is `503` with
+`remote_mcp_forced_network_enforcement_unavailable` and `Cache-Control: no-store`.
+This route does not read credentials or contact an MCP server.
+It does not add an Identity credential-release success path.
+
+`RemoteMcpNativeCallContext.CreateVerified` creates an in-process context from an
+authenticated principal, current runtime registration, and exact Orchestrator
+verification receipt. Its constructor is private. JSON cannot carry its authority.
+The trusted host supplies the configured issuer and original actor authorization.
+The receiving handler must check current owners again before network IO.
+Neither an MCP header nor an actor name in a request body replaces authentication.
+
+`IRemoteMcpManagedGatewayPolicy` defines `ApplyAsync`, `VerifyAsync`, and
+`RevokeAsync`. Each method accepts `RemoteMcpManagedGatewayGateDescriptor` and
+returns `RemoteMcpManagedGatewayPolicyReceipt`. The descriptor pins the Environment
+generation, policy resource and generation, egress intent, options, gateway,
+target, and complete connection/configuration/discovery/catalog/tool snapshot.
+The receipt binds the operation, descriptor hash, handler instance, and gate state.
+It proves only in-process handler state. It does not prove forced network mediation.
+
+`RemoteMcpCurrentGatewayPolicyReader.ReadCurrentAsync` obtains the full gateway
+binding from `IRemoteMcpManagedGatewayStateReader`, not the saved catalog reference.
+The handler must return its current descriptor and a fresh `Verify` receipt.
+The reader checks current actor and run authority, selected L7 options, lifecycle,
+owner-recorded policy generation, target purpose, intent hash, and full snapshot.
+It repeats authority and handler reads after waits and rejects changed state.
+
+This reader does not render an L7 intent through the Cilium-only adapter.
+That adapter still rejects L7 intents, and its datapath flag remains false.
+`VerifyForDispatchAsync` reports missing forced-network proof. It cannot turn a
+current handler receipt or owner-recorded generation into dispatch authority.
+The source includes managed-handler readback and the optional current-call route.
+Network enforcement, gate application, and native dispatch remain unavailable.
+
+The managed gate retains exact descriptors in process and returns fresh verification receipts.
+A restart loses that state; a receipt does not prove persistent or network state.
+These shared types do not provide a native dispatch route.
+Missing network enforcement or purpose evidence still denies
+both a send and credential delivery. Management reads retain Projects authority;
+these types do not expose an unauthenticated connection resolver.
+
 This source does not prove a Registry fetch, MCP handshake, `tools/list` request, reviewed tool selection, native SDK use, or remote tool call. Tool acceptance belongs to the separate reviewed-call work in [#1925](https://github.com/sabbour/agentweaver/issues/1925). OAuth binding belongs to [#1927](https://github.com/sabbour/agentweaver/issues/1927). Trusted transport belongs to [#1929](https://github.com/sabbour/agentweaver/issues/1929).
 
 ```mermaid
@@ -91,4 +199,9 @@ sequenceDiagram
     Environment-->>Caller: Return no-store final revision/hash receipt
     Note over Environment: Parser is local and pure. These routes do not contact a Registry or MCP server
     Note over Environment: The Identity reference is generated by Identity; this route does not create consent or credentials
+    Note over Environment: Shared call and gate contracts do not enable native sends or prove forced network mediation
+    Note over Environment: The current L7 binding comes from active handler readback, not a saved catalog reference
+    Note over Environment: A native handoff retains the original actor context and full proof; network proof remains required
+    Note over Environment: The Orchestrator recipient has a separate, default-off TLS listener and peer check
+    Note over Environment: The optional Identity current-call route checks owners and active gate state but returns no acknowledgment without network proof
 ```

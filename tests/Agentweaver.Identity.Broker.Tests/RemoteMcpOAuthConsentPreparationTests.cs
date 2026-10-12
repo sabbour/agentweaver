@@ -630,6 +630,58 @@ public sealed class RemoteMcpOAuthConsentPreparationTests(PostgresContainerFixtu
     }
 
     [Fact]
+    public async Task DisconnectClearsCredentialReferencesAndReplaysIdempotently()
+    {
+        var (db, dataSource) = await CreateDatabaseAsync();
+        await using (dataSource)
+        await using (db)
+        {
+            var row = await SeedAuthorizedConnectionAsync(db);
+            var projectsHandler = new ProjectsOwnerHandler();
+            var environmentHandler = new EnvironmentOwnerHandler(
+                row.IdentityBindingReference, linked: true);
+            var providerHandler = new MetadataProviderHandler();
+            var secrets = new ControlledSecretWriter();
+            using var projects = new HttpClient(projectsHandler);
+            using var environment = new HttpClient(environmentHandler);
+            using var provider = new HttpClient(providerHandler);
+            var service = CreateService(db, projects, environment, provider, secrets);
+            var request = new RemoteMcpOAuthDisconnectRequest(
+                row.ConnectionRevision,
+                row.CredentialRevision,
+                row.ConfigurationRevision,
+                Guid.NewGuid());
+
+            var status = await service.DisconnectAsync(
+                Actor(), Issuer, ActorId, ConnectionId, request, CancellationToken.None);
+
+            var saved = await db.RemoteMcpOAuthConnections.AsNoTracking()
+                .SingleAsync(item => item.ConnectionId == ConnectionId);
+            Assert.Equal(RemoteMcpOAuthConnectionState.Disconnected, saved.State);
+            Assert.Equal(request.ExpectedConnectionRevision + 1, saved.ConnectionRevision);
+            Assert.Equal(request.ExpectedCredentialRevision + 1, saved.CredentialRevision);
+            Assert.Null(saved.AccessTokenSecretId);
+            Assert.Null(saved.AccessTokenSecretVersion);
+            Assert.Null(saved.AccessTokenExpiresAt);
+            Assert.Null(saved.RefreshTokenSecretId);
+            Assert.Null(saved.RefreshTokenSecretVersion);
+            Assert.Null(saved.RefreshTokenExpiresAt);
+            Assert.False(status.CredentialUseAvailable);
+            Assert.Empty(secrets.RedeemedReferences);
+            Assert.Empty(providerHandler.Requests);
+
+            var replay = await service.DisconnectAsync(
+                Actor(), Issuer, ActorId, ConnectionId, request, CancellationToken.None);
+
+            Assert.Equal(status, replay);
+            var replayed = await db.RemoteMcpOAuthConnections.AsNoTracking()
+                .SingleAsync(item => item.ConnectionId == ConnectionId);
+            Assert.Equal(saved.ConnectionRevision, replayed.ConnectionRevision);
+            Assert.Equal(saved.CredentialRevision, replayed.CredentialRevision);
+        }
+    }
+
+    [Fact]
     public async Task MissingWriterFailsBeforeAnyOwnerRequestOrEnvironmentLink()
     {
         var (db, dataSource) = await CreateDatabaseAsync();

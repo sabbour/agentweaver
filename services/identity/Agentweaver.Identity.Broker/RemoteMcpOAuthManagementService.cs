@@ -2022,7 +2022,7 @@ internal sealed class RemoteMcpOAuthManagementService(
             receipt.IdentityBindingReference);
     }
 
-    private static RemoteMcpOAuthConnectionBinding CreateBinding(
+    internal static RemoteMcpOAuthConnectionBinding CreateBinding(
         RemoteMcpOAuthConnectionRecord row,
         long configurationRevision,
         string configurationHash,

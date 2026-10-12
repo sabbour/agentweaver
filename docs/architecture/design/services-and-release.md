@@ -115,6 +115,8 @@ flowchart LR
     Orch -->|"gRPC"| Knowledge
     Orch -->|"gRPC"| Source
     Orch -->|"gRPC"| Env
+    Env -.->|"optional separate TLS current-call verification"| Orch
+    Env -.->|"optional pinned Identity owner client; credential delivery unavailable"| Identity
     Orch -->|"outbox events"| Events
     Events -->|"events and SSE"| Bff
     Control -->|"owned schemas"| Db
