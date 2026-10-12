@@ -11,3 +11,5 @@ Keep the existing Events listener and peer pins separate, and reject incorrect s
 These source profiles do not enable remote MCP dispatch, credential delivery, or applied network enforcement.
 Add exact current-call and gate contracts, an authenticated owner client, and a non-wire native call context.
 An in-process gate receipt is not proof of forced network enforcement.
+Read full current gateway bindings from active-handler state and exact accepted run options, with repeat checks after waits.
+Keep the Cilium-only L7 rejection intact and refuse dispatch without a real forced-network proof producer.
