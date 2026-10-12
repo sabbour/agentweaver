@@ -95,6 +95,39 @@ public sealed class ReviewedRemoteToolTransportClientTests
         Assert.Equal(0, rig.Handler.Calls);
     }
 
+    [Fact]
+    public async Task ExactRequestByteLimitReachesOnlyTheFixedOwner()
+    {
+        using var rig = CreateRig();
+        var bytes = new byte[SessionMaterialValidation.MaximumBytes];
+        Array.Fill(bytes, (byte)' ');
+        rig.Bytes.CopyTo(bytes, 0);
+        rig.Handler.Respond = request => MatchingResponseAsync(request, bytes);
+
+        var result = await rig.Client.SendAsync(
+            rig.Context, rig.Proof, rig.Snapshot, bytes, CancellationToken.None);
+
+        Assert.Equal("result"u8.ToArray(), result.Content.ToArray());
+        Assert.Equal(1, rig.Handler.Calls);
+    }
+
+    [Fact]
+    public async Task ExactResultByteLimitReturnsTheBoundedPrivateCopy()
+    {
+        using var rig = CreateRig();
+        var expected = new byte[SessionMaterialValidation.MaximumBytes];
+        rig.Handler.Respond = async request =>
+        {
+            var envelope = await ReadRequestAsync(request);
+            return Response(request, Result(envelope) with { ContentBytes = expected });
+        };
+
+        var result = await rig.SendAsync();
+
+        Assert.Equal(expected, result.Content.ToArray());
+        Assert.Equal(1, rig.Handler.Calls);
+    }
+
     [Theory]
     [InlineData("bytes")]
     [InlineData("snapshot")]
