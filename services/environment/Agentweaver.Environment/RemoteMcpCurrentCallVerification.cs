@@ -5,7 +5,9 @@ using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.Http;
+using Microsoft.Extensions.Options;
 
 namespace Agentweaver.Environment;
 
@@ -147,9 +149,24 @@ public static class RemoteMcpCurrentCallVerificationEndpoints
                     return Results.Json(new { code = "remote_mcp_current_verification_content_type_invalid" },
                         statusCode: StatusCodes.Status415UnsupportedMediaType);
                 if (context.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } limit)
-                    limit.MaxRequestBodySize = maximumBytes;
-                var request = await context.Request.ReadFromJsonAsync<RemoteMcpCurrentCallVerificationRequest>(
-                    cancellationToken: cancellationToken).ConfigureAwait(false)
+                    limit.MaxRequestBodySize = maximumBytes + 1;
+                var body = new byte[maximumBytes + 1];
+                var bodyLength = 0;
+                while (bodyLength < body.Length)
+                {
+                    var read = await context.Request.Body.ReadAsync(body.AsMemory(bodyLength), cancellationToken)
+                        .ConfigureAwait(false);
+                    if (read == 0)
+                        break;
+                    bodyLength += read;
+                }
+                if (bodyLength > maximumBytes)
+                    return Results.Json(new { code = "remote_mcp_current_verification_request_too_large" },
+                        statusCode: StatusCodes.Status413PayloadTooLarge);
+                var serializerOptions = context.RequestServices.GetRequiredService<IOptions<JsonOptions>>()
+                    .Value.SerializerOptions;
+                var request = JsonSerializer.Deserialize<RemoteMcpCurrentCallVerificationRequest>(
+                    body.AsSpan(0, bodyLength), serializerOptions)
                     ?? throw new ArgumentException("A Remote MCP current-call request is required.");
                 var verifier = context.RequestServices.GetRequiredService<RemoteMcpCurrentCallVerificationService>();
                 var acknowledgment = await verifier.VerifyAsync(context, request, cancellationToken)

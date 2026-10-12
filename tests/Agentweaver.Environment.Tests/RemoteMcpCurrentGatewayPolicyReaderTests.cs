@@ -4,6 +4,8 @@ using System.Net.Http.Json;
 using System.Net.Security;
 using System.Security.Authentication;
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -13,6 +15,7 @@ using Agentweaver.Identity;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Http;
@@ -219,6 +222,111 @@ public sealed class RemoteMcpCurrentGatewayPolicyReaderTests
         Assert.Equal(0, certificateResolutions);
     }
 
+    [Fact]
+    public async Task UnknownLengthVerificationBodyIsBoundedWithoutWritableServerLimit()
+    {
+        const int listenerPort = 9448;
+        const int maximumBytes = 2 * SessionMaterialValidation.MaximumBytes;
+        using var key = RSA.Create(2048);
+        var certificateRequest = new CertificateRequest(
+            "CN=remote-mcp-route-test", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        certificateRequest.CertificateExtensions.Add(
+            new X509BasicConstraintsExtension(false, false, 0, false));
+        certificateRequest.CertificateExtensions.Add(
+            new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, false));
+        var extendedKeyUsage = new OidCollection
+        {
+            new("1.3.6.1.5.5.7.3.1"),
+            new("1.3.6.1.5.5.7.3.2")
+        };
+        certificateRequest.CertificateExtensions.Add(
+            new X509EnhancedKeyUsageExtension(extendedKeyUsage, false));
+        using var certificate = certificateRequest.CreateSelfSigned(
+            DateTimeOffset.UtcNow.AddMinutes(-5), DateTimeOffset.UtcNow.AddMinutes(5));
+        var certificatePath = Path.Combine(Path.GetTempPath(), $"remote-mcp-route-{Guid.NewGuid():N}.pem");
+        var privateKeyPath = Path.Combine(Path.GetTempPath(), $"remote-mcp-route-{Guid.NewGuid():N}.key");
+        File.WriteAllText(certificatePath, certificate.ExportCertificatePem());
+        File.WriteAllText(privateKeyPath, key.ExportPkcs8PrivateKeyPem());
+        try
+        {
+            var certificateHash = Convert.ToHexString(SHA256.HashData(certificate.RawData)).ToLowerInvariant();
+            var tlsOptions = new RuntimeServiceTlsOptions
+            {
+                LocalServiceName = "Environment",
+                LocalServicePrincipalId = "11111111-1111-1111-1111-111111111111",
+                LocalCertificatePemPath = certificatePath,
+                LocalPrivateKeyPemPath = privateKeyPath,
+                LocalCertificateSha256 = certificateHash,
+                ListenerPort = listenerPort,
+                PeerServiceName = "IdentityBroker",
+                PeerServicePrincipalId = "22222222-2222-2222-2222-222222222222",
+                PeerOwnerAddress = "https://identity.test/",
+                PeerCertificateSha256Pins = [certificateHash]
+            };
+            var builder = WebApplication.CreateBuilder();
+            builder.Services.AddAuthorization();
+            builder.Services.AddKeyedSingleton(RemoteMcpTrustedServiceTlsComposition.IdentityTlsKey, tlsOptions);
+            builder.Services.AddKeyedSingleton<RuntimeServiceTlsIdentity>(
+                RemoteMcpTrustedServiceTlsComposition.IdentityTlsKey,
+                (_, _) => new(tlsOptions, "Environment", "IdentityBroker"));
+            var verifierResolutions = 0;
+            builder.Services.AddSingleton<RemoteMcpCurrentCallVerificationService>(_ =>
+            {
+                verifierResolutions++;
+                throw new InvalidOperationException("A rejected body must not create the verifier.");
+            });
+            await using var app = builder.Build();
+            app.MapRemoteMcpCurrentCallVerification();
+            var endpoint = Assert.Single(((IEndpointRouteBuilder)app).DataSources
+                .SelectMany(source => source.Endpoints)
+                .OfType<RouteEndpoint>());
+
+            foreach (var readOnlyFeature in new bool?[] { null, true })
+            foreach (var overLimit in new[] { false, true })
+            {
+                var body = new byte[maximumBytes + (overLimit ? 1 : 0)];
+                Array.Fill(body, (byte)' ');
+                body[^1] = (byte)'{';
+                var bodyStream = new CountingReadStream(body);
+                var context = new DefaultHttpContext
+                {
+                    RequestServices = app.Services
+                };
+                context.Request.IsHttps = true;
+                context.Connection.LocalPort = listenerPort;
+                context.Request.ContentType = "application/json";
+                context.Request.Body = bodyStream;
+                context.Features.Set<ITlsHandshakeFeature>(new TestTlsHandshake(SslProtocols.Tls13));
+                context.Features.Set<ITlsConnectionFeature>(new TestTlsConnection(certificate));
+                if (readOnlyFeature is true)
+                    context.Features.Set<IHttpMaxRequestBodySizeFeature>(new ReadOnlyRequestBodySizeFeature());
+                Assert.Null(context.Request.ContentLength);
+                if (readOnlyFeature is null)
+                    Assert.Null(context.Features.Get<IHttpMaxRequestBodySizeFeature>());
+                await using var response = new MemoryStream();
+                context.Response.Body = response;
+
+                await endpoint.RequestDelegate!(context);
+
+                Assert.Equal(overLimit ? StatusCodes.Status413PayloadTooLarge : StatusCodes.Status400BadRequest,
+                    context.Response.StatusCode);
+                Assert.Equal(maximumBytes + (overLimit ? 1 : 0), bodyStream.BytesRead);
+                response.Position = 0;
+                using var result = await JsonDocument.ParseAsync(response);
+                Assert.Equal(
+                    overLimit ? "remote_mcp_current_verification_request_too_large" :
+                        "remote_mcp_current_verification_invalid",
+                    result.RootElement.GetProperty("code").GetString());
+                Assert.Equal(0, verifierResolutions);
+            }
+        }
+        finally
+        {
+            File.Delete(certificatePath);
+            File.Delete(privateKeyPath);
+        }
+    }
+
     [Theory]
     [InlineData("missing-handler", "remote_mcp_managed_handler_unavailable")]
     [InlineData("snapshot", "remote_mcp_managed_handler_binding_invalid")]
@@ -398,6 +506,33 @@ public sealed class RemoteMcpCurrentGatewayPolicyReaderTests
 #pragma warning restore SYSLIB0058
         public int KeyExchangeStrength => 0;
         public TlsCipherSuite? NegotiatedCipherSuite => null;
+    }
+
+    private sealed class TestTlsConnection(X509Certificate2 clientCertificate) : ITlsConnectionFeature
+    {
+        public X509Certificate2? ClientCertificate { get; set; } = clientCertificate;
+
+        public Task<X509Certificate2?> GetClientCertificateAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(ClientCertificate);
+    }
+
+    private sealed class ReadOnlyRequestBodySizeFeature : IHttpMaxRequestBodySizeFeature
+    {
+        public long? MaxRequestBodySize { get; set; } = 1;
+        public bool IsReadOnly => true;
+    }
+
+    private sealed class CountingReadStream(byte[] content) : MemoryStream(content)
+    {
+        public int BytesRead { get; private set; }
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            var read = await base.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+            BytesRead += read;
+            return read;
+        }
     }
 
     private static DefaultHttpContext ActorContext(
