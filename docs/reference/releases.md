@@ -111,11 +111,13 @@ It pulls only the three source-pinned Microsoft base images.
 A standard locked npm install fills the cache for the runner's dependencies from the approved 467-entry Web lockfile.
 It retains the committed download destinations and npm's existing integrity checks.
 This preparation runs no dependency install scripts and adds no dependency.
-The runner's Docker builder shares the containerd image store used by the image pulls.
-Preparation checks the actual builder, store, image digests, and clean source before packing.
-It does not change or restart the Docker daemon.
-It requires the runner's existing Buildx tool and does not install a builder or other software.
-If the required shared store is absent, preparation reports that missing setup before any image pull.
+For `platform_only: true`, the workflow starts Docker Engine `v29.9.0` with the official `docker/setup-docker-action` `v5.5.0`, pinned to commit `2bf61fb9464cc67f0cbdeabed6aa0380accd1c70`.
+The action enables `containerd-snapshotter` in its temporary Docker daemon.
+The action exports that daemon's Unix socket through `DOCKER_HOST`, so Docker commands use the temporary engine without changing context metadata.
+The default Buildx builder then uses the same local Docker Engine as the image pulls.
+Preparation still checks the builder, shared store, image digests, and clean source before packing.
+The action stops its daemon at the end of the job and does not change the runner's preinstalled daemon.
+The runner still requires Buildx `0.13` or later. The workflow does not install Buildx or fetch a builder image.
 The existing offline Web install and image checks remain unchanged.
 These inputs are prepared on the build runner, not on a developer's machine.
 This preparation does not publish artifacts or deploy services.

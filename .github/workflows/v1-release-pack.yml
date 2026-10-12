@@ -74,6 +74,19 @@ jobs:
       - name: Validate release composition
         if: ${{ github.ref == 'refs/heads/v1' }}
         run: npm run release:validate
+      - name: Set up product Docker engine
+        id: product-docker
+        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+        if: ${{ github.ref == 'refs/heads/v1' && inputs.platform_only }}
+        with:
+          version: 'v29.9.0'
+          set-host: true
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
       - uses: docker/setup-buildx-action@v3
         if: ${{ github.ref == 'refs/heads/v1' && !inputs.platform_only }}
       - name: Prepare approved product build inputs
