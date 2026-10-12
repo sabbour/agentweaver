@@ -121,8 +121,18 @@ public sealed class RuntimeBootstrapReceiver(
         ReadOnlyMemory<byte> configuration,
         Guid consumeOperationId,
         Guid exchangeOperationId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        RuntimeResumeBootstrapRequest? resumeBootstrap = null)
     {
+        resumeBootstrap?.Validate();
+        if (resumeBootstrap is not null &&
+            (resumeBootstrap.Registration != registration ||
+             resumeBootstrap.ConsumeOperationId != consumeOperationId ||
+             resumeBootstrap.ExchangeOperationId != exchangeOperationId))
+            throw new RuntimeAuthorizationException("runtime_resume_bootstrap_request_invalid");
+        var resumeBootstrapHash = resumeBootstrap is null
+            ? null
+            : RuntimeContractValidation.Hash(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(resumeBootstrap));
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -131,7 +141,8 @@ public sealed class RuntimeBootstrapReceiver(
             {
                 if (configured.ConfigurationHash != RuntimeContractValidation.Hash(configuration.Span) ||
                     configured.ConsumeOperationId != consumeOperationId ||
-                    configured.ExchangeOperationId != exchangeOperationId)
+                    configured.ExchangeOperationId != exchangeOperationId ||
+                    configured.ResumeBootstrapHash != resumeBootstrapHash)
                     throw new RuntimeAuthorizationException("runtime_configuration_conflict");
                 await currentSession.RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
                 return currentSession;
@@ -140,14 +151,16 @@ public sealed class RuntimeBootstrapReceiver(
                 throw new RuntimeAuthorizationException("runtime_delivery_unavailable");
             if (RuntimeContractValidation.Hash(configuration.Span) != pending.Proof.ConfigurationHash)
                 throw new RuntimeAuthorizationException("runtime_configuration_invalid");
+            if (resumeBootstrap is not null && resumeBootstrap.BootstrapOperationId != pending.Receipt.OperationId)
+                throw new RuntimeAuthorizationException("runtime_resume_bootstrap_request_invalid");
             Volatile.Write(ref _state, (int)RuntimeBootstrapReceiverState.Configuring);
             try
             {
                 _session = await bootstrap.ConfigureAsync(
                     configuration, pending.Proof, consumeOperationId, exchangeOperationId,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken, resumeBootstrap).ConfigureAwait(false);
                 _configured = new(pending.Proof.ConfigurationHash, consumeOperationId,
-                    exchangeOperationId);
+                    exchangeOperationId, resumeBootstrapHash);
                 Volatile.Write(ref _state, (int)RuntimeBootstrapReceiverState.Ready);
                 return _session;
             }
@@ -233,5 +246,6 @@ public sealed class RuntimeBootstrapReceiver(
     private sealed record ConfiguredTicket(
         string ConfigurationHash,
         Guid ConsumeOperationId,
-        Guid ExchangeOperationId);
+        Guid ExchangeOperationId,
+        string? ResumeBootstrapHash);
 }

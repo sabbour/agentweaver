@@ -77,11 +77,14 @@ public sealed class RuntimeCopilotSessionFactory
         SkillRuntimeContentProjectionV1 acceptedSkills,
         RuntimeSessionRecovery? recovery = null,
         Func<RuntimeActionRequest, CancellationToken, Task>? requireActionAuthority = null,
-        RuntimeMcpServerEndpoint? mcpServer = null)
+        RuntimeMcpServerEndpoint? mcpServer = null,
+        Func<CancellationToken, Task<RuntimeSessionRecovery>>? journalFallback = null)
     {
         ArgumentNullException.ThrowIfNull(requireCreationAuthority);
         RuntimeContractValidation.Validate(registration);
         RuntimeSkillContentHttpClient.ValidateForRegistration(acceptedSkills, registration);
+        if (journalFallback is not null && recovery is null)
+            throw new RuntimeAuthorizationException("runtime_resume_cache_unavailable");
         if (mcpServer is { IsValid: false })
             throw new RuntimeAuthorizationException("runtime_mcp_server_binding_invalid");
         if (mcpServer is not null)
@@ -170,14 +173,17 @@ public sealed class RuntimeCopilotSessionFactory
             if (recovery is not null)
             {
                 var recordedLimit = recovery.Cache?.Material.Reference.Material?.MaxPromptTokens;
-                if (recovery.CacheMatches(registration, sdkVersion, status.Version, model.ModelId, recordedLimit) &&
-                    recordedLimit is { } previousLimit)
+                var cacheMatches = recovery.CacheMatches(
+                    registration, sdkVersion, status.Version, model.ModelId, recordedLimit);
+                if (cacheMatches && recordedLimit is { } previousLimit)
                 {
                     if (maxPromptTokens is null || maxPromptTokens < previousLimit)
                         throw new RuntimeAuthorizationException("runtime_prompt_capacity_changed");
                     maxPromptTokens = previousLimit;
                 }
-                if (recovery.CacheMatches(registration, sdkVersion, status.Version, model.ModelId, maxPromptTokens))
+                cacheMatches = recovery.CacheMatches(
+                    registration, sdkVersion, status.Version, model.ModelId, maxPromptTokens);
+                if (cacheMatches)
                 {
                     try
                     {
@@ -187,14 +193,29 @@ public sealed class RuntimeCopilotSessionFactory
                     catch (RuntimeAuthorizationException failure) when (
                         failure.Code is "runtime_sdk_cache_invalid" or "runtime_sdk_cache_unavailable")
                     {
-                        recoveryMode = RuntimeSessionRecoveryMode.JournalRebuild;
                         recoveryReason = failure.Code;
                     }
                 }
-                else if (recovery.Turns.Count > 0 || recovery.Cache is not null)
+
+                if (recoveryMode != RuntimeSessionRecoveryMode.NativeCache)
                 {
-                    recoveryMode = RuntimeSessionRecoveryMode.JournalRebuild;
-                    recoveryReason = recovery.Cache is null ? "runtime_sdk_cache_missing" : "runtime_sdk_cache_incompatible";
+                    if (journalFallback is not null)
+                    {
+                        var reason = recoveryReason ??
+                            (recovery.Cache is null ? "runtime_sdk_cache_missing" : "runtime_sdk_cache_incompatible");
+                        recovery = await journalFallback(cancellationToken).ConfigureAwait(false);
+                        if (recovery.Cache is not null || recovery.JournalRebuild is null)
+                            throw new RuntimeAuthorizationException("runtime_resume_journal_receipt_invalid");
+                        recoveryMode = RuntimeSessionRecoveryMode.JournalRebuild;
+                        recoveryReason = reason;
+                    }
+                    else if (recovery.Turns.Count > 0 || recovery.Cache is not null)
+                    {
+                        recoveryMode = RuntimeSessionRecoveryMode.JournalRebuild;
+                        recoveryReason ??= recovery.Cache is null
+                            ? "runtime_sdk_cache_missing"
+                            : "runtime_sdk_cache_incompatible";
+                    }
                 }
             }
             nativeFiles.InstallSkillResources(acceptedSkills);
@@ -248,9 +269,10 @@ public sealed class RuntimeCopilotSessionFactory
                 };
                 options.RemoteSession = GitHub.Copilot.Rpc.RemoteSessionMode.Off;
                 if (recoveryMode == RuntimeSessionRecoveryMode.JournalRebuild)
-                    options.SystemMessage = new SystemMessageConfig
+                    if (recovery!.RebuiltContext() is { } context)
+                        options.SystemMessage = new SystemMessageConfig
                     {
-                        Mode = SystemMessageMode.Append, Content = recovery!.RebuiltContext()
+                        Mode = SystemMessageMode.Append, Content = context
                     };
             }
             if (recoveryMode == RuntimeSessionRecoveryMode.NativeCache)
@@ -294,7 +316,7 @@ public sealed class RuntimeCopilotSessionFactory
                     : null
             };
             return new RuntimeCopilotSession(client, session, facts, usage, turns,
-                nativeFiles, recoveryMode, recoveryReason, _abortDrainTimeout);
+                nativeFiles, recoveryMode, recoveryReason, recovery?.JournalRebuild, _abortDrainTimeout);
         }
         catch
         {

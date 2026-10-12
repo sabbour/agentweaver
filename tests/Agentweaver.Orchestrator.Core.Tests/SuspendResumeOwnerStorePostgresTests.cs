@@ -129,6 +129,30 @@ public sealed class SuspendResumeOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ResumeCannotReserveAnOperationWithoutTheCurrentReleasedManifest()
+    {
+        var sourceManifestId = Guid.NewGuid();
+
+        var exception = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.BeginSessionResumeAsync(
+                _actor, _selection, _identity, "resume-without-source", sourceManifestId,
+                CancellationToken.None));
+
+        Assert.Equal("suspend_resume_manifest_unavailable", exception.Code);
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT count(*) FROM "{_schema}".coordination_execution_operations
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+                AND idempotency_key = @key
+            """, connection);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, _identity.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, _identity.RunId);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, _identity.SessionId);
+        command.Parameters.AddWithValue("key", NpgsqlDbType.Varchar, "resume-without-source");
+        Assert.Equal(0L, await command.ExecuteScalarAsync());
+    }
+
+    [Fact]
     public async Task IdempotencyKeyCannotBeReusedForAnotherOperation()
     {
         _ = await _store.RecordUnavailableSessionSuspendResumeAsync(
@@ -219,9 +243,10 @@ public sealed class SuspendResumeOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task CurrentSuspendGuardRequiresExactFencedOperationBinding()
+    public async Task CurrentSuspendGuardRequiresExactReservedResolveBinding()
     {
-        var seeded = await InsertFencedSuspendOperationAsync("guarded-suspend");
+        var seeded = await InsertFencedSuspendOperationAsync(
+            "guarded-suspend", advanceToFenced: false);
         var request = CreateSuspendRequest(seeded);
         var echo = await new SessionSuspendResumeCoordinator(_store).RequireCurrentSuspendAsync(
             _actor,
@@ -243,78 +268,52 @@ public sealed class SuspendResumeOwnerStorePostgresTests : IAsyncLifetime
 
         var wrongOperation = await Assert.ThrowsAsync<CoordinationException>(() =>
             _store.RequireCurrentSessionSuspendAsync(
-                _actor, _selection, _identity, Guid.NewGuid(), seeded.ManifestId,
-                seeded.ExecutionFence, seeded.AcceptedSelectionHash, seeded.PhaseVersion,
+                _actor, _selection, CreateSuspendRequest(seeded, operationId: Guid.NewGuid()),
                 CancellationToken.None));
         Assert.Equal(StatusCodes.Status409Conflict, wrongOperation.StatusCode);
 
         var wrongManifest = await Assert.ThrowsAsync<CoordinationException>(() =>
             _store.RequireCurrentSessionSuspendAsync(
-                _actor, _selection, _identity, seeded.OperationId, Guid.NewGuid(),
-                seeded.ExecutionFence, seeded.AcceptedSelectionHash, seeded.PhaseVersion,
+                _actor, _selection, CreateSuspendRequest(seeded, manifestId: Guid.NewGuid()),
                 CancellationToken.None));
         Assert.Equal(StatusCodes.Status409Conflict, wrongManifest.StatusCode);
 
         var wrongVersion = await Assert.ThrowsAsync<CoordinationException>(() =>
             _store.RequireCurrentSessionSuspendAsync(
-                _actor, _selection, _identity, seeded.OperationId, seeded.ManifestId,
-                seeded.ExecutionFence, seeded.AcceptedSelectionHash, seeded.PhaseVersion + 1,
+                _actor, _selection, CreateSuspendRequest(seeded, phaseVersion: seeded.PhaseVersion + 1),
                 CancellationToken.None));
         Assert.Equal(StatusCodes.Status409Conflict, wrongVersion.StatusCode);
 
         var wrongFence = await Assert.ThrowsAsync<CoordinationException>(() =>
             _store.RequireCurrentSessionSuspendAsync(
-                _actor, _selection, _identity, seeded.OperationId, seeded.ManifestId,
-                seeded.ExecutionFence + 1, seeded.AcceptedSelectionHash, seeded.PhaseVersion,
+                _actor, _selection, CreateSuspendRequest(seeded, ownerFence: seeded.ExecutionFence + 1),
                 CancellationToken.None));
         Assert.Equal(StatusCodes.Status409Conflict, wrongFence.StatusCode);
 
         var wrongSelection = await Assert.ThrowsAsync<CoordinationException>(() =>
             _store.RequireCurrentSessionSuspendAsync(
-                _actor, _selection, _identity, seeded.OperationId, seeded.ManifestId,
-                seeded.ExecutionFence, new string('0', 64), seeded.PhaseVersion,
+                _actor, _selection, CreateSuspendRequest(seeded, selectionHash: new string('0', 64)),
                 CancellationToken.None));
         Assert.Equal(StatusCodes.Status409Conflict, wrongSelection.StatusCode);
 
         var wrongScope = await Assert.ThrowsAsync<CoordinationException>(() =>
             _store.RequireCurrentSessionSuspendAsync(
-                _actor,
-                _selection,
-                new SessionIdentity("another-project", _identity.RunId, _identity.SessionId),
-                seeded.OperationId,
-                seeded.ManifestId,
-                seeded.ExecutionFence,
-                seeded.AcceptedSelectionHash,
-                seeded.PhaseVersion,
+                _actor, _selection, CreateSuspendRequest(
+                    seeded, identity: new SessionIdentity("another-project", _identity.RunId, _identity.SessionId)),
                 CancellationToken.None));
         Assert.Equal(StatusCodes.Status404NotFound, wrongScope.StatusCode);
 
         var wrongActor = await Assert.ThrowsAsync<CoordinationException>(() =>
             _store.RequireCurrentSessionSuspendAsync(
                 _actor with { Subject = Guid.NewGuid().ToString("D") },
-                _selection, _identity, seeded.OperationId, seeded.ManifestId,
-                seeded.ExecutionFence, seeded.AcceptedSelectionHash, seeded.PhaseVersion,
+                _selection, request,
                 CancellationToken.None));
         Assert.Equal(StatusCodes.Status403Forbidden, wrongActor.StatusCode);
         var missingVersion = await Assert.ThrowsAsync<CoordinationException>(() =>
             _store.RequireCurrentSessionSuspendAsync(
-                _actor, _selection, _identity, seeded.OperationId, seeded.ManifestId,
-                seeded.ExecutionFence, seeded.AcceptedSelectionHash, 0,
+                _actor, _selection, CreateSuspendRequest(seeded, phaseVersion: 0),
                 CancellationToken.None));
         Assert.Equal(StatusCodes.Status400BadRequest, missingVersion.StatusCode);
-    }
-
-    [Fact]
-    public async Task CurrentSuspendGuardRejectsAnOperationThatIsNotFenced()
-    {
-        var reserved = await InsertFencedSuspendOperationAsync(
-            "reserved-suspend", advanceToFenced: false);
-        var exception = await Assert.ThrowsAsync<CoordinationException>(() =>
-            _store.RequireCurrentSessionSuspendAsync(
-                _actor, _selection, _identity, reserved.OperationId, reserved.ManifestId,
-                reserved.ExecutionFence, reserved.AcceptedSelectionHash, reserved.PhaseVersion,
-                CancellationToken.None));
-        Assert.Equal(StatusCodes.Status409Conflict, exception.StatusCode);
     }
 
     [Fact]
@@ -525,8 +524,15 @@ public sealed class SuspendResumeOwnerStorePostgresTests : IAsyncLifetime
 
     private RuntimeHostSuspendRequest CreateSuspendRequest(
         (Guid OperationId, Guid ManifestId, long ExecutionFence, string AcceptedSelectionHash, long PhaseVersion)
-            operation)
+            operation,
+        Guid? operationId = null,
+        Guid? manifestId = null,
+        long? ownerFence = null,
+        string? selectionHash = null,
+        long? phaseVersion = null,
+        SessionIdentity? identity = null)
     {
+        var scope = identity ?? _identity;
         var selection = _selection.Selection;
         var registration = new RuntimeRegistration(
             Guid.NewGuid(),
@@ -535,17 +541,17 @@ public sealed class SuspendResumeOwnerStorePostgresTests : IAsyncLifetime
                 _actor.Issuer,
                 _actor.Subject,
                 _selection.Authorization.TenantId,
-                _identity.ProjectId,
-                _identity.RunId,
-                _identity.SessionId,
+                scope.ProjectId,
+                scope.RunId,
+                scope.SessionId,
                 "agent-1",
                 "turn-1",
                 selection.ProjectRevision,
                 selection.ProjectConfigurationRevision,
                 selection.PlatformRuntimeRevision,
                 selection.ContextRevision,
-                operation.AcceptedSelectionHash,
-                operation.ExecutionFence,
+                selectionHash ?? operation.AcceptedSelectionHash,
+                ownerFence ?? operation.ExecutionFence,
                 "environment-1",
                 "placement-1",
                 1,
@@ -557,8 +563,8 @@ public sealed class SuspendResumeOwnerStorePostgresTests : IAsyncLifetime
         return new RuntimeHostSuspendRequest(
             new RuntimeHostSessionProof(
                 1, registration, Guid.NewGuid(), 1, RuntimeCredentialPurpose.Observe),
-            operation.OperationId,
-            operation.ManifestId,
-            operation.PhaseVersion);
+            operationId ?? operation.OperationId,
+            manifestId ?? operation.ManifestId,
+            phaseVersion ?? operation.PhaseVersion);
     }
 }

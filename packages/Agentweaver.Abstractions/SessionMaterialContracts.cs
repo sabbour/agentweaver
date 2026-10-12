@@ -2,7 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace Agentweaver.Abstractions;
 
-public enum SessionMaterialKind { TurnContent, SdkCache, RemoteToolResult }
+public enum SessionMaterialKind { TurnContent, SdkCache, RemoteToolResult, RuntimeConfiguration }
 
 public enum SessionMaterialResultContentClass { TextOnly, Structured, NonText, Mixed }
 
@@ -161,6 +161,13 @@ public static class SessionMaterialValidation
             if (request.ModelId is not null)
                 RequireIdentifier(request.ModelId);
         }
+        if (request.Kind == SessionMaterialKind.RuntimeConfiguration)
+        {
+            using var document = System.Text.Json.JsonDocument.Parse(request.Bytes);
+            if (document.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object ||
+                document.RootElement.GetRawText().Length > AddressedMessageValidation.MaximumPayloadLength)
+                throw new ArgumentException("A bounded accepted Runtime configuration object is required.");
+        }
     }
 
     public static void Validate(SessionObjectReference reference)
@@ -193,6 +200,7 @@ public static class SessionMaterialValidation
         SessionMaterialKind.TurnContent => "runtime-turn-content",
         SessionMaterialKind.SdkCache => "runtime-sdk-cache",
         SessionMaterialKind.RemoteToolResult => "runtime-remote-tool-result",
+        SessionMaterialKind.RuntimeConfiguration => "runtime-configuration",
         _ => throw new ArgumentOutOfRangeException(nameof(kind))
     };
 

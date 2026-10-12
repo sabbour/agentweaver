@@ -100,7 +100,7 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
                     "lifecycle_generation > 0");
                 table.HasCheckConstraint(
                     "ck_environment_owner_effects_kind",
-                    "effect_kind IN ('NetworkPolicy', 'WorkspaceVolume', 'BuildTestCommand')");
+                    "effect_kind IN ('NetworkPolicy', 'WorkspaceVolume', 'BuildTestCommand', 'RuntimeResumeBootstrap')");
                 table.HasCheckConstraint(
                     "ck_environment_owner_effects_state",
                     "effect_state IN ('Reserved', 'Completed', 'ReconciliationRequired', 'Reconciled', 'Failed', 'Stale')");
@@ -159,6 +159,28 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
                         AND target_provider_binding_json IS NOT NULL
                     )
                     """);
+                table.HasCheckConstraint(
+                    "ck_environment_owner_effects_runtime_resume_bootstrap",
+                    """
+                    effect_kind <> 'RuntimeResumeBootstrap' OR (
+                        operation = 'Activate' AND resource_id IS NOT NULL
+                        AND expected_provider_seam = 'Sandbox' AND expected_provider_id IS NOT NULL
+                        AND expected_provider_resource_id IS NOT NULL AND expected_provider_resource_id = resource_id
+                        AND target_provider_seam IS NULL AND target_provider_id IS NULL
+                        AND target_provider_resource_id IS NULL AND policy_generation IS NULL
+                        AND expected_previous_policy_generation IS NULL
+                        AND expected_transition_revision IS NULL AND expected_resource_generation IS NULL
+                        AND expected_data_generation IS NULL AND target_transition_revision IS NULL
+                        AND target_resource_generation IS NULL AND target_data_generation IS NULL
+                        AND target_volume_state IS NULL AND flush_evidence_json IS NULL
+                        AND specification_json IS NOT NULL AND expected_provider_binding_json IS NOT NULL
+                        AND effect_state IN ('Reserved', 'Completed', 'Stale')
+                        AND ((effect_state = 'Completed' AND target_provider_binding_json IS NOT NULL
+                              AND completed_at IS NOT NULL)
+                             OR (effect_state IN ('Reserved', 'Stale') AND target_provider_binding_json IS NULL
+                                 AND completed_at IS NULL))
+                    )
+                    """);
             });
             entity.HasKey(row => row.OperationId);
             entity.Property(row => row.OperationId).HasColumnName("operation_id");
@@ -193,6 +215,8 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
                 .HasColumnName("expected_provider_binding_json").HasColumnType("jsonb");
             entity.Property(row => row.TargetProviderBindingJson)
                 .HasColumnName("target_provider_binding_json").HasColumnType("jsonb");
+            entity.Property(row => row.FlushEvidenceJson)
+                .HasColumnName("flush_evidence_json").HasColumnType("jsonb");
             entity.Property(row => row.IdempotencyKey).HasColumnName("idempotency_key").HasMaxLength(128);
             entity.Property(row => row.RequestFingerprint).HasColumnName("request_fingerprint").HasMaxLength(64);
             entity.Property(row => row.State).HasColumnName("effect_state").HasMaxLength(32);
@@ -363,6 +387,7 @@ internal sealed class EnvironmentOwnerEffectRow
     public string? SpecificationJson { get; set; }
     public string? ExpectedProviderBindingJson { get; set; }
     public string? TargetProviderBindingJson { get; set; }
+    public string? FlushEvidenceJson { get; set; }
     public string State { get; set; } = string.Empty;
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? CompletedAt { get; set; }

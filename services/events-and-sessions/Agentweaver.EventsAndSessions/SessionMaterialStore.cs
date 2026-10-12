@@ -62,6 +62,7 @@ internal sealed class SessionMaterialStore(PostgresSessionsJournal journal, IObj
                 new CacheReferenceSessionPayload(reference, source.RuntimeVersion, source.ModelSelectionReference),
             SessionMaterialKind.RemoteToolResult =>
                 CreateRemoteToolResultPayload(input.RemoteToolResultProof!, reference),
+            SessionMaterialKind.RuntimeConfiguration => new RuntimeConfigurationSessionPayload(reference),
             _ => throw new ArgumentOutOfRangeException(nameof(input))
         };
         await validateCurrentAuthority(cancellationToken).ConfigureAwait(false);
@@ -98,6 +99,8 @@ internal sealed class SessionMaterialStore(PostgresSessionsJournal journal, IObj
         {
             TurnSessionPayload turn when kind == SessionMaterialKind.TurnContent => turn.Content,
             CacheReferenceSessionPayload cache when kind == SessionMaterialKind.SdkCache => cache.Cache,
+            RuntimeConfigurationSessionPayload { Configuration: { } configuration }
+                when kind == SessionMaterialKind.RuntimeConfiguration => configuration,
             ToolCallSessionPayload toolCall when kind == SessionMaterialKind.RemoteToolResult =>
                 RequireRemoteToolResultReference(envelope, toolCall),
             _ => throw new SessionNotFoundException("The event does not record the requested material kind.")

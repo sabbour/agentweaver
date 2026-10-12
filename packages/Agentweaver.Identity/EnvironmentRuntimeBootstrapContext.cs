@@ -40,4 +40,6 @@ public sealed record EnvironmentRuntimeBootstrapContext(
     public SandboxImageIdentity? Image { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeMcpServerEndpoint? McpServer { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SandboxRuntimeHttpsEndpoint? RuntimeEndpoint { get; init; }
 }

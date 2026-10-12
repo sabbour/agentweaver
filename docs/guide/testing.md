@@ -49,6 +49,25 @@ No check proves an image publication, live certificate/file access, cloud grant,
 The oversized webhook request uses `Expect: 100-continue` to receive the
 exact `413` rejection before uploading its body. The one-MiB limit is unchanged.
 
+The pure [Environment suspend flush checks](./environment-sandbox-testing.md) use a fake owner store and Kubernetes transport.
+They cover trusted next-generation evidence, replay without another producer call, uncertain retry, and authority loss before effect or commit.
+The shared client checks original actor delivery, owner-bound resolution, no-store, and incomplete-result rejection.
+The evidence migration is checked against model metadata without a database connection.
+The related PostgreSQL case is compiled separately; these pure results do not prove SQL execution or mounted CSI durability.
+The staged resume checks compare the saved source and exact new mount, then require the actual Host hash and verified next Network generation.
+Controlled Kubernetes reads reject foreign Service owners, selectors, and DNS names before the pre-configuration request.
+The historical-read and lifecycle rollback/replay cases compile but require their separate PostgreSQL run.
+Bootstrap contract checks bind the saved server configuration, current registration, server-issued attempt, and exact delivery/loss proof.
+Resume preparation rejects missing or changed private configuration before owner calls; ordinary suspend receipt validation remains unchanged.
+Journal-rebuild receipts bind the saved journal boundary and current attempt while marking native cache as pending until a real authorized turn.
+The ordered prefix checks allow run-wide position gaps and reject changed source references, duplicate events, invalid order, and excessive size.
+These contract checks do not prove native cache persistence, authenticated pagination, or material-byte recovery.
+Controlled placement cases check authority loss at each reservation, attachment, and provider boundary.
+They preserve retained Storage and data, release no-effect leases, detach attempted mounts, and retain resources when provisioning already occurred.
+The schema checks compare migration metadata with the current owner-effects model, without applying SQL or changing grants.
+Those cases do not prove durable bootstrap restart, concurrent replacement, old-grant rejection, or native cache reconstruction.
+These source results do not prove native TLS, mounted restore contents, Cilium traffic enforcement, or deployed resume.
+
 | Test suite | What it exercises | What it does not prove |
 | --- | --- | --- |
 | Orchestrator Core tests | Typed outcome/workflow/plan/revision validation, workflow grammar and step DAG validation, bounded WorkPlan eligibility and joins, deterministic UTC daily/weekly/monthly occurrence evaluation, stable schedule idempotency inputs, bounded structured GitHub event predicates and regex safety, project-scoped backlog graph edits and cycle checks, revision-fenced readiness for merge-complete and verified non-merge completion, MAF witness serialization and current-capture inventory regressions for late non-empty captures and multiple captures, pinned model/provider selection checks, structured scope diffs, AGT Policy provider validation and evaluation, negotiation/pinning, deny-by-default and project-policy narrowing, plus action-guard grant scope/fence checks, immutable owner receipt persistence, journal-ACK ordering, current-grant revalidation, and no-effect behavior on evidence failure. Its PostgreSQL integration tests cover persisted backlog edits, concurrent claim arbitration, idempotent replay after store restart, rollback of claim/root/decision intent, and rollback when current authority is lost immediately before commit or replay commit. The source-only Guardrails candidate uses controlled classifiers, authority and journal doubles to cover ordered seam/run/resource pin consistency, invalid null/default shapes, content SHA-256 binding, typed stage/content support, AGT deny monotonicity, timeout/failure, revocation, redaction, and append response-loss/replay. | Current network authorization in backlog routes, production task-to-whole-plan evidence association/output-proof verification, automatic workflow initiation, live model output, full child dispatch, deployed authorization, production Prompt Shields transport, a trusted Guardrails journal/current-authority adapter, MAF gate wiring, or protected-effect call-site enforcement. |
@@ -327,6 +346,9 @@ Response, log, and SDK-wire checks exclude refresh tokens and OAuth client secre
 The native SDK session store and ambient configuration discovery remain disabled.
 The custom filesystem captures opaque native cache bytes and restores the same logical session through the actual SDK resume call.
 Missing, incompatible, or corrupt caches rebuild context from journal content without a model-turn replay.
+Resume producer tests reject Events authorization/transport failures, repeated or empty pages with a next cursor, and TURN bytes, reference, hash, or per-event provenance mismatches before readiness or native session creation.
+Full Host Configure tests accept prior-runtime TURNs and visible-parent TURNs through the saved source-session replay, and do not read same-run events that are absent from that replay.
+Full Host Configure tests also prove that a compatible cache uses native resume and an authenticated incompatible cache falls back to the saved journal.
 The guarded positive scenario records the actual user and assistant content, the Policy receipt, and the native cache reference.
 Separate controlled Host tests require Core's exact current-operation echo before stopping turns and around native cache writes.
 They reject changed operation identity, phase version, or authority, and missing replay cache.

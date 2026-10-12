@@ -95,6 +95,23 @@ short-lived credential out of band to the exact registered placement. Its receip
 contains references, the configuration hash, and placement/fence evidence, not a
 credential value. A missing registered delivery adapter must report unavailable.
 
+`RuntimeWorkspaceResumeHttpClient` separates new placement preparation from content verification.
+Its source request contains Core's saved manifest and exact recorded suspend producer evidence.
+The second request contains Core's saved new Workspace context.
+Only the final receipt combines the actual Host tree hash with the verified new Network generation.
+Neither stage requires an already configured Runtime.
+The optional observed Runtime endpoint pins the Pod address while retaining normal HTTPS Service-name verification.
+These contracts do not prove a mounted restore, native TLS, or a deployed resume.
+
+`RuntimeHostResumeCacheReceipt` keeps the original suspended cache acknowledgment as source evidence.
+The native-cache path requires compatible recorded cache facts.
+The journal-rebuild path requires the saved checkpoint, journal boundary, digest, and current resume attempt.
+Its `PendingUntilAuthorizedTurn` state does not claim that a new native cache was captured.
+The shared digest helper checks ordered, unique, bounded events and exact source configuration and cache references.
+Events assigns positions across the run, so gaps in a session-visible prefix are valid.
+The producer must use the authenticated saved session route, including its existing fork visibility.
+These receipt checks do not independently verify returned material bytes or page completeness.
+
 The configure and observation credential purposes are separate. Default JSON and
 diagnostic strings omit credential values. These contracts alone do not establish
 a runtime channel or prove SDK provenance.

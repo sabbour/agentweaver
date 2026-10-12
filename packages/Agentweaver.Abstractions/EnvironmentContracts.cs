@@ -301,6 +301,8 @@ public sealed record EnvironmentWorkspaceVolumeTransitionReservation
     public EnvironmentWorkspaceVolumeOperation Operation { get; }
     public EnvironmentWorkspaceVolumeTransitionState TransitionState { get; }
     public bool Replayed { get; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public WorkspaceVolumeFlushEvidence? FlushEvidence { get; init; }
 }
 
 public sealed record EnvironmentWorkspaceVolumeTransitionResult
@@ -388,6 +390,8 @@ public sealed record EnvironmentWorkspaceVolumeTransitionResult
     public EnvironmentWorkspaceVolumeOperation Operation { get; }
     public EnvironmentWorkspaceVolumeTransitionState TransitionState { get; }
     public bool Replayed { get; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public WorkspaceVolumeFlushEvidence? FlushEvidence { get; init; }
 }
 
 public enum EnvironmentNetworkEffectKind
@@ -484,7 +488,8 @@ public interface IEnvironmentLifecycleStore
 
     Task<EnvironmentLifecycleTransitionResult> TransitionAsync(
         EnvironmentLifecycleTransitionRequest request,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null);
 
     Task<EnvironmentNetworkEffectReservation> ReserveNetworkEffectAsync(
         EnvironmentGenerationFence fence,
@@ -664,7 +669,8 @@ public interface IEnvironmentLifecycleStore
         bool effectMayHaveApplied,
         ProviderResourceRef? providerResource,
         bool effectVerified,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null);
 
     Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeDetachReconciledAsync(
         Guid operationId,
@@ -690,10 +696,35 @@ public interface IEnvironmentLifecycleStore
         bool durableFlushVerified,
         CancellationToken cancellationToken);
 
+    Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeFlushAsync(
+        Guid operationId,
+        EnvironmentGenerationFence environmentFence,
+        bool effectMayHaveApplied,
+        WorkspaceVolumeFlushEvidence? evidence,
+        bool effectVerified,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null) =>
+        throw new NotSupportedException("The Environment owner cannot persist verified workspace flush evidence.");
+
     Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeFlushReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
         CancellationToken cancellationToken);
+
+    Task<WorkspaceVolumeFlushEvidence?> GetWorkspaceVolumeFlushEvidenceAsync(
+        EnvironmentGenerationFence environmentFence,
+        string volumeId,
+        long targetTransitionRevision,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException("The Environment owner cannot read durable workspace flush evidence.");
+
+    Task<WorkspaceVolumeFlushEvidence?> GetRetainedWorkspaceVolumeFlushEvidenceAsync(
+        EnvironmentGenerationFence currentFence,
+        EnvironmentGenerationFence sourceFence,
+        string volumeId,
+        long targetTransitionRevision,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException("The Environment owner cannot read retained workspace flush evidence.");
 
     Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeReleaseAsync(
         EnvironmentGenerationFence environmentFence,

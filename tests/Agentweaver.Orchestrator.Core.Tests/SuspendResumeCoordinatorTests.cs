@@ -90,6 +90,48 @@ public sealed class SuspendResumeCoordinatorTests
     }
 
     [Fact]
+    public void FenceAdvancedResumeUsesProgressPersistedWithTheAdvancedOperation()
+    {
+        var progress = SessionSuspendResumeProgress.Empty with { ResumeExecutionFence = 12 };
+        var operation = CreateFenceAdvancedResumeOperation(12, progress);
+
+        var restored = SessionSuspendResumeCoordinator.ReadFenceAdvancedProgress(operation);
+
+        Assert.Equal(12, restored.ResumeExecutionFence);
+    }
+
+    [Fact]
+    public void FenceAdvancedResumeRejectsProgressFromBeforeTheFenceAdvance()
+    {
+        var progress = SessionSuspendResumeProgress.Empty with { ResumeExecutionFence = 11 };
+        var operation = CreateFenceAdvancedResumeOperation(12, progress);
+
+        var exception = Assert.Throws<CoordinationException>(
+            () => SessionSuspendResumeCoordinator.ReadFenceAdvancedProgress(operation));
+
+        Assert.Equal("runtime_resume_bootstrap_request_invalid", exception.Code);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, exception.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(12L, 12L, 12L, 12L, true)]
+    [InlineData(12L, 13L, 12L, 13L, true)]
+    [InlineData(12L, 12L, 12L, 13L, false)]
+    [InlineData(12L, 14L, 12L, 13L, false)]
+    [InlineData(13L, 13L, 12L, 13L, false)]
+    [InlineData(12L, null, 12L, 13L, false)]
+    public void ManifestFencePairMustMatchImmutableOwnerAndExpectedClaim(
+        long ownerFence,
+        long? claimedFence,
+        long expectedOwnerFence,
+        long expectedClaimedFence,
+        bool expected)
+    {
+        Assert.Equal(expected, SessionSuspendResumePhaseMachine.MatchesManifestFencePair(
+            ownerFence, claimedFence, expectedOwnerFence, expectedClaimedFence));
+    }
+
+    [Fact]
     public async Task CoordinatorReturnsExplicitUnavailableWithoutSuccessShapedFallback()
     {
         using var services = new ServiceCollection()
@@ -111,4 +153,22 @@ public sealed class SuspendResumeCoordinatorTests
         Assert.False(response.RootElement.TryGetProperty("suspended", out _));
         Assert.False(response.RootElement.TryGetProperty("resumed", out _));
     }
+
+    private static SessionSuspendResumeOperationRecord CreateFenceAdvancedResumeOperation(
+        long ownerFence,
+        SessionSuspendResumeProgress progress) =>
+        new(
+            Guid.NewGuid(),
+            new("project", "run", "session"),
+            SessionSuspendResumeOperationKind.Resume,
+            SessionSuspendResumeOperationPhase.FenceAdvanced,
+            4,
+            ownerFence,
+            Guid.NewGuid(),
+            "resume-key",
+            "request-hash",
+            JsonSerializer.SerializeToElement(progress, new JsonSerializerOptions(JsonSerializerDefaults.Web)),
+            Manifest: null,
+            ManifestHash: null,
+            IsDuplicate: false);
 }

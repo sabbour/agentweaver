@@ -31,6 +31,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         RuntimeNativeSessionFiles nativeFiles,
         RuntimeSessionRecoveryMode recoveryMode,
         string? recoveryReason,
+        RuntimeResumeJournalRebuildReceipt? journalRebuildReceipt,
         TimeSpan abortDrainTimeout)
     {
         _client = client;
@@ -41,6 +42,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         _nativeFiles = nativeFiles;
         RecoveryMode = recoveryMode;
         RecoveryReason = recoveryReason;
+        JournalRebuildReceipt = journalRebuildReceipt;
         _abortDrainTimeout = abortDrainTimeout;
     }
 
@@ -48,6 +50,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
     public Task UsageCompletion => _usage.Reader.Completion;
     public RuntimeSessionRecoveryMode RecoveryMode { get; }
     public string? RecoveryReason { get; }
+    public RuntimeResumeJournalRebuildReceipt? JournalRebuildReceipt { get; }
 
     internal async Task<byte[]> CaptureNativeCacheAsync(CancellationToken cancellationToken)
     {

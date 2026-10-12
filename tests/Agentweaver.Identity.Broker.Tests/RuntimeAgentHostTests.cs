@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
+using System.Globalization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Net;
 using System.Net.Http.Headers;
@@ -69,7 +70,7 @@ public sealed class RuntimeAgentHostTests
         var message = fixture.Message(proof);
         var turn = fixture.Host.SendAsync(message, fixture.Actor, timeout.Token);
         await fixture.Sdk.TurnReceived.Task.WaitAsync(timeout.Token);
-        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        var request = fixture.SuspendRequest(proof);
         var suspend = fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token);
         Assert.False(suspend.IsCompleted);
         Assert.DoesNotContain(fixture.Material, material => material.Kind == SessionMaterialKind.SdkCache);
@@ -82,6 +83,11 @@ public sealed class RuntimeAgentHostTests
         Assert.Equal(fixture.Registration, receipt.Registration);
         Assert.Equal(request.ManifestId, receipt.CacheAcknowledgment.EventId);
         Assert.Equal(SessionMaterialKind.SdkCache, receipt.CacheAcknowledgment.Reference.Material!.Kind);
+        var configuration = receipt.ConfigurationAcknowledgment
+            ?? throw new InvalidOperationException("The suspend receipt must carry its saved configuration.");
+        Assert.Equal(fixture.Configure.ConsumeOperationId, configuration.EventId);
+        Assert.Equal(SessionMaterialKind.RuntimeConfiguration, configuration.Reference.Material!.Kind);
+        Assert.Equal(fixture.ConfigurationHash, configuration.Reference.Material.Sha256);
         Assert.Equal(message.Message.MessageId, receipt.NativeTurn.Admission.MessageId);
         Assert.Equal(fixture.Sdk.NativeCompletionReceiptEventId,
             receipt.NativeTurn.Observation.NativeCompletionReceiptEventId);
@@ -107,6 +113,520 @@ public sealed class RuntimeAgentHostTests
                 fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token))).Code);
     }
 
+    [Fact]
+    public async Task RuntimeConfigurationUsesDedicatedWriteRouteAndGenericReadsStayDenied()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        await fixture.ConfigureAsync(timeout.Token);
+
+        var saved = Assert.Single(
+            fixture.Material, material => material.Kind == SessionMaterialKind.RuntimeConfiguration);
+        Assert.Equal(fixture.Configure.ConsumeOperationId, saved.EventId);
+        Assert.Equal(
+            $"/internal/sessions/{fixture.Registration.Binding.SessionId}/runtime-configuration",
+            Assert.Single(fixture.MaterialWriteRoutes));
+
+        var error = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.MaterialClient().ReadRecordedAsync(
+                new(fixture.Registration.Binding.ProjectId, fixture.Registration.Binding.RunId,
+                    fixture.Registration.Binding.SessionId),
+                saved.EventId, SessionMaterialKind.RuntimeConfiguration, timeout.Token));
+        Assert.Equal("runtime_configuration_route_unavailable", error.Code);
+    }
+
+    [Fact]
+    public async Task ResumeRecoveryReadsOnlyTheExactManifestCacheAcknowledgment()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var material = fixture.MaterialClient();
+        await using var session = await fixture.ConfigureSessionAsync(material, timeout.Token);
+        await session.RegisterUsageAsync(fixture.SourceClient(), timeout.Token);
+        var nativeFile = await fixture.Sdk.InvokeNativeFilesAsync(
+            "sessionFs.writeFile", "state/events.jsonl", "opaque native events\n", timeout.Token);
+        Assert.Equal(JsonValueKind.Null, nativeFile.ValueKind);
+        var acknowledgment = await session.CommitNativeCacheAsync(material, Guid.NewGuid(), timeout.Token);
+
+        var recovery = await material.ReadRecoveryAsync(session.Registration, timeout.Token, acknowledgment);
+
+        Assert.Equal(acknowledgment, recovery.Cache?.Material);
+        var changed = acknowledgment with { EventId = Guid.NewGuid() };
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            material.ReadRecoveryAsync(session.Registration, timeout.Token, changed));
+    }
+
+    [Fact]
+    public async Task ResumeWithCompatibleCacheUsesNativeResumeWithoutReadingJournal()
+    {
+        await using var source = new HostFixture(workflowBound: true);
+        await using var target = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var request = await PrepareResumeTargetAsync(source, target, timeout.Token);
+        target.MissingMaterialId = null;
+
+        var readiness = await target.ConfigureAsync(timeout.Token);
+
+        Assert.Equal("native-cache", readiness.ResumeCache?.RecoveryMode);
+        var cache = request.Resume.SourceManifest.CacheAcknowledgment!;
+        Assert.Equal(cache.EventId, Assert.Single(target.ResumeCacheReads));
+        var resume = Assert.Single(target.Sdk.Requests, item => item.Method == "session.resume");
+        Assert.Equal(RuntimeContractValidation.NativeSessionId(request.Registration.Binding),
+            resume.Parameters.GetProperty("sessionId").GetString());
+        Assert.DoesNotContain(target.Sdk.Requests, item => item.Method == "session.create");
+        Assert.Empty(target.ResumeEventRequests);
+        Assert.DoesNotContain(target.Material, item => item.Kind == SessionMaterialKind.SdkCache);
+    }
+
+    [Fact]
+    public async Task AuthenticatedIncompatibleCacheFallsBackToJournalWithoutNativeResume()
+    {
+        await using var source = new HostFixture(workflowBound: true);
+        await using var target = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var request = await PrepareResumeTargetAsync(source, target, timeout.Token);
+        target.MissingMaterialId = null;
+        target.Sdk.RuntimeVersion = "controlled-runtime-v2";
+
+        var readiness = await target.ConfigureAsync(timeout.Token);
+
+        Assert.Equal("journal-rebuild", readiness.ResumeCache?.RecoveryMode);
+        Assert.NotNull(readiness.ResumeCache?.JournalRebuild);
+        Assert.Equal(request.Resume.SourceManifest.CacheAcknowledgment!.EventId,
+            Assert.Single(target.ResumeCacheReads));
+        AssertResumeEventsUseSourceSession(target, request);
+        Assert.Single(target.Sdk.Requests, item => item.Method == "session.create");
+        Assert.DoesNotContain(target.Sdk.Requests, item => item.Method == "session.resume");
+        Assert.DoesNotContain(target.Material, item => item.Kind == SessionMaterialKind.SdkCache);
+    }
+
+    [Fact]
+    public async Task ResumeRebuildsFromTheSavedVisibleJournalAndWaitsForAnAuthorizedTurnToWriteCache()
+    {
+        await using var source = new HostFixture(workflowBound: true);
+        await using var target = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var request = await PrepareResumeTargetAsync(source, target, timeout.Token);
+        var sourceCache = request.Resume.SourceManifest.CacheAcknowledgment!;
+
+        var readiness = await target.ConfigureAsync(timeout.Token);
+        var receipt = readiness.ResumeCache
+            ?? throw new InvalidOperationException("Resume readiness must include the recovery receipt.");
+        Assert.Equal("journal-rebuild", receipt.RecoveryMode);
+        Assert.Equal(sourceCache, receipt.CacheAcknowledgment);
+        Assert.Equal(request.Resume.SourceManifest.FlushedJournalPosition, receipt.JournalRebuild!.ThroughPosition);
+        Assert.Equal(RuntimeResumeNativeCacheState.PendingUntilAuthorizedTurn,
+            receipt.JournalRebuild.NativeCacheState);
+        var savedPrefix = source.SessionEvents
+            .Where(item => item.Position <= receipt.JournalRebuild.ThroughPosition)
+            .ToImmutableArray();
+        Assert.Contains(savedPrefix, item => item.Identity.SessionId == "visible-parent");
+        Assert.DoesNotContain(source.SessionEvents, item =>
+            item.Position <= receipt.JournalRebuild.ThroughPosition &&
+            item.Payload is AcceptedEffectSessionPayload { EffectId: "post-boundary-effect" });
+        Assert.Equal(
+            RuntimeResumeJournalRebuildReceipt.ComputeJournalSha256(request, savedPrefix),
+            receipt.JournalRebuild.JournalSha256);
+        var create = Assert.Single(target.Sdk.Requests, item => item.Method == "session.create");
+        Assert.DoesNotContain(target.Sdk.Requests, item => item.Method == "session.resume");
+        Assert.Contains("Recorded conversation context", create.Parameters.GetRawText());
+        Assert.Contains("A bounded user request.", create.Parameters.GetRawText());
+        Assert.DoesNotContain(target.Material, item => item.Kind == SessionMaterialKind.SdkCache);
+
+        await target.Host.SendAsync(
+            target.Message(target.Proof(readiness)), target.Actor, timeout.Token);
+
+        var writtenCache = Assert.Single(target.Material, item => item.Kind == SessionMaterialKind.SdkCache);
+        Assert.NotEqual(sourceCache.EventId, writtenCache.EventId);
+        Assert.NotEmpty(writtenCache.Bytes);
+    }
+
+    [Fact]
+    public async Task ResumeJournalAcceptsATurnFromItsPriorRuntimeRegistration()
+    {
+        await using var prior = new HostFixture(workflowBound: true);
+        await using var source = new HostFixture(workflowBound: true, executionFence: 2);
+        await using var target = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var priorEventId = await prior.RecordOneTurnAsync(timeout.Token);
+        var request = await PrepareResumeTargetAsync(
+            source, target, timeout.Token, priorTurnOwner: prior);
+        var priorTurn = prior.ReadMaterial(priorEventId);
+        var priorBinding = priorTurn.Material.Reference.Material!;
+        var latestCacheBinding = request.Resume.SourceManifest.CacheAcknowledgment!.Reference.Material!;
+
+        Assert.Equal(prior.Registration.RuntimeInstanceId, priorBinding.RuntimeInstanceId);
+        Assert.Equal(prior.Registration.Revision, priorBinding.RegistrationRevision);
+        Assert.Equal(prior.Registration.Binding.ExecutionFence, priorBinding.ExecutionFence);
+        Assert.NotEqual(latestCacheBinding.RuntimeInstanceId, priorBinding.RuntimeInstanceId);
+        Assert.NotEqual(latestCacheBinding.ExecutionFence, priorBinding.ExecutionFence);
+
+        var readiness = await target.ConfigureAsync(timeout.Token);
+
+        Assert.Equal("journal-rebuild", readiness.ResumeCache?.RecoveryMode);
+        Assert.Contains(
+            $"/internal/sessions/{Uri.EscapeDataString(prior.Registration.Binding.SessionId)}/material/{priorEventId:D}/TurnContent",
+            target.ResumeMaterialReadRequests);
+        AssertResumeEventsUseSourceSession(target, request);
+    }
+
+    [Fact]
+    public async Task ResumeJournalReadsVisibleAncestorTurnButNotNonVisibleSameRunTurn()
+    {
+        await using var parent = new HostFixture(workflowBound: true, sessionId: "visible-parent");
+        await using var nonVisible = new HostFixture(workflowBound: true, sessionId: "not-visible");
+        await using var source = new HostFixture(workflowBound: true, executionFence: 2);
+        await using var target = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var parentEventId = await parent.RecordOneTurnAsync(timeout.Token);
+        var nonVisibleEventId = await nonVisible.RecordOneTurnAsync(timeout.Token);
+        var request = await PrepareResumeTargetAsync(
+            source, target, timeout.Token, visibleParentOwner: parent, nonVisibleOwner: nonVisible);
+        var throughPosition = request.Resume.SourceManifest.FlushedJournalPosition
+            ?? throw new InvalidOperationException("Resume must preserve the flushed journal position.");
+        var parentEvent = Assert.Single(source.SessionEvents, item => item.EventId == parentEventId);
+        var parentBinding = parent.ReadMaterial(parentEventId).Material.Reference.Material!;
+
+        Assert.Equal("visible-parent", parentEvent.Identity.SessionId);
+        Assert.IsType<TurnSessionPayload>(parentEvent.Payload);
+        Assert.True(parentEvent.Position <= throughPosition);
+        Assert.Equal(parent.Registration.RuntimeInstanceId, parentBinding.RuntimeInstanceId);
+        Assert.Equal(parent.Registration.Revision, parentBinding.RegistrationRevision);
+        Assert.Equal(parent.Registration.Binding.ExecutionFence, parentBinding.ExecutionFence);
+        Assert.True(source.HasMaterial(nonVisibleEventId));
+        Assert.DoesNotContain(source.SessionEvents, item => item.EventId == nonVisibleEventId);
+        Assert.DoesNotContain(source.SessionEvents, item => item.Identity.SessionId == "not-visible");
+
+        var readiness = await target.ConfigureAsync(timeout.Token);
+
+        Assert.Equal("journal-rebuild", readiness.ResumeCache?.RecoveryMode);
+        Assert.Contains(
+            $"/internal/sessions/visible-parent/material/{parentEventId:D}/TurnContent",
+            target.ResumeMaterialReadRequests);
+        Assert.DoesNotContain(
+            $"/internal/sessions/not-visible/material/{nonVisibleEventId:D}/TurnContent",
+            target.ResumeMaterialReadRequests);
+        AssertResumeEventsUseSourceSession(target, request);
+    }
+
+    [Theory]
+    [InlineData("events-unauthorized", "runtime_owner_denied")]
+    [InlineData("events-forbidden", "runtime_owner_denied")]
+    [InlineData("events-transport", "transport")]
+    [InlineData("cursor-repeated", "runtime_journal_cursor_invalid")]
+    [InlineData("cursor-no-progress", "runtime_journal_cursor_invalid")]
+    [InlineData("material-bytes", "runtime_material_read_invalid")]
+    [InlineData("material-reference", "runtime_journal_turn_invalid")]
+    [InlineData("material-hash", "runtime_material_read_invalid")]
+    [InlineData("material-provenance", "runtime_journal_turn_invalid")]
+    public async Task ResumeJournalProducerFailuresPreventReadinessAndNativeSessionCreation(
+        string fault, string expectedFailure)
+    {
+        await using var source = new HostFixture(workflowBound: true);
+        await using var target = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var request = await PrepareResumeTargetAsync(source, target, timeout.Token);
+        target.ResumeFault = fault;
+        if (fault == "material-provenance")
+            target.ResumeProvenanceRuntimeInstanceId = Guid.NewGuid();
+
+        var failure = await Record.ExceptionAsync(() => target.ConfigureAsync(timeout.Token));
+
+        if (expectedFailure == "transport")
+            Assert.IsType<HttpRequestException>(failure);
+        else
+            Assert.Equal(expectedFailure, Assert.IsType<RuntimeAuthorizationException>(failure).Code);
+
+        var cache = request.Resume.SourceManifest.CacheAcknowledgment!;
+        Assert.Equal(cache.EventId, Assert.Single(target.ResumeCacheReads));
+        AssertResumeEventsUseSourceSession(target, request);
+        Assert.DoesNotContain(target.Material, item => item.Kind == SessionMaterialKind.SdkCache);
+        Assert.DoesNotContain(target.Sdk.Requests,
+            item => item.Method is "session.create" or "session.resume" or "session.send");
+        var readinessFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(
+            () => target.Host.ReadinessAsync(timeout.Token));
+        Assert.Equal("runtime_host_not_ready", readinessFailure.Code);
+    }
+
+    private static async Task<RuntimeResumeBootstrapRequest> PrepareResumeTargetAsync(
+        HostFixture source, HostFixture target, CancellationToken token,
+        HostFixture? priorTurnOwner = null,
+        HostFixture? visibleParentOwner = null,
+        HostFixture? nonVisibleOwner = null)
+    {
+        source.PositionIncrement = 2;
+        var request = await CreateResumeBootstrapRequestAsync(source, target, token);
+        source.PrepareResumeJournal(request.Resume.SourceRelease.HostReceipt, includeVisibleAncestor: true);
+        if (priorTurnOwner is not null)
+            source.ReplaceFirstTurnFrom(priorTurnOwner);
+        if (visibleParentOwner is not null)
+            source.ReplaceVisibleParentEffectWithTurn(visibleParentOwner);
+        if (nonVisibleOwner is not null)
+            source.ImportUnlistedMaterialFrom(nonVisibleOwner, nonVisibleOwner.FirstTurnEventId);
+        var cache = request.Resume.SourceManifest.CacheAcknowledgment!;
+        target.UseResumeBootstrap(request);
+        var resumedPlacement = request.Resume.RestoredWorkspace!.Placement;
+        target.Readiness = source.Readiness with
+        {
+            Placement = resumedPlacement with
+            {
+                RuntimeOwnerContext = resumedPlacement.RuntimeOwnerContext! with
+                {
+                    ExecutionFence = request.Registration.Binding.ExecutionFence
+                }
+            },
+            Observation = source.Readiness.Observation with
+            {
+                Resource = resumedPlacement.Resource,
+                FencingGeneration = resumedPlacement.ProviderFencingGeneration
+            },
+            WorkspaceMountPath = target.WorkingDirectory
+        };
+        target.ImportResumeSourceFrom(source, cache.EventId);
+        target.SessionEventPageSize = 2;
+        return request;
+    }
+
+    private static void AssertResumeEventsUseSourceSession(
+        HostFixture target, RuntimeResumeBootstrapRequest request)
+    {
+        var expectedPrefix =
+            $"/internal/sessions/{Uri.EscapeDataString(request.Resume.SourceManifest.Identity.SessionId)}/events";
+        Assert.NotEmpty(target.ResumeEventRequests);
+        Assert.All(target.ResumeEventRequests, path =>
+            Assert.True(path.StartsWith(expectedPrefix, StringComparison.Ordinal),
+                "Journal fallback must stay bound to the saved source session."));
+    }
+
+    [Fact]
+    public async Task WorkspaceResumeVerifierChecksCoreBeforeAndAfterHashingTheMount()
+    {
+        await using var fixture = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
+        var suspend = fixture.SuspendRequest(proof);
+        var hostReceipt = await fixture.Host.SuspendAsync(suspend, fixture.Actor, timeout.Token);
+        Directory.CreateDirectory(fixture.WorkingDirectory);
+        var treeHash = await MountedWorkspaceFlush.ComputeTreeSha256Async(
+            fixture.WorkingDirectory, timeout.Token);
+        var flush = hostReceipt.WorkspaceFlush! with { TreeSha256 = treeHash };
+        hostReceipt = hostReceipt with { WorkspaceFlush = flush };
+        var identity = new SessionIdentity(
+            proof.Registration.Binding.ProjectId,
+            proof.Registration.Binding.RunId,
+            proof.Registration.Binding.SessionId);
+        var manifest = new SessionSuspendResumeManifest(
+            1,
+            hostReceipt.ManifestId,
+            identity,
+            SessionSuspendResumeManifestState.Suspended,
+            flush.EnvironmentFence,
+            proof.Registration.Binding.ExecutionFence,
+            hostReceipt.CacheAcknowledgment,
+            new(
+                identity,
+                SessionSuspendResumeContractVersions.CoordinatorCheckpointStoreName,
+                "checkpoint",
+                1,
+                "plan",
+                1),
+            hostReceipt.CacheAcknowledgment.Position,
+            flush.Volume,
+            flush.Resource,
+            flush.DataGeneration,
+            treeHash,
+            null,
+            null,
+            null,
+            1,
+            ImmutableArray<string>.Empty).Validate();
+        var release = new RuntimeSuspendPlacementReleaseRequest(hostReceipt, 3).Validate();
+        var request = new RuntimeWorkspaceResumeRequest(
+            1, Guid.NewGuid(), 3, manifest, release)
+        {
+            RestoredWorkspace = CreateResumeWorkspace(fixture.Readiness.Placement, flush, release)
+        };
+
+        var receipt = await fixture.Host.VerifyWorkspaceResumeAsync(request, fixture.Actor, timeout.Token);
+
+        Assert.Equal(treeHash, receipt.ActualTreeSha256);
+        Assert.Equal(request.RestoredWorkspace, receipt.Workspace);
+        Assert.Equal(2, fixture.ResumeChecks.Count);
+        Assert.All(fixture.ResumeChecks, check => Assert.Equal(request, check));
+        Assert.Single(fixture.Sdk.Requests, rpc => rpc.Method == "session.send");
+        Assert.Single(fixture.NativeAdmissions);
+    }
+
+    private static EnvironmentRuntimeWorkspaceContext CreateResumeWorkspace(
+        EnvironmentRuntimeBootstrapContext sourcePlacement,
+        WorkspaceVolumeFlushReceipt flush,
+        RuntimeSuspendPlacementReleaseRequest release)
+    {
+        var sandbox = new ProviderResourceRef(
+            ProviderSeam.Sandbox,
+            sourcePlacement.Resource.ProviderId,
+            sourcePlacement.Resource.ResourceId + "-resumed",
+            checked(sourcePlacement.Resource.Generation + 1));
+        var fence = new EnvironmentGenerationFence(
+            flush.EnvironmentFence.Owner,
+            checked(flush.EnvironmentFence.LifecycleGeneration + 1));
+        var fencingGeneration = checked(sourcePlacement.ProviderFencingGeneration + 1);
+        var placement = sourcePlacement with
+        {
+            LifecycleGeneration = fence.LifecycleGeneration,
+            CurrentFencingGeneration = fencingGeneration,
+            ProviderFencingGeneration = fencingGeneration,
+            LeaseRevision = checked(sourcePlacement.LeaseRevision + 1),
+            Resource = sandbox
+        };
+        var workspace = new WorkspaceVolumeAttachmentNegotiation(
+            flush.Volume.ProjectId,
+            sourcePlacement.EnvironmentId,
+            sourcePlacement.RunId,
+            flush.Volume,
+            sandbox,
+            flush.Resource,
+            fence,
+            flush.DataGeneration,
+            "/workspace/agentweaver/workspace",
+            false,
+            WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim);
+        return new(1, placement, workspace, checked(release.FlushTransitionRevision + 2));
+    }
+
+    [Fact]
+    public async Task ResumeStateProbeRequiresSignedAuthorityAndNeverReportsPresentStateAsMissing()
+    {
+        await using var source = new HostFixture(workflowBound: true);
+        await using var target = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var request = await CreateResumeBootstrapRequestAsync(source, target, timeout.Token);
+        target.UseResumeBootstrap(request);
+
+        using var server = await target.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = request.Registration.Binding.ConfigureEndpoint;
+        var path = request.Registration.Binding.ConfigureEndpoint.AbsolutePath + "/resume-state";
+        using var anonymous = await client.PostAsJsonAsync(path, request, HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+
+        client.DefaultRequestHeaders.Authorization = new("Bearer", target.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        using var wrongAudience = await client.PostAsJsonAsync(
+            "http://runtime.test" + path, request, HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.BadRequest, wrongAudience.StatusCode);
+
+        using var missing = await client.PostAsJsonAsync(path, request, HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.OK, missing.StatusCode);
+        Assert.True(missing.Headers.CacheControl?.NoStore);
+        var missingReceipt = await missing.Content.ReadFromJsonAsync<RuntimeResumeHostStateReceipt>(
+            HostFixture.Json, timeout.Token);
+        Assert.Equal(RuntimeResumeHostState.Missing, missingReceipt!.State);
+
+        await target.Host.ReceiveAsync(new RuntimeBootstrapDeliveryRequest(
+            request.Registration.RuntimeInstanceId,
+            request.BootstrapOperationId,
+            target.BootstrapGrantId,
+            RuntimeResumeBootstrapRequest.RequireConfigurationAcknowledgment(
+                request.Resume.SourceRelease.HostReceipt).Reference.Material!.Sha256,
+            new string('c', 64),
+            request.Registration.ExpiresAt), target.Actor, timeout.Token);
+        using var present = await client.PostAsJsonAsync(path, request, HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.OK, present.StatusCode);
+        var presentReceipt = await present.Content.ReadFromJsonAsync<RuntimeResumeHostStateReceipt>(
+            HostFixture.Json, timeout.Token);
+        Assert.Equal(RuntimeResumeHostState.BootstrapPresent, presentReceipt!.State);
+
+        using var changedAttempt = await client.PostAsJsonAsync(
+            path, request with { ResumeAttemptId = Guid.NewGuid() }, HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.Forbidden, changedAttempt.StatusCode);
+        Assert.Equal(4, target.ResumeBootstrapChecks.Count);
+    }
+
+    private static async Task<RuntimeResumeBootstrapRequest> CreateResumeBootstrapRequestAsync(
+        HostFixture source, HostFixture target, CancellationToken token)
+    {
+        var ready = await source.ConfigureAsync(token);
+        var proof = source.Proof(ready);
+        await source.Host.SendAsync(source.Message(proof), source.Actor, token);
+        var hostReceipt = await source.Host.SuspendAsync(
+            source.SuspendRequest(proof), source.Actor, token);
+        var flush = hostReceipt.WorkspaceFlush!;
+        var identity = new SessionIdentity(
+            proof.Registration.Binding.ProjectId,
+            proof.Registration.Binding.RunId,
+            proof.Registration.Binding.SessionId);
+        var manifest = new SessionSuspendResumeManifest(
+            1,
+            hostReceipt.ManifestId,
+            identity,
+            SessionSuspendResumeManifestState.Suspended,
+            flush.EnvironmentFence,
+            proof.Registration.Binding.ExecutionFence,
+            hostReceipt.CacheAcknowledgment,
+            new(
+                identity,
+                SessionSuspendResumeContractVersions.CoordinatorCheckpointStoreName,
+                "checkpoint",
+                1,
+                "plan",
+                1),
+            hostReceipt.CacheAcknowledgment.Position,
+            flush.Volume,
+            flush.Resource,
+            flush.DataGeneration,
+            flush.TreeSha256,
+            null,
+            null,
+            null,
+            1,
+            ImmutableArray<string>.Empty).Validate();
+        var release = new RuntimeSuspendPlacementReleaseRequest(hostReceipt, 3).Validate();
+        var operationId = Guid.NewGuid();
+        var resume = new RuntimeWorkspaceResumeRequest(
+            1, operationId, 4, manifest, release)
+        {
+            RestoredWorkspace = CreateResumeWorkspace(source.Readiness.Placement, flush, release)
+        }.Validate();
+        var workspace = resume.RestoredWorkspace!;
+        var attemptId = RuntimeResumeAttemptIdentity.Initial(operationId);
+        var targetBinding = proof.Registration.Binding with
+        {
+            ExecutionFence = checked(proof.Registration.Binding.ExecutionFence + 1),
+            EnvironmentId = workspace.Placement.EnvironmentId,
+            PlacementUid = workspace.Placement.Resource.ResourceId,
+            PlacementGeneration = workspace.Placement.Resource.Generation,
+            ProfileId = workspace.Placement.ProfileId,
+            ConfigureEndpoint = workspace.Placement.ConfigureEndpoint,
+            ObservationEndpoint = workspace.Placement.ObservationEndpoint,
+            PlacementProviderId = workspace.Placement.Resource.ProviderId,
+            EnvironmentLifecycleGeneration = workspace.Placement.LifecycleGeneration,
+            EnvironmentLeaseRevision = workspace.Placement.LeaseRevision,
+            EnvironmentCurrentFencingGeneration = workspace.Placement.CurrentFencingGeneration,
+            EnvironmentProviderFencingGeneration = workspace.Placement.ProviderFencingGeneration,
+            Image = workspace.Placement.Image,
+            ResumeOperationId = operationId,
+            ResumeAttemptId = attemptId
+        };
+        var registration = new RuntimeRegistration(
+            Guid.NewGuid(),
+            1,
+            targetBinding,
+            RuntimeRegistrationState.Active,
+            workspace.Placement.LeaseExpiresAt);
+        target.Registration = registration;
+        var requestIds = (
+            RuntimeResumeAttemptIdentity.Bootstrap(operationId, attemptId),
+            RuntimeResumeAttemptIdentity.Consume(operationId, attemptId),
+            RuntimeResumeAttemptIdentity.Exchange(operationId, attemptId));
+        return new RuntimeResumeBootstrapRequest(
+            1, resume, registration, requestIds.Item1, requestIds.Item2, requestIds.Item3)
+        {
+            ResumeAttemptId = attemptId
+        }.Validate();
+    }
+
     [Theory]
     [InlineData("operation")]
     [InlineData("manifest")]
@@ -125,7 +645,7 @@ public sealed class RuntimeAgentHostTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
         await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
-        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        var request = fixture.SuspendRequest(proof);
         fixture.SuspendEcho = current => changed switch
         {
             "operation" => current with { OperationId = Guid.NewGuid() },
@@ -179,7 +699,7 @@ public sealed class RuntimeAgentHostTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
         await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
-        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        var request = fixture.SuspendRequest(proof);
 
         Assert.Equal(code, (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
             fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token))).Code);
@@ -196,13 +716,13 @@ public sealed class RuntimeAgentHostTests
         await using var fixture = new HostFixture(workflowBound: true);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
-        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), phaseVersion);
+        var request = fixture.SuspendRequest(proof, phaseVersion);
 
         Assert.Equal("runtime_suspend_request_invalid",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token))).Code);
         Assert.Empty(fixture.SuspendChecks);
-        Assert.Empty(fixture.Material);
+        Assert.DoesNotContain(fixture.Material, material => material.Kind == SessionMaterialKind.SdkCache);
         await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
         Assert.Single(fixture.Sdk.Requests, rpc => rpc.Method == "session.send");
     }
@@ -216,7 +736,7 @@ public sealed class RuntimeAgentHostTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
         await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
-        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        var request = fixture.SuspendRequest(proof);
         fixture.SuspendEcho = current => fixture.SuspendChecks.Count == deniedCheck
             ? current with { PhaseVersion = 2 } : current;
 
@@ -235,7 +755,7 @@ public sealed class RuntimeAgentHostTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
         await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
-        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        var request = fixture.SuspendRequest(proof);
         fixture.AfterMaterialWrite = material =>
         {
             if (material.EventId == request.ManifestId)
@@ -258,7 +778,7 @@ public sealed class RuntimeAgentHostTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
         await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
-        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        var request = fixture.SuspendRequest(proof);
         await fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token);
         fixture.MissingMaterialId = missingCache ? request.ManifestId : null;
         fixture.AfterMaterialRead = read =>
@@ -287,7 +807,7 @@ public sealed class RuntimeAgentHostTests
         fixture.Sdk.BeforeAbortIdle = token => idle.Task.WaitAsync(token);
         var turn = fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, cancellation.Token);
         await fixture.Sdk.TurnReceived.Task.WaitAsync(timeout.Token);
-        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        var request = fixture.SuspendRequest(proof);
         var suspend = fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token);
         await cancellation.CancelAsync();
         await fixture.Sdk.AbortAcknowledged.Task.WaitAsync(timeout.Token);
@@ -310,7 +830,7 @@ public sealed class RuntimeAgentHostTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
         await fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token);
-        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
+        var request = fixture.SuspendRequest(proof);
         fixture.AfterMaterialWrite = material =>
         {
             if (material.EventId == request.ManifestId)
@@ -333,8 +853,8 @@ public sealed class RuntimeAgentHostTests
         using var server = await fixture.StartHttpAsync();
         using var client = server.GetTestClient();
         client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
-        var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
-        const string path = "/runtime/v1/suspend/native-evidence";
+        var request = fixture.SuspendRequest(proof);
+        const string path = "/runtime/v1/suspend";
         using var anonymous = await client.PostAsJsonAsync(path, request, HostFixture.Json, timeout.Token);
         Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
         client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
@@ -343,12 +863,23 @@ public sealed class RuntimeAgentHostTests
             "http://runtime.test" + path, request, HostFixture.Json, timeout.Token);
         Assert.Equal(HttpStatusCode.BadRequest, wrongAudience.StatusCode);
         Assert.Single(fixture.Material, material => material.Kind == SessionMaterialKind.SdkCache);
+        using var missingFlush = await client.PostAsJsonAsync(
+            path, new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1),
+            HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.Forbidden, missingFlush.StatusCode);
+        Assert.Contains("runtime_workspace_flush_request_missing",
+            await missingFlush.Content.ReadAsStringAsync());
         using var response = await client.PostAsJsonAsync(path, request, HostFixture.Json, timeout.Token);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.True(response.Headers.CacheControl?.NoStore);
         var receipt = await response.Content.ReadFromJsonAsync<RuntimeHostSuspendReceipt>(
             HostFixture.Json, timeout.Token);
         Assert.Equal(request.ManifestId, receipt!.CacheAcknowledgment.EventId);
+        Assert.NotNull(receipt.WorkspaceFlush);
+        Assert.Equal(request.WorkspaceFlush!.EnvironmentFence, receipt.WorkspaceFlush!.EnvironmentFence);
+        Assert.Equal(request.WorkspaceFlush.Resource, receipt.WorkspaceFlush.Resource);
+        Assert.Equal(request.WorkspaceFlush.ExpectedDataGeneration + 1, receipt.WorkspaceFlush.DataGeneration);
+        Assert.Equal(request.WorkspaceFlush.IdempotencyKey, receipt.WorkspaceFlush.IdempotencyKey);
         client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token + "invalid");
         using var forged = await client.PostAsJsonAsync(path, request, HostFixture.Json, timeout.Token);
         Assert.Equal(HttpStatusCode.Unauthorized, forged.StatusCode);
@@ -542,7 +1073,8 @@ public sealed class RuntimeAgentHostTests
             using var error = JsonDocument.Parse(await response.Content.ReadAsStringAsync(timeout.Token));
             Assert.Equal("runtime_a2a_message_invalid", error.RootElement.GetProperty("code").GetString());
             Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
-            Assert.Empty(fixture.Material);
+            Assert.DoesNotContain(fixture.Material,
+                material => material.Kind is SessionMaterialKind.TurnContent or SessionMaterialKind.SdkCache);
         }
     }
 
@@ -600,7 +1132,8 @@ public sealed class RuntimeAgentHostTests
 
         Assert.Equal(expectedCode, failure.Code);
         Assert.Single(fixture.NativeAdmissions);
-        Assert.Empty(fixture.Material);
+        Assert.DoesNotContain(fixture.Material,
+            material => material.Kind is SessionMaterialKind.TurnContent or SessionMaterialKind.SdkCache);
         Assert.Empty(fixture.NativeObservations);
         Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
     }
@@ -853,7 +1386,8 @@ public sealed class RuntimeAgentHostTests
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 fixture.Host.SendAsync(fixture.Message(fixture.Proof(ready)), fixture.Actor, timeout.Token))).Code);
         Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
-        Assert.Empty(fixture.Material);
+        Assert.DoesNotContain(fixture.Material,
+            material => material.Kind is SessionMaterialKind.TurnContent or SessionMaterialKind.SdkCache);
         Assert.Empty(fixture.Usage);
     }
 
@@ -1112,7 +1646,7 @@ public sealed class RuntimeAgentHostTests
         };
         private readonly SymmetricSecurityKey _key = new(Encoding.UTF8.GetBytes(new string('s', 64)));
         private readonly HttpClient _http;
-        private readonly Guid _bootstrap = Guid.NewGuid();
+        private Guid _bootstrap = Guid.NewGuid();
         private readonly Guid _source = Guid.NewGuid();
         private readonly string _hash = RuntimeContractValidation.Hash("{}"u8);
         private RuntimeModelCredentialGrantReceipt? _model;
@@ -1120,13 +1654,16 @@ public sealed class RuntimeAgentHostTests
         private long _sourceRevision = 1;
         private int _position;
         private readonly ConcurrentDictionary<Guid, SessionMaterialReadResult> _material = new();
+        private readonly ConcurrentDictionary<Guid, SessionMaterialWriteRequest> _materialWrites = new();
         public HostFixture(
             ModelSourceMode sourceMode = ModelSourceMode.HostedCopilot,
             decimal? hardCreditLimit = null,
             int? maxModelTurns = null,
             int? maxToolCalls = null,
             int? maxPromptTokens = null,
-            bool workflowBound = false)
+            bool workflowBound = false,
+            string sessionId = "session",
+            long executionFence = 1)
         {
             Time = new() { Now = DateTimeOffset.UtcNow };
             Token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
@@ -1140,6 +1677,8 @@ public sealed class RuntimeAgentHostTests
                 ExpiresAt = Time.Now.AddMinutes(5),
                 Binding = Registration.Binding with
                 {
+                    SessionId = sessionId,
+                    ExecutionFence = executionFence,
                     ConfigureEndpoint = new("https://runtime.test/runtime/v1/configure"),
                     PlacementProviderId = "sandbox-test", EnvironmentLifecycleGeneration = 1,
                     EnvironmentLeaseRevision = 1, Image = Image,
@@ -1181,6 +1720,7 @@ public sealed class RuntimeAgentHostTests
                 };
             var factory = new RuntimeCopilotSessionFactory(Sdk.Connection,
                 Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), modelBindings);
+            WorkingDirectory = factory.WorkingDirectory;
             var b = Registration.Binding;
             var owner = new RuntimeOwnerContext(1, b.ActorIssuer, b.ActorId, b.TenantId, b.ProjectId, b.RunId,
                 b.SessionId, b.AgentId, b.ModelSelectionReference!, b.TurnId, b.ProjectRevision,
@@ -1208,19 +1748,30 @@ public sealed class RuntimeAgentHostTests
             _http = new(new Handler(SendOwnerAsync));
             Host = new(new(b.ConfigureEndpoint, new("https://broker.test/"), new("https://orchestrator.test/"),
                     new("https://environment.test/"), new("https://events.test/"), Image, 8),
-                _http, new RuntimeRegistrationHttpClient(_http, new("https://orchestrator.test/")), factory, Time);
+                _http, new RuntimeRegistrationHttpClient(_http, new("https://orchestrator.test/")), factory, Time,
+                static (_, request, _) => Task.FromResult(CreateWorkspaceFlushReceipt(request)));
             Configure = new(1, Registration, Guid.NewGuid(), Guid.NewGuid(), JsonSerializer.SerializeToElement(new { }));
         }
         public TestClock Time { get; }
         public string Token { get; }
+        public Guid BootstrapGrantId => _bootstrap;
         public RuntimeActorAuthorization Actor { get; }
         public SandboxImageIdentity Image { get; }
         public RuntimeRegistration Registration { get; set; }
         public EnvironmentRuntimeReadinessContext Readiness { get; set; }
         public RuntimeAgentHost Host { get; }
-        public RuntimeHostConfigureRequest Configure { get; }
+        public RuntimeHostConfigureRequest Configure { get; private set; }
         public ControlledCopilotRuntime Sdk { get; }
+        public string WorkingDirectory { get; }
+        public string ConfigurationHash => _hash;
         public ConcurrentQueue<SessionMaterialWriteRequest> Material { get; } = new();
+        public ImmutableArray<SessionEventEnvelope> SessionEvents { get; private set; } = [];
+        public int PositionIncrement { get; set; } = 1;
+        public int SessionEventPageSize { get; set; } = 100;
+        public ConcurrentQueue<string> MaterialWriteRoutes { get; } = new();
+        public ConcurrentQueue<Guid> ResumeCacheReads { get; } = new();
+        public ConcurrentQueue<string> ResumeEventRequests { get; } = new();
+        public ConcurrentQueue<string> ResumeMaterialReadRequests { get; } = new();
         public ConcurrentQueue<RuntimeUsageSourceReceipt> Usage { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnBeginRequest> NativeAdmissions { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnObservationRequest> NativeObservations { get; } = new();
@@ -1232,10 +1783,16 @@ public sealed class RuntimeAgentHostTests
         public Func<RuntimeHostSuspendRequest, RuntimeHostSuspendRequest>? SuspendEcho { get; set; }
         public HttpStatusCode SuspendStatus { get; set; } = HttpStatusCode.OK;
         public ConcurrentQueue<RuntimeHostSuspendRequest> SuspendChecks { get; } = new();
+        public Func<RuntimeWorkspaceResumeRequest, RuntimeWorkspaceResumeRequest>? ResumeEcho { get; set; }
+        public HttpStatusCode ResumeStatus { get; set; } = HttpStatusCode.OK;
+        public ConcurrentQueue<RuntimeWorkspaceResumeRequest> ResumeChecks { get; } = new();
+        public ConcurrentQueue<RuntimeResumeBootstrapRequest> ResumeBootstrapChecks { get; } = new();
         public TaskCompletionSource AccountingReceived { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Func<CancellationToken, Task>? BeforeAccounting { get; set; }
         public bool FailAccounting { get; set; }
         public bool MaterialPromptCapacityChanged { get; set; }
+        public string? ResumeFault { get; set; }
+        public Guid? ResumeProvenanceRuntimeInstanceId { get; set; }
         public Action<SessionMaterialWriteRequest>? AfterMaterialWrite { get; set; }
         public Action<SessionMaterialReadResult>? AfterMaterialRead { get; set; }
         public Guid? MissingMaterialId { get; set; }
@@ -1246,9 +1803,131 @@ public sealed class RuntimeAgentHostTests
         public bool CostPreflightSourceHashMismatch { get; set; }
         public int SourceRevocations { get; private set; }
 
+        public Guid FirstTurnEventId => _materialWrites.Values
+            .Where(item => item.Kind == SessionMaterialKind.TurnContent)
+            .OrderBy(item => _material[item.EventId].Material.Position)
+            .Select(item => item.EventId)
+            .First();
+        public SessionMaterialReadResult ReadMaterial(Guid eventId) => _material[eventId];
+        public bool HasMaterial(Guid eventId) => _material.ContainsKey(eventId);
+        public async Task<Guid> RecordOneTurnAsync(CancellationToken token)
+        {
+            var readiness = await ConfigureAsync(token);
+            await Host.SendAsync(Message(Proof(readiness)), Actor, token);
+            return FirstTurnEventId;
+        }
         public Task<RuntimeBootstrapDeliveryReceipt> DeliverAsync(CancellationToken token) =>
-            Host.ReceiveAsync(new(Registration.RuntimeInstanceId, Guid.NewGuid(), _bootstrap, _hash,
+            Host.ReceiveAsync(new(Registration.RuntimeInstanceId,
+                Configure.ResumeBootstrap?.BootstrapOperationId ?? Guid.NewGuid(), _bootstrap, _hash,
                 new string('c', 64), Registration.ExpiresAt), Actor, token);
+        public void UseResumeBootstrap(RuntimeResumeBootstrapRequest request)
+        {
+            request.Validate();
+            using var emptyConfiguration = JsonDocument.Parse("null");
+            Configure = new RuntimeHostConfigureRequest(
+                1,
+                request.Registration,
+                request.ConsumeOperationId,
+                request.ExchangeOperationId,
+                emptyConfiguration.RootElement.Clone())
+            {
+                ResumeBootstrap = request
+            };
+        }
+        public void ImportResumeSourceFrom(HostFixture source, Guid missingCacheId)
+        {
+            foreach (var (eventId, material) in source._material)
+                _material[eventId] = material;
+            _position = source._position;
+            SessionEvents = source.SessionEvents;
+            MissingMaterialId = missingCacheId;
+        }
+        public void ReplaceFirstTurnFrom(HostFixture owner)
+        {
+            var ownerWrite = owner._materialWrites.Values
+                .Where(item => item.Kind == SessionMaterialKind.TurnContent)
+                .OrderBy(item => owner._material[item.EventId].Material.Position)
+                .First();
+            var ownerMaterial = owner._material[ownerWrite.EventId];
+            var currentTurn = SessionEvents
+                .Where(item => item.Payload is TurnSessionPayload)
+                .OrderBy(item => item.Position)
+                .First();
+            var relocated = ownerMaterial.Material with { Position = currentTurn.Position };
+            _material[relocated.EventId] = ownerMaterial with { Material = relocated };
+            var turn = new TurnSessionPayload(ownerWrite.Role!, relocated.Reference);
+            SessionEvents = SessionEvents
+                .Where(item => item.EventId != currentTurn.EventId)
+                .Append(CreateEnvelope(relocated.Identity, currentTurn.Position, relocated.EventId, turn))
+                .OrderBy(item => item.Position)
+                .ToImmutableArray();
+        }
+        public void ReplaceVisibleParentEffectWithTurn(HostFixture owner)
+        {
+            var ownerWrite = owner._materialWrites.Values
+                .Where(item => item.Kind == SessionMaterialKind.TurnContent)
+                .OrderBy(item => owner._material[item.EventId].Material.Position)
+                .First();
+            var ownerMaterial = owner._material[ownerWrite.EventId];
+            var placeholder = SessionEvents.Single(item =>
+                item.Payload is AcceptedEffectSessionPayload { EffectId: "parent-effect" });
+            var relocated = ownerMaterial.Material with { Position = placeholder.Position };
+            _material[relocated.EventId] = ownerMaterial with { Material = relocated };
+            var turn = new TurnSessionPayload(ownerWrite.Role!, relocated.Reference);
+            SessionEvents = SessionEvents
+                .Where(item => item.EventId != placeholder.EventId)
+                .Append(CreateEnvelope(relocated.Identity, placeholder.Position, relocated.EventId, turn))
+                .OrderBy(item => item.Position)
+                .ToImmutableArray();
+        }
+        public void ImportUnlistedMaterialFrom(HostFixture owner, Guid eventId) =>
+            _material[eventId] = owner._material[eventId];
+        public void PrepareResumeJournal(RuntimeHostSuspendReceipt receipt, bool includeVisibleAncestor)
+        {
+            var identity = receipt.ConfigurationAcknowledgment!.Identity;
+            var events = new List<SessionEventEnvelope>();
+            foreach (var write in _materialWrites.Values)
+            {
+                var recorded = _material[write.EventId];
+                if (recorded.Material.Position > receipt.CacheAcknowledgment.Position)
+                    continue;
+                SessionEventPayload? payload = write.Kind switch
+                {
+                    SessionMaterialKind.TurnContent => new TurnSessionPayload(
+                        write.Role ?? throw new InvalidOperationException("Turn role is required."),
+                        recorded.Material.Reference),
+                    SessionMaterialKind.SdkCache => new CacheReferenceSessionPayload(
+                        recorded.Material.Reference,
+                        recorded.Material.Reference.Material!.RuntimeVersion,
+                        "fixture-binding"),
+                    SessionMaterialKind.RuntimeConfiguration => new RuntimeConfigurationSessionPayload(
+                        recorded.Material.Reference),
+                    _ => null
+                };
+                if (payload is not null)
+                    events.Add(CreateEnvelope(
+                        recorded.Material.Identity,
+                        recorded.Material.Position,
+                        recorded.Material.EventId,
+                        payload));
+            }
+
+            if (includeVisibleAncestor)
+            {
+                var configuration = events.Single(item => item.Payload is RuntimeConfigurationSessionPayload);
+                events.Add(CreateEnvelope(
+                    new SessionIdentity(identity.ProjectId, identity.RunId, "visible-parent"),
+                    configuration.Position + 1,
+                    Guid.NewGuid(),
+                    new AcceptedEffectSessionPayload("parent-effect", "recorded", null)));
+                events.Add(CreateEnvelope(
+                    identity,
+                    receipt.CacheAcknowledgment.Position + 1,
+                    Guid.NewGuid(),
+                    new AcceptedEffectSessionPayload("post-boundary-effect", "recorded", null)));
+            }
+            SessionEvents = events.OrderBy(item => item.Position).ToImmutableArray();
+        }
         public async Task<RuntimeHostReadinessReceipt> ConfigureAsync(CancellationToken token)
         {
             await DeliverAsync(token);
@@ -1256,6 +1935,48 @@ public sealed class RuntimeAgentHostTests
         }
         public RuntimeHostSessionProof Proof(RuntimeHostReadinessReceipt ready) =>
             new(1, Configure.Registration, ready.SourceGrant.GrantId, ready.SourceGrant.Revision, RuntimeCredentialPurpose.Observe);
+        public RuntimeHostSuspendRequest SuspendRequest(RuntimeHostSessionProof proof, long phaseVersion = 1)
+        {
+            var binding = proof.Registration.Binding;
+            var request = new RuntimeHostSuspendRequest(
+                proof, Guid.NewGuid(), Guid.NewGuid(), phaseVersion);
+            var spec = new WorkspaceVolumeSpec(
+                "workspace",
+                binding.ProjectId,
+                new(WorkspaceVolumeOwnerKind.Run, binding.RunId),
+                binding.EnvironmentId,
+                WorkspaceVolumeBindingMode.Environment,
+                WorkspaceVolumeAccessMode.ReadWriteOnce,
+                8,
+                "test-storage",
+                WorkspaceVolumeConsistency.Strict,
+                WorkspaceVolumeReclaimPolicy.Delete,
+                WorkspaceVolumeOwnerDeletionPolicy.Delete,
+                []);
+            var flushRequest = new WorkspaceVolumeFlushRequest(
+                spec,
+                1,
+                new(new(binding.TenantId, binding.ProjectId, binding.RunId, binding.EnvironmentId),
+                    binding.EnvironmentLifecycleGeneration),
+                new(ProviderSeam.Storage, "test-storage", "workspace-resource", 1),
+                0,
+                Guid.NewGuid().ToString("N"));
+            return request with { WorkspaceFlush = flushRequest };
+        }
+
+        private static WorkspaceVolumeFlushReceipt CreateWorkspaceFlushReceipt(
+            WorkspaceVolumeFlushRequest request) =>
+            new WorkspaceVolumeFlushReceipt(
+                1,
+                request.EnvironmentFence,
+                new(request.Spec.ProjectId, request.Spec.VolumeId, request.ResourceGeneration),
+                request.Resource,
+                request.ExpectedDataGeneration,
+                checked(request.ExpectedDataGeneration + 1),
+                request.IdempotencyKey,
+                new string('a', 64),
+                ProviderCheckpointId: null).ValidateFor(request);
+
         public RuntimeSessionMaterialHttpClient MaterialClient() => new(_http, new("https://events.test/"), Actor);
         public RuntimeUsageSourceHttpClient SourceClient() => new(_http, new("https://orchestrator.test/"), Actor);
         public async Task<AuthorizedRuntimeSession> ConfigureSessionAsync(
@@ -1316,12 +2037,15 @@ public sealed class RuntimeAgentHostTests
         }).StartAsync();
 
         private RuntimeGrantReceipt Grant(Guid id, RuntimeCredentialPurpose purpose,
-            RuntimeCredentialState state = RuntimeCredentialState.Active, long revision = 1) =>
-            new(id, Configure.Registration.RuntimeInstanceId, Configure.Registration.Revision, revision,
+            RuntimeCredentialState state = RuntimeCredentialState.Active, long revision = 1)
+        {
+            var registration = Registration;
+            return new(id, registration.RuntimeInstanceId, registration.Revision, revision,
                 "https://broker.test/", purpose,
-                purpose == RuntimeCredentialPurpose.Configure ? Configure.Registration.Binding.ConfigureEndpoint :
-                    Configure.Registration.Binding.ObservationEndpoint, state, _hash,
-                Configure.Registration.ExpiresAt, Time.GetUtcNow());
+                purpose == RuntimeCredentialPurpose.Configure ? registration.Binding.ConfigureEndpoint :
+                    registration.Binding.ObservationEndpoint, state, _hash,
+                registration.ExpiresAt, Time.GetUtcNow());
+        }
 
         private async Task<HttpResponseMessage> SendOwnerAsync(HttpRequestMessage request, CancellationToken token)
         {
@@ -1344,6 +2068,22 @@ public sealed class RuntimeAgentHostTests
                 var suspend = await ReadAsync<RuntimeHostSuspendRequest>(request, token);
                 SuspendChecks.Enqueue(suspend);
                 return Response(request, SuspendEcho?.Invoke(suspend) ?? suspend, SuspendStatus);
+            }
+            if (path == "/internal/runtime/resume/require-current")
+            {
+                Assert.Equal("orchestrator.test", request.RequestUri.Host);
+                Assert.Equal(HttpMethod.Post, request.Method);
+                var resume = await ReadAsync<RuntimeWorkspaceResumeRequest>(request, token);
+                ResumeChecks.Enqueue(resume);
+                return Response(request, ResumeEcho?.Invoke(resume) ?? resume, ResumeStatus);
+            }
+            if (path == "/internal/runtime/resume/require-bootstrap-current")
+            {
+                Assert.Equal("orchestrator.test", request.RequestUri.Host);
+                Assert.Equal(HttpMethod.Post, request.Method);
+                var resume = await ReadAsync<RuntimeResumeBootstrapRequest>(request, token);
+                ResumeBootstrapChecks.Enqueue(resume);
+                return Response(request, resume);
             }
             if (path == "/internal/runtime/bootstrap/verify-pending")
                 return Response(request, Grant(_bootstrap, RuntimeCredentialPurpose.Configure));
@@ -1512,14 +2252,68 @@ public sealed class RuntimeAgentHostTests
                         null, null, "controlled fixture", null, null, Time.GetUtcNow()), false));
             }
             if (path.EndsWith("/events", StringComparison.Ordinal))
-                return Response(request, new SessionEventPage([], null, false));
-            if (path.EndsWith("/material", StringComparison.Ordinal))
+            {
+                ResumeEventRequests.Enqueue(path);
+                if (ResumeFault == "events-unauthorized")
+                    return Response(request, new { }, HttpStatusCode.Unauthorized);
+                if (ResumeFault == "events-forbidden")
+                    return Response(request, new { }, HttpStatusCode.Forbidden);
+                if (ResumeFault == "events-transport")
+                    throw new HttpRequestException("Controlled Events transport failure.");
+                if (ResumeFault == "cursor-no-progress")
+                    return Response(request, new SessionEventPage([], "1", true));
+                var after = 0L;
+                foreach (var part in request.RequestUri.Query.TrimStart('?')
+                             .Split('&', StringSplitOptions.RemoveEmptyEntries))
+                {
+                    var pair = part.Split('=', 2);
+                    if (pair[0] == "cursor" && pair.Length == 2)
+                        after = long.Parse(
+                            Uri.UnescapeDataString(pair[1]), NumberStyles.None, CultureInfo.InvariantCulture);
+                }
+                var page = SessionEvents.Where(item => item.Position > after)
+                    .Take(SessionEventPageSize + 1).ToArray();
+                var hasMore = page.Length > SessionEventPageSize;
+                if (hasMore)
+                    page = page[..SessionEventPageSize];
+                var cursor = page.Length == 0
+                    ? null
+                    : page[^1].Position.ToString(CultureInfo.InvariantCulture);
+                if (ResumeFault == "cursor-repeated" && after > 0 && SessionEvents.Length > SessionEventPageSize)
+                    cursor = SessionEvents.Take(SessionEventPageSize).Last().Position
+                        .ToString(CultureInfo.InvariantCulture);
+                return Response(request, new SessionEventPage(page.ToImmutableArray(), cursor, hasMore));
+            }
+            if (path == "/internal/runtime/resume/configuration")
+            {
+                var resume = await ReadAsync<RuntimeResumeBootstrapRequest>(request, token);
+                var acknowledgment = RuntimeResumeBootstrapRequest.RequireConfigurationAcknowledgment(
+                    resume.Resume.SourceRelease.HostReceipt);
+                if (acknowledgment.EventId == MissingMaterialId ||
+                    !_material.TryGetValue(acknowledgment.EventId, out var configuration))
+                    return Response(request, new { }, HttpStatusCode.NotFound);
+                return Response(request, configuration);
+            }
+            if (path.EndsWith("/material", StringComparison.Ordinal) ||
+                path.EndsWith("/runtime-configuration", StringComparison.Ordinal))
             {
                 var material = await ReadAsync<SessionMaterialWriteRequest>(request, token);
+                var dedicatedConfigurationRoute = path.EndsWith("/runtime-configuration", StringComparison.Ordinal);
+                if (dedicatedConfigurationRoute !=
+                    (material.Kind == SessionMaterialKind.RuntimeConfiguration))
+                    return Response(request, new { }, HttpStatusCode.Forbidden);
+                if (_material.TryGetValue(material.EventId, out var existing))
+                {
+                    if (!_materialWrites.TryGetValue(material.EventId, out var previous) ||
+                        !RuntimeWorkspaceResumeHttpClient.SameJson(previous, material))
+                        return Response(request, new { code = "session_event_conflict" }, HttpStatusCode.Conflict);
+                    return Response(request, existing.Material);
+                }
                 Material.Enqueue(material);
+                MaterialWriteRoutes.Enqueue(path);
                 var b = Configure.Registration.Binding;
                 var receipt = new SessionMaterialAcknowledgment(1, new(b.ProjectId, b.RunId, b.SessionId),
-                    material.EventId, Interlocked.Increment(ref _position),
+                    material.EventId, Interlocked.Add(ref _position, PositionIncrement),
                     new(new ObjectKey(material.EventId.ToString("N")), SessionMaterialValidation.Purpose(material.Kind),
                         material.Bytes.Length)
                     {
@@ -1528,21 +2322,81 @@ public sealed class RuntimeAgentHostTests
                             b.AcceptedSelectionHash, _facts!.SdkVersion, _facts.RuntimeVersion,
                             _facts.ModelSelectionReference, _facts.ModelId)
                         {
-                            MaxPromptTokens = MaterialPromptCapacityChanged
+                            MaxPromptTokens = MaterialPromptCapacityChanged &&
+                                material.Kind != SessionMaterialKind.RuntimeConfiguration
                                 ? (_facts.MaxPromptTokens ?? 1024) + 1 : _facts.MaxPromptTokens
                         }
                     });
                 _material[material.EventId] = new(receipt, material.Bytes);
+                _materialWrites[material.EventId] = material;
                 AfterMaterialWrite?.Invoke(material);
                 return Response(request, receipt);
             }
             if (path.Contains("/material/", StringComparison.Ordinal))
             {
+                ResumeMaterialReadRequests.Enqueue(path);
                 var id = Guid.Parse(path.Split('/')[5]);
+                if (path.EndsWith("/SdkCache", StringComparison.Ordinal))
+                    ResumeCacheReads.Enqueue(id);
                 if (id == MissingMaterialId || !_material.TryGetValue(id, out var recorded))
                     return Response(request, new { }, HttpStatusCode.NotFound);
                 AfterMaterialRead?.Invoke(recorded);
-                return Response(request, recorded);
+                var result = recorded;
+                if (path.EndsWith("/TurnContent", StringComparison.Ordinal))
+                {
+                    var material = recorded.Material;
+                    var reference = material.Reference;
+                    var binding = reference.Material!;
+                    result = ResumeFault switch
+                    {
+                        "material-bytes" => recorded with
+                        {
+                            Bytes = CorruptFirstByte(recorded.Bytes)
+                        },
+                        "material-reference" => recorded with
+                        {
+                            Material = material with
+                            {
+                                Reference = reference with
+                                {
+                                    Key = new ObjectKey(Guid.NewGuid().ToString("N"))
+                                }
+                            }
+                        },
+                        "material-hash" => recorded with
+                        {
+                            Material = material with
+                            {
+                                Reference = reference with
+                                {
+                                    Material = binding with
+                                    {
+                                        Sha256 = binding.Sha256[0] == 'a'
+                                            ? 'b' + binding.Sha256[1..]
+                                            : 'a' + binding.Sha256[1..]
+                                    }
+                                }
+                            }
+                        },
+                        "material-provenance" => recorded with
+                        {
+                            Material = material with
+                            {
+                                Reference = reference with
+                                {
+                                    Material = binding with
+                                    {
+                                        RuntimeInstanceId = ResumeProvenanceRuntimeInstanceId
+                                            ?? throw new InvalidOperationException(
+                                                "A forged resume material binding is required.")
+                                    }
+                                }
+                            }
+                        },
+                        _ => recorded
+                    };
+                }
+                return Response(request, result);
             }
             throw new InvalidOperationException("Unexpected fixture owner route: " + path);
         }
@@ -1556,6 +2410,36 @@ public sealed class RuntimeAgentHostTests
                 RequestMessage = request, Content = JsonContent.Create(body, options: Json),
                 Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
             };
+        private static byte[] CorruptFirstByte(byte[] bytes)
+        {
+            var corrupted = bytes.ToArray();
+            corrupted[0] ^= 1;
+            return corrupted;
+        }
+        private static SessionEventEnvelope CreateEnvelope(
+            SessionIdentity identity,
+            long position,
+            Guid eventId,
+            SessionEventPayload payload)
+        {
+            var references = SessionEventPayloadValidation.ValidateAndGetReferences(payload)
+                .Select(reference => new StoredSessionObjectReference(
+                    reference, new SessionObjectRetention("fixture", DateTimeOffset.MaxValue)))
+                .ToImmutableArray();
+            var json = JsonSerializer.Serialize(new
+            {
+                schemaVersion = SessionsContractVersions.CurrentSchemaVersion,
+                eventVersion = SessionsContractVersions.CurrentEventVersion,
+                eventId,
+                identity,
+                position,
+                occurredAt = DateTimeOffset.UnixEpoch,
+                payload,
+                objectReferences = references
+            }, Json);
+            return JsonSerializer.Deserialize<SessionEventEnvelope>(json, Json)
+                ?? throw new InvalidOperationException("The fixture event envelope could not be created.");
+        }
         public async ValueTask DisposeAsync()
         {
             try { await Host.DisposeAsync(); }

@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -92,6 +94,134 @@ internal sealed class RuntimeRegistrationStore
         RequireAvailable(registered);
         await transaction.CommitAsync(cancellationToken);
         return registered;
+    }
+
+    internal async Task<RuntimeRegistration> ReplaceAsync(
+        RuntimeRegistration expected,
+        Guid operationId,
+        RuntimeBinding serverDerivedBinding,
+        DateTimeOffset ownerBoundExpiresAt,
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? revalidateCurrentAuthority = null)
+    {
+        RuntimeContractValidation.Validate(expected);
+        if (operationId == Guid.Empty ||
+            expected.State != RuntimeRegistrationState.Active ||
+            expected.Revision == long.MaxValue)
+            throw new RuntimeAuthorizationException("runtime_registration_stale");
+
+        var expiresAt = new DateTimeOffset(
+            ownerBoundExpiresAt.UtcTicks - ownerBoundExpiresAt.UtcTicks % 10, TimeSpan.Zero);
+        var candidate = new RuntimeRegistration(
+            CreateReplacementId(expected.RuntimeInstanceId, operationId),
+            1, serverDerivedBinding, RuntimeRegistrationState.Active, expiresAt);
+        RuntimeContractValidation.Validate(candidate);
+        RequireAvailable(candidate);
+        var bindingJson = JsonSerializer.Serialize(serverDerivedBinding, JsonOptions);
+        var bindingHash = RuntimeContractValidation.Hash(
+            JsonSerializer.SerializeToUtf8Bytes(serverDerivedBinding, JsonOptions));
+        var expectedHash = RuntimeContractValidation.Hash(
+            JsonSerializer.SerializeToUtf8Bytes(expected.Binding, JsonOptions));
+        if (bindingHash == expectedHash)
+            throw new RuntimeAuthorizationException("runtime_registration_conflict");
+
+        await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        RuntimeRegistration current;
+        string oldBindingJson;
+        string oldBindingHash;
+        await using (var read = new NpgsqlCommand($"""
+            SELECT revision.runtime_instance_id, revision.revision, revision.binding_json,
+                   revision.binding_hash, revision.state, revision.expires_at
+            FROM {_heads} AS head
+            JOIN {_revisions} AS revision
+              ON revision.runtime_instance_id = head.runtime_instance_id
+             AND revision.revision = head.current_revision
+            WHERE head.runtime_instance_id = @runtime
+            FOR UPDATE OF head
+            """, connection, transaction))
+        {
+            read.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, expected.RuntimeInstanceId);
+            await using var reader = await read.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+                throw new RuntimeAuthorizationException("runtime_registration_unknown");
+            current = ReadRegistration(reader);
+            oldBindingJson = reader.GetString(2);
+            oldBindingHash = reader.GetString(3);
+        }
+
+        var replayedRevocation =
+            current.Revision == expected.Revision + 1 &&
+            current.State == RuntimeRegistrationState.Revoked &&
+            current.Binding == expected.Binding &&
+            current.ExpiresAt == expected.ExpiresAt;
+        if (!replayedRevocation && current != expected)
+            throw new RuntimeAuthorizationException("runtime_registration_stale");
+
+        if (!replayedRevocation)
+        {
+            var revoked = current with
+            {
+                Revision = checked(expected.Revision + 1),
+                State = RuntimeRegistrationState.Revoked
+            };
+            await using (var advance = new NpgsqlCommand($"""
+                UPDATE {_heads} SET current_revision = @next
+                WHERE runtime_instance_id = @runtime AND current_revision = @expected
+                """, connection, transaction))
+            {
+                advance.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, expected.RuntimeInstanceId);
+                advance.Parameters.AddWithValue("expected", NpgsqlDbType.Bigint, expected.Revision);
+                advance.Parameters.AddWithValue("next", NpgsqlDbType.Bigint, revoked.Revision);
+                if (await advance.ExecuteNonQueryAsync(cancellationToken) != 1)
+                    throw new RuntimeAuthorizationException("runtime_registration_stale");
+            }
+            await InsertRevisionAsync(
+                connection, transaction, revoked, oldBindingJson, oldBindingHash, cancellationToken);
+        }
+
+        int inserted;
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO {_heads}(runtime_instance_id, binding_hash, current_revision)
+            VALUES (@runtime, @hash, 1)
+            ON CONFLICT DO NOTHING
+            """, connection, transaction))
+        {
+            insert.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, candidate.RuntimeInstanceId);
+            insert.Parameters.AddWithValue("hash", NpgsqlDbType.Char, bindingHash);
+            inserted = await insert.ExecuteNonQueryAsync(cancellationToken);
+        }
+        if (inserted == 1)
+            await InsertRevisionAsync(
+                connection, transaction, candidate, bindingJson, bindingHash, cancellationToken);
+
+        RuntimeRegistration replacement;
+        await using (var read = new NpgsqlCommand($"""
+            SELECT revision.runtime_instance_id, revision.revision, revision.binding_json,
+                   revision.binding_hash, revision.state, revision.expires_at
+            FROM {_heads} AS head
+            JOIN {_revisions} AS revision
+              ON revision.runtime_instance_id = head.runtime_instance_id
+             AND revision.revision = head.current_revision
+            WHERE head.runtime_instance_id = @runtime
+            FOR UPDATE OF head
+            """, connection, transaction))
+        {
+            read.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, candidate.RuntimeInstanceId);
+            await using var reader = await read.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken))
+                throw new RuntimeAuthorizationException("runtime_registration_conflict");
+            replacement = ReadRegistration(reader);
+        }
+        if (replacement.Binding != serverDerivedBinding || replacement.ExpiresAt != expiresAt ||
+            replacement.State != RuntimeRegistrationState.Active)
+            throw new RuntimeAuthorizationException("runtime_registration_conflict");
+        RequireAvailable(replacement);
+        if (revalidateCurrentAuthority is not null)
+            await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
+        RequireAvailable(replacement);
+        await transaction.CommitAsync(cancellationToken);
+        return replacement;
     }
 
     internal async Task<RuntimeRegistration?> ReadAsync(
@@ -196,6 +326,12 @@ internal sealed class RuntimeRegistrationStore
             bindingJson = reader.GetString(2);
             bindingHash = reader.GetString(3);
         }
+        if (current.Revision == expectedRevision + 1 &&
+            current.State == RuntimeRegistrationState.Revoked)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return current;
+        }
         if (current.Revision != expectedRevision || current.State != RuntimeRegistrationState.Active)
             throw new RuntimeAuthorizationException("runtime_registration_stale");
         var revoked = current with { Revision = checked(expectedRevision + 1), State = RuntimeRegistrationState.Revoked };
@@ -234,7 +370,14 @@ internal sealed class RuntimeRegistrationStore
         await insert.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static RuntimeRegistration ReadRegistration(NpgsqlDataReader reader)
+    private static Guid CreateReplacementId(Guid releasedRuntimeInstanceId, Guid operationId)
+    {
+        var input = Encoding.UTF8.GetBytes(
+            $"agentweaver.runtime-registration.resume.v1:{releasedRuntimeInstanceId:D}:{operationId:D}");
+        return new Guid(SHA256.HashData(input).AsSpan(0, 16));
+    }
+
+    internal static RuntimeRegistration ReadRegistration(NpgsqlDataReader reader)
     {
         var binding = JsonSerializer.Deserialize<RuntimeBinding>(reader.GetString(2), JsonOptions)
             ?? throw new InvalidOperationException("A stored runtime binding is invalid.");

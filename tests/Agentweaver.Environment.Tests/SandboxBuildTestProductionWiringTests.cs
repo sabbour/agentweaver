@@ -115,8 +115,34 @@ public sealed class SandboxBuildTestProductionWiringTests
         {
             Assert.Equal(EnvironmentDbContext.Schema, constraint.Schema);
             Assert.Equal("owner_effects", constraint.Table);
-            Assert.Equal(constraints[constraint.Name].Sql, constraint.Sql);
+            if (constraint.Name != "ck_environment_owner_effects_kind")
+                Assert.Equal(constraints[constraint.Name].Sql, constraint.Sql);
         }
         Assert.Contains("'BuildTestCommand'", constraints["ck_environment_owner_effects_kind"].Sql);
+        var latestKind = Assert.Single(new RuntimeResumeBootstrap().UpOperations
+            .OfType<AddCheckConstraintOperation>(), constraint =>
+                constraint.Name == "ck_environment_owner_effects_kind");
+        Assert.Equal(latestKind.Sql, constraints[latestKind.Name].Sql);
+    }
+
+    [Fact]
+    public void RuntimeResumeBootstrapMigrationChangesOnlyTheExistingOwnerEffectConstraints()
+    {
+        using var context = new EnvironmentDbContext(new DbContextOptionsBuilder<EnvironmentDbContext>()
+            .UseNpgsql("Host=unused.invalid;Database=unused;Username=unused").Options);
+        var entity = context.GetService<IDesignTimeModel>().Model.FindEntityType(typeof(EnvironmentOwnerEffectRow))!;
+        var constraints = entity.GetCheckConstraints().ToDictionary(constraint => constraint.Name!);
+        var operations = new RuntimeResumeBootstrap().UpOperations;
+        Assert.Equal(3, operations.Count);
+        Assert.Single(operations.OfType<DropCheckConstraintOperation>());
+        var added = operations.OfType<AddCheckConstraintOperation>().ToArray();
+        Assert.Equal(2, added.Length);
+        foreach (var constraint in added)
+        {
+            Assert.Equal(EnvironmentDbContext.Schema, constraint.Schema);
+            Assert.Equal("owner_effects", constraint.Table);
+            Assert.Equal(constraints[constraint.Name].Sql, constraint.Sql);
+        }
+        Assert.False(context.Database.HasPendingModelChanges());
     }
 }

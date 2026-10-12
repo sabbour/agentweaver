@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Storage volumes, replacement, and Sandbox attachment",
-  "alt": "Environment provisions a generation-pinned Azure Files claim, then negotiates a mount for the selected Sandbox. It reserves the exact Workspace generation before Sandbox dispatch and detaches it only after placement retirement. The retained-lease runtime bootstrap read does not change Workspace attachment or retirement. Replace cleanup deletes only the pinned old claim and PV. It does not prove Azure data erasure.",
+  "alt": "Environment provisions a generation-pinned Azure Files claim and negotiates the selected Sandbox mount. Suspend saves trusted mounted flush evidence before release and exact detach. Resume validates saved private configuration before owner calls or effects. It prepares a new Sandbox with the same Storage resource and data generation. Core saves that exact mount before the Host hashes its actual tree and Environment repeats Network and owner checks. Post-fence bootstrap uses saved configuration, a server-issued attempt, and fresh Host evidence. Recovery uses compatible native cache or the authenticated saved journal; journal recovery marks native cache pending until a real authorized turn. A saved receipt or generic failure cannot permit dispatch. These source contracts do not prove live durability, native TLS, or Azure erasure.",
   "autonumber": true,
   "participants": [
     {
@@ -24,7 +24,7 @@
     {
       "id": "kubernetes",
       "label": "Kubernetes API",
-      "subLabel": "StorageClass, PVC, PV",
+      "subLabel": "Storage, Pod, Service, Network",
       "icon": "box",
       "fluentIcon": "container",
       "library": "kubernetes",
@@ -33,7 +33,7 @@
     {
       "id": "sandbox",
       "label": "Sandbox provider",
-      "subLabel": "Actual resource and profile",
+      "subLabel": "Placement and mounted AgentHost",
       "icon": "bot",
       "fluentIcon": "window",
       "badge": { "text": "Provider", "tone": "teal" }
@@ -159,9 +159,76 @@
       "arrow": "filled"
     },
     {
-      "type": "note",
-      "over": ["azure-files", "storage-caller"],
-      "label": "Replace pins both generations; cleanup verifies exact claim/PV absence. Sandbox uses owner-CAS attach/detach; Release waits for detach. No Azure erasure proof."
+      "type": "message",
+      "from": "storage-caller",
+      "to": "storage-caller",
+      "label": "Resolve current suspend Workspace; save exact next-generation request",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "storage-caller",
+      "to": "azure-files",
+      "label": "FlushAsync with pinned resource and trusted mounted callback",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "azure-files",
+      "to": "kubernetes",
+      "label": "Check exact PVC, PV, claim specification, and mount options",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "storage-caller",
+      "to": "sandbox",
+      "label": "Require current Core authority; deliver trusted mounted suspend",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "sandbox",
+      "to": "storage-caller",
+      "label": "Exact native-turn, cache, and Workspace flush receipts",
+      "line": "dashed",
+      "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "azure-files",
+      "to": "kubernetes",
+      "label": "Recheck the same pinned resources after mounted flush",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "storage-caller",
+      "to": "storage-caller",
+      "label": "Recheck authority after SQL waits; save evidence and advance data once",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "storage-caller",
+      "to": "sandbox",
+      "label": "After manifest, private configuration, and release/detach checks: prepare same volume/data; save mount, then verify",
+      "line": "solid",
+      "arrow": "filled"
+    },
+    {
+      "type": "message",
+      "from": "sandbox",
+      "to": "storage-caller",
+      "label": "Exact hash + owner/Network checks; restore cache or saved journal, native cache pending until real turn",
+      "line": "dashed",
+      "arrow": "open"
     }
   ]
 }

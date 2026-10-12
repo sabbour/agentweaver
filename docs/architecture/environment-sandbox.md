@@ -135,6 +135,148 @@ run-owner evidence API for this consumer. Therefore, no caller-supplied
 `abandoned` flag, lease age, stale credential, timeout, Pod failure, or failed
 lookup is treated as proof that a run ended.
 
+## Trusted suspend Workspace flush
+
+This source connects Environment to the trusted AgentHost flush operation for issue [#1930](https://github.com/sabbour/agentweaver/issues/1930).
+It does not claim a complete deployed suspend/resume flow.
+
+Core calls authenticated `POST /internal/runtime/suspend/resolve` with its current suspend operation and Host session proof.
+This request cannot contain Workspace evidence.
+Environment reads the current registration, attached Workspace, and volume snapshot through their owners.
+It returns the exact Storage resource, provider binding, transition revision, and next data generation.
+Resolve is a read-only step while Core's operation is Reserved.
+Core stores the resolved request and its target phase version when it advances Reserved to Fenced.
+Host delivery accepts only that saved Fenced request.
+Retries must use that saved request, not new generations.
+The shared request and client live in `Agentweaver.Identity`; Core does not need an Environment assembly reference.
+
+`POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/workspace-volumes/{volumeId}/flush`
+reserves the exact volume transition.
+Environment checks fresh Projects authority, Core's exact current-operation response, registration, placement, and attached Workspace before and after Host delivery.
+The trusted Host response must contain the matching native-turn receipt, durable cache acknowledgment, and Workspace flush receipt.
+The Azure Files adapter verifies its pinned PVC, PV, full claim specification, and approved mount options around that delivery.
+Both routes require an expiring authenticated bearer and return `no-store`.
+The original actor is retained; no service credential replaces it.
+
+Only a verified receipt advances data generation by one.
+Migration `20261011133000_WorkspaceFlushEvidence` adds nullable `owner_effects.flush_evidence_json`.
+The receipt and Host evidence are saved with the transition in the same owner transaction.
+Authority is checked again after database waits and before commit.
+Uncertain effects keep their evidence for reconciliation without advancing the generation.
+Failure before provider dispatch records no effect.
+Completed replay returns the saved evidence without repeating Host flush.
+Conflicting evidence cannot replace a saved receipt.
+A resource and a caller-supplied durability flag alone cannot complete a flush.
+
+Placement retirement accepts changed Workspace counters only with the exact saved suspend flush for that retiring lease.
+Core calls authenticated `POST /internal/runtime/suspend/release-placement` only after it commits the complete suspend manifest.
+The shared release request contains the saved Host receipt and exact flush transition revision.
+Environment asks Core's `POST /internal/runtime/suspend/require-release-current` to confirm that saved evidence before provider release and owner completion.
+Detach and lease completion repeat the Projects and Core checks after owner database waits and before transaction commit.
+Ordinary abandonment and retirement recovery apply the same check when their Workspace has trusted suspend flush evidence.
+The Sandbox provider must confirm release before Environment detaches the exact Workspace and records the lease as Released.
+Completed detach replay keeps the same resource, data generation, and transition.
+Core's client rejects pending release, changed placement, and different detach counters.
+Credential revocation alone is not placement release.
+It does not rewrite the original attachment or immutable provider selection.
+Workspace retention and reclaim rules remain unchanged.
+Pure checks cover these source contracts; PostgreSQL and mounted CSI execution require their separate acceptance runs.
+
+## Retained Workspace resume
+
+The Environment source first prepares and verifies the retained Workspace.
+Those two authenticated, no-store steps do not require a new Runtime registration or a configured model session.
+Both retain the original expiring actor and ask Core to confirm the exact saved operation.
+
+`POST /internal/runtime/resume/prepare` accepts `RuntimeWorkspaceResumeRequest`.
+It contains the complete source manifest, saved Host receipt, and exact flush transition revision.
+The optional `RestoredWorkspace` must be absent.
+Resume requires the exact private configuration acknowledgment before any owner call or Environment effect.
+Ordinary suspend receipts retain their existing validation; a receipt without saved configuration cannot authorize resume.
+Environment checks the recorded flush, released source Sandbox, retained volume, and unchanged accepted provider selection.
+Historical flush reads require the current active owner lock and an exact older lifecycle from that same owner.
+An old lifecycle does not gain permission to change current state.
+
+Prepare advances the Environment lifecycle once with a stable operation key.
+Core and Projects authority are checked after database waits and before that transition commits, including replay.
+Environment reapplies the same accepted Network rules with the source policy generation plus one.
+The recorded previous policy generation must equal the manifest's source generation.
+It provisions a new Sandbox with the retained Storage resource and data generation, then verifies the actual mount.
+The response contains the exact new lease, Workspace attachment, and transition revision.
+This is placement evidence, not verified Workspace content or permission to dispatch.
+Core saves that complete response before requesting the second step.
+
+`POST /internal/runtime/resume/verify` requires that saved `RestoredWorkspace`.
+Environment compares it with a fresh owner-scoped mount and Sandbox observation.
+It calls the new Host's read-only `/runtime/v1/workspace/resume` operation.
+The actual tree hash must equal the manifest hash.
+Environment then repeats the placement, Network object, and current-operation checks.
+Only the final receipt contains both the native content proof and verified new Network generation.
+Core must obtain it before advancing its execution fence, registering the new Runtime, restoring the existing cache, or dispatching.
+Provider-checkpoint and guest-snapshot restoration remain explicitly unsupported on this path.
+
+The new Host address comes from the owned Kubernetes Sandbox Service and its exact singleton Pod.
+Environment checks the Service owner, DNS name, selector, Pod UID, and Pod address.
+It connects to that observed Pod address while retaining normal TLS verification for the Service DNS name.
+This permits the pre-configuration read without requiring a readiness-gated DNS address.
+It does not bypass certificate validation or create another Service.
+The original configured owner/profile remains the source of the observation address and MCP setting.
+The saved provider request retains the resume source, so later bootstrap reads reconstruct the new address after restart.
+No caller or new placement-specific configuration supplies that address.
+
+After Core advances its execution fence, `POST /internal/runtime/resume/bootstrap` starts the new Runtime.
+It requires Core's phase-4 request, current registration, exact saved mount, and server-issued resume attempt.
+Environment reads the acknowledged server configuration from the protected Events material route.
+The saved configuration contains no credential values; no caller supplies replacement configuration.
+Events returns its exact bytes only after current Core and registration checks.
+Public event streams expose neither those bytes nor their private object reference.
+
+Environment uses the existing Broker delivery and Host activation paths.
+It stores each attempt's immutable request and complete receipt in the existing `owner_effects` table.
+The `RuntimeResumeBootstrap` migration changes only that table's check constraints.
+It adds no table or grant, and service startup never applies it.
+Attempts for one resume operation run in order.
+Owner and lease locks cover database changes, not calls back into Environment.
+Receipt replay still requires fresh Core, registration, placement, Host state, and recovery-evidence checks.
+A saved receipt alone cannot authorize dispatch.
+
+Recovery distinguishes `native-cache` from `journal-rebuild`.
+The native path validates the exact compatible saved cache.
+If the cache is missing or incompatible, the Host may rebuild history from the authenticated saved session journal.
+It requests pages for the manifest's saved source session, keeps the exact checkpoint and flushed position, and checks every page.
+Events uses saved fork lineage and immutable source-position bounds to include only that session's visible ancestors.
+Run-wide positions can have valid gaps in a session-visible page.
+For each TURN, the Host reads material by the page event's exact session and event ID.
+The event payload, its single stored object reference, the read acknowledgment, and the event position must agree.
+The Host also checks the current tenant, byte bound, and content digest.
+Each TURN keeps its own recorded runtime, revision, fence, selection, SDK, model, and capacity facts.
+These historical facts need not match the latest cache or current Runtime.
+A direct material read does not establish session visibility, and unrelated session history is not a fallback.
+Authorization, transport, configuration, hash, and fence failures do not permit recovery from another source.
+
+`JournalRebuild` keeps the original source cache acknowledgment separate from the current Host facts.
+It records the saved checkpoint, upper position, ordered journal digest, and current resume attempt.
+The native cache state is `PendingUntilAuthorizedTurn`.
+This means that a new native cache was not captured or proved during resume.
+The pinned SDK does not establish a supported client-filesystem checkpoint before a real turn.
+The next real authorized turn uses the existing native cache capture and Events write path.
+Suspend before genuine native files exist fails explicitly as `runtime_sdk_cache_unavailable`.
+The Host must not create placeholder files, send a synthetic turn, or report an empty cache as successful persistence.
+Replay and Host replacement use the same saved journal boundary, not a later journal.
+The shared digest validates returned references; authenticated producer reads must verify bytes and page completion.
+
+An acknowledged delivery followed by a fresh Host `Missing` state produces an explicit state-loss outcome.
+A timeout or generic refusal does not authorize replacement.
+Core must revoke the exact old registration under current authority before issuing a replacement attempt.
+Each attempt has distinct bootstrap, consume, and exchange IDs under the same durable resume operation.
+Ordinary Runtime bindings omit the resume fields and keep their existing hashes.
+The Core replacement and Host journal-recovery paths require separate runtime acceptance.
+Missing or incomplete saved journal evidence cannot establish readiness.
+Lost Host state still requires the exact replacement proof.
+
+The pure checks cover request, receipt, actor, authority, attempt identity, explicit loss proof, schema metadata, and controlled Kubernetes routing behavior.
+They do not prove PostgreSQL execution, native TLS, actual remount contents, Cilium traffic enforcement, or a deployed resume.
+
 ## Workspace, network, and readiness
 
 Provisioning accepts a Workspace volume ID and exact resource/data generations,

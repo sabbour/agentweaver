@@ -40,7 +40,8 @@ public static class RuntimeOwnerHttpTransport
 
     public static async Task<TResponse?> SendBoundedAsync<TResponse>(
         HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
-        object? body, int maximumBytes, bool allowNotFound, CancellationToken cancellationToken)
+        object? body, int maximumBytes, bool allowNotFound, CancellationToken cancellationToken,
+        SandboxRuntimeHttpsEndpoint? sandboxEndpoint = null)
         where TResponse : class
     {
         if (maximumBytes is < 1 or > 4 * SessionMaterialValidation.MaximumBytes)
@@ -60,6 +61,13 @@ public static class RuntimeOwnerHttpTransport
             deadline.CancelAfter(client.Timeout);
         var token = deadline.Token;
         using var request = new HttpRequestMessage(body is null ? HttpMethod.Get : HttpMethod.Post, endpoint);
+        if (sandboxEndpoint is not null)
+        {
+            sandboxEndpoint.Validate();
+            if (sandboxEndpoint.Address != owner)
+                throw new RuntimeAuthorizationException("runtime_sandbox_endpoint_invalid");
+            request.Options.Set(RuntimeSandboxHttpTransport.EndpointOption, sandboxEndpoint);
+        }
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", actor.Bearer.GetValue());
         request.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true, NoCache = true };
         if (actor.TenantSelector is not null)

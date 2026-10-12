@@ -29,6 +29,9 @@ public sealed record RuntimeHostConfigureRequest(
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeMcpServerEndpoint? McpServer { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeResumeBootstrapRequest? ResumeBootstrap { get; init; }
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -45,7 +48,11 @@ public sealed record RuntimeHostRefreshRequest(RuntimeHostSessionProof Proof, Gu
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeHostSuspendRequest(
-    RuntimeHostSessionProof Proof, Guid OperationId, Guid ManifestId, long PhaseVersion);
+    RuntimeHostSessionProof Proof, Guid OperationId, Guid ManifestId, long PhaseVersion)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public WorkspaceVolumeFlushRequest? WorkspaceFlush { get; init; }
+}
 
 public sealed record RuntimeHostSuspendReceipt(
     int ContractVersion,
@@ -54,7 +61,14 @@ public sealed record RuntimeHostSuspendReceipt(
     RuntimeRegistration Registration,
     RuntimeGrantReceipt SourceGrant,
     RuntimeNativeTurnRecordedReceipt NativeTurn,
-    SessionMaterialAcknowledgment CacheAcknowledgment);
+    SessionMaterialAcknowledgment CacheAcknowledgment)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public WorkspaceVolumeFlushReceipt? WorkspaceFlush { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SessionMaterialAcknowledgment? ConfigurationAcknowledgment { get; init; }
+}
 
 public sealed record RuntimeHostReadinessReceipt(
     int ContractVersion,
@@ -63,7 +77,11 @@ public sealed record RuntimeHostReadinessReceipt(
     long ExecutionFence,
     SandboxImageIdentity Image,
     ImmutableArray<SandboxStartupPhaseObservation> StartupPhases,
-    RuntimeGrantReceipt SourceGrant);
+    RuntimeGrantReceipt SourceGrant)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeHostResumeCacheReceipt? ResumeCache { get; init; }
+}
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeA2ATextPart(string Kind, string Text);

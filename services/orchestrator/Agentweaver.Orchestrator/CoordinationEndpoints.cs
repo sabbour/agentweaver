@@ -1139,7 +1139,7 @@ public static partial class CoordinationEndpoints
             return Results.Ok(ToDecisionResponse(saved));
         }, cancellationToken);
 
-    private static async Task RequireUnchangedAuthorizedSelectionAsync(
+    internal static async Task RequireUnchangedAuthorizedSelectionAsync(
         HttpContext context,
         string projectId,
         string runId,

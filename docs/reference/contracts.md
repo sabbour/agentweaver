@@ -759,12 +759,61 @@ Identity verifies the separate purpose-bound nonce for those operations.
 | `POST /internal/runtime/observations` | Commits a native SDK observation, including optional A2A message correlation, under the exact current registration/source grant. Identical SDK events return the original source receipt. Changed content conflicts. |
 | `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/usage-receipts/{receiptId}` | Returns the immutable source receipt only after fresh accepted-selection and run-read checks. Events cannot substitute caller-supplied usage. |
 
+The staged Environment resume contract uses these authenticated, no-store routes.
+
+| Method and path | Source contract |
+| --- | --- |
+| `POST /internal/runtime/resume/prepare` | `RuntimeWorkspaceResumeRequest` contains the saved manifest and `RuntimeSuspendPlacementReleaseRequest`. `RestoredWorkspace` must be absent. Returns `RuntimeWorkspaceResumePlacementReceipt` for the exact new mount; this is not content verification. |
+| `POST /internal/runtime/resume/verify` | The same request requires Core's persisted `RestoredWorkspace` and current phase version. Returns `RuntimeWorkspaceResumeVerificationReceipt` only after actual Host tree-hash and fresh owner, placement, and Network checks. |
+| `POST /internal/runtime/resume/require-current` | Core confirms the exact source manifest, saved producer receipt, resume operation, and phase. With `RestoredWorkspace`, it also confirms Core's saved complete mount response. Environment and Host retain the original actor. |
+| `POST /runtime/v1/workspace/resume` | Read-only Host verifier. Returns `RuntimeHostWorkspaceResumeReceipt` bound to the operation, source manifest, exact new Workspace context, and actual tree hash. It does not configure a model session or recover cache files. |
+| `POST /internal/runtime/resume/bootstrap` | Environment accepts Core's phase-4 `RuntimeResumeBootstrapRequest`. Returns `RuntimeResumeBootstrapOutcome` with exactly one complete receipt or explicit state-loss proof. It persists successful attempt receipts and freshly rechecks the Host on replay. |
+| `POST /internal/runtime/resume/require-bootstrap-current` | Core confirms the exact phase-4 operation, saved mount, current Runtime registration, and server-issued attempt. A caller-selected attempt is not authority. |
+| `POST /internal/runtime/resume/configuration` | Events reads the exact acknowledged server configuration. Native TLS, current Core authority, registration, private material identity, and byte hash are required. Generic and public material reads cannot expose it. |
+| `POST /runtime/v1/configure/resume-state` | The Host returns `RuntimeResumeHostStateReceipt` for the exact operation, manifest, registration, and attempt. Valid states are `BootstrapPresent`, `Activated`, and `Missing`; an omitted or unknown state is rejected. |
+
+The request and both Environment clients belong to `Agentweaver.Identity`.
+Resume validates the source's private configuration acknowledgment before owner calls or Environment effects.
+Ordinary suspend receipt validation remains unchanged; missing configuration cannot authorize resume.
+Prepare and verify use Core phase versions 2 and 3.
+The target lifecycle is the source plus one; Storage resource and data generations do not change.
+The final Network generation is the source plus one, not a default readiness counter.
+The optional bootstrap `runtimeEndpoint` contains the observed HTTPS Service address, Pod address, Pod UID, and Service UID.
+The transport pins the observed Pod address and uses ordinary TLS verification for the owned Service name.
+The complete target context is compared before and after native verification.
+`RuntimeBinding.ResumeOperationId` and `ResumeAttemptId` are paired optional fields.
+Ordinary bindings omit both, so their existing serialized identity does not change.
+Resume bootstrap requires the matching attempt and canonical bootstrap, consume, and exchange IDs.
+A replacement derives from the exact revoked prior registration under the same operation.
+Core must serialize selection and revocation; an already-issued active attempt survives a lost response.
+The immutable registration revision stores the attempt without a same-phase update to migration 019 progress.
+`RuntimeResumeBootstrapStateLossReceipt` requires a matching delivery receipt and fresh Host `Missing` proof.
+The shared bootstrap client returns a valid receipt or throws `RuntimeResumeBootstrapStateLostException` with that validated proof.
+Generic denials, timeouts, historical delivery, and saved Host receipts alone cannot authorize replacement or dispatch.
+`RuntimeHostResumeCacheReceipt` preserves the original source cache acknowledgment in both recovery modes.
+`native-cache` requires the compatible saved cache facts and forbids `JournalRebuild`.
+`journal-rebuild` requires `RuntimeResumeJournalRebuildReceipt` with the exact saved checkpoint, flushed position, digest, and active attempt.
+Its only supported native-cache state is `PendingUntilAuthorizedTurn`; it contains no new cache acknowledgment.
+The current Host source facts do not need to match the old cache's SDK or Runtime version.
+The shared digest covers the ordered authenticated session-visible prefix, including valid run-wide position gaps.
+The producer must verify saved-boundary pagination, material bytes, current authority, and the saved source configuration and cache references.
+Each TURN must match its own journal payload and single stored object reference, and its material read must match that same reference and event position.
+The recorded runtime, registration revision, fence, selection, SDK, model, and capacity facts belong to that TURN; they need not match the latest cache or current Runtime.
+The source-session replay response supplies the saved fork visibility. A direct material read does not make another session visible.
+A receipt hash alone is not independent proof of those reads.
+Missing required journal evidence blocks readiness; owner, transport, configuration, hash, and fence failures cannot trigger another-source fallback.
+The next real authorized turn uses the existing native cache commit path.
+Suspend before genuine native files exist fails explicitly without a cache success receipt.
+These source contracts do not prove native TLS, PostgreSQL, mounted contents, or deployed dispatch.
+
 `Environment:RuntimeBootstrap:Profiles` configures exact owner/profile/provider
 registrations. An absent or mismatched registration returns explicit denial.
 No caller supplies a configure URI or observation URI. Runtime bindings separately
 pin `PlacementProviderId`, `EnvironmentLifecycleGeneration`, and
 `EnvironmentLeaseRevision`; omitted legacy pins do not change stored binding JSON.
 Lease expiry bounds registration expiry and cannot be extended by enrollment replay.
+A resumed placement retains that original profile and saved resume source.
+Its new configure address is resolved from the currently verified Kubernetes Service and Pod, not another configured placement.
 
 Current Projects policy deliberately withholds `WriteProjects` from run-bound tokens.
 The public placement route still denies those tokens.

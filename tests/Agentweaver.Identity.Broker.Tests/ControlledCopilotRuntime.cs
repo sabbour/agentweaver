@@ -36,6 +36,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
 
     public ConcurrentQueue<(string Method, JsonElement Parameters)> Requests { get; } = [];
     public string ModelId { get; set; } = "controlled-model";
+    public string RuntimeVersion { get; set; } = "controlled-runtime-v1";
     public string SdkCredential { get; set; } = "ghu_external-sdk-credential";
     public string AssistantResponse { get; set; } = "controlled response";
     public string ExpectedPrompt { get; set; } = "A bounded user request.";
@@ -258,7 +259,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                     {
                         case "connect":
                             Assert.Equal(_connectionToken, parameters.GetProperty("token").GetString());
-                            result = new { ok = true, protocolVersion = 3, version = "controlled-runtime-v1" };
+                            result = new { ok = true, protocolVersion = 3, version = RuntimeVersion };
                             break;
                         case "sessionFs.setProvider":
                             Assert.Equal("state", parameters.GetProperty("sessionStatePath").GetString());
@@ -286,7 +287,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                         case "status.get":
                             if (BeforeStatusResponse is not null)
                                 await BeforeStatusResponse(_stop.Token);
-                            result = new { version = "controlled-runtime-v1", protocolVersion = 3 };
+                            result = new { version = RuntimeVersion, protocolVersion = 3 };
                             break;
                         case "session.create":
                         case "session.resume":

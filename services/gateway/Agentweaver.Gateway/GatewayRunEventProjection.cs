@@ -86,6 +86,9 @@ internal static class GatewayRunEventProjection
         var payloadKind = RequiredString(Property(payload, "kind"));
         ValidatePayload(eventKind, payloadKind, payload, eventId);
         ValidateObjectReferences(Property(sessionEvent, "objectReferences"));
+        if (payloadKind == "runtime_configuration" &&
+            Property(sessionEvent, "objectReferences").GetArrayLength() != 0)
+            throw InvalidProjection();
         return sessionEvent.Clone();
     }
 
@@ -154,6 +157,12 @@ internal static class GatewayRunEventProjection
                 ValidateReference(Property(payload, "cache"));
                 RequireStringProperties(payload, ["runtimeVersion", "bindingId"]);
                 RequireEventKind(eventKind, "cacheReference");
+                break;
+            case "runtime_configuration":
+                RequireProperties(payload, ["kind", "configuration"]);
+                if (Property(payload, "configuration").ValueKind != JsonValueKind.Null)
+                    throw InvalidProjection();
+                RequireEventKind(eventKind, "runtimeConfiguration");
                 break;
             case "addressed_message":
                 RequireProperties(payload,
@@ -229,7 +238,8 @@ internal static class GatewayRunEventProjection
         var key = RequiredString(Property(reference, "key"));
         var purpose = RequiredString(Property(reference, "purpose"));
         if (key.Contains("remote-tool-result", StringComparison.OrdinalIgnoreCase) ||
-            purpose.Contains("remote-tool-result", StringComparison.OrdinalIgnoreCase))
+            purpose.Contains("remote-tool-result", StringComparison.OrdinalIgnoreCase) ||
+            purpose.Contains("runtime-configuration", StringComparison.OrdinalIgnoreCase))
             throw InvalidProjection();
         if (reference.TryGetProperty("byteLength", out var byteLength) &&
             byteLength.ValueKind is not JsonValueKind.Null and not JsonValueKind.Number)

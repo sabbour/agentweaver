@@ -235,6 +235,11 @@ At a confirmed idle boundary, the runtime captures opaque SDK cache bytes throug
 Recovery compares session scope, accepted selection, model reference, model ID, prompt-capacity pin, SDK version, and runtime version.
 A compatible cache uses the actual SDK resume call.
 A missing, incompatible, or corrupt cache rebuilds conversation context from authenticated journal content.
+The saved source-session replay supplies visibility, including Events-approved parent history.
+Each recovered TURN must match its own journal payload, single stored object reference, and authenticated material acknowledgment.
+Events rechecks the current reader's authority before it returns material bytes.
+The Host checks event identity, position, tenant, byte length, and content digest.
+Historical runtime, revision, fence, selection, SDK/runtime, model, and capacity facts belong to each TURN, not the latest cache.
 Recovery does not replay model turns, tools, or external effects.
 Cancellation waits for the native abort idle event; a failed abort prevents another turn or cache capture.
 

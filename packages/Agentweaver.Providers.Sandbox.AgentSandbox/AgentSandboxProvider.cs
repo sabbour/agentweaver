@@ -364,6 +364,11 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         var state = failed
             ? SandboxObservedState.Failed
             : SandboxObservedState.Pending;
+        var runtimeEndpoint = request.RequireRuntimeEndpoint && !failed &&
+            workspaceVerified && isolationVerified
+            ? await ReadRuntimeEndpointAsync(
+                sandbox.Value, pod, descriptor.Namespace, options, cancellationToken).ConfigureAwait(false)
+            : null;
         return new SandboxObservation(
             request.Resource,
             state,
@@ -374,7 +379,10 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             StartupPhases: phases,
             ProvisionOperationId: operationId,
             ProvisionedResource: BuildProvisionedResource(request, descriptor, phases),
-            StartupFailure: startupFailure).ValidateFor(request);
+            StartupFailure: startupFailure)
+        {
+            RuntimeEndpoint = runtimeEndpoint
+        }.ValidateFor(request);
     }
 
     public async Task<IReadOnlyList<SandboxObservation>> ListOwnedAsync(

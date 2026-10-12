@@ -30,6 +30,18 @@ public sealed class SessionMaterialReadAuthorityTests
     }
 
     [Theory]
+    [InlineData("readProjects")]
+    [InlineData("readRunSelection")]
+    [InlineData("writeProjects")]
+    public void ProjectPermissionsCannotDiscloseAcceptedRuntimeConfiguration(string permission)
+    {
+        var failure = Assert.Throws<RuntimeAuthorizationException>(() =>
+            SessionMaterialApplicationService.RequireMaterialReadAuthority(
+                Authority(permission), SessionMaterialKind.RuntimeConfiguration));
+        Assert.Equal("runtime_configuration_read_requires_resume_owner", failure.Code);
+    }
+
+    [Theory]
     [InlineData("permission")]
     [InlineData("project")]
     [InlineData("run")]

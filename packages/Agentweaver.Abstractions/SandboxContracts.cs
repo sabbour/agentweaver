@@ -290,6 +290,10 @@ public sealed record SandboxDescribeRequest(
     SandboxProviderBindingSnapshot ProviderBinding,
     DateTimeOffset LeaseCreatedAt)
 {
+    [System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool RequireRuntimeEndpoint { get; init; }
+
     public SandboxDescribeRequest Validate()
     {
         ArgumentNullException.ThrowIfNull(Fence);
@@ -392,6 +396,10 @@ public sealed record SandboxObservation(
     SandboxProvisionedResource? ProvisionedResource = null,
     SandboxStartupBudgetFailure? StartupFailure = null)
 {
+    [System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public SandboxRuntimeHttpsEndpoint? RuntimeEndpoint { get; init; }
+
     public SandboxObservation ValidateFor(SandboxDescribeRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -412,6 +420,10 @@ public sealed record SandboxObservation(
             ProvisionedResource is not null &&
                 (ProvisionedResource.Resource != request.Resource ||
                  !SameProviderBinding(ProvisionedResource.ProviderBinding, request.ProviderBinding)) ||
+            RuntimeEndpoint is not null &&
+                (!VmIsolationVerified || !WorkspaceAttachmentVerified ||
+                 State is not (SandboxObservedState.Pending or SandboxObservedState.Ready) ||
+                 RuntimeEndpoint.Validate() != RuntimeEndpoint) ||
             State == SandboxObservedState.Ready &&
                 (!VmIsolationVerified ||
                  !WorkspaceAttachmentVerified ||
@@ -435,6 +447,31 @@ public sealed record SandboxObservation(
         JsonNode.DeepEquals(
             JsonNode.Parse(left.ReleaseDescriptor.GetRawText()),
             JsonNode.Parse(right.ReleaseDescriptor.GetRawText()));
+}
+
+public sealed record SandboxRuntimeHttpsEndpoint(
+    Uri Address,
+    string PodAddress,
+    string PodUid,
+    string ServiceUid)
+{
+    public SandboxRuntimeHttpsEndpoint Validate()
+    {
+        if (Address is not { IsAbsoluteUri: true } || Address.Scheme != Uri.UriSchemeHttps ||
+            Address.HostNameType != UriHostNameType.Dns || Address.Port != 8443 ||
+            Address.AbsolutePath != "/" || Address.UserInfo.Length != 0 ||
+            Address.Query.Length != 0 || Address.Fragment.Length != 0 ||
+            !System.Net.IPAddress.TryParse(PodAddress, out var address) ||
+            System.Net.IPAddress.IsLoopback(address) ||
+            address.Equals(System.Net.IPAddress.Any) || address.Equals(System.Net.IPAddress.IPv6Any) ||
+            address.IsIPv6Multicast ||
+            address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork &&
+                address.GetAddressBytes()[0] is >= 224 ||
+            string.IsNullOrWhiteSpace(PodUid) || PodUid.Length > 256 || PodUid.Any(char.IsControl) ||
+            string.IsNullOrWhiteSpace(ServiceUid) || ServiceUid.Length > 256 || ServiceUid.Any(char.IsControl))
+            throw new ArgumentException("The observed Sandbox HTTPS endpoint is invalid.");
+        return this;
+    }
 }
 
 public enum SandboxStartupBudgetFailureKind
@@ -881,7 +918,8 @@ public interface ISandboxLeaseStore
         EnvironmentGenerationFence fence,
         long providerFencingGeneration,
         SandboxReleaseReceipt receipt,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null);
 
     Task<SandboxLeaseSnapshot> CompletePartialReleaseAsync(
         SandboxPartialReleaseCompletionRequest request,

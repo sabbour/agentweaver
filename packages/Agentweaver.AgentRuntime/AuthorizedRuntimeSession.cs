@@ -61,6 +61,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
     public SdkSessionFacts Facts => _session.Facts;
     public RuntimeSessionRecoveryMode RecoveryMode => _session.RecoveryMode;
     public string? RecoveryReason => _session.RecoveryReason;
+    internal RuntimeResumeJournalRebuildReceipt? JournalRebuildReceipt => _session.JournalRebuildReceipt;
 
     public async Task<string> SendTurnAsync(
         string prompt, RuntimeSessionMaterialHttpClient material, CancellationToken cancellationToken,
