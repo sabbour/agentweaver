@@ -16,6 +16,11 @@ Release build-input checks bind the three image references and all 467 dependenc
 They reject source drift, wrong image digests, an isolated builder, and dependency integrity failures before packing.
 A local npm fixture checks a standard locked install followed by offline cache consumption for both existing integrity algorithms.
 These checks run no product image build or publication.
+CI comparison regressions use real controlled Git commits and genuine plan/application receipts.
+They cover the integrated PR merge, ordinary post-merge push, and unchanged linear push.
+They reject forged, stale, unrelated, or changed archive evidence and mismatched event history.
+Extra product edits present only in the integrated tested tree still need fresh source notes.
+Both CI workflows retain that integrated checkout and its exact coverage identity.
 
 Fixed-child store cases compile with the PostgreSQL suite. They check a null
 Open WorkPlan link and a recovered checkpoint association, not runtime permission.

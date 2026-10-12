@@ -61,7 +61,23 @@ npm run release:validate
 npm run release:validate -- --base <full-base-commit-sha>
 ```
 
-The base-aware form checks changeset coverage for changed components. CI supplies the pull request base commit.
+The base-aware form checks changeset coverage for changed components.
+Both CI workflows use `npm run release:validate -- --ci` on the integrated checkout.
+For a pull request, the tested commit's ordered parents must match the event base and authored head.
+For an ordinary merge push, those parents must match the previous target and authored head.
+Validation compares their common ancestor with the integrated tested tree, not only with the authored tree.
+A linear push retains its previous-commit comparison.
+Missing or mismatched history fails explicitly.
+The comparison base never comes from a receipt's own claim.
+Preparation receipts and archive-byte checks remain unchanged.
+
+```mermaid
+flowchart LR
+  Event["Verified event and ordered commit parents"] --> SourceBase["Authored source common ancestor"]
+  SourceBase --> Diff["Compare with the integrated tested tree"]
+  Diff --> Guards["Unchanged receipt, archive, and product coverage checks"]
+  Tested["Integrated checkout and exact coverage identity"] --> Diff
+```
 
 `npm run release:plan` writes a source-bound plan under ignored `artifacts/release/`. It does not change component versions.
 

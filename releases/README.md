@@ -251,9 +251,17 @@ and validate all `.changeset/*.md` records. Run
 an added or modified changeset in that diff for every changed product component.
 Generated `packages.lock.json` updates by themselves do not require a component
 changeset; project and source changes still do.
-CI supplies the PR base SHA (or the previous push SHA) and checks their common
-ancestor against HEAD. An absent or unavailable base is an error, not an
-exemption. Run `npm run test:release` for validator tests. Neither command installs
+Both CI workflows use `npm run release:validate -- --ci`.
+This form verifies the checkout against `GITHUB_SHA` and the event's source history.
+For a PR, the tested merge must have ordered parents `[event base, authored head]`.
+For an ordinary merge push, it requires `[previous target, authored head]`.
+The authored parents' common ancestor is the comparison base.
+The diff still ends at the integrated tested HEAD, so extra integrated product edits need fresh source notes.
+Linear pushes retain the previous-commit comparison.
+Missing history, mismatched parents, or an ambiguous ancestor is an error, not an exemption.
+No receipt chooses the comparison base; genuine preparation and archive guards remain unchanged.
+The checkout, native restore/build/test steps, and exact coverage identity remain unchanged.
+Run `npm run test:release` for validator tests. Neither command installs
 dependencies or contacts the cloud. CI also restores the .NET solution with
 checked-in lock files, builds once, and tests all foundation libraries, including
 the Azure Blob transport adapter.
