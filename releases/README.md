@@ -180,16 +180,19 @@ must occur in the list; do not infer compatibility from semver proximity.
 Semantic versions have `major.minor.patch` and optional prerelease/build
 suffixes; a prerelease numeric identifier cannot have a leading zero.
 
-The draft now accepts planned `0.1.0` dependencies on 43 existing direct
-consumer relationships while retaining every current `0.0.0` entry.
-These declarations use the same reviewed consumer and dependency source.
-Pure preparation changes version fields without changing runtime code, API
-contracts, package pins, or the component selection.
+The user-selected P1 plan targets `1.0.0` for all 23 product components:
+13 packages and 10 service images.
+The `p1-product-1-0-0-preparation` changeset records major intent for each.
+The canonical planner selects this intent over earlier minor and patch records.
+The acceptance-only Probe keeps its separate pending `0.0.1` version.
+Use `--platform-only` for product artifact preparation and matching publication.
+The draft accepts `1.0.0` on all 53 direct dependency relationships, including
+the Probe's product dependencies. Earlier accepted versions remain unchanged.
+These declarations retain the reviewed consumer and dependency source.
+They change no runtime code, API contract, external package pin, or artifact selection.
 Later source changes need their own compatibility decision.
-The pending plan targets 18 product components at `0.1.0`, Gateway and MCP
-at `0.2.0`, and the acceptance-only Probe at `0.0.1`.
 No component version has been applied, and the manifest remains a draft.
-This is not a final `1.0.0` platform release or permission to publish.
+This plan is not a published `1.0.0` platform release or permission to publish.
 
 Draft service entries can omit `imageDigest` until publication supplies an actual digest.
 The #1779 candidate registers `Agentweaver.Identity.Broker` as an unpublished service.
