@@ -137,6 +137,19 @@ It repeats actor and expiry checks after the wait.
 The private result must match the entire reviewed proof; only `ContentClass` can change.
 The adapter does not register or enable the native SDK hook.
 
+The same default-off option also registers `ReviewedRemoteToolAgent` and its
+scoped Orchestrator execution authority.
+Program registers them after the current runtime and native source owners.
+Startup requires actual unkeyed registrations for the current runtime, Projects
+selection, action owner, snapshot resolver, transport, result writer, result
+verifier, and native source owner.
+Configuration flags or a service registered under another key do not satisfy these requirements.
+An incomplete host fails before it builds; composition does not resolve owners
+or load certificates.
+The executor retains its existing admission, current-authority, saved-result,
+and durable result-acknowledgment checks.
+This registration adds no invocation route, SDK hook, native sender, or network proof.
+
 `RemoteMcpNativeCallRequest` carries the full current-call request and a byte array.
 `POST /internal/remote-mcp/current-call/dispatch` accepts only the dedicated Orchestrator peer.
 This check precedes body reads and verifier creation.
@@ -259,6 +272,7 @@ sequenceDiagram
     Note over Environment: Shared call and gate contracts do not enable native sends or prove forced network mediation
     Note over Environment: The current L7 binding comes from active handler readback, not a saved catalog reference
     Note over Environment: A native handoff retains the original actor context and full proof; network proof remains required
+    Note over Environment: The caller's reviewed executor is registered only with all current owners; no SDK hook or sender is added
     Note over Environment: The Orchestrator recipient has a separate, default-off TLS listener and peer check
     Note over Environment: The optional Identity current-call route checks owners and active gate state but returns no acknowledgment without network proof
     Note over Environment: The caller checks its copied bytes; the receiver must still check its actual upstream request

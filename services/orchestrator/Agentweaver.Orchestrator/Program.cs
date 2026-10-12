@@ -206,6 +206,7 @@ builder.AddReviewedRemoteToolTransport(runtimeRegistrationEnabled);
 var runtimeUsageEnabled = builder.Services.AddRuntimeUsageSource(builder.Configuration);
 if (remoteToolTlsSection.Exists() && !runtimeUsageEnabled)
     throw new InvalidOperationException("Remote tool result TLS requires the current native SDK source owner.");
+builder.AddReviewedRemoteToolExecution();
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 builder.Services.AddOpenIddict().AddValidation(validation =>
 {

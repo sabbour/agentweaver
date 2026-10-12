@@ -24,6 +24,81 @@ public sealed class RemoteMcpTrustedServiceTlsCompositionTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void ReviewedToolExecutionIsOffWithoutExplicitTransportOptIn(bool owners)
+    {
+        var builder = Builder();
+        if (owners)
+            AddReviewedExecutionDependencies(builder);
+
+        Assert.False(OrchestratorTls.AddReviewedRemoteToolExecution(builder));
+        Assert.DoesNotContain(builder.Services, service =>
+            service.ServiceType == typeof(OrchestratorOwner.IReviewedRemoteToolExecutionAuthority) ||
+            service.ServiceType == typeof(OrchestratorOwner.ReviewedRemoteToolAgent));
+    }
+
+    [Theory]
+    [InlineData(nameof(OrchestratorOwner.RuntimeRegistrationOwner))]
+    [InlineData(nameof(OrchestratorOwner.ProjectsRunSelectionClient))]
+    [InlineData(nameof(OrchestratorOwner.RuntimeActionOwner))]
+    [InlineData(nameof(OrchestratorOwner.IReviewedRemoteToolSnapshotResolver))]
+    [InlineData(nameof(OrchestratorOwner.IReviewedRemoteToolTransport))]
+    [InlineData(nameof(OrchestratorOwner.IReviewedRemoteToolResultWriter))]
+    [InlineData(nameof(OrchestratorOwner.ReviewedRemoteToolResultVerifier))]
+    [InlineData(nameof(OrchestratorOwner.RuntimeUsageSourceOwner))]
+    public void ReviewedToolExecutionRejectsEachMissingOwnerBeforeRegistration(string missing)
+    {
+        var builder = Builder(new() { [OrchestratorTls.ReviewedToolTransportEnabledSetting] = "true" });
+        AddReviewedExecutionDependencies(builder, missing);
+
+        var failure = Assert.Throws<InvalidOperationException>(() =>
+            OrchestratorTls.AddReviewedRemoteToolExecution(builder));
+
+        Assert.Equal($"Reviewed-tool execution requires the registered {missing} service.", failure.Message);
+        Assert.DoesNotContain(builder.Services, service =>
+            service.ServiceType == typeof(OrchestratorOwner.IReviewedRemoteToolExecutionAuthority) ||
+            service.ServiceType == typeof(OrchestratorOwner.ReviewedRemoteToolAgent));
+    }
+
+    [Fact]
+    public void ReviewedToolExecutionDoesNotTreatAKeyedOwnerAsItsRequiredUnkeyedOwner()
+    {
+        var builder = Builder(new() { [OrchestratorTls.ReviewedToolTransportEnabledSetting] = "true" });
+        AddReviewedExecutionDependencies(builder, nameof(OrchestratorOwner.IReviewedRemoteToolResultWriter));
+        builder.Services.AddKeyedScoped<OrchestratorOwner.IReviewedRemoteToolResultWriter>(
+            "unrelated", (_, _) => throw new InvalidOperationException("Do not resolve a keyed result writer."));
+
+        var failure = Assert.Throws<InvalidOperationException>(() =>
+            OrchestratorTls.AddReviewedRemoteToolExecution(builder));
+
+        Assert.Equal(
+            "Reviewed-tool execution requires the registered IReviewedRemoteToolResultWriter service.",
+            failure.Message);
+        Assert.DoesNotContain(builder.Services, service =>
+            service.ServiceType == typeof(OrchestratorOwner.ReviewedRemoteToolAgent));
+    }
+
+    [Fact]
+    public void ReviewedToolExecutionRegistersTheScopedRealAuthorityAndAgentWithoutResolvingOwners()
+    {
+        var builder = Builder(new() { [OrchestratorTls.ReviewedToolTransportEnabledSetting] = "true" });
+        AddReviewedExecutionDependencies(builder);
+
+        Assert.True(OrchestratorTls.AddReviewedRemoteToolExecution(builder));
+
+        var authority = Assert.Single(builder.Services, service =>
+            service.ServiceType == typeof(OrchestratorOwner.IReviewedRemoteToolExecutionAuthority));
+        Assert.Equal(ServiceLifetime.Scoped, authority.Lifetime);
+        Assert.Equal(typeof(OrchestratorOwner.OrchestratorReviewedRemoteToolExecutionAuthority),
+            authority.ImplementationType);
+        var agent = Assert.Single(builder.Services, service =>
+            service.ServiceType == typeof(OrchestratorOwner.ReviewedRemoteToolAgent));
+        Assert.Equal(ServiceLifetime.Scoped, agent.Lifetime);
+        Assert.Equal(typeof(OrchestratorOwner.ReviewedRemoteToolAgent), agent.ImplementationType);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void ReviewedCallerTransportIsOffWithoutExplicitOptIn(bool profiles)
     {
         var builder = Builder(profiles ? OrchestratorProfiles() : null);
@@ -416,6 +491,25 @@ public sealed class RemoteMcpTrustedServiceTlsCompositionTests
 
         Assert.Equal(code, failure.Code);
         Assert.False(certificateResolved);
+    }
+
+    private static void AddReviewedExecutionDependencies(WebApplicationBuilder builder, string? missing = null)
+    {
+        Type[] dependencies =
+        [
+            typeof(OrchestratorOwner.RuntimeRegistrationOwner),
+            typeof(OrchestratorOwner.ProjectsRunSelectionClient),
+            typeof(OrchestratorOwner.RuntimeActionOwner),
+            typeof(OrchestratorOwner.IReviewedRemoteToolSnapshotResolver),
+            typeof(OrchestratorOwner.IReviewedRemoteToolTransport),
+            typeof(OrchestratorOwner.IReviewedRemoteToolResultWriter),
+            typeof(OrchestratorOwner.ReviewedRemoteToolResultVerifier),
+            typeof(OrchestratorOwner.RuntimeUsageSourceOwner)
+        ];
+        foreach (var dependency in dependencies)
+            if (dependency.Name != missing)
+                builder.Services.AddScoped(dependency, _ => throw new InvalidOperationException(
+                    "Composition must not resolve owners, load certificates, or open a database."));
     }
 
     private static void AssertClient(HttpClientFactoryOptions options, string address)

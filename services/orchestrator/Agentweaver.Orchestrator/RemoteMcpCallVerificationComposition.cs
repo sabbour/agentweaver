@@ -33,6 +33,32 @@ public static class RemoteMcpCallVerificationComposition
         return true;
     }
 
+    public static bool AddReviewedRemoteToolExecution(this WebApplicationBuilder builder)
+    {
+        if (!builder.Configuration.GetValue<bool>(ReviewedToolTransportEnabledSetting))
+            return false;
+        Type[] dependencies =
+        [
+            typeof(RuntimeRegistrationOwner),
+            typeof(ProjectsRunSelectionClient),
+            typeof(RuntimeActionOwner),
+            typeof(IReviewedRemoteToolSnapshotResolver),
+            typeof(IReviewedRemoteToolTransport),
+            typeof(IReviewedRemoteToolResultWriter),
+            typeof(ReviewedRemoteToolResultVerifier),
+            typeof(RuntimeUsageSourceOwner)
+        ];
+        foreach (var dependency in dependencies)
+            if (!builder.Services.Any(service =>
+                    !service.IsKeyedService && service.ServiceType == dependency))
+                throw new InvalidOperationException(
+                    $"Reviewed-tool execution requires the registered {dependency.Name} service.");
+        builder.Services.AddScoped<
+            IReviewedRemoteToolExecutionAuthority, OrchestratorReviewedRemoteToolExecutionAuthority>();
+        builder.Services.AddScoped<ReviewedRemoteToolAgent>();
+        return true;
+    }
+
     public static bool AddRemoteMcpCallVerificationTls(
         this WebApplicationBuilder builder, bool runtimeRegistrationEnabled)
     {
