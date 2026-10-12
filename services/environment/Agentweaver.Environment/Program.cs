@@ -90,6 +90,7 @@ builder.Services.AddScoped<RemoteMcpConnectionStore>();
 builder.AddRemoteMcpTrustedServiceTls();
 var remoteMcpCurrentCallVerificationEnabled =
     builder.AddRemoteMcpCurrentCallVerification(authorityUri.AbsoluteUri);
+var remoteMcpNativeCallDispatchEnabled = builder.ConfigureRemoteMcpNativeCallDispatch();
 builder.Services.AddScoped<IEnvironmentLifecycleProducer, EnvironmentLifecycleProducer>();
 builder.Services.AddScoped<EnvironmentRuntimePlacementReader>();
 builder.Services.AddSingleton(new EnvironmentRuntimeBootstrapProfileRegistry(
@@ -215,6 +216,8 @@ app.MapEnvironmentEndpoints();
 app.MapRemoteMcpConnectionEndpoints();
 if (remoteMcpCurrentCallVerificationEnabled)
     app.MapRemoteMcpCurrentCallVerification();
+if (remoteMcpNativeCallDispatchEnabled)
+    app.MapRemoteMcpNativeCallDispatch();
 app.MapProviderLifecycleReportEndpoints();
 app.Run();
 

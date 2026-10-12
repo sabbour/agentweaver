@@ -83,8 +83,12 @@ Its port must match that profile's `ListenerPort` and differ from every other li
 It cannot share the Identity verification listener or accept the Identity peer.
 `RequireOrchestratorPeer` rejects missing configuration, ordinary HTTPS,
 the wrong port, or another service before the receiving route reads the proof.
-This source registration does not map a route or authenticate the original actor.
-It does not establish network enforcement, issue credentials, or enable remote sends.
+The receiving route also requires the current-call verifier below.
+Startup rejects an enabled recipient without that verifier or its registered services.
+With both options, Program maps the private dispatch route.
+This configuration does not establish network enforcement, issue credentials, or enable remote sends.
+Public domains and SSL remain owned by AKS Application Routing.
+Public managed HTTPS and forwarded headers do not replace the private client-certificate check.
 
 ## Internal reviewed-call contracts
 
@@ -93,13 +97,66 @@ and a matching `tools/call` binding. It has no caller-defined wire digest or RPC
 identity. The native handler must read and check the actual bounded request bytes.
 The reviewed `NativeCallId` remains separate from the transport's RPC ID.
 
+`RemoteMcpCurrentCallContract.ValidateToolCallBytes` checks an actual request
+against that existing proof and binding. It requires the exact HTTP method,
+target, `tools/call` operation, tool name, and canonical arguments digest.
+The body limit is 1 MiB; canonical arguments retain the existing 256-KiB limit.
+It rejects batches, notifications, responses, malformed JSON, duplicate keys
+at any depth, and unsupported request fields.
+Object ordering, whitespace, and equivalent string escapes do not change the argument match.
+Array ordering and numeric spelling retain the existing reviewed digest rules.
+Omitted arguments match only the reviewed empty object.
+A string or number JSON-RPC request ID remains independent of `NativeCallId`.
+Optional MCP metadata and progress tokens retain their protocol types.
+Metadata is not actor or approval authority.
+
+The Orchestrator caller checks its private copy with this helper before its
+late authority check and transport handoff.
+It supplies the reviewed HTTP method and target, not an actual emitted request.
+The receiving native transport must still check its built upstream method,
+target, and exact body bytes before a send.
+The Environment receiver now uses this helper on its built upstream request.
+The helper itself does not authenticate a caller, verify current owner state, prove network
+enforcement, return an acknowledgment, or permit credential use.
+Those separate checks remain required before any protected effect.
+
 The Orchestrator's `IReviewedRemoteToolTransport.SendAsync` receives the original
 `HttpContext`, full owner-built proof, selected snapshot, and copied request bytes.
 The caller repeats current authority checks after serialization and before this handoff.
 The receiving host must authenticate that context and repeat owner and network checks.
 The proof and MCP request metadata do not establish actor or network authority.
 A transport denial returns no result and does not trigger a fallback or retry.
-This source handoff does not register a native transport or enable the SDK hook.
+The optional owner adapter is disabled by default.
+`Orchestrator:RemoteMcpCallVerification:EnableReviewedToolTransport` registers it.
+Startup requires the runtime registration owner and the existing Environment TLS profile.
+Its `PeerOwnerAddress` must identify Environment's private reviewed-tool listener,
+not a public managed route or the Identity verification listener.
+The adapter sends only to this fixed owner, with no redirects, cookies, retry, or fallback.
+It forwards the authenticated actor's bearer and owner-built tenant binding.
+It repeats actor and expiry checks after the wait.
+The private result must match the entire reviewed proof; only `ContentClass` can change.
+The adapter does not register or enable the native SDK hook.
+
+`RemoteMcpNativeCallRequest` carries the full current-call request and a byte array.
+`POST /internal/remote-mcp/current-call/dispatch` accepts only the dedicated Orchestrator peer.
+This check precedes body reads and verifier creation.
+The route limits the JSON envelope to 2 MiB, including unknown-length bodies.
+The copied MCP request and private result each have a 1-MiB limit.
+The route builds a credential-free POST to the exact reviewed target.
+It checks that method, target, and the same copied bytes before current owner verification.
+The result contract binds every proof field except the actual content class.
+
+The receiver has no sender.
+Missing forced network enforcement still returns `503` with
+`remote_mcp_forced_network_enforcement_unavailable`.
+Even a successful verification cannot enable a send: the receiver then returns
+`503` with `remote_mcp_native_transport_unavailable`.
+An unavailable recipient returns `503`; a wrong peer returns `403`.
+Invalid content type returns `415`, an oversized envelope returns `413`,
+and a malformed request returns `400`.
+These handled responses use `Cache-Control: no-store`.
+The caller uses the shared owner HTTP errors for denied or unavailable responses.
+No denial produces a result, retry, credential read, or remote send.
 
 Identity's `RemoteMcpCurrentCallVerificationClient.VerifyAsync` authenticates the
 original actor with the Broker validation scheme. It forwards that actor's bearer
@@ -170,7 +227,7 @@ Network enforcement, gate application, and native dispatch remain unavailable.
 
 The managed gate retains exact descriptors in process and returns fresh verification receipts.
 A restart loses that state; a receipt does not prove persistent or network state.
-These shared types do not provide a native dispatch route.
+The optional receiving route does not provide a native sender.
 Missing network enforcement or purpose evidence still denies
 both a send and credential delivery. Management reads retain Projects authority;
 these types do not expose an unauthenticated connection resolver.
@@ -204,4 +261,5 @@ sequenceDiagram
     Note over Environment: A native handoff retains the original actor context and full proof; network proof remains required
     Note over Environment: The Orchestrator recipient has a separate, default-off TLS listener and peer check
     Note over Environment: The optional Identity current-call route checks owners and active gate state but returns no acknowledgment without network proof
+    Note over Environment: The caller checks its copied bytes; the receiver must still check its actual upstream request
 ```

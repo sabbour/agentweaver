@@ -189,6 +189,16 @@ internal sealed class ReviewedRemoteToolAgent(
         if (serializedCall.Length is <= 0 or > SessionMaterialValidation.MaximumBytes)
             throw new RuntimeAuthorizationException("runtime_remote_tool_call_size_invalid");
         var outboundBytes = serializedCall.ToArray();
+        try
+        {
+            var verification = RemoteMcpCurrentCallContract.CreateRequest(proofTemplate);
+            RemoteMcpCurrentCallContract.ValidateToolCallBytes(
+                verification, verification.CallBinding.Method, verification.CallBinding.CanonicalTarget, outboundBytes);
+        }
+        catch (ArgumentException)
+        {
+            throw new RuntimeAuthorizationException("runtime_remote_tool_call_serialization_invalid");
+        }
 
         await RequireCurrentAuthorityAsync(
             context, registration, snapshot, invocation, admission, request, cancellationToken)

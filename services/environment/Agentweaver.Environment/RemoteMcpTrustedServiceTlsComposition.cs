@@ -66,6 +66,20 @@ public static class RemoteMcpTrustedServiceTlsComposition
             "remote_mcp_current_verification_route_unavailable",
             "remote_mcp_current_verification_peer_profile_invalid");
 
+    public static bool ConfigureRemoteMcpNativeCallDispatch(this WebApplicationBuilder builder)
+    {
+        if (!builder.Configuration.GetValue<bool>(OrchestratorRecipientEnabledSetting))
+            return false;
+        if (!builder.Configuration.GetValue<bool>(CurrentCallVerifierEnabledSetting) ||
+            !builder.Services.Any(service => service.ServiceType == typeof(RuntimeServiceTlsOptions) &&
+                Equals(service.ServiceKey, OrchestratorRecipientTlsKey)) ||
+            !builder.Services.Any(service =>
+                service.ServiceType == typeof(RemoteMcpCurrentCallVerificationService)))
+            throw new InvalidOperationException(
+                "Reviewed-tool dispatch requires its private Orchestrator recipient and current-call verifier.");
+        return true;
+    }
+
     public static bool AddRemoteMcpCurrentCallVerification(this WebApplicationBuilder builder, string actorIssuer)
     {
         if (!builder.Configuration.GetValue<bool>(CurrentCallVerifierEnabledSetting))

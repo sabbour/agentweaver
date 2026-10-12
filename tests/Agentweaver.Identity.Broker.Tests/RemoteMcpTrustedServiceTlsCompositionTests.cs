@@ -15,11 +15,107 @@ using Xunit;
 using EnvironmentTls = EnvironmentService::Agentweaver.Environment.RemoteMcpTrustedServiceTlsComposition;
 using OrchestratorTls = OrchestratorHost::Agentweaver.Orchestrator.RemoteMcpCallVerificationComposition;
 using EnvironmentOwner = EnvironmentService::Agentweaver.Environment;
+using OrchestratorOwner = OrchestratorHost::Agentweaver.Orchestrator;
 
 namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class RemoteMcpTrustedServiceTlsCompositionTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReviewedCallerTransportIsOffWithoutExplicitOptIn(bool profiles)
+    {
+        var builder = Builder(profiles ? OrchestratorProfiles() : null);
+        OrchestratorTls.AddRemoteMcpCallVerificationTls(builder, profiles);
+
+        Assert.False(OrchestratorTls.AddReviewedRemoteToolTransport(builder, profiles));
+        Assert.DoesNotContain(builder.Services, service =>
+            service.ServiceType == typeof(OrchestratorOwner.IReviewedRemoteToolTransport));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReviewedCallerTransportRejectsMissingRuntimeOrPeerProfile(bool runtime)
+    {
+        var builder = Builder(new()
+        {
+            [OrchestratorTls.ReviewedToolTransportEnabledSetting] = "true"
+        });
+
+        Assert.Throws<InvalidOperationException>(() =>
+            OrchestratorTls.AddReviewedRemoteToolTransport(builder, runtime));
+        Assert.DoesNotContain(builder.Services, service =>
+            service.ServiceType == typeof(OrchestratorOwner.IReviewedRemoteToolTransport));
+    }
+
+    [Fact]
+    public void ReviewedCallerTransportRegistersOneScopedAdapterWithoutLoadingCertificates()
+    {
+        var values = OrchestratorProfiles();
+        values[OrchestratorTls.ReviewedToolTransportEnabledSetting] = "true";
+        var builder = Builder(values);
+        OrchestratorTls.AddRemoteMcpCallVerificationTls(builder, true);
+
+        Assert.True(OrchestratorTls.AddReviewedRemoteToolTransport(builder, true));
+        var adapter = Assert.Single(builder.Services, service =>
+            service.ServiceType == typeof(OrchestratorOwner.IReviewedRemoteToolTransport));
+        Assert.Equal(ServiceLifetime.Scoped, adapter.Lifetime);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void NativeDispatchIsOffWithoutExplicitRecipientOptIn(bool verifier)
+    {
+        var builder = Builder(verifier ? CurrentCallProfiles() : null);
+        EnvironmentTls.AddRemoteMcpTrustedServiceTls(builder);
+        EnvironmentTls.AddRemoteMcpCurrentCallVerification(builder, "https://identity.example/");
+
+        Assert.False(EnvironmentTls.ConfigureRemoteMcpNativeCallDispatch(builder));
+    }
+
+    [Fact]
+    public void NativeDispatchRequiresTheCurrentVerifierBeforeHostComposition()
+    {
+        var builder = Builder(RecipientProfiles());
+        EnvironmentTls.AddRemoteMcpTrustedServiceTls(builder);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            EnvironmentTls.ConfigureRemoteMcpNativeCallDispatch(builder));
+    }
+
+    [Fact]
+    public void NativeDispatchRequiresActualRecipientAndVerifierRegistrationsNotFlagsAlone()
+    {
+        var builder = Builder(new()
+        {
+            [EnvironmentTls.OrchestratorRecipientEnabledSetting] = "true",
+            [EnvironmentTls.CurrentCallVerifierEnabledSetting] = "true"
+        });
+
+        Assert.Throws<InvalidOperationException>(() =>
+            EnvironmentTls.ConfigureRemoteMcpNativeCallDispatch(builder));
+    }
+
+    [Fact]
+    public void NativeDispatchUsesTheExistingDedicatedRecipientAndScopedVerifier()
+    {
+        var values = CurrentCallProfiles();
+        values[EnvironmentTls.OrchestratorRecipientEnabledSetting] = "true";
+        values[EnvironmentTls.OrchestratorSectionName + ":ListenerPort"] = "9448";
+        values["Kestrel:Endpoints:" + EnvironmentTls.OrchestratorRecipientListenerName + ":Url"] =
+            "https://environment.example:9448/";
+        var builder = Builder(values);
+        EnvironmentTls.AddRemoteMcpTrustedServiceTls(builder);
+        EnvironmentTls.AddRemoteMcpCurrentCallVerification(builder, "https://identity.example/");
+
+        Assert.True(EnvironmentTls.ConfigureRemoteMcpNativeCallDispatch(builder));
+        Assert.Single(builder.Services, service =>
+            service.ServiceType == typeof(EnvironmentOwner.RemoteMcpCurrentCallVerificationService));
+    }
+
     [Fact]
     public void MissingProfilesDoNotRegisterTrustedOwnerClientsOrReplaceExistingTls()
     {

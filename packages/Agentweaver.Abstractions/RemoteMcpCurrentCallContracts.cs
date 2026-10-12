@@ -84,6 +84,69 @@ public static class RemoteMcpCurrentCallContract
             throw new ArgumentException("The exact reviewed tools/call semantic binding is required.", nameof(request));
     }
 
+    public static void ValidateToolCallBytes(
+        RemoteMcpCurrentCallVerificationRequest request,
+        string actualMethod,
+        string actualTarget,
+        ReadOnlyMemory<byte> requestBytes)
+    {
+        Validate(request);
+        if (actualMethod != request.CallBinding.Method || actualTarget != request.CallBinding.CanonicalTarget ||
+            requestBytes.Length is <= 0 or > SessionMaterialValidation.MaximumBytes)
+            throw new ArgumentException("The bounded request must use the reviewed method and target.", nameof(requestBytes));
+        if (!System.Text.Unicode.Utf8.IsValid(requestBytes.Span))
+            throw new ArgumentException("The MCP request must contain valid UTF-8.", nameof(requestBytes));
+        try
+        {
+            using var document = JsonDocument.Parse(requestBytes);
+            var root = document.RootElement;
+            RequireUniqueProperties(root);
+            RequireObjectShape(root, ["jsonrpc", "id", "method", "params"]);
+            if (!root.TryGetProperty("jsonrpc", out var version) || version.ValueKind != JsonValueKind.String ||
+                version.GetString() != "2.0" ||
+                !root.TryGetProperty("id", out var id) ||
+                id.ValueKind is not (JsonValueKind.String or JsonValueKind.Number) ||
+                !root.TryGetProperty("method", out var operation) || operation.ValueKind != JsonValueKind.String ||
+                operation.GetString() != request.CallBinding.Operation ||
+                !root.TryGetProperty("params", out var parameters))
+                throw new ArgumentException("A JSON-RPC tools/call request with an explicit request ID is required.");
+            RequireObjectShape(parameters, ["name", "arguments", "_meta"]);
+            if (!parameters.TryGetProperty("name", out var name) || name.ValueKind != JsonValueKind.String ||
+                name.GetString() != request.CallBinding.ToolName)
+                throw new ArgumentException("The request must name the exact reviewed tool.");
+            if (parameters.TryGetProperty("_meta", out var metadata) &&
+                (metadata.ValueKind != JsonValueKind.Object ||
+                    metadata.TryGetProperty("progressToken", out var progress) &&
+                    progress.ValueKind is not (JsonValueKind.String or JsonValueKind.Number)))
+                throw new ArgumentException("MCP request metadata and progress tokens must use their protocol types.");
+
+            using var canonicalArguments = new MemoryStream();
+            using (var writer = new Utf8JsonWriter(canonicalArguments, SandboxBuildTestCanonicalJson.WriterOptions))
+            {
+                if (parameters.TryGetProperty("arguments", out var arguments))
+                {
+                    if (arguments.ValueKind != JsonValueKind.Object)
+                        throw new ArgumentException("MCP tool arguments must be an object.");
+                    SandboxBuildTestCanonicalJson.WriteJsonElement(writer, arguments);
+                }
+                else
+                {
+                    writer.WriteStartObject();
+                    writer.WriteEndObject();
+                }
+            }
+            var argumentBytes = canonicalArguments.ToArray();
+            if (argumentBytes.Length > SessionMaterialValidation.MaximumRemoteToolArgumentsBytes ||
+                Encoding.UTF8.GetString(argumentBytes) != request.Proof.CanonicalArgumentsJson ||
+                Sha256(argumentBytes) != request.CallBinding.ArgumentsDigest)
+                throw new ArgumentException("The request arguments must match the exact reviewed arguments and digest.");
+        }
+        catch (JsonException exception)
+        {
+            throw new ArgumentException("The MCP request must contain one valid bounded JSON object.", nameof(requestBytes), exception);
+        }
+    }
+
     public static string CallBindingHash(RemoteMcpToolCallSemanticBinding binding)
     {
         ArgumentNullException.ThrowIfNull(binding);
@@ -147,6 +210,32 @@ public static class RemoteMcpCurrentCallContract
         if (value is not { Length: 64 } ||
             value.Any(character => character is not (>= 'a' and <= 'f' or >= '0' and <= '9')))
             throw new ArgumentException("An exact SHA-256 policy binding is required.");
+    }
+
+    private static void RequireObjectShape(JsonElement value, string[] allowedProperties)
+    {
+        if (value.ValueKind != JsonValueKind.Object ||
+            value.EnumerateObject().Any(property => !allowedProperties.Contains(property.Name, StringComparer.Ordinal)))
+            throw new ArgumentException("The MCP request contains an unsupported object shape.");
+    }
+
+    private static void RequireUniqueProperties(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var property in value.EnumerateObject())
+            {
+                if (!names.Add(property.Name))
+                    throw new ArgumentException("Duplicate MCP request properties are not allowed.");
+                RequireUniqueProperties(property.Value);
+            }
+        }
+        else if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in value.EnumerateArray())
+                RequireUniqueProperties(item);
+        }
     }
 
     private static string Sha256(ReadOnlySpan<byte> bytes) =>

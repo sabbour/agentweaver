@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
@@ -37,6 +38,28 @@ public sealed class ReviewedRemoteToolAgentTests
         Assert.Equal(1, rig.Transport.SerializeCount);
         Assert.Equal(0, rig.Transport.SendCount);
         Assert.Equal(0, rig.Results.WriteCount);
+    }
+
+    [Theory]
+    [InlineData("""{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{"name":"remote.lookup","arguments":{"query":"x"}}}""")]
+    [InlineData("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"other","arguments":{"query":"x"}}}""")]
+    [InlineData("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"remote.lookup","arguments":{"query":"changed"}}}""")]
+    [InlineData("""{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"remote.lookup","arguments":{"query":"x","query":"x"}}}""")]
+    [InlineData("not-json")]
+    public async Task ChangedSerializedCallIsRejectedBeforeLateAuthorityTransportOrResultStorage(string wire)
+    {
+        var rig = CreateRig();
+        rig.Transport.SerializedCall = Encoding.UTF8.GetBytes(wire);
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            rig.Agent.InvokeAsync(new DefaultHttpContext(), Invocation(), CancellationToken.None));
+
+        Assert.Equal("runtime_remote_tool_call_serialization_invalid", failure.Code);
+        Assert.Equal(1, rig.Transport.SerializeCount);
+        Assert.Equal(1, rig.Authority.VerifyCount);
+        Assert.Equal(0, rig.Transport.SendCount);
+        Assert.Equal(0, rig.Results.WriteCount);
+        Assert.False(rig.Results.WriteStarted.Task.IsCompleted);
     }
 
     [Fact]
@@ -118,6 +141,26 @@ public sealed class ReviewedRemoteToolAgentTests
         Assert.Equal(0, rig.Transport.SendCount);
         Assert.Null(rig.Transport.Proof);
         Assert.Equal(0, rig.Results.WriteCount);
+    }
+
+    [Fact]
+    public async Task SerializerBufferChangesDuringAuthorityCheckDoNotChangeTheValidatedPrivateCopy()
+    {
+        var rig = CreateRig();
+        var expectedBytes = rig.Transport.SerializedCall.ToArray();
+        rig.Authority.OnVerify = () =>
+        {
+            if (rig.Authority.VerifyCount == 2)
+                Array.Fill(rig.Transport.SerializedCall, (byte)'!');
+        };
+
+        var invoke = rig.Agent.InvokeAsync(new DefaultHttpContext(), Invocation(), CancellationToken.None);
+        var write = await rig.Results.WriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(expectedBytes, rig.Transport.SentBytes.ToArray());
+        Assert.All(rig.Transport.SerializedCall, value => Assert.Equal((byte)'!', value));
+        rig.Results.Acknowledgment.TrySetResult(CreateAcknowledgment(write.Proof, write.Bytes));
+        await invoke.WaitAsync(TimeSpan.FromSeconds(5));
     }
 
     [Fact]
@@ -452,6 +495,7 @@ public sealed class ReviewedRemoteToolAgentTests
         public Exception? AuthorizationFailure { get; set; }
         public RuntimeActionRequest? AuthorizedRequest { get; private set; }
         public int VerifyCount { get; private set; }
+        public Action? OnVerify { get; set; }
         public bool RegistrationChanged { get; set; }
         public int? FailAtVerification { get; set; }
 
@@ -483,6 +527,7 @@ public sealed class ReviewedRemoteToolAgentTests
             HttpContext context, RuntimeActionAdmission admission, CancellationToken cancellationToken)
         {
             VerifyCount++;
+            OnVerify?.Invoke();
             if (VerifyCount == FailAtVerification)
                 return Task.FromException<RuntimeActionAdmission>(new RuntimeAuthorizationException("runtime_action_denied"));
             return Task.FromResult(admission);
@@ -499,7 +544,8 @@ public sealed class ReviewedRemoteToolAgentTests
 
     private sealed class TestTransport : IReviewedRemoteToolTransport
     {
-        public byte[] SerializedCall { get; set; } = [1, 2, 3];
+        public byte[] SerializedCall { get; set; } =
+            """{"jsonrpc":"2.0","id":"rpc-local-1","method":"tools/call","params":{"name":"remote.lookup","arguments":{"query":"x"}}}"""u8.ToArray();
         public int SerializeCount { get; private set; }
         public int SendCount { get; private set; }
         public HttpContext? Context { get; private set; }

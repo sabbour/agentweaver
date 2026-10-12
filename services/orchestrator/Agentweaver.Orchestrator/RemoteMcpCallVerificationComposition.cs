@@ -8,6 +8,30 @@ public static class RemoteMcpCallVerificationComposition
     public const string TlsKey = "remote-mcp-call-verification-environment";
     public const string SectionName = "Orchestrator:RemoteMcpCallVerification";
     public const string ListenerName = "RemoteMcpCallVerification";
+    public const string ReviewedToolTransportEnabledSetting = SectionName + ":EnableReviewedToolTransport";
+
+    public static bool AddReviewedRemoteToolTransport(
+        this WebApplicationBuilder builder, bool runtimeRegistrationEnabled)
+    {
+        if (!builder.Configuration.GetValue<bool>(ReviewedToolTransportEnabledSetting))
+            return false;
+        if (!runtimeRegistrationEnabled ||
+            !builder.Services.Any(service => service.ServiceType == typeof(RuntimeServiceTlsOptions) &&
+                Equals(service.ServiceKey, TlsKey)))
+            throw new InvalidOperationException(
+                "Reviewed-tool transport requires the runtime registration owner and Environment TLS profile.");
+        builder.Services.AddHttpClient<ReviewedRemoteToolTransportClient>(client =>
+            client.Timeout = TimeSpan.FromSeconds(15))
+            .ConfigurePrimaryHttpMessageHandler(services =>
+            {
+                var handler = services.GetRequiredKeyedService<RuntimeServiceTlsIdentity>(TlsKey).CreateHandler();
+                handler.UseCookies = false;
+                return handler;
+            });
+        builder.Services.AddScoped<IReviewedRemoteToolTransport>(services =>
+            services.GetRequiredService<ReviewedRemoteToolTransportClient>());
+        return true;
+    }
 
     public static bool AddRemoteMcpCallVerificationTls(
         this WebApplicationBuilder builder, bool runtimeRegistrationEnabled)
