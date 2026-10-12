@@ -202,7 +202,9 @@ test('draft dependency declarations allow pure version preparation without chang
   const plannedVersions = new Map(plan.components.map(({ id, toVersion }) => [id, toVersion]));
   for (const { dependency, versions } of fixture.compatibility) {
     const planned = plannedVersions.get(dependency);
-    assert.deepEqual(versions, planned === '0.1.0' ? ['0.0.0', planned] : ['0.0.0']);
+    assert.ok(versions.includes('0.0.0'));
+    assert.ok(versions.includes(planned ?? fixture.components.find(component => component.id === dependency).version));
+    assert.equal(new Set(versions).size, versions.length);
   }
   assert.equal(validateManifest(fixture, { root }).stage, 'draft');
   const prepared = preparationFiles(manifestText, plan, '2026-10-11T00:00:00.000Z', readSource);
@@ -232,6 +234,23 @@ test('draft dependency declarations allow pure version preparation without chang
     ...component, version: plannedVersions.get(component.id) ?? component.version,
   })));
   assert.equal(readSource('releases/foundation.json'), manifestText);
+});
+
+test('P1 planning targets every product component at 1.0.0 and keeps the Probe separate', () => {
+  const plan = createPlan(fixture, { root });
+  const byId = new Map(plan.components.map(component => [component.id, component]));
+  const product = fixture.components.filter(component => component.id !== 'Agentweaver.FoundationProbe');
+  assert.equal(product.length, 23);
+  assert.equal(product.filter(component => component.kind !== 'service').length, 13);
+  assert.equal(product.filter(component => component.kind === 'service').length, 10);
+  assert.equal(plan.components.length, product.length + 1);
+  for (const { id } of product) {
+    assert.equal(byId.get(id)?.bump, 'major', id);
+    assert.equal(byId.get(id)?.toVersion, '1.0.0', id);
+    assert.ok(byId.get(id)?.changesets.includes('.changeset/p1-product-1-0-0-preparation.md'), id);
+  }
+  assert.equal(byId.get('Agentweaver.FoundationProbe')?.toVersion, '0.0.1');
+  assert.ok(!byId.get('Agentweaver.FoundationProbe')?.changesets.includes('.changeset/p1-product-1-0-0-preparation.md'));
 });
 
 test('the CLI accepts the checked-in composition and JSON schema is parseable', () => {
