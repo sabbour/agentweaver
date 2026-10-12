@@ -1,0 +1,58 @@
+name: v1 AgentHost archive diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_source:
+        description: Exact v1 workflow source SHA (must differ from the original image source)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose-agenthost-archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Require exact v1 diagnostic source
+        env:
+          EXPECTED_SOURCE: ${{ inputs.expected_source }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/v1" || { echo "::error::Diagnostic requires v1"; exit 1; }
+          test "$EXPECTED_SOURCE" = "$GITHUB_SHA" || { echo "::error::Diagnostic source mismatch"; exit 1; }
+          test "$GITHUB_SHA" != "6b036e11ff211f96cfddcd837be9b5bce75ddb34" || { echo "::error::Workflow source must differ from the original image source"; exit 1; }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Set up product Docker engine
+        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+        with:
+          version: 'v29.9.0'
+          set-host: true
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 38286624230
+          artifact-ids: 11763641424
+          path: artifacts/release/saved-agenthost/
+      - name: Verify hash, load and inspect only the saved AgentHost archive
+        env:
+          EXPECTED_SOURCE: ${{ inputs.expected_source }}
+          DOCKER_CONTEXT: default
+        run: node scripts/release/agenthost-archive-diagnostic.mjs artifacts/release/saved-agenthost
