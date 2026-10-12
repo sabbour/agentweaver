@@ -68,24 +68,19 @@ internal sealed class RuntimeRegistrationStore
         }
         if (inserted == 1)
             await InsertRevisionAsync(connection, transaction, candidate, bindingJson, bindingHash, cancellationToken);
-        RuntimeRegistration registered;
-        await using (var read = new NpgsqlCommand($"""
-            SELECT revision.runtime_instance_id, revision.revision, revision.binding_json,
-                   revision.binding_hash, revision.state, revision.expires_at
-            FROM {_heads} AS head
-            JOIN {_revisions} AS revision
-              ON revision.runtime_instance_id = head.runtime_instance_id
-             AND revision.revision = head.current_revision
-            WHERE head.binding_hash = @hash
-            FOR UPDATE OF head
-            """, connection, transaction))
-        {
-            read.Parameters.AddWithValue("hash", NpgsqlDbType.Char, bindingHash);
-            await using var reader = await read.ExecuteReaderAsync(cancellationToken);
-            if (!await reader.ReadAsync(cancellationToken))
-                throw new InvalidOperationException("A runtime registration head has no current revision.");
-            registered = ReadRegistration(reader);
-        }
+        var registeredCurrent = await ReadCurrentAfterHeadLockAsync(
+            connection, transaction,
+            new NpgsqlCommand($"""
+                SELECT runtime_instance_id, current_revision
+                FROM {_heads}
+                WHERE binding_hash = @hash
+                FOR UPDATE
+                """, connection, transaction),
+            command => command.Parameters.AddWithValue("hash", NpgsqlDbType.Char, bindingHash),
+            cancellationToken);
+        if (registeredCurrent is null)
+            throw new InvalidOperationException("A runtime registration head has no current revision.");
+        var registered = registeredCurrent.Value.Registration;
         if (registered.Binding != serverDerivedBinding || registered.ExpiresAt != expiresAt)
             throw new RuntimeAuthorizationException("runtime_registration_conflict");
         RequireAvailable(registered);
@@ -127,28 +122,23 @@ internal sealed class RuntimeRegistrationStore
 
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        RuntimeRegistration current;
-        string oldBindingJson;
-        string oldBindingHash;
-        await using (var read = new NpgsqlCommand($"""
-            SELECT revision.runtime_instance_id, revision.revision, revision.binding_json,
-                   revision.binding_hash, revision.state, revision.expires_at
-            FROM {_heads} AS head
-            JOIN {_revisions} AS revision
-              ON revision.runtime_instance_id = head.runtime_instance_id
-             AND revision.revision = head.current_revision
-            WHERE head.runtime_instance_id = @runtime
-            FOR UPDATE OF head
-            """, connection, transaction))
-        {
-            read.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, expected.RuntimeInstanceId);
-            await using var reader = await read.ExecuteReaderAsync(cancellationToken);
-            if (!await reader.ReadAsync(cancellationToken))
-                throw new RuntimeAuthorizationException("runtime_registration_unknown");
-            current = ReadRegistration(reader);
-            oldBindingJson = reader.GetString(2);
-            oldBindingHash = reader.GetString(3);
-        }
+        var currentRead = await ReadCurrentAfterHeadLockAsync(
+            connection, transaction,
+            new NpgsqlCommand($"""
+                SELECT runtime_instance_id, current_revision
+                FROM {_heads}
+                WHERE runtime_instance_id = @runtime
+                FOR UPDATE
+                """, connection, transaction),
+            command => command.Parameters.AddWithValue(
+                "runtime", NpgsqlDbType.Uuid, expected.RuntimeInstanceId),
+            cancellationToken);
+        if (currentRead is null)
+            throw new RuntimeAuthorizationException("runtime_registration_unknown");
+        var (current, oldBindingJson, oldBindingHash) = (
+            currentRead.Value.Registration,
+            currentRead.Value.BindingJson,
+            currentRead.Value.BindingHash);
 
         var replayedRevocation =
             current.Revision == expected.Revision + 1 &&
@@ -195,24 +185,20 @@ internal sealed class RuntimeRegistrationStore
             await InsertRevisionAsync(
                 connection, transaction, candidate, bindingJson, bindingHash, cancellationToken);
 
-        RuntimeRegistration replacement;
-        await using (var read = new NpgsqlCommand($"""
-            SELECT revision.runtime_instance_id, revision.revision, revision.binding_json,
-                   revision.binding_hash, revision.state, revision.expires_at
-            FROM {_heads} AS head
-            JOIN {_revisions} AS revision
-              ON revision.runtime_instance_id = head.runtime_instance_id
-             AND revision.revision = head.current_revision
-            WHERE head.runtime_instance_id = @runtime
-            FOR UPDATE OF head
-            """, connection, transaction))
-        {
-            read.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, candidate.RuntimeInstanceId);
-            await using var reader = await read.ExecuteReaderAsync(cancellationToken);
-            if (!await reader.ReadAsync(cancellationToken))
-                throw new RuntimeAuthorizationException("runtime_registration_conflict");
-            replacement = ReadRegistration(reader);
-        }
+        var replacementCurrent = await ReadCurrentAfterHeadLockAsync(
+            connection, transaction,
+            new NpgsqlCommand($"""
+                SELECT runtime_instance_id, current_revision
+                FROM {_heads}
+                WHERE runtime_instance_id = @runtime
+                FOR UPDATE
+                """, connection, transaction),
+            command => command.Parameters.AddWithValue(
+                "runtime", NpgsqlDbType.Uuid, candidate.RuntimeInstanceId),
+            cancellationToken);
+        if (replacementCurrent is null)
+            throw new RuntimeAuthorizationException("runtime_registration_conflict");
+        var replacement = replacementCurrent.Value.Registration;
         if (replacement.Binding != serverDerivedBinding || replacement.ExpiresAt != expiresAt ||
             replacement.State != RuntimeRegistrationState.Active)
             throw new RuntimeAuthorizationException("runtime_registration_conflict");
@@ -231,31 +217,43 @@ internal sealed class RuntimeRegistrationStore
         if (runtimeInstanceId == Guid.Empty)
             throw new RuntimeAuthorizationException("runtime_registration_invalid");
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
-        await using var transaction = revalidateCurrentAuthority is null
-            ? null : await connection.BeginTransactionAsync(cancellationToken);
-        await using var command = new NpgsqlCommand($"""
-            SELECT revision.runtime_instance_id, revision.revision, revision.binding_json,
-                   revision.binding_hash, revision.state, revision.expires_at
-            FROM {_heads} AS head
-            JOIN {_revisions} AS revision
-              ON revision.runtime_instance_id = head.runtime_instance_id
-             AND revision.revision = head.current_revision
-            WHERE head.runtime_instance_id = @runtime
-            {(revalidateCurrentAuthority is null ? "" : "FOR SHARE OF head")}
-            """, connection, transaction);
-        command.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, runtimeInstanceId);
-        RuntimeRegistration? registration;
-        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
-            registration = await reader.ReadAsync(cancellationToken) ? ReadRegistration(reader) : null;
-        if (registration is not null && revalidateCurrentAuthority is not null)
+        if (revalidateCurrentAuthority is null)
+        {
+            await using var read = new NpgsqlCommand($"""
+                SELECT revision.runtime_instance_id, revision.revision, revision.binding_json,
+                       revision.binding_hash, revision.state, revision.expires_at
+                FROM {_heads} AS head
+                JOIN {_revisions} AS revision
+                  ON revision.runtime_instance_id = head.runtime_instance_id
+                 AND revision.revision = head.current_revision
+                WHERE head.runtime_instance_id = @runtime
+                """, connection);
+            read.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, runtimeInstanceId);
+            await using var reader = await read.ExecuteReaderAsync(cancellationToken);
+            return await reader.ReadAsync(cancellationToken) ? ReadRegistration(reader) : null;
+        }
+
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        var current = await ReadCurrentAfterHeadLockAsync(
+            connection, transaction,
+            new NpgsqlCommand($"""
+                SELECT runtime_instance_id, current_revision
+                FROM {_heads}
+                WHERE runtime_instance_id = @runtime
+                FOR SHARE
+                """, connection, transaction),
+            command => command.Parameters.AddWithValue(
+                "runtime", NpgsqlDbType.Uuid, runtimeInstanceId),
+            cancellationToken);
+        var registration = current?.Registration;
+        if (registration is not null)
         {
             RequireAvailable(registration);
             await revalidateCurrentAuthority(registration, cancellationToken).ConfigureAwait(false);
             RequireAvailable(registration);
         }
-        if (transaction is not null)
-            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        if (registration is not null && revalidateCurrentAuthority is not null)
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        if (registration is not null)
             RequireAvailable(registration);
         return registration;
     }
@@ -304,28 +302,22 @@ internal sealed class RuntimeRegistrationStore
             throw new RuntimeAuthorizationException("runtime_registration_invalid");
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        RuntimeRegistration current;
-        string bindingJson;
-        string bindingHash;
-        await using (var read = new NpgsqlCommand($"""
-            SELECT revision.runtime_instance_id, revision.revision, revision.binding_json,
-                   revision.binding_hash, revision.state, revision.expires_at
-            FROM {_heads} AS head
-            JOIN {_revisions} AS revision
-              ON revision.runtime_instance_id = head.runtime_instance_id
-             AND revision.revision = head.current_revision
-            WHERE head.runtime_instance_id = @runtime
-            FOR UPDATE OF head
-            """, connection, transaction))
-        {
-            read.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, runtimeInstanceId);
-            await using var reader = await read.ExecuteReaderAsync(cancellationToken);
-            if (!await reader.ReadAsync(cancellationToken))
-                throw new RuntimeAuthorizationException("runtime_registration_unknown");
-            current = ReadRegistration(reader);
-            bindingJson = reader.GetString(2);
-            bindingHash = reader.GetString(3);
-        }
+        var currentRead = await ReadCurrentAfterHeadLockAsync(
+            connection, transaction,
+            new NpgsqlCommand($"""
+                SELECT runtime_instance_id, current_revision
+                FROM {_heads}
+                WHERE runtime_instance_id = @runtime
+                FOR UPDATE
+                """, connection, transaction),
+            command => command.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, runtimeInstanceId),
+            cancellationToken);
+        if (currentRead is null)
+            throw new RuntimeAuthorizationException("runtime_registration_unknown");
+        var (current, bindingJson, bindingHash) = (
+            currentRead.Value.Registration,
+            currentRead.Value.BindingJson,
+            currentRead.Value.BindingHash);
         if (current.Revision == expectedRevision + 1 &&
             current.State == RuntimeRegistrationState.Revoked)
         {
@@ -349,6 +341,39 @@ internal sealed class RuntimeRegistrationStore
         await InsertRevisionAsync(connection, transaction, revoked, bindingJson, bindingHash, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
         return revoked;
+    }
+
+    private async Task<(RuntimeRegistration Registration, string BindingJson, string BindingHash)?>
+        ReadCurrentAfterHeadLockAsync(
+            NpgsqlConnection connection,
+            NpgsqlTransaction transaction,
+            NpgsqlCommand lockHead,
+            Action<NpgsqlCommand> addLookupParameter,
+            CancellationToken cancellationToken)
+    {
+        addLookupParameter(lockHead);
+        Guid runtimeInstanceId;
+        long revision;
+        await using (lockHead)
+        {
+            await using var headReader = await lockHead.ExecuteReaderAsync(cancellationToken);
+            if (!await headReader.ReadAsync(cancellationToken))
+                return null;
+            runtimeInstanceId = headReader.GetGuid(0);
+            revision = headReader.GetInt64(1);
+        }
+
+        await using var read = new NpgsqlCommand($"""
+            SELECT runtime_instance_id, revision, binding_json, binding_hash, state, expires_at
+            FROM {_revisions}
+            WHERE runtime_instance_id = @runtime AND revision = @revision
+            """, connection, transaction);
+        read.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, runtimeInstanceId);
+        read.Parameters.AddWithValue("revision", NpgsqlDbType.Bigint, revision);
+        await using var reader = await read.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken))
+            return null;
+        return (ReadRegistration(reader), reader.GetString(2), reader.GetString(3));
     }
 
     private async Task InsertRevisionAsync(

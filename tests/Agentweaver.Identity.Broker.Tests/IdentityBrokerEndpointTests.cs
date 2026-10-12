@@ -360,9 +360,10 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
                 during = await PostgresContainerFixture.CountConnectionsAsync(connectionString);
                 Assert.True(during > before);
             }
-            var after = await PostgresContainerFixture.CountConnectionsAsync(connectionString);
+            var after = await PostgresContainerFixture.WaitForNoConnectionsAsync(connectionString);
             Console.WriteLine($"Broker pool iteration {iteration + 1}: before={before}, during={during}, after={after}.");
             Assert.Equal(before, after);
+            Assert.Equal(0, after);
         }
     }
 
