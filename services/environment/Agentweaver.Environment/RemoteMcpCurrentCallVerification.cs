@@ -132,7 +132,6 @@ public static class RemoteMcpCurrentCallVerificationEndpoints
     {
         endpoints.MapPost(RemoteMcpCurrentCallContract.VerificationPath, async (
             HttpContext context,
-            RemoteMcpCurrentCallVerificationService verifier,
             CancellationToken cancellationToken) =>
         {
             context.Response.Headers.CacheControl = "no-store";
@@ -152,6 +151,7 @@ public static class RemoteMcpCurrentCallVerificationEndpoints
                 var request = await context.Request.ReadFromJsonAsync<RemoteMcpCurrentCallVerificationRequest>(
                     cancellationToken: cancellationToken).ConfigureAwait(false)
                     ?? throw new ArgumentException("A Remote MCP current-call request is required.");
+                var verifier = context.RequestServices.GetRequiredService<RemoteMcpCurrentCallVerificationService>();
                 var acknowledgment = await verifier.VerifyAsync(context, request, cancellationToken)
                     .ConfigureAwait(false);
                 return Results.Ok(acknowledgment);

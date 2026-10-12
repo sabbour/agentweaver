@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
 using System.Net;
 using System.Net.Http.Json;
+using System.Net.Security;
+using System.Security.Authentication;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
@@ -8,7 +10,11 @@ using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
 using Agentweaver.Identity;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Http;
 using Xunit;
 
@@ -155,6 +161,62 @@ public sealed class RemoteMcpCurrentGatewayPolicyReaderTests
         Assert.Empty(owner.Requests);
         Assert.Equal(0, rig.State.Reads);
         Assert.Equal(0, rig.Network.Reads);
+    }
+
+    [Fact]
+    public async Task WrongPortHttpsVerificationRouteDeniesBeforeResolvingVerifierOrCertificate()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddAuthorization();
+        builder.Services.AddKeyedSingleton(RemoteMcpTrustedServiceTlsComposition.IdentityTlsKey,
+            new RuntimeServiceTlsOptions
+            {
+                LocalServiceName = "Environment",
+                PeerServiceName = "IdentityBroker",
+                ListenerPort = 9448
+            });
+        var verifierResolutions = 0;
+        builder.Services.AddSingleton<RemoteMcpCurrentCallVerificationService>(_ =>
+        {
+            verifierResolutions++;
+            throw new InvalidOperationException("A denied request must not create the verifier.");
+        });
+        var certificateResolutions = 0;
+        builder.Services.AddKeyedSingleton<RuntimeServiceTlsIdentity>(
+            RemoteMcpTrustedServiceTlsComposition.IdentityTlsKey, (_, _) =>
+            {
+                certificateResolutions++;
+                throw new InvalidOperationException("A denied request must not load the TLS certificate.");
+            });
+        using var app = builder.Build();
+        app.MapRemoteMcpCurrentCallVerification();
+
+        var endpoint = Assert.Single(((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>());
+        var context = new DefaultHttpContext
+        {
+            RequestServices = app.Services
+        };
+        context.Request.IsHttps = true;
+        context.Connection.LocalPort = 9449;
+        context.Request.ContentType = "application/json";
+        context.Request.Body = new MemoryStream("{}"u8.ToArray());
+        context.Request.ContentLength = 2;
+        context.Features.Set<ITlsHandshakeFeature>(new TestTlsHandshake(SslProtocols.Tls13));
+        await using var response = new MemoryStream();
+        context.Response.Body = response;
+
+        await endpoint.RequestDelegate!(context);
+
+        Assert.Equal(StatusCodes.Status403Forbidden, context.Response.StatusCode);
+        Assert.Equal("no-store", context.Response.Headers.CacheControl);
+        response.Position = 0;
+        using var result = await JsonDocument.ParseAsync(response);
+        Assert.Equal("runtime_remote_tool_result_service_listener_denied",
+            result.RootElement.GetProperty("code").GetString());
+        Assert.Equal(0, verifierResolutions);
+        Assert.Equal(0, certificateResolutions);
     }
 
     [Theory]
@@ -322,6 +384,21 @@ public sealed class RemoteMcpCurrentGatewayPolicyReaderTests
     }
 
     private static string Hash(string text) => RemoteMcpManagedGatewayProviderOptions.Hash(Encoding.UTF8.GetBytes(text));
+
+    private sealed class TestTlsHandshake(SslProtocols protocol) : ITlsHandshakeFeature
+    {
+        public SslProtocols Protocol => protocol;
+        public string HostName => string.Empty;
+#pragma warning disable SYSLIB0058
+        public CipherAlgorithmType CipherAlgorithm => default;
+        public int CipherStrength => 0;
+        public HashAlgorithmType HashAlgorithm => default;
+        public int HashStrength => 0;
+        public ExchangeAlgorithmType KeyExchangeAlgorithm => default;
+#pragma warning restore SYSLIB0058
+        public int KeyExchangeStrength => 0;
+        public TlsCipherSuite? NegotiatedCipherSuite => null;
+    }
 
     private static DefaultHttpContext ActorContext(
         RemoteMcpNativeCallContext call, RemoteToolResultProof proof)
