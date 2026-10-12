@@ -412,6 +412,27 @@ The manually dispatched `v1 release pack` GitHub Actions workflow
 (`.github/workflows/v1-release-pack.yml`) validates and prepares the exact dispatch source.
 Dispatch requires the `v1` branch and an `expected_source` equal to the full dispatch SHA.
 The default `publish: false` uploads artifacts only.
+For `platform_only: true`, the pack job first runs `npm run release:prepare-build-inputs`.
+This step requires the exact clean source and the approved Web lockfile hash
+`a6e3ac6dc04086969ba78898057bda4273c3f5491185d15437143cddaef214db`.
+It pulls only the three digest-pinned Microsoft images in the AgentHost and Web Dockerfiles.
+It validates all 467 locked Web dependency entries and their committed HTTPS URLs.
+Only the existing Microsoft npm feeds and `registry.npmjs.org` are permitted.
+It runs standard `npm ci --ignore-scripts --no-audit --no-fund --no-progress`.
+Registry-host replacement is disabled, and npm retains its locked SHA1 and SHA512 integrity checks.
+This install fills npm's cache for the runner's platform; it does not claim every optional-platform tarball was fetched.
+It runs no dependency install scripts and adds no cache library or dependency.
+Its isolated cache is outside the checkout and also supplies the existing offline Web install.
+The product job requires the runner's existing containerd image store and uses the default Docker Buildx driver.
+The image pulls, Buildx native build, and Web build therefore use the same Docker Engine.
+Preparation rejects another builder, a missing shared store, or a wrong local image digest.
+It does not reconfigure or restart the Docker daemon.
+Missing shared-store setup fails before image pulls and requires a separate setup decision.
+Docker 27 or later supplies the existing OCI archive and loaded-image outputs.
+The product path requires an existing Buildx 0.13 or later; it does not install Buildx or fetch a builder image.
+The packer's offline, immutable-image, exact-source, and clean-tree guards remain unchanged.
+Other selections and the frozen Probe jobs retain their existing paths.
+Build-input preparation does not publish, deploy, or change registry credentials.
 Pack artifact names bind the source SHA and workflow run ID, not the attempt number.
 Rerunning failed publication jobs uses the successful pack job's artifact.
 A full rerun replaces that run's pack artifact; a redispatch has a different run ID.

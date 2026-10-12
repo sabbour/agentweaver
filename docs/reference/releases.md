@@ -90,6 +90,20 @@ The full manifest hash remains in the preparation receipt.
 The publisher rejects a receipt prepared with another component selection.
 This selection cannot combine with `--packages-only` or `--foundation-probe-only`.
 
+For a product build, the manual workflow first prepares its approved build inputs.
+It pulls only the three source-pinned Microsoft base images.
+A standard locked npm install fills the cache for the runner's dependencies from the approved 467-entry Web lockfile.
+It retains the committed download destinations and npm's existing integrity checks.
+This preparation runs no dependency install scripts and adds no dependency.
+The runner's Docker builder shares the containerd image store used by the image pulls.
+Preparation checks the actual builder, store, image digests, and clean source before packing.
+It does not change or restart the Docker daemon.
+It requires the runner's existing Buildx tool and does not install a builder or other software.
+If the required shared store is absent, preparation reports that missing setup before any image pull.
+The existing offline Web install and image checks remain unchanged.
+These inputs are prepared on the build runner, not on a developer's machine.
+This preparation does not publish artifacts or deploy services.
+
 ```mermaid
 flowchart LR
   Manifest["Draft manifest with explicit dependency versions"] --> Plan["Plan 23 product versions at 1.0.0"]
@@ -97,7 +111,8 @@ flowchart LR
   Apply --> Selection["Choose component selection"]
   Selection --> Product["platform-only: product packages and service images"]
   Selection --> Full["Default: all components, including the acceptance Probe"]
-  Product --> Pack["Prepare exact-source artifacts and hashes"]
+  Product --> Inputs["Verify and cache approved build inputs on the same runner"]
+  Inputs --> Pack["Prepare exact-source artifacts and hashes"]
   Full --> Pack
   Pack --> Publish["Approved publication with the same selection"]
   Publish --> Evidence["Actual registry digests"]
