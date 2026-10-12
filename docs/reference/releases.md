@@ -113,7 +113,7 @@ It retains the committed download destinations and npm's existing integrity chec
 This preparation runs no dependency install scripts and adds no dependency.
 For `platform_only: true`, the workflow starts Docker Engine `v29.9.0` with the official `docker/setup-docker-action` `v5.5.0`, pinned to commit `2bf61fb9464cc67f0cbdeabed6aa0380accd1c70`.
 The action enables `containerd-snapshotter` in its temporary Docker daemon.
-The workflow points the default local Docker context at that daemon's Unix socket.
+The action exports that daemon's Unix socket through `DOCKER_HOST`, so Docker commands use the temporary engine without changing context metadata.
 The default Buildx builder then uses the same local Docker Engine as the image pulls.
 Preparation still checks the builder, shared store, image digests, and clean source before packing.
 The action stops its daemon at the end of the job and does not change the runner's preinstalled daemon.

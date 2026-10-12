@@ -151,8 +151,8 @@ test('product workflow sets up the shared Docker engine before cache preparation
   const pack = workflow.slice(workflow.indexOf('\n  pack:'), workflow.indexOf('\n  diagnose-probe-sampler:'));
   assert.equal((pack.match(/uses: docker\/setup-buildx-action@v3/g) ?? []).length, 1);
   assert.equal((pack.match(/uses: docker\/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70/g) ?? []).length, 1);
-  assert.match(pack, /- name: Set up product Docker engine\n\s+id: product-docker\n\s+uses: docker\/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70\n\s+if: \$\{\{ github.ref == 'refs\/heads\/v1' && inputs\.platform_only \}\}\n\s+with:\n\s+version: 'v29\.9\.0'\n\s+daemon-config:[\s\S]*?"containerd-snapshotter": true/);
-  assert.match(pack, /Route default Docker context to product engine\n\s+if: \$\{\{ github.ref == 'refs\/heads\/v1' && inputs\.platform_only \}\}[\s\S]*?DOCKER_SOCKET: \$\{\{ steps\.product-docker\.outputs\.sock \}\}[\s\S]*?docker context update default --docker "host=\$DOCKER_SOCKET"[\s\S]*?docker context use default[\s\S]*?docker context show/);
+  assert.match(pack, /- name: Set up product Docker engine\n\s+id: product-docker\n\s+uses: docker\/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70\n\s+if: \$\{\{ github.ref == 'refs\/heads\/v1' && inputs\.platform_only \}\}\n\s+with:\n\s+version: 'v29\.9\.0'\n\s+set-host: true\n\s+daemon-config:[\s\S]*?"containerd-snapshotter": true/);
+  assert.doesNotMatch(pack, /docker context update default/);
   assert.match(pack, /uses: docker\/setup-buildx-action@v3\n\s+if: \$\{\{ github.ref == 'refs\/heads\/v1' && !inputs.platform_only \}\}/);
   assert.match(pack, /Prepare approved product build inputs[\s\S]*?inputs\.platform_only[\s\S]*?EXPECTED_SOURCE: \$\{\{ inputs.expected_source \}\}[\s\S]*?DOCKER_CONTEXT: default/);
   assert.match(pack, /npm_config_cache: \$\{\{ runner.temp \}\}\/agentweaver-release-npm-cache/);
@@ -161,7 +161,6 @@ test('product workflow sets up the shared Docker engine before cache preparation
   assert.match(pack, /!inputs\.platform_only/);
   assert.ok(pack.indexOf('Require exact dispatch source') < pack.indexOf('Prepare approved product build inputs'));
   assert.ok(pack.indexOf('Set up product Docker engine') < pack.indexOf('Prepare approved product build inputs'));
-  assert.ok(pack.indexOf('Route default Docker context to product engine') < pack.indexOf('Prepare approved product build inputs'));
   assert.ok(pack.indexOf('Prepare approved product build inputs') < pack.indexOf('Prepare locked package and image artifacts'));
   assert.doesNotMatch(pack, /\bsudo\b|systemctl|daemon\.json|buildx-stable|docker buildx install/);
   assert.match(pack, /npm run release:pack -- "\$\{args\[@\]\}"/);

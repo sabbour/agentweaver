@@ -434,7 +434,7 @@ Its isolated cache is outside the checkout and also supplies the existing offlin
 For `platform_only: true`, the workflow starts Docker Engine `v29.9.0` with the official `docker/setup-docker-action` `v5.5.0`.
 The action is pinned to commit `2bf61fb9464cc67f0cbdeabed6aa0380accd1c70`.
 The action enables `containerd-snapshotter` in its temporary Docker daemon.
-The workflow points the default local Docker context at that daemon's Unix socket.
+The action exports that daemon's Unix socket through `DOCKER_HOST`, so Docker commands use the temporary engine without changing context metadata.
 The pack job then uses the default Docker Buildx builder.
 Image pulls, the Buildx build, and the Web build use the same Docker Engine.
 Preparation still rejects another builder, a missing shared image store, or a wrong local image digest.

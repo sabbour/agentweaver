@@ -80,24 +80,13 @@ jobs:
         if: ${{ github.ref == 'refs/heads/v1' && inputs.platform_only }}
         with:
           version: 'v29.9.0'
+          set-host: true
           daemon-config: |
             {
               "features": {
                 "containerd-snapshotter": true
               }
             }
-      - name: Route default Docker context to product engine
-        if: ${{ github.ref == 'refs/heads/v1' && inputs.platform_only }}
-        env:
-          DOCKER_SOCKET: ${{ steps.product-docker.outputs.sock }}
-        run: |
-          case "$DOCKER_SOCKET" in
-            unix:///*) ;;
-            *) echo "::error::Docker setup returned a non-local socket" >&2; exit 1 ;;
-          esac
-          docker context update default --docker "host=$DOCKER_SOCKET"
-          docker context use default
-          test "$(docker context show)" = "default" || { echo "::error::Product build requires the default Docker context" >&2; exit 1; }
       - uses: docker/setup-buildx-action@v3
         if: ${{ github.ref == 'refs/heads/v1' && !inputs.platform_only }}
       - name: Prepare approved product build inputs

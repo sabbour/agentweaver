@@ -15,7 +15,7 @@ They do not authenticate a token, publish a package or prove registry access.
 Release build-input checks bind the three image references and all 467 dependencies to the approved source.
 They reject source drift, wrong image digests, an isolated builder, and dependency integrity failures before packing.
 A workflow source check requires the pinned Docker setup action on the `platform_only` path.
-It also requires the action's local socket to back the default context before input preparation.
+It also requires `set-host: true`, which makes the action export its local socket through `DOCKER_HOST` before input preparation. The check rejects attempts to update the reserved `default` context.
 These source checks do not start Docker or prove runner storage behavior.
 A local npm fixture checks a standard locked install followed by offline cache consumption for both existing integrity algorithms.
 These checks run no product image build or publication.
