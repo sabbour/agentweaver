@@ -375,8 +375,8 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
       if (agentHost) verifyAgentHostArchives(agentHost.archives, directory);
       run('docker', ['load', '--input', file]);
       if (agentHost) {
-        verifyLoadedAgentHostImage(localImageReference, agentHost.measured, agentHost.source, component.version,
-          args => run('docker', args));
+        agentHost.loadedImageId = verifyLoadedAgentHostImage(localImageReference, agentHost.measured, agentHost.source,
+          component.version, args => run('docker', args)).loadedImageId;
         verifyAgentHostArchives(agentHost.archives, directory);
         continue;
       }
@@ -399,7 +399,9 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
         run('dotnet', ['nuget', 'push', file, '--source', env.RELEASE_NUGET_SOURCE, '--api-key', env.RELEASE_NUGET_API_KEY]);
         receipt.published.push({ id: component.id, version: component.version, kind: 'package', feed: env.RELEASE_NUGET_SOURCE, sha256: artifact.sha256 });
       } else {
-        const local = agentHost ? agentHost.measured.image.configDigest
+        if (agentHost && !/^sha256:[a-f0-9]{64}$/.test(agentHost.loadedImageId ?? ''))
+          fail('AgentHost has no verified loaded image identity to tag');
+        const local = agentHost ? agentHost.loadedImageId
           : localImageReference ?? `${componentImageRepository(component.id)}:${component.version}`;
         const remote = `${imageRepositories.get(component.id)}:${component.version}`;
         if (localImageReference === undefined) run('docker', ['load', '--input', file]);

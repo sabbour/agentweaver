@@ -411,9 +411,13 @@ The manual workflow has a separate publication choice.
   One component record requires both archive hashes, sizes, and matching image-config digests.
   The existing OCI measurer checks actual manifest, config, and compressed layer bytes.
   It does not trust a saved byte total or Docker's filesystem size.
-  The saved image is loaded and checked against the measured config and source/tree labels.
+  The saved image is loaded and checked against the measured source/tree labels.
+  Docker may report the loaded image ID as the measured image-config digest or as the measured OCI manifest digest.
+  The manifest digest is allowed only when it equals the measured manifest, which names the measured config.
+  Any other ID is refused. The check never pulls an ID.
+  The provenance and receipt keep the image-config digest. The verified loaded ID is used only for the local native check and tag.
   Its network-disabled native check must report the pinned SDK, runtime, and protocol.
-  Publication repeats these checks before registry login and tags the verified config digest.
+  Publication repeats these checks before registry login and tags the verified loaded image ID.
   Missing or changed archives, wrong labels, size failures, and runtime failures block publication.
   The receipt keeps the prepared OCI measurement separate from the actual registry digest.
   Docker may encode the pushed manifest differently; the local OCI digest is not a registry claim.

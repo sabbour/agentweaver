@@ -101,11 +101,22 @@ export function verifyAgentHostRuntimeStatus(status, runtime) {
   };
 }
 
+// Docker reports its image ID as the OCI config digest (classic store) or as the OCI platform
+// manifest digest (containerd store). Both are proven by the measured archive bytes, because the
+// measured manifest names the measured config. Any other ID is refused.
+export function verifiedLoadedImageId(image, measured) {
+  const id = image?.Id;
+  if (id === measured.image.configDigest) return { id, kind: 'config' };
+  if (id === measured.image.digest) return { id, kind: 'manifest' };
+  return null;
+}
+
 export function verifyLoadedAgentHostImage(imageReference, measured, source, version, docker) {
   verifyAgentHostMeasurement(measured, source, version);
   const image = JSON.parse(docker(['image', 'inspect', '--format', '{{json .}}', imageReference]));
   const labels = image?.Config?.Labels;
-  if (image?.Id !== measured.image.configDigest || image.Os !== 'linux' || image.Architecture !== 'amd64' ||
+  const loaded = verifiedLoadedImageId(image, measured);
+  if (!loaded || image.Os !== 'linux' || image.Architecture !== 'amd64' ||
       image.Config?.User !== '1654:1654' ||
       !equal(image.Config?.Entrypoint, ['dotnet', 'Agentweaver.AgentHost.dll']) ||
       labels?.['org.opencontainers.image.revision'] !== source.sourceSha ||
@@ -113,13 +124,13 @@ export function verifyLoadedAgentHostImage(imageReference, measured, source, ver
       labels?.['org.opencontainers.image.version'] !== version)
     reject('loaded archive image identity, source/tree labels, version, or execution contract do not match');
   const status = JSON.parse(docker([
-    'run', '--rm', '--platform', 'linux/amd64', '--network', 'none', '--read-only',
+    'run', '--rm', '--pull=never', '--platform', 'linux/amd64', '--network', 'none', '--read-only',
     '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
     '--tmpfs', '/state:rw,noexec,nosuid,nodev,uid=1654,gid=1654,mode=700',
     '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,uid=1654,gid=1654,mode=700',
-    measured.image.configDigest, '--verify-native-runtime',
+    loaded.id, '--verify-native-runtime',
   ]));
-  return verifyAgentHostRuntimeStatus(status, source.runtime);
+  return { runtime: verifyAgentHostRuntimeStatus(status, source.runtime), loadedImageId: loaded.id, loadedImageIdKind: loaded.kind };
 }
 
 export function validateAgentHostArtifact(component, artifact, record, root, directory, sourceSha, git,

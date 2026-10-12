@@ -14,7 +14,7 @@ const webBaseImage = `mcr.microsoft.com/dotnet/aspnet@sha256:${'a'.repeat(64)}`;
 const webImageId = `sha256:${'c'.repeat(64)}`;
 
 function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageXml,
-  foundationProbe = false, probeVersion = '0.0.1', web = false, agenthost = false } = {}) {
+  foundationProbe = false, probeVersion = '0.0.1', web = false, agenthost = false, idMode = 'config' } = {}) {
   const parent = path.resolve('artifacts', 'release-tests');
   mkdirSync(parent, { recursive: true });
   const root = mkdtempSync(path.join(parent, 'publication-'));
@@ -85,7 +85,7 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
   git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'source');
   const calls = [];
   const outDir = path.join(root, 'artifacts', 'release', 'pack');
-  const agentHostDocker = agenthost ? agentHostDockerFixture(root) : undefined;
+  const agentHostDocker = agenthost ? agentHostDockerFixture(root, { idMode }) : undefined;
   const prepare = (override = {}) => packComponentsFromFile(path.join(root, 'releases', 'foundation.json'), {
     root, outDir,
     dotnet: (args) => {
@@ -223,6 +223,32 @@ test('AgentHost publication remeasures both archives and checks loaded pinned ru
   assert.deepEqual(published.preparedOciMeasurement, provenance.components.find(item =>
     item.id === 'Agentweaver.AgentHost').build.measurement);
   assert.equal(receipt.status, 'published');
+});
+
+test('AgentHost publication tags and runs the verified manifest-digest ID while receipts keep the config digest', t => {
+  const f = fixture(t, { service: false, agenthost: true, idMode: 'manifest' });
+  const provenance = f.prepare();
+  const artifact = provenance.artifacts.find(item => item.componentId === 'Agentweaver.AgentHost');
+  const measured = provenance.components.find(item => item.id === 'Agentweaver.AgentHost').build.measurement;
+  const receipt = f.publish();
+  assert.notEqual(measured.image.digest, artifact.imageId);
+  const docker = f.externalCalls.filter(({ bin }) => bin === 'docker');
+  assert.equal(docker.find(({ args }) => args[0] === 'run').args.at(-2), measured.image.digest);
+  assert.ok(docker.find(({ args }) => args[0] === 'run').args.includes('--pull=never'));
+  assert.equal(docker.find(({ args }) => args[0] === 'tag').args[1], measured.image.digest);
+  assert.equal(docker.some(({ args }) => args[0] === 'pull'), false);
+  const published = receipt.published.find(item => item.id === 'Agentweaver.AgentHost');
+  assert.equal(published.imageConfigDigest, artifact.imageId);
+});
+
+test('AgentHost publication refuses an unrelated loaded image ID before login, run or tag', t => {
+  const f = fixture(t, { service: false, agenthost: true, idMode: 'manifest' });
+  f.prepare();
+  assert.throws(() => f.publish({ run: (bin, args) => {
+    if (bin === 'docker' && args[0] === 'image') return JSON.stringify({ ...JSON.parse(f.agentHostDocker(args)), Id: `sha256:${'a'.repeat(64)}` });
+    return '';
+  } }), /loaded archive image identity/);
+  assert.equal(f.externalCalls.some(({ bin, args }) => bin === 'docker' && ['run', 'login', 'tag', 'pull'].includes(args[0])), false);
 });
 
 for (const [name, change] of [
