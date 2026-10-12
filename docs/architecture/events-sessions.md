@@ -119,6 +119,26 @@ Bounded HTTP reads retain their deadline after response headers arrive.
 A `409` owner response is an explicit changed-binding denial, not a successful retry.
 
 This source adds no certificate issuance, service principal, trust store, deployment, or approved live TLS configuration.
+Environment has a separate, optional current-call verifier profile:
+`Orchestrator:RemoteMcpCallVerification:Tls`, with local service `Orchestrator`
+and peer `Environment`. It requires the runtime registration owner and the
+dedicated `Kestrel:Endpoints:RemoteMcpCallVerification:Url` port. It uses key
+`remote-mcp-call-verification-environment`, not the Events profile.
+The current-call route remains `/internal/runtime/remote-tool-results/verify`.
+The actual server listener port selects the configured profile; request bodies
+and headers cannot select a service role. Wrong transport, listener, or peer
+denies the request before proof-body reads. If both profiles exist, they must
+name the same Orchestrator principal and different peer principals and pins.
+The existing Events listener, options, and peer gate are unchanged.
+
+Environment's matching client uses `Environment:RemoteMcpCallVerification:Tls`,
+key `remote-mcp-call-verification-orchestrator`, and client
+`RemoteMcpCallVerificationOwner`. It pins the fixed owner address and has a
+15-second timeout. The verifier still checks the original actor, current
+registration, exact accepted call, current grant and policy, and existing
+journal acknowledgment. Its receipt is not network evidence or a credential
+grant.
+
 Native remote-tool dispatch remains disabled.
 Positive native TLS, complete producer recovery, and private-result acceptance remain open.
 

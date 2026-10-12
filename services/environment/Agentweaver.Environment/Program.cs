@@ -87,6 +87,7 @@ builder.Services.AddScoped<IEnvironmentProviderLifecycleReportStore, Environment
 builder.Services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
 builder.Services.AddScoped<IEnvironmentSandboxBuildTestCommandStore, EnvironmentSandboxBuildTestCommandStore>();
 builder.Services.AddScoped<RemoteMcpConnectionStore>();
+builder.AddRemoteMcpTrustedServiceTls();
 builder.Services.AddScoped<IEnvironmentLifecycleProducer, EnvironmentLifecycleProducer>();
 builder.Services.AddScoped<EnvironmentRuntimePlacementReader>();
 builder.Services.AddSingleton(new EnvironmentRuntimeBootstrapProfileRegistry(

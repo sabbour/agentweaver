@@ -315,6 +315,16 @@ if (identityOptions.RemoteMcpOAuth is { } remoteMcpOAuthOptions)
         provider.GetRequiredService<ISecretRedemption>()));
 }
 
+if (builder.Configuration.GetSection(RemoteMcpCredentialUseComposition.SectionName).Exists() &&
+    identityOptions.RemoteMcpOAuth is null)
+    throw new InvalidOperationException("Remote MCP credential use requires configured Remote MCP OAuth.");
+if (builder.AddRemoteMcpCredentialUseTls())
+    builder.Services.AddHttpClient<RemoteMcpCurrentCallVerificationClient>(client =>
+        client.Timeout = TimeSpan.FromSeconds(15))
+        .ConfigurePrimaryHttpMessageHandler(services =>
+            services.GetRequiredKeyedService<RuntimeServiceTlsIdentity>(
+                RemoteMcpCredentialUseComposition.RecipientTlsKey).CreateHandler());
+
 // The broker's own signing/encryption credential. Production composition mounts a real
 // PFX; there is no "development certificate" escape hatch in this host.
 var signingCertificate = X509CertificateLoader.LoadPkcs12FromFile(

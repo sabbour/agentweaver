@@ -1,10 +1,12 @@
 extern alias OrchestratorHost;
 
 using System.Security.Claims;
+using System.Security.Authentication;
 using System.Text.Encodings.Web;
 using Agentweaver.Identity;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Connections.Features;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
@@ -119,6 +121,95 @@ public sealed class ReviewedRemoteToolResultUnavailableTests
             document.RootElement.GetProperty("error").GetString());
         Assert.NotNull(body);
         Assert.False(body.WasRead);
+    }
+
+    [Theory]
+    [InlineData(false, null, 9446, "Environment", System.Net.HttpStatusCode.ServiceUnavailable,
+        "runtime_remote_tool_result_https_required")]
+    [InlineData(true, null, 9446, "Environment", System.Net.HttpStatusCode.Forbidden,
+        "runtime_remote_tool_result_https_required")]
+    [InlineData(true, SslProtocols.Tls13, 9446, "IdentityBroker", System.Net.HttpStatusCode.Forbidden,
+        "runtime_remote_mcp_call_service_profile_invalid")]
+    [InlineData(true, SslProtocols.Tls13, 9447, "Environment", System.Net.HttpStatusCode.Forbidden,
+        "runtime_remote_tool_result_service_listener_denied")]
+    [InlineData(true, null, 9443, "Environment", System.Net.HttpStatusCode.Forbidden,
+        "runtime_remote_tool_result_https_required")]
+    public async Task EnvironmentProfileCannotUsePlainHttpsAnotherRoleOrAnotherListener(
+        bool https, SslProtocols? protocol, int port, string peer,
+        System.Net.HttpStatusCode expectedStatus, string expectedCode)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddAuthentication("test")
+            .AddScheme<AuthenticationSchemeOptions, TestAuthenticationHandler>("test", _ => { });
+        builder.Services.AddAuthorization();
+        builder.Services.AddSingleton(new RuntimeServiceTlsOptions
+        {
+            LocalServiceName = "Orchestrator",
+            PeerServiceName = "EventsAndSessions",
+            ListenerPort = 9443
+        });
+        var key = OrchestratorHost::Agentweaver.Orchestrator.RemoteMcpCallVerificationComposition.TlsKey;
+        builder.Services.AddKeyedSingleton(key, new RuntimeServiceTlsOptions
+        {
+            LocalServiceName = "Orchestrator",
+            PeerServiceName = peer,
+            ListenerPort = 9446
+        });
+        var certificateResolved = false;
+        builder.Services.AddSingleton<RuntimeServiceTlsIdentity>(_ =>
+        {
+            certificateResolved = true;
+            throw new InvalidOperationException("Denied requests must not resolve the Events certificate.");
+        });
+        builder.Services.AddKeyedSingleton<RuntimeServiceTlsIdentity>(key, (_, _) =>
+        {
+            certificateResolved = true;
+            throw new InvalidOperationException("Denied requests must not resolve the Environment certificate.");
+        });
+        await using var app = builder.Build();
+        UnexpectedBodyReadStream? body = null;
+        app.Use(async (context, next) =>
+        {
+            context.Request.Scheme = https ? "https" : "http";
+            context.Connection.LocalPort = port;
+            if (protocol is { } value)
+                context.Features.Set<ITlsHandshakeFeature>(new Handshake(value));
+            body = new UnexpectedBodyReadStream();
+            context.Request.Body = body;
+            await next();
+        });
+        app.UseAuthentication();
+        app.UseAuthorization();
+        OrchestratorHost::Agentweaver.Orchestrator.ReviewedRemoteToolResultEndpoints
+            .MapReviewedRemoteToolResultEndpoints(app);
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        using var response = await client.PostAsync(
+            "/internal/runtime/remote-tool-results/verify", new ByteArrayContent("private proof"u8.ToArray()));
+
+        Assert.Equal(expectedStatus, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        using var document = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(expectedCode, document.RootElement.GetProperty("error").GetString());
+        Assert.NotNull(body);
+        Assert.False(body.WasRead);
+        Assert.False(certificateResolved);
+    }
+
+    private sealed class Handshake(SslProtocols protocol) : ITlsHandshakeFeature
+    {
+        public SslProtocols Protocol => protocol;
+        public string HostName => string.Empty;
+#pragma warning disable SYSLIB0058 // ITlsHandshakeFeature still requires the obsolete algorithm properties.
+        public CipherAlgorithmType CipherAlgorithm => default;
+        public int CipherStrength => 0;
+        public HashAlgorithmType HashAlgorithm => default;
+        public int HashStrength => 0;
+        public ExchangeAlgorithmType KeyExchangeAlgorithm => default;
+#pragma warning restore SYSLIB0058
+        public int KeyExchangeStrength => 0;
+        public System.Net.Security.TlsCipherSuite? NegotiatedCipherSuite => null;
     }
 
     private sealed class TestAuthenticationHandler(

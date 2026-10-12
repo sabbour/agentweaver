@@ -224,8 +224,14 @@ public static class ReviewedRemoteToolResultEndpoints
             (HttpContext context, CancellationToken cancellationToken) =>
             {
                 context.Response.Headers.CacheControl = "no-store";
-                if (!context.Request.IsHttps ||
-                    context.RequestServices.GetService<RuntimeServiceTlsOptions>() is not { } tlsOptions)
+                var environmentProfile = context.RequestServices
+                    .GetKeyedService<RuntimeServiceTlsOptions>(RemoteMcpCallVerificationComposition.TlsKey);
+                var useEnvironmentProfile = environmentProfile is not null &&
+                    context.Connection.LocalPort == environmentProfile.ListenerPort;
+                var tlsOptions = useEnvironmentProfile
+                    ? environmentProfile
+                    : context.RequestServices.GetService<RuntimeServiceTlsOptions>();
+                if (!context.Request.IsHttps || tlsOptions is null)
                 {
                     var error = context.Request.IsHttps
                         ? "runtime_remote_tool_result_route_unavailable"
@@ -235,10 +241,19 @@ public static class ReviewedRemoteToolResultEndpoints
                 }
                 return ExecuteAsync(context, async () =>
                 {
+                    if (useEnvironmentProfile &&
+                        (tlsOptions.LocalServiceName != "Orchestrator" || tlsOptions.PeerServiceName != "Environment"))
+                        throw new RuntimeAuthorizationException("runtime_remote_mcp_call_service_profile_invalid");
                     var protocol = context.Features.Get<ITlsHandshakeFeature>()?.Protocol;
                     RuntimeServiceTlsIdentity.RequireDirectTls(
                         context.Request.IsHttps, protocol, context.Connection.LocalPort, tlsOptions.ListenerPort);
-                    var tls = context.RequestServices.GetRequiredService<RuntimeServiceTlsIdentity>();
+                    var tls = useEnvironmentProfile
+                        ? context.RequestServices.GetRequiredKeyedService<RuntimeServiceTlsIdentity>(
+                            RemoteMcpCallVerificationComposition.TlsKey)
+                        : context.RequestServices.GetRequiredService<RuntimeServiceTlsIdentity>();
+                    if (useEnvironmentProfile &&
+                        (tls.LocalServiceName != "Orchestrator" || tls.PeerServiceName != "Environment"))
+                        throw new RuntimeAuthorizationException("runtime_remote_mcp_call_service_profile_invalid");
                     tls.RequirePeerConnection(context.Request.IsHttps, protocol, context.Connection.LocalPort,
                         context.Features.Get<ITlsConnectionFeature>()?.ClientCertificate);
                     if (context.Features.Get<IHttpMaxRequestBodySizeFeature>() is { IsReadOnly: false } limit)
