@@ -1,8 +1,11 @@
 extern alias EnvironmentService;
 extern alias OrchestratorHost;
 
+using System.Security.Authentication;
 using Agentweaver.Identity;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Connections.Features;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Http;
@@ -139,6 +142,106 @@ public sealed class RemoteMcpTrustedServiceTlsCompositionTests
         Assert.Throws<InvalidOperationException>(() => EnvironmentTls.AddRemoteMcpTrustedServiceTls(builder));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReviewedToolRecipientRemainsUnavailableWithoutExplicitOptIn(bool profiles)
+    {
+        var builder = Builder(profiles ? EnvironmentProfiles() : null);
+        EnvironmentTls.AddRemoteMcpTrustedServiceTls(builder);
+        using var services = builder.Services.BuildServiceProvider();
+        var context = new DefaultHttpContext { RequestServices = services };
+
+        var failure = Assert.Throws<RuntimeAuthorizationException>(() => EnvironmentTls.RequireOrchestratorPeer(context));
+
+        Assert.Equal("remote_mcp_reviewed_tool_recipient_unavailable", failure.Code);
+        Assert.Null(services.GetKeyedService<RuntimeServiceTlsOptions>(EnvironmentTls.OrchestratorRecipientTlsKey));
+    }
+
+    [Fact]
+    public void ReviewedToolRecipientUsesExistingOrchestratorPinsOnItsSeparateListener()
+    {
+        var builder = Builder(RecipientProfiles());
+        EnvironmentTls.AddRemoteMcpTrustedServiceTls(builder);
+        using var services = builder.Services.BuildServiceProvider();
+        var recipient = services.GetRequiredKeyedService<RuntimeServiceTlsOptions>(EnvironmentTls.OrchestratorRecipientTlsKey);
+
+        Assert.Same(services.GetRequiredKeyedService<RuntimeServiceTlsOptions>(EnvironmentTls.OrchestratorTlsKey), recipient);
+        Assert.NotSame(services.GetRequiredKeyedService<RuntimeServiceTlsOptions>(EnvironmentTls.IdentityTlsKey), recipient);
+        Assert.Equal("Orchestrator", recipient.PeerServiceName);
+        Assert.Equal(9448, recipient.ListenerPort);
+        Assert.NotNull(recipient.PeerCertificateSha256Pins);
+        Assert.Equal([new string('c', 64)], recipient.PeerCertificateSha256Pins);
+    }
+
+    [Theory]
+    [InlineData("missing-profile")]
+    [InlineData("missing-listener")]
+    [InlineData("http")]
+    [InlineData("path")]
+    [InlineData("wrong-port")]
+    [InlineData("shared-port")]
+    [InlineData("identity-port")]
+    public void InvalidReviewedToolRecipientIsRejectedBeforeAnyTlsRegistration(string changed)
+    {
+        var values = RecipientProfiles();
+        var endpoint = "Kestrel:Endpoints:" + EnvironmentTls.OrchestratorRecipientListenerName + ":Url";
+        switch (changed)
+        {
+            case "missing-profile":
+                foreach (var key in values.Keys.Where(key => key.StartsWith(
+                             EnvironmentTls.OrchestratorSectionName + ":", StringComparison.Ordinal)).ToArray())
+                    values.Remove(key);
+                break;
+            case "missing-listener": values.Remove(endpoint); break;
+            case "http": values[endpoint] = "http://environment.example:9448/"; break;
+            case "path": values[endpoint] = "https://environment.example:9448/native"; break;
+            case "wrong-port": values[endpoint] = "https://environment.example:9449/"; break;
+            case "shared-port": values["Kestrel:Endpoints:Public:Url"] = values[endpoint]; break;
+            case "identity-port":
+                values[endpoint] = values["Kestrel:Endpoints:RemoteMcpCredentialUse:Url"];
+                values[EnvironmentTls.OrchestratorSectionName + ":ListenerPort"] = "9447";
+                break;
+        }
+        var builder = Builder(values);
+
+        Assert.Throws<InvalidOperationException>(() => EnvironmentTls.AddRemoteMcpTrustedServiceTls(builder));
+        Assert.DoesNotContain(builder.Services, service => service.ServiceType == typeof(RuntimeServiceTlsIdentity));
+    }
+
+    [Theory]
+    [InlineData(false, null, 9448, "Orchestrator", "runtime_remote_tool_result_https_required")]
+    [InlineData(true, null, 9448, "Orchestrator", "runtime_remote_tool_result_https_required")]
+    [InlineData(true, SslProtocols.None, 9448, "Orchestrator", "runtime_remote_tool_result_https_required")]
+    [InlineData(true, SslProtocols.Tls13, 9447, "Orchestrator", "runtime_remote_tool_result_service_listener_denied")]
+    [InlineData(true, SslProtocols.Tls13, 9448, "IdentityBroker", "remote_mcp_reviewed_tool_recipient_profile_invalid")]
+    public void ReviewedToolRecipientRejectsWrongTransportListenerAndRoleBeforeCertificateLoading(
+        bool https, SslProtocols? protocol, int port, string peer, string code)
+    {
+        var collection = new ServiceCollection();
+        collection.AddKeyedSingleton(EnvironmentTls.OrchestratorRecipientTlsKey, new RuntimeServiceTlsOptions
+        {
+            LocalServiceName = "Environment", PeerServiceName = peer, ListenerPort = 9448
+        });
+        var certificateResolved = false;
+        collection.AddKeyedSingleton<RuntimeServiceTlsIdentity>(EnvironmentTls.OrchestratorRecipientTlsKey, (_, _) =>
+        {
+            certificateResolved = true;
+            throw new InvalidOperationException("Denied requests must not load a certificate.");
+        });
+        using var services = collection.BuildServiceProvider();
+        var context = new DefaultHttpContext { RequestServices = services };
+        context.Request.Scheme = https ? "https" : "http";
+        context.Connection.LocalPort = port;
+        if (protocol is { } value)
+            context.Features.Set<ITlsHandshakeFeature>(new Handshake(value));
+
+        var failure = Assert.Throws<RuntimeAuthorizationException>(() => EnvironmentTls.RequireOrchestratorPeer(context));
+
+        Assert.Equal(code, failure.Code);
+        Assert.False(certificateResolved);
+    }
+
     private static void AssertClient(HttpClientFactoryOptions options, string address)
     {
         using var client = new HttpClient();
@@ -185,6 +288,16 @@ public sealed class RemoteMcpTrustedServiceTlsCompositionTests
         return values;
     }
 
+    private static Dictionary<string, string?> RecipientProfiles()
+    {
+        var values = EnvironmentProfiles();
+        values[EnvironmentTls.OrchestratorRecipientEnabledSetting] = "true";
+        values[EnvironmentTls.OrchestratorSectionName + ":ListenerPort"] = "9448";
+        values["Kestrel:Endpoints:" + EnvironmentTls.OrchestratorRecipientListenerName + ":Url"] =
+            "https://environment.example:9448/";
+        return values;
+    }
+
     private static void AddProfile(
         Dictionary<string, string?> values, string section, string local, string peer,
         string localId, string peerId, int port, string owner, char pin)
@@ -199,5 +312,20 @@ public sealed class RemoteMcpTrustedServiceTlsCompositionTests
         values[section + ":LocalCertificateSha256"] = new string('a', 64);
         values[section + ":PeerOwnerAddress"] = owner;
         values[section + ":PeerCertificateSha256Pins:0"] = new string(pin, 64);
+    }
+
+    private sealed class Handshake(SslProtocols protocol) : ITlsHandshakeFeature
+    {
+        public SslProtocols Protocol => protocol;
+        public string HostName => string.Empty;
+#pragma warning disable SYSLIB0058
+        public CipherAlgorithmType CipherAlgorithm => default;
+        public int CipherStrength => 0;
+        public HashAlgorithmType HashAlgorithm => default;
+        public int HashStrength => 0;
+        public ExchangeAlgorithmType KeyExchangeAlgorithm => default;
+#pragma warning restore SYSLIB0058
+        public int KeyExchangeStrength => 0;
+        public System.Net.Security.TlsCipherSuite? NegotiatedCipherSuite => null;
     }
 }

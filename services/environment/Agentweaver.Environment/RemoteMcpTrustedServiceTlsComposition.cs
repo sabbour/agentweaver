@@ -14,62 +14,105 @@ public static class RemoteMcpTrustedServiceTlsComposition
     public const string OrchestratorTlsKey = "remote-mcp-call-verification-orchestrator";
     public const string OrchestratorSectionName = "Environment:RemoteMcpCallVerification:Tls";
     public const string OrchestratorClientName = "RemoteMcpCallVerificationOwner";
+    public const string OrchestratorRecipientEnabledSetting =
+        "Environment:RemoteMcpCallVerification:EnableReviewedToolRecipient";
+    public const string OrchestratorRecipientTlsKey = "remote-mcp-reviewed-tool-orchestrator-recipient";
+    public const string OrchestratorRecipientListenerName = "RemoteMcpReviewedToolTransport";
 
     public static void AddRemoteMcpTrustedServiceTls(this WebApplicationBuilder builder)
     {
         var identity = ReadProfile(builder, IdentitySectionName, "IdentityBroker");
         var orchestrator = ReadProfile(builder, OrchestratorSectionName, "Orchestrator");
+        var enableOrchestratorRecipient = builder.Configuration.GetValue<bool>(OrchestratorRecipientEnabledSetting);
         if (identity is not null && orchestrator is not null &&
             (Guid.Parse(identity.LocalServicePrincipalId!) != Guid.Parse(orchestrator.LocalServicePrincipalId!) ||
                 Guid.Parse(identity.PeerServicePrincipalId!) == Guid.Parse(orchestrator.PeerServicePrincipalId!) ||
                 identity.PeerCertificateSha256Pins!.Any(pin =>
                     orchestrator.PeerCertificateSha256Pins!.Contains(pin, StringComparer.OrdinalIgnoreCase))))
             throw new InvalidOperationException("Remote MCP owner clients require separate, consistent service profiles.");
+        if (enableOrchestratorRecipient)
+        {
+            if (orchestrator is null)
+                throw new InvalidOperationException("The reviewed-tool recipient requires an explicit Orchestrator TLS profile.");
+            RequireDedicatedListener(builder, OrchestratorRecipientListenerName, orchestrator.ListenerPort,
+                "Reviewed-tool requests require a separate Orchestrator recipient HTTPS listener and port.");
+        }
         if (identity is not null)
         {
-            var endpoints = builder.Configuration.GetSection("Kestrel:Endpoints");
-            if (!Uri.TryCreate(endpoints[IdentityListenerName + ":Url"], UriKind.Absolute, out var address) ||
-                !RuntimeContractValidation.IsHttpsEndpoint(address) || address.AbsolutePath != "/" ||
-                address.Port != identity.ListenerPort ||
-                endpoints.GetChildren().Any(endpoint =>
-                    endpoint.Key != IdentityListenerName &&
-                    Uri.TryCreate(endpoint["Url"], UriKind.Absolute, out var other) &&
-                    other.Port == identity.ListenerPort))
-                throw new InvalidOperationException("Identity verification requires its own Environment HTTPS listener and port.");
+            RequireDedicatedListener(builder, IdentityListenerName, identity.ListenerPort,
+                "Identity verification requires its own Environment HTTPS listener and port.");
             AddClient(builder, IdentityTlsKey, IdentityClientName, identity, "IdentityBroker");
-            builder.WebHost.ConfigureKestrel(server =>
-            {
-                var loader = server.ConfigurationLoader ?? server.Configure(builder.Configuration.GetSection("Kestrel"));
-                loader.Endpoint(IdentityListenerName, endpoint =>
-                {
-                    var peer = server.ApplicationServices.GetRequiredKeyedService<RuntimeServiceTlsIdentity>(IdentityTlsKey);
-                    endpoint.HttpsOptions.ServerCertificate = peer.Certificate;
-                    endpoint.HttpsOptions.SslProtocols = RuntimeServiceTlsIdentity.AllowedProtocols;
-                    endpoint.HttpsOptions.ClientCertificateMode = ClientCertificateMode.RequireCertificate;
-                    endpoint.HttpsOptions.CheckCertificateRevocation = true;
-                    endpoint.HttpsOptions.ClientCertificateValidation = peer.AcceptClientCertificate;
-                });
-            });
+            ConfigureListener(builder, IdentityListenerName, IdentityTlsKey);
         }
         if (orchestrator is not null)
+        {
             AddClient(builder, OrchestratorTlsKey, OrchestratorClientName, orchestrator, "Orchestrator");
+            if (enableOrchestratorRecipient)
+            {
+                builder.Services.AddKeyedSingleton(OrchestratorRecipientTlsKey, orchestrator);
+                builder.Services.AddKeyedSingleton<RuntimeServiceTlsIdentity>(OrchestratorRecipientTlsKey, (services, _) =>
+                    services.GetRequiredKeyedService<RuntimeServiceTlsIdentity>(OrchestratorTlsKey));
+                ConfigureListener(builder, OrchestratorRecipientListenerName, OrchestratorRecipientTlsKey);
+            }
+        }
     }
 
-    public static void RequireIdentityPeer(HttpContext context)
+    public static void RequireIdentityPeer(HttpContext context) =>
+        RequirePeer(context, IdentityTlsKey, "IdentityBroker",
+            "remote_mcp_current_verification_route_unavailable",
+            "remote_mcp_current_verification_peer_profile_invalid");
+
+    public static void RequireOrchestratorPeer(HttpContext context) =>
+        RequirePeer(context, OrchestratorRecipientTlsKey, "Orchestrator",
+            "remote_mcp_reviewed_tool_recipient_unavailable",
+            "remote_mcp_reviewed_tool_recipient_profile_invalid");
+
+    private static void RequirePeer(
+        HttpContext context, string key, string peerName, string unavailableCode, string profileCode)
     {
-        var options = context.RequestServices.GetKeyedService<RuntimeServiceTlsOptions>(IdentityTlsKey)
-            ?? throw new RuntimeAuthorizationException("remote_mcp_current_verification_route_unavailable");
-        if (options.LocalServiceName != "Environment" || options.PeerServiceName != "IdentityBroker")
-            throw new RuntimeAuthorizationException("remote_mcp_current_verification_peer_profile_invalid");
+        var options = context.RequestServices.GetKeyedService<RuntimeServiceTlsOptions>(key)
+            ?? throw new RuntimeAuthorizationException(unavailableCode);
+        if (options.LocalServiceName != "Environment" || options.PeerServiceName != peerName)
+            throw new RuntimeAuthorizationException(profileCode);
         var protocol = context.Features.Get<ITlsHandshakeFeature>()?.Protocol;
         RuntimeServiceTlsIdentity.RequireDirectTls(
             context.Request.IsHttps, protocol, context.Connection.LocalPort, options.ListenerPort);
-        var identity = context.RequestServices.GetRequiredKeyedService<RuntimeServiceTlsIdentity>(IdentityTlsKey);
-        if (identity.LocalServiceName != "Environment" || identity.PeerServiceName != "IdentityBroker")
-            throw new RuntimeAuthorizationException("remote_mcp_current_verification_peer_profile_invalid");
+        var identity = context.RequestServices.GetRequiredKeyedService<RuntimeServiceTlsIdentity>(key);
+        if (identity.LocalServiceName != "Environment" || identity.PeerServiceName != peerName)
+            throw new RuntimeAuthorizationException(profileCode);
         identity.RequirePeerConnection(
             context.Request.IsHttps, protocol, context.Connection.LocalPort,
             context.Features.Get<ITlsConnectionFeature>()?.ClientCertificate);
+    }
+
+    private static void RequireDedicatedListener(
+        WebApplicationBuilder builder, string listenerName, int port, string error)
+    {
+        var endpoints = builder.Configuration.GetSection("Kestrel:Endpoints");
+        if (!Uri.TryCreate(endpoints[listenerName + ":Url"], UriKind.Absolute, out var address) ||
+            !RuntimeContractValidation.IsHttpsEndpoint(address) || address.AbsolutePath != "/" ||
+            address.Port != port ||
+            endpoints.GetChildren().Any(endpoint =>
+                endpoint.Key != listenerName &&
+                Uri.TryCreate(endpoint["Url"], UriKind.Absolute, out var other) && other.Port == port))
+            throw new InvalidOperationException(error);
+    }
+
+    private static void ConfigureListener(WebApplicationBuilder builder, string listenerName, string key)
+    {
+        builder.WebHost.ConfigureKestrel(server =>
+        {
+            var loader = server.ConfigurationLoader ?? server.Configure(builder.Configuration.GetSection("Kestrel"));
+            loader.Endpoint(listenerName, endpoint =>
+            {
+                var peer = server.ApplicationServices.GetRequiredKeyedService<RuntimeServiceTlsIdentity>(key);
+                endpoint.HttpsOptions.ServerCertificate = peer.Certificate;
+                endpoint.HttpsOptions.SslProtocols = RuntimeServiceTlsIdentity.AllowedProtocols;
+                endpoint.HttpsOptions.ClientCertificateMode = ClientCertificateMode.RequireCertificate;
+                endpoint.HttpsOptions.CheckCertificateRevocation = true;
+                endpoint.HttpsOptions.ClientCertificateValidation = peer.AcceptClientCertificate;
+            });
+        });
     }
 
     private static RuntimeServiceTlsOptions? ReadProfile(

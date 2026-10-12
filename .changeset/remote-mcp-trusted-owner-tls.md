@@ -17,3 +17,6 @@ Carry the original actor context and full owner-built proof through the reviewed
 Keep native transport registration and the SDK remote-tool hook unavailable.
 Select the current Identity access-token reference for the fixed reviewed tools-call purpose.
 Recheck OAuth row bindings after waits without reading or delivering a credential.
+Add a separate, default-off Environment listener for its existing Orchestrator peer.
+Reject wrong-service, shared-port, and non-native-TLS requests before proof reads.
+Keep the recipient source separate from route, actor, and network authorization.

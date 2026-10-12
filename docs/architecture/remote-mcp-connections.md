@@ -74,6 +74,17 @@ select these service roles. The matching private listeners reject another
 service or port before reading a proof. These registrations do not supply
 current applied L7 evidence, map a credential-use route, or enable a send.
 
+Environment's reviewed-tool recipient is separately disabled by default.
+`Environment:RemoteMcpCallVerification:EnableReviewedToolRecipient` enables its
+`Kestrel:Endpoints:RemoteMcpReviewedToolTransport:Url` listener.
+It reuses the configured Orchestrator service identity and certificate pins.
+Its port must match that profile's `ListenerPort` and differ from every other listener.
+It cannot share the Identity verification listener or accept the Identity peer.
+`RequireOrchestratorPeer` rejects missing configuration, ordinary HTTPS,
+the wrong port, or another service before the receiving route reads the proof.
+This source registration does not map a route or authenticate the original actor.
+It does not establish network enforcement, issue credentials, or enable remote sends.
+
 ## Internal reviewed-call contracts
 
 `RemoteMcpCurrentCallVerificationRequest` carries the full `RemoteToolResultProof`
@@ -156,4 +167,5 @@ sequenceDiagram
     Note over Environment: Shared call and gate contracts do not enable native sends or prove forced network mediation
     Note over Environment: The current L7 binding comes from active handler readback, not a saved catalog reference
     Note over Environment: A native handoff retains the original actor context and full proof; network proof remains required
+    Note over Environment: The Orchestrator recipient has a separate, default-off TLS listener and peer check
 ```
