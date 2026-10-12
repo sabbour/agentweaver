@@ -234,6 +234,7 @@ test('AgentHost publication tags and runs the verified manifest-digest ID while 
   assert.notEqual(measured.image.digest, artifact.imageId);
   const docker = f.externalCalls.filter(({ bin }) => bin === 'docker');
   assert.equal(docker.find(({ args }) => args[0] === 'run').args.at(-2), measured.image.digest);
+  assert.ok(docker.find(({ args }) => args[0] === 'run').args.includes('--pull=never'));
   assert.equal(docker.find(({ args }) => args[0] === 'tag').args[1], measured.image.digest);
   assert.equal(docker.some(({ args }) => args[0] === 'pull'), false);
   const published = receipt.published.find(item => item.id === 'Agentweaver.AgentHost');

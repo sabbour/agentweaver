@@ -84,13 +84,16 @@ test('AgentHost preparation accepts the containerd manifest-digest image ID and 
   assert.ok(runtime.sdkVersion);
   const native = f.calls.find(({ args }) => args[0] === 'run').args;
   assert.equal(native.at(-2), measurement.image.digest);
+  assert.ok(native.includes('--pull=never'));
   assert.equal(f.calls.some(({ args }) => args[0] === 'pull'), false);
 });
 
 test('AgentHost preparation still runs the config-digest image ID in the classic store', t => {
   const f = fixture(t);
   const { measurement } = f.prepare({ idMode: 'config' }).components[0].build;
-  assert.equal(f.calls.find(({ args }) => args[0] === 'run').args.at(-2), measurement.image.configDigest);
+  const classic = f.calls.find(({ args }) => args[0] === 'run').args;
+  assert.equal(classic.at(-2), measurement.image.configDigest);
+  assert.ok(classic.includes('--pull=never'));
 });
 
 test('AgentHost preparation rejects a loaded ID that is neither measured digest, before any run', t => {

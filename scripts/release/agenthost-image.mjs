@@ -124,7 +124,7 @@ export function verifyLoadedAgentHostImage(imageReference, measured, source, ver
       labels?.['org.opencontainers.image.version'] !== version)
     reject('loaded archive image identity, source/tree labels, version, or execution contract do not match');
   const status = JSON.parse(docker([
-    'run', '--rm', '--platform', 'linux/amd64', '--network', 'none', '--read-only',
+    'run', '--rm', '--pull=never', '--platform', 'linux/amd64', '--network', 'none', '--read-only',
     '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
     '--tmpfs', '/state:rw,noexec,nosuid,nodev,uid=1654,gid=1654,mode=700',
     '--tmpfs', '/tmp:rw,noexec,nosuid,nodev,uid=1654,gid=1654,mode=700',
