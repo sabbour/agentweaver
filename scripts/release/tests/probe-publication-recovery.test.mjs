@@ -413,8 +413,8 @@ test('local receipt failure still leaves both permanent results and sanitized ev
 test('recovery workflow uses the four existing inputs, skips pack and reuses the original artifact without stored credentials', () => {
   const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8').replaceAll('\r\n', '\n');
   const recovery = workflow.slice(workflow.indexOf('\n  publish-probe-sampler:'));
-  assert.match(workflow, /pack:\n\s+if: \$\{\{ !inputs\.foundation_probe_sampler_replacement \}\}/);
-  assert.match(recovery, /inputs\.publish && inputs\.foundation_probe_sampler_replacement/);
+  assert.match(workflow, /pack:\n\s+if: \$\{\{ !inputs\.foundation_probe_sampler_replacement && !inputs\.agenthost_archive_diagnostic \}\}/);
+  assert.match(recovery, /inputs\.publish && inputs\.foundation_probe_sampler_replacement && !inputs\.agenthost_archive_diagnostic/);
   assert.match(recovery, /actions: read/);
   assert.match(recovery, /contents: write/);
   assert.match(recovery, /packages: write/);

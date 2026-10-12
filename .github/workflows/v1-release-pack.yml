@@ -27,13 +27,18 @@ on:
         required: false
         default: ''
         type: string
+      agenthost_archive_diagnostic:
+        description: Check only the saved AgentHost archive from retained run 38286624230 (not a rebuild, publication or acceptance; leave publish, platform_only and Probe replacement off)
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 jobs:
   pack:
-    if: ${{ !inputs.foundation_probe_sampler_replacement }}
+    if: ${{ !inputs.foundation_probe_sampler_replacement && !inputs.agenthost_archive_diagnostic }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -120,7 +125,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
   diagnose-probe-sampler:
-    if: ${{ !inputs.publish && inputs.foundation_probe_sampler_replacement }}
+    if: ${{ !inputs.publish && inputs.foundation_probe_sampler_replacement && !inputs.agenthost_archive_diagnostic }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -161,9 +166,62 @@ jobs:
           RELEASE_REGISTRY_USER: ${{ github.repository_owner }}
           RELEASE_REGISTRY_PASSWORD: ${{ github.token }}
         run: node scripts/release/probe-publication-diagnostic.mjs artifacts/release/frozen-probe
+  diagnose-agenthost-archive:
+    if: ${{ inputs.agenthost_archive_diagnostic }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Require exact v1 source, first attempt and no conflicting modes
+        env:
+          EXPECTED_SOURCE: ${{ inputs.expected_source }}
+          PUBLISH: ${{ inputs.publish }}
+          PLATFORM_ONLY: ${{ inputs.platform_only }}
+          PROBE_SAMPLER_REPLACEMENT: ${{ inputs.foundation_probe_sampler_replacement }}
+          EXPECTED_PROBE_DIGEST: ${{ inputs.expected_probe_digest }}
+        run: |
+          test "$GITHUB_REPOSITORY" = "sabbour/agentweaver" || { echo "::error::Diagnostic requires sabbour/agentweaver"; exit 1; }
+          test "$GITHUB_EVENT_NAME" = "workflow_dispatch" || { echo "::error::Diagnostic requires dispatch"; exit 1; }
+          test "$GITHUB_REF" = "refs/heads/v1" || { echo "::error::Diagnostic requires v1"; exit 1; }
+          test "$GITHUB_RUN_ATTEMPT" = "1" || { echo "::error::Diagnostic cannot be re-run"; exit 1; }
+          test "$EXPECTED_SOURCE" = "$GITHUB_SHA" || { echo "::error::Diagnostic source mismatch"; exit 1; }
+          test "$GITHUB_SHA" != "6b036e11ff211f96cfddcd837be9b5bce75ddb34" || { echo "::error::Workflow source must differ from the original image source"; exit 1; }
+          test "$PUBLISH" = "false" && test "$PLATFORM_ONLY" = "false" && test "$PROBE_SAMPLER_REPLACEMENT" = "false" && test -z "$EXPECTED_PROBE_DIGEST" || { echo "::error::Archive diagnostic cannot be combined with publish, platform_only or Probe inputs"; exit 1; }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Set up product Docker engine
+        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+        with:
+          version: 'v29.9.0'
+          set-host: true
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: 38286624230
+          artifact-ids: 11763641424
+          path: artifacts/release/saved-agenthost/
+      - name: Verify hash, load and inspect only the saved AgentHost archive
+        env:
+          EXPECTED_SOURCE: ${{ inputs.expected_source }}
+          DOCKER_CONTEXT: default
+        run: node scripts/release/agenthost-archive-diagnostic.mjs artifacts/release/saved-agenthost
   publish:
     needs: pack
-    if: ${{ inputs.publish && !inputs.foundation_probe_sampler_replacement }}
+    if: ${{ inputs.publish && !inputs.foundation_probe_sampler_replacement && !inputs.agenthost_archive_diagnostic }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -212,7 +270,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
   publish-probe-sampler:
-    if: ${{ inputs.publish && inputs.foundation_probe_sampler_replacement }}
+    if: ${{ inputs.publish && inputs.foundation_probe_sampler_replacement && !inputs.agenthost_archive_diagnostic }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

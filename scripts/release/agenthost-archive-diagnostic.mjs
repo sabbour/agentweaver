@@ -32,6 +32,7 @@ const canonical = value => sha256(JSON.stringify(value ?? null));
 const failureCodes = new Set([
   'DIAGNOSTIC_SCOPE_INVALID', 'HELPER_SOURCE_MISMATCH', 'ARCHIVE_HASH_MISMATCH', 'ARCHIVE_UNREADABLE',
   'PROCESS_TIMEOUT', 'COMMAND_NOT_FOUND', 'OPERATION_FAILED', 'INSPECT_OUTPUT_INVALID',
+  'REGISTRY_WRITE_DENIED', 'AUTHORIZATION_DENIED', 'TRANSPORT_FAILED',
 ]);
 const reject = code => { throw Object.assign(new Error(`AgentHost archive diagnostic refused: ${code}`), { code }); };
 
@@ -90,7 +91,8 @@ export function runAgentHostArchiveDiagnostic(directory, { env = process.env, sp
   };
   try {
     if (env.GITHUB_REPOSITORY !== 'sabbour/agentweaver' || env.GITHUB_REF !== 'refs/heads/v1' ||
-        env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || !/^[a-f0-9]{40}$/.test(env.EXPECTED_SOURCE ?? '') ||
+        env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || env.GITHUB_RUN_ATTEMPT !== '1' ||
+        !/^[a-f0-9]{40}$/.test(env.EXPECTED_SOURCE ?? '') ||
         env.EXPECTED_SOURCE === archivePins.imageSourceSha) reject('DIAGNOSTIC_SCOPE_INVALID');
     const helperSource = operation('git.source-read', 'git', ['rev-parse', 'HEAD']);
     if (helperSource !== env.EXPECTED_SOURCE || operation('git.source-read', 'git', ['status', '--porcelain']))
@@ -113,12 +115,13 @@ export function runAgentHostArchiveDiagnostic(directory, { env = process.env, sp
     operation('docker.load', 'docker', ['load', '--input', archivePath]);
     const reference = `agentweaver-agenthost:${archivePins.version}-${archivePins.imageSourceSha}`;
     let inspected;
+    const raw = operation('docker.image-inspect', 'docker', ['image', 'inspect', '--format', '{{json .}}', reference]);
     try {
-      inspected = JSON.parse(operation('docker.image-inspect', 'docker', ['image', 'inspect', '--format', '{{json .}}', reference]));
-    } catch (error) {
-      if (error instanceof SyntaxError) reject('INSPECT_OUTPUT_INVALID');
-      throw error;
-    }
+      inspected = JSON.parse(raw);
+    } catch { reject('INSPECT_OUTPUT_INVALID'); }
+    if (!inspected || typeof inspected !== 'object' || Array.isArray(inspected) || typeof inspected.Id !== 'string' ||
+        (inspected.Config !== undefined && (inspected.Config === null || typeof inspected.Config !== 'object')))
+      reject('INSPECT_OUTPUT_INVALID');
     Object.assign(result, describeInspect(inspected));
     result.allExpectedFieldsMatch = Object.entries(result.comparisons)
       .every(([name, value]) => name === 'idEqualsManifestDigest' || value);

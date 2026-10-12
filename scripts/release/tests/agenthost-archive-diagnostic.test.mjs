@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -11,7 +11,7 @@ const bytes = Buffer.from('synthetic archive');
 const sha = createHash('sha256').update(bytes).digest('hex');
 const env = {
   GITHUB_REPOSITORY: 'sabbour/agentweaver', GITHUB_REF: 'refs/heads/v1', GITHUB_EVENT_NAME: 'workflow_dispatch',
-  EXPECTED_SOURCE: helper, GH_TOKEN: 'secret', GITHUB_TOKEN: 'secret',
+  EXPECTED_SOURCE: helper, GITHUB_RUN_ATTEMPT: '1', GH_TOKEN: 'secret', GITHUB_TOKEN: 'secret',
 };
 const image = (overrides = {}) => ({
   Id: pins.configDigest, Os: 'linux', Architecture: 'amd64', Env: ['SECRET=raw'],
@@ -21,22 +21,87 @@ const image = (overrides = {}) => ({
   } }, ...overrides,
 });
 
-function run(inspect, { hash = sha } = {}) {
+function run(inspect, { hash = sha, nested = false, envOverrides = {}, git = {}, rawInspect } = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), 'ah-diag-'));
-  writeFileSync(path.join(dir, pins.archive), bytes);
+  const archiveDir = nested ? path.join(dir, 'v1-release-pack-x-1') : dir;
+  if (nested) mkdirSync(archiveDir);
+  writeFileSync(path.join(archiveDir, pins.archive), bytes);
   const calls = [];
   const spawn = (bin, args, options) => {
     calls.push([bin, ...args]);
     assert.equal(options.env.GH_TOKEN, undefined);
-    if (bin === 'git') return { status: 0, stdout: args[0] === 'status' ? '' : helper, stderr: '' };
-    return { status: 0, stdout: args[0] === 'image' ? JSON.stringify(inspect) : 'raw load output', stderr: '' };
+    if (bin === 'git') return { status: 0, stdout: args[0] === 'status' ? (git.status ?? '') : (git.head ?? helper), stderr: '' };
+    if (args[0] === 'load') return { status: 0, stdout: 'raw load output', stderr: '' };
+    return { status: 0, stdout: rawInspect ?? JSON.stringify(inspect), stderr: '' };
   };
   try {
-    return { calls, result: runAgentHostArchiveDiagnostic(dir, { env, spawn, expectedArchiveSha256: hash }) };
+    return { calls, dir, result: runAgentHostArchiveDiagnostic(dir, { env: { ...env, ...envOverrides }, spawn, expectedArchiveSha256: hash }) };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+const failure = (options, code) => {
+  const calls = [];
+  const dir = mkdtempSync(path.join(tmpdir(), 'ah-diag-'));
+  writeFileSync(path.join(dir, pins.archive), bytes);
+  try {
+    assert.throws(() => runAgentHostArchiveDiagnostic(dir, {
+      env: { ...env, ...options.envOverrides }, expectedArchiveSha256: sha,
+      spawn: (bin, args) => {
+        calls.push([bin, ...args]);
+        if (options.spawn) return options.spawn(bin, args);
+        if (bin === 'git') return { status: 0, stdout: args[0] === 'status' ? (options.status ?? '') : (options.head ?? helper), stderr: '' };
+        return { status: 0, stdout: args[0] === 'load' ? '' : (options.rawInspect ?? '{}'), stderr: '' };
+      },
+    }), error => { assert.equal(error.diagnostic.failureCode, code); assert.equal(error.diagnostic.status, 'failed'); return true; });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  return calls;
+};
+
+test('refuses wrong repository, ref, event and run attempt before any command', () => {
+  for (const envOverrides of [{ GITHUB_REPOSITORY: 'other/repo' }, { GITHUB_REF: 'refs/heads/dev' },
+    { GITHUB_EVENT_NAME: 'push' }, { GITHUB_RUN_ATTEMPT: '2' }, { GITHUB_RUN_ATTEMPT: undefined }])
+    assert.deepEqual(failure({ envOverrides }, 'DIAGNOSTIC_SCOPE_INVALID'), []);
+});
+
+test('refuses a wrong helper SHA or dirty source before any docker command', () => {
+  for (const options of [{ head: 'c'.repeat(40) }, { status: ' M file.txt' }])
+    assert.equal(failure(options, 'HELPER_SOURCE_MISMATCH').some(call => call[0] === 'docker'), false);
+});
+
+test('malformed inspect JSON is a clear failure, not valid evidence', () => {
+  for (const rawInspect of ['not json', '[]', 'null', '{"Config":5,"Id":"x"}', '{}'])
+    assert.equal(failure({ rawInspect }, 'INSPECT_OUTPUT_INVALID').at(-1)[1], 'image');
+});
+
+test('secret-bearing command failure output is sanitized', () => {
+  const secret = 'ghp_SECRETTOKENVALUE';
+  const spawn = (bin, args) => bin === 'git' ? { status: 0, stdout: args[0] === 'status' ? '' : helper, stderr: '' }
+    : { status: 1, stdout: secret, stderr: `unauthorized ${secret}` };
+  const calls = [];
+  const dir = mkdtempSync(path.join(tmpdir(), 'ah-diag-'));
+  writeFileSync(path.join(dir, pins.archive), bytes);
+  try {
+    assert.throws(() => runAgentHostArchiveDiagnostic(dir, { env, expectedArchiveSha256: sha,
+      spawn: (...args) => { calls.push(args[0]); return spawn(...args); } }), error => {
+      const text = `${error.message}${JSON.stringify(error.diagnostic)}`;
+      assert.equal(text.includes(secret), false);
+      assert.equal(error.diagnostic.failureCode, 'AUTHORIZATION_DENIED');
+      return true;
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('finds the archive in the real download nesting layout', () => {
+  const { calls, result } = run(image(), { nested: true });
+  assert.equal(result.archiveHashVerifiedBeforeLoad, true);
+  assert.equal(calls.some(call => call[1] === 'load' && call.at(-1).includes('v1-release-pack-x-1')), true);
+});
 
 test('hashes before load, only loads and inspects, and reports allowlisted booleans', () => {
   const { calls, result } = run(image());
@@ -78,14 +143,25 @@ test('refuses the original image SHA as the workflow source', () => {
     spawn: () => assert.fail('no command may run') }), error => error.diagnostic.failureCode === 'DIAGNOSTIC_SCOPE_INVALID');
 });
 
-test('workflow is separate, read-only, dispatch-only and has no build or publish step', () => {
-  const workflow = readFileSync('.github/workflows/v1-agenthost-archive-diagnostic.yml', 'utf8').replaceAll('\r\n', '\n');
-  assert.match(workflow, /on:\n  workflow_dispatch:\n    inputs:\n      expected_source:/);
-  assert.match(workflow, /run-id: 38286624230\n\s+artifact-ids: 11763641424/);
-  assert.match(workflow, /docker\/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70/);
-  assert.match(workflow, /version: 'v29\.9\.0'/);
-  assert.match(workflow, /DOCKER_CONTEXT: default/);
-  assert.doesNotMatch(workflow, /docker (build|buildx|push|login|run)|buildx|packages: write|contents: write|secrets\./);
+test('release workflow routes the archive diagnostic alone, read-only, before Docker setup, with no build or publish', () => {
+  const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8').replaceAll('\r\n', '\n');
+  const job = workflow.slice(workflow.indexOf('\n  diagnose-agenthost-archive:'), workflow.indexOf('\n  publish:'));
+  assert.match(workflow, /agenthost_archive_diagnostic:[\s\S]*?default: false/);
+  for (const name of ['pack', 'diagnose-probe-sampler', 'publish', 'publish-probe-sampler']) {
+    const start = workflow.indexOf(`\n  ${name}:`);
+    assert.match(workflow.slice(start, start + 400), /!inputs\.agenthost_archive_diagnostic/);
+  }
+  assert.match(job, /if: \$\{\{ inputs\.agenthost_archive_diagnostic \}\}/);
+  for (const guard of ['GITHUB_REPOSITORY', 'GITHUB_REF" = "refs/heads/v1', 'GITHUB_RUN_ATTEMPT" = "1',
+    'EXPECTED_SOURCE" = "$GITHUB_SHA', '"$PUBLISH" = "false"', '"$PLATFORM_ONLY" = "false"', '"$PROBE_SAMPLER_REPLACEMENT" = "false"'])
+    assert.ok(job.includes(guard), guard);
+  assert.ok(job.indexOf('GITHUB_RUN_ATTEMPT') < job.indexOf('setup-docker-action'));
+  assert.ok(job.indexOf('setup-docker-action') < job.indexOf('download-artifact'));
+  assert.match(job, /run-id: 38286624230\n\s+artifact-ids: 11763641424/);
+  assert.match(job, /docker\/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70/);
+  assert.match(job, /version: 'v29\.9\.0'/);
+  assert.match(job, /DOCKER_CONTEXT: default/);
+  assert.doesNotMatch(job, /docker (build|buildx|push|login|run)|buildx|: write|environment:|secrets\.|release:pack|publish\.mjs/);
 });
 
 test('describeInspect marks missing fields', () => {
