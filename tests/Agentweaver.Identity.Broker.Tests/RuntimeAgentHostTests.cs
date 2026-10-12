@@ -241,6 +241,74 @@ public sealed class RuntimeAgentHostTests
         Assert.NotEmpty(writtenCache.Bytes);
     }
 
+    [Fact]
+    public async Task ResumeJournalAcceptsATurnFromItsPriorRuntimeRegistration()
+    {
+        await using var prior = new HostFixture(workflowBound: true);
+        await using var source = new HostFixture(workflowBound: true, executionFence: 2);
+        await using var target = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var priorEventId = await prior.RecordOneTurnAsync(timeout.Token);
+        var request = await PrepareResumeTargetAsync(
+            source, target, timeout.Token, priorTurnOwner: prior);
+        var priorTurn = prior.ReadMaterial(priorEventId);
+        var priorBinding = priorTurn.Material.Reference.Material!;
+        var latestCacheBinding = request.Resume.SourceManifest.CacheAcknowledgment!.Reference.Material!;
+
+        Assert.Equal(prior.Registration.RuntimeInstanceId, priorBinding.RuntimeInstanceId);
+        Assert.Equal(prior.Registration.Revision, priorBinding.RegistrationRevision);
+        Assert.Equal(prior.Registration.Binding.ExecutionFence, priorBinding.ExecutionFence);
+        Assert.NotEqual(latestCacheBinding.RuntimeInstanceId, priorBinding.RuntimeInstanceId);
+        Assert.NotEqual(latestCacheBinding.ExecutionFence, priorBinding.ExecutionFence);
+
+        var readiness = await target.ConfigureAsync(timeout.Token);
+
+        Assert.Equal("journal-rebuild", readiness.ResumeCache?.RecoveryMode);
+        Assert.Contains(
+            $"/internal/sessions/{Uri.EscapeDataString(prior.Registration.Binding.SessionId)}/material/{priorEventId:D}/TurnContent",
+            target.ResumeMaterialReadRequests);
+        AssertResumeEventsUseSourceSession(target, request);
+    }
+
+    [Fact]
+    public async Task ResumeJournalReadsVisibleAncestorTurnButNotNonVisibleSameRunTurn()
+    {
+        await using var parent = new HostFixture(workflowBound: true, sessionId: "visible-parent");
+        await using var nonVisible = new HostFixture(workflowBound: true, sessionId: "not-visible");
+        await using var source = new HostFixture(workflowBound: true, executionFence: 2);
+        await using var target = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var parentEventId = await parent.RecordOneTurnAsync(timeout.Token);
+        var nonVisibleEventId = await nonVisible.RecordOneTurnAsync(timeout.Token);
+        var request = await PrepareResumeTargetAsync(
+            source, target, timeout.Token, visibleParentOwner: parent, nonVisibleOwner: nonVisible);
+        var throughPosition = request.Resume.SourceManifest.FlushedJournalPosition
+            ?? throw new InvalidOperationException("Resume must preserve the flushed journal position.");
+        var parentEvent = Assert.Single(source.SessionEvents, item => item.EventId == parentEventId);
+        var parentBinding = parent.ReadMaterial(parentEventId).Material.Reference.Material!;
+
+        Assert.Equal("visible-parent", parentEvent.Identity.SessionId);
+        Assert.IsType<TurnSessionPayload>(parentEvent.Payload);
+        Assert.True(parentEvent.Position <= throughPosition);
+        Assert.Equal(parent.Registration.RuntimeInstanceId, parentBinding.RuntimeInstanceId);
+        Assert.Equal(parent.Registration.Revision, parentBinding.RegistrationRevision);
+        Assert.Equal(parent.Registration.Binding.ExecutionFence, parentBinding.ExecutionFence);
+        Assert.True(source.HasMaterial(nonVisibleEventId));
+        Assert.DoesNotContain(source.SessionEvents, item => item.EventId == nonVisibleEventId);
+        Assert.DoesNotContain(source.SessionEvents, item => item.Identity.SessionId == "not-visible");
+
+        var readiness = await target.ConfigureAsync(timeout.Token);
+
+        Assert.Equal("journal-rebuild", readiness.ResumeCache?.RecoveryMode);
+        Assert.Contains(
+            $"/internal/sessions/visible-parent/material/{parentEventId:D}/TurnContent",
+            target.ResumeMaterialReadRequests);
+        Assert.DoesNotContain(
+            $"/internal/sessions/not-visible/material/{nonVisibleEventId:D}/TurnContent",
+            target.ResumeMaterialReadRequests);
+        AssertResumeEventsUseSourceSession(target, request);
+    }
+
     [Theory]
     [InlineData("events-unauthorized", "runtime_owner_denied")]
     [InlineData("events-forbidden", "runtime_owner_denied")]
@@ -281,11 +349,20 @@ public sealed class RuntimeAgentHostTests
     }
 
     private static async Task<RuntimeResumeBootstrapRequest> PrepareResumeTargetAsync(
-        HostFixture source, HostFixture target, CancellationToken token)
+        HostFixture source, HostFixture target, CancellationToken token,
+        HostFixture? priorTurnOwner = null,
+        HostFixture? visibleParentOwner = null,
+        HostFixture? nonVisibleOwner = null)
     {
         source.PositionIncrement = 2;
         var request = await CreateResumeBootstrapRequestAsync(source, target, token);
         source.PrepareResumeJournal(request.Resume.SourceRelease.HostReceipt, includeVisibleAncestor: true);
+        if (priorTurnOwner is not null)
+            source.ReplaceFirstTurnFrom(priorTurnOwner);
+        if (visibleParentOwner is not null)
+            source.ReplaceVisibleParentEffectWithTurn(visibleParentOwner);
+        if (nonVisibleOwner is not null)
+            source.ImportUnlistedMaterialFrom(nonVisibleOwner, nonVisibleOwner.FirstTurnEventId);
         var cache = request.Resume.SourceManifest.CacheAcknowledgment!;
         target.UseResumeBootstrap(request);
         var resumedPlacement = request.Resume.RestoredWorkspace!.Placement;
@@ -1584,7 +1661,9 @@ public sealed class RuntimeAgentHostTests
             int? maxModelTurns = null,
             int? maxToolCalls = null,
             int? maxPromptTokens = null,
-            bool workflowBound = false)
+            bool workflowBound = false,
+            string sessionId = "session",
+            long executionFence = 1)
         {
             Time = new() { Now = DateTimeOffset.UtcNow };
             Token = new JwtSecurityTokenHandler().WriteToken(new JwtSecurityToken(
@@ -1598,6 +1677,8 @@ public sealed class RuntimeAgentHostTests
                 ExpiresAt = Time.Now.AddMinutes(5),
                 Binding = Registration.Binding with
                 {
+                    SessionId = sessionId,
+                    ExecutionFence = executionFence,
                     ConfigureEndpoint = new("https://runtime.test/runtime/v1/configure"),
                     PlacementProviderId = "sandbox-test", EnvironmentLifecycleGeneration = 1,
                     EnvironmentLeaseRevision = 1, Image = Image,
@@ -1690,6 +1771,7 @@ public sealed class RuntimeAgentHostTests
         public ConcurrentQueue<string> MaterialWriteRoutes { get; } = new();
         public ConcurrentQueue<Guid> ResumeCacheReads { get; } = new();
         public ConcurrentQueue<string> ResumeEventRequests { get; } = new();
+        public ConcurrentQueue<string> ResumeMaterialReadRequests { get; } = new();
         public ConcurrentQueue<RuntimeUsageSourceReceipt> Usage { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnBeginRequest> NativeAdmissions { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnObservationRequest> NativeObservations { get; } = new();
@@ -1721,6 +1803,19 @@ public sealed class RuntimeAgentHostTests
         public bool CostPreflightSourceHashMismatch { get; set; }
         public int SourceRevocations { get; private set; }
 
+        public Guid FirstTurnEventId => _materialWrites.Values
+            .Where(item => item.Kind == SessionMaterialKind.TurnContent)
+            .OrderBy(item => _material[item.EventId].Material.Position)
+            .Select(item => item.EventId)
+            .First();
+        public SessionMaterialReadResult ReadMaterial(Guid eventId) => _material[eventId];
+        public bool HasMaterial(Guid eventId) => _material.ContainsKey(eventId);
+        public async Task<Guid> RecordOneTurnAsync(CancellationToken token)
+        {
+            var readiness = await ConfigureAsync(token);
+            await Host.SendAsync(Message(Proof(readiness)), Actor, token);
+            return FirstTurnEventId;
+        }
         public Task<RuntimeBootstrapDeliveryReceipt> DeliverAsync(CancellationToken token) =>
             Host.ReceiveAsync(new(Registration.RuntimeInstanceId,
                 Configure.ResumeBootstrap?.BootstrapOperationId ?? Guid.NewGuid(), _bootstrap, _hash,
@@ -1747,6 +1842,46 @@ public sealed class RuntimeAgentHostTests
             SessionEvents = source.SessionEvents;
             MissingMaterialId = missingCacheId;
         }
+        public void ReplaceFirstTurnFrom(HostFixture owner)
+        {
+            var ownerWrite = owner._materialWrites.Values
+                .Where(item => item.Kind == SessionMaterialKind.TurnContent)
+                .OrderBy(item => owner._material[item.EventId].Material.Position)
+                .First();
+            var ownerMaterial = owner._material[ownerWrite.EventId];
+            var currentTurn = SessionEvents
+                .Where(item => item.Payload is TurnSessionPayload)
+                .OrderBy(item => item.Position)
+                .First();
+            var relocated = ownerMaterial.Material with { Position = currentTurn.Position };
+            _material[relocated.EventId] = ownerMaterial with { Material = relocated };
+            var turn = new TurnSessionPayload(ownerWrite.Role!, relocated.Reference);
+            SessionEvents = SessionEvents
+                .Where(item => item.EventId != currentTurn.EventId)
+                .Append(CreateEnvelope(relocated.Identity, currentTurn.Position, relocated.EventId, turn))
+                .OrderBy(item => item.Position)
+                .ToImmutableArray();
+        }
+        public void ReplaceVisibleParentEffectWithTurn(HostFixture owner)
+        {
+            var ownerWrite = owner._materialWrites.Values
+                .Where(item => item.Kind == SessionMaterialKind.TurnContent)
+                .OrderBy(item => owner._material[item.EventId].Material.Position)
+                .First();
+            var ownerMaterial = owner._material[ownerWrite.EventId];
+            var placeholder = SessionEvents.Single(item =>
+                item.Payload is AcceptedEffectSessionPayload { EffectId: "parent-effect" });
+            var relocated = ownerMaterial.Material with { Position = placeholder.Position };
+            _material[relocated.EventId] = ownerMaterial with { Material = relocated };
+            var turn = new TurnSessionPayload(ownerWrite.Role!, relocated.Reference);
+            SessionEvents = SessionEvents
+                .Where(item => item.EventId != placeholder.EventId)
+                .Append(CreateEnvelope(relocated.Identity, placeholder.Position, relocated.EventId, turn))
+                .OrderBy(item => item.Position)
+                .ToImmutableArray();
+        }
+        public void ImportUnlistedMaterialFrom(HostFixture owner, Guid eventId) =>
+            _material[eventId] = owner._material[eventId];
         public void PrepareResumeJournal(RuntimeHostSuspendReceipt receipt, bool includeVisibleAncestor)
         {
             var identity = receipt.ConfigurationAcknowledgment!.Identity;
@@ -2138,24 +2273,6 @@ public sealed class RuntimeAgentHostTests
                 }
                 var page = SessionEvents.Where(item => item.Position > after)
                     .Take(SessionEventPageSize + 1).ToArray();
-                if (ResumeFault == "material-provenance")
-                {
-                    var runtimeInstanceId = ResumeProvenanceRuntimeInstanceId
-                        ?? throw new InvalidOperationException("A forged resume material binding is required.");
-                    page = page.Select(item => item.Payload is TurnSessionPayload turn
-                        ? CreateEnvelope(item.Identity, item.Position, item.EventId,
-                            turn with
-                            {
-                                Content = turn.Content with
-                                {
-                                    Material = turn.Content.Material! with
-                                    {
-                                        RuntimeInstanceId = runtimeInstanceId
-                                    }
-                                }
-                            })
-                        : item).ToArray();
-                }
                 var hasMore = page.Length > SessionEventPageSize;
                 if (hasMore)
                     page = page[..SessionEventPageSize];
@@ -2217,6 +2334,7 @@ public sealed class RuntimeAgentHostTests
             }
             if (path.Contains("/material/", StringComparison.Ordinal))
             {
+                ResumeMaterialReadRequests.Enqueue(path);
                 var id = Guid.Parse(path.Split('/')[5]);
                 if (path.EndsWith("/SdkCache", StringComparison.Ordinal))
                     ResumeCacheReads.Enqueue(id);

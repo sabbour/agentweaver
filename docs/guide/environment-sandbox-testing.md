@@ -44,7 +44,10 @@ Native-cache receipts reject a journal-rebuild proof; unknown recovery modes and
 The prefix digest accepts legitimate gaps from interleaved sessions and authenticated fork history.
 It rejects changed source configuration or cache references, missing required events, duplicate IDs, invalid ordering, and oversized prefixes.
 Digest validation alone does not prove authenticated page completion or material bytes.
-Host producer tests must separately reject page, cursor, owner, transport, and byte-hash failures without using later journal records.
+Host Configure tests accept a TURN with its original prior-runtime binding and a TURN from a visible parent session.
+They verify each TURN against its own event payload, single stored object reference, and material read acknowledgment.
+An unrelated same-run session is absent from the source-session replay and is not read as a fallback.
+Host producer tests must separately reject page, cursor, owner, transport, mismatched-reference, and byte-hash failures without using later journal records.
 Pending cache means no new native cache is claimed until a real authorized turn captures and persists genuine SDK files.
 Suspend before such files exist must fail explicitly, not manufacture cache evidence.
 Missing owner composition cannot reach Broker delivery.

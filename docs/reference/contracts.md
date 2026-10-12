@@ -796,7 +796,10 @@ Generic denials, timeouts, historical delivery, and saved Host receipts alone ca
 Its only supported native-cache state is `PendingUntilAuthorizedTurn`; it contains no new cache acknowledgment.
 The current Host source facts do not need to match the old cache's SDK or Runtime version.
 The shared digest covers the ordered authenticated session-visible prefix, including valid run-wide position gaps.
-The producer must verify saved-boundary pagination, material bytes, current authority, and source configuration and cache references.
+The producer must verify saved-boundary pagination, material bytes, current authority, and the saved source configuration and cache references.
+Each TURN must match its own journal payload and single stored object reference, and its material read must match that same reference and event position.
+The recorded runtime, registration revision, fence, selection, SDK, model, and capacity facts belong to that TURN; they need not match the latest cache or current Runtime.
+The source-session replay response supplies the saved fork visibility. A direct material read does not make another session visible.
 A receipt hash alone is not independent proof of those reads.
 Missing required journal evidence blocks readiness; owner, transport, configuration, hash, and fence failures cannot trigger another-source fallback.
 The next real authorized turn uses the existing native cache commit path.

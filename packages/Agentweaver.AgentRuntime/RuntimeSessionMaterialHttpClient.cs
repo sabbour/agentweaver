@@ -214,8 +214,9 @@ public sealed class RuntimeSessionMaterialHttpClient(
         var binding = registration.Binding;
         var source = request.Resume.SourceManifest;
         var identity = source.Identity;
-        var sourceCacheBinding = source.CacheAcknowledgment?.Reference.Material
+        var sourceCacheAcknowledgment = source.CacheAcknowledgment
             ?? throw new RuntimeAuthorizationException("runtime_resume_journal_source_missing");
+        SessionMaterialValidation.Validate(sourceCacheAcknowledgment.Reference);
         var throughPosition = source.FlushedJournalPosition
             ?? throw new RuntimeAuthorizationException("runtime_resume_journal_source_missing");
         if (binding.ProjectId != identity.ProjectId || binding.RunId != identity.RunId ||
@@ -273,18 +274,12 @@ public sealed class RuntimeSessionMaterialHttpClient(
                     recorded.Identity, recorded.EventId, SessionMaterialKind.TurnContent, cancellationToken)
                     .ConfigureAwait(false);
                 var turnBinding = material.Material.Reference.Material!;
-                if (!RuntimeWorkspaceResumeHttpClient.SameJson(material.Material.Reference, turn.Content) ||
+                if (recorded.ObjectReferences is not [{ Reference: var storedReference }] ||
+                    !RuntimeWorkspaceResumeHttpClient.SameJson(storedReference, turn.Content) ||
+                    !RuntimeWorkspaceResumeHttpClient.SameJson(storedReference, material.Material.Reference) ||
+                    !RuntimeWorkspaceResumeHttpClient.SameJson(material.Material.Reference, turn.Content) ||
                     material.Material.Position != recorded.Position ||
                     turnBinding.TenantId != binding.TenantId ||
-                    turnBinding.RuntimeInstanceId != sourceCacheBinding.RuntimeInstanceId ||
-                    turnBinding.RegistrationRevision != sourceCacheBinding.RegistrationRevision ||
-                    turnBinding.ExecutionFence != sourceCacheBinding.ExecutionFence ||
-                    turnBinding.AcceptedSelectionHash != sourceCacheBinding.AcceptedSelectionHash ||
-                    turnBinding.SdkVersion != sourceCacheBinding.SdkVersion ||
-                    turnBinding.RuntimeVersion != sourceCacheBinding.RuntimeVersion ||
-                    turnBinding.ModelSelectionReference != sourceCacheBinding.ModelSelectionReference ||
-                    turnBinding.ModelId != sourceCacheBinding.ModelId ||
-                    turnBinding.MaxPromptTokens != sourceCacheBinding.MaxPromptTokens ||
                     material.Bytes.Length > SessionMaterialValidation.MaximumBytes - totalContentBytes)
                     throw new RuntimeAuthorizationException("runtime_journal_turn_invalid");
                 totalContentBytes += material.Bytes.Length;

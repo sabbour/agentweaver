@@ -243,9 +243,15 @@ A saved receipt alone cannot authorize dispatch.
 Recovery distinguishes `native-cache` from `journal-rebuild`.
 The native path validates the exact compatible saved cache.
 If the cache is missing or incompatible, the Host may rebuild history from the authenticated saved session journal.
-It must keep the exact checkpoint and flushed position, check every page, and reject changed source references.
+It requests pages for the manifest's saved source session, keeps the exact checkpoint and flushed position, and checks every page.
+Events uses saved fork lineage and immutable source-position bounds to include only that session's visible ancestors.
 Run-wide positions can have valid gaps in a session-visible page.
-Existing fork visibility remains controlled by Events; unrelated session history is not a fallback.
+For each TURN, the Host reads material by the page event's exact session and event ID.
+The event payload, its single stored object reference, the read acknowledgment, and the event position must agree.
+The Host also checks the current tenant, byte bound, and content digest.
+Each TURN keeps its own recorded runtime, revision, fence, selection, SDK, model, and capacity facts.
+These historical facts need not match the latest cache or current Runtime.
+A direct material read does not establish session visibility, and unrelated session history is not a fallback.
 Authorization, transport, configuration, hash, and fence failures do not permit recovery from another source.
 
 `JournalRebuild` keeps the original source cache acknowledgment separate from the current Host facts.
