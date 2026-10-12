@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -780,7 +780,7 @@ test('existing Linux workflow defaults off and isolates the approved sampler rou
   assert.equal((workflow.match(/fetch-depth: 0/g) ?? []).length, 4);
   const ordinary = workflow.slice(workflow.indexOf('\n  publish:'), workflow.indexOf('\n  publish-probe-sampler:'));
   const sampler = workflow.slice(workflow.indexOf('\n  publish-probe-sampler:'));
-  assert.doesNotMatch(ordinary, /packages: write/);
+  assert.match(ordinary, /permissions:\r?\n\s+contents: write\r?\n\s+packages: write/);
   assert.match(ordinary, /environment: v1-publication/);
   assert.match(ordinary, /inputs\.publish && !inputs\.foundation_probe_sampler_replacement/);
   assert.match(ordinary, /RELEASE_REGISTRY_PASSWORD: \$\{\{ secrets\.RELEASE_REGISTRY_PASSWORD \}\}/);
@@ -790,6 +790,40 @@ test('existing Linux workflow defaults off and isolates the approved sampler rou
   assert.match(sampler, /RELEASE_REGISTRY_PASSWORD: \$\{\{ github\.token \}\}/);
   assert.doesNotMatch(sampler, /\benvironment:/);
   assert.doesNotMatch(sampler, /secrets\.|RELEASE_NUGET|console\.log|echo.*TOKEN/);
+});
+
+test('ordinary release workflow scopes the existing Actions token to the approved GitHub Packages feed', () => {
+  const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8').replaceAll('\r\n', '\n');
+  const ordinary = workflow.slice(workflow.indexOf('\n  publish:'), workflow.indexOf('\n  publish-probe-sampler:'));
+  const beforeOrdinary = workflow.slice(0, workflow.indexOf('\n  publish:'));
+  assert.match(ordinary, /permissions:\n      contents: write\n      packages: write/);
+  assert.match(ordinary, /environment: v1-publication/);
+  assert.match(ordinary, /inputs\.publish && !inputs\.foundation_probe_sampler_replacement/);
+  assert.match(ordinary, /RELEASE_NUGET_API_KEY: \$\{\{ github\.token \}\}/);
+  assert.doesNotMatch(ordinary, /secrets\.RELEASE_NUGET_API_KEY|\|\|/);
+  assert.doesNotMatch(beforeOrdinary, /packages: write|RELEASE_NUGET_API_KEY/);
+  const guardStep = ordinary.indexOf('name: Require approved GitHub Packages destination');
+  assert.ok(guardStep >= 0 && guardStep < ordinary.indexOf('uses: actions/download-artifact@v4'));
+  const guard = ordinary.match(/node -e "([^"]+)"/)?.[1];
+  assert.ok(guard);
+  const approvedFeed = 'https://nuget.pkg.github.com/sabbour/index.json';
+  for (const feed of [
+    approvedFeed, undefined, '', 'https://feed.example.invalid/v3/index.json',
+    'https://nuget.pkg.github.com/another-owner/index.json',
+    'http://nuget.pkg.github.com/sabbour/index.json',
+    `${approvedFeed}?credential=fake-secret`, `${approvedFeed}#fake-secret`, `${approvedFeed}/`,
+  ]) {
+    const env = { ...process.env };
+    delete env.RELEASE_NUGET_SOURCE;
+    if (feed !== undefined) env.RELEASE_NUGET_SOURCE = feed;
+    const result = spawnSync(process.execPath, ['-e', guard], { encoding: 'utf8', env });
+    assert.equal(result.status, feed === approvedFeed ? 0 : 1, String(feed));
+    assert.equal(result.stdout, '');
+    if (feed !== approvedFeed) {
+      assert.match(result.stderr, /::error::Publication feed does not match/);
+      if (feed) assert.ok(!result.stderr.includes(feed));
+    }
+  }
 });
 
 test('confirmed initial replacement updates only the approved tag and preserves old index/platforms and history', t => {

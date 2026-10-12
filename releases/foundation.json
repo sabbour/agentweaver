@@ -6,145 +6,145 @@
     {
       "id": "Agentweaver.Abstractions",
       "kind": "contract",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "packages/Agentweaver.Abstractions/Agentweaver.Abstractions.csproj"
     },
     {
       "id": "Agentweaver.Providers",
       "kind": "library",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "packages/Agentweaver.Providers/Agentweaver.Providers.csproj"
     },
     {
       "id": "Agentweaver.SourceControl",
       "kind": "library",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "packages/Agentweaver.SourceControl/Agentweaver.SourceControl.csproj"
     },
     {
       "id": "Agentweaver.Orchestrator.Core",
       "kind": "library",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "services/orchestrator/Agentweaver.Orchestrator.Core/Agentweaver.Orchestrator.Core.csproj"
     },
     {
       "id": "Agentweaver.Persistence.Postgres",
       "kind": "library",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "packages/Agentweaver.Persistence.Postgres/Agentweaver.Persistence.Postgres.csproj"
     },
     {
       "id": "Agentweaver.Secrets.AzureKeyVault",
       "kind": "library",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "packages/Agentweaver.Secrets.AzureKeyVault/Agentweaver.Secrets.AzureKeyVault.csproj"
     },
     {
       "id": "Agentweaver.Identity",
       "kind": "library",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "packages/Agentweaver.Identity/Agentweaver.Identity.csproj"
     },
     {
       "id": "Agentweaver.AgentRuntime",
       "kind": "library",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj"
     },
     {
       "id": "Agentweaver.AgentHost",
       "kind": "service",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "services/agenthost/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj"
     },
     {
       "id": "Agentweaver.Telemetry",
       "kind": "library",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "packages/Agentweaver.Telemetry/Agentweaver.Telemetry.csproj"
     },
     {
       "id": "Agentweaver.Telemetry.AzureMonitor",
       "kind": "library",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "packages/Agentweaver.Telemetry.AzureMonitor/Agentweaver.Telemetry.AzureMonitor.csproj"
     },
     {
       "id": "Agentweaver.ObjectStore.AzureBlob",
       "kind": "library",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "packages/Agentweaver.ObjectStore.AzureBlob/Agentweaver.ObjectStore.AzureBlob.csproj"
     },
     {
       "id": "Agentweaver.Identity.Broker",
       "kind": "service",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj"
     },
     {
       "id": "Agentweaver.EventsAndSessions",
       "kind": "service",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "services/events-and-sessions/Agentweaver.EventsAndSessions/Agentweaver.EventsAndSessions.csproj"
     },
     {
       "id": "Agentweaver.Gateway",
       "kind": "service",
-      "version": "0.1.0",
+      "version": "1.0.0",
       "project": "services/gateway/Agentweaver.Gateway/Agentweaver.Gateway.csproj"
     },
     {
       "id": "Agentweaver.Mcp",
       "kind": "service",
-      "version": "0.1.0",
+      "version": "1.0.0",
       "project": "services/mcp/Agentweaver.Mcp/Agentweaver.Mcp.csproj"
     },
     {
       "id": "Agentweaver.Web",
       "kind": "service",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "apps/web/package.json"
     },
     {
       "id": "Agentweaver.Orchestrator",
       "kind": "service",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "services/orchestrator/Agentweaver.Orchestrator/Agentweaver.Orchestrator.csproj"
     },
     {
       "id": "Agentweaver.Environment",
       "kind": "service",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "services/environment/Agentweaver.Environment/Agentweaver.Environment.csproj"
     },
     {
       "id": "Agentweaver.Knowledge",
       "kind": "service",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "services/knowledge/Agentweaver.Knowledge/Agentweaver.Knowledge.csproj"
     },
     {
       "id": "Agentweaver.Projects.Config",
       "kind": "service",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "services/projects-config/Agentweaver.Projects.Config/Agentweaver.Projects.Config.csproj"
     },
     {
       "id": "Agentweaver.FoundationProbe",
       "kind": "service",
-      "version": "0.0.0",
+      "version": "0.0.1",
       "project": "tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj"
     },
     {
       "id": "Agentweaver.Providers.Storage.AzureFiles",
       "kind": "library",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "packages/Agentweaver.Providers.Storage.AzureFiles/Agentweaver.Providers.Storage.AzureFiles.csproj"
     },
     {
       "id": "Agentweaver.Providers.Sandbox.AgentSandbox",
       "kind": "library",
-      "version": "0.0.0",
+      "version": "1.0.0",
       "project": "packages/Agentweaver.Providers.Sandbox.AgentSandbox/Agentweaver.Providers.Sandbox.AgentSandbox.csproj"
     }
   ],
@@ -152,62 +152,107 @@
     {
       "consumer": "Agentweaver.AgentHost",
       "dependency": "Agentweaver.AgentRuntime",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.AgentHost",
       "dependency": "Agentweaver.Telemetry",
-      "versions": ["0.0.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.AgentHost",
       "dependency": "Agentweaver.SourceControl",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.AgentRuntime",
       "dependency": "Agentweaver.Abstractions",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.AgentRuntime",
       "dependency": "Agentweaver.Identity",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Orchestrator",
       "dependency": "Agentweaver.Identity",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.FoundationProbe",
       "dependency": "Agentweaver.Abstractions",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.FoundationProbe",
       "dependency": "Agentweaver.Providers",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.FoundationProbe",
       "dependency": "Agentweaver.Persistence.Postgres",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.FoundationProbe",
       "dependency": "Agentweaver.Secrets.AzureKeyVault",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.FoundationProbe",
       "dependency": "Agentweaver.ObjectStore.AzureBlob",
-      "versions": ["0.0.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.FoundationProbe",
       "dependency": "Agentweaver.Telemetry.AzureMonitor",
-      "versions": ["0.0.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Providers",
@@ -221,12 +266,20 @@
     {
       "consumer": "Agentweaver.SourceControl",
       "dependency": "Agentweaver.Abstractions",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.SourceControl",
       "dependency": "Agentweaver.Providers",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Orchestrator.Core",
@@ -249,27 +302,47 @@
     {
       "consumer": "Agentweaver.Orchestrator",
       "dependency": "Agentweaver.Orchestrator.Core",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Orchestrator",
       "dependency": "Agentweaver.Abstractions",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Orchestrator",
       "dependency": "Agentweaver.Persistence.Postgres",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Orchestrator",
       "dependency": "Agentweaver.Providers",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Orchestrator",
       "dependency": "Agentweaver.SourceControl",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Secrets.AzureKeyVault",
@@ -336,52 +409,88 @@
     {
       "consumer": "Agentweaver.EventsAndSessions",
       "dependency": "Agentweaver.Abstractions",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.EventsAndSessions",
       "dependency": "Agentweaver.Identity",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.EventsAndSessions",
       "dependency": "Agentweaver.Providers",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.EventsAndSessions",
       "dependency": "Agentweaver.Persistence.Postgres",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.EventsAndSessions",
       "dependency": "Agentweaver.Telemetry",
-      "versions": ["0.0.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.EventsAndSessions",
       "dependency": "Agentweaver.ObjectStore.AzureBlob",
-      "versions": ["0.0.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Gateway",
       "dependency": "Agentweaver.Abstractions",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Gateway",
       "dependency": "Agentweaver.Telemetry",
-      "versions": ["0.0.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Mcp",
       "dependency": "Agentweaver.Abstractions",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Mcp",
       "dependency": "Agentweaver.Telemetry",
-      "versions": ["0.0.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Projects.Config",
@@ -404,7 +513,10 @@
     {
       "consumer": "Agentweaver.Projects.Config",
       "dependency": "Agentweaver.ObjectStore.AzureBlob",
-      "versions": ["0.0.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Environment",
@@ -418,7 +530,11 @@
     {
       "consumer": "Agentweaver.Environment",
       "dependency": "Agentweaver.Identity",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Environment",
@@ -432,42 +548,73 @@
     {
       "consumer": "Agentweaver.Knowledge",
       "dependency": "Agentweaver.Abstractions",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Knowledge",
       "dependency": "Agentweaver.Providers",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Knowledge",
       "dependency": "Agentweaver.Persistence.Postgres",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Knowledge",
       "dependency": "Agentweaver.Telemetry",
-      "versions": ["0.0.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Providers.Storage.AzureFiles",
       "dependency": "Agentweaver.Abstractions",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Environment",
       "dependency": "Agentweaver.Providers.Storage.AzureFiles",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Providers.Sandbox.AgentSandbox",
       "dependency": "Agentweaver.Abstractions",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     },
     {
       "consumer": "Agentweaver.Environment",
       "dependency": "Agentweaver.Providers.Sandbox.AgentSandbox",
-      "versions": ["0.0.0", "0.1.0", "1.0.0"]
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0"
+      ]
     }
   ]
 }

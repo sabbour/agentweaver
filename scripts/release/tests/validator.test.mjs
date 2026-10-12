@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { createPlan } from '../plan.mjs';
-import { preparationFiles } from '../preparation.mjs';
+import { verifyPreparation } from '../preparation.mjs';
 import { validateFile, validateManifest } from '../validate.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -144,10 +143,10 @@ test('the AgentHost collector dependency is present in the fixture and still req
   }), /Agentweaver\.AgentHost.*Agentweaver\.SourceControl.*has no ProjectReference/);
 });
 
-test('the Orchestrator host is registered as a baseline service with all project dependencies pinned', () => {
+test('the Orchestrator host is registered as a prepared service with all project dependencies pinned', () => {
   const host = fixture.components.find(component => component.id === 'Agentweaver.Orchestrator');
   assert.equal(host.kind, 'service');
-  assert.equal(host.version, '0.0.0');
+  assert.equal(host.version, '1.0.0');
   assert.equal(host.project, 'services/orchestrator/Agentweaver.Orchestrator/Agentweaver.Orchestrator.csproj');
   assert.deepEqual(fixture.compatibility
     .filter(({ consumer }) => consumer === host.id)
@@ -165,14 +164,14 @@ test('the Orchestrator host is registered as a baseline service with all project
 test('the acceptance-only Probe is tracked as its exact image artifact, not an arbitrary tools project', () => {
   const probe = fixture.components.find(component => component.id === 'Agentweaver.FoundationProbe');
   assert.equal(probe.kind, 'service');
-  assert.equal(probe.version, '0.0.0');
+  assert.equal(probe.version, '0.0.1');
   assert.equal(probe.project, 'tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj');
   assert.throws(() => check(edit(manifest => {
     manifest.components.find(component => component.id === probe.id).project = 'tools/Other/Other.csproj';
   })), /safe services/);
 });
 
-test('the initial P0 NuGet baseline contains exactly the eight packages at 0.0.0', () => {
+test('the historical P0 NuGet baseline still records exactly the eight original packages at 0.0.0', () => {
   const packageIds = [
     'Agentweaver.Abstractions',
     'Agentweaver.Providers',
@@ -185,7 +184,6 @@ test('the initial P0 NuGet baseline contains exactly the eight packages at 0.0.0
   ].sort();
   const packages = fixture.components.filter(({ id }) => packageIds.includes(id));
   assert.deepEqual(packages.map(({ id }) => id).sort(), packageIds);
-  assert.ok(packages.every(({ version }) => version === '0.0.0'));
   assert.ok(fixture.compatibility.every(({ versions }) => versions[0] === '0.0.0'));
 
   const baseline = JSON.parse(readFileSync(path.join(root, 'releases', 'initial-baseline.json'), 'utf8'));
@@ -197,22 +195,30 @@ test('the initial P0 NuGet baseline contains exactly the eight packages at 0.0.0
 
 test('draft dependency declarations allow pure version preparation without changing source code or pins', () => {
   const manifestText = readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8');
-  const readSource = file => readFileSync(path.join(root, file), 'utf8');
-  const plan = createPlan(fixture, { root });
-  const plannedVersions = new Map(plan.components.map(({ id, toVersion }) => [id, toVersion]));
+  const receipt = JSON.parse(readFileSync(path.join(root, 'releases', 'receipts',
+    '62a0dcf5307dc7ef58c805d4c66b45baecd98e43.json'), 'utf8'));
+  const prepared = verifyPreparation(root, receipt);
+  const readSource = file => {
+    const result = spawnSync('git', ['show', `${receipt.sourceSha}:${file}`], { cwd: root, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+  const sourceManifest = JSON.parse(readSource(receipt.manifestPath));
+  const preparedVersions = new Map(prepared.plan.components.map(({ id, toVersion }) => [id, toVersion]));
   for (const { dependency, versions } of fixture.compatibility) {
-    const planned = plannedVersions.get(dependency);
     assert.ok(versions.includes('0.0.0'));
-    assert.ok(versions.includes(planned ?? fixture.components.find(component => component.id === dependency).version));
+    assert.ok(versions.includes(fixture.components.find(component => component.id === dependency).version));
     assert.equal(new Set(versions).size, versions.length);
   }
   assert.equal(validateManifest(fixture, { root }).stage, 'draft');
-  const prepared = preparationFiles(manifestText, plan, '2026-10-11T00:00:00.000Z', readSource);
-  const expectedPaths = plan.components.map(({ id }) =>
+  const expectedPaths = prepared.plan.components.map(({ id }) =>
     fixture.components.find(component => component.id === id).project);
   if (expectedPaths.includes('apps/web/package.json')) expectedPaths.push('apps/web/package-lock.json');
-  assert.deepEqual([...prepared.files.keys()].sort(), [...expectedPaths, 'releases/CHANGELOG.md'].sort());
-  for (const { id, fromVersion, toVersion } of plan.components) {
+  assert.deepEqual([...prepared.files.keys()].sort(), [
+    ...expectedPaths, 'releases/CHANGELOG.md', receipt.manifestPath,
+    ...receipt.changesets.map(({ archivedPath }) => archivedPath),
+  ].sort());
+  for (const { id, fromVersion, toVersion } of prepared.plan.components) {
     const { project } = fixture.components.find(component => component.id === id);
     const original = readSource(project);
     if (project.endsWith('.csproj')) {
@@ -227,30 +233,40 @@ test('draft dependency declarations allow pure version preparation without chang
       assert.deepEqual(JSON.parse(prepared.files.get('apps/web/package-lock.json')), originalLock);
     }
   }
-  const preparedManifest = JSON.parse(prepared.manifestText);
+  const preparedManifest = JSON.parse(prepared.files.get(receipt.manifestPath));
   assert.equal(preparedManifest.stage, 'draft');
   assert.deepEqual(preparedManifest.compatibility, fixture.compatibility);
-  assert.deepEqual(preparedManifest.components, fixture.components.map(component => ({
-    ...component, version: plannedVersions.get(component.id) ?? component.version,
+  assert.deepEqual(preparedManifest.components, sourceManifest.components.map(component => ({
+    ...component, version: preparedVersions.get(component.id) ?? component.version,
   })));
-  assert.equal(readSource('releases/foundation.json'), manifestText);
+  assert.deepEqual(preparedManifest, fixture);
+  for (const [file, expected] of prepared.files) {
+    assert.deepEqual(readFileSync(path.join(root, file)), Buffer.from(expected), file);
+  }
+  for (const file of prepared.deleted) assert.ok(!existsSync(path.join(root, file)), file);
+  assert.equal(readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8'), manifestText);
 });
 
-test('P1 planning targets every product component at 1.0.0 and keeps the Probe separate', () => {
-  const plan = createPlan(fixture, { root });
-  const byId = new Map(plan.components.map(component => [component.id, component]));
+test('P1 preparation records every product component at 1.0.0 and keeps the Probe separate', () => {
+  const receipt = JSON.parse(readFileSync(path.join(root, 'releases', 'receipts',
+    '62a0dcf5307dc7ef58c805d4c66b45baecd98e43.json'), 'utf8'));
+  const byId = new Map(receipt.components.map(component => [component.id, component]));
   const product = fixture.components.filter(component => component.id !== 'Agentweaver.FoundationProbe');
   assert.equal(product.length, 23);
   assert.equal(product.filter(component => component.kind !== 'service').length, 13);
   assert.equal(product.filter(component => component.kind === 'service').length, 10);
-  assert.equal(plan.components.length, product.length + 1);
-  for (const { id } of product) {
+  assert.equal(receipt.components.length, product.length + 1);
+  for (const { id, version } of product) {
+    assert.equal(version, '1.0.0', id);
     assert.equal(byId.get(id)?.bump, 'major', id);
     assert.equal(byId.get(id)?.toVersion, '1.0.0', id);
-    assert.ok(byId.get(id)?.changesets.includes('.changeset/p1-product-1-0-0-preparation.md'), id);
   }
+  assert.equal(fixture.components.find(component => component.id === 'Agentweaver.FoundationProbe').version, '0.0.1');
   assert.equal(byId.get('Agentweaver.FoundationProbe')?.toVersion, '0.0.1');
-  assert.ok(!byId.get('Agentweaver.FoundationProbe')?.changesets.includes('.changeset/p1-product-1-0-0-preparation.md'));
+  assert.equal(byId.get('Agentweaver.FoundationProbe')?.bump, 'patch');
+  assert.ok(receipt.changesets.some(({ sourcePath, archivedPath }) =>
+    sourcePath === '.changeset/p1-product-1-0-0-preparation.md' &&
+    archivedPath === '.changeset/archive/p1-product-1-0-0-preparation.md'));
 });
 
 test('the CLI accepts the checked-in composition and JSON schema is parseable', () => {

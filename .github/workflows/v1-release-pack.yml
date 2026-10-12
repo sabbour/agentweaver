@@ -142,6 +142,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: write
     environment: v1-publication
     steps:
       - uses: actions/checkout@v4
@@ -155,6 +156,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Require approved GitHub Packages destination
+        env:
+          RELEASE_NUGET_SOURCE: ${{ vars.RELEASE_NUGET_SOURCE }}
+        run: |
+          node -e "if (process.env.RELEASE_NUGET_SOURCE !== 'https://nuget.pkg.github.com/sabbour/index.json') { console.error('::error::Publication feed does not match the approved P1 GitHub Packages destination'); process.exit(1); }"
       - uses: actions/download-artifact@v4
         with:
           name: v1-release-pack-${{ github.sha }}-${{ github.run_id }}
@@ -163,7 +169,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_NUGET_SOURCE: ${{ vars.RELEASE_NUGET_SOURCE }}
-          RELEASE_NUGET_API_KEY: ${{ secrets.RELEASE_NUGET_API_KEY }}
+          RELEASE_NUGET_API_KEY: ${{ github.token }}
           RELEASE_REGISTRY: ${{ vars.RELEASE_REGISTRY }}
           RELEASE_REGISTRY_USER: ${{ secrets.RELEASE_REGISTRY_USER }}
           RELEASE_REGISTRY_PASSWORD: ${{ secrets.RELEASE_REGISTRY_PASSWORD }}
