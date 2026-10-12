@@ -194,8 +194,14 @@ public sealed class ReviewedRemoteToolTransportClientTests
             return response;
         };
 
-        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => rig.SendAsync());
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => rig.SendAsync());
 
+        Assert.Equal(changed switch
+        {
+            "bearer" => "runtime_remote_tool_transport_actor_changed",
+            "expired" => "runtime_remote_tool_transport_actor_expired",
+            _ => "runtime_remote_tool_transport_actor_invalid"
+        }, failure.Code);
         Assert.Equal(1, rig.Handler.Calls);
     }
 
@@ -270,8 +276,16 @@ public sealed class ReviewedRemoteToolTransportClientTests
             return response;
         };
 
-        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => rig.SendAsync());
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => rig.SendAsync());
 
+        Assert.Equal(changed switch
+        {
+            "cache" => "runtime_owner_cache_contract_invalid",
+            "redirect" => "runtime_owner_redirect_rejected",
+            "unknown-field" => "runtime_owner_contract_invalid",
+            "oversized-envelope" or "oversized-unknown-length-envelope" => "runtime_owner_response_size_invalid",
+            _ => "runtime_remote_tool_transport_result_invalid"
+        }, failure.Code);
         Assert.Equal(1, rig.Handler.Calls);
     }
 
