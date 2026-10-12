@@ -550,8 +550,8 @@ public sealed class RemoteMcpCurrentGatewayPolicyReaderTests
     {
         LocalServiceName = "Environment",
         LocalServicePrincipalId = "11111111-1111-1111-1111-111111111111",
-        LocalCertificatePemPath = @"C:\environment.pem",
-        LocalPrivateKeyPemPath = @"C:\environment.key",
+        LocalCertificatePemPath = Path.Combine(Path.GetTempPath(), "agentweaver-orchestrator.pem"),
+        LocalPrivateKeyPemPath = Path.Combine(Path.GetTempPath(), "agentweaver-orchestrator.key"),
         LocalCertificateSha256 = new('a', 64),
         ListenerPort = 5001,
         PeerServiceName = "Orchestrator",
