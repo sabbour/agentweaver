@@ -440,6 +440,8 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         {
             Assert.Equal(receipt, await writeRig.Owner.RecordFixedCreditGuardAsync(
                 writeRig.Context, new(proof, receipt), CancellationToken.None));
+            Assert.Equal("hostPreQueue",
+                await ReadFixedCreditGuardStageAsync(registration, receipt.RequestId));
             var initialEvidenceRequest = new RuntimeFixedCreditNoSendEvidenceRequest(proof, receipt, evidence);
             Assert.Equal(evidence, await writeRig.Owner.RecordFixedCreditNoSendAsync(
                 writeRig.Context, initialEvidenceRequest, CancellationToken.None));
@@ -1296,6 +1298,22 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             $"coordination/{_root.ProjectId}/{_root.RunId}/fixed-credit-denials");
         command.Parameters.AddWithValue("event", eventType);
         return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private async Task<string?> ReadFixedCreditGuardStageAsync(
+        RuntimeRegistration registration, Guid requestId)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT payload->>'stage' FROM "{_schema}".outbox_events
+            WHERE stream_id = @stream AND event_type = 'orchestrator.runtime.fixed_credit_denial'
+                AND payload->>'requestId' = @request
+            ORDER BY sequence DESC LIMIT 1
+            """, connection);
+        command.Parameters.AddWithValue("stream",
+            $"coordination/{registration.Binding.ProjectId}/{registration.Binding.RunId}/fixed-credit-denials");
+        command.Parameters.AddWithValue("request", requestId.ToString("D"));
+        return (string?)await command.ExecuteScalarAsync();
     }
 
     private sealed record RuntimeUsageOwnerRig(

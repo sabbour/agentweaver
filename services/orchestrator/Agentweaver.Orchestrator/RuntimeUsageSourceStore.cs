@@ -1181,7 +1181,8 @@ internal sealed class RuntimeUsageSourceStore(
             registration.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture));
         command.Parameters.AddWithValue("fence", NpgsqlDbType.Text,
             registration.Binding.ExecutionFence.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        command.Parameters.AddWithValue("stage", NpgsqlDbType.Text, stage.ToString());
+        command.Parameters.AddWithValue("stage", NpgsqlDbType.Text,
+            JsonNamingPolicy.CamelCase.ConvertName(stage.ToString()));
         command.Parameters.AddWithValue("request", NpgsqlDbType.Text, requestId.ToString("D"));
     }
 
