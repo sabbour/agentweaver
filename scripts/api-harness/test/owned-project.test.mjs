@@ -29,7 +29,7 @@ async function fixture() {
     response.setHeader('X-Correlation-Id', request.headers['x-correlation-id']);
     if (request.url === '/openapi/v1.json') return response.end(JSON.stringify(document));
     if (request.method === 'POST') {
-      project = { projectId: 'controlled-owned-project', name: body.name, state: 'Active', revision: 1 };
+      project = { projectId: 'controlled-owned-project', name: body.name, state: 'active', revision: 1 };
       response.statusCode = 201;
     }
     if (request.method === 'PATCH') {
@@ -74,7 +74,7 @@ test('actual HTTP creates only a new project and verifies current-revision archi
     const evidence = await owned.archive();
     assert.equal(evidence.cleanupResult, 'verified-archived');
     assert.deepEqual(host.requests.find(request => request.method === 'PATCH').body,
-      { expectedRevision: 1, name: 'Controlled owned fixture', state: 'Archived' });
+      { expectedRevision: 1, name: 'Controlled owned fixture', state: 'archived' });
     assert.equal(host.requests.some(request => request.method === 'DELETE'), false);
     const patches = host.requests.filter(request => request.method === 'PATCH').length;
     await owned.archive();

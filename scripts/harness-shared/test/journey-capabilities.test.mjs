@@ -17,14 +17,27 @@ test('requires exact discovered operations and UI adapters for each selected P1 
   assert.throws(() => requireJourneyCapabilities(adapters, 'unknown'), /Unknown/);
 });
 
-test('journal requires API SSE support but never invents the deliberately unadvertised MCP SSE tool', () => {
+test('journal uses the discovered MCP replay tool without inventing an API SSE route', () => {
   const adapters = {
-    api: { operations: new Map([['replayRunEvents', {}], ['streamRunEvents', {}]]) },
+    api: { operations: new Map() },
     mcp: { tools: new Map([['agentweaver_replayRunEvents', {}]]) },
     ui: { replayJournal() {} },
   };
   const required = requireJourneyCapabilities(adapters, 'journal');
+  assert.deepEqual(required.apiOperations, []);
   assert.deepEqual(required.mcpTools, ['agentweaver_replayRunEvents']);
-  adapters.api.operations.delete('streamRunEvents');
-  assert.throws(() => requireJourneyCapabilities(adapters, 'journal'), /api:streamRunEvents/);
+  adapters.mcp.tools.clear();
+  assert.throws(() => requireJourneyCapabilities(adapters, 'journal'), /mcp:agentweaver_replayRunEvents/);
+});
+
+test('surface checks require only that surface adapter while preserving shared live dependencies', () => {
+  const api = { operations: new Map([['readRunStatus', {}], ['readSessionTree', {}], ['sendMessage', {}]]) };
+  const mcp = { tools: new Map([
+    ['agentweaver_readRunStatus', {}],
+    ['agentweaver_readSessionTree', {}],
+    ['agentweaver_sendMessage', {}],
+  ]) };
+  assert.equal(requireJourneyCapabilities({ api, mcp }, 'message', 'api').journey, 'message');
+  assert.equal(requireJourneyCapabilities({ api, mcp }, 'message', 'mcp').journey, 'message');
+  assert.throws(() => requireJourneyCapabilities({ api, mcp }, 'message', 'ui'), /ui:sendMessage/);
 });

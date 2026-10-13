@@ -1,5 +1,71 @@
 # Errors
 
+## [ERR-20261013-002] native-probe-failure-exit-code
+
+**Logged**: 2026-10-13T01:27:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+A native probe failure changed full P1 status but left the aggregate exit code successful.
+
+### Error
+```text
+Expected exitCode 1; received 0.
+```
+
+### Context
+- The new controlled aggregation test supplied a failed required native probe.
+- Full P1 status correctly became failed, but exit code still depended on surface status.
+
+### Suggested Fix
+Derive the aggregate exit code from `fullP1Status`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: scripts/harness-shared/p1-acceptance-result.mjs, scripts/harness-shared/test/p1-acceptance-result.test.mjs
+
+### Resolution
+- **Resolved**: 2026-10-13T01:27:00-07:00
+- **Notes**: Exit code now returns 1 whenever full P1 status is failed.
+
+---
+
+## [ERR-20261013-001] stale-multifile-patch-context
+
+**Logged**: 2026-10-13T01:26:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: docs
+
+### Summary
+A combined source-and-docs patch stopped when one documentation context no longer matched.
+
+### Error
+```text
+Failed to find expected lines in docs/guide/testing.md; remaining hunks were not attempted.
+```
+
+### Context
+- The first two file hunks were already applied before the documentation hunk failed.
+- No documentation hunks were applied.
+
+### Suggested Fix
+After a partial patch failure, inspect the applied files and use smaller patches against current exact text.
+
+### Metadata
+- Reproducible: yes
+- Related Files: scripts/harness-shared/run-p1.mjs, scripts/harness-shared/test/run-p1.test.mjs
+- Recurrence-Count: 5
+- Last-Seen: 2026-10-13
+
+### Resolution
+- **Resolved**: 2026-10-13T02:02:00-07:00
+- **Notes**: Inspected partial applications, used smaller file-specific hunks, and verified the final documentation with the required build/link/diagram checks.
+
+---
+
 ## [ERR-20261010-004] oauth-drift-regression-fixture
 
 **Logged**: 2026-10-10T09:35:00-07:00
@@ -89,7 +155,13 @@ Locate source files by symbol search or glob before reading an assumed path.
 
 ### Metadata
 - Reproducible: no
-- Related Files: services/identity/Agentweaver.Identity.Broker/RuntimeCredentialEndpoints.cs
+- Related Files: services/identity/Agentweaver.Identity.Broker/RuntimeCredentialEndpoints.cs, services/projects-config/Agentweaver.Projects.Config/ProjectAuthorization.cs
+- Recurrence-Count: 2
+- Last-Seen: 2026-10-13
+
+### Resolution
+- **Resolved**: 2026-10-13T02:02:00-07:00
+- **Notes**: Symbol search located the authorization owner and scope constants in ProjectAuthorization.cs.
 
 ---
 
@@ -818,5 +890,37 @@ Run `npm ci` from `apps/web`, then rerun the focused Web tests and typecheck.
 - Reproducible: yes
 - Related Files: apps/web/package.json, apps/web/package-lock.json
 - Tags: web, vitest, dependency-restore
+
+---
+
+## [ERR-20261013-003] p1-cli-output-path-validation-test
+
+**Logged**: 2026-10-13T01:41:00-07:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The P1 CLI stopped writing safe blocked evidence when the input manifest failed validation.
+
+### Error
+```
+ENOENT: no such file or directory, open '<temporary-directory>\evidence.jsonl'
+```
+
+### Context
+- Moved output-path assignment after full manifest validation to prevent collision errors from overwriting protected input artifacts.
+- The existing non-execute-input test then found no evidence output, although that destination did not collide with a protected file.
+
+### Suggested Fix
+Retain the requested path after the exact input collision check, then clear it before rejecting any collision with a deployment artifact.
+
+### Metadata
+- Reproducible: yes
+- Related Files: scripts/harness-shared/run-p1.mjs, scripts/harness-shared/test/run-p1.test.mjs
+
+### Resolution
+- **Resolved**: 2026-10-13T01:43:00-07:00
+- **Notes**: Retained safe output destinations after input-collision validation, cleared artifact collisions, and reran focused tests successfully.
 
 ---

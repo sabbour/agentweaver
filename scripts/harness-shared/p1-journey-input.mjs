@@ -1,0 +1,178 @@
+import { validateNetworkTarget } from './target-guard.mjs';
+
+const PIN_RECEIPTS = [
+  'providerReceipt',
+  'runtimeReceipt',
+  'storageReceipt',
+  'sourceReceipt',
+  'imageReceipt',
+];
+const SECRET_PROPERTY = /^(?:accessToken|authorization|connectionString|password|secret|token)$/i;
+const SURFACE_JOURNEYS = new Set(['gate-answer', 'gate-approve', 'gate-reject', 'message', 'journal']);
+const SOURCE_SHA = /^[a-f0-9]{40}$/;
+const IMAGE_DIGEST = /^sha256:[a-f0-9]{64}$/;
+const SHA256 = /^[a-f0-9]{64}$/;
+
+function isRecord(value) {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function requireString(value, label) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`An explicit ${label} is required.`);
+  }
+}
+
+function requireExactKeys(value, keys, label) {
+  if (!isRecord(value) || Object.keys(value).some(key => !keys.includes(key))
+    || keys.some(key => !Object.hasOwn(value, key))) {
+    throw new Error(`The ${label} must contain exactly: ${keys.join(', ')}.`);
+  }
+}
+
+function rejectSecrets(value) {
+  if (Array.isArray(value)) {
+    for (const item of value) rejectSecrets(item);
+    return;
+  }
+  if (!isRecord(value)) return;
+  for (const [name, child] of Object.entries(value)) {
+    if (SECRET_PROPERTY.test(name)) throw new Error('Credentials must not be included in P1 runner input.');
+    rejectSecrets(child);
+  }
+}
+
+export function validateP1JourneyInput(input, { now = () => Date.now() } = {}) {
+  if (!isRecord(input) || input.executionIntent !== 'execute') {
+    throw new Error('P1 runner input must explicitly set executionIntent to "execute".');
+  }
+  rejectSecrets(input);
+
+  const environment = input.environment;
+  if (!isRecord(environment)) throw new Error('The direct Environment target is required.');
+  validateNetworkTarget(environment.baseUrl, { exactPath: '/' });
+  for (const name of ['issuer', 'audience', 'actorId', 'tenantId']) {
+    requireString(environment[name], `Environment ${name}`);
+  }
+
+  const pins = input.pins;
+  if (!isRecord(pins)) throw new Error('Pinned P1 environment receipts are required.');
+  requireString(pins.context, 'Kubernetes context');
+  requireString(pins.namespace, 'Kubernetes namespace');
+  if (!/^[A-Za-z0-9._:/@-]{1,128}$/.test(pins.context)
+    || !/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/.test(pins.namespace)) {
+    throw new Error('The exact Kubernetes context or namespace is invalid.');
+  }
+  for (const name of PIN_RECEIPTS) {
+    if (!isRecord(pins[name]) || !Object.keys(pins[name]).length) {
+      throw new Error(`A pinned ${name} is required.`);
+    }
+  }
+  const deploymentEvidence = input.deploymentEvidence;
+  requireExactKeys(deploymentEvidence,
+    ['publicationPath', 'manifestPath', 'agentHostArchivePath'], 'deployment evidence input');
+  for (const name of ['publicationPath', 'manifestPath', 'agentHostArchivePath']) {
+    requireString(deploymentEvidence[name], `deployment evidence ${name}`);
+  }
+  requireExactKeys(pins.providerReceipt,
+    ['configMapName', 'sourceCommit', 'uid', 'resourceVersion'], 'provider catalog receipt pin');
+  requireString(pins.providerReceipt.configMapName, 'provider catalog ConfigMap name');
+  requireString(pins.providerReceipt.uid, 'provider catalog ConfigMap UID');
+  requireString(pins.providerReceipt.resourceVersion, 'provider catalog resource version');
+  if (!SOURCE_SHA.test(pins.providerReceipt.sourceCommit ?? '')) {
+    throw new Error('A pinned provider catalog source commit is required.');
+  }
+  requireExactKeys(pins.sourceReceipt, ['sourceSha', 'sourceTree'], 'source receipt pin');
+  if (!SOURCE_SHA.test(pins.sourceReceipt.sourceSha ?? '')
+    || !SOURCE_SHA.test(pins.sourceReceipt.sourceTree ?? '')) {
+    throw new Error('The source receipt must pin an exact Git commit and tree.');
+  }
+  requireExactKeys(pins.imageReceipt, [
+    'registryImage',
+    'registryDigest',
+    'archiveSha256',
+    'manifestDigest',
+    'configDigest',
+    'compressedPullBytes',
+  ], 'AgentHost image receipt pin');
+  const registryImage = /^ghcr\.io\/[a-z0-9._/-]+@(sha256:[a-f0-9]{64})$/.exec(pins.imageReceipt.registryImage ?? '');
+  if (!registryImage
+    || pins.imageReceipt.registryDigest !== registryImage[1]
+    || !SHA256.test(pins.imageReceipt.archiveSha256 ?? '')
+    || !IMAGE_DIGEST.test(pins.imageReceipt.manifestDigest ?? '')
+    || !IMAGE_DIGEST.test(pins.imageReceipt.configDigest ?? '')
+    || !Number.isSafeInteger(pins.imageReceipt.compressedPullBytes)
+    || pins.imageReceipt.compressedPullBytes < 1) {
+    throw new Error('The AgentHost image receipt must pin its immutable registry, archive, OCI, config, and byte identities.');
+  }
+
+  const fences = pins.ownerFences;
+  if (!isRecord(fences)) throw new Error('Current owner fences are required.');
+  for (const name of ['projectId', 'runId', 'rootSessionId', 'sessionId']) {
+    requireString(fences[name], `owner-fenced ${name}`);
+  }
+  if (!Number.isSafeInteger(fences.executionFence) || fences.executionFence < 1) {
+    throw new Error('A positive current owner execution fence is required.');
+  }
+
+  const fixture = pins.fixtureScope;
+  if (!isRecord(fixture) || fixture.kind !== 'p1-runner-owned'
+    || fixture.status !== 'ready') {
+    throw new Error('An active P1 runner-owned fixture scope is required.');
+  }
+  requireString(fixture.invocationId, 'acceptance invocation ID');
+  requireString(fixture.fixtureId, 'runner-owned fixture ID');
+  for (const name of ['projectId', 'runId', 'rootSessionId', 'sessionId']) {
+    if (fixture[name] !== fences[name]) {
+      throw new Error(`The fixture scope does not match the owner-fenced ${name}.`);
+    }
+  }
+  const expiresAt = Date.parse(fixture.expiresAt ?? '');
+  if (!Number.isFinite(expiresAt) || expiresAt <= now()) {
+    throw new Error('The runner-owned fixture scope is expired or has no valid expiry.');
+  }
+  if (!Array.isArray(fixture.allowedJourneys) || !fixture.allowedJourneys.length
+    || fixture.allowedJourneys.some(journey => !SURFACE_JOURNEYS.has(journey))
+    || new Set(fixture.allowedJourneys).size !== fixture.allowedJourneys.length) {
+    throw new Error('The fixture scope must list its exact allowed P1 journeys.');
+  }
+  if (!Array.isArray(fixture.ownershipReceipts) || fixture.ownershipReceipts.length === 0) {
+    throw new Error('Invocation-bound owner creation and readback receipts are required.');
+  }
+  const receiptKeys = new Set();
+  for (const receipt of fixture.ownershipReceipts) {
+    if (!isRecord(receipt) || typeof receipt.resourceType !== 'string' || !receipt.resourceType.trim()
+      || typeof receipt.resourceId !== 'string' || !receipt.resourceId.trim()
+      || receipt.invocationId !== fixture.invocationId
+      || !isRecord(receipt.creationReceipt) || !Object.keys(receipt.creationReceipt).length
+      || !isRecord(receipt.observedReceipt) || !Object.keys(receipt.observedReceipt).length
+      || receipt.creationReceipt.resourceId !== receipt.resourceId
+      || receipt.observedReceipt.resourceId !== receipt.resourceId
+      || !Number.isSafeInteger(receipt.ownerFence) || receipt.ownerFence < 1) {
+      throw new Error('Each owner resource must have an invocation-bound creation receipt, readback, and current fence.');
+    }
+    const key = `${receipt.resourceType}\u0000${receipt.resourceId}`;
+    if (receiptKeys.has(key)) throw new Error('The fixture scope contains duplicate owner resource receipts.');
+    receiptKeys.add(key);
+  }
+  for (const resourceId of new Set([fences.projectId, fences.runId, fences.rootSessionId, fences.sessionId])) {
+    if (!fixture.ownershipReceipts.some(receipt =>
+      receipt.resourceId === resourceId && receipt.ownerFence === fences.executionFence)) {
+      throw new Error('The invocation-owned receipts do not cover every pinned project, run, and session fence.');
+    }
+  }
+  if (typeof input.journey !== 'string' || !fixture.allowedJourneys.includes(input.journey)) {
+    throw new Error('The selected journey is not allowed by the active fixture scope.');
+  }
+  return { environment, pins, fences, fixture, deploymentEvidence };
+}
+
+export function requireP1OwnedResources(fixture, requiredResources) {
+  for (const { resourceType, resourceId } of requiredResources) {
+    if (!fixture.ownershipReceipts.some(receipt =>
+      receipt.resourceType === resourceType && receipt.resourceId === resourceId
+      && receipt.invocationId === fixture.invocationId)) {
+      throw new Error(`The invocation does not own the exact ${resourceType} fixture resource.`);
+    }
+  }
+}

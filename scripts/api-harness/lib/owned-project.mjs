@@ -4,7 +4,7 @@ function requireProject(call, projectId, name) {
   const project = call.transientResponseBody;
   if (call.status !== 200 && call.status !== 201 || typeof project?.projectId !== 'string'
     || !project.projectId || projectId !== null && project.projectId !== projectId
-    || project.name !== name || !['Active', 'Archived'].includes(project.state)
+    || project.name !== name || !['active', 'archived'].includes(project.state)
     || !Number.isSafeInteger(project.revision) || project.revision < 1) {
     throw new Error('The actual owner project identity, name, state, or revision is invalid.');
   }
@@ -20,7 +20,7 @@ export class OwnedProjectFixture {
     const call = await client.invoke('createProject', { body: { name: name.trim() } });
     if (call.status !== 201) throw new Error('The owner did not return a created-project receipt.');
     const project = requireProject(call, null, name.trim());
-    if (project.state !== 'Active') throw new Error('The created project is not active.');
+    if (project.state !== 'active') throw new Error('The created project is not active.');
     return new OwnedProjectFixture(client, project, call);
   }
 
@@ -52,16 +52,16 @@ export class OwnedProjectFixture {
       const read = await this.client.invoke('getProject', { pathParameters: { projectId: this.projectId } });
       this.evidence.cleanupReceipts.push(read);
       const current = requireProject(read, this.projectId, this.name);
-      if (current.state !== 'Archived') {
+      if (current.state !== 'archived') {
         const archive = await this.client.invoke('updateProject', {
           pathParameters: { projectId: this.projectId },
-          body: { expectedRevision: current.revision, name: current.name, state: 'Archived' },
+          body: { expectedRevision: current.revision, name: current.name, state: 'archived' },
         });
         this.evidence.cleanupReceipts.push(archive);
         if (archive.status !== 200) throw new Error('The owner rejected the revisioned project archive.');
         const verify = await this.client.invoke('getProject', { pathParameters: { projectId: this.projectId } });
         this.evidence.cleanupReceipts.push(verify);
-        if (requireProject(verify, this.projectId, this.name).state !== 'Archived') {
+        if (requireProject(verify, this.projectId, this.name).state !== 'archived') {
           throw new Error('The owner has not confirmed that the created project is archived.');
         }
       }

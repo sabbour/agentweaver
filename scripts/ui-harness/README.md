@@ -82,3 +82,32 @@ They do not undo a request that the browser already sent.
 It does not close the borrowed page, context, or browser.
 Run, session, Environment, and project cleanup require separate current owner authority and verified receipts.
 Closing the adapter is not product-resource cleanup.
+
+## Executable P1 journey
+
+The shared P1 runner contains gate, message, and journal journeys through this
+adapter. Its CLI currently blocks before importing a page provider because a
+JSON manifest cannot prove that this invocation created the project, run,
+selection, and sessions. Supply a module whose default async function returns
+an already authorized page on the selected Environment web origin when a
+supported same-invocation setup path is available:
+
+```powershell
+npm run harness:p1 -- --surface ui --input <manifest.json> --output <evidence.jsonl> --page-module <authorized-page-provider.mjs>
+```
+
+The manifest also needs `deploymentEvidence` paths named `publicationPath`,
+`manifestPath`, and `agentHostArchivePath`. Before reading bearer credentials
+or importing the page provider, the runner verifies the pinned clean Git
+commit/tree, published images and AgentHost archive, then performs read-only
+Kubernetes and public GHCR observations. It then returns blocked without
+reading credentials or importing the page provider. Public project, selection,
+root, and session endpoints exist, but they require separately authorized
+actors and current role grants. Project roles are provisioned only through a
+privileged source path, and caller receipts cannot create that authority.
+Gateway does not expose the Orchestrator dispatch handler to this harness.
+
+The command currently exits with code `2` and a blocked result. It does not
+start a browser or sign in. Direct UI gate and message journeys also block
+before workflow writes; caller-supplied receipts do not authorize them. The
+controlled UI adapter tests do not prove a deployed P1 journey.

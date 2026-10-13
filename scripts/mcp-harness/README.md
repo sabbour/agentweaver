@@ -64,3 +64,32 @@ It is SDK message evidence, not a raw network-byte capture.
 `close` closes the owned SDK client and transport.
 It does not archive projects, release Environments, or clean up sessions.
 Product cleanup needs separate current owner authority and observed receipts.
+
+## Executable P1 journey
+
+The shared runner contains bounded MCP gate, message, and journal journeys.
+Its CLI currently blocks before MCP access because a JSON manifest cannot
+prove that this invocation created the project, run, selection, and sessions.
+The input manifest must contain
+`executionIntent: "execute"`, direct Environment identity metadata, pinned
+runtime receipts, current owner fences, and caller-supplied creation/readback
+receipt claims for the fixture.
+The manifest also needs `deploymentEvidence` paths named `publicationPath`,
+`manifestPath`, and `agentHostArchivePath`. Before reading bearer credentials
+or connecting to MCP, the runner verifies the pinned clean Git commit/tree,
+published images and AgentHost archive, then performs read-only Kubernetes and
+public GHCR observations. It then returns blocked without reading credentials
+or connecting to MCP. Public project, selection, root, and session endpoints
+exist, but they require separately authorized actors and current role grants.
+Project roles are provisioned only through a privileged source path, and
+caller receipts cannot create that authority. Gateway does not expose the
+Orchestrator dispatch handler to this harness.
+Direct MCP gate and message journeys allow read-only tool discovery but block
+before write tool calls; caller-supplied receipts do not authorize writes.
+
+```powershell
+npm run harness:p1 -- --surface mcp --input <manifest.json> --output <evidence.jsonl>
+```
+
+The example currently exits with code `2` and a blocked result. The controlled
+MCP adapter tests do not prove a deployed P1 journey.

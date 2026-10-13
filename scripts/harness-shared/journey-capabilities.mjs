@@ -1,25 +1,63 @@
 const SNAPSHOTS = ['readRunStatus', 'readSessionStatus', 'readDecisions'];
 const JOURNEYS = {
-  'gate-answer': { operations: [...SNAPSHOTS, 'answerGate'], uiMethod: 'gate' },
-  'gate-approve': { operations: [...SNAPSHOTS, 'approveGate'], uiMethod: 'gate' },
-  'gate-reject': { operations: [...SNAPSHOTS, 'rejectGate'], uiMethod: 'gate' },
-  message: { operations: ['readRunStatus', 'readSessionTree', 'sendMessage'], uiMethod: 'sendMessage' },
-  journal: { operations: ['replayRunEvents'], uiMethod: 'replayJournal' },
+  'gate-answer': {
+    apiOperations: [...SNAPSHOTS, 'answerGate'],
+    mcpTools: [...SNAPSHOTS, 'answerGate'].map(operation => `agentweaver_${operation}`),
+    uiMethod: 'gate',
+  },
+  'gate-approve': {
+    apiOperations: [...SNAPSHOTS, 'approveGate'],
+    mcpTools: [...SNAPSHOTS, 'approveGate'].map(operation => `agentweaver_${operation}`),
+    uiMethod: 'gate',
+  },
+  'gate-reject': {
+    apiOperations: [...SNAPSHOTS, 'rejectGate'],
+    mcpTools: [...SNAPSHOTS, 'rejectGate'].map(operation => `agentweaver_${operation}`),
+    uiMethod: 'gate',
+  },
+  message: {
+    apiOperations: ['readRunStatus', 'readSessionTree', 'sendMessage'],
+    mcpTools: ['readRunStatus', 'readSessionTree', 'sendMessage'].map(operation => `agentweaver_${operation}`),
+    uiMethod: 'sendMessage',
+  },
+  journal: {
+    apiOperations: [],
+    mcpTools: ['agentweaver_replayRunEvents'],
+    uiMethod: 'replayJournal',
+  },
 };
 
-export function requireJourneyCapabilities({ api, mcp, ui }, journey) {
+export function requireJourneyCapabilities({ api, mcp, ui }, journey, surface) {
   const required = Object.hasOwn(JOURNEYS, journey) ? JOURNEYS[journey] : null;
   if (!required) throw new Error('Unknown bounded P1 journey.');
-  if (!(api?.operations instanceof Map) || !(mcp?.tools instanceof Map)) {
-    throw new Error('Discover the actual API and MCP menus before checking journey capabilities.');
+  if (surface !== undefined && !['api', 'mcp', 'ui'].includes(surface)) {
+    throw new Error('A known P1 surface is required for capability checks.');
   }
-  const apiOperations = journey === 'journal' ? [...required.operations, 'streamRunEvents'] : required.operations;
-  const mcpTools = required.operations.map(operation => `agentweaver_${operation}`);
+  const checkApi = surface === undefined || required.apiOperations.length > 0;
+  const checkMcp = surface === undefined || required.mcpTools.length > 0;
+  const checkUi = surface === undefined || surface === 'ui';
+  if (checkApi && !(api?.operations instanceof Map)) {
+    throw new Error('Discover the actual API menu before checking journey capabilities.');
+  }
+  if (checkMcp && !(mcp?.tools instanceof Map)) {
+    throw new Error('Discover the actual MCP menu before checking journey capabilities.');
+  }
   const missing = [
-    ...apiOperations.filter(operation => !api.operations.has(operation)).map(operation => `api:${operation}`),
-    ...mcpTools.filter(tool => !mcp.tools.has(tool)).map(tool => `mcp:${tool}`),
-    ...(typeof ui?.[required.uiMethod] === 'function' ? [] : [`ui:${required.uiMethod}`]),
+    ...(checkApi
+      ? required.apiOperations.filter(operation => !api.operations.has(operation)).map(operation => `api:${operation}`)
+      : []),
+    ...(checkMcp
+      ? required.mcpTools.filter(tool => !mcp.tools.has(tool)).map(tool => `mcp:${tool}`)
+      : []),
+    ...(checkUi
+      ? (typeof ui?.[required.uiMethod] === 'function' ? [] : [`ui:${required.uiMethod}`])
+      : []),
   ];
   if (missing.length) throw new Error(`Required P1 journey capabilities are missing: ${missing.join(', ')}`);
-  return { journey, apiOperations: [...apiOperations], mcpTools, uiMethod: required.uiMethod };
+  return {
+    journey,
+    apiOperations: [...required.apiOperations],
+    mcpTools: [...required.mcpTools],
+    uiMethod: required.uiMethod,
+  };
 }

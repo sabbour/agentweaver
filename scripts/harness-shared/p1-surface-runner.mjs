@@ -1,0 +1,364 @@
+import { randomUUID } from 'node:crypto';
+import { createP1AcceptanceResult } from './p1-acceptance-result.mjs';
+import { requireJourneyCapabilities } from './journey-capabilities.mjs';
+import { validateP1JourneyInput } from './p1-journey-input.mjs';
+import {
+  P1BlockedError,
+  callP1McpTool,
+  newP1IdempotencyKey,
+  p1Timestamp,
+  readP1OwnerSnapshots,
+  replayP1Journal,
+  requireP1DecisionReceipt,
+  requireP1DeniedApiActor,
+  requireP1Http,
+  requireP1OwnedGate,
+  sanitizeP1Failure,
+  summarizeP1SourceEvidence,
+  validateP1AdapterBindings,
+  waitForP1GateResolution,
+} from './p1-surface-common.mjs';
+
+const SURFACES = new Set(['api', 'mcp', 'ui']);
+const JOURNEYS = new Set(['gate-answer', 'gate-approve', 'gate-reject', 'message', 'journal']);
+
+function validateActorAnswer(snapshot, input) {
+  const { gate, blocker } = requireP1OwnedGate(snapshot, input);
+  let answerBody = {};
+  if (input.journey === 'gate-answer') {
+    const answer = input.pins.fixtureScope.gate.answer;
+    if (typeof answer !== 'string' || !answer.trim()) {
+      throw new P1BlockedError('The fixture scope has no exact gate answer.');
+    }
+    if (blocker.choices.includes(answer) && gate.allowedChoices.includes(answer)) {
+      answerBody = { choiceId: answer, freeformAnswer: null };
+    } else if (blocker.allowsFreeform && gate.allowsFreeform && !blocker.choices.includes(answer)) {
+      answerBody = { choiceId: null, freeformAnswer: answer };
+    } else {
+      throw new P1BlockedError('The exact fixture-owned gate does not allow its configured answer.');
+    }
+  } else if (blocker.kind === 'awaitingInput') {
+    throw new P1BlockedError('An input gate cannot be approved or rejected.');
+  }
+  return { gate, blocker, answerBody };
+}
+
+async function dispatchGate(surface, adapters, input, snapshot, dependencies) {
+  const { gate, answerBody } = validateActorAnswer(snapshot, input);
+  const operationId = input.journey === 'gate-answer'
+    ? 'answerGate'
+    : input.journey === 'gate-approve' ? 'approveGate' : 'rejectGate';
+  if (surface === 'ui') {
+    const call = await adapters.ui.gate({
+      sessionId: input.pins.ownerFences.sessionId,
+      requestId: gate.requestId,
+      action: input.journey === 'gate-answer'
+        ? 'answer'
+        : input.journey === 'gate-approve' ? 'approve' : 'reject',
+      ...(input.journey === 'gate-answer' ? { answer: input.pins.fixtureScope.gate.answer } : {}),
+    });
+    const receipt = call?.transientResponseBody;
+    if (call?.status !== 200) throw new Error('The UI gate action did not return HTTP 200.');
+    return { operationId, status: call.status, receipt };
+  }
+
+  const body = {
+    expectedStateVersion: snapshot.decisions.stateVersion,
+    idempotencyKey: newP1IdempotencyKey(dependencies.createIdempotencyKey),
+    ...answerBody,
+  };
+  if (surface === 'api') {
+    const call = await adapters.api.invoke(operationId, {
+      pathParameters: {
+        projectId: input.pins.ownerFences.projectId,
+        runId: input.pins.ownerFences.runId,
+        sessionId: input.pins.ownerFences.sessionId,
+        requestId: gate.requestId,
+      },
+      body,
+    });
+    const receipt = requireP1Http(call, [200], operationId);
+    return { operationId, status: call.status, receipt };
+  }
+
+  const result = await callP1McpTool(adapters.mcp, `agentweaver_${operationId}`, {
+    projectId: input.pins.ownerFences.projectId,
+    runId: input.pins.ownerFences.runId,
+    sessionId: input.pins.ownerFences.sessionId,
+    requestId: gate.requestId,
+    body,
+    tenantSelector: input.environment.tenantId,
+  });
+  if (result.isError || result.status !== 200) {
+    throw new Error(`The MCP ${operationId} tool returned an owner denial or unexpected status.`);
+  }
+  return { operationId, status: result.status, receipt: result.ownerResponse, correlationId: result.correlationId };
+}
+
+async function readMessageTree(api, input) {
+  const { projectId, runId, rootSessionId } = input.pins.ownerFences;
+  const call = await api.invoke('readSessionTree', {
+    pathParameters: { projectId, runId, sessionId: rootSessionId },
+  });
+  const tree = requireP1Http(call, [200], 'readSessionTree');
+  if (tree?.rootSessionId !== rootSessionId || !Array.isArray(tree.nodes)
+    || tree.nodes.some(node => node.identity?.projectId !== projectId || node.identity?.runId !== runId)) {
+    throw new P1BlockedError('The live owner session tree does not match the pinned fixture scope.');
+  }
+  const message = input.pins.fixtureScope.message;
+  for (const sessionId of [message?.senderSessionId, message?.recipientSessionId]) {
+    if (typeof sessionId !== 'string' || !sessionId
+      || tree.nodes.filter(node => node.identity.sessionId === sessionId && node.lifecycle === 'active').length !== 1) {
+      throw new P1BlockedError('Both addressed message sessions must already be active in the runner-owned session tree.');
+    }
+  }
+  if (message.senderSessionId === message.recipientSessionId
+    || typeof message.text !== 'string' || !message.text.trim()) {
+    throw new P1BlockedError('The fixture scope has no exact addressed-message pair and content.');
+  }
+  return message;
+}
+
+async function dispatchMessage(surface, adapters, input, dependencies) {
+  const message = await readMessageTree(adapters.api, input);
+  const operationId = 'sendMessage';
+  if (surface === 'ui') {
+    const call = await adapters.ui.sendMessage({
+      rootSessionId: input.pins.ownerFences.rootSessionId,
+      senderSessionId: message.senderSessionId,
+      recipientSessionId: message.recipientSessionId,
+      text: message.text,
+    });
+    if (!call || ![200, 202].includes(call.status)) {
+      throw new Error('The UI message action did not return owner acceptance.');
+    }
+    return { operationId, status: call.status, receipt: call.transientResponseBody };
+  }
+
+  const body = {
+    recipientSessionId: message.recipientSessionId,
+    idempotencyKey: newP1IdempotencyKey(dependencies.createIdempotencyKey),
+    deliveryMode: 'immediate',
+    purpose: 'progress',
+    kind: 'text',
+    payload: { text: message.text.trim() },
+  };
+  if (surface === 'api') {
+    const call = await adapters.api.invoke(operationId, {
+      pathParameters: {
+        projectId: input.pins.ownerFences.projectId,
+        runId: input.pins.ownerFences.runId,
+        sessionId: message.senderSessionId,
+      },
+      body,
+    });
+    const receipt = requireP1Http(call, [200, 202], operationId);
+    return { operationId, status: call.status, receipt };
+  }
+
+  const result = await callP1McpTool(adapters.mcp, 'agentweaver_sendMessage', {
+    projectId: input.pins.ownerFences.projectId,
+    runId: input.pins.ownerFences.runId,
+    sessionId: message.senderSessionId,
+    body,
+    tenantSelector: input.environment.tenantId,
+  });
+  if (result.isError || ![200, 202].includes(result.status)) {
+    throw new Error('The MCP message tool returned an owner denial or unexpected status.');
+  }
+  return { operationId, status: result.status, receipt: result.ownerResponse, correlationId: result.correlationId };
+}
+
+function requireMessageReceipt(receipt, recipientSessionId) {
+  if (typeof receipt?.ownerMessageId !== 'string' || !receipt.ownerMessageId
+    || receipt.recipientSessionId !== recipientSessionId
+    || !['accepted', 'admitted'].includes(receipt.status)) {
+    throw new Error('The message owner did not return its actual accepted-message receipt.');
+  }
+}
+
+export async function runP1SurfaceJourney(surface, input, {
+  api,
+  deniedApi,
+  mcp,
+  ui,
+  sourceEvidence,
+  nativeProbeResults = [],
+  clock = () => Date.now(),
+  sleep = delay => new Promise(resolve => setTimeout(resolve, delay)),
+  createIdempotencyKey = randomUUID,
+  gateTimeoutMs = 5000,
+} = {}) {
+  if (!SURFACES.has(surface)) throw new Error('A known P1 surface is required.');
+  const startedAt = p1Timestamp(clock);
+  const steps = [];
+  let surfaceStatus = 'blocked';
+  let failure;
+  let uiAdapterCloseStatus = surface === 'ui' ? 'not-started' : 'not-required';
+  let mcpCloseStatus = mcp && typeof mcp.close === 'function' ? 'not-started' : 'not-required';
+  const observations = {};
+  const actionReceipts = [];
+  let safeSourceEvidence;
+  let cleanup = { intent: 'none', status: 'not-required' };
+  const adapters = { api, deniedApi, mcp, ui };
+
+  try {
+    let validated;
+    try {
+      validated = validateP1JourneyInput(input, { now: clock });
+    } catch (error) {
+      throw new P1BlockedError(error.message);
+    }
+    if (!JOURNEYS.has(input.journey)) throw new P1BlockedError('The selected P1 journey is unsupported.');
+    const { environment, pins } = validated;
+    validateP1AdapterBindings(adapters, environment, pins.fixtureScope, surface);
+    safeSourceEvidence = summarizeP1SourceEvidence(sourceEvidence, pins);
+    await api.discover();
+    try {
+      await mcp.discoverTools();
+    } catch (error) {
+      throw new P1BlockedError(`The live MCP tool catalog is unavailable: ${error.message}`);
+    }
+    let capabilities;
+    try {
+      capabilities = requireJourneyCapabilities(adapters, input.journey, surface);
+    } catch (error) {
+      throw new P1BlockedError(error.message);
+    }
+    const supportingOperations = [
+      'readRunStatus', 'readSessionStatus', 'readDecisions',
+      ...(input.journey === 'message' ? ['readSessionTree'] : []),
+    ];
+    const missing = supportingOperations.filter(operation => !api.operations.has(operation));
+    if (missing.length) throw new P1BlockedError(`Required P1 API observations are missing: ${missing.join(', ')}.`);
+    steps.push({
+      id: 'live-capabilities',
+      status: 'passed',
+      requiredApiOperations: [...new Set([...capabilities.apiOperations, ...supportingOperations])].length,
+    });
+
+    const denied = await requireP1DeniedApiActor(deniedApi, input);
+    steps.push({ id: 'valid-denied-actor-403', status: 'passed', operationId: denied.operationId, httpStatus: 403 });
+    const snapshot = await readP1OwnerSnapshots(api, pins.ownerFences);
+    steps.push({ id: 'current-owner-fences', status: 'passed', operationId: 'readRunStatus/readSessionStatus/readDecisions' });
+    const journal = await replayP1Journal(mcp, pins.ownerFences, environment.tenantId);
+    observations.journal = { eventCount: journal.eventCount, pageCount: journal.pageCount };
+    steps.push({
+      id: 'committed-run-journal',
+      status: 'passed',
+      toolName: 'agentweaver_replayRunEvents',
+      correlationId: journal.correlationId,
+    });
+
+    if (input.journey.startsWith('gate-')) validateActorAnswer(snapshot, input);
+    if (input.journey === 'message') await readMessageTree(api, input);
+    if (surface === 'ui') await ui.openRun({ projectId: pins.ownerFences.projectId, runId: pins.ownerFences.runId });
+    if (input.journey !== 'journal') {
+      throw new P1BlockedError('Gate and message writes are blocked until a supported authenticated setup path proves same-invocation creation and readback.');
+    }
+    if (input.journey.startsWith('gate-')) {
+      const result = await dispatchGate(surface, adapters, input, snapshot, { createIdempotencyKey });
+      actionReceipts.push({
+        operationId: result.operationId,
+        httpStatus: result.status,
+        receipt: result.receipt,
+        ...(result.correlationId ? { correlationId: result.correlationId } : {}),
+      });
+      cleanup = { intent: 'resolve-runner-owned-gate', status: 'verification-pending' };
+      requireP1DecisionReceipt(result.receipt, snapshot.decisions.stateVersion, snapshot.run.executionFence);
+      await waitForP1GateResolution(api, pins.ownerFences, input.pins.fixtureScope.gate.requestId,
+        result.receipt.stateVersion, { clock, sleep, timeoutMs: gateTimeoutMs });
+      steps.push({
+        id: input.journey,
+        status: 'passed',
+        operationId: result.operationId,
+        httpStatus: result.status,
+        ...(result.correlationId ? { correlationId: result.correlationId } : {}),
+      });
+      cleanup = { intent: 'resolve-runner-owned-gate', status: 'verified-by-owner-snapshot' };
+    } else if (input.journey === 'message') {
+      const result = await dispatchMessage(surface, adapters, input, { createIdempotencyKey });
+      actionReceipts.push({
+        operationId: result.operationId,
+        httpStatus: result.status,
+        receipt: result.receipt,
+        ...(result.correlationId ? { correlationId: result.correlationId } : {}),
+      });
+      cleanup = {
+        intent: 'none',
+        status: 'acceptance-verification-pending',
+        reason: 'The current owner API exposes no delete operation for an accepted addressed message.',
+      };
+      requireMessageReceipt(result.receipt, input.pins.fixtureScope.message.recipientSessionId);
+      steps.push({
+        id: 'message',
+        status: 'passed',
+        operationId: result.operationId,
+        httpStatus: result.status,
+        acceptedNotDelivered: true,
+        ...(result.correlationId ? { correlationId: result.correlationId } : {}),
+      });
+      cleanup = {
+        intent: 'none',
+        status: 'not-applicable',
+        reason: 'The current owner API exposes no delete operation for an accepted addressed message.',
+      };
+    } else {
+      if (surface === 'ui') {
+        const uiJournal = await ui.replayJournal();
+        if (!Array.isArray(uiJournal?.events) || uiJournal.events.length === 0
+          || uiJournal.transcriptContentAvailable !== false) {
+          throw new Error('The UI did not return a nonempty committed-event view without transcript content.');
+        }
+        observations.uiJournalEventCount = uiJournal.events.length;
+      }
+      steps.push({ id: 'journal', status: 'passed', operationId: 'agentweaver_replayRunEvents' });
+    }
+    surfaceStatus = 'passed';
+  } catch (error) {
+    failure = sanitizeP1Failure(error);
+    surfaceStatus = error instanceof P1BlockedError ? 'blocked' : 'failed';
+  } finally {
+    if (mcp && typeof mcp.close === 'function') {
+      try {
+        await mcp.close();
+        mcpCloseStatus = 'closed';
+      } catch (error) {
+        mcpCloseStatus = 'failed';
+        failure = failure
+          ? { message: `${failure.message ?? String(failure)}; MCP adapter cleanup failed: ${sanitizeP1Failure(error).message}` }
+          : sanitizeP1Failure(error);
+        surfaceStatus = 'failed';
+      }
+    }
+    if (surface === 'ui' && ui && typeof ui.close === 'function') {
+      try {
+        await ui.close();
+        uiAdapterCloseStatus = 'closed';
+      } catch (error) {
+        uiAdapterCloseStatus = 'failed';
+        failure = failure
+          ? { message: `${failure.message ?? String(failure)}; UI adapter cleanup failed: ${sanitizeP1Failure(error).message}` }
+          : sanitizeP1Failure(error);
+        surfaceStatus = 'failed';
+      }
+    }
+  }
+
+  return createP1AcceptanceResult({
+    surface,
+    surfaceStatus,
+    steps,
+    sourceEvidence: safeSourceEvidence,
+    nativeProbeResults,
+    observations: {
+      ...observations,
+      ...(actionReceipts.length ? { actionReceipts } : {}),
+      cleanup,
+      adapterCleanup: { mcp: mcpCloseStatus, ui: uiAdapterCloseStatus },
+      startedAt,
+      completedAt: p1Timestamp(clock),
+    },
+    failure,
+  });
+}

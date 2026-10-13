@@ -1,8 +1,10 @@
 import { createHttpTransport } from './transport-http.mjs';
 import { redact } from '../../harness-shared/redaction.mjs';
+import { validateNetworkTarget } from '../../harness-shared/target-guard.mjs';
 
 export class McpHarnessClient {
   static async connect(options) {
+    const target = validateNetworkTarget(options.target, { exactPath: '/mcp' });
     const transport = await createHttpTransport(options);
     const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
     const client = new Client({ name: 'agentweaver-p1-mcp-harness', version: '0.1.0' });
@@ -17,7 +19,11 @@ export class McpHarnessClient {
     };
     try {
       await client.connect(transport);
-      return new McpHarnessClient(client, protocol);
+      return new McpHarnessClient(client, protocol, {
+        target,
+        tenantId: options.tenantId,
+        authProvider: options.authProvider,
+      });
     } catch (error) {
       try {
         await client.close();
@@ -28,9 +34,12 @@ export class McpHarnessClient {
     }
   }
 
-  constructor(client, protocol = []) {
+  constructor(client, protocol = [], { target, tenantId, authProvider } = {}) {
     this.client = client;
     this.protocol = protocol;
+    this.target = target ? validateNetworkTarget(target, { exactPath: '/mcp' }) : null;
+    this.tenantId = tenantId ?? null;
+    this.authProvider = authProvider ?? null;
     this.tools = new Map();
     this.calls = [];
   }

@@ -476,12 +476,47 @@ MCP tests use the pinned SDK with an actual loopback JSON-RPC server.
 UI tests use a controlled injected-page contract, not a browser.
 These checks do not prove a real cross-surface journey, native model execution, or deployment.
 
-For an approved journey, discover the live API and MCP menus first.
-Use `requireJourneyCapabilities` from `scripts/harness-shared/journey-capabilities.mjs` before dispatch.
-It checks only the selected gate action, message, or journal requirements.
-Missing required operations block the journey; they do not produce a skipped success.
-Helper and menu presence are not proof of current DOM controls or owner authority.
-Journal replay requires API SSE support, but MCP deliberately does not advertise an SSE tool.
+The P1 adapters contain five bounded journeys:
+`gate-answer`, `gate-approve`, `gate-reject`, `message`, and `journal`.
+The shared CLI currently blocks before it reads credentials or opens an API,
+MCP, or UI adapter. A JSON manifest cannot prove that this invocation created
+its project, run, selection, and sessions. Public endpoints exist for project
+creation, run selection, root acceptance, and child-session spawn, but they
+require different authenticated scopes and current role grants. Project
+creation does not assign an Owner, and role grants are made only through a
+privileged source path. The current runner has no supported way to provision
+and verify those identities or prove complete same-invocation cleanup.
+Orchestrator has a dispatch handler, but Gateway has no dispatch route for the
+admitted harness client. Caller receipts do not prove ownership.
+
+The CLI still validates an `executionIntent: "execute"` manifest and the
+read-only source/deployment evidence inputs. It requires direct Environment
+identity metadata, pinned deployment receipts, owner fences, and
+`deploymentEvidence` paths for the published-image receipt, source manifest,
+and AgentHost OCI archive. Before the blocked result, it verifies the exact
+clean Git commit and tree, validates the publication receipt against that
+source and manifest, measures the archive, and performs read-only Kubernetes
+and public GHCR observations. Use repository-relative paths in the manifest
+when possible. The runner rejects credentials in the manifest.
+
+```powershell
+npm run harness:p1 -- --surface api --input <manifest.json> --output <evidence.jsonl>
+npm run harness:p1 -- --surface mcp --input <manifest.json> --output <evidence.jsonl>
+npm run harness:p1 -- --surface ui --input <manifest.json> --output <evidence.jsonl> --page-module <authorized-page-provider.mjs>
+```
+
+These commands currently return exit code `2` with a blocked result before
+reading `AGENTWEAVER_ENVIRONMENT_BEARER` or importing a UI page provider.
+
+The shared runner blocks every gate and message journey before API, MCP, or UI
+access until it has a trusted same-invocation setup and cleanup path. Caller
+receipts do not authorize writes. The journal journey is read-only. These are
+controlled checks, not a live P1 acceptance result, and message acceptance is
+not delivery. The CLI remains blocked until the same-invocation path is
+available. A complete surface pass would still report full P1 as blocked until
+every required native probe has actual receipts.
+The Host replacement probe may use a fresh lease with the workspace retained;
+a same-lease restart API is not required.
 
 The UI adapter requires an already authorized page and exact Broker identity metadata.
 It neither starts a browser nor changes its profile or stored credentials.

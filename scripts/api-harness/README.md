@@ -71,4 +71,35 @@ A later invocation can verify an already archived project without sending anothe
 Changed owner name, tenant, target, or auth provider stops cleanup.
 Archive is not deletion or Environment/session cleanup.
 Record created resource identities and obtain current revisions and authority before cleanup.
-Retain actual owner cleanup receipts; do not clean up a pre-existing project.
+
+## Executable P1 journey
+
+The shared runner contains a bounded API journey, but its CLI currently blocks
+before API access because a JSON manifest cannot prove that this invocation
+created the project, run, selection, and sessions. It requires an
+`executionIntent: "execute"` manifest with the direct Environment target,
+provider/runtime/storage/source/image receipts, current owner fences, and
+caller-supplied creation and readback receipt claims for the fixture.
+It also requires `deploymentEvidence` paths named `publicationPath`,
+`manifestPath`, and `agentHostArchivePath`. Before reading bearer credentials
+or creating clients, the runner verifies the pinned clean Git commit/tree,
+published image receipt and AgentHost archive, then performs read-only
+Kubernetes and public GHCR observations. It then returns a blocked result
+without reading credentials or making API, MCP, or UI requests. Direct API
+gate and message journeys preserve read-only discovery but block before
+workflow writes; caller-supplied receipts do not authorize writes. The setup
+endpoints need a tenant administrator for project creation, a project
+Orchestrator role and scope for run selection, and a run-bound actor for root
+and session creation. Project creation does not assign an Owner; role grants
+use a privileged source path.
+
+```powershell
+npm run harness:p1 -- --surface api --input <manifest.json> --output <evidence.jsonl>
+```
+
+The example currently exits with code `2` and a blocked result. The controlled
+adapter tests do not make live owner or deployment claims.
+
+Do not use caller-supplied receipts to authorize writes against a pre-existing
+project, run, session, Environment, Sandbox, or policy. Retain actual owner
+cleanup receipts when a supported setup path is available.

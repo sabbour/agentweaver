@@ -23,6 +23,9 @@ export function createBrokerAuthProvider({
   return {
     name: 'supplied-broker-token',
     origin,
+    issuer,
+    audience,
+    actorId,
     async getAuthorization(destination) {
       if (validateNetworkTarget(destination).origin !== origin) {
         throw new Error('Refusing broker authentication outside its selected target origin.');
