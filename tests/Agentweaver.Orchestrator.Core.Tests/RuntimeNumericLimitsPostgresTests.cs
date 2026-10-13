@@ -108,11 +108,11 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     [Fact]
     public async Task NativeSendReservationSurvivesRestartAndReplayWithoutResendingOrRefunding()
     {
-        Assert.True(await PrepareAsync(0));
-        Assert.True(await PrepareAsync(0));
+        Assert.Null(await PrepareAsync(0));
+        Assert.Null(await PrepareAsync(0));
         Assert.Equal(1, await CountAsync("maf_execution_dispatches"));
-        var admission = await BeginAsync(0);
-        Assert.NotNull(admission);
+        var admission = Assert.IsType<RuntimeNativeTurnAdmissionReceipt>(
+            (await BeginAsync(0)).Admission);
         Assert.Equal(_intents[0].MessageId, admission.MessageId);
         Assert.Equal("runtime_native_turn_indeterminate",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => BeginAsync(0))).Code);
@@ -127,8 +127,8 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     public async Task ConcurrentNativeRuntimesCannotReserveBeyondTheWholeRunModelCap()
     {
         var admitted = await Task.WhenAll(
-            TryReserveAsync(() => PrepareAsync(0), "runtime_model_turn_limit_exhausted"),
-            TryReserveAsync(() => PrepareAsync(1), "runtime_model_turn_limit_exhausted"));
+            TryReserveAsync(async () => await PrepareAsync(0) is null, "runtime_model_turn_limit_exhausted"),
+            TryReserveAsync(async () => await PrepareAsync(1) is null, "runtime_model_turn_limit_exhausted"));
         Assert.Single(admitted, value => value);
         Assert.Equal(1, await CountAsync("maf_execution_dispatches"));
     }
@@ -136,7 +136,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     [Fact]
     public async Task ModelGrantRequiresTheExactPreparedDispatchRuntimeAndPrompt()
     {
-        Assert.True(await PrepareAsync(0));
+        Assert.Null(await PrepareAsync(0));
         var request = Action(0, toolInvocation: false) with
         {
             ActionId = "model.turn", DispatchId = _intents[0].MessageId, InputHash = _intents[0].PromptHash
@@ -170,7 +170,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => IssueAsync(0, request))).Code);
         Assert.Equal(0, await CountRuntimeGrantsAsync());
 
-        Assert.True(await PrepareAsync(0, PricedSnapshot(0, 0m, 0)));
+        Assert.Null(await PrepareAsync(0, PricedSnapshot(0, 0m, 0)));
         await IssueAsync(0, request with { DispatchId = _intents[0].MessageId });
         Assert.Equal(1, await CountRuntimeGrantsAsync());
         Assert.Equal("runtime_model_turn_admission_required",
@@ -186,13 +186,19 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     {
         await RegisterPositiveHardCreditAsync(0);
 
-        Assert.False(await PrepareAsync(0, PricedSnapshot(0, observedCredits, 1)));
+        var denial = Assert.IsType<RuntimeNativeCreditDenialReceipt>(
+            await PrepareAsync(0, PricedSnapshot(0, observedCredits, 1)));
+        Assert.Equal(RuntimeCreditLimitDenialStage.Preparation, denial.Stage);
+        Assert.Equal(5m, denial.HardCreditLimit);
+        Assert.Equal(observedCredits, denial.ObservedCredits);
+        Assert.Equal("absent", denial.DispatchStateBefore);
+        Assert.Equal("absent", denial.DispatchStateAfter);
         Assert.Equal(0, await CountAsync("maf_execution_dispatches"));
         var guard = await ReadCreditGuardAsync();
         Assert.Equal(observedCredits, guard.Floor);
         Assert.Equal(1, guard.LedgerEventCount);
         Assert.True(guard.HardCapExhausted);
-        Assert.False(await PrepareAsync(0, PricedSnapshot(0, observedCredits, 1)));
+        Assert.NotNull(await PrepareAsync(0, PricedSnapshot(0, observedCredits, 1)));
         Assert.Equal(0, await CountAsync("maf_execution_dispatches"));
     }
 
@@ -207,17 +213,17 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             PrepareAsync(0, atBoundary),
             PrepareAsync(1, PricedSnapshot(1, 3m, 1)));
 
-        Assert.All(prepared, Assert.True);
+        Assert.All(prepared, denial => Assert.Null(denial));
         Assert.Equal(1, await CountSoftCreditWarningsAsync());
         var boundaryGuard = await ReadCreditGuardAsync();
         Assert.Equal(3m, boundaryGuard.Floor);
         Assert.Equal(1, boundaryGuard.LedgerEventCount);
         Assert.False(boundaryGuard.HardCapExhausted);
 
-        Assert.True(await PrepareAsync(0, atBoundary));
+        Assert.Null(await PrepareAsync(0, atBoundary));
         Assert.Equal(1, await CountSoftCreditWarningsAsync());
 
-        Assert.True(await PrepareAsync(1, PricedSnapshot(1, 4m, 2)));
+        Assert.Null(await PrepareAsync(1, PricedSnapshot(1, 4m, 2)));
         var laterGuard = await ReadCreditGuardAsync();
         Assert.Equal(4m, laterGuard.Floor);
         Assert.Equal(2, laterGuard.LedgerEventCount);
@@ -230,9 +236,15 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     public async Task BeginRechecksCreditFloorAndLeavesDeniedIntentPrepared()
     {
         await RegisterPositiveHardCreditAsync(0);
-        Assert.True(await PrepareAsync(0, PricedSnapshot(0, 4m, 1)));
+        Assert.Null(await PrepareAsync(0, PricedSnapshot(0, 4m, 1)));
 
-        Assert.Null(await BeginAsync(0, PricedSnapshot(0, 5m, 2)));
+        var begin = await BeginAsync(0, PricedSnapshot(0, 5m, 2));
+        Assert.Null(begin.Admission);
+        var denial = Assert.IsType<RuntimeNativeCreditDenialReceipt>(begin.Denial);
+        Assert.Equal(RuntimeCreditLimitDenialStage.NativeTurnBegin, denial.Stage);
+        Assert.Equal("prepared", denial.DispatchStateBefore);
+        Assert.Equal(denial.DispatchStateBefore, denial.DispatchStateAfter);
+        Assert.Equal(denial.DispatchRevisionBefore, denial.DispatchRevisionAfter);
         Assert.Equal("prepared", await ReadDispatchStateAsync(_intents[0].MessageId));
         Assert.Equal(0, await NativeDispatchCountAsync("sending"));
         var guard = await ReadCreditGuardAsync();
@@ -247,13 +259,14 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         await RegisterPositiveHardCreditAsync(0);
         await RegisterPositiveHardCreditAsync(1);
         var belowLimit = PricedSnapshot(0, 0m, 0);
-        Assert.True(await PrepareAsync(0, belowLimit));
-        Assert.True(await PrepareAsync(1, PricedSnapshot(1, 0m, 0)));
+        Assert.Null(await PrepareAsync(0, belowLimit));
+        Assert.Null(await PrepareAsync(1, PricedSnapshot(1, 0m, 0)));
 
         var admissions = await Task.WhenAll(
-            TryReserveAsync(async () => await BeginAsync(0, belowLimit) is not null,
+            TryReserveAsync(async () => (await BeginAsync(0, belowLimit)).Admission is not null,
                 "runtime_native_accounting_pending"),
-            TryReserveAsync(async () => await BeginAsync(1, PricedSnapshot(1, 0m, 0)) is not null,
+            TryReserveAsync(async () =>
+                (await BeginAsync(1, PricedSnapshot(1, 0m, 0))).Admission is not null,
                 "runtime_native_accounting_pending"));
 
         Assert.Single(admissions, admitted => admitted);
@@ -269,10 +282,10 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     {
         await RegisterPositiveHardCreditAsync(0);
         await RegisterPositiveHardCreditAsync(1);
-        Assert.True(await PrepareAsync(0, PricedSnapshot(0, 0m, 0)));
-        Assert.True(await PrepareAsync(1, PricedSnapshot(1, 0m, 0)));
+        Assert.Null(await PrepareAsync(0, PricedSnapshot(0, 0m, 0)));
+        Assert.Null(await PrepareAsync(1, PricedSnapshot(1, 0m, 0)));
         var first = Assert.IsType<RuntimeNativeTurnAdmissionReceipt>(
-            await BeginAsync(0, PricedSnapshot(0, 0m, 0)));
+            (await BeginAsync(0, PricedSnapshot(0, 0m, 0))).Admission);
         if (siblingState != "sending")
             await SetDispatchStateAsync(first.MessageId, siblingState);
 
@@ -287,11 +300,11 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     {
         await RegisterPositiveHardCreditAsync(0);
         await RegisterPositiveHardCreditAsync(1);
-        Assert.True(await PrepareAsync(0, PricedSnapshot(0, 4m, 1)));
+        Assert.Null(await PrepareAsync(0, PricedSnapshot(0, 4m, 1)));
         Assert.IsType<RuntimeNativeTurnAdmissionReceipt>(
-            await BeginAsync(0, PricedSnapshot(0, 4m, 1)));
+            (await BeginAsync(0, PricedSnapshot(0, 4m, 1))).Admission);
 
-        Assert.False(await PrepareAsync(1, PricedSnapshot(1, 5m, 2)));
+        Assert.NotNull(await PrepareAsync(1, PricedSnapshot(1, 5m, 2)));
         Assert.Equal("sending", await ReadDispatchStateAsync(_intents[0].MessageId));
         Assert.Equal(1, await CountAsync("maf_execution_dispatches"));
         var guard = await ReadCreditGuardAsync();
@@ -304,9 +317,9 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     public async Task PositiveCreditDispatchEvidenceStaysPartialAndUnserialized()
     {
         await RegisterPositiveHardCreditAsync(0);
-        Assert.True(await PrepareAsync(0, PricedSnapshot(0, 1m, 1)));
+        Assert.Null(await PrepareAsync(0, PricedSnapshot(0, 1m, 1)));
         var admission = Assert.IsType<RuntimeNativeTurnAdmissionReceipt>(
-            await BeginAsync(0, PricedSnapshot(0, 1m, 1)));
+            (await BeginAsync(0, PricedSnapshot(0, 1m, 1))).Admission);
         var observation = NativeObservation(admission, Guid.NewGuid()) with { UsageEventIds = [] };
         var recorded = await RecordNativeAsync(admission, observation);
 
@@ -338,7 +351,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     public async Task ChangedCostRateOrRevokedSourceGrantCannotBeginHardCappedDispatch()
     {
         await RegisterPositiveHardCreditAsync(0);
-        Assert.True(await PrepareAsync(0, PricedSnapshot(0, 1m, 1)));
+        Assert.Null(await PrepareAsync(0, PricedSnapshot(0, 1m, 1)));
         await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
             BeginAsync(0, PricedSnapshot(0, 1m, 1, rateVersion: "2")));
         Assert.Equal("prepared", await ReadDispatchStateAsync(_intents[0].MessageId));
@@ -358,9 +371,9 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         await RegisterPositiveHardCreditAsync(0);
         await RegisterPositiveHardCreditAsync(1);
         var belowLimit = PricedSnapshot(0, 4m, 1);
-        Assert.True(await PrepareAsync(0, belowLimit));
-        Assert.True(await PrepareAsync(1, PricedSnapshot(1, 4m, 1)));
-        Assert.IsType<RuntimeNativeTurnAdmissionReceipt>(await BeginAsync(0, belowLimit));
+        Assert.Null(await PrepareAsync(0, belowLimit));
+        Assert.Null(await PrepareAsync(1, PricedSnapshot(1, 4m, 1)));
+        Assert.IsType<RuntimeNativeTurnAdmissionReceipt>((await BeginAsync(0, belowLimit)).Admission);
         var beforeReplay = await ReadCreditGuardAsync();
 
         Assert.Equal("runtime_native_turn_indeterminate",
@@ -461,7 +474,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             DecisionStateVersion = revisionState.StateVersion
         });
         if (kind == "model")
-            Assert.True(await PrepareAsync(0));
+            Assert.Null(await PrepareAsync(0));
         else
             await IssueAsync(0, Action(0, toolInvocation: true));
         var coordination = new CoordinationOwnerStore(fixture.DataSource, _schema, TimeProvider.System, _decisions);
@@ -631,10 +644,10 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             Revision = _checkpoint.State.Revision + 1,
             PendingDispatches = _intents.ToImmutableDictionary(intent => intent.AssociationId)
         });
-        Assert.True(await PrepareAsync(0));
-        Assert.True(await PrepareAsync(1));
-        return [Assert.IsType<RuntimeNativeTurnAdmissionReceipt>(await BeginAsync(0)),
-            Assert.IsType<RuntimeNativeTurnAdmissionReceipt>(await BeginAsync(1))];
+        Assert.Null(await PrepareAsync(0));
+        Assert.Null(await PrepareAsync(1));
+        return [Assert.IsType<RuntimeNativeTurnAdmissionReceipt>((await BeginAsync(0)).Admission),
+            Assert.IsType<RuntimeNativeTurnAdmissionReceipt>((await BeginAsync(1)).Admission)];
     }
 
     private async Task AdvanceNativeCheckpointAsync(string id, MafExecutionCheckpoint state)
@@ -857,7 +870,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         };
     }
 
-    private Task<bool> PrepareAsync(
+    private Task<RuntimeNativeCreditDenialReceipt?> PrepareAsync(
         int index,
         Func<SdkSessionFacts, CancellationToken, Task<RuntimeUsageCostSnapshotReceipt>>? readCostSnapshot = null)
     {
@@ -874,7 +887,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             }, default);
     }
 
-    private Task<RuntimeNativeTurnAdmissionReceipt?> BeginAsync(
+    private Task<RuntimeNativeTurnBeginResult> BeginAsync(
         int index,
         Func<SdkSessionFacts, CancellationToken, Task<RuntimeUsageCostSnapshotReceipt>>? readCostSnapshot = null,
         RuntimeGrantReceipt? grantOverride = null)

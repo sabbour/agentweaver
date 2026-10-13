@@ -45,6 +45,16 @@ public static class RuntimeUsageSourceEndpoints
                 [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
                 ExecuteAsync(context, () => owner.BeginNativeTurnAsync(context, request, cancellationToken)))
             .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/turns/denials/read",
+            (RuntimeNativeCreditDenialReadRequest request, HttpContext context,
+                [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => owner.ReadNativeCreditDenialAsync(context, request, cancellationToken)))
+            .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/turns/no-send",
+            (RuntimeNativeTurnNoSendEvidenceRequest request, HttpContext context,
+                [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => owner.RecordNativeTurnNoSendAsync(context, request, cancellationToken)))
+            .RequireAuthorization();
         endpoints.MapPost("/internal/runtime/turns/observations",
             (RuntimeNativeTurnObservationRequest request, HttpContext context,
                 [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>

@@ -367,6 +367,7 @@ public sealed class RuntimeUsageSourceReceiptTests
             admission with { PromptHash = new string('c', 64) },
             admission with { RequestHash = new string('d', 64) },
             admission with { Source = admission.Source with { ModelId = "another-model" } },
+            admission with { Registration = admission.Registration with { Revision = 2 } },
             admission with { OwnerRevision = 1 }
         })
             Assert.Throws<RuntimeAuthorizationException>(() => RuntimeNativeTurnContract.ValidateAdmission(
@@ -473,6 +474,131 @@ public sealed class RuntimeUsageSourceReceiptTests
         };
         Assert.Throws<RuntimeAuthorizationException>(() =>
             RuntimeNativeTurnContract.ValidateObservation(admission, observation));
+    }
+
+    [Fact]
+    public void HardLimitDenialAndNoSendReceiptsBindActualSourceAndAnEmptyCompleteRange()
+    {
+        var usageReceipt = Receipt();
+        var registration = usageReceipt.Registration with
+        {
+            Binding = usageReceipt.Registration.Binding with { CopilotHardCreditLimit = 5m }
+        };
+        var source = usageReceipt.Usage.SdkSource!;
+        var sourceReceipt = new RuntimeSdkSourceReceipt(
+            registration.RuntimeInstanceId, registration.Revision, Guid.NewGuid(), source,
+            RuntimeUsageSourceReceiptContract.HashSource(registration, source), DateTimeOffset.UtcNow);
+        const string checkpointHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var dispatchId = Guid.NewGuid();
+        var registrationHash = RuntimeContractValidation.RegistrationHash(registration);
+        var sourceHash = RuntimeUsageSourceReceiptContract.HashSource(registration, source);
+        var denial = RuntimeNativeDenialContract.SealDenial(new(
+            1, registration.RuntimeInstanceId, registration.Revision, registration.Binding.ExecutionFence,
+            sourceReceipt.SourceGrantId,
+            dispatchId, RuntimeCreditLimitDenialStage.NativeTurnBegin,
+            RuntimeCreditLimitDenialCode.HardLimitReached,
+            registrationHash, sourceHash,
+            RuntimeNativeDenialContract.DispatchHash(
+                dispatchId, registrationHash, sourceHash, checkpointHash, "prepared", 1),
+            checkpointHash, 5m, 5m, 3, new string('b', 64), new string('c', 64),
+            2, 3, "prepared", 1, "prepared", 1, DateTimeOffset.UtcNow, string.Empty));
+        RuntimeNativeDenialContract.ValidateDenial(denial, registration, sourceReceipt);
+
+        var cursorHash = new string('d', 64);
+        var evidence = RuntimeNativeDenialContract.SealNoSend(new(
+            1, registration.RuntimeInstanceId, registration.Revision, dispatchId,
+            denial.CanonicalPayloadHash, denial.RegistrationHash, denial.SourceHash,
+            RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(source.SdkSessionId)),
+            cursorHash, cursorHash, 0, true, DateTimeOffset.UtcNow, string.Empty));
+        RuntimeNativeDenialContract.ValidateNoSend(evidence, denial, registration, sourceReceipt);
+
+        var roundTrip = JsonSerializer.Deserialize<RuntimeNativeTurnNoSendReceipt>(
+            JsonSerializer.Serialize(evidence))!;
+        RuntimeNativeDenialContract.ValidateNoSend(roundTrip, denial, registration, sourceReceipt);
+        Assert.DoesNotContain("credential", JsonSerializer.Serialize(evidence), StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("prompt", JsonSerializer.Serialize(denial), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DenialReceiptRejectsBelowLimitChangedFenceOrPossibleDispatch()
+    {
+        var usageReceipt = Receipt();
+        var registration = usageReceipt.Registration with
+        {
+            Binding = usageReceipt.Registration.Binding with { CopilotHardCreditLimit = 5m }
+        };
+        var sourceReceipt = new RuntimeSdkSourceReceipt(
+            registration.RuntimeInstanceId, registration.Revision, Guid.NewGuid(),
+            usageReceipt.Usage.SdkSource!,
+            RuntimeUsageSourceReceiptContract.HashSource(registration, usageReceipt.Usage.SdkSource!),
+            DateTimeOffset.UtcNow);
+        var denial = NativeCreditDenial(registration, sourceReceipt);
+
+        foreach (var invalid in new[]
+        {
+            RuntimeNativeDenialContract.SealDenial(denial with { ObservedCredits = 4m }),
+            RuntimeNativeDenialContract.SealDenial(denial with { GuardRevisionAfter = 4 }),
+            RuntimeNativeDenialContract.SealDenial(denial with { DispatchStateAfter = "sending" }),
+            RuntimeNativeDenialContract.SealDenial(denial with { DispatchRevisionAfter = 2 }),
+            RuntimeNativeDenialContract.SealDenial(denial with { RegistrationHash = new string('e', 64) })
+        })
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeNativeDenialContract.ValidateDenial(invalid, registration, sourceReceipt));
+    }
+
+    [Fact]
+    public void NoSendReceiptRejectsIncompleteOrNonemptyNativeJournalRange()
+    {
+        var usageReceipt = Receipt();
+        var registration = usageReceipt.Registration with
+        {
+            Binding = usageReceipt.Registration.Binding with { CopilotHardCreditLimit = 5m }
+        };
+        var source = usageReceipt.Usage.SdkSource!;
+        var sourceReceipt = new RuntimeSdkSourceReceipt(
+            registration.RuntimeInstanceId, registration.Revision, Guid.NewGuid(), source,
+            RuntimeUsageSourceReceiptContract.HashSource(registration, source), DateTimeOffset.UtcNow);
+        var denial = NativeCreditDenial(
+            registration, sourceReceipt, RuntimeCreditLimitDenialStage.NativeTurnBegin);
+        var valid = RuntimeNativeDenialContract.SealNoSend(new(
+            1, registration.RuntimeInstanceId, registration.Revision, denial.DispatchId,
+            denial.CanonicalPayloadHash, denial.RegistrationHash, denial.SourceHash,
+            RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(source.SdkSessionId)),
+            new string('d', 64), new string('d', 64), 0, true,
+            DateTimeOffset.UtcNow, string.Empty));
+        RuntimeNativeDenialContract.ValidateNoSend(valid, denial, registration, sourceReceipt);
+
+        foreach (var invalid in new[]
+        {
+            RuntimeNativeDenialContract.SealNoSend(valid with { ObservedEventCount = 1 }),
+            RuntimeNativeDenialContract.SealNoSend(valid with { RangeComplete = false }),
+            RuntimeNativeDenialContract.SealNoSend(valid with { AfterCursorHash = new string('e', 64) }),
+            RuntimeNativeDenialContract.SealNoSend(valid with { DenialReceiptHash = new string('f', 64) })
+        })
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+            {
+                RuntimeNativeDenialContract.ValidateNoSend(invalid, denial, registration, sourceReceipt);
+            });
+    }
+
+    private static RuntimeNativeCreditDenialReceipt NativeCreditDenial(
+        RuntimeRegistration registration, RuntimeSdkSourceReceipt sourceReceipt,
+        RuntimeCreditLimitDenialStage stage = RuntimeCreditLimitDenialStage.Preparation)
+    {
+        const string checkpointHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        var dispatchId = Guid.NewGuid();
+        var registrationHash = RuntimeContractValidation.RegistrationHash(registration);
+        var sourceHash = RuntimeUsageSourceReceiptContract.HashSource(registration, sourceReceipt.Source);
+        return RuntimeNativeDenialContract.SealDenial(new(
+            1, registration.RuntimeInstanceId, registration.Revision, registration.Binding.ExecutionFence,
+            sourceReceipt.SourceGrantId,
+            dispatchId, stage,
+            RuntimeCreditLimitDenialCode.HardLimitReached,
+            registrationHash, sourceHash,
+            RuntimeNativeDenialContract.DispatchHash(
+                dispatchId, registrationHash, sourceHash, checkpointHash, "prepared", 1),
+            checkpointHash, 5m, 6m, 3, new string('b', 64), new string('c', 64),
+            2, 3, "prepared", 1, "prepared", 1, DateTimeOffset.UtcNow, string.Empty));
     }
 
     private static (RuntimeNativeTurnAdmissionReceipt, RuntimeA2ASendRequest, RuntimeNativeTurnObservation) NativeTurn()

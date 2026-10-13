@@ -140,7 +140,30 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
                 throw new RuntimeAuthorizationException("runtime_turn_already_recorded");
             await _actions.RequireAsync(Registration, "model.turn", System.Text.Encoding.UTF8.GetBytes(prompt),
                 RequireCurrentAsync, cancellationToken, dispatchId: message.MessageId).ConfigureAwait(false);
-            var admission = await source.BeginNativeTurnAsync(this, request, cancellationToken).ConfigureAwait(false);
+            var nativeCursor = Registration.Binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
+                Registration.Binding.CopilotHardCreditLimit is not null
+                    ? await _session.CaptureNativeEventCursorAsync(cancellationToken).ConfigureAwait(false)
+                    : null;
+            var begin = await source.BeginNativeTurnAsync(this, request, cancellationToken).ConfigureAwait(false);
+            if (begin.Denial is { } denial)
+            {
+                if (nativeCursor is null)
+                    throw new RuntimeAuthorizationException("runtime_native_turn_no_send_invalid");
+                await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
+                var range = await _session.RequireNoNativeEventsSinceAsync(nativeCursor, cancellationToken)
+                    .ConfigureAwait(false);
+                var noSend = RuntimeNativeDenialContract.SealNoSend(new(
+                    1, Registration.RuntimeInstanceId, Registration.Revision, message.MessageId,
+                    denial.CanonicalPayloadHash, denial.RegistrationHash, denial.SourceHash,
+                    RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(Facts.SdkSessionId)),
+                    range.BeforeCursorHash, range.AfterCursorHash, range.ObservedEventCount,
+                    range.IsComplete, DateTimeOffset.UtcNow, string.Empty));
+                await source.RecordNativeTurnNoSendAsync(this, denial, noSend, cancellationToken)
+                    .ConfigureAwait(false);
+                throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
+            }
+            var admission = begin.Admission
+                ?? throw new RuntimeAuthorizationException("runtime_native_turn_begin_result_invalid");
             await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
             await CommitTurnContentAsync(material, message.MessageId, "user", prompt, cancellationToken)
                 .ConfigureAwait(false);

@@ -44,15 +44,58 @@ public sealed class RuntimeUsageSourceHttpClient(
         return receipt;
     }
 
-    internal async Task<RuntimeNativeTurnAdmissionReceipt> BeginNativeTurnAsync(
+    internal async Task<RuntimeNativeTurnBeginResult> BeginNativeTurnAsync(
         AuthorizedRuntimeSession session, RuntimeA2ASendRequest message, CancellationToken cancellationToken)
     {
         RequireAudience(session);
-        var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeNativeTurnAdmissionReceipt>(
+        var proof = session.Proof();
+        var sourceReceipt = new RuntimeSdkSourceReceipt(
+            session.Registration.RuntimeInstanceId, session.Registration.Revision, proof.GrantId,
+            session.Facts, RuntimeUsageSourceReceiptContract.HashSource(session.Registration, session.Facts),
+            DateTimeOffset.UtcNow);
+        var result = await RuntimeOwnerHttpTransport.SendAsync<RuntimeNativeTurnBeginResult>(
             client, _address, "/internal/runtime/turns/begin", actor,
-            new RuntimeNativeTurnBeginRequest(Request(session.Proof()), message, session.Facts), cancellationToken)
+            new RuntimeNativeTurnBeginRequest(Request(proof), message, session.Facts), cancellationToken)
             .ConfigureAwait(false);
-        RuntimeNativeTurnContract.ValidateAdmission(receipt, session.Registration, session.Facts, message);
+        RuntimeNativeDenialContract.ValidateBeginResult(result, session.Registration, sourceReceipt, message);
+        return result;
+    }
+
+    internal async Task<RuntimeNativeCreditDenialReadResult> ReadNativeCreditDenialAsync(
+        AuthorizedRuntimeSession session, Guid dispatchId, RuntimeCreditLimitDenialStage stage,
+        CancellationToken cancellationToken)
+    {
+        RequireAudience(session);
+        var proof = session.Proof();
+        var sourceReceipt = new RuntimeSdkSourceReceipt(
+            session.Registration.RuntimeInstanceId, session.Registration.Revision, proof.GrantId,
+            session.Facts, RuntimeUsageSourceReceiptContract.HashSource(session.Registration, session.Facts),
+            DateTimeOffset.UtcNow);
+        var response = await RuntimeOwnerHttpTransport.SendAsync<RuntimeNativeCreditDenialReadResult>(
+            client, _address, "/internal/runtime/turns/denials/read", actor,
+            new RuntimeNativeCreditDenialReadRequest(Request(proof), dispatchId, stage), cancellationToken)
+            .ConfigureAwait(false);
+        if (response.Receipt is { } denial)
+            RuntimeNativeDenialContract.ValidateDenial(denial, session.Registration, sourceReceipt);
+        return response;
+    }
+
+    internal async Task<RuntimeNativeTurnNoSendReceipt> RecordNativeTurnNoSendAsync(
+        AuthorizedRuntimeSession session, RuntimeNativeCreditDenialReceipt denial,
+        RuntimeNativeTurnNoSendReceipt evidence, CancellationToken cancellationToken)
+    {
+        RequireAudience(session);
+        var proof = session.Proof();
+        var sourceReceipt = new RuntimeSdkSourceReceipt(
+            session.Registration.RuntimeInstanceId, session.Registration.Revision, proof.GrantId,
+            session.Facts, RuntimeUsageSourceReceiptContract.HashSource(session.Registration, session.Facts),
+            DateTimeOffset.UtcNow);
+        RuntimeNativeDenialContract.ValidateNoSend(evidence, denial, session.Registration, sourceReceipt);
+        var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeNativeTurnNoSendReceipt>(
+            client, _address, "/internal/runtime/turns/no-send", actor,
+            new RuntimeNativeTurnNoSendEvidenceRequest(Request(proof), denial, evidence), cancellationToken)
+            .ConfigureAwait(false);
+        RuntimeNativeDenialContract.ValidateNoSend(receipt, denial, session.Registration, sourceReceipt);
         return receipt;
     }
 

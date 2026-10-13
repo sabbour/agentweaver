@@ -129,10 +129,11 @@ admission path before SDK send. An unbound `maxModelTurns`, any `maxToolCalls`, 
 fails activation with `runtime_numeric_limits_unsupported`, before SDK session creation, readiness, or
 model/tool invocation. Absent values preserve the legacy path. The RuntimeAction owner also rejects unsupported
 numeric bindings before issuing an action grant. Positive workflow-bound Hosted Copilot hard limits use the same prepared
-dispatch and begin checks against observed whole-run priced usage. This wiring
-does not establish live boundary acceptance; the P1 dispatch check remains
-blocked until actual owner receipts prove the limit boundary, soft-warning
-deduplication, later floor advancement, and no-send result.
+dispatch and begin checks against observed whole-run priced usage. The source
+path can record durable hard-limit denial and bounded no-send receipts, but it
+does not establish live boundary acceptance. The P1 dispatch check remains
+blocked until permitted live owner receipts prove the limit boundary,
+soft-warning deduplication, later floor advancement, and no-send result.
 
 AgentHost and the enabled Events native consumer load the same server-owned
 `AgentHost:ModelBindings` map and required `AgentHost:ModelBindingsRevision`.
@@ -262,7 +263,7 @@ The source bridge now uses a typed `RuntimeNativeTurnObservation`.
 It retains the actual root usage-event IDs found inside the native completion range.
 Those IDs describe observed membership, not a complete accounting-source set.
 
-Orchestrator exposes three authenticated turn-write routes under the existing observe grant.
+Orchestrator exposes authenticated native-turn and denial-evidence routes under the existing observe grant.
 Before sending, the MAF source path prepares the immutable dispatch row under the
 current registration, root owner, decision, and checkpoint locks.
 It pins the platform intent, complete request hash, source hash, model, and execution fence.
@@ -272,7 +273,9 @@ snapshot before it commits the dispatch. Unavailable pricing rejects dispatch st
 Begin repeats financial admission before any native work.
 `POST /internal/runtime/turns/begin` requires a previously prepared MAF dispatch.
 It checks the current registration, SDK source, model, request bytes, pending checkpoint,
-and decision version before it changes `prepared` to `sending`.
+and decision version before it changes `prepared` to `sending`. It returns either
+an admission or a typed hard-limit denial; the denial leaves the dispatch prepared
+at its existing owner revision.
 The admission receipt contains the stable platform message ID, not predicted native IDs.
 A repeated begin cannot resend a dispatch that has already entered `sending`.
 For configured hosted credit limits, begin reads the existing Events pricing snapshot.
@@ -289,6 +292,14 @@ At or above the hard limit, it records exhaustion and denies new dispatch.
 The currently executing turn can report usage above the limit; the next dispatch cannot start.
 Another sending or accounting-pending dispatch blocks hard-capped admission.
 These checks do not claim an all-future accounting-source barrier.
+The source owner stores the typed denial receipt in its existing outbox with the
+credit-guard update. For a hard-capped Hosted Copilot turn, AgentHost captures
+the native cursor before begin. After a denial it accepts only a complete bounded
+event-log range with zero events and the same before/after cursor, then stores a
+source-owned no-send receipt through `POST /internal/runtime/turns/no-send`.
+The Host returns the budget error only after that receipt is stored. An event,
+incomplete range, or changed cursor fails closed, and native Send is not called.
+This proves only the bounded no-send interval, not later accounting finality.
 `POST /internal/runtime/turns/observations` attaches the actual native range and output hash
 to that same dispatch. Exact retries retain the stored observation.
 The resulting state is `terminal_pending_accounting`, with a `partial` source report.
@@ -347,17 +358,22 @@ flowchart LR
     Q -->|"No"| R["Deny new send; retain existing reservations"]
     Q -->|"Yes or exact replay"| A["Prepared immutable MAF intent and reserved slot"]
     A --> P["Current Policy grant matches dispatch and prompt"]
-    P --> B["Begin: prepared to sending"]
-    B --> C["Workflow-bound Host: native cursor and SDK send"]
-    C --> D["Observed native IDs and bounded durable range"]
-    D --> E{"Range and output bytes match?"}
-    E -->|"No"| F["Reject native proof; never resend blindly"]
-    E -->|"Yes"| G["Persist partial native observation"]
-    G --> H["Persist assistant content and native cache"]
-    H --> I["Events acknowledges observed usage receipts"]
-    I --> J["Events joins immutable source and ledger references"]
-    J --> K["Owner completes observed dispatch; source remains partial"]
-    K --> L["Return actual answer; retain exact replay"]
+    P --> B{"Begin: credit admission"}
+    B -->|"Allowed"| C["Host captures native cursor when hard-capped; SDK send"]
+    B -->|"Hard limit reached"| Denial["Persist denial; keep dispatch prepared"]
+    Denial --> EmptyRange{"Complete empty native event range?"}
+    EmptyRange -->|"No"| NoSendFail["Fail closed; do not send or report no-send"]
+    EmptyRange -->|"Yes"| NoSendReceipt["Persist source-owned no-send receipt"]
+    NoSendReceipt --> BudgetError["Return budget exhausted; no SDK send"]
+    C --> Observed["Observed native IDs and bounded durable range"]
+    Observed --> ValidProof{"Range and output bytes match?"}
+    ValidProof -->|"No"| RejectProof["Reject native proof; never resend blindly"]
+    ValidProof -->|"Yes"| Partial["Persist partial native observation"]
+    Partial --> Content["Persist assistant content and native cache"]
+    Content --> Ack["Events acknowledges observed usage receipts"]
+    Ack --> Join["Events joins immutable source and ledger references"]
+    Join --> Complete["Owner completes observed dispatch; source remains partial"]
+    Complete --> Answer["Return actual answer; retain exact replay"]
     C --> T{"Registered pre-tool invocation"}
     T --> U["Current Policy allow and exact tool event"]
     U --> V{"Whole-run tool slot available?"}

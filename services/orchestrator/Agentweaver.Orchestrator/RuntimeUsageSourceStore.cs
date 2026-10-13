@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
@@ -24,6 +25,7 @@ internal sealed class RuntimeUsageSourceStore(
     private readonly string _sessions = $"\"{options.Schema}\".coordination_sessions";
     private readonly string _decisions = $"\"{options.Schema}\".coordinator_decisions";
     private readonly string _guards = $"\"{options.Schema}\".maf_execution_run_guards";
+    private readonly string _outboxEvents = $"\"{options.Schema}\".outbox_events";
     private readonly PostgresOutbox _outbox = new(dataSource, options.Schema);
 
     internal async Task<T> ExecuteLockedAsync<T>(
@@ -140,7 +142,7 @@ internal sealed class RuntimeUsageSourceStore(
         return receipt;
     }
 
-    internal async Task<RuntimeNativeTurnAdmissionReceipt?> BeginNativeTurnWithinTransactionAsync(
+    internal async Task<RuntimeNativeTurnBeginResult> BeginNativeTurnWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeGrantReceipt grant, RuntimeNativeTurnBeginRequest request,
         Func<SdkSessionFacts, CancellationToken, Task<RuntimeUsageCostSnapshotReceipt>> readCostSnapshot,
@@ -166,7 +168,7 @@ internal sealed class RuntimeUsageSourceStore(
         RequireNativeDispatch(dispatch, admission, source.Receipt.CanonicalPayloadHash);
         if (dispatch.State != "prepared")
             throw new RuntimeAuthorizationException("runtime_native_turn_indeterminate");
-        await RequireNativeCheckpointAsync(
+        var checkpointHash = await RequireNativeCheckpointAsync(
             connection, transaction, registration, admission, dispatch, cancellationToken).ConfigureAwait(false);
         var binding = registration.Binding;
         if (RequiresCopilotCreditSnapshot(binding))
@@ -186,10 +188,17 @@ internal sealed class RuntimeUsageSourceStore(
                     throw new RuntimeAuthorizationException("runtime_native_accounting_pending");
             }
             var snapshot = await readCostSnapshot(source.Receipt.Source, cancellationToken).ConfigureAwait(false);
-            if (!await ReconcileNativeCreditLimitsAsync(
+            var creditDecision = await ReconcileNativeCreditLimitsAsync(
                 connection, transaction, registration, source.Receipt.Source, dispatch.RootSessionId,
-                snapshot, cancellationToken).ConfigureAwait(false))
-                return null;
+                snapshot, cancellationToken).ConfigureAwait(false);
+            if (creditDecision.HardLimitReached)
+            {
+                var denial = await RecordNativeCreditDenialAsync(
+                    connection, transaction, registration, source.Receipt, message.MessageId,
+                    RuntimeCreditLimitDenialStage.NativeTurnBegin, checkpointHash, creditDecision,
+                    dispatch.State, dispatch.OwnerRevision, cancellationToken).ConfigureAwait(false);
+                return new(null, denial);
+            }
         }
         await using var update = new NpgsqlCommand($"""
             UPDATE {_dispatches}
@@ -201,7 +210,7 @@ internal sealed class RuntimeUsageSourceStore(
         update.Parameters.AddWithValue("revision", NpgsqlDbType.Bigint, dispatch.OwnerRevision);
         if (await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
             throw new RuntimeAuthorizationException("runtime_native_turn_conflict");
-        return admission;
+        return new(admission, null);
     }
 
     internal static void ValidateNativePreparation(
@@ -243,7 +252,7 @@ internal sealed class RuntimeUsageSourceStore(
         binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
         (binding.CopilotSoftCreditLimit is not null || binding.CopilotHardCreditLimit is not null);
 
-    private async Task<bool> ReconcileNativeCreditLimitsAsync(
+    private async Task<NativeCreditDecision> ReconcileNativeCreditLimitsAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         SdkSessionFacts source, string rootSessionId, RuntimeUsageCostSnapshotReceipt snapshot,
         CancellationToken cancellationToken)
@@ -306,6 +315,7 @@ internal sealed class RuntimeUsageSourceStore(
             warningEmitted = reader.GetBoolean(11);
             hardExhausted = reader.GetBoolean(12);
         }
+        var nextRevision = checked(revision + 1);
         await using (var update = new NpgsqlCommand($"""
             UPDATE {_guards}
             SET copilot_aic_floor = @floor, accounted_through_event_position = @ledgerEventCount,
@@ -339,7 +349,83 @@ internal sealed class RuntimeUsageSourceStore(
                     ledgerEventCount = snapshot.CopilotTotals.Events, costIdentity
                 }), timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
         }
-        return !hardExhausted && !limits.HardReached;
+        return new(observed, snapshot.CopilotTotals.Events, digest, costIdentity,
+            revision, nextRevision, hardExhausted || limits.HardReached);
+    }
+
+    private async Task<RuntimeNativeCreditDenialReceipt> RecordNativeCreditDenialAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
+        RuntimeSdkSourceReceipt source, Guid dispatchId, RuntimeCreditLimitDenialStage stage,
+        string checkpointHash, NativeCreditDecision decision, string dispatchState, long dispatchRevision,
+        CancellationToken cancellationToken)
+    {
+        var hardLimit = registration.Binding.CopilotHardCreditLimit
+            ?? throw new RuntimeAuthorizationException("runtime_native_credit_denial_invalid");
+        var recordedAt = timeProvider.GetUtcNow();
+        var denial = RuntimeNativeDenialContract.SealDenial(new(
+            1, registration.RuntimeInstanceId, registration.Revision, registration.Binding.ExecutionFence,
+            source.SourceGrantId,
+            dispatchId, stage, RuntimeCreditLimitDenialCode.HardLimitReached,
+            RuntimeContractValidation.RegistrationHash(registration),
+            RuntimeUsageSourceReceiptContract.HashSource(registration, source.Source),
+            RuntimeNativeDenialContract.DispatchHash(
+                dispatchId, RuntimeContractValidation.RegistrationHash(registration),
+                RuntimeUsageSourceReceiptContract.HashSource(registration, source.Source),
+                checkpointHash, dispatchState, dispatchRevision),
+            checkpointHash, hardLimit, decision.ObservedCredits, decision.LedgerEventCount,
+            decision.LedgerDigest, decision.CostIdentity,
+            decision.GuardRevisionBefore, decision.GuardRevisionAfter,
+            dispatchState, dispatchRevision, dispatchState, dispatchRevision, recordedAt, string.Empty));
+        RuntimeNativeDenialContract.ValidateDenial(denial, registration, source);
+        var eventId = NativeCreditDenialEventId(denial);
+        await _outbox.EnqueueAsync(connection, transaction, new OutboxEvent(
+            eventId,
+            $"coordination/{registration.Binding.ProjectId}/{registration.Binding.RunId}/native-credit-denials",
+            $"native-credit-denial/{eventId:D}",
+            "orchestrator.native_turn.credit_denied", 1,
+            JsonSerializer.SerializeToElement(denial, JsonOptions), recordedAt), cancellationToken)
+            .ConfigureAwait(false);
+        return denial;
+    }
+
+    internal async Task<RuntimeNativeCreditDenialReceipt?> ReadNativeCreditDenialWithinTransactionAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
+        RuntimeSdkSourceReceipt source, Guid dispatchId, RuntimeCreditLimitDenialStage stage,
+        CancellationToken cancellationToken)
+    {
+        if (dispatchId == Guid.Empty || !Enum.IsDefined(stage))
+            throw new RuntimeAuthorizationException("runtime_native_credit_denial_request_invalid");
+        var stageName = stage switch
+        {
+            RuntimeCreditLimitDenialStage.Preparation => "preparation",
+            RuntimeCreditLimitDenialStage.NativeTurnBegin => "nativeTurnBegin",
+            _ => throw new RuntimeAuthorizationException("runtime_native_credit_denial_request_invalid")
+        };
+        await using var command = new NpgsqlCommand($"""
+            SELECT payload::text FROM {_outboxEvents}
+            WHERE stream_id = @stream AND event_type = 'orchestrator.native_turn.credit_denied'
+                AND event_version = 1 AND payload->>'dispatchId' = @dispatch
+                AND payload->>'runtimeInstanceId' = @runtime AND payload->>'stage' = @stage
+            ORDER BY sequence DESC LIMIT 1
+            """, connection, transaction);
+        command.Parameters.AddWithValue("stream", NpgsqlDbType.Text,
+            $"coordination/{registration.Binding.ProjectId}/{registration.Binding.RunId}/native-credit-denials");
+        command.Parameters.AddWithValue("dispatch", NpgsqlDbType.Text, dispatchId.ToString("D"));
+        command.Parameters.AddWithValue("runtime", NpgsqlDbType.Text, registration.RuntimeInstanceId.ToString("D"));
+        command.Parameters.AddWithValue("stage", NpgsqlDbType.Text, stageName);
+        var payload = (string?)await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        if (payload is null)
+            return null;
+        var denial = Deserialize<RuntimeNativeCreditDenialReceipt>(payload);
+        RuntimeNativeDenialContract.ValidateDenial(denial, registration, source);
+        return denial;
+    }
+
+    private static Guid NativeCreditDenialEventId(RuntimeNativeCreditDenialReceipt denial)
+    {
+        var key = $"native-credit-denial\0{denial.RuntimeInstanceId:D}\0{denial.DispatchId:D}\0" +
+            $"{denial.Stage}\0{denial.GuardRevisionAfter}";
+        return Guid.ParseExact(RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(key))[..32], "N");
     }
 
     private static void AddCreditGuardScope(
@@ -354,7 +440,7 @@ internal sealed class RuntimeUsageSourceStore(
         command.Parameters.AddWithValue("cost", NpgsqlDbType.Varchar, costIdentity);
     }
 
-    internal async Task<bool> PrepareNativeTurnWithinTransactionAsync(
+    internal async Task<RuntimeNativeCreditDenialReceipt?> PrepareNativeTurnWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, SessionIdentity root,
         MafExecutionCheckpointSnapshot checkpoint, MafExecutionDispatchIntent intent,
         RuntimeRegistration registration, RuntimeA2ASendRequest message,
@@ -389,8 +475,26 @@ internal sealed class RuntimeUsageSourceStore(
             source.Source.ModelSelectionReference, source.Source.ModelId, intent.PromptHash, admission.RequestHash,
             1, "prepared", checkpoint.State.WorkPlanId, intent.AssociationId, checkpoint.Info.CheckpointId,
             checkpoint.State.Revision, checkpoint.State.DecisionStateVersion, null, null);
-        await RequireNativeCheckpointAsync(
+        var checkpointHash = await RequireNativeCheckpointAsync(
             connection, transaction, registration, admission, prepared, cancellationToken).ConfigureAwait(false);
+        var marker = await ReadNativeDispatchMarkerAsync(
+            connection, transaction, registration, intent.MessageId, cancellationToken).ConfigureAwait(false);
+        if (marker is not null)
+        {
+            var existingDispatch = await ReadNativeDispatchAsync(
+                connection, transaction, registration, intent.MessageId, cancellationToken).ConfigureAwait(false);
+            RequireNativeDispatch(existingDispatch, admission, source.CanonicalPayloadHash);
+            if (existingDispatch.RootSessionId != prepared.RootSessionId ||
+                existingDispatch.WorkPlanId != prepared.WorkPlanId ||
+                existingDispatch.AssociationId != prepared.AssociationId ||
+                existingDispatch.CheckpointId != prepared.CheckpointId ||
+                existingDispatch.CheckpointRevision != prepared.CheckpointRevision ||
+                existingDispatch.DecisionStateVersion != prepared.DecisionStateVersion)
+                throw new RuntimeAuthorizationException("runtime_native_turn_conflict");
+            if (existingDispatch.State != "prepared" || existingDispatch.OwnerRevision != 1)
+                throw new RuntimeAuthorizationException("runtime_native_turn_indeterminate");
+            marker = new(existingDispatch.State, existingDispatch.OwnerRevision);
+        }
         if (registration.Binding.MaxModelTurns is { } maxModelTurns)
         {
             await using var count = new NpgsqlCommand($"""
@@ -406,10 +510,15 @@ internal sealed class RuntimeUsageSourceStore(
         if (RequiresCopilotCreditSnapshot(registration.Binding))
         {
             var snapshot = await readCostSnapshot(source.Source, cancellationToken).ConfigureAwait(false);
-            if (!await ReconcileNativeCreditLimitsAsync(
+            var creditDecision = await ReconcileNativeCreditLimitsAsync(
                 connection, transaction, registration, source.Source, root.SessionId, snapshot, cancellationToken)
-                .ConfigureAwait(false))
-                return false;
+                .ConfigureAwait(false);
+            if (creditDecision.HardLimitReached)
+                return await RecordNativeCreditDenialAsync(
+                    connection, transaction, registration, source, intent.MessageId,
+                    RuntimeCreditLimitDenialStage.Preparation, checkpointHash, creditDecision,
+                    marker?.State ?? "absent", marker?.OwnerRevision ?? 0, cancellationToken)
+                    .ConfigureAwait(false);
         }
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_dispatches}
@@ -454,7 +563,7 @@ internal sealed class RuntimeUsageSourceStore(
             throw new RuntimeAuthorizationException("runtime_native_turn_conflict");
         if (retained.State != "prepared" || retained.OwnerRevision != 1)
             throw new RuntimeAuthorizationException("runtime_native_turn_indeterminate");
-        return true;
+        return null;
     }
 
     internal async Task<RuntimeNativeTurnRecordedReceipt> RecordNativeTurnWithinTransactionAsync(
@@ -553,6 +662,99 @@ internal sealed class RuntimeUsageSourceStore(
             reader.GetInt64(16), reader.GetInt64(17), reader.IsDBNull(18) ? null : reader.GetString(18),
             reader.IsDBNull(19) ? null : reader.GetString(19));
     }
+
+    private async Task<NativeDispatchMarker?> ReadNativeDispatchMarkerAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
+        Guid messageId, CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT dispatch_state, owner_revision FROM {_dispatches}
+            WHERE project_id = @project AND run_id = @run AND dispatch_id = @message
+            FOR UPDATE
+            """, connection, transaction);
+        AddNativeScope(command, registration, messageId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? new(reader.GetString(0), reader.GetInt64(1))
+            : null;
+    }
+
+    internal async Task<RuntimeNativeTurnNoSendReceipt> RecordNativeTurnNoSendWithinTransactionAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
+        RuntimeGrantReceipt grant, RuntimeNativeTurnNoSendEvidenceRequest request,
+        CancellationToken cancellationToken)
+    {
+        var source = await ReadSourceAsync(connection, transaction, registration.RuntimeInstanceId, cancellationToken)
+            .ConfigureAwait(false) ?? throw new RuntimeAuthorizationException("runtime_sdk_source_unknown");
+        RequireSource(source, registration, grant);
+        RuntimeNativeDenialContract.ValidateRequest(request, registration, source.Receipt);
+        var denial = await ReadNativeCreditDenialWithinTransactionAsync(
+            connection, transaction, registration, source.Receipt, request.Denial.DispatchId,
+            RuntimeCreditLimitDenialStage.NativeTurnBegin, cancellationToken).ConfigureAwait(false);
+        var storedDenial = denial
+            ?? throw new RuntimeAuthorizationException("runtime_native_credit_denial_conflict");
+        if (storedDenial.CanonicalPayloadHash != request.Denial.CanonicalPayloadHash)
+            throw new RuntimeAuthorizationException("runtime_native_credit_denial_conflict");
+
+        var existing = await ReadNativeTurnNoSendWithinTransactionAsync(
+            connection, transaction, registration, request.Denial.CanonicalPayloadHash, cancellationToken)
+            .ConfigureAwait(false);
+        if (existing is not null)
+        {
+            RuntimeNativeDenialContract.ValidateNoSend(existing, storedDenial, registration, source.Receipt);
+            return existing;
+        }
+
+        var dispatch = await ReadNativeDispatchAsync(
+            connection, transaction, registration, request.Denial.DispatchId, cancellationToken).ConfigureAwait(false);
+        var expectedAdmission = new RuntimeNativeTurnAdmissionReceipt(
+            registration, source.Receipt.Source, request.Denial.DispatchId, dispatch.PromptHash,
+            dispatch.RequestHash, checked(dispatch.OwnerRevision + 1));
+        RequireNativeDispatch(dispatch, expectedAdmission, source.Receipt.CanonicalPayloadHash);
+        if (dispatch.State != "prepared" ||
+            dispatch.OwnerRevision != request.Denial.DispatchRevisionAfter)
+            throw new RuntimeAuthorizationException("runtime_native_credit_denial_conflict");
+        var checkpointHash = await RequireNativeCheckpointAsync(
+            connection, transaction, registration, expectedAdmission, dispatch, cancellationToken)
+            .ConfigureAwait(false);
+        if (checkpointHash != storedDenial.CheckpointHash ||
+            RuntimeNativeDenialContract.DispatchHash(
+                request.Denial.DispatchId, storedDenial.RegistrationHash, storedDenial.SourceHash,
+                checkpointHash, dispatch.State, dispatch.OwnerRevision) !=
+            storedDenial.DispatchHash)
+            throw new RuntimeAuthorizationException("runtime_native_credit_denial_conflict");
+
+        var eventId = NativeTurnNoSendEventId(denial.CanonicalPayloadHash);
+        await _outbox.EnqueueAsync(connection, transaction, new OutboxEvent(
+            eventId,
+            $"coordination/{registration.Binding.ProjectId}/{registration.Binding.RunId}/native-no-sends",
+            $"native-turn-no-send/{eventId:D}",
+            "orchestrator.native_turn.no_send", 1,
+            JsonSerializer.SerializeToElement(request.Evidence, JsonOptions),
+            request.Evidence.VerifiedAt), cancellationToken).ConfigureAwait(false);
+        return request.Evidence;
+    }
+
+    private async Task<RuntimeNativeTurnNoSendReceipt?> ReadNativeTurnNoSendWithinTransactionAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
+        string denialHash, CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT payload::text FROM {_outboxEvents}
+            WHERE stream_id = @stream AND event_type = 'orchestrator.native_turn.no_send'
+                AND event_version = 1 AND payload->>'denialReceiptHash' = @denial
+            ORDER BY sequence DESC LIMIT 1
+            """, connection, transaction);
+        command.Parameters.AddWithValue("stream", NpgsqlDbType.Text,
+            $"coordination/{registration.Binding.ProjectId}/{registration.Binding.RunId}/native-no-sends");
+        command.Parameters.AddWithValue("denial", NpgsqlDbType.Text, denialHash);
+        var payload = (string?)await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return payload is null ? null : Deserialize<RuntimeNativeTurnNoSendReceipt>(payload);
+    }
+
+    private static Guid NativeTurnNoSendEventId(string denialHash) =>
+        Guid.ParseExact(RuntimeContractValidation.Hash(
+            Encoding.UTF8.GetBytes($"native-turn-no-send\0{denialHash}"))[..32], "N");
 
     internal async Task<RuntimeNativeTurnRecordedReceipt> ReadNativeTurnWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
@@ -725,7 +927,7 @@ internal sealed class RuntimeUsageSourceStore(
             throw new RuntimeAuthorizationException("runtime_native_turn_admission_invalid");
     }
 
-    private async Task RequireNativeCheckpointAsync(
+    private async Task<string> RequireNativeCheckpointAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeNativeTurnAdmissionReceipt admission, NativeDispatch dispatch, CancellationToken cancellationToken)
     {
@@ -770,6 +972,7 @@ internal sealed class RuntimeUsageSourceStore(
             checkpoint.Results.ContainsKey(dispatch.AssociationId) ||
             !IsNativeDispatchRunning(checkpoint, dispatch.AssociationId))
             throw new RuntimeAuthorizationException("runtime_native_turn_checkpoint_stale");
+        return RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(payload));
     }
 
     private static bool IsNativeDispatchRunning(MafExecutionCheckpoint checkpoint, string associationId) =>
@@ -801,6 +1004,12 @@ internal sealed class RuntimeUsageSourceStore(
         string ModelId, string PromptHash, string RequestHash, long OwnerRevision, string State,
         string WorkPlanId, string AssociationId, string CheckpointId, long CheckpointRevision,
         long DecisionStateVersion, string? ReportHash, string? ReportJson);
+
+    private sealed record NativeDispatchMarker(string State, long OwnerRevision);
+
+    private sealed record NativeCreditDecision(
+        decimal ObservedCredits, long LedgerEventCount, string LedgerDigest, string CostIdentity,
+        long GuardRevisionBefore, long GuardRevisionAfter, bool HardLimitReached);
 
     internal async Task<RuntimeSdkSourceReceipt> ReadCurrentSourceAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,

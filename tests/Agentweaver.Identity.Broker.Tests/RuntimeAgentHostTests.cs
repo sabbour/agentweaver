@@ -1378,7 +1378,7 @@ public sealed class RuntimeAgentHostTests
     {
         await using var fixture = new HostFixture(hardCreditLimit: 100m, workflowBound: true)
         {
-            NativeAdmissionFault = "denied"
+            NativeAdmissionFault = "hard-limit-denied"
         };
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
@@ -1390,11 +1390,17 @@ public sealed class RuntimeAgentHostTests
         Assert.Equal(1, fixture.CostPreflightRequests);
         Assert.Equal(message.Message.MessageId, Assert.Single(fixture.ModelTurnActions).DispatchId);
         Assert.Single(fixture.NativeAdmissions);
+        var noSend = Assert.Single(fixture.NativeNoSendEvidence);
+        Assert.Equal(message.Message.MessageId, noSend.Denial.DispatchId);
+        Assert.Equal(0, noSend.Evidence.ObservedEventCount);
+        Assert.True(noSend.Evidence.RangeComplete);
         Assert.DoesNotContain(fixture.Material, material =>
             material.Kind is SessionMaterialKind.TurnContent or SessionMaterialKind.SdkCache);
         Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.Contains(fixture.Sdk.Requests, request => request.Method == "session.eventLog.tail");
+        Assert.Contains(fixture.Sdk.Requests, request => request.Method == "session.eventLog.read");
         Assert.Equal(
-            ["preflight", "action-authorize", "action-verify", "begin"],
+            ["preflight", "action-authorize", "action-verify", "begin", "no-send"],
             fixture.NativePathEvents.ToArray());
     }
 
@@ -1856,6 +1862,7 @@ public sealed class RuntimeAgentHostTests
         public ConcurrentQueue<string> ResumeMaterialReadRequests { get; } = new();
         public ConcurrentQueue<RuntimeUsageSourceReceipt> Usage { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnBeginRequest> NativeAdmissions { get; } = new();
+        public ConcurrentQueue<RuntimeNativeTurnNoSendEvidenceRequest> NativeNoSendEvidence { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnObservationRequest> NativeObservations { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnAccountingRequest> NativeAccounting { get; } = new();
         public ConcurrentQueue<Guid> CostTurnRequests { get; } = new();
@@ -2265,6 +2272,27 @@ public sealed class RuntimeAgentHostTests
                 NativePathEvents.Enqueue("begin");
                 if (NativeAdmissionFault == "denied")
                     return Response(request, new { }, HttpStatusCode.Forbidden);
+                if (NativeAdmissionFault == "hard-limit-denied")
+                {
+                    var source = _facts!;
+                    var sourceHash = RuntimeUsageSourceReceiptContract.HashSource(Registration, source);
+                    var checkpointHash = new string('a', 64);
+                    var dispatchId = begin.Message.Message.MessageId;
+                    var registrationHash = RuntimeContractValidation.RegistrationHash(Registration);
+                    var denial = RuntimeNativeDenialContract.SealDenial(new(
+                        1, Registration.RuntimeInstanceId, Registration.Revision,
+                        Registration.Binding.ExecutionFence, begin.Authorization.GrantId,
+                        dispatchId, RuntimeCreditLimitDenialStage.NativeTurnBegin,
+                        RuntimeCreditLimitDenialCode.HardLimitReached,
+                        registrationHash, sourceHash,
+                        RuntimeNativeDenialContract.DispatchHash(
+                            dispatchId, registrationHash, sourceHash, checkpointHash, "prepared", 1),
+                        checkpointHash, Registration.Binding.CopilotHardCreditLimit!.Value,
+                        Registration.Binding.CopilotHardCreditLimit.Value, 1, new string('b', 64),
+                        new string('c', 64), 2, 3, "prepared", 1, "prepared", 1,
+                        Time.GetUtcNow(), string.Empty));
+                    return Response(request, new RuntimeNativeTurnBeginResult(null, denial));
+                }
                 var admission = new RuntimeNativeTurnAdmissionReceipt(Configure.Registration, _facts!,
                     begin.Message.Message.MessageId,
                     RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(begin.Message.Message.Parts[0].Text)),
@@ -2278,7 +2306,19 @@ public sealed class RuntimeAgentHostTests
                 };
                 if (NativeAdmissionFault == "stale")
                     Registration = Registration with { Revision = 2 };
-                return Response(request, admission);
+                return Response(request, new RuntimeNativeTurnBeginResult(admission, null));
+            }
+            if (path == "/internal/runtime/turns/no-send")
+            {
+                var noSend = await ReadAsync<RuntimeNativeTurnNoSendEvidenceRequest>(request, token);
+                var source = _facts!;
+                var sourceReceipt = new RuntimeSdkSourceReceipt(
+                    Registration.RuntimeInstanceId, Registration.Revision, noSend.Authorization.GrantId,
+                    source, RuntimeUsageSourceReceiptContract.HashSource(Registration, source), Time.GetUtcNow());
+                RuntimeNativeDenialContract.ValidateRequest(noSend, Registration, sourceReceipt);
+                NativeNoSendEvidence.Enqueue(noSend);
+                NativePathEvents.Enqueue("no-send");
+                return Response(request, noSend.Evidence);
             }
             if (path == "/internal/runtime/turns/observations")
             {

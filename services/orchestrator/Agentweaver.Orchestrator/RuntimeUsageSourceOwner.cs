@@ -60,19 +60,48 @@ internal sealed class RuntimeUsageSourceOwner(
                     connection, transaction, registration, grant, request.Observation, token), cancellationToken);
     }
 
-    internal async Task<RuntimeNativeTurnAdmissionReceipt> BeginNativeTurnAsync(
+    internal Task<RuntimeNativeTurnBeginResult> BeginNativeTurnAsync(
         HttpContext context, RuntimeNativeTurnBeginRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request.Authorization);
         ArgumentNullException.ThrowIfNull(request.Message);
         ArgumentNullException.ThrowIfNull(request.Source);
-        var receipt = await ExecuteWriteAsync(context, request.Authorization,
+        return ExecuteWriteAsync(context, request.Authorization,
             (connection, transaction, registration, grant, actor, token) =>
                 store.BeginNativeTurnWithinTransactionAsync(
                     connection, transaction, registration, grant, request,
                     (source, currentToken) => broker.ReadCostSnapshotAsync(actor, options.EventsOwnerBaseAddress,
-                        new(1, registration, source), currentToken), token), cancellationToken).ConfigureAwait(false);
-        return receipt ?? throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
+                        new(1, registration, source), currentToken), token), cancellationToken);
+    }
+
+    internal Task<RuntimeNativeCreditDenialReadResult> ReadNativeCreditDenialAsync(
+        HttpContext context, RuntimeNativeCreditDenialReadRequest request, CancellationToken cancellationToken)
+    {
+        RuntimeNativeDenialContract.ValidateReadRequest(request);
+        return ExecuteWriteAsync(context, request.Authorization,
+            async (connection, transaction, registration, grant, actor, token) =>
+            {
+                var source = await store.ReadCurrentSourceForGrantAsync(
+                    connection, transaction, registration, grant, token).ConfigureAwait(false);
+                var receipt = await store.ReadNativeCreditDenialWithinTransactionAsync(
+                    connection, transaction, registration, source, request.DispatchId, request.Stage, token)
+                    .ConfigureAwait(false);
+                return new RuntimeNativeCreditDenialReadResult(receipt);
+            }, cancellationToken);
+    }
+
+    internal Task<RuntimeNativeTurnNoSendReceipt> RecordNativeTurnNoSendAsync(
+        HttpContext context, RuntimeNativeTurnNoSendEvidenceRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Authorization);
+        ArgumentNullException.ThrowIfNull(request.Denial);
+        ArgumentNullException.ThrowIfNull(request.Evidence);
+        return ExecuteWriteAsync(context, request.Authorization,
+            (connection, transaction, registration, grant, actor, token) =>
+                store.RecordNativeTurnNoSendWithinTransactionAsync(
+                    connection, transaction, registration, grant, request, token), cancellationToken);
     }
 
     internal async Task PrepareNativeTurnAsync(
@@ -88,11 +117,11 @@ internal sealed class RuntimeUsageSourceOwner(
             throw new RuntimeAuthorizationException("runtime_actor_expired");
         var bearer = new SecretCredential(
             CoordinationIdentity.RequireBearer(context).Parameter!, expiry.Value, timeProvider);
-        bool prepared;
+        RuntimeNativeCreditDenialReceipt? denial;
         try
         {
             var actor = new RuntimeActorAuthorization(bearer, CoordinationIdentity.ReadTenantSelector(context));
-            prepared = await store.ExecuteLockedAsync(expected.RuntimeInstanceId,
+            denial = await store.ExecuteLockedAsync(expected.RuntimeInstanceId,
             (connection, transaction, token) => registrations.ExecuteCurrentAsync(
                 context, expected.RuntimeInstanceId, async (registration, currentToken) =>
                 {
@@ -116,7 +145,7 @@ internal sealed class RuntimeUsageSourceOwner(
         {
             bearer.Invalidate();
         }
-        if (!prepared)
+        if (denial is not null)
             throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
     }
 
