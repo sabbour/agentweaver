@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
@@ -1277,6 +1278,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         Assert.NotEmpty(endpoint.Metadata.GetOrderedMetadata<IAuthorizeData>());
 
         var context = RuntimeHttpContext(app.Services);
+        context.Features.Set<IHttpRequestBodyDetectionFeature>(new RequestBodyDetectionFeature());
         context.Request.Method = HttpMethods.Post;
         context.Request.ContentType = "application/json";
         var requestBytes = JsonSerializer.SerializeToUtf8Bytes(request with { Authorization = proof }, OwnerJson);
@@ -1284,7 +1286,10 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         context.Request.Body = new MemoryStream(requestBytes);
         context.Response.Body = new MemoryStream();
         await endpoint.RequestDelegate!(context);
-        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        context.Response.Body.Position = 0;
+        var responseBody = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        Assert.True(context.Response.StatusCode == StatusCodes.Status200OK,
+            $"The fixed-credit read route returned HTTP {context.Response.StatusCode}: {responseBody}");
         context.Response.Body.Position = 0;
         return await JsonSerializer.DeserializeAsync<RuntimeFixedCreditGuardReadResult>(
                    context.Response.Body, OwnerJson)
@@ -1337,6 +1342,11 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             BrokerHttp.Dispose();
             ContextServices.Dispose();
         }
+    }
+
+    private sealed class RequestBodyDetectionFeature : IHttpRequestBodyDetectionFeature
+    {
+        public bool CanHaveBody => true;
     }
 
     private sealed class OwnerAuthentication(DateTimeOffset expiresAt) : IAuthenticationService
