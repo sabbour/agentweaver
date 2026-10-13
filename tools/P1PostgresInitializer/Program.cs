@@ -60,9 +60,7 @@ var plan = JsonSerializer.Deserialize<PostgresPlan>(planJson, new JsonSerializer
 {
     PropertyNameCaseInsensitive = true,
 }) ?? throw new InvalidOperationException("The exact source plan is missing.");
-if (plan.Services.Any(service => service.Tables.Any(table => table.MutationDenialRequired)))
-    throw new InvalidOperationException(
-        "Initialization remains blocked until the separate row-lock mutation guards and restricted-role tests are reviewed. No credential or database connection was used.");
+InitializerChecks.AssertMutationDenialPlan(plan.Services);
 
 var receiptPath = Path.GetFullPath(args[8]);
 var receiptRoot = Path.GetFullPath("Temp") + Path.DirectorySeparatorChar;
@@ -222,7 +220,7 @@ try
             await ReadExistingBoundaryAsync(connection, grants, plan, cancellationToken),
             [.. connectedRoles, runtimeOid]);
         await AssertFunctionGrantsAsync(connection, grants, service, operatorOid, runtimeOid, cancellationToken);
-        await transactionCheckAsync(connection, grants, service, cancellationToken);
+        await transactionCheckAsync(connection, grants, service, operatorOid, runtimeOid, cancellationToken);
         await grants.CommitAsync(cancellationToken);
         connectedRoles.Add(runtimeOid);
         await RecordAsync($"{service.Service}:exact_grants_checked_and_committed");
@@ -405,7 +403,8 @@ static async Task<T> ReadJsonAsync<T>(NpgsqlConnection connection, NpgsqlTransac
         ?? throw new InvalidOperationException("The required ownership and privilege facts are missing.");
 }
 
-static async Task transactionCheckAsync(NpgsqlConnection connection, NpgsqlTransaction transaction, ServicePlan service, CancellationToken cancellationToken)
+static async Task transactionCheckAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
+    ServicePlan service, uint ownerOid, uint runtimeOid, CancellationToken cancellationToken)
 {
     await using var query = new NpgsqlCommand("""
         SELECT rolcanlogin AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole
@@ -435,6 +434,61 @@ static async Task transactionCheckAsync(NpgsqlConnection connection, NpgsqlTrans
                 throw new InvalidOperationException($"Unexpected {privilege} authority on {service.Schema}.{table.Table}.");
         }
         if (table.LockColumn is not null)
-            throw new InvalidOperationException("One-column row-lock grants still require reviewed mutation-denial source and restricted-role proof. Initialization is not yet permitted.");
+        {
+            await using var columnCheck = new NpgsqlCommand("""
+                SELECT has_column_privilege(@role, @table, @column, 'UPDATE')
+                  AND NOT EXISTS (
+                    SELECT 1 FROM pg_catalog.pg_attribute a
+                    WHERE a.attrelid = pg_catalog.to_regclass(@table)
+                      AND a.attnum > 0 AND NOT a.attisdropped AND a.attname <> @column
+                      AND pg_catalog.has_column_privilege(@role, a.attrelid, a.attnum, 'UPDATE'))
+                """, connection, transaction);
+            columnCheck.Parameters.AddWithValue("role", service.Role);
+            columnCheck.Parameters.AddWithValue("table", $"{service.Schema}.{table.Table}");
+            columnCheck.Parameters.AddWithValue("column", table.LockColumn);
+            if (await columnCheck.ExecuteScalarAsync(cancellationToken) is not true)
+                throw new InvalidOperationException(
+                    $"The {service.Service} role does not have exactly its planned UPDATE column on {service.Schema}.{table.Table}.");
+        }
     }
+    var mutationGuards = await ReadMutationGuardStatesAsync(connection, transaction, service, cancellationToken);
+    InitializerChecks.AssertMutationDenialGuards(service, mutationGuards, ownerOid, runtimeOid);
+}
+
+static Task<MutationGuardState[]> ReadMutationGuardStatesAsync(NpgsqlConnection connection,
+    NpgsqlTransaction transaction, ServicePlan service, CancellationToken cancellationToken)
+{
+    var protectedTables = service.Tables.Where(table => table.MutationDenialRequired).ToArray();
+    if (protectedTables.Length == 0) return Task.FromResult(Array.Empty<MutationGuardState>());
+    return ReadJsonAsync<MutationGuardState[]>(connection, transaction, """
+        SELECT coalesce(jsonb_agg(jsonb_build_object(
+          'table', expected.table_name,
+          'triggerName', t.tgname,
+          'functionSchema', function_namespace.nspname,
+          'functionName', CASE WHEN p.oid IS NULL THEN NULL ELSE p.proname || '()' END,
+          'triggerType', t.tgtype,
+          'enabled', t.tgenabled::text,
+          'isInternal', t.tgisinternal,
+          'noColumnFilter', CASE WHEN t.oid IS NULL THEN NULL ELSE t.tgattr = ''::int2vector END,
+          'noCondition', CASE WHEN t.oid IS NULL THEN NULL ELSE t.tgqual IS NULL END,
+          'argumentCount', t.tgnargs,
+          'functionOwnerOid', p.proowner,
+          'runtimeCanExecute', CASE WHEN p.oid IS NULL THEN NULL
+            ELSE pg_catalog.has_function_privilege(@role, p.oid, 'EXECUTE') END,
+          'functionSource', p.prosrc)
+          ORDER BY expected.table_name), '[]'::jsonb)::text
+        FROM unnest(@tables, @triggers, @functions) AS expected(table_name, trigger_name, function_name)
+        LEFT JOIN pg_catalog.pg_namespace service_namespace ON service_namespace.nspname = @schema
+        LEFT JOIN pg_catalog.pg_class c
+          ON c.relnamespace = service_namespace.oid AND c.relname = expected.table_name
+        LEFT JOIN pg_catalog.pg_trigger t
+          ON t.tgrelid = c.oid AND t.tgname = expected.trigger_name
+        LEFT JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
+        LEFT JOIN pg_catalog.pg_namespace function_namespace ON function_namespace.oid = p.pronamespace
+        """, cancellationToken,
+        new NpgsqlParameter("tables", protectedTables.Select(table => table.Table).ToArray()),
+        new NpgsqlParameter("triggers", protectedTables.Select(table => table.MutationDenialGuard!.Trigger).ToArray()),
+        new NpgsqlParameter("functions", protectedTables.Select(table => table.MutationDenialGuard!.Function).ToArray()),
+        new NpgsqlParameter("schema", service.Schema),
+        new NpgsqlParameter("role", service.Role));
 }

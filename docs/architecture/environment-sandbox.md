@@ -341,7 +341,14 @@ Environment lifecycle generation, Sandbox resource generation, provider fence,
 and operation ID.
 
 The optional typed `AgentHost` launch profile pins only a trusted ConfigMap name and TLS Secret name.
-The adapter adds fixed private state/temporary volumes, readonly configuration/TLS mounts, UID/GID/fsGroup 1654, and HTTPS health probes.
+The adapter adds fixed private state/temporary volumes, read-only configuration/TLS mounts,
+UID/GID/fsGroup 1000, and HTTPS health probes. Only this profile asks the Sandbox
+controller to create its private ClusterIP Service. The provider and runtime endpoint
+require HTTPS on TCP 8443 and verify that the Service selector resolves to exactly the
+actual AgentHost Pod; no shared AgentHost Deployment or Service is created.
+That Pod has stable `agentweaver.io/workload: agenthost` and
+`agentweaver.io/identity-client: "true"` labels. The latter selects the existing
+Identity Broker network rule and grants no application authority.
 It uses the exact negotiated workspace as the SDK working directory.
 It validates the profile on both template and actual Pod readback.
 Absent profiles preserve the legacy template without native-host configuration.
@@ -570,11 +577,14 @@ double-underscore names, for example
 
 | Key | Purpose |
 | --- | --- |
-| `OptionsSchemaVersion` | Must be `1`. |
+| `OptionsSchemaVersion` | Must be `2`. |
 | `OptionsRevision` | Bounded immutable revision selected for this adapter. |
 | `Namespace` | Namespace for Sandbox objects; it must match the Cilium and Workspace PVC namespace. |
 | `WorkspaceStorageProviderId` | Supported Storage adapter ID; currently `azure-files-csi`. |
-| `ContainerImage` | AgentHost image reference used by the Sandbox template. |
+| `ContainerImage` | Exact digest-pinned AgentHost image reference used by the Sandbox template. |
+| `ContainerImagePlatform` | Must be `linux/amd64` for the measured AgentHost image. |
+| `ContainerImageCompressedPullBytes` | Positive compressed-pull-byte measurement for that exact image. |
+| `AgentHost` | Optional typed launch profile naming the existing configuration ConfigMap and TLS Secret; enables the controller Service and native HTTPS listener. |
 | `RuntimeClassName` | Kubernetes RuntimeClass selected for the Pod. |
 | `ExpectedRuntimeHandler` | Handler value that must be read back from that RuntimeClass. |
 | `CpuRequest`, `MemoryRequest` | Bounded Kubernetes resource quantities used as both requests and limits. |

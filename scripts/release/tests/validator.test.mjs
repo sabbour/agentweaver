@@ -408,7 +408,9 @@ const validEvidence = {
 const release = () => edit((m) => {
   m.stage = 'release';
   for (const component of m.components) {
-    if (component.kind === 'service') component.imageDigest = `sha256:${'b'.repeat(64)}`;
+    if (component.kind === 'service' && component.id !== 'Agentweaver.FoundationProbe') {
+      component.imageDigest = `sha256:${'b'.repeat(64)}`;
+    }
   }
   m.components.push({
     id: 'Agentweaver.Example',
@@ -475,4 +477,20 @@ test('draft services may honestly omit an image digest, but release services may
   assert.throws(() => check(draftWithBadDigest, { readProject: releaseProject }), /sha256 image digest/);
   assert.throws(() => checkRelease(editRelease((m) => { delete m.components.at(-1).imageDigest; })),
     /requires a published sha256 image digest/);
+});
+
+test('release product images are digest-pinned while the acceptance-only Probe stays outside the release', () => {
+  const released = release();
+  const probe = released.components.find(({ id }) => id === 'Agentweaver.FoundationProbe');
+  assert.equal(probe.version, '0.0.1');
+  assert.equal(probe.imageDigest, undefined);
+  assert.equal(checkRelease(released).stage, 'release');
+  const changedProbe = editRelease((m) => {
+    m.components.find(({ id }) => id === 'Agentweaver.FoundationProbe').version = '0.0.2';
+  });
+  assert.throws(() => check(changedProbe, {
+    readProject: (file) => file.includes('Agentweaver.FoundationProbe.csproj')
+      ? readProject(file).replace('<Version>0.0.1</Version>', '<Version>0.0.2</Version>')
+      : releaseProject(file),
+  }), /acceptance-only and must remain service 0.0.1 in a product release/);
 });

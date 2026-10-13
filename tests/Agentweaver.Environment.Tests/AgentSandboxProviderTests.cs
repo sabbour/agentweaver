@@ -258,7 +258,11 @@ public sealed partial class AgentSandboxProviderTests
         Assert.Equal(3, handler.CreateCount);
         Assert.Equal(provisioned.Resource, duplicate.Resource);
         Assert.Equal(provisioned.Endpoint, duplicate.Endpoint);
-        var podSpec = handler.GetCreated("sandboxtemplates")["spec"]!["podTemplate"]!["spec"]!;
+        var template = handler.GetCreated("sandboxtemplates");
+        Assert.Equal(agentHostProfile, template["spec"]!["service"]!.GetValue<bool>());
+        var podTemplate = template["spec"]!["podTemplate"]!;
+        var podLabels = podTemplate["metadata"]!["labels"]!;
+        var podSpec = podTemplate["spec"]!;
         var container = podSpec["containers"]![0]!;
         Assert.Equal(1000, podSpec["securityContext"]!["runAsUser"]!.GetValue<int>());
         Assert.Equal(agentHostProfile ? 5 : 1, podSpec["volumes"]!.AsArray().Count);
@@ -266,6 +270,10 @@ public sealed partial class AgentSandboxProviderTests
         var pinnedJson = JsonSerializer.Serialize(options, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         if (agentHostProfile)
         {
+            Assert.Equal("agenthost", podLabels["app.kubernetes.io/name"]!.GetValue<string>());
+            Assert.Equal("agenthost", podLabels["agentweaver.io/service"]!.GetValue<string>());
+            Assert.Equal("agenthost", podLabels["agentweaver.io/workload"]!.GetValue<string>());
+            Assert.Equal("true", podLabels["agentweaver.io/identity-client"]!.GetValue<string>());
             Assert.Equal(1000, podSpec["securityContext"]!["fsGroup"]!.GetValue<int>());
             Assert.Equal(1000, container["securityContext"]!["runAsUser"]!.GetValue<int>());
             Assert.Equal(1000, container["securityContext"]!["runAsGroup"]!.GetValue<int>());
@@ -335,12 +343,17 @@ public sealed partial class AgentSandboxProviderTests
                 new("https://sandbox-a.agentweaver.svc.cluster.local:8443/"),
                 "10.2.3.4", "pod-uid", "service-uid"), endpointObservation.RuntimeEndpoint);
             Assert.Equal(SandboxObservedState.Pending, endpointObservation.State);
-            foreach (var fault in new[] { "foreign-service-owner", "foreign-pod-selector", "foreign-dns" })
+            foreach (var fault in new[]
+            {
+                "foreign-service-owner", "foreign-pod-selector", "foreign-dns",
+                "external-service", "foreign-service-port", "ambiguous-pod-selector"
+            })
             {
                 handler.SetRuntimeEndpointFault(fault);
-                Assert.Equal("sandbox_runtime_endpoint_unavailable",
-                    (await Assert.ThrowsAsync<SandboxProviderException>(() =>
-                        provider.DescribeAsync(endpointRequest))).Code);
+                var failure = await Record.ExceptionAsync(() => provider.DescribeAsync(endpointRequest));
+                Assert.True(failure is SandboxProviderException, $"Fault '{fault}' was not rejected.");
+                var unavailable = (SandboxProviderException)failure!;
+                Assert.Equal("sandbox_runtime_endpoint_unavailable", unavailable.Code);
                 handler.SetRuntimeEndpointFault(null);
             }
         }
@@ -678,7 +691,8 @@ public sealed partial class AgentSandboxProviderTests
                 {"apiVersion":"v1","kind":"Service",
                  "metadata":{"name":"sandbox-a","namespace":"agentweaver","uid":"service-uid",
                    "ownerReferences":[{"kind":"Sandbox","uid":"sandbox-uid","controller":true}]},
-                 "spec":{"selector":{"egress.example/selector":"environment-a"}}}
+                 "spec":{"type":"ClusterIP","selector":{"egress.example/selector":"environment-a"},
+                   "ports":[{"name":"https","port":8443,"targetPort":"https","protocol":"TCP"}]}}
                 """)!;
         }
 
@@ -689,9 +703,25 @@ public sealed partial class AgentSandboxProviderTests
                 fault == "foreign-service-owner" ? "foreign" : "sandbox-uid";
             service["spec"]!["selector"]!["egress.example/selector"] =
                 fault == "foreign-pod-selector" ? "foreign" : "environment-a";
+            service["spec"]!["type"] = fault == "external-service" ? "LoadBalancer" : "ClusterIP";
+            service["spec"]!["ports"]![0]!["port"] = fault == "foreign-service-port" ? 443 : 8443;
             _resources["apis/agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxes/sandbox-a"]
                 ["status"]!["serviceFQDN"] = fault == "foreign-dns"
                     ? "foreign.example.com" : "sandbox-a.agentweaver.svc.cluster.local";
+            var pods = _podList!["items"]!.AsArray();
+            if (fault == "ambiguous-pod-selector" && pods.Count == 1)
+            {
+                var sibling = pods[0]!.DeepClone().AsObject();
+                sibling["metadata"]!["name"] = "sandbox-a-stray";
+                sibling["metadata"]!["uid"] = "another-pod-uid";
+                sibling["metadata"]!["labels"]!["agents.x-k8s.io/claim-uid"] = "another-claim-uid";
+                sibling["status"]!["podIP"] = "10.2.3.5";
+                pods.Add(sibling);
+            }
+            else if (fault is null && pods.Count > 1)
+            {
+                pods.RemoveAt(pods.Count - 1);
+            }
         }
 
         public void SetPodImageId(string imageId)
@@ -715,7 +745,33 @@ public sealed partial class AgentSandboxProviderTests
                     return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) };
                 }
                 if (path == "api/v1/namespaces/agentweaver/pods")
-                    return JsonResponse(HttpStatusCode.OK, _podList ?? new JsonObject { ["items"] = new JsonArray() });
+                {
+                    var podList = _podList ?? new JsonObject { ["items"] = new JsonArray() };
+                    var labelSelector = request.RequestUri.Query.TrimStart('?')
+                        .Split('&', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(part => part.Split('=', 2))
+                        .Where(parts => parts.Length == 2 && parts[0] == "labelSelector")
+                        .Select(parts => Uri.UnescapeDataString(parts[1]))
+                        .SingleOrDefault();
+                    if (labelSelector is null)
+                        return JsonResponse(HttpStatusCode.OK, podList);
+
+                    var labelPairs = labelSelector.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                        .Select(entry => entry.Split('=', 2))
+                        .Where(parts => parts.Length == 2)
+                        .Select(parts => (Key: parts[0], Value: parts[1]))
+                        .ToArray();
+                    var filteredPods = new JsonArray();
+                    foreach (var item in podList["items"]!.AsArray())
+                    {
+                        var labels = item?["metadata"]?["labels"]?.AsObject();
+                        if (labels is not null && labelPairs.All(pair =>
+                                labels.TryGetPropertyValue(pair.Key, out var value) &&
+                                string.Equals(value?.GetValue<string>(), pair.Value, StringComparison.Ordinal)))
+                            filteredPods.Add(item!.DeepClone());
+                    }
+                    return JsonResponse(HttpStatusCode.OK, new JsonObject { ["items"] = filteredPods });
+                }
                 if (path.EndsWith("/sandboxclaims", StringComparison.Ordinal))
                 {
                     var segments = path.Split('/');

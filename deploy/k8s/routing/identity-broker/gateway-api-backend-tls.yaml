@@ -1,0 +1,19 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: gateway-api
+  namespace: agentweaver-v1-p0
+  labels:
+    agentweaver.io/service: gateway
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: gateway
+      sectionName: https
+  validation:
+    hostname: gateway.agentweaver-v1-p0.svc.cluster.local
+    caCertificateRefs:
+      - group: ""
+        kind: Secret
+        name: service-backend-ca

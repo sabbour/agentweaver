@@ -1,0 +1,1019 @@
+import { createHash, X509Certificate } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import {
+  mkdirSync, readFileSync, rmSync, writeFileSync,
+} from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { componentImageRepository } from './pack.mjs';
+import { createRuntimeList } from './runtime-list.mjs';
+import { validateManifest } from './validate.mjs';
+
+const REPOSITORY = 'sabbour/agentweaver';
+const REGISTRY = 'ghcr.io/sabbour';
+const PRODUCT_SERVICES = Object.freeze([
+  'Agentweaver.AgentHost',
+  'Agentweaver.Identity.Broker',
+  'Agentweaver.EventsAndSessions',
+  'Agentweaver.Gateway',
+  'Agentweaver.Mcp',
+  'Agentweaver.Web',
+  'Agentweaver.Orchestrator',
+  'Agentweaver.Environment',
+  'Agentweaver.Knowledge',
+  'Agentweaver.Projects.Config',
+]);
+const DEPLOYED_SERVICES = Object.freeze(PRODUCT_SERVICES.filter((id) => id !== 'Agentweaver.AgentHost'));
+const PRODUCT_COMPONENTS = Object.freeze([
+  'Agentweaver.Abstractions',
+  'Agentweaver.Providers',
+  'Agentweaver.SourceControl',
+  'Agentweaver.Orchestrator.Core',
+  'Agentweaver.Persistence.Postgres',
+  'Agentweaver.Secrets.AzureKeyVault',
+  'Agentweaver.Identity',
+  'Agentweaver.AgentRuntime',
+  'Agentweaver.AgentHost',
+  'Agentweaver.Telemetry',
+  'Agentweaver.Telemetry.AzureMonitor',
+  'Agentweaver.ObjectStore.AzureBlob',
+  'Agentweaver.Identity.Broker',
+  'Agentweaver.EventsAndSessions',
+  'Agentweaver.Gateway',
+  'Agentweaver.Mcp',
+  'Agentweaver.Web',
+  'Agentweaver.Orchestrator',
+  'Agentweaver.Environment',
+  'Agentweaver.Providers.Storage.AzureFiles',
+  'Agentweaver.Providers.Sandbox.AgentSandbox',
+  'Agentweaver.Knowledge',
+  'Agentweaver.Projects.Config',
+]);
+const TARGET = Object.freeze({
+  subscriptionId: '90ab3701-83f0-4ba1-a90a-f2e68683adab',
+  tenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47',
+  resourceGroup: 'aw-v1-p0',
+  clusterName: 'aw-v1-p0-aks',
+  namespace: 'agentweaver-v1-p0',
+  nodeMin: 2,
+  nodeMax: 3,
+});
+const SERVICE_NAMES = Object.freeze({
+  'Agentweaver.AgentHost': 'agenthost',
+  'Agentweaver.Identity.Broker': 'identity-broker',
+  'Agentweaver.EventsAndSessions': 'events-and-sessions',
+  'Agentweaver.Gateway': 'gateway',
+  'Agentweaver.Mcp': 'mcp',
+  'Agentweaver.Web': 'web',
+  'Agentweaver.Orchestrator': 'orchestrator',
+  'Agentweaver.Environment': 'environment',
+  'Agentweaver.Knowledge': 'knowledge',
+  'Agentweaver.Projects.Config': 'projects-config',
+});
+const WORKLOAD_IDENTITY_SERVICES = new Set([
+  'identity-broker', 'events-and-sessions', 'environment', 'knowledge', 'orchestrator', 'projects-config',
+]);
+const IDENTITY_CLIENT_SERVICES = new Set(['gateway', 'orchestrator']);
+const BACKEND_TLS_HOSTNAMES = Object.freeze({
+  gateway: 'gateway.agentweaver-v1-p0.svc.cluster.local',
+  mcp: 'mcp.agentweaver-v1-p0.svc.cluster.local',
+});
+const BACKEND_TLS_CA_SECRET = 'service-backend-ca';
+export const SERVICE_NETWORK_POLICY_NAMES = Object.freeze({
+  'identity-broker': 'identity-broker-egress',
+  'events-and-sessions': 'events-and-sessions-network',
+  agenthost: 'agenthost-environment-ingress',
+  environment: ['environment-agenthost-egress', 'environment-agenthost-ingress'],
+  gateway: ['gateway-owner-network', 'gateway-api-ingress'],
+  mcp: ['mcp-gateway-network', 'mcp-gateway-ingress'],
+  orchestrator: 'orchestrator-owner-network',
+  knowledge: 'knowledge-owner-network',
+  'projects-config': 'projects-config-network',
+  web: 'web-gateway-ingress',
+});
+const SHA = /^[a-f0-9]{40}$/;
+const DIGEST = /^sha256:[a-f0-9]{64}$/;
+const RELEASE_TAG = /^v1\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const CHECKPOINT_VERSION = 1;
+const checkpointDirectory = path.join(os.homedir(), '.agentweaver', 'v1-release-deploy');
+const registryManifestAccept = [
+  'application/vnd.oci.image.index.v1+json',
+  'application/vnd.oci.image.manifest.v1+json',
+  'application/vnd.docker.distribution.manifest.list.v2+json',
+  'application/vnd.docker.distribution.manifest.v2+json',
+].join(', ');
+
+function fail(message) {
+  throw new Error(`release deployment: ${message}`);
+}
+
+function requiredString(value, name) {
+  if (typeof value !== 'string' || value.trim() !== value || value.length === 0) {
+    fail(`${name} is required and must be an exact nonempty string`);
+  }
+}
+
+function safeKubernetesName(value, location) {
+  if (typeof value !== 'string' || value.length > 253 ||
+      !/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/.test(value)) {
+    fail(`${location} must be an exact Kubernetes DNS name`);
+  }
+}
+
+function parseJson(text, location) {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    fail(`${location} is not valid JSON: ${error.message}`);
+  }
+}
+
+function runCommand(file, args, { cwd, input, env } = {}) {
+  const result = spawnSync(file, args, {
+    cwd,
+    input,
+    encoding: 'utf8',
+    env,
+    windowsHide: true,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  if (result.error) fail(`could not run ${file}: ${result.error.message}`);
+  if (result.status !== 0) {
+    const detail = (result.stderr || result.stdout || '').trim();
+    fail(`${file} ${args.join(' ')} failed${detail ? `: ${detail}` : ''}`);
+  }
+  return result.stdout.trim();
+}
+
+export function parseArgs(argv = []) {
+  const values = {};
+  let releaseTag;
+  let execute = false;
+  let dryRun = false;
+  let resume = false;
+  let restart = false;
+  let help = false;
+  const options = new Map([
+    ['--manifest', 'manifestPath'],
+    ['--publication', 'publicationPath'],
+    ['--runtime-manifest', 'runtimeManifestPath'],
+    ['--provider-catalog-configmap', 'providerCatalogConfigMapName'],
+    ['--provider-catalog-source-commit', 'providerCatalogSourceCommit'],
+    ['--subscription-id', 'subscriptionId'],
+    ['--tenant-id', 'tenantId'],
+    ['--resource-group', 'resourceGroup'],
+    ['--cluster', 'clusterName'],
+    ['--namespace', 'namespace'],
+    ['--node-min', 'nodeMin'],
+    ['--node-max', 'nodeMax'],
+  ]);
+
+  for (let index = 0; index < argv.length; index++) {
+    const arg = argv[index];
+    if (['--help', '-h'].includes(arg)) {
+      help = true;
+    } else if (arg === '--execute') {
+      execute = true;
+    } else if (arg === '--dry-run') {
+      dryRun = true;
+    } else if (arg === '--resume') {
+      resume = true;
+    } else if (arg === '--restart') {
+      restart = true;
+    } else if ([...options.keys()].some((name) => arg === name || arg.startsWith(`${name}=`))) {
+      const name = [...options.keys()].find((option) => arg === option || arg.startsWith(`${option}=`));
+      const key = options.get(name);
+      let value;
+      if (arg.startsWith(`${name}=`)) {
+        value = arg.slice(name.length + 1);
+      } else {
+        value = argv[++index];
+      }
+      if (value === undefined || value === '' || value.startsWith('--')) {
+        fail(`${name} requires an explicit value`);
+      }
+      values[key] = value;
+    } else if (!arg.startsWith('-') && releaseTag === undefined) {
+      releaseTag = arg;
+    } else {
+      fail(`unknown argument "${arg}"`);
+    }
+  }
+
+  if (help) return { help: true };
+  if (execute && dryRun) fail('--execute and --dry-run are mutually exclusive');
+  if (!RELEASE_TAG.test(releaseTag ?? '')) fail('an exact v1.x.y GitHub release tag is required');
+  if (resume && restart) fail('--resume and --restart are mutually exclusive');
+  if ((resume || restart) && !execute) fail('--resume and --restart require explicit --execute');
+  const required = [
+    'manifestPath', 'publicationPath',
+    'subscriptionId', 'tenantId', 'resourceGroup', 'clusterName', 'namespace', 'nodeMin', 'nodeMax',
+  ];
+  const optionNames = new Map([...options].map(([option, key]) => [key, option]));
+  for (const key of required) requiredString(values[key], optionNames.get(key));
+  if (!values.runtimeManifestPath) {
+    requiredString(values.providerCatalogConfigMapName, '--provider-catalog-configmap');
+    requiredString(values.providerCatalogSourceCommit, '--provider-catalog-source-commit');
+  }
+  const target = {
+    subscriptionId: values.subscriptionId,
+    tenantId: values.tenantId,
+    resourceGroup: values.resourceGroup,
+    clusterName: values.clusterName,
+    namespace: values.namespace,
+    nodeMin: Number(values.nodeMin),
+    nodeMax: Number(values.nodeMax),
+  };
+  validateTarget(target);
+  return {
+    ...values,
+    releaseTag,
+    target,
+    execute,
+    dryRun: dryRun || !execute,
+    resume,
+    restart,
+    help: false,
+  };
+}
+
+export function validateTarget(target) {
+  if (!target || typeof target !== 'object' || Array.isArray(target)) fail('explicit P0 target is required');
+  for (const key of ['subscriptionId', 'tenantId', 'resourceGroup', 'clusterName', 'namespace']) {
+    requiredString(target[key], `target.${key}`);
+    if (target[key] !== TARGET[key]) {
+      fail(`target.${key} must be the exact approved v1 P0 value (${TARGET[key]})`);
+    }
+  }
+  if (target.nodeMin !== TARGET.nodeMin || target.nodeMax !== TARGET.nodeMax) {
+    fail(`target node bounds must be exactly ${TARGET.nodeMin}-${TARGET.nodeMax}`);
+  }
+  if (Object.keys(target).some((key) => !Object.hasOwn(TARGET, key))) {
+    fail('target contains an unsupported field');
+  }
+  return TARGET;
+}
+
+export function validatePublishedManifest(manifest, { root, sourceSha }) {
+  if (!SHA.test(sourceSha ?? '')) fail('release source SHA must be a lowercase full Git commit SHA');
+  validateManifest(manifest, { root });
+  if (manifest.stage !== 'release') {
+    fail('the supplied manifest is still draft; an already-published release composition is required');
+  }
+  if (manifest.evidence.sourceSha !== sourceSha || manifest.evidence.deploymentSha !== sourceSha) {
+    fail('release manifest source and deployment evidence must match the exact tagged source commit');
+  }
+  const product = manifest.components.filter((component) => component.id !== 'Agentweaver.FoundationProbe');
+  const ids = product.map((component) => component.id).sort();
+  const expected = [...PRODUCT_COMPONENTS].sort();
+  if (ids.length !== expected.length || ids.some((id, index) => id !== expected[index])) {
+    fail('release manifest must contain exactly the 23 v1 product components and exclude acceptance Probe from product inventory');
+  }
+  for (const service of PRODUCT_SERVICES) {
+    const component = product.find((entry) => entry.id === service);
+    if (!component || component.kind !== 'service' || component.version !== '1.0.0' ||
+        !DIGEST.test(component.imageDigest ?? '') || /^0+$/.test(component.imageDigest.slice(7))) {
+      fail(`${service} must be the v1.0.0 product service with a nonzero published image digest`);
+    }
+  }
+  for (const component of product) {
+    if (component.kind !== 'service' && component.version !== '1.0.0') {
+      fail(`${component.id} must remain pinned at the approved product version 1.0.0`);
+    }
+  }
+  const probe = manifest.components.find((component) => component.id === 'Agentweaver.FoundationProbe');
+  if (probe && (probe.kind !== 'service' || probe.version !== '0.0.1')) {
+    fail('FoundationProbe is acceptance-only at 0.0.1 and must remain outside product deployment');
+  }
+  return manifest;
+}
+
+function kindFor(component) {
+  return component.kind === 'service' ? 'image' : 'package';
+}
+
+function expectedRepository(componentId) {
+  return `${REGISTRY}/${componentImageRepository(componentId)}`;
+}
+
+export function validatePublicationReceipt(receipt, manifest, sourceSha) {
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) ||
+      receipt.schemaVersion !== 1 || receipt.sourceSha !== sourceSha ||
+      receipt.status !== 'published' || !/^[a-f0-9]{64}$/.test(receipt.provenanceSha256 ?? '') ||
+      !Array.isArray(receipt.planned) || !Array.isArray(receipt.published)) {
+    fail('publication receipt is missing, partial, or not bound to the tagged source');
+  }
+  const product = manifest.components.filter((component) => component.id !== 'Agentweaver.FoundationProbe');
+  if (receipt.planned.length !== product.length || receipt.published.length !== product.length) {
+    fail('publication receipt does not contain the exact 23-component product selection');
+  }
+  const planned = new Map();
+  for (const entry of receipt.planned) {
+    if (!entry || typeof entry !== 'object' || planned.has(entry.id)) fail('publication plan has malformed or duplicate entries');
+    planned.set(entry.id, entry);
+  }
+  const published = new Map();
+  for (const entry of receipt.published) {
+    if (!entry || typeof entry !== 'object' || published.has(entry.id)) fail('published receipt has malformed or duplicate entries');
+    published.set(entry.id, entry);
+  }
+
+  let agentHostMeasurement;
+  for (const component of product) {
+    const expectedKind = kindFor(component);
+    const plan = planned.get(component.id);
+    const result = published.get(component.id);
+    if (!plan || !result || plan.version !== component.version ||
+        plan.kind !== expectedKind || result.version !== component.version ||
+        result.kind !== expectedKind || !/^[a-f0-9]{64}$/.test(plan.sha256 ?? '')) {
+      fail(`publication receipt does not prove the exact ${component.id} ${component.version} artifact`);
+    }
+    if (component.kind === 'service') {
+      const expectedImage = `${expectedRepository(component.id)}@${component.imageDigest}`;
+      if (plan.destination !== `${expectedRepository(component.id)}:${component.version}` ||
+          result.image !== expectedImage || result.archiveSha256 !== plan.sha256 ||
+          !DIGEST.test(component.imageDigest)) {
+        fail(`publication receipt and release manifest disagree on the published image for ${component.id}`);
+      }
+      if (component.id === 'Agentweaver.AgentHost') {
+        const measurement = result.preparedOciMeasurement;
+        if (measurement?.kind !== 'agenthost-image' || measurement.schemaVersion !== 1 ||
+            measurement.sourceSha !== sourceSha || !SHA.test(measurement.sourceTree ?? '') ||
+            measurement.image?.version !== component.version ||
+            measurement.image.platform !== 'linux/amd64' ||
+            !DIGEST.test(measurement.image.digest ?? '') ||
+            !DIGEST.test(measurement.image.configDigest ?? '') ||
+            !Number.isSafeInteger(measurement.image.compressedPullBytes) ||
+            measurement.image.compressedPullBytes <= 0 ||
+            result.imageConfigDigest !== measurement.image.configDigest ||
+            !/^[a-f0-9]{64}$/.test(result.ociArchiveSha256 ?? '')) {
+          fail('AgentHost publication receipt lacks source-bound linux/amd64 image and compressed-byte evidence');
+        }
+        agentHostMeasurement = {
+          image: `${expectedRepository(component.id)}@${measurement.image.digest}`,
+          digest: measurement.image.digest,
+          compressedPullBytes: measurement.image.compressedPullBytes,
+        };
+      } else if (result.preparedOciMeasurement !== undefined ||
+          result.imageConfigDigest !== undefined || result.ociArchiveSha256 !== undefined) {
+        fail(`${component.id} publication receipt contains unsupported AgentHost image evidence`);
+      }
+    } else if (result.sha256 !== plan.sha256 || result.feed !== plan.destination ||
+        !/^[a-f0-9]{64}$/.test(result.sha256 ?? '')) {
+      fail(`publication receipt package hash does not match its plan for ${component.id}`);
+    }
+  }
+  if (planned.has('Agentweaver.FoundationProbe') || published.has('Agentweaver.FoundationProbe')) {
+    fail('acceptance-only FoundationProbe must not be part of product publication or deployment');
+  }
+  if (!agentHostMeasurement) fail('AgentHost publication receipt has no verified per-Sandbox image measurement');
+  return PRODUCT_SERVICES.map((id) => {
+    const component = manifest.components.find((entry) => entry.id === id);
+    const result = { id, name: SERVICE_NAMES[id], image: `${expectedRepository(id)}@${component.imageDigest}` };
+    if (id === 'Agentweaver.AgentHost') {
+      result.sandboxImage = agentHostMeasurement.image;
+      result.compressedPullBytes = agentHostMeasurement.compressedPullBytes;
+      result.sandboxImageDigest = agentHostMeasurement.digest;
+    }
+    return result;
+  });
+}
+
+export function validateRuntimeManifest(document, images, namespace) {
+  const items = document?.kind === 'List' ? document.items
+    : Array.isArray(document) ? document : null;
+  if (!Array.isArray(items) || items.length === 0) fail('runtime manifest must be a rendered Kubernetes List');
+  const hostImage = images.find((image) => image.id === 'Agentweaver.AgentHost');
+  if (!hostImage?.sandboxImage || !Number.isSafeInteger(hostImage.compressedPullBytes) ||
+      hostImage.compressedPullBytes <= 0) {
+    fail('runtime validation requires the exact measured per-Sandbox AgentHost image');
+  }
+  const expectedNames = new Map(images
+    .filter((image) => image.id !== 'Agentweaver.AgentHost')
+    .map((image) => [image.name, image]));
+  const deployments = new Map();
+  const services = new Map();
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || !['Deployment', 'Service'].includes(item.kind)) {
+      fail('runtime manifest may contain only Deployment and ClusterIP Service resources; held prerequisites are not managed here');
+    }
+    if (item.apiVersion !== (item.kind === 'Deployment' ? 'apps/v1' : 'v1') ||
+        item.metadata?.namespace !== namespace) {
+      fail(`${item.kind} must use the exact v1 P0 namespace and API version`);
+    }
+    const name = item.metadata?.name;
+    if (!expectedNames.has(name)) fail(`runtime manifest contains unsupported workload "${name}"`);
+    const resourceMap = item.kind === 'Deployment' ? deployments : services;
+    if (resourceMap.has(name)) fail(`runtime manifest contains duplicate ${item.kind} "${name}"`);
+    resourceMap.set(name, item);
+  }
+  if (deployments.size !== DEPLOYED_SERVICES.length || services.size !== DEPLOYED_SERVICES.length) {
+    fail('runtime manifest must include exactly one Service and Deployment for each of the nine shared product services');
+  }
+
+  for (const [name, expected] of expectedNames) {
+    const deployment = deployments.get(name);
+    const service = services.get(name);
+    if (!deployment || !service) fail(`runtime manifest is missing the ${name} Deployment or Service`);
+    const podSpec = deployment.spec?.template?.spec;
+    const containers = podSpec?.containers;
+    if (!Array.isArray(containers) || containers.length !== 1 ||
+        containers[0].name !== name || containers[0].image !== expected.image) {
+      fail(`${name} must run only its exact immutable GHCR image from the published release`);
+    }
+    const labels = deployment.spec?.template?.metadata?.labels;
+    if (labels?.['app.kubernetes.io/name'] !== name ||
+        labels?.['agentweaver.io/service'] !== name ||
+        labels?.['agentweaver.io/workload'] !== name) {
+      fail(`${name} Pod must expose its exact service-owner selectors`);
+    }
+    if (IDENTITY_CLIENT_SERVICES.has(name)
+      ? labels['agentweaver.io/identity-client'] !== 'true'
+      : labels['agentweaver.io/identity-client'] !== undefined) {
+      fail(`${name} Pod must preserve its exact Identity Broker client selector`);
+    }
+    const usesWorkloadIdentity = WORKLOAD_IDENTITY_SERVICES.has(name);
+    if (usesWorkloadIdentity
+      ? labels['azure.workload.identity/use'] !== 'true'
+      : labels['azure.workload.identity/use'] !== undefined) {
+      fail(`${name} Pod must preserve only its existing Azure Workload Identity injection setting`);
+    }
+    if (podSpec.serviceAccountName !== name ||
+        deployment.spec?.replicas !== 1 ||
+        deployment.spec?.strategy?.type !== 'Recreate' ||
+        podSpec.automountServiceAccountToken !== true ||
+        podSpec.securityContext?.runAsNonRoot !== true ||
+        !Number.isSafeInteger(podSpec.securityContext?.runAsUser) || podSpec.securityContext.runAsUser < 1 ||
+        !Number.isSafeInteger(podSpec.securityContext?.runAsGroup) || podSpec.securityContext.runAsGroup < 1 ||
+        podSpec.securityContext?.seccompProfile?.type !== 'RuntimeDefault' ||
+        podSpec.initContainers?.length || podSpec.ephemeralContainers?.length ||
+        podSpec.hostNetwork || podSpec.hostPID || podSpec.hostIPC) {
+      fail(`${name} must use its existing service identity and a single restricted runtime pod`);
+    }
+    const container = containers[0];
+    if (container.command !== undefined || container.args !== undefined ||
+        container.securityContext?.allowPrivilegeEscalation !== false ||
+        container.securityContext?.readOnlyRootFilesystem !== true ||
+        !container.securityContext?.capabilities?.drop?.includes('ALL')) {
+      fail(`${name} must not override its image entrypoint and must retain the restricted container profile`);
+    }
+    for (const env of container.env ?? []) {
+      if (env.value !== undefined && ![
+        'ASPNETCORE_URLS',
+        'ASPNETCORE_Kestrel__Certificates__Default__Path',
+        'ASPNETCORE_Kestrel__Certificates__Default__KeyPath',
+        'IdentityBroker__Signing__PfxPath',
+        'Environment__Sandbox__AgentSandbox__ContainerImage',
+        'Environment__Sandbox__AgentSandbox__ContainerImagePlatform',
+        'Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes',
+      ].includes(env.name)) {
+        fail(`${name} may not embed runtime credentials or operator configuration as literal environment values`);
+      }
+    }
+    for (const volume of podSpec.volumes ?? []) {
+      if (volume.hostPath !== undefined || volume.csi !== undefined || volume.nfs !== undefined) {
+        fail(`${name} cannot mount host paths, CSI devices, or unreviewed network filesystems`);
+      }
+    }
+    const web = name === 'web';
+    const portName = web ? 'http' : 'https';
+    const portNumber = web ? 8080 : 8443;
+    const scheme = web ? 'HTTP' : 'HTTPS';
+    if (!Array.isArray(container.ports) || container.ports.length !== 1 ||
+        container.ports[0].name !== portName || container.ports[0].containerPort !== portNumber ||
+        container.ports[0].protocol !== 'TCP') {
+      fail(`${name} must expose only its source-declared ${scheme} application port`);
+    }
+    const environment = container.env ?? [];
+    const getEnvValue = (key) => {
+      const matches = environment.filter((entry) => entry.name === key);
+      if (matches.length !== 1 || typeof matches[0].value !== 'string') return undefined;
+      return matches[0].value;
+    };
+    if (getEnvValue('ASPNETCORE_URLS') !== `${web ? 'http' : 'https'}://+:${portNumber}`) {
+      fail(`${name} must explicitly configure its ${scheme} listener`);
+    }
+    if (web) {
+      if (environment.some((entry) => entry.name === 'ASPNETCORE_Kestrel__Certificates__Default__Path' ||
+          entry.name === 'ASPNETCORE_Kestrel__Certificates__Default__KeyPath')) {
+        fail('Web is source-owned HTTP on port 8080 and cannot claim an unconfigured HTTPS listener');
+      }
+    } else {
+      const certificatePath = getEnvValue('ASPNETCORE_Kestrel__Certificates__Default__Path');
+      const keyPath = getEnvValue('ASPNETCORE_Kestrel__Certificates__Default__KeyPath');
+      if (typeof certificatePath !== 'string' || typeof keyPath !== 'string' ||
+          !certificatePath.startsWith('/') || !keyPath.startsWith('/') ||
+          path.posix.dirname(certificatePath) !== path.posix.dirname(keyPath)) {
+        fail(`${name} must explicitly mount a private TLS certificate and key`);
+      }
+      const tlsDirectory = path.posix.dirname(certificatePath);
+      const tlsMount = (podSpec.containers[0].volumeMounts ?? []).find((mount) =>
+        mount.mountPath === tlsDirectory && mount.readOnly === true);
+      const tlsVolume = (podSpec.volumes ?? []).find((volume) =>
+        volume.name === tlsMount?.name && typeof volume.secret?.secretName === 'string' &&
+        volume.secret.optional !== true);
+      if (!tlsVolume) fail(`${name} TLS files must come from an existing read-only Secret volume`);
+      if (tlsVolume.secret.secretName !== `${name}-tls`) {
+        fail(`${name} must use its exact service TLS Secret ${name}-tls`);
+      }
+    }
+    if (name === 'environment') {
+      if (getEnvValue('Environment__Sandbox__AgentSandbox__ContainerImage') !== hostImage.sandboxImage ||
+          getEnvValue('Environment__Sandbox__AgentSandbox__ContainerImagePlatform') !== 'linux/amd64' ||
+          getEnvValue('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes') !==
+            String(hostImage.compressedPullBytes)) {
+        fail('Environment must pin the exact measured AgentHost image, platform, and compressed pull bytes');
+      }
+    } else if (environment.some((entry) =>
+      entry.name.startsWith('Environment__Sandbox__AgentSandbox__ContainerImage'))) {
+      fail('only Environment may configure the per-Sandbox AgentHost image');
+    }
+    for (const [probeName, expectedPath] of [['livenessProbe', '/health/live'], ['readinessProbe', '/health/ready']]) {
+      const probe = container[probeName];
+      if (probe?.httpGet?.path !== expectedPath || probe.httpGet.scheme !== scheme ||
+          probe.httpGet.port !== portName) {
+        fail(`${name} requires its source-owned ${scheme} ${expectedPath} ${probeName}`);
+      }
+    }
+    if (service.spec?.type !== 'ClusterIP' ||
+        service.metadata?.labels?.['app.kubernetes.io/name'] !== name ||
+        service.metadata?.labels?.['agentweaver.io/service'] !== name ||
+        service.spec?.selector?.['app.kubernetes.io/name'] !== name ||
+        deployment.spec?.selector?.matchLabels?.['app.kubernetes.io/name'] !== name ||
+        deployment.spec?.template?.metadata?.labels?.['app.kubernetes.io/name'] !== name ||
+        !Array.isArray(service.spec?.ports) ||
+        service.spec.ports.length !== 1 ||
+        service.spec.ports[0].port !== (name === 'identity-broker' ? 443 : portNumber) ||
+        service.spec.ports[0].targetPort !== portName ||
+        service.spec.ports[0].protocol !== 'TCP') {
+      fail(`${name} Service must remain private ClusterIP ${scheme}`);
+    }
+    for (const forbidden of ['hostNetwork', 'hostPID', 'hostIPC', 'hostAliases']) {
+      if (podSpec[forbidden] !== undefined && podSpec[forbidden] !== false) {
+        fail(`${name} cannot use ${forbidden}`);
+      }
+    }
+    if (podSpec.imagePullSecrets?.length) fail(`${name} cannot add or invent image-pull credentials`);
+  }
+  if (deployments.has('agenthost') || services.has('agenthost')) {
+    fail('AgentHost must remain per-Sandbox through Environment provider options, not a shared Deployment or Service');
+  }
+  return { apiVersion: 'v1', kind: 'List', items };
+}
+
+function resolvePodReferences(runtimeManifest) {
+  const references = new Map();
+  for (const item of runtimeManifest.items) {
+    if (item.kind !== 'Deployment') continue;
+    const pod = item.spec.template.spec;
+    const add = (kind, name) => {
+      if (!name) return;
+      const key = `${kind}/${name}`;
+      references.set(key, { kind, name });
+    };
+    add('serviceaccount', pod.serviceAccountName);
+    for (const container of [...(pod.initContainers ?? []), ...pod.containers]) {
+      for (const source of container.envFrom ?? []) {
+        if (source.configMapRef?.optional !== true) add('configmap', source.configMapRef?.name);
+        if (source.secretRef?.optional !== true) add('secret', source.secretRef?.name);
+      }
+      for (const env of container.env ?? []) {
+        add('configmap', env.valueFrom?.configMapKeyRef?.optional === true ? undefined : env.valueFrom?.configMapKeyRef?.name);
+        add('secret', env.valueFrom?.secretKeyRef?.optional === true ? undefined : env.valueFrom?.secretKeyRef?.name);
+      }
+    }
+    for (const volume of pod.volumes ?? []) {
+      add('configmap', volume.configMap?.optional === true ? undefined : volume.configMap?.name);
+      add('secret', volume.secret?.optional === true ? undefined : volume.secret?.secretName);
+      add('persistentvolumeclaim', volume.persistentVolumeClaim?.claimName);
+    }
+  }
+  return [...references.values()];
+}
+
+function verifyBackendCertificates(target, { root, run }) {
+  const caOutput = run('kubectl', [
+    'get', 'secret', BACKEND_TLS_CA_SECRET, '--namespace', target.namespace,
+    '--output', 'jsonpath={.type}:{.data.ca\\.crt}',
+  ], { cwd: root });
+  const caSeparator = caOutput.indexOf(':');
+  if (caSeparator < 0 || caOutput.slice(0, caSeparator) !== 'Opaque' || !caOutput.slice(caSeparator + 1)) {
+    fail(`the exact ${BACKEND_TLS_CA_SECRET} Secret must contain its public ca.crt`);
+  }
+  let authority;
+  try {
+    authority = new X509Certificate(Buffer.from(caOutput.slice(caSeparator + 1), 'base64'));
+  } catch (error) {
+    fail(`the ${BACKEND_TLS_CA_SECRET} Secret has an invalid public CA certificate: ${error.message}`);
+  }
+  const now = Date.now();
+  if (!authority.ca || Date.parse(authority.validFrom) > now || Date.parse(authority.validTo) <= now ||
+      !authority.verify(authority.publicKey)) {
+    fail(`${BACKEND_TLS_CA_SECRET} must contain a currently valid self-signed CA certificate`);
+  }
+  for (const [name, hostname] of Object.entries(BACKEND_TLS_HOSTNAMES)) {
+    const output = run('kubectl', [
+      'get', 'secret', `${name}-tls`, '--namespace', target.namespace,
+      '--output', 'jsonpath={.type}:{.data.tls\\.crt}',
+    ], { cwd: root });
+    const separator = output.indexOf(':');
+    if (separator < 0 || output.slice(0, separator) !== 'kubernetes.io/tls' || !output.slice(separator + 1)) {
+      fail(`${name}-tls must contain its public tls.crt as a kubernetes.io/tls Secret`);
+    }
+    let leaf;
+    try {
+      leaf = new X509Certificate(Buffer.from(output.slice(separator + 1), 'base64'));
+    } catch (error) {
+      fail(`${name}-tls has an invalid public certificate: ${error.message}`);
+    }
+    if (leaf.ca || leaf.checkHost(hostname, { subject: 'never' }) !== hostname ||
+        Date.parse(leaf.validFrom) > now || Date.parse(leaf.validTo) <= now ||
+        leaf.issuer !== authority.subject || !leaf.verify(authority.publicKey)) {
+      fail(`${name}-tls must be currently valid for ${hostname} and directly signed by ${BACKEND_TLS_CA_SECRET}`);
+    }
+  }
+}
+
+function checkpointKey(tag, sourceSha, target, identity) {
+  return createHash('sha256')
+    .update(JSON.stringify([tag, sourceSha, target.subscriptionId, target.tenantId,
+      target.resourceGroup, target.clusterName, target.namespace, target.nodeMin, target.nodeMax,
+      identity.manifestSha256, identity.runtimeManifestSha256, identity.publicationSha256]))
+    .digest('hex');
+}
+
+function loadCheckpoint(key, identity, io) {
+  const file = path.join(io.directory, `${key}.json`);
+  let value;
+  try {
+    value = JSON.parse(io.readFile(file, 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    fail(`cannot read or parse deployment checkpoint ${file}: ${error.message}`);
+  }
+  if (value?.version !== CHECKPOINT_VERSION || value.key !== key ||
+      value.releaseTag !== identity.releaseTag || value.sourceSha !== identity.sourceSha ||
+      JSON.stringify(value.target) !== JSON.stringify(identity.target) ||
+      value.manifestSha256 !== identity.manifestSha256 ||
+      value.runtimeManifestSha256 !== identity.runtimeManifestSha256 ||
+      value.publicationSha256 !== identity.publicationSha256 ||
+      value.stages?.apply?.completed !== true) {
+    fail(`deployment checkpoint ${file} is invalid; use --restart after inspecting it`);
+  }
+  return value;
+}
+
+function saveCheckpoint(key, state, io) {
+  try {
+    io.mkdir(io.directory, { recursive: true });
+    io.writeFile(path.join(io.directory, `${key}.json`), `${JSON.stringify(state, null, 2)}\n`, 'utf8');
+  } catch (error) {
+    fail(`cannot persist deployment checkpoint: ${error.message}`);
+  }
+}
+
+function clearCheckpoint(key, io) {
+  try {
+    io.rm(path.join(io.directory, `${key}.json`), { force: true });
+  } catch (error) {
+    fail(`cannot clear successful deployment checkpoint: ${error.message}`);
+  }
+}
+
+export async function verifyRegistryImage(image, fetchImpl = globalThis.fetch) {
+  const separator = image.indexOf('/', 'ghcr.io/'.length);
+  const repository = image.slice('ghcr.io/'.length, image.lastIndexOf('@'));
+  const digest = image.slice(image.lastIndexOf('@') + 1);
+  if (separator < 0 || !repository || !DIGEST.test(digest)) fail(`invalid immutable GHCR image reference "${image}"`);
+  const tokenUrl = new URL('https://ghcr.io/token');
+  tokenUrl.searchParams.set('service', 'ghcr.io');
+  tokenUrl.searchParams.set('scope', `repository:${repository}:pull`);
+  const tokenResponse = await fetchImpl(tokenUrl, { headers: { accept: 'application/json' } });
+  if (!tokenResponse.ok) fail(`GHCR does not expose ${repository} for anonymous pull verification (HTTP ${tokenResponse.status})`);
+  const tokenJson = await tokenResponse.json();
+  const token = tokenJson.token ?? tokenJson.access_token;
+  if (typeof token !== 'string' || !token) fail(`GHCR returned no anonymous pull token for ${repository}`);
+  const manifestResponse = await fetchImpl(`https://ghcr.io/v2/${repository}/manifests/${digest}`, {
+    headers: { accept: registryManifestAccept, authorization: `Bearer ${token}` },
+  });
+  if (!manifestResponse.ok) fail(`published image ${image} is unavailable from GHCR (HTTP ${manifestResponse.status})`);
+  if (manifestResponse.headers.get('docker-content-digest') !== digest) {
+    fail(`GHCR returned a different manifest digest for ${image}`);
+  }
+  const manifest = await manifestResponse.json();
+  const acceptedDigests = new Set([digest]);
+  if (Array.isArray(manifest.manifests)) {
+    const amd64 = manifest.manifests.filter((entry) =>
+      entry.platform?.os === 'linux' && entry.platform?.architecture === 'amd64' &&
+      DIGEST.test(entry.digest ?? ''));
+    if (amd64.length === 0) fail(`published image ${image} has no linux/amd64 manifest`);
+    for (const entry of amd64) acceptedDigests.add(entry.digest);
+  }
+  return acceptedDigests;
+}
+
+async function verifyRelease(tag, publication, { root, run }) {
+  const current = run('git', ['rev-parse', 'HEAD'], { cwd: root });
+  const dirty = run('git', ['status', '--porcelain'], { cwd: root });
+  if (dirty) fail('the release source checkout must be clean');
+  if (!SHA.test(current)) fail('the local release source HEAD is not a full commit SHA');
+
+  const release = parseJson(run('gh', ['api', `repos/${REPOSITORY}/releases/tags/${tag}`], { cwd: root }), 'GitHub Release');
+  if (release.tag_name !== tag || release.draft !== false || release.prerelease !== false) {
+    fail(`${tag} must identify an existing published, non-prerelease GitHub Release`);
+  }
+  const tagRefPath = `repos/${REPOSITORY}/git/ref/tags/${encodeURIComponent(tag)}`;
+  const tagRef = parseJson(run('gh', ['api', tagRefPath], { cwd: root }), 'GitHub release tag ref');
+  if (tagRef.object?.type !== 'tag' || !SHA.test(tagRef.object.sha ?? '')) {
+    fail(`${tag} must be an annotated Git tag`);
+  }
+  const tagObject = parseJson(run('gh', ['api', `repos/${REPOSITORY}/git/tags/${tagRef.object.sha}`], { cwd: root }), 'GitHub annotated tag');
+  if (tagObject.tag !== tag || tagObject.object?.type !== 'commit' ||
+      !SHA.test(tagObject.object.sha ?? '') || tagObject.object.sha !== current) {
+    fail(`${tag} must resolve to the exact clean local source commit ${current}`);
+  }
+
+  const resultRefName = `agentweaver-publication/${current}/result`;
+  const resultRef = parseJson(run('gh', ['api', `repos/${REPOSITORY}/git/ref/tags/${encodeURIComponent(resultRefName)}`], { cwd: root }), 'publication result ref');
+  if (resultRef.object?.type !== 'tag' || !SHA.test(resultRef.object.sha ?? '')) {
+    fail('the immutable publication result for this exact source SHA is missing');
+  }
+  const resultTag = parseJson(run('gh', ['api', `repos/${REPOSITORY}/git/tags/${resultRef.object.sha}`], { cwd: root }), 'publication result tag');
+  if (resultTag.tag !== resultRefName || resultTag.object?.type !== 'commit' || resultTag.object.sha !== current) {
+    fail('the publication result tag is not bound to the exact release source commit');
+  }
+  const remotePublication = parseJson(resultTag.message, 'publication result message');
+  if (JSON.stringify(remotePublication) !== JSON.stringify(publication)) {
+    fail('the supplied publication receipt differs from the immutable GitHub publication result');
+  }
+  return current;
+}
+
+function verifyAzureTarget(target, { root, run }) {
+  const account = parseJson(run('az', ['account', 'show', '--subscription', target.subscriptionId, '--output', 'json'], { cwd: root }), 'Azure account');
+  if (account.id?.toLowerCase() !== target.subscriptionId.toLowerCase() ||
+      account.tenantId?.toLowerCase() !== target.tenantId.toLowerCase()) {
+    fail('the existing Azure CLI context does not match the explicit v1 P0 subscription and tenant');
+  }
+  const cluster = parseJson(run('az', ['aks', 'show', '--name', target.clusterName,
+    '--resource-group', target.resourceGroup, '--subscription', target.subscriptionId, '--output', 'json'], { cwd: root }), 'AKS target');
+  const expectedResourceId = `/subscriptions/${target.subscriptionId}/resourceGroups/${target.resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${target.clusterName}`;
+  if (cluster.id?.toLowerCase() !== expectedResourceId.toLowerCase()) fail('Azure returned a different AKS resource than the explicit v1 P0 target');
+  const pools = cluster.agentPoolProfiles;
+  if (!Array.isArray(pools) || pools.length !== 1 ||
+      pools[0].enableAutoScaling !== true || pools[0].minCount !== target.nodeMin ||
+      pools[0].maxCount !== target.nodeMax || pools[0].count < target.nodeMin ||
+      pools[0].count > target.nodeMax) {
+    fail('the exact AKS target must have one autoscaling pool bounded to 2-3 nodes');
+  }
+  const kubeconfig = parseJson(run('kubectl', ['config', 'view', '--minify', '--output', 'json'], { cwd: root }), 'current Kubernetes context');
+  const contextName = kubeconfig['current-context'];
+  const context = (kubeconfig.contexts ?? []).find((entry) => entry.name === contextName)?.context;
+  const clusterName = context?.cluster;
+  const server = (kubeconfig.clusters ?? []).find((entry) => entry.name === clusterName)?.cluster?.server;
+  let serverHost;
+  try { serverHost = new URL(server).hostname.toLowerCase(); } catch { /* rejected below */ }
+  const expectedHosts = [cluster.fqdn, cluster.privateFqdn,
+    cluster.apiserverAccessProfile?.privateFqdn].filter(Boolean).map((host) => host.toLowerCase());
+  if (!serverHost || !expectedHosts.includes(serverHost)) {
+    fail('the current kubectl context does not point to the exact Azure-verified AKS API endpoint; no context fallback is allowed');
+  }
+  const namespace = parseJson(run('kubectl', ['get', 'namespace', target.namespace, '--output', 'json'], { cwd: root }), 'target namespace');
+  if (namespace.metadata?.name !== target.namespace ||
+      namespace.metadata?.labels?.['agentweaver.io/environment'] !== 'v1-p0') {
+    fail('the exact pre-existing v1 P0 namespace and environment label are required');
+  }
+  return { cluster, contextName, server };
+}
+
+function verifyRuntimePrerequisites(runtimeManifest, target, { root, run }) {
+  for (const reference of resolvePodReferences(runtimeManifest)) {
+    const plural = reference.kind === 'serviceaccount' ? 'serviceaccount'
+      : reference.kind === 'configmap' ? 'configmap'
+        : reference.kind === 'secret' ? 'secret'
+          : 'persistentvolumeclaim';
+    const result = run('kubectl', ['get', plural, reference.name, '--namespace', target.namespace, '--output', 'json'], { cwd: root });
+    const resource = parseJson(result, `${reference.kind} ${reference.name}`);
+    if (resource.metadata?.name !== reference.name || resource.metadata?.namespace !== target.namespace) {
+      fail(`required existing ${reference.kind} ${reference.name} is not in the exact v1 P0 namespace`);
+    }
+  }
+  const defaultPolicies = parseJson(run('kubectl', ['get', 'networkpolicies.networking.k8s.io',
+    '--namespace', target.namespace, '--output', 'json'], { cwd: root }), 'namespace network policies');
+  const defaultPolicyNames = new Set((defaultPolicies.items ?? []).map((entry) => entry.metadata?.name));
+  if (!defaultPolicyNames.has('default-deny-all') || !defaultPolicyNames.has('allow-dns-egress')) {
+    fail('the existing namespace default-deny and DNS-only network policies are required');
+  }
+  const policies = parseJson(run('kubectl', ['get', 'ciliumnetworkpolicies.cilium.io',
+    '--namespace', target.namespace, '--output', 'json'], { cwd: root }), 'existing Cilium network policies');
+  const policyNames = new Set((policies.items ?? []).map((entry) => entry.metadata?.name));
+  for (const name of PRODUCT_SERVICES.map((id) => SERVICE_NAMES[id])) {
+    const configuredPolicies = SERVICE_NETWORK_POLICY_NAMES[name];
+    if (!configuredPolicies) {
+      fail(`no v1 Cilium policy contract is defined for ${name}; deployment is blocked until its service-specific network policy is reviewed and checked in`);
+    }
+    for (const policyName of Array.isArray(configuredPolicies) ? configuredPolicies : [configuredPolicies]) {
+      if (!policyNames.has(policyName)) {
+        fail(`operator-reviewed ${policyName} Cilium policy must already exist; deployment does not create or broaden network access`);
+      }
+    }
+  }
+  verifyBackendCertificates(target, { root, run });
+}
+
+function verifyImageIds(runtimeManifest, images) {
+  const expected = new Map(images.map((item) => [item.name, item.image]));
+  for (const item of runtimeManifest.items.filter((resource) => resource.kind === 'Deployment')) {
+    const pod = item.spec.template.spec;
+    for (const container of [...(pod.initContainers ?? []), ...pod.containers]) {
+      if (container.image !== expected.get(item.metadata.name)) {
+        fail(`runtime image reference changed for ${item.metadata.name}`);
+      }
+    }
+  }
+}
+
+function verifyMeasuredAgentHostDigest(images, acceptedDigests) {
+  const agentHost = images.find((image) => image.id === 'Agentweaver.AgentHost');
+  const accepted = acceptedDigests.get('agenthost');
+  if (!agentHost?.sandboxImageDigest || !accepted?.has(agentHost.sandboxImageDigest)) {
+    fail('GHCR does not attest the exact measured linux/amd64 AgentHost image used by Environment');
+  }
+}
+
+function verifyLiveDeployment(images, target, acceptedDigests, { root, run }) {
+  for (const image of images.filter((entry) => entry.id !== 'Agentweaver.AgentHost')) {
+    run('kubectl', ['rollout', 'status', `deployment/${image.name}`, '--namespace', target.namespace, '--timeout=5m'], { cwd: root });
+    const deployment = parseJson(run('kubectl', ['get', 'deployment', image.name, '--namespace', target.namespace, '--output', 'json'], { cwd: root }), `${image.name} deployment`);
+    if (deployment.spec?.template?.spec?.containers?.[0]?.image !== image.image) {
+      fail(`${image.name} is not running the exact published GHCR digest`);
+    }
+    const pods = parseJson(run('kubectl', ['get', 'pods', '--namespace', target.namespace,
+      '--selector', `app.kubernetes.io/name=${image.name}`, '--output', 'json'], { cwd: root }), `${image.name} pods`);
+    const ready = (pods.items ?? []).filter((pod) => pod.status?.conditions?.some((condition) =>
+      condition.type === 'Ready' && condition.status === 'True'));
+    if (ready.length !== 1 || ready[0].spec?.containers?.[0]?.image !== image.image ||
+        ready[0].status?.containerStatuses?.[0]?.ready !== true) {
+      fail(`${image.name} must have exactly one ready pod with the immutable released image`);
+    }
+    const imageId = ready[0].status?.containerStatuses?.[0]?.imageID ?? '';
+    const liveDigest = imageId.slice(imageId.lastIndexOf('@') + 1);
+    const accepted = acceptedDigests.get(image.name) ?? new Set([image.image.slice(image.image.lastIndexOf('@') + 1)]);
+    if (!accepted.has(liveDigest)) {
+      fail(`${image.name} live container image ID does not attest its release digest`);
+    }
+  }
+}
+
+function helpText() {
+  return `release:deploy -- verify and deploy an already-published v1 product release
+
+Usage:
+  npm run release:deploy -- v1.0.0 --manifest <release-manifest.json> --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group <name> --cluster <name> --namespace <name> --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--runtime-manifest <runtime-list.json>] [--execute] [--resume]
+
+The default is read-only dry-run. The exact P0 target is mandatory. A write requires
+--execute. Deployment uses only digest-pinned GHCR images, never Docker or Podman.
+Without --runtime-manifest, the checked-in runtime List source builds the nine
+shared workloads from the verified publication receipt. The Projects provider
+catalog ConfigMap name and reviewed source commit are required. A supplied
+runtime manifest may reference pre-existing objects only; it cannot create
+credentials, identities, routes, policies, namespaces, migrations, or databases.
+`;
+}
+
+export async function deployRelease(options = {}, dependencies = {}) {
+  const parsed = options.argv ? parseArgs(options.argv) : options;
+  if (parsed.help) return { ok: true, help: true, text: helpText() };
+  if (!parsed.target) fail('explicit P0 target is required');
+  validateTarget(parsed.target);
+  if (!RELEASE_TAG.test(parsed.releaseTag ?? '')) fail('an exact v1.x.y GitHub release tag is required');
+
+  const root = path.resolve(dependencies.root ?? process.cwd());
+  const run = dependencies.run ?? runCommand;
+  const readFile = dependencies.readFile ?? readFileSync;
+  const fetchImpl = dependencies.fetch ?? globalThis.fetch;
+  const checkpointIo = {
+    directory: dependencies.checkpointDirectory ?? checkpointDirectory,
+    mkdir: dependencies.checkpointMkdir ?? mkdirSync,
+    readFile: dependencies.checkpointReadFile ?? readFileSync,
+    writeFile: dependencies.checkpointWriteFile ?? writeFileSync,
+    rm: dependencies.checkpointRm ?? rmSync,
+  };
+  const manifest = options.manifest ?? parseJson(readFile(path.resolve(root, parsed.manifestPath), 'utf8'), 'release manifest');
+  const publication = options.publication ?? parseJson(readFile(path.resolve(root, parsed.publicationPath), 'utf8'), 'publication receipt');
+  const runtimeDocument = options.runtimeManifest ??
+    (parsed.runtimeManifestPath
+      ? parseJson(readFile(path.resolve(root, parsed.runtimeManifestPath), 'utf8'), 'runtime manifest')
+      : undefined);
+
+  const sourceSha = await (dependencies.verifyRelease ?? verifyRelease)(parsed.releaseTag, publication, { root, run });
+  validatePublishedManifest(manifest, { root, sourceSha });
+  const images = validatePublicationReceipt(publication, manifest, sourceSha);
+  const runtimeList = runtimeDocument ?? createRuntimeList(images, parsed.target.namespace, {
+    configMapName: parsed.providerCatalogConfigMapName,
+    sourceCommit: parsed.providerCatalogSourceCommit,
+  });
+  const runtimeManifest = validateRuntimeManifest(runtimeList, images, parsed.target.namespace);
+  verifyImageIds(runtimeManifest, images);
+  const verifyImages = dependencies.verifyImages ?? (async (refs) => {
+    const result = new Map();
+    for (const image of refs) result.set(image.name, await verifyRegistryImage(image.image, fetchImpl));
+    return result;
+  });
+  let acceptedDigests = await verifyImages(images);
+  verifyMeasuredAgentHostDigest(images, acceptedDigests);
+  const targetInfo = await (dependencies.verifyTarget ?? verifyAzureTarget)(parsed.target, { root, run });
+  (dependencies.verifyPrerequisites ?? verifyRuntimePrerequisites)(runtimeManifest, parsed.target, { root, run });
+  run('kubectl', ['apply', '--dry-run=client', '--filename', '-'], {
+    cwd: root,
+    input: `${JSON.stringify(runtimeManifest)}\n`,
+  });
+
+  if (parsed.dryRun || !parsed.execute) {
+    return {
+      ok: true,
+      dryRun: true,
+      sourceSha,
+      target: parsed.target,
+      services: images.filter((image) => image.id !== 'Agentweaver.AgentHost')
+        .map(({ id, image }) => ({ id, image })),
+      perSandboxAgentHost: images.find((image) => image.id === 'Agentweaver.AgentHost').sandboxImage,
+      renderedResources: runtimeManifest.items.length,
+      targetInfo,
+    };
+  }
+
+  const identity = {
+    releaseTag: parsed.releaseTag,
+    sourceSha,
+    target: parsed.target,
+    manifestSha256: createHash('sha256').update(JSON.stringify(manifest)).digest('hex'),
+    runtimeManifestSha256: createHash('sha256').update(JSON.stringify(runtimeManifest)).digest('hex'),
+    publicationSha256: createHash('sha256').update(JSON.stringify(publication)).digest('hex'),
+  };
+  const key = checkpointKey(parsed.releaseTag, sourceSha, parsed.target, identity);
+  let checkpoint;
+  if (parsed.restart) {
+    clearCheckpoint(key, checkpointIo);
+  } else if (parsed.resume) {
+    checkpoint = loadCheckpoint(key, identity, checkpointIo);
+  }
+  if (!checkpoint) {
+    checkpoint = {
+      version: CHECKPOINT_VERSION,
+      key,
+      ...identity,
+      stages: {},
+    };
+  }
+  const applied = checkpoint.stages.apply?.completed === true;
+  if (!applied) {
+    run('kubectl', ['apply', '--filename', '-'], {
+      cwd: root,
+      input: `${JSON.stringify(runtimeManifest)}\n`,
+    });
+    checkpoint = {
+      ...checkpoint,
+      updatedAt: new Date().toISOString(),
+      stages: { ...checkpoint.stages, apply: { completed: true, completedAt: new Date().toISOString() } },
+    };
+    saveCheckpoint(key, checkpoint, checkpointIo);
+  }
+
+  // Resume never skips current target, release, image, rollout, pod or health checks.
+  validateTarget(parsed.target);
+  const freshSourceSha = await (dependencies.verifyRelease ?? verifyRelease)(parsed.releaseTag, publication, { root, run });
+  if (freshSourceSha !== sourceSha) fail('release source changed during deployment');
+  acceptedDigests = await verifyImages(images);
+  verifyMeasuredAgentHostDigest(images, acceptedDigests);
+  await (dependencies.verifyTarget ?? verifyAzureTarget)(parsed.target, { root, run });
+  const verifyLive = dependencies.verifyLive ?? ((refs, target, digests) =>
+    verifyLiveDeployment(refs, target, digests, { root, run }));
+  const deployedImages = images.filter((image) => image.id !== 'Agentweaver.AgentHost');
+  await verifyLive(deployedImages, parsed.target, acceptedDigests);
+  clearCheckpoint(key, checkpointIo);
+  return {
+    ok: true,
+    dryRun: false,
+    resumed: parsed.resume && applied,
+    sourceSha,
+    services: deployedImages.map(({ id }) => id),
+    perSandboxAgentHost: images.find((image) => image.id === 'Agentweaver.AgentHost').sandboxImage,
+  };
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    const result = await deployRelease({ argv: process.argv.slice(2) });
+    if (result.help) console.log(result.text);
+    else if (result.dryRun) {
+      console.log(`Read-only dry-run validated ${result.services.length} product images and ${result.renderedResources} runtime resources at ${result.sourceSha}.`);
+    } else {
+      console.log(`Deployment and live verification completed for ${result.services.length} product services at ${result.sourceSha}.`);
+    }
+  } catch (error) {
+    console.error(`Release deployment failed: ${error.message}`);
+    process.exitCode = 1;
+  }
+}

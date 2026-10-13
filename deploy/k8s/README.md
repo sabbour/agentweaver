@@ -17,12 +17,14 @@ The Identity Service remains a ClusterIP Service.
 | --- | --- |
 | `base/namespace.yaml`, `resourcequota.yaml`, `limitrange.yaml` | Bounded namespace and pod/resource ceilings. |
 | `base/networkpolicy-default-deny.yaml` | Default-deny ingress/egress and DNS-only standard NetworkPolicy. |
+| `base/environment-agenthost-network.yaml`, `base/service-owner-network.yaml` | Cilium policies for the per-Sandbox AgentHost and source-verified in-cluster service-owner edges. |
 | `base/serviceaccounts/foundation-probe-sa.yaml` | Reserved identity for the #1784 acceptance-only Job. |
 | `base/identity-broker/` | Identity runtime ServiceAccount, HTTPS Deployment, ClusterIP Service, and narrow Cilium policy. |
 | `migrations/identity-broker/` | Separate migration ServiceAccount, one-shot Job, and PostgreSQL/token egress policy. |
-| `routing/identity-broker/` | Explicit Gateway namespace/policy, native certificates, HTTPS Gateway, HTTPRoute, backend TLS policy, and narrow Broker ingress. |
+| `routing/identity-broker/` | Explicit Gateway namespace/policy, native certificates, HTTPS Gateway, Broker/Web/Gateway API/MCP HTTPRoutes, backend TLS policies, and narrow ingress policies. |
 | `acceptance/foundation-probe/` | #1784 executable Job and its own scoped egress overlay. |
 | `profiles/projects-config/` | Separately selected Projects runtime source renderer; requires existing catalog and TLS references and explicit runtime inputs. |
+| `scripts/release/runtime-list.mjs` | Checked-in source for the nine shared-service Kubernetes `List`, rendered from validated publication images and explicit provider-catalog inputs. |
 
 The runtime listens with HTTPS on port 8443. Its ClusterIP Service exposes
 port 443. Cilium permits health probes from the node and requests only from
@@ -30,6 +32,14 @@ same-namespace pods labeled `agentweaver.io/identity-client: "true"`.
 It permits DNS, Entra token exchange, the configured upstream OIDC hosts,
 the exact PostgreSQL host, and the exact Key Vault host. The migration policy
 permits DNS, Entra token exchange, and PostgreSQL only.
+
+The typed AgentHost Sandbox profile adds the stable `agentweaver.io/workload: agenthost`
+and `agentweaver.io/identity-client: "true"` labels to the actual controller-owned Pod.
+The latter selects the existing Identity Broker network rule; it grants no application
+identity or authorization. The profile asks the Sandbox controller to create a private
+ClusterIP Service. The provider accepts only HTTPS on TCP 8443 and verifies that the
+Service selector resolves to the actual AgentHost Pod. This is not a shared AgentHost
+Deployment or Service.
 
 ## Selected Projects runtime profile
 
@@ -70,6 +80,16 @@ The Gateway terminates public HTTPS on port 443.
 The HTTPRoute targets the Broker Service on port 443.
 BackendTLSPolicy requires HTTPS to Kestrel and validates its certificate
 with system trust and the exact route hostname.
+The portal listener uses `portal.<managed-domain>`. Its Web route sends `/`
+to the Web Service on port 8080. Its Gateway API route sends `/api/v1` and the
+exact `/openapi/v1.json` path to the Gateway Service on port 8443. The exact
+`/mcp` route sends MCP traffic to the MCP Service on port 8443. Gateway and MCP
+use their own service TLS Secrets, `gateway-tls` and `mcp-tls`. Each leaf
+certificate must contain the exact service DNS name as a SAN and be directly
+signed by the operator-owned `service-backend-ca` Secret. Its `ca.crt` is public
+CA data in an Opaque Secret; private keys stay in the service TLS Secrets.
+BackendTLSPolicies validate the exact service DNS name against that CA.
+These are source-defined routes, not proof that the managed Gateway is accepting traffic.
 `CHANGEME-MANAGED-HOST` requires the `agentweaver` prefix within the certificate's
 reported wildcard domain.
 The zone root is not a service hostname.
@@ -110,6 +130,7 @@ The ordinary base references, but does not create, these objects:
 | `identity-broker-signing` Secret | `signing.pfx` and its `password`; the PFX signs/encrypts tokens and protects the durable data-protection key ring. |
 | `identity-broker-client-secrets` Secret | Optional `IdentityBroker__ExternalProvider__ClientSecret` for a confidential upstream client and `IdentityBroker__Clients__<index>__ClientSecret` keys for configured confidential clients. Public clients omit their secrets. |
 | `identity-broker-tls` Secret | Approved `tls.crt` and `tls.key` for Kestrel HTTPS. No certificate is created here. |
+| `gateway-tls`, `mcp-tls`, and `service-backend-ca` Secrets | Operator-owned Kestrel certificates for Gateway and MCP, plus an Opaque Secret containing the public `ca.crt` that signs both leaf certificates. The leaves must include `gateway.agentweaver-v1-p0.svc.cluster.local` and `mcp.agentweaver-v1-p0.svc.cluster.local` as their respective SANs. Release preflight verifies their type, validity, hostnames, and direct signature. |
 | `identity-broker-key-ring` PVC | Durable writable storage mounted for the protected ASP.NET data-protection key ring. The host runs one replica with a recreate strategy. |
 | `identity-broker-migration-config` ConfigMap | `ConnectionStrings__IdentityBrokerMigration` and the separate migration workload-identity tenant, client, and absolute projected-token-file settings. |
 
@@ -220,3 +241,69 @@ kubectl kustomize deploy\k8s\acceptance\foundation-probe
 These commands only render manifests. They require no cluster connection and
 do not prove a running workload, image, token exchange, network policy, or Azure
 permission.
+
+## Published v1 release rollout
+
+The local `npm run release:deploy` command is a separate, opt-in consumer of a
+published v1 composition. Its default is a read-only dry-run. It requires a
+release-stage manifest with exact image digests and the matching
+`publication.json` receipt from the immutable source-bound GitHub result. By
+default, the checked-in `scripts/release/runtime-list.mjs` source renders a
+Kubernetes `List` containing one restricted Deployment and private ClusterIP
+Service for each of the nine shared product services. It takes the Projects
+provider-catalog ConfigMap name and reviewed source commit explicitly. An
+operator may instead supply a complete rendered list with `--runtime-manifest`.
+The tool verifies the GitHub
+annotated tag and Release, source SHA, all ten public GHCR manifests, the exact
+Azure/kubectl target, and referenced prerequisites before it can render or apply.
+The measured AgentHost image is not deployed as a shared workload: the Environment
+Deployment pins its exact digest, `linux/amd64` platform, and measured compressed
+pull bytes for the per-Sandbox provider. The Foundation Probe is excluded.
+
+The target must be passed explicitly each time: subscription
+`90ab3701-83f0-4ba1-a90a-f2e68683adab`, tenant
+`72f988bf-86f1-41af-91ab-2d7cd011db47`, resource group `aw-v1-p0`, cluster
+`aw-v1-p0-aks`, namespace `agentweaver-v1-p0`, and node bounds 2–3. The tool
+uses the existing Azure CLI and kubectl contexts only after verifying them
+against those values. It does not login, fetch AKS credentials, switch contexts,
+or consult any 0.x target.
+
+Only nine pairs of `Deployment` and `Service` objects may appear in the supplied
+runtime List. AgentHost must not appear there. All referenced ServiceAccounts,
+runtime ConfigMaps, Secrets, PVCs, and service-specific Cilium policies must
+already exist in this namespace.
+Deployments must pin the exact GHCR digest, use the existing per-service
+identity, use HTTPS health endpoints, and retain the restricted pod/container
+security profile. No Secret or ConfigMap data is supplied through the release
+tool. It will not create a Namespace, identity, access policy, migration Job,
+database, ingress, Gateway, or TLS certificate, and it will not broaden the
+default-deny network policy.
+
+The checked-in source defines required Cilium policy names for Identity Broker,
+Events & Sessions, Projects & Config, AgentHost, Environment, Gateway, MCP,
+Orchestrator, Knowledge, and Web. The optional routing overlay defines Web
+ingress only from node health probes and the exact `identity-broker` Gateway
+pods in the explicitly selected Gateway namespace, on HTTP port 8080. The source also
+defines the Web root route, Gateway API routes for `/api/v1` and exact
+`/openapi/v1.json`, and exact `/mcp` to MCP; the release tool does not create
+or manage these routes.
+The other owner policies cover source-verified internal service edges; they do
+not supply missing external endpoints or prove live traffic.
+
+No current source release is deployable: `releases/foundation.json` remains
+`draft`, no product publication receipt exists, and the nine-service runtime
+List is generated from checked-in source but has not been deployed. The source
+now supports a run-scoped AgentHost
+Sandbox profile, but this does not prove production scheduling, a live
+controller-created Service, or complete runtime delivery. Existing
+service-specific runtime configuration, including service ConfigMaps, TLS
+Secrets, the Projects provider catalog, and database/access/TLS prerequisites
+also remain operator-owned. The renderer only references those existing objects;
+it does not supply values, create them, or guess database mappings.
+
+An explicit `--execute` applies only those nine shared-workload Deployments and
+ClusterIP Services. `--resume` may skip an already-applied stage only when its
+checkpoint binds the exact tag, source SHA, release manifest, publication
+receipt, runtime List, and target. It always repeats live target, image
+provenance, rollout, pod-readiness, and running-image-ID checks. A successful
+verification removes that checkpoint; checkpoint I/O errors are reported.

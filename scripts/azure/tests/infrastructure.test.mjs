@@ -308,6 +308,17 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.match(identityDeploymentDocument, /optional: false\s+secretName: identity-broker-tls/);
   assert.match(identityDeploymentDocument, /runAsNonRoot: true/);
   assert.match(identityDeploymentDocument, /runAsUser: 10001/);
+  const ownerNetwork = readFileSync('deploy/k8s/base/service-owner-network.yaml', 'utf8');
+  const environmentNetwork = readFileSync('deploy/k8s/base/environment-agenthost-network.yaml', 'utf8');
+  const sourcePolicy = (source, name) => source.split('---').find(document => document.includes(`name: ${name}`));
+  const ciliumIngress = document => document.slice(document.indexOf('  ingress:'), document.indexOf('  egress:'));
+  const orchestratorIngress = ciliumIngress(sourcePolicy(ownerNetwork, 'orchestrator-owner-network'));
+  const knowledgeIngress = ciliumIngress(sourcePolicy(ownerNetwork, 'knowledge-owner-network'));
+  const environmentIngress = sourcePolicy(environmentNetwork, 'environment-agenthost-ingress');
+  assert.match(orchestratorIngress, /agentweaver\.io\/workload: events-and-sessions/);
+  assert.match(knowledgeIngress, /agentweaver\.io\/workload: events-and-sessions/);
+  assert.match(environmentIngress, /agentweaver\.io\/workload: orchestrator/);
+  assert.match(environmentIngress, /port: "8443"/);
   const identityService = rendered.split('---').find(document =>
     document.includes('kind: Service\n') && document.includes('name: identity-broker'));
   assert.ok(identityService);
@@ -374,12 +385,11 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
 test('separate routing candidate preserves native managed certificates and HTTPS to the Broker', () => {
   const rendered = run('kubectl', ['kustomize', 'deploy/k8s/routing/identity-broker']).stdout;
   const documents = rendered.split('---').filter(document => document.trim());
-  assert.equal(documents.length, 7);
-  function document(kind, namespace = 'agentweaver-v1-p0') {
+  assert.equal(documents.length, 15);
+  function document(kind, namespace = 'agentweaver-v1-p0', name = 'identity-broker') {
     const value = documents.find(item => item.includes(`kind: ${kind}\n`) &&
-      item.includes(`namespace: ${namespace}\n`));
+      item.includes(`namespace: ${namespace}\n`) && item.includes(`\n  name: ${name}\n`));
     assert.ok(value, `Missing ${kind}`);
-    assert.match(value, /name: identity-broker/);
     return value;
   }
   const certificate = document('DefaultDomainCertificate');
@@ -390,6 +400,8 @@ test('separate routing candidate preserves native managed certificates and HTTPS
   const gateway = document('Gateway', 'CHANGEME-GATEWAY-NAMESPACE');
   assert.match(gateway, /gatewayClassName: approuting-istio/);
   assert.match(gateway, /hostname: CHANGEME-MANAGED-HOST/);
+  assert.match(gateway, /hostname: CHANGEME-PORTAL-HOST\s+name: portal\s+port: 443\s+protocol: HTTPS/);
+  assert.equal((gateway.match(/name: identity-broker-tls/g) ?? []).length, 2);
   assert.match(gateway, /port: 443/);
   assert.match(gateway, /protocol: HTTPS/);
   assert.match(gateway, /certificateRefs:\s+- kind: Secret\s+name: identity-broker-tls/);
@@ -400,17 +412,69 @@ test('separate routing candidate preserves native managed certificates and HTTPS
   assert.match(route, /parentRefs:\s+- name: identity-broker\s+namespace: CHANGEME-GATEWAY-NAMESPACE\s+sectionName: https/);
   assert.match(route, /hostnames:\s+- CHANGEME-MANAGED-HOST/);
   assert.match(route, /backendRefs:\s+- name: identity-broker\s+port: 443/);
+  const webRoute = documents.find(item => item.includes('name: web-application\n'));
+  assert.ok(webRoute);
+  assert.match(webRoute, /service: web|agentweaver\.io\/service: web/);
+  assert.match(webRoute, /sectionName: portal/);
+  assert.match(webRoute, /hostnames:\s+- CHANGEME-PORTAL-HOST/);
+  assert.match(webRoute, /value: \//);
+  assert.match(webRoute, /backendRefs:\s+- name: web\s+port: 8080/);
+  const apiRoute = documents.find(item => item.includes('name: gateway-api\n') &&
+    item.includes('kind: HTTPRoute\n'));
+  assert.ok(apiRoute);
+  assert.match(apiRoute, /agentweaver\.io\/service: gateway/);
+  assert.match(apiRoute, /sectionName: portal/);
+  assert.match(apiRoute, /hostnames:\s+- CHANGEME-PORTAL-HOST/);
+  assert.match(apiRoute,
+    /matches:\n    - path:\n        type: PathPrefix\n        value: \/api\/v1\n    - path:\n        type: Exact\n        value: \/openapi\/v1\.json/);
+  assert.match(apiRoute, /backendRefs:\s+- name: gateway\s+port: 8443/);
+  const apiBackend = documents.find(item => item.includes('name: gateway-api\n') &&
+    item.includes('kind: BackendTLSPolicy\n'));
+  assert.ok(apiBackend);
+  assert.match(apiBackend, /hostname: gateway\.agentweaver-v1-p0\.svc\.cluster\.local/);
+  assert.match(apiBackend, /caCertificateRefs:\s+- group: ""\s+kind: Secret\s+name: service-backend-ca/);
+  const mcpRoute = documents.find(item => item.includes('name: mcp\n') &&
+    item.includes('kind: HTTPRoute\n'));
+  assert.ok(mcpRoute);
+  assert.match(mcpRoute, /hostnames:\s+- CHANGEME-PORTAL-HOST/);
+  assert.match(mcpRoute, /type: Exact\s+value: \/mcp/);
+  assert.match(mcpRoute, /backendRefs:\s+- name: mcp\s+port: 8443/);
+  const mcpBackend = documents.find(item => item.includes('name: mcp\n') &&
+    item.includes('kind: BackendTLSPolicy\n'));
+  assert.ok(mcpBackend);
+  assert.match(mcpBackend, /hostname: mcp\.agentweaver-v1-p0\.svc\.cluster\.local/);
+  assert.match(mcpBackend, /caCertificateRefs:\s+- group: ""\s+kind: Secret\s+name: service-backend-ca/);
   const backend = document('BackendTLSPolicy');
   assert.match(backend, /apiVersion: gateway\.networking\.k8s\.io\/v1/);
   assert.match(backend, /kind: Service\s+name: identity-broker\s+sectionName: https/);
   assert.match(backend, /hostname: CHANGEME-MANAGED-HOST/);
   assert.match(backend, /wellKnownCACertificates: System/);
-  const ingress = document('CiliumNetworkPolicy');
+  const ingress = document('CiliumNetworkPolicy', 'agentweaver-v1-p0', 'identity-broker-gateway-ingress');
   assert.match(ingress, /k8s:io\.kubernetes\.pod\.namespace: CHANGEME-GATEWAY-NAMESPACE/);
   assert.match(ingress, /k8s:gateway\.networking\.k8s\.io\/gateway-name: identity-broker/);
   assert.match(ingress, /port: "8443"/);
+  const webIngress = documents.find(item => item.includes('name: web-gateway-ingress\n'));
+  assert.ok(webIngress);
+  assert.match(webIngress, /agentweaver\.io\/service: web/);
+  assert.match(webIngress, /agentweaver\.io\/workload: web/);
+  assert.match(webIngress, /k8s:io\.kubernetes\.pod\.namespace: CHANGEME-GATEWAY-NAMESPACE/);
+  assert.match(webIngress, /k8s:gateway\.networking\.k8s\.io\/gateway-name: identity-broker/);
+  assert.match(webIngress, /fromEntities:\s+- host/);
+  assert.match(webIngress, /port: "8080"/);
+  assert.doesNotMatch(webIngress, /world|0\.0\.0\.0\/0/);
+  const gatewayIngress = documents.find(item => item.includes('name: gateway-api-ingress\n'));
+  assert.ok(gatewayIngress);
+  assert.match(gatewayIngress, /agentweaver\.io\/workload: gateway/);
+  assert.match(gatewayIngress, /k8s:io\.kubernetes\.pod\.namespace: CHANGEME-GATEWAY-NAMESPACE/);
+  assert.match(gatewayIngress, /port: "8443"/);
+  const mcpIngress = documents.find(item => item.includes('name: mcp-gateway-ingress\n'));
+  assert.ok(mcpIngress);
+  assert.match(mcpIngress, /agentweaver\.io\/workload: mcp/);
+  assert.match(mcpIngress, /k8s:io\.kubernetes\.pod\.namespace: CHANGEME-GATEWAY-NAMESPACE/);
+  assert.match(mcpIngress, /port: "8443"/);
   assert.match(rendered, /pod-security\.kubernetes\.io\/enforce: CHANGEME-GATEWAY-POLICY/);
-  assert.doesNotMatch(rendered, /kind: (Deployment|Ingress|IngressClass)\n|parametersRef:|tls\.key:|tls\.crt:|fromEntities:|0\.0\.0\.0\/0/);
+  assert.doesNotMatch(ingress, /fromEntities:|0\.0\.0\.0\/0/);
+  assert.doesNotMatch(rendered, /kind: (Deployment|Ingress|IngressClass)\n|parametersRef:|tls\.key:|tls\.crt:|0\.0\.0\.0\/0/);
   const namespace = readFileSync('deploy/k8s/base/namespace.yaml', 'utf8');
   for (const mode of ['enforce', 'audit', 'warn']) {
     assert.match(namespace, new RegExp(`pod-security\\.kubernetes\\.io/${mode}: restricted`));

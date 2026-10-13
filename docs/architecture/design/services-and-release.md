@@ -537,6 +537,70 @@ new release model does not imply that 0.x stops shipping or that 1.0 gains data 
 Platform versioning describes the tested deployment set; provider compatibility and per-run pinning
 still control which environment and AgentHost implementation a run may use.
 
+### Local published-image deployment
+
+The operator-hosted `release:deploy` command is a separate consumer of the
+existing source-bound publication receipt and release manifest. It accepts only
+an annotated v1 GitHub Release at the exact clean source commit, verifies all
+ten product image digests against the immutable publication result and GHCR,
+and never builds, pushes, or imports an image. Nine services run as shared
+Deployments and private ClusterIP Services. AgentHost remains per-Sandbox:
+Environment pins its exact receipt-measured image digest, `linux/amd64` platform,
+and compressed pull byte count for the Sandbox provider. The 13 NuGet packages
+are checked as part of the publication composition but are not deployed. The
+0.0.1 Foundation Probe remains acceptance-only and is excluded from product images.
+
+The command requires all P0 subscription, tenant, resource-group, cluster,
+namespace, and 2–3 node-bound inputs; it does not choose an Azure account or
+kubectl context. Its default is read-only and the explicit `--execute` path
+applies only the nine shared-service Deployments and private ClusterIP Services
+in the supplied runtime List. It does not create a shared AgentHost Deployment
+or Service; the Sandbox controller owns each per-run Host Service.
+Existing identities, TLS Secrets, runtime ConfigMaps, storage claims, SQL
+mappings/grants, Cilium policies, and routing are prerequisites owned elsewhere,
+not resources the release tool creates. Resume state is keyed to the exact tag,
+source, publication and runtime manifests, and target; live image, target, and
+health verification always runs again.
+
+No v1 release-stage manifest or successful product publication exists in the
+current source. The checked-in `scripts/release/runtime-list.mjs` source creates
+the nine-service runtime List from verified publication images and explicit
+Projects provider-catalog inputs; no live runtime list has been applied.
+The AgentHost Sandbox provider has a source-defined private HTTPS Service and
+label contract, but that does not prove production scheduling or a live
+controller result. The release preflight requires existing Cilium policy names
+for Identity Broker, Events & Sessions, Projects & Config, AgentHost,
+Environment, Gateway, MCP, Orchestrator, Knowledge, and Web. The optional
+routing overlay allows Web HTTP only from the explicitly selected `identity-broker`
+Gateway pods and node health probes. The routing source defines a Web root
+HTTPRoute, Gateway API HTTPRoute for `/api/v1` and exact `/openapi/v1.json`,
+and exact `/mcp` HTTPRoute to MCP, all on the portal listener. Gateway and MCP
+BackendTLSPolicies pin their service DNS hostnames and the existing
+`service-backend-ca` Secret. Release preflight checks that its public CA and
+both signed service certificates are already present; the release tool does
+not create or manage these routes or certificates. Other source policies cover
+in-cluster owner edges, not unknown external destinations or routes. Runtime
+settings and database, access, TLS, provider-catalog, and routing prerequisites
+remain operator-owned.
+
+```mermaid
+flowchart LR
+  Tag["Annotated v1 tag and published GitHub Release"] --> Exact["Verify exact source commit"]
+  Exact --> Receipt["Verify immutable publication receipt"]
+  Receipt --> GHCR["Verify 10 digest-pinned GHCR images"]
+  Manifest["Release-stage composition manifest"] --> GHCR
+  Target["Explicit v1 P0 target"] --> ReadOnly["Read-only Azure, kubectl, and prerequisite checks"]
+  Portal["Existing portal routes: / to Web; API and exact OpenAPI to Gateway; /mcp to MCP"] --> ReadOnly
+  GHCR --> ReadOnly
+  Runtime["Checked-in List source + explicit provider catalog inputs"] --> ReadOnly
+  Receipt --> Host["Measured AgentHost image and pull bytes"]
+  Host --> Environment["Pin per-Sandbox AgentHost in Environment options"]
+  ReadOnly --> DryRun["Default dry-run"]
+  DryRun -->|explicit --execute| Apply["Apply only nine shared-service pairs"]
+  Apply --> Live["Repeat target, provenance, health, and image-ID checks"]
+  Live --> Clear["Clear exact release/target checkpoint"]
+```
+
 ### Parity and cutover
 
 Every post-fork 0.x change enters a parity map with a 1.0 owner and a disposition: rebuild,

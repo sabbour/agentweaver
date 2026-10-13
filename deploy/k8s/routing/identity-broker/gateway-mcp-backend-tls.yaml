@@ -1,0 +1,19 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: mcp
+  namespace: agentweaver-v1-p0
+  labels:
+    agentweaver.io/service: mcp
+spec:
+  targetRefs:
+    - group: ""
+      kind: Service
+      name: mcp
+      sectionName: https
+  validation:
+    hostname: mcp.agentweaver-v1-p0.svc.cluster.local
+    caCertificateRefs:
+      - group: ""
+        kind: Secret
+        name: service-backend-ca

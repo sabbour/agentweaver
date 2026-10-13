@@ -40,14 +40,34 @@ test('The only DELETE grants are the two source-owned rollback and edge paths', 
 });
 
 test('Row locks use one column, never blanket UPDATE on append-only tables', () => {
-  const locks = buildP1PostgresPlan().services.flatMap(service =>
-    service.tables.filter(table => table.lockColumn));
+  const plan = buildP1PostgresPlan();
+  const locks = plan.services.flatMap(service =>
+    service.tables.filter(table => table.lockColumn).map(table => ({ service, table })));
   assert.equal(locks.length, 8);
-  for (const table of locks) {
+  for (const { service, table } of locks) {
     assert.deepEqual(table.privileges, ['SELECT', 'INSERT']);
     assert.equal(table.mutationDenialRequired, true);
     assert.match(table.lockColumn, /^[a-z][a-z0-9_]*$/);
+    assert.deepEqual(Object.keys(table.mutationDenialGuard).sort(),
+      ['function', 'message', 'sqlState', 'trigger', 'triggerType']);
+    assert.match(table.mutationDenialGuard.trigger, /^[a-z][a-z0-9_]*$/);
+    assert.match(table.mutationDenialGuard.function, /^[a-z][a-z0-9_]*\(\)$/);
+    assert.ok([19, 27].includes(table.mutationDenialGuard.triggerType));
+    assert.ok(service.functions.some(item =>
+      item.signature === table.mutationDenialGuard.function && !item.execute));
   }
+  assert.deepEqual(locks.map(({ service, table }) =>
+    `${service.schema}.${table.table}:${table.mutationDenialGuard.trigger}:` +
+    `${table.mutationDenialGuard.function}:${table.mutationDenialGuard.triggerType}`).sort(), [
+    'events_sessions.session_fork_lineage:session_fork_lineage_no_update:reject_row_lock_record_update():19',
+    'events_sessions.session_provider_bindings:session_provider_bindings_no_update:reject_row_lock_record_update():19',
+    'events_sessions.sessions:sessions_no_update:reject_row_lock_record_update():19',
+    'events_sessions.usage_ledger:usage_ledger_append_only:reject_usage_history_mutation():27',
+    'events_sessions.usage_rate_cards:usage_rate_cards_immutable:reject_usage_history_mutation():27',
+    'orchestrator.coordinator_decisions:coordinator_decisions_no_update:reject_row_lock_record_update():19',
+    'orchestrator.maf_workflow_checkpoints:maf_workflow_checkpoints_no_update:reject_row_lock_record_update():19',
+    'orchestrator.session_consistency_manifests:session_consistency_manifests_immutable:reject_session_consistency_manifest_mutation():27',
+  ].sort());
 });
 
 test('Only the existing casting authority function receives direct runtime EXECUTE', () => {
@@ -63,7 +83,7 @@ test('Core plan includes all 20 registered versions but never 017; source approv
     [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21]);
   assert.equal(plan.executionRequirements.length, 4);
   assert.ok(plan.executionRequirements.some(item => item.includes('separate approval')));
-  assert.ok(plan.executionRequirements.some(item => item.includes('Restricted-role PostgreSQL tests')));
+  assert.ok(plan.executionRequirements.some(item => item.includes('restricted-role PostgreSQL tests prove')));
 });
 
 test('Plans and hashes are deterministic and independent copies', () => {
@@ -77,15 +97,15 @@ test('Plans and hashes are deterministic and independent copies', () => {
   assert.match(hash, /^[0-9a-f]{64}$/);
 });
 
-test('Initializer source corrections preserve both execution blocks and the separate catalog review', () => {
+test('Initializer validates planned and installed mutation guards before it commits grants', () => {
   const source = readFileSync(new URL('../../../tools/P1PostgresInitializer/Program.cs', import.meta.url), 'utf8')
     .replace(/\r\n/g, '\n');
-  const credentialBlock = source.indexOf('if (plan.Services.Any(service => service.Tables.Any(table => table.MutationDenialRequired)))');
-  assert.ok(credentialBlock > 0);
-  assert.ok(source.indexOf('No credential or database connection was used.', credentialBlock) >
-    credentialBlock);
-  assert.ok(credentialBlock < source.indexOf('new AzureCliCredential('));
-  assert.ok(source.includes('if (table.LockColumn is not null)\n            throw new InvalidOperationException("One-column row-lock grants still require reviewed mutation-denial source and restricted-role proof. Initialization is not yet permitted.");'));
+  const planGuard = source.indexOf('InitializerChecks.AssertMutationDenialPlan(plan.Services)');
+  assert.ok(planGuard > 0 && planGuard < source.indexOf('new AzureCliCredential('));
+  assert.ok(source.includes('InitializerChecks.AssertMutationDenialGuards(service, mutationGuards, ownerOid, runtimeOid)'));
+  assert.ok(source.includes("has_column_privilege(@role, @table, @column, 'UPDATE')"));
+  assert.doesNotMatch(source, /plan\.Services\.Any\(service => service\.Tables\.Any\(table => table\.MutationDenialRequired\)\)/);
+  assert.doesNotMatch(source, /One-column row-lock grants still require reviewed mutation-denial source/);
   assert.ok(source.includes('Enumerable\\.Range\\(1,\\s*16\\)\\.Concat\\(\\[18,\\s*19,\\s*20,\\s*21\\]\\)'));
   assert.ok(source.includes('21 => \\"row_lock_record_updates\\"'));
 });

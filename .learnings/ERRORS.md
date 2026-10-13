@@ -820,3 +820,35 @@ Run `npm ci` from `apps/web`, then rerun the focused Web tests and typecheck.
 - Tags: web, vitest, dependency-restore
 
 ---
+
+## [ERR-20261013-001] apply-patch-context-mismatch
+
+**Logged**: 2026-10-13T00:14:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+A combined patch stopped when a later source hunk did not match the current backend TLS call formatting.
+
+### Error
+```
+Failed to find expected lines in scripts/azure/lib/identity-broker-routing.mjs:
+  assertManagedBackendTlsPolicy(apiBackendPolicy, 'gateway-api', 'gateway',
+    hostname);
+```
+
+### Context
+- Earlier hunks in the same patch applied to runtime TLS validation and the two Gateway API policy manifests before the source hunk failed.
+- Inspected the files and continued with smaller patches based on their current contents.
+- No existing work was reverted.
+
+### Suggested Fix
+Use exact current source context for each small patch and inspect partial changes before retrying.
+
+### Metadata
+- Reproducible: yes
+- Related Files: scripts/release/deploy.mjs, scripts/azure/lib/identity-broker-routing.mjs
+- Tags: patch, partial-application
+
+---

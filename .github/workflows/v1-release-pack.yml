@@ -244,6 +244,11 @@ jobs:
           RELEASE_NUGET_SOURCE: ${{ vars.RELEASE_NUGET_SOURCE }}
         run: |
           node -e "if (process.env.RELEASE_NUGET_SOURCE !== 'https://nuget.pkg.github.com/sabbour/index.json') { console.error('::error::Publication feed does not match the approved P1 GitHub Packages destination'); process.exit(1); }"
+      - name: Require approved GHCR destination
+        env:
+          RELEASE_REGISTRY: ghcr.io/sabbour
+        run: |
+          node -e "if (process.env.RELEASE_REGISTRY !== 'ghcr.io/sabbour') { console.error('::error::Publication registry does not match the approved GHCR destination'); process.exit(1); }"
       - uses: actions/download-artifact@v4
         with:
           name: v1-release-pack-${{ github.sha }}-${{ github.run_id }}
@@ -253,9 +258,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_NUGET_SOURCE: ${{ vars.RELEASE_NUGET_SOURCE }}
           RELEASE_NUGET_API_KEY: ${{ github.token }}
-          RELEASE_REGISTRY: ${{ vars.RELEASE_REGISTRY }}
-          RELEASE_REGISTRY_USER: ${{ secrets.RELEASE_REGISTRY_USER }}
-          RELEASE_REGISTRY_PASSWORD: ${{ secrets.RELEASE_REGISTRY_PASSWORD }}
+          RELEASE_REGISTRY: ghcr.io/sabbour
+          RELEASE_REGISTRY_USER: ${{ github.repository_owner }}
+          RELEASE_REGISTRY_PASSWORD: ${{ github.token }}
           DOCKER_CONFIG: ${{ github.workspace }}/artifacts/docker-config
           PLATFORM_ONLY: ${{ inputs.platform_only }}
         run: |

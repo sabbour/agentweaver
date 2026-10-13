@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
+import { runtimeListFixture } from './runtime-list-fixture.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const callbackPath = '/auth/github/copilot-app/callback';
@@ -130,6 +131,18 @@ test('pinned amd64 Web image serves and sanitizes the Copilot callback', {
   assert.match(appUid ?? '', /^\d+$/, 'the pinned ASP.NET runtime image defines a numeric APP_UID');
   const imageUser = run('docker', ['image', 'inspect', '--format', '{{.Config.User}}', image]);
   assert.equal(imageUser, appUid, 'the Web image runs as the ASP.NET runtime app UID');
+  const webDeployment = runtimeListFixture().items.find(value =>
+    value.kind === 'Deployment' && value.metadata.name === 'web');
+  assert.equal(String(webDeployment.spec.template.spec.securityContext.runAsUser), appUid,
+    'the release manifest runs Web as the UID from its pinned ASP.NET runtime image');
+  const webContainer = webDeployment.spec.template.spec.containers[0];
+  assert.deepEqual(webContainer.ports, [{ name: 'http', containerPort: 8080, protocol: 'TCP' }]);
+  assert.deepEqual(webContainer.livenessProbe.httpGet, {
+    path: '/health/live', port: 'http', scheme: 'HTTP',
+  });
+  assert.deepEqual(webContainer.readinessProbe.httpGet, {
+    path: '/health/ready', port: 'http', scheme: 'HTTP',
+  });
 
   const clientId = 'client-π";window.__injected=true;//';
   run('docker', [

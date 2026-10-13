@@ -809,7 +809,10 @@ test('existing Linux workflow defaults off and isolates the approved sampler rou
   assert.match(ordinary, /permissions:\r?\n\s+contents: write\r?\n\s+packages: write/);
   assert.match(ordinary, /environment: v1-publication/);
   assert.match(ordinary, /inputs\.publish && !inputs\.foundation_probe_sampler_replacement/);
-  assert.match(ordinary, /RELEASE_REGISTRY_PASSWORD: \$\{\{ secrets\.RELEASE_REGISTRY_PASSWORD \}\}/);
+  assert.match(ordinary, /RELEASE_REGISTRY: ghcr\.io\/sabbour/);
+  assert.match(ordinary, /RELEASE_REGISTRY_USER: \$\{\{ github\.repository_owner \}\}/);
+  assert.match(ordinary, /RELEASE_REGISTRY_PASSWORD: \$\{\{ github\.token \}\}/);
+  assert.doesNotMatch(ordinary, /secrets\.RELEASE_REGISTRY_(?:USER|PASSWORD)/);
   assert.match(sampler, /packages: write/);
   assert.match(sampler, /RELEASE_REGISTRY: ghcr\.io\/sabbour/);
   assert.match(sampler, /RELEASE_REGISTRY_USER: \$\{\{ github\.repository_owner \}\}/);
@@ -827,9 +830,16 @@ test('ordinary release workflow scopes the existing Actions token to the approve
   assert.match(ordinary, /inputs\.publish && !inputs\.foundation_probe_sampler_replacement/);
   assert.match(ordinary, /RELEASE_NUGET_API_KEY: \$\{\{ github\.token \}\}/);
   assert.doesNotMatch(ordinary, /secrets\.RELEASE_NUGET_API_KEY|\|\|/);
+  assert.match(ordinary, /RELEASE_REGISTRY: ghcr\.io\/sabbour/);
+  assert.match(ordinary, /RELEASE_REGISTRY_USER: \$\{\{ github\.repository_owner \}\}/);
+  assert.match(ordinary, /RELEASE_REGISTRY_PASSWORD: \$\{\{ github\.token \}\}/);
+  assert.doesNotMatch(ordinary, /secrets\.RELEASE_REGISTRY_(?:USER|PASSWORD)|\|\|/);
   assert.doesNotMatch(beforeOrdinary, /packages: write|RELEASE_NUGET_API_KEY/);
   const guardStep = ordinary.indexOf('name: Require approved GitHub Packages destination');
-  assert.ok(guardStep >= 0 && guardStep < ordinary.indexOf('uses: actions/download-artifact@v4'));
+  const registryGuardStep = ordinary.indexOf('name: Require approved GHCR destination');
+  const artifactDownload = ordinary.indexOf('uses: actions/download-artifact@v4');
+  assert.ok(guardStep >= 0 && guardStep < artifactDownload);
+  assert.ok(registryGuardStep >= 0 && registryGuardStep < artifactDownload);
   const guard = ordinary.match(/node -e "([^"]+)"/)?.[1];
   assert.ok(guard);
   const approvedFeed = 'https://nuget.pkg.github.com/sabbour/index.json';
@@ -848,6 +858,25 @@ test('ordinary release workflow scopes the existing Actions token to the approve
     if (feed !== approvedFeed) {
       assert.match(result.stderr, /::error::Publication feed does not match/);
       if (feed) assert.ok(!result.stderr.includes(feed));
+    }
+  }
+  const registryGuardBlock = ordinary.slice(registryGuardStep, artifactDownload);
+  const registryGuard = registryGuardBlock.match(/node -e "([^"]+)"/)?.[1];
+  assert.ok(registryGuard);
+  const approvedRegistry = 'ghcr.io/sabbour';
+  for (const registry of [
+    approvedRegistry, undefined, '', 'ghcr.io/another-owner', 'https://ghcr.io/sabbour',
+    'ghcr.io/sabbour/agentweaver', 'ghcr.io/sabbour?token=fake-secret',
+  ]) {
+    const env = { ...process.env };
+    delete env.RELEASE_REGISTRY;
+    if (registry !== undefined) env.RELEASE_REGISTRY = registry;
+    const result = spawnSync(process.execPath, ['-e', registryGuard], { encoding: 'utf8', env });
+    assert.equal(result.status, registry === approvedRegistry ? 0 : 1, String(registry));
+    assert.equal(result.stdout, '');
+    if (registry !== approvedRegistry) {
+      assert.match(result.stderr, /::error::Publication registry does not match/);
+      if (registry) assert.ok(!result.stderr.includes(registry));
     }
   }
 });

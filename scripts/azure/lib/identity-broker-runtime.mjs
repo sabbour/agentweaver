@@ -165,6 +165,8 @@ export function bootstrapIdentityBrokerRuntime(config, {
       return JSON.parse(result.stdout);
     }
     const route = read('httproutes', 'identity-broker', projectIdentityRoutingReadback);
+    const webRoute = read('httproutes', 'web-application', projectIdentityRoutingReadback);
+    const apiRoute = read('httproutes', 'gateway-api', projectIdentityRoutingReadback);
     const gatewayNamespace = route?.spec?.parentRefs?.[0]?.namespace;
     if (gatewayNamespace !== 'agentweaver-v1-gateway') {
       throw new Error('Broker runtime route does not identify the exact approved Gateway namespace.');
@@ -174,6 +176,9 @@ export function bootstrapIdentityBrokerRuntime(config, {
       gateway: read('gateways', 'identity-broker', projectIdentityRoutingReadback, gatewayNamespace),
       route,
       backendPolicy: read('backendtlspolicies', 'identity-broker', projectIdentityRoutingReadback),
+      webRoute,
+      apiRoute,
+      apiBackendPolicy: read('backendtlspolicies', 'gateway-api', projectIdentityRoutingReadback),
     });
     if (!routing.hostnameAligned) throw new Error('Broker runtime setup requires independently observed aligned native routing specs.');
     if (application.appId !== config.upstreamClientId ||
@@ -247,7 +252,8 @@ export function bootstrapIdentityBrokerRuntime(config, {
     }
     return {
       namespace: NAMESPACE, configMap: CONFIG, configMapUid: readback.metadata.uid,
-      configMapCreated: !existing, issuer: routing.issuer, configurationOnly: true,
+      configMapCreated: !existing, issuer: routing.issuer, portalHostname: routing.portalHostname,
+      configurationOnly: true,
       gatewayProgrammed: routing.gatewayProgrammed, routingBlocked: !routing.gatewayProgrammed,
       runtimeVerified: false, acceptanceClientId: data.IdentityBroker__Clients__0__ClientId,
       brokerImage: config.brokerImage, runtimeIdentityClientId: identity.clientId,
