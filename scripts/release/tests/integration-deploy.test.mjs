@@ -365,6 +365,50 @@ test('default integration dry-run verifies images and renders without applying r
   assert.equal(commands.length, 1);
 });
 
+test('execute mode rejects unsafe or existing result paths before mutating apply', async t => {
+  const scenarios = [
+    {
+      name: 'result outside the source checkout',
+      resultPath: path.join('..', 'outside-deployment-result.json'),
+      error: /result path must remain inside the source checkout/,
+    },
+    {
+      name: 'existing immutable result',
+      resultPath: 'deployment-result.json',
+      error: /deployment result already exists/,
+      existingContent: 'earlier deployment result',
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async t => {
+      const fixture = createFixture(t);
+      if (scenario.existingContent) {
+        writeFileSync(path.join(fixture.root, scenario.resultPath), scenario.existingContent);
+      }
+      const options = deployOptions(fixture, {
+        execute: true,
+        dryRun: false,
+        resultPath: scenario.resultPath,
+      });
+      const commands = [];
+      const dependencies = deploymentDependencies(fixture, (file, args) => {
+        commands.push([file, args]);
+        return '';
+      });
+
+      await assert.rejects(deployIntegration(options, dependencies), scenario.error);
+      assert.equal(commands.filter(([file, args]) =>
+        file === 'kubectl' && args[0] === 'apply' && !args.includes('--dry-run=client')).length, 0);
+      assert.equal(commands.filter(([file, args]) =>
+        file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=client')).length, 1);
+      if (scenario.existingContent) {
+        assert.equal(readFileSync(path.join(fixture.root, scenario.resultPath), 'utf8'), scenario.existingContent);
+      }
+    });
+  }
+});
+
 test('execute mode records exact registry and Kubernetes readbacks without external commands', async t => {
   const fixture = createFixture(t);
   const resultPath = path.join(fixture.root, 'deployment-result.json');

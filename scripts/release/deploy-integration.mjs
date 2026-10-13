@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { componentImageRepository, selectIntegrationImageComponents } from './pack.mjs';
@@ -430,6 +430,10 @@ export async function deployIntegration(options = {}, dependencies = {}) {
     };
   }
 
+  const resultPath = path.resolve(root, parsed.resultPath ?? `artifacts/release/integration/${parsed.sourceSha}-deployment.json`);
+  if (!resultPath.startsWith(`${root}${path.sep}`)) fail('deployment result path must remain inside the source checkout');
+  if (existsSync(resultPath)) fail('deployment result already exists; refusing to apply over a prior deployment receipt');
+
   run('kubectl', ['apply', '--filename', '-'], {
     cwd: root, input: `${JSON.stringify(runtimeManifest)}\n`,
   });
@@ -499,8 +503,6 @@ export async function deployIntegration(options = {}, dependencies = {}) {
     readbacks,
     completedAt: (dependencies.now ?? (() => new Date()))().toISOString(),
   };
-  const resultPath = path.resolve(root, parsed.resultPath ?? `artifacts/release/integration/${parsed.sourceSha}-deployment.json`);
-  if (!resultPath.startsWith(`${root}${path.sep}`)) fail('deployment result path must remain inside the source checkout');
   mkdirSync(path.dirname(resultPath), { recursive: true });
   try {
     writeFileSync(resultPath, `${JSON.stringify(result, null, 2)}\n`, { flag: 'wx' });
