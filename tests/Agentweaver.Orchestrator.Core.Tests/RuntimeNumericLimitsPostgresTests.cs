@@ -1256,6 +1256,14 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     {
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddAuthorization();
+        builder.Services.ConfigureHttpJsonOptions(options =>
+        {
+            options.SerializerOptions.UnmappedMemberHandling =
+                System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow;
+            options.SerializerOptions.MaxDepth = 16;
+            options.SerializerOptions.Converters.Add(
+                new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        });
         builder.Services.AddSingleton<IAuthenticationService>(
             new OwnerAuthentication(DateTimeOffset.UtcNow.AddMinutes(5)));
         builder.Services.AddSingleton(owner);

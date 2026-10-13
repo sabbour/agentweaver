@@ -689,7 +689,7 @@ public sealed class RuntimeAgentHostTests
 
     [Theory]
     [InlineData(HttpStatusCode.Forbidden, "runtime_owner_denied")]
-    [InlineData(HttpStatusCode.Conflict, "runtime_owner_unavailable")]
+    [InlineData(HttpStatusCode.Conflict, "runtime_owner_binding_changed")]
     [InlineData(HttpStatusCode.NotFound, "runtime_owner_unavailable")]
     [InlineData(HttpStatusCode.ServiceUnavailable, "runtime_owner_unavailable")]
     public async Task NativeSuspendNeedsCoreAuthorityBeforeStoppingTurns(
@@ -762,7 +762,7 @@ public sealed class RuntimeAgentHostTests
                 fixture.SuspendStatus = HttpStatusCode.Conflict;
         };
 
-        Assert.Equal("runtime_owner_unavailable",
+        Assert.Equal("runtime_owner_binding_changed",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token))).Code);
         Assert.Single(fixture.Material, material => material.EventId == request.ManifestId);
@@ -787,7 +787,7 @@ public sealed class RuntimeAgentHostTests
                 fixture.SuspendStatus = HttpStatusCode.Conflict;
         };
 
-        Assert.Equal("runtime_owner_unavailable",
+        Assert.Equal(missingCache ? "runtime_owner_unavailable" : "runtime_owner_binding_changed",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token))).Code);
         Assert.Equal(2, fixture.Material.Count(material => material.Kind == SessionMaterialKind.SdkCache));
