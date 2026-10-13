@@ -292,6 +292,54 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             .ConfigureAwait(false);
     }
 
+    internal async Task<RuntimeFixedCreditGuardReadResult> ReadFixedCreditGuardAsync(
+        RuntimeHostFixedCreditGuardReadRequest request, RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(actor);
+        var proof = request.Proof
+            ?? throw new RuntimeAuthorizationException("runtime_session_proof_invalid");
+        var session = await RequireSessionAsync(proof, actor, token).ConfigureAwait(false);
+        var source = _usageSource
+            ?? throw new RuntimeAuthorizationException("runtime_usage_source_unavailable");
+        RuntimeFixedCreditGuardReadResult result;
+        try
+        {
+            result = await source.ReadFixedCreditGuardAsync(
+                session, request.RequestId, request.RequestHash, token).ConfigureAwait(false);
+        }
+        catch (RuntimeAuthorizationException failure) when (failure.Code == "runtime_owner_unavailable")
+        {
+            throw new RuntimeAuthorizationException("runtime_usage_source_unavailable");
+        }
+        await RequireSessionAsync(proof, actor, token).ConfigureAwait(false);
+        return result;
+    }
+
+    internal async Task<RuntimeNativeCreditDenialReadResult> ReadNativeCreditDenialAsync(
+        RuntimeHostNativeCreditDenialReadRequest request, RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(actor);
+        var proof = request.Proof
+            ?? throw new RuntimeAuthorizationException("runtime_session_proof_invalid");
+        var session = await RequireSessionAsync(proof, actor, token).ConfigureAwait(false);
+        var source = _usageSource
+            ?? throw new RuntimeAuthorizationException("runtime_usage_source_unavailable");
+        RuntimeNativeCreditDenialReadResult result;
+        try
+        {
+            result = await source.ReadNativeCreditDenialAsync(
+                session, request.DispatchId, request.Stage, token).ConfigureAwait(false);
+        }
+        catch (RuntimeAuthorizationException failure) when (failure.Code == "runtime_owner_unavailable")
+        {
+            throw new RuntimeAuthorizationException("runtime_usage_source_unavailable");
+        }
+        await RequireSessionAsync(proof, actor, token).ConfigureAwait(false);
+        return result;
+    }
+
     public async Task<RuntimeA2AResponse> SendAsync(
         RuntimeA2ASendRequest request, RuntimeActorAuthorization actor, CancellationToken token)
     {

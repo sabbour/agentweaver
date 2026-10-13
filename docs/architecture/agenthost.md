@@ -313,6 +313,16 @@ source-owned no-send receipt through `POST /internal/runtime/turns/no-send`.
 The Host returns the budget error only after that receipt is stored. An event,
 incomplete range, or changed cursor fails closed, and native Send is not called.
 This proves only the bounded no-send interval, not later accounting finality.
+AgentHost exposes authenticated read routes at
+`POST /runtime/v1/turns/fixed-credit-denials/read` and
+`POST /runtime/v1/turns/denials/read`. Each request contains the current session
+proof and the stable record selector. The Host checks the proof against the
+current registration before and after the source read, then returns the
+source-owned `receipt`/`evidence` or `receipt`/`noSend` pair directly. A stored
+fixed-credit guard can have null evidence while its no-send write is incomplete;
+a native read with no stored denial returns a null receipt and null `noSend`.
+Source-owner unavailability returns `503`. Both routes use no-store
+responses.
 `POST /internal/runtime/turns/observations` attaches the actual native range and output hash
 to that same dispatch. Exact retries retain the stored observation.
 The resulting state is `terminal_pending_accounting`, with a `partial` source report.

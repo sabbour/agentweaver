@@ -5,11 +5,18 @@ using System.Net.Http.Json;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator;
 using Agentweaver.Providers;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Metadata;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Xunit;
 
@@ -18,6 +25,11 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 [Collection("Coordination PostgreSQL")]
 public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixture fixture) : IAsyncLifetime
 {
+    private static readonly JsonSerializerOptions OwnerJson = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+    };
+
     private readonly string _schema = "numeric_" + Guid.NewGuid().ToString("N");
     private readonly CoordinationActor _actor = new("https://identity.example/", Guid.NewGuid().ToString("D"));
     private readonly RuntimeRegistration[] _registrations = new RuntimeRegistration[2];
@@ -411,6 +423,93 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     }
 
     [Fact]
+    public async Task FixedCreditOutboxOwnerReplayAndReadRouteReturnStoredEvidenceWithoutWrites()
+    {
+        var binding = _registrations[0].Binding with
+        {
+            CopilotHardCreditLimit = 0m,
+            ObservationEndpoint = new("https://runtime.test/internal/runtime/observations")
+        };
+        await RegisterSourceAsync(0, binding);
+        var registration = _registrations[0];
+        Assert.Equal(new Uri("https://runtime.test/internal/runtime/observations"),
+            registration.Binding.ObservationEndpoint);
+        var grant = _grants[0];
+        var (proof, receipt, evidence) = FixedCreditEvidence(registration, grant, _sources[0]);
+        using (var writeRig = CreateRuntimeUsageOwner(registration, grant))
+        {
+            Assert.Equal(receipt, await writeRig.Owner.RecordFixedCreditGuardAsync(
+                writeRig.Context, new(proof, receipt), CancellationToken.None));
+            var initialEvidenceRequest = new RuntimeFixedCreditNoSendEvidenceRequest(proof, receipt, evidence);
+            Assert.Equal(evidence, await writeRig.Owner.RecordFixedCreditNoSendAsync(
+                writeRig.Context, initialEvidenceRequest, CancellationToken.None));
+        }
+
+        Assert.Equal(1, await CountFixedCreditEventsAsync("orchestrator.runtime.fixed_credit_denial"));
+        using var replayRig = CreateRuntimeUsageOwner(registration, grant);
+        var replayedGuard = await replayRig.Owner.RecordFixedCreditGuardAsync(
+            replayRig.Context, new(proof, receipt), CancellationToken.None);
+        Assert.Equal(receipt, replayedGuard);
+        Assert.Equal(1, await CountFixedCreditEventsAsync("orchestrator.runtime.fixed_credit_denial"));
+        var evidenceRequest = new RuntimeFixedCreditNoSendEvidenceRequest(proof, receipt, evidence);
+        Assert.Equal(evidence, await replayRig.Owner.RecordFixedCreditNoSendAsync(
+            replayRig.Context, evidenceRequest, CancellationToken.None));
+        Assert.Equal(1, await CountFixedCreditEventsAsync("orchestrator.runtime.fixed_credit_no_send"));
+
+        var beforeRead = await ReadFixedCreditEventCountsAsync();
+        var read = await ReadFixedCreditGuardRouteAsync(replayRig.Owner, proof,
+            new(proof, registration.RuntimeInstanceId, registration.Revision,
+                registration.Binding.ExecutionFence, receipt.Stage, receipt.RequestId, receipt.RequestHash));
+        Assert.Equal(new RuntimeFixedCreditGuardReadResult(receipt, evidence), read);
+        Assert.Equal(beforeRead, await ReadFixedCreditEventCountsAsync());
+    }
+
+    [Fact]
+    public async Task FixedCreditOwnerRejectsStaleEvidenceAfterRegistrationFenceRotation()
+    {
+        var binding = _registrations[0].Binding with
+        {
+            CopilotHardCreditLimit = 0m,
+            ObservationEndpoint = new("https://runtime.test/internal/runtime/observations")
+        };
+        await RegisterSourceAsync(0, binding);
+        var registration = _registrations[0];
+        Assert.Equal(new Uri("https://runtime.test/internal/runtime/observations"),
+            registration.Binding.ObservationEndpoint);
+        var grant = _grants[0];
+        var (proof, receipt, evidence) = FixedCreditEvidence(registration, grant, _sources[0]);
+        using var staleRig = CreateRuntimeUsageOwner(registration, grant);
+        Assert.Equal(receipt, await staleRig.Owner.RecordFixedCreditGuardAsync(
+            staleRig.Context, new(proof, receipt), CancellationToken.None));
+
+        var rotated = await new RuntimeRegistrationStore(fixture.DataSource, _schema, TimeProvider.System)
+            .ReplaceAsync(registration, Guid.NewGuid(),
+                registration.Binding with { ExecutionFence = registration.Binding.ExecutionFence + 1 },
+                registration.ExpiresAt, CancellationToken.None);
+        await RegisterCurrentSourceAsync(0, rotated);
+        Assert.Equal(registration.Binding.ExecutionFence + 1, rotated.Binding.ExecutionFence);
+        Assert.Equal(rotated, await new RuntimeRegistrationStore(fixture.DataSource, _schema, TimeProvider.System)
+            .ReadAsync(rotated.RuntimeInstanceId, CancellationToken.None));
+
+        var staleFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            staleRig.Owner.RecordFixedCreditNoSendAsync(staleRig.Context,
+                new(proof, receipt, evidence), CancellationToken.None));
+        Assert.Equal("runtime_registration_unavailable", staleFailure.Code);
+        Assert.Equal(1, await CountFixedCreditEventsAsync("orchestrator.runtime.fixed_credit_denial"));
+        Assert.Equal(0, await CountFixedCreditEventsAsync("orchestrator.runtime.fixed_credit_no_send"));
+
+        using var currentRig = CreateRuntimeUsageOwner(rotated, _grants[0]);
+        var currentProof = SourceProof(_grants[0]);
+        var missing = await Assert.ThrowsAsync<CoordinationException>(() =>
+            currentRig.Owner.ReadFixedCreditGuardAsync(currentRig.Context,
+                new(currentProof, rotated.RuntimeInstanceId, rotated.Revision,
+                    rotated.Binding.ExecutionFence, receipt.Stage, receipt.RequestId, receipt.RequestHash),
+                CancellationToken.None));
+        Assert.Equal("runtime_fixed_credit_guard_unknown", missing.Code);
+        Assert.Equal(0, await CountFixedCreditEventsAsync("orchestrator.runtime.fixed_credit_no_send"));
+    }
+
+    [Fact]
     public async Task PermissionCheckDoesNotDebitAndExactToolRetrySurvivesRestartAtTheCap()
     {
         var permission = Action(0, toolInvocation: false);
@@ -541,16 +640,39 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     {
         var registration = await new RuntimeRegistrationStore(fixture.DataSource, _schema, TimeProvider.System)
             .RegisterAsync(binding, DateTimeOffset.UtcNow.AddHours(1), default);
-        _registrations[index] = registration;
         var grant = new RuntimeGrantReceipt(Guid.NewGuid(), registration.RuntimeInstanceId, registration.Revision,
             1, _actor.Issuer, RuntimeCredentialPurpose.Observe, binding.ObservationEndpoint,
             RuntimeCredentialState.Active, new string('a', 64), registration.ExpiresAt, DateTimeOffset.UtcNow);
-        _grants[index] = grant;
         var source = new SdkSessionFacts(registration.RuntimeInstanceId,
             RuntimeContractValidation.NativeSessionId(binding), "1.0.18", "1.0.79", "model:selected",
             "controlled-model", new string('c', 64), 1, "hosted-copilot", SdkMeterSources.CopilotNanoAiu,
             binding.AcceptedSelectionHash, registration.Revision);
-        _sources[index] = source;
+        await RegisterCurrentSourceAsync(index, registration, grant, source);
+        var prompt = $"Execute work item {index}.";
+        var intent = new MafExecutionDispatchIntent($"item-{index}", binding.SessionId,
+            Guid.NewGuid(), RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt)));
+        _intents[index] = intent;
+        _messages[index] = new(new("message", intent.MessageId, source.SdkSessionId, "user",
+            [new("text", prompt)], new(new(1, registration, grant.GrantId, grant.Revision,
+                RuntimeCredentialPurpose.Observe), AddressedMessageDeliveryMode.Enqueue)));
+    }
+
+    private async Task RegisterCurrentSourceAsync(int index, RuntimeRegistration registration)
+    {
+        var binding = registration.Binding;
+        var grant = new RuntimeGrantReceipt(Guid.NewGuid(), registration.RuntimeInstanceId, registration.Revision,
+            1, _actor.Issuer, RuntimeCredentialPurpose.Observe, binding.ObservationEndpoint,
+            RuntimeCredentialState.Active, new string('a', 64), registration.ExpiresAt, DateTimeOffset.UtcNow);
+        var source = new SdkSessionFacts(registration.RuntimeInstanceId,
+            RuntimeContractValidation.NativeSessionId(binding), "1.0.18", "1.0.79", "model:selected",
+            "controlled-model", new string('c', 64), 1, "hosted-copilot", SdkMeterSources.CopilotNanoAiu,
+            binding.AcceptedSelectionHash, registration.Revision);
+        await RegisterCurrentSourceAsync(index, registration, grant, source);
+    }
+
+    private async Task RegisterCurrentSourceAsync(
+        int index, RuntimeRegistration registration, RuntimeGrantReceipt grant, SdkSessionFacts source)
+    {
         var store = SourceStore();
         await store.ExecuteLockedAsync(registration.RuntimeInstanceId, async (connection, transaction, token) =>
         {
@@ -559,13 +681,9 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             await transaction.CommitAsync(token);
             return receipt;
         }, default);
-        var prompt = $"Execute work item {index}.";
-        var intent = new MafExecutionDispatchIntent($"item-{index}", binding.SessionId,
-            Guid.NewGuid(), RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(prompt)));
-        _intents[index] = intent;
-        _messages[index] = new(new("message", intent.MessageId, source.SdkSessionId, "user",
-            [new("text", prompt)], new(new(1, registration, grant.GrantId, grant.Revision,
-                RuntimeCredentialPurpose.Observe), AddressedMessageDeliveryMode.Enqueue)));
+        _registrations[index] = registration;
+        _grants[index] = grant;
+        _sources[index] = source;
     }
 
     [Fact]
@@ -1022,6 +1140,212 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         command.Parameters.AddWithValue("purpose", RuntimeActionContract.Purpose);
         return (long)(await command.ExecuteScalarAsync())!;
     }
+
+    private RuntimeUsageOwnerRig CreateRuntimeUsageOwner(
+        RuntimeRegistration registration, RuntimeGrantReceipt grant)
+    {
+        var environmentHttp = new HttpClient(new OwnerHttpHandler(request =>
+            OwnerResponse(request, RuntimePlacement(registration))));
+        var brokerHttp = new HttpClient(new OwnerHttpHandler(request =>
+            OwnerResponse(request, grant)));
+        var projects = new ProjectsRunSelectionClient(
+            _projectsHttp, _options, new ReviewedRemoteToolSnapshotStore(fixture.DataSource, _schema));
+        var catalog = ProviderCatalog.Create([], [], []).Value!;
+        var contexts = new CoordinatorRunSelectionContextStore(
+            fixture.DataSource, _schema, catalog, new ProviderResolver(catalog), []);
+        var registrations = new RuntimeRegistrationOwner(
+            _options, projects, new CoordinationOwnerStore(fixture.DataSource, _schema), _decisions,
+            contexts, new PostgresMafCheckpointStore(fixture.DataSource, _schema, null),
+            new RuntimeRegistrationStore(fixture.DataSource, _schema, TimeProvider.System),
+            new RuntimeEnvironmentContextClient(
+                environmentHttp, new(new Uri("https://environment.test/"))), TimeProvider.System);
+        var owner = new RuntimeUsageSourceOwner(
+            SourceStore(), registrations,
+            new RuntimeUsageBrokerClient(brokerHttp, new(new Uri("https://broker.test/"))),
+            projects, _options, TimeProvider.System);
+        var contextServices = new ServiceCollection()
+            .AddSingleton<IAuthenticationService>(new OwnerAuthentication(DateTimeOffset.UtcNow.AddMinutes(5)))
+            .BuildServiceProvider();
+        return new(owner, RuntimeHttpContext(contextServices), environmentHttp, brokerHttp, contextServices);
+    }
+
+    private HttpContext RuntimeHttpContext(IServiceProvider services)
+    {
+        var context = new DefaultHttpContext
+        {
+            RequestServices = services,
+            User = new(new ClaimsIdentity(
+            [
+                new("sub", _actor.Subject), new("iss", _actor.Issuer),
+                new("aud", _options.ProjectsAudience), new("project_id", _root.ProjectId),
+                new("run_id", _root.RunId), new("scope", "api.read projects.orchestrator")
+            ], "fixed-credit-test"))
+        };
+        context.Request.Headers.Authorization = "Bearer controlled-owner";
+        context.Request.Headers["X-Agentweaver-Tenant"] = "tenant-1";
+        return context;
+    }
+
+    private static EnvironmentRuntimeBootstrapContext RuntimePlacement(RuntimeRegistration registration)
+    {
+        var binding = registration.Binding;
+        var owner = new RuntimeOwnerContext(
+            1, binding.ActorIssuer, binding.ActorId, binding.TenantId, binding.ProjectId, binding.RunId,
+            binding.SessionId, binding.AgentId, binding.ModelSelectionReference!, binding.TurnId,
+            binding.ProjectRevision, binding.ProjectConfigurationRevision, binding.PlatformRuntimeRevision,
+            binding.ContextRevision, binding.AcceptedSelectionHash, binding.ExecutionFence, 1, 1, 1)
+        {
+            WorkflowStepId = binding.WorkflowStepId,
+            ModelCredentialReference = binding.ModelCredentialReference,
+            ModelSourceMode = binding.ModelSourceMode,
+            ModelBindingPin = binding.ModelBindingPin,
+            ModelConnectionId = binding.ModelConnectionId,
+            ModelConnectionScope = binding.ModelConnectionScope,
+            MaxModelTurns = binding.MaxModelTurns,
+            MaxToolCalls = binding.MaxToolCalls,
+            MaxPromptTokens = binding.MaxPromptTokens,
+            MaxRevisionAttempts = binding.MaxRevisionAttempts,
+            CopilotSoftCreditLimit = binding.CopilotSoftCreditLimit,
+            CopilotHardCreditLimit = binding.CopilotHardCreditLimit
+        };
+        return new(1, binding.TenantId, binding.ProjectId, binding.RunId, binding.EnvironmentId,
+            binding.EnvironmentLifecycleGeneration, binding.EnvironmentCurrentFencingGeneration,
+            binding.EnvironmentProviderFencingGeneration, binding.EnvironmentLeaseRevision,
+            registration.ExpiresAt,
+            new(ProviderSeam.Sandbox, binding.PlacementProviderId!, binding.PlacementUid,
+                binding.PlacementGeneration),
+            new(Guid.NewGuid()), new("placement"), binding.ProfileId,
+            binding.ConfigureEndpoint, binding.ObservationEndpoint)
+        {
+            RuntimeOwnerContext = owner,
+            Image = binding.Image
+        };
+    }
+
+    private static (RuntimeCredentialHttpRequest Proof, RuntimeFixedCreditGuardReceipt Receipt,
+        RuntimeFixedCreditNoSendReceipt Evidence) FixedCreditEvidence(
+        RuntimeRegistration registration, RuntimeGrantReceipt grant, SdkSessionFacts source)
+    {
+        var proof = SourceProof(grant);
+        var sourceHash = RuntimeUsageSourceReceiptContract.HashSource(registration, source);
+        var requestId = Guid.NewGuid();
+        var requestHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes("fixed-zero request"));
+        var receipt = RuntimeFixedCreditGuardContract.Seal(new RuntimeFixedCreditGuardReceipt(
+            1, RuntimeFixedCreditGuardStage.HostPreQueue, RuntimeFixedCreditGuardCode.HardLimitZero,
+            registration, RuntimeContractValidation.RegistrationHash(registration), requestId,
+            requestHash, sourceHash, grant.GrantId, grant.Revision, DateTimeOffset.UtcNow, string.Empty));
+        var cursorHash = new string('d', 64);
+        var evidence = RuntimeFixedCreditGuardContract.Seal(new RuntimeFixedCreditNoSendReceipt(
+            1, registration.RuntimeInstanceId, registration.Revision, registration.Binding.ExecutionFence,
+            requestId, RuntimeFixedCreditGuardStage.HostPreQueue, receipt.CanonicalPayloadHash,
+            receipt.RegistrationHash, sourceHash, grant.GrantId, grant.Revision,
+            RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(source.SdkSessionId)),
+            cursorHash, cursorHash, 0, true, DateTimeOffset.UtcNow, string.Empty));
+        return (proof, receipt, evidence);
+    }
+
+    private static RuntimeCredentialHttpRequest SourceProof(RuntimeGrantReceipt grant) =>
+        new(grant.GrantId, grant.RuntimeInstanceId, grant.Revision, RuntimeCredentialPurpose.Observe,
+            grant.Audience, grant.ConfigurationHash, new string('e', 64), grant.ExpiresAt, Guid.Empty);
+
+    private async Task<RuntimeFixedCreditGuardReadResult> ReadFixedCreditGuardRouteAsync(
+        RuntimeUsageSourceOwner owner, RuntimeCredentialHttpRequest proof,
+        RuntimeFixedCreditGuardReadRequest request)
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddAuthorization();
+        builder.Services.AddSingleton<IAuthenticationService>(
+            new OwnerAuthentication(DateTimeOffset.UtcNow.AddMinutes(5)));
+        builder.Services.AddSingleton(owner);
+        await using var app = builder.Build();
+        app.MapRuntimeUsageSourceEndpoints();
+        var endpoint = Assert.Single(((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints).OfType<RouteEndpoint>(), candidate =>
+                candidate.RoutePattern.RawText ==
+                    "/internal/runtime/turns/fixed-credit-denials/read" &&
+                candidate.Metadata.GetMetadata<IHttpMethodMetadata>()!.HttpMethods.Contains("POST"));
+        Assert.NotEmpty(endpoint.Metadata.GetOrderedMetadata<IAuthorizeData>());
+
+        var context = RuntimeHttpContext(app.Services);
+        context.Request.Method = HttpMethods.Post;
+        context.Request.ContentType = "application/json";
+        var requestBytes = JsonSerializer.SerializeToUtf8Bytes(request with { Authorization = proof }, OwnerJson);
+        context.Request.ContentLength = requestBytes.Length;
+        context.Request.Body = new MemoryStream(requestBytes);
+        context.Response.Body = new MemoryStream();
+        await endpoint.RequestDelegate!(context);
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        context.Response.Body.Position = 0;
+        return await JsonSerializer.DeserializeAsync<RuntimeFixedCreditGuardReadResult>(
+                   context.Response.Body, OwnerJson)
+               ?? throw new InvalidOperationException("The fixed-credit read route returned no result.");
+    }
+
+    private async Task<(long GuardCount, long EvidenceCount)> ReadFixedCreditEventCountsAsync() =>
+        (await CountFixedCreditEventsAsync("orchestrator.runtime.fixed_credit_denial"),
+            await CountFixedCreditEventsAsync("orchestrator.runtime.fixed_credit_no_send"));
+
+    private async Task<long> CountFixedCreditEventsAsync(string eventType)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT count(*) FROM "{_schema}".outbox_events
+            WHERE stream_id = @stream AND event_type = @event
+            """, connection);
+        command.Parameters.AddWithValue("stream",
+            $"coordination/{_root.ProjectId}/{_root.RunId}/fixed-credit-denials");
+        command.Parameters.AddWithValue("event", eventType);
+        return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private sealed record RuntimeUsageOwnerRig(
+        RuntimeUsageSourceOwner Owner,
+        HttpContext Context,
+        HttpClient EnvironmentHttp,
+        HttpClient BrokerHttp,
+        ServiceProvider ContextServices) : IDisposable
+    {
+        public void Dispose()
+        {
+            EnvironmentHttp.Dispose();
+            BrokerHttp.Dispose();
+            ContextServices.Dispose();
+        }
+    }
+
+    private sealed class OwnerAuthentication(DateTimeOffset expiresAt) : IAuthenticationService
+    {
+        public Task<AuthenticateResult> AuthenticateAsync(HttpContext context, string? scheme) =>
+            Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(
+                context.User, new AuthenticationProperties { ExpiresUtc = expiresAt }, "fixed-credit-test")));
+        public Task ChallengeAsync(HttpContext context, string? scheme, AuthenticationProperties? properties) =>
+            throw new NotSupportedException();
+        public Task ForbidAsync(HttpContext context, string? scheme, AuthenticationProperties? properties) =>
+            throw new NotSupportedException();
+        public Task SignInAsync(
+            HttpContext context, string? scheme, ClaimsPrincipal principal, AuthenticationProperties? properties) =>
+            throw new NotSupportedException();
+        public Task SignOutAsync(HttpContext context, string? scheme, AuthenticationProperties? properties) =>
+            throw new NotSupportedException();
+    }
+
+    private sealed class OwnerHttpHandler(
+        Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(respond(request));
+        }
+    }
+
+    private static HttpResponseMessage OwnerResponse(HttpRequestMessage request, object body) => new(HttpStatusCode.OK)
+    {
+        RequestMessage = request,
+        Content = JsonContent.Create(body, body.GetType(), options: OwnerJson),
+        Headers = { CacheControl = new CacheControlHeaderValue { NoStore = true } }
+    };
 
     private sealed class ProjectsHandler(AuthorizedRunSelection selection) : HttpMessageHandler
     {

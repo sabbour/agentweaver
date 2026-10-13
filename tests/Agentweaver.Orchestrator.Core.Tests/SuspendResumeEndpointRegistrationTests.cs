@@ -51,6 +51,33 @@ public sealed class SuspendResumeEndpointRegistrationTests
             Assert.NotEmpty(Assert.Single(routes).Metadata.GetOrderedMetadata<IAuthorizeData>());
     }
 
+    [Fact]
+    public async Task FixedCreditGuardReadRouteIsAuthenticatedWhenUsageSourceIsConfigured()
+    {
+        var builder = WebApplication.CreateBuilder();
+        var options = new OrchestratorOptions(
+            "https://issuer.test/", "orchestrator-api", "https://projects.test/",
+            "projects-api", "https://events.test/", "events-api");
+        builder.Services.AddAuthorization();
+        builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Orchestrator:RuntimeRegistration:EnvironmentOwnerAddress"] = "https://environment.test/",
+            ["Orchestrator:RuntimeUsage:BrokerOwnerAddress"] = "https://broker.test/"
+        });
+        Assert.True(builder.Services.AddRuntimeRegistrationOwner(builder.Configuration, options));
+        Assert.True(builder.Services.AddRuntimeUsageSource(builder.Configuration));
+
+        await using var app = builder.Build();
+        app.MapRuntimeUsageSourceEndpoints();
+        var route = Assert.Single(((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints)
+            .OfType<RouteEndpoint>(), endpoint => endpoint.RoutePattern.RawText ==
+                    "/internal/runtime/turns/fixed-credit-denials/read" &&
+                endpoint.Metadata.GetMetadata<IHttpMethodMetadata>()!.HttpMethods.Contains("POST"));
+
+        Assert.NotEmpty(route.Metadata.GetOrderedMetadata<IAuthorizeData>());
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
