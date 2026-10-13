@@ -172,6 +172,26 @@ internal sealed class RuntimeUsageSourceOwner(
             }, cancellationToken);
     }
 
+    internal Task<RuntimeCreditGuardSnapshot> ReadCreditGuardAsync(
+        HttpContext context, RuntimeCreditGuardReadRequest request, CancellationToken cancellationToken)
+    {
+        RuntimeCreditGuardObservationContract.ValidateReadRequest(request);
+        return ExecuteWriteAsync(context, request.Authorization,
+            async (connection, transaction, registration, grant, actor, token) =>
+            {
+                RuntimeCreditGuardObservationContract.RequireIntent(request.Intent, registration);
+                _ = await store.ReadCurrentSourceForGrantAsync(
+                    connection, transaction, registration, grant, token).ConfigureAwait(false);
+                var snapshot = await store.ReadCreditGuardWithinTransactionAsync(
+                    connection, transaction, registration, request.Intent, token).ConfigureAwait(false)
+                    ?? throw new CoordinationException(
+                        "runtime_credit_guard_unknown", StatusCodes.Status404NotFound);
+                RuntimeCreditGuardObservationContract.ValidateSnapshot(
+                    snapshot, registration, request.Intent);
+                return snapshot;
+            }, cancellationToken);
+    }
+
     internal Task<RuntimeNativeTurnNoSendReceipt> RecordNativeTurnNoSendAsync(
         HttpContext context, RuntimeNativeTurnNoSendEvidenceRequest request,
         CancellationToken cancellationToken)

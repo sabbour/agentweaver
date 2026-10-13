@@ -315,8 +315,16 @@ public sealed class RuntimeCopilotSessionFactory
                     ? new(actualProvider.Type, currentModel.ModelId, _modelBindings.ConfigurationHash)
                     : null
             };
+            var consumedNativeCacheAcknowledgment = recoveryMode == RuntimeSessionRecoveryMode.NativeCache
+                ? recovery?.Cache?.Material
+                    ?? throw new RuntimeAuthorizationException("runtime_recovery_receipt_invalid")
+                : null;
+            var journalEvidence = recoveryMode == RuntimeSessionRecoveryMode.JournalRebuild
+                ? recovery?.JournalEvidence
+                : null;
             return new RuntimeCopilotSession(client, session, facts, usage, turns,
-                nativeFiles, recoveryMode, recoveryReason, recovery?.JournalRebuild, _abortDrainTimeout);
+                nativeFiles, recoveryMode, recoveryReason, recovery?.JournalRebuild,
+                consumedNativeCacheAcknowledgment, journalEvidence, _abortDrainTimeout);
         }
         catch
         {

@@ -65,6 +65,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     private RuntimeHostSuspendRequest? _suspendRequest;
     private SessionMaterialAcknowledgment? _configurationAcknowledgment;
     private RuntimeHostResumeCacheReceipt? _resumeCacheReceipt;
+    private RuntimeHostRecoveryReceipt? _recoveryReceipt;
     private PendingTurn? _lastTurn;
     private DateTimeOffset? _configuredAt;
     private DateTimeOffset? _readyAt;
@@ -196,6 +197,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                 token, resumeBootstrap).ConfigureAwait(false);
             var configuredSession = _session
                 ?? throw new RuntimeAuthorizationException("runtime_session_unavailable");
+            _resumeCacheReceipt = null;
+            _recoveryReceipt = null;
             if (resumeBootstrap is not null)
             {
                 await RequireCurrentResumeBootstrapAsync(resumeBootstrap, retained, token).ConfigureAwait(false);
@@ -216,6 +219,10 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                 {
                     JournalRebuild = configuredSession.JournalRebuildReceipt
                 }.ValidateFor(resumeBootstrap);
+            }
+            else
+            {
+                _recoveryReceipt = CreateRecoveryReceipt(configuredSession);
             }
             _configuredAt ??= _time.GetUtcNow();
             var source = _usageSource ??= new(_http, _options.OrchestratorAddress, retained);
@@ -614,8 +621,33 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         return new(1, session.Registration.RuntimeInstanceId, session.Registration.Revision,
             session.Registration.Binding.ExecutionFence, _options.Image, phases, session.SourceGrant)
         {
-            ResumeCache = _resumeCacheReceipt
+            ResumeCache = _resumeCacheReceipt,
+            Recovery = _recoveryReceipt
         };
+    }
+
+    private static RuntimeHostRecoveryReceipt CreateRecoveryReceipt(AuthorizedRuntimeSession session)
+    {
+        var recoveryMode = session.RecoveryMode switch
+        {
+            RuntimeSessionRecoveryMode.Fresh => RuntimeHostRecoveryMode.Fresh,
+            RuntimeSessionRecoveryMode.NativeCache => RuntimeHostRecoveryMode.NativeCache,
+            RuntimeSessionRecoveryMode.JournalRebuild => RuntimeHostRecoveryMode.JournalRebuild,
+            _ => throw new RuntimeAuthorizationException("runtime_recovery_receipt_invalid")
+        };
+        return new RuntimeHostRecoveryReceipt(
+            1,
+            session.Registration.RuntimeInstanceId,
+            session.Registration.Revision,
+            session.Registration.Binding.ExecutionFence,
+            recoveryMode,
+            session.Facts)
+        {
+            NativeCacheAcknowledgment = session.ConsumedNativeCacheAcknowledgment,
+            Journal = session.JournalEvidence is { } journal
+                ? new RuntimeHostJournalRecoveryEvidence(journal.ThroughPosition, journal.JournalSha256)
+                : null
+        }.ValidateFor(session.Registration);
     }
 
     private static void ValidateConfigurationAcknowledgment(

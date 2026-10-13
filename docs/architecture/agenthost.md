@@ -34,11 +34,11 @@ Missing, ambiguous, expired, or changed registrations do not produce a current r
 Fixed-work sessions use their retained execution-checkpoint association instead of an open WorkPlan item.
 The association must match the parent, child, workflow, plan, agent, model, selection hash, fence, and decision version.
 Accepted numeric and credit limits propagate without changing legacy null configuration.
-Workflow-bound `MaxModelTurns` and positive Hosted Copilot hard credit limits use
-the owner-admitted native dispatch path. Unbound `MaxModelTurns`, `MaxToolCalls`,
-and `MaxPromptTokens` remain unsupported and fail before SDK setup.
-The SDK has prompt-capacity configuration, but that alone does not establish
-end-to-end limit enforcement.
+Workflow-bound `MaxModelTurns`, `MaxToolCalls`, and positive Hosted Copilot hard
+credit limits use owner-controlled admission. The Orchestrator preserves an
+accepted `MaxPromptTokens` value in `RuntimeOwnerContext` and the runtime
+binding, then fails activation before SDK setup because it cannot prove every
+model and compaction request stays within the configured token limit.
 These boundaries do not count the SDK's internal model API calls.
 For a zero Hosted Copilot hard limit, startup remains allowed, but the host
 blocks a message before it enters the turn queue. It reads the native event log
@@ -81,7 +81,7 @@ sequenceDiagram
 | `POST /runtime/v1/configure` | Authenticated delivery of the pending, purpose-bound configure nonce. No model session starts on delivery alone. |
 | `POST /runtime/v1/configure/activate` | Contract version 1, exact registration, consume/exchange operation IDs, and the delivered configuration bytes. Exact replay returns the existing session. Changed bytes or bindings deny. |
 | `POST /runtime/v1/refresh` | Exact session proof and an operation ID. Rotation rechecks current Identity and owner authority. Exact replay does not rotate again. |
-| `GET /runtime/v1/readiness` | Returns the existing noncredential `RuntimeHostReadinessReceipt` after the host revalidates the caller, registration, session, Observe grant, and readiness evidence. It does not configure the SDK or send a turn. |
+| `GET /runtime/v1/readiness` | Returns the existing noncredential `RuntimeHostReadinessReceipt` after the host revalidates the caller, registration, session, Observe grant, and readiness evidence. Ordinary configuration includes the source-derived recovery mode and its bound cache or journal evidence. It does not configure the SDK or send a turn. |
 | `POST /runtime/v1/a2a/message:send` | One `user` message with one `text` part, a GUID message ID, native context ID, exact runtime proof, and `immediate` or `enqueue` delivery. |
 | `GET /runtime/v1/readiness` | Authenticated current readiness receipt. Checks the caller, exact HTTPS configure audience, registration, source authority, and current placement. Does not start a turn or rotate a grant. |
 | `GET /health/live` | Process liveness only. |
@@ -94,7 +94,7 @@ sequenceDiagram
     participant O as Orchestrator
     participant I as Identity
     participant E as Environment
-    Note over H: Permit MaxModelTurns and positive Hosted Copilot hard caps only for workflow-bound dispatches; reject other numeric limits before SDK configuration
+    Note over H: Permit workflow-bound MaxModelTurns and MaxToolCalls; preserve MaxPromptTokens and fail activation before SDK setup
     C->>H: GET /runtime/v1/readiness with Broker bearer
     H->>O: Revalidate current registration
     O-->>H: Current registration or denial
@@ -102,7 +102,11 @@ sequenceDiagram
     I-->>H: Noncredential grant receipts
     H->>E: Read current placement and readiness evidence
     E-->>H: Current lease and startup observations
-    H-->>C: RuntimeHostReadinessReceipt (no-store)
+    H-->>C: RuntimeHostReadinessReceipt with ordinary recovery evidence (no-store)
+    opt Read the current durable run credit guard
+        C->>O: POST /internal/runtime/credit-guards/read with Observe proof and exact run intent
+        O-->>C: Owner snapshot or unavailable/denied (no-store)
+    end
     Note over H: No SDK start or turn send
     Note over C,H: Unbound positive hard-capped Hosted activation is rejected; workflow-bound dispatches use owner admission
 ```
@@ -136,12 +140,14 @@ startup, zero still permits startup but blocks dispatch, and BYOK remains
 token-metered.
 
 The immutable Projects selection's `maxModelTurns`, `maxToolCalls`, and `maxPromptTokens` values are carried
-through `RuntimeOwnerContext` into the registered `RuntimeBinding`. `maxModelTurns` is supported only for
-workflow-bound registrations, whose native sends require the prepared-dispatch, action-grant, and native-begin
-admission path before SDK send. An unbound `maxModelTurns`, any `maxToolCalls`, or any `maxPromptTokens` still
-fails activation with `runtime_numeric_limits_unsupported`, before SDK session creation, readiness, or
-model/tool invocation. Absent values preserve the legacy path. The RuntimeAction owner also rejects unsupported
-numeric bindings before issuing an action grant. Positive workflow-bound Hosted Copilot hard limits use the same prepared
+through `RuntimeOwnerContext` into the registered `RuntimeBinding`. `maxModelTurns` and `maxToolCalls` are
+supported only for workflow-bound registrations. Native sends require the prepared-dispatch, action-grant, and
+native-begin admission path before SDK send. Each native tool invocation reserves one owner-side slot before
+approval; exact retries reuse the reservation and attempts beyond the run limit are denied. An unbound
+`maxModelTurns` or `maxToolCalls`, and any `maxPromptTokens`, fail activation with
+`runtime_numeric_limits_unsupported`, before SDK session creation, readiness, or model/tool invocation. Absent
+values preserve the legacy path. The RuntimeAction owner also rejects unsupported numeric bindings before issuing
+an action grant. Positive workflow-bound Hosted Copilot hard limits use the same prepared
 dispatch and begin checks against observed whole-run priced usage. The source
 path can record durable hard-limit denial and bounded no-send receipts, but it
 does not establish live boundary acceptance. The P1 dispatch check remains
@@ -213,16 +219,17 @@ A sending or uncertain dispatch cannot be resent.
 The model action grant must match the prepared dispatch, current registration, and exact prompt hash.
 The SDK exposes no pre-model admission hook; this limit does not count internal model API calls.
 
-`MaxToolCalls` remains unsupported. A registration with this limit fails before
-SDK setup with `runtime_numeric_limits_unsupported`; no runtime tool-call limit
-is claimed.
+`MaxToolCalls` is supported only for workflow-bound registrations. The Orchestrator
+reserves a run-wide invocation slot before approving a native tool call, with
+replays reusing the original reservation. The next invocation after the configured
+limit is denied. Unbound registrations with this limit fail before SDK setup.
 
-`MaxPromptTokens` remains unsupported. A registration with this limit fails
-before SDK setup with `runtime_numeric_limits_unsupported`. The SDK can accept
-prompt-capacity configuration and the session factory can pin that value, but
-these facts do not prove whole-request admission or an N/N+1 no-send boundary.
-Do not rely on this setting until an approved increment demonstrates that
-boundary for hosted and BYOK requests, including create and resume.
+`MaxPromptTokens` remains unsupported as an enforceable model-request bound.
+The Orchestrator preserves the accepted value in `RuntimeOwnerContext` and the
+runtime binding, then rejects activation with `runtime_numeric_limits_unsupported`
+before SDK setup. The SDK setting compacts context before sending, but does not
+establish an owner-side N/N+1 no-send boundary for hosted and BYOK requests,
+including compaction.
 
 Each built-in tool approval checks current owner authority and Policy again.
 The pre-tool callback checks Policy without reserving a tool slot.
@@ -305,6 +312,14 @@ At or above the hard limit, it records exhaustion and denies new dispatch.
 The currently executing turn can report usage above the limit; the next dispatch cannot start.
 Another sending or accounting-pending dispatch blocks hard-capped admission.
 These checks do not claim an all-future accounting-source barrier.
+`POST /internal/runtime/credit-guards/read` provides a separate read-only Orchestrator
+observation of this durable state. Its Observe proof is checked against the current
+registration and source grant, and its request must match the current tenant,
+project, run, root session, accepted-selection hash, execution fence, and configured
+limits. The typed response includes the owner registration hash, cost identity and
+unit/scope, observed-credit floor, ledger-event count and digest, guard revision,
+warning/exhaustion flags, and update time. The guard row is read under a shared
+transaction lock; no row returns `404`, and the response is never cached.
 The source owner stores the typed denial receipt in its existing outbox with the
 credit-guard update. For a hard-capped Hosted Copilot turn, AgentHost captures
 the native cursor before begin. After a denial it accepts only a complete bounded
@@ -434,6 +449,13 @@ Its timestamp is actual availability evidence; compressed pull bytes describe th
 AgentHost records `configured` after authenticated native session creation and `ready` after current prerequisite checks.
 The readiness receipt combines all five observations with the exact image and current source grant.
 Readiness does not infer completion from a Kubernetes Ready condition.
+Ordinary configuration also reports whether the SDK used a fresh session, a restored native cache,
+or journal-rebuilt context. Native-cache evidence carries the Events acknowledgment for the source
+cache and is bound to the replacement Host instance, registration revision, fence, and returned SDK
+session facts. Journal-rebuild evidence carries the last read event position and a digest over the
+ordered authenticated journal entries and turn-material digests, bound to the same replacement
+instance. A fresh start carries neither source proof; none of these modes alone proves that an
+external effect was not repeated. Resume-only receipts remain separate.
 
 The host enforces configured per-phase and total startup-time ceilings.
 Exact ceiling values pass; values beyond the ceiling fail.

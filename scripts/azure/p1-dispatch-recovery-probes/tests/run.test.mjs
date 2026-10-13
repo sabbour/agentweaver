@@ -49,14 +49,27 @@ test('source-only result keeps both required acceptance slots blocked without ru
   assert.ok(usageReceipt.requiredFacts.some(fact =>
     fact.includes('later priced totals advance')));
   assert.match(numeric.reason, /only for workflow-bound registrations/);
+  assert.match(numeric.reason, /MaxPromptTokens remains preserved through owner projection/);
+  assert.match(numeric.reason, /rejected with runtime_numeric_limits_unsupported before SDK setup/);
+  assert.match(numeric.evidence.sourceGates[0].detail, /Workflow-bound MaxToolCalls/);
+  assert.match(numeric.evidence.sourceGates[0].detail, /MaxPromptTokens is retained through owner projection/);
   assert.match(numeric.evidence.sourceGates[2].detail, /one durable warning/);
   assert.match(numeric.evidence.sourceGates[2].detail, /not an all-usage-final claim/);
   const restart = result.probes[1];
   assert.match(restart.reason, /P2 manifest suspend\/resume path is explicitly excluded/);
+  assert.match(restart.reason, /producer and owner-fenced placement, bootstrap, readiness, and source-derived recovery receipt exist/);
+  assert.match(restart.reason, /does not dispatch, invoke, or ingest the native runner/);
+  assert.match(restart.reason, /does not dispatch, invoke, or ingest the native runner or collect a replacement-run recovery receipt/);
+  assert.match(restart.reason, /GatewayRouteCatalog has no matching mapping/);
   assert.deepEqual(restart.evidence.sourceGates.map(gate => gate.path), [
-    'services/environment/Agentweaver.Environment/EnvironmentRuntimeBootstrapProfiles.cs',
+    'services/environment/Agentweaver.Environment/EnvironmentRuntimePlacementReader.cs',
     'packages/Agentweaver.AgentRuntime/RuntimeAgentHost.cs',
   ]);
+  assert.match(restart.evidence.sourceGates[0].detail, /authenticated replacement producer.*exist/);
+  assert.match(restart.evidence.sourceGates[0].detail, /does not invoke or dispatch them/);
+  assert.match(restart.evidence.sourceGates[1].detail, /RuntimeHostReadinessReceipt includes the source-derived RuntimeSessionRecovery mode and RuntimeHostRecoveryReceipt/);
+  assert.match(restart.evidence.sourceGates[1].detail, /does not invoke the runner or collect a run-specific recovery receipt/);
+  assert.match(restart.evidence.sourceGates[1].detail, /ResumeCache remains specific to the excluded P2 manifest-resume flow/);
   assert.deepEqual(restart.evidence.requiredReceipts.map(receipt => receipt.receipt), [
     'invocation-owned-gate-join-and-checkpoint',
     'ordinary-replacement-placement',

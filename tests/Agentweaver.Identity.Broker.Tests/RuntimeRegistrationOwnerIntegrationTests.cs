@@ -7,11 +7,14 @@ using System.Collections.Immutable;
 using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Identity;
+using Agentweaver.Providers;
 using Agentweaver.Providers.Sandbox.AgentSandbox;
 using EnvironmentService::Agentweaver.Environment;
 using Microsoft.AspNetCore.Authentication;
@@ -72,7 +75,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         ControlledCopilotConnection copilotConnection, string connectionOwnerToken,
         Func<bool, Task> setHistoricalReadAuthority, RecordingSecretRedemption? byokSecrets = null,
         SkillRuntimeContentV1? expectedAcceptedSkill = null, string? unassignedAgentId = null,
-        ProjectsConfigResourceServer? skillWriter = null)
+        ProjectsConfigResourceServer? skillWriter = null, bool stopAfterRegistration = false)
     {
         await AssignRoleAsync(projects.PrivilegedFixtureDataSource, membershipId,
             ProjectAuthorityResourceType.Project, owner.ProjectId, ProjectAuthorityRole.Owner);
@@ -150,6 +153,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(owner.ModelConnectionId, registration.Binding.ModelConnectionId);
         Assert.Equal(owner.ModelConnectionScope, registration.Binding.ModelConnectionScope);
         Assert.Equal(byokSecrets is null ? ModelSourceMode.HostedCopilot : ModelSourceMode.Byok, owner.ModelSourceMode);
+        Assert.Equal(owner.MaxPromptTokens, registration.Binding.MaxPromptTokens);
         Assert.Equal(owner.ModelBindingPin, registration.Binding.ModelBindingPin);
         Assert.Equal(owner.ModelSourceMode, registration.Binding.ModelSourceMode);
         Assert.Equal(owner.AcceptedSelectionHash, registration.Binding.AcceptedSelectionHash);
@@ -230,6 +234,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var forged = await SendJsonAsync(client, HttpMethod.Post, enrollmentPath, runToken,
             new { environmentOwner.EnvironmentId, ProfileId = "runtime-profile", DesiredModel = "foreign" });
         await AssertStatusAsync(forged, HttpStatusCode.BadRequest);
+        if (stopAfterRegistration)
+            return;
         await VerifyCurrentRuntimeDeliveryAndNativeSessionAsync(
             registration, signingKey, runToken, routes, failures, projects, events.Schema, ownerSchema,
             revokeSourceBeforeSdk, sourceLoss, environment, copilotConnection,
@@ -367,7 +373,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             });
         }).StartAsync();
         TraceNativeStage(failures, "Receiver host startup completed.");
-        routes.Add("runtime.test", () => host.GetTestServer().CreateHandler());
+        routes.Add(RuntimeReceiverHost, () => host.GetTestServer().CreateHandler());
         var bearer = new SecretCredential(runToken, registration.ExpiresAt);
         var primaryFailure = await Record.ExceptionAsync(async () =>
         {
@@ -710,8 +716,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                                             registration.Binding.ConfigureEndpoint, retryReceiver));
                                     });
                                 }).StartAsync();
-                                var registeredRuntimeRoute = routes["runtime.test"];
-                                routes["runtime.test"] = () => retryHost.GetTestServer().CreateHandler();
+                                var registeredRuntimeRoute = routes[RuntimeReceiverHost];
+                                routes[RuntimeReceiverHost] = () => retryHost.GetTestServer().CreateHandler();
                                 try
                                 {
                                     var retryInput = new RuntimeBootstrapRequest(
@@ -731,7 +737,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                                 }
                                 finally
                                 {
-                                    routes["runtime.test"] = registeredRuntimeRoute;
+                                    routes[RuntimeReceiverHost] = registeredRuntimeRoute;
                                 }
                             }
                             if (!sdk.Byok)
@@ -1438,8 +1444,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         output.WriteLine($"Native source {loss} loss after actual PostgreSQL wait denies without observation or accounting.");
     }
 
+    private const string RuntimeReceiverHost = "runtime-receiver.agentweaver.svc.cluster.local";
+    private const string RuntimeReceiverConfigureEndpoint =
+        "https://runtime-receiver.agentweaver.svc.cluster.local:8443/runtime/v1/configure";
+
     private sealed class RuntimePlacementTestServer(IHost host, NpgsqlDataSource dataSource,
-        SandboxLeaseSnapshot lease, RuntimePlacementReadTimeProvider readTime) : IAsyncDisposable
+        HttpClient sandboxHttpClient, SandboxLeaseSnapshot lease, RuntimePlacementReadTimeProvider readTime) : IAsyncDisposable
     {
         public SandboxLeaseSnapshot Lease { get; } = lease;
         public HttpMessageHandler CreateHandler() => host.GetTestServer().CreateHandler();
@@ -1467,6 +1477,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             // This cross-service integration can exceed the sandbox's short production lease.
             var leaseTimeProvider = new RuntimeLeaseTestTimeProvider();
             var readTimeProvider = new RuntimePlacementReadTimeProvider();
+            HttpClient? sandboxHttpClient = null;
             IHost? host = null;
             try
             {
@@ -1474,33 +1485,168 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     .UseNpgsql(dataSource, options => options.MigrationsHistoryTable(
                         "__ef_migrations_history", EnvironmentDbContext.Schema)).Options;
                 await EnvironmentMigrator.MigrateAsync(dataSource, dbOptions);
-                var lifecycle = await new EnvironmentLifecycleProducer(
-                    new EnvironmentLifecycleStore(dataSource, TimeProvider.System))
+                var lifecycleStore = new EnvironmentLifecycleStore(dataSource, TimeProvider.System);
+                var lifecycle = await new EnvironmentLifecycleProducer(lifecycleStore)
                     .RegisterAsync(owner, "runtime-register", default);
                 var leaseStore = new EnvironmentSandboxLeaseStore(dataSource, leaseTimeProvider);
-                var optionsSnapshot = JsonSerializer.SerializeToElement(new { namespaceName = "agentweaver" });
+                var sandboxOptions = new AgentSandboxOptions(
+                    candidate.OptionsSchemaVersion, candidate.OptionsRevision, "agentweaver", "azure-files-csi",
+                    "ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "linux/amd64", 1, "kata-test", "kata-test", "100m", "128Mi", 20, 100,
+                    new(30, 30, 30, 30, 30, 120))
+                {
+                    AgentHost = new("agenthost-runtime-v1", "agenthost-runtime-tls")
+                };
+                var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+                jsonOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+                var runSelection = selection.Deserialize<EffectiveNetworkPolicySelection>(jsonOptions)
+                    ?? throw new InvalidOperationException("The controlled run selection is empty.");
+                var selectedNetworkCandidate = runSelection.Providers
+                    .Single(provider => provider.Seam == ProviderSeam.NetworkPolicy)
+                    .Candidates.Single(provider => provider.Layer == NetworkPolicyLayer.L3L4);
+                var networkOptions = new CiliumEgressProviderOptions(
+                    "agentweaver", Version.Parse(selectedNetworkCandidate.AdapterVersion),
+                    selectedNetworkCandidate.OptionsSchemaVersion, selectedNetworkCandidate.OptionsRevision,
+                    ImmutableDictionary<string, ImmutableDictionary<string, string>>.Empty);
+                var networkStore = new RuntimePlacementNetworkTransport();
+                var cilium = new CiliumEgressPolicyAdapter(networkStore, networkOptions);
+                var networkSelector = EnvironmentEgressSelector.Create(
+                    owner.EnvironmentId, owner.TenantId, owner.ProjectId, owner.RunId, networkOptions.Namespace);
+                var compiledEgress = EgressIntentCompiler.Compile(runSelection);
+                if (!compiledEgress.IsSuccess)
+                    throw new InvalidOperationException(
+                        compiledEgress.Failure?.Message ?? "The controlled run egress selection is invalid.");
+                const long networkPolicyGeneration = 1;
+                var networkEffect = await lifecycleStore.ReserveNetworkEffectAsync(
+                    lifecycle.Snapshot.Fence,
+                    $"{networkSelector.Namespace}/{networkSelector.PolicyName}",
+                    networkPolicyGeneration,
+                    0,
+                    EnvironmentNetworkEffectKind.Apply,
+                    "runtime-profile-resolution",
+                    default);
+                _ = await cilium.ApplyAsync(
+                    networkSelector, compiledEgress.Intent!, networkPolicyGeneration, 0, default);
+                await lifecycleStore.CompleteNetworkEffectAsync(
+                    networkEffect.OperationId, lifecycle.Snapshot.Fence, true, true, default);
+
+                var sandboxRegistration = AgentSandboxProviderMetadata.CreateRegistration(sandboxOptions);
+                var sandboxCatalog = ProviderCatalog.Create(
+                    [sandboxRegistration],
+                    [new(ProviderSeam.Sandbox, sandboxRegistration.Descriptor.Id)],
+                    []);
+                if (!sandboxCatalog.IsSuccess)
+                    throw new InvalidOperationException(
+                        sandboxCatalog.Error?.Message ?? "The controlled Sandbox provider catalog is invalid.");
+                var sandboxResolution = new ProviderResolver(sandboxCatalog.Value!).Resolve(
+                    new(ProviderSeam.Sandbox, null, sandboxRegistration.Descriptor.AdapterVersion,
+                        sandboxRegistration.OptionsSchemaVersion,
+                        sandboxRegistration.Descriptor.AdvertisedCapabilities));
+                if (!sandboxResolution.IsSuccess || sandboxResolution.Value?.Candidate is not { } sandboxCandidate)
+                    throw new InvalidOperationException(
+                        sandboxResolution.Error?.Message ?? "The controlled Sandbox provider is unavailable.");
+                var provisionRequest = new SandboxProvisionApiRequest(
+                    "runtime-workspace", 1, 0, "/workspace/agentweaver/project",
+                    false, networkPolicyGeneration, "runtime-provision");
+                var optionsSnapshot = JsonSerializer.SerializeToElement(sandboxOptions, jsonOptions);
                 var intent = new SandboxLeaseProvisionIntent(
                     candidate.ProviderId, candidate.AdapterVersion, candidate.OptionsSchemaVersion,
                     candidate.OptionsRevision, optionsSnapshot, selection,
-                    JsonSerializer.SerializeToElement(new { transport = "controlled-external-placement" }));
-                var reserved = await leaseStore.ReserveProvisionAsync(lifecycle.Snapshot.Fence, "runtime-provision", intent, default);
+                    JsonSerializer.SerializeToElement(provisionRequest, jsonOptions));
+                var reserved = await leaseStore.ReserveProvisionAsync(
+                    lifecycle.Snapshot.Fence, provisionRequest.IdempotencyKey, intent, default);
                 var lease = reserved.Lease;
-                var resource = SandboxResourceIdentity.CreatePlannedReference(
-                    candidate.ProviderId, candidate.OptionsRevision, lease.Fence,
+                var plannedResource = SandboxResourceIdentity.CreatePlannedReference(
+                    sandboxCandidate.ProviderId, sandboxCandidate.OptionsRevision, lease.Fence,
                     lease.ResourceGeneration, lease.ProviderFencingGeneration, lease.OperationId);
-                var provisioned = new SandboxProvisionedResource(
-                    resource, new(Guid.NewGuid()), new("controlled-placement"),
-                    candidate.RequiredCapabilities.ToImmutableHashSet(StringComparer.Ordinal), [],
-                    new(candidate.ProviderId, candidate.AdapterVersion, candidate.OptionsSchemaVersion,
-                        candidate.OptionsRevision, optionsSnapshot,
-                        JsonSerializer.SerializeToElement(new { claim = resource.ResourceId })));
-                lease = await leaseStore.CompleteProvisionAsync(lease.OperationId, lease.Fence, provisioned, true, default);
+                var storageResource = new ProviderResourceRef(
+                    ProviderSeam.Storage, sandboxOptions.WorkspaceStorageProviderId, "workspace-claim-uid", 1);
+                var workspaceSpec = new WorkspaceVolumeSpec(
+                    provisionRequest.VolumeId, owner.ProjectId,
+                    new(WorkspaceVolumeOwnerKind.Run, owner.RunId), owner.EnvironmentId,
+                    WorkspaceVolumeBindingMode.Environment, WorkspaceVolumeAccessMode.ReadWriteOnce, 8,
+                    "azure-files", WorkspaceVolumeConsistency.Strict, WorkspaceVolumeReclaimPolicy.Delete,
+                    WorkspaceVolumeOwnerDeletionPolicy.Retain, []);
+                var workspaceReference = new WorkspaceVolumeReference(
+                    owner.ProjectId, provisionRequest.VolumeId, provisionRequest.VolumeResourceGeneration);
+                var workspaceMount = new WorkspaceVolumeMountDeclaration(
+                    workspaceReference, provisionRequest.MountPath, provisionRequest.ReadOnly);
+                var storageBinding = new WorkspaceVolumeProviderBindingSnapshot(
+                    storageResource.ProviderId, "1.0.0", 1, "runtime-storage-options",
+                    JsonSerializer.SerializeToElement(new { @namespace = "agentweaver" }, jsonOptions),
+                    JsonSerializer.SerializeToElement(new
+                    {
+                        @namespace = "agentweaver",
+                        claimName = "workspace-claim",
+                        claimUid = "workspace-claim-uid"
+                    }, jsonOptions));
+                var workspaceStorage = new WorkspaceVolumeResource(
+                    storageResource,
+                    ImmutableHashSet.Create(
+                        StringComparer.Ordinal,
+                        WorkspaceVolumeCapabilities.ReadWriteOnce,
+                        WorkspaceVolumeCapabilities.ReadOnlyMount),
+                    storageBinding);
+                var sandboxAttachmentProfile = new WorkspaceSandboxAttachmentProfile(
+                    plannedResource,
+                    Enum.GetValues<WorkspaceVolumeAccessMode>().ToImmutableHashSet(),
+                    ImmutableHashSet.Create(WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim),
+                    ImmutableHashSet.Create(StringComparer.Ordinal, storageResource.ProviderId),
+                    SupportsReadOnlyMounts: true);
+                var workspaceNegotiation = WorkspaceVolumeAttachmentNegotiator.Negotiate(
+                    owner.ProjectId,
+                    owner.EnvironmentId,
+                    owner.RunId,
+                    workspaceSpec,
+                    workspaceStorage,
+                    new WorkspaceVolumeMountManifest([workspaceMount]),
+                    workspaceMount,
+                    plannedResource,
+                    lifecycle.Snapshot.Fence,
+                    provisionRequest.DataGeneration,
+                    sandboxAttachmentProfile,
+                    WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim);
+                var workspaceAttachment = new SandboxWorkspaceAttachment(
+                    workspaceNegotiation,
+                    JsonSerializer.SerializeToElement(new AgentSandboxPersistentVolumeClaimAttachment(
+                        1, storageResource.ProviderId, "agentweaver", "workspace-claim", "workspace-claim-uid"),
+                        jsonOptions)).Validate();
+                var sandboxProvisionRequest = new SandboxProvisionRequest(
+                    lifecycle.Snapshot.Fence,
+                    sandboxCandidate,
+                    lease.ResourceGeneration,
+                    lease.ProviderFencingGeneration,
+                    lease.OperationId,
+                    networkSelector.MatchLabels,
+                    workspaceAttachment).Validate();
+                var recoveryIntent = JsonSerializer.SerializeToElement(new
+                {
+                    contractVersion = 1,
+                    request = provisionRequest,
+                    workspace = workspaceAttachment,
+                    egressSelectorLabels = networkSelector.MatchLabels,
+                    workspaceAttachmentTransitionRevision = 2
+                }, jsonOptions);
+                lease = await leaseStore.SaveProviderRequestAsync(
+                    lease.OperationId, lifecycle.Snapshot.Fence, recoveryIntent, default);
+                var kubernetesTransport = new RuntimePlacementKubernetesTransport(
+                    sandboxOptions, owner, provisionRequest);
+                sandboxHttpClient = new HttpClient(kubernetesTransport)
+                {
+                    BaseAddress = new Uri("https://kubernetes.test/")
+                };
+                var sandboxProvider = new AgentSandboxProvider(
+                    sandboxOptions, new KubernetesAgentSandboxClient(sandboxHttpClient));
+                var provisioned = await sandboxProvider.ProvisionAsync(sandboxProvisionRequest);
+                kubernetesTransport.AddReadySandbox(
+                    provisioned,
+                    lease.CreatedAt ?? throw new InvalidOperationException(
+                        "The controlled Sandbox lease has no creation timestamp."));
+                lease = await leaseStore.CompleteProvisionAsync(
+                    lease.OperationId, lease.Fence, provisioned, true, default);
                 var profile = new EnvironmentRuntimeBootstrapProfile(
-                    "runtime-profile", new("https://runtime.test/configure"),
+                    "runtime-profile", new(RuntimeReceiverConfigureEndpoint),
                     new("https://orchestrator.test/internal/runtime/observations"));
-                var networkOptions = new CiliumEgressProviderOptions(
-                    "agentweaver", new Version(1, 0, 0), 1, "unused-network-options",
-                    ImmutableDictionary<string, ImmutableDictionary<string, string>>.Empty);
                 host = await new HostBuilder().ConfigureWebHost(web =>
                 {
                     web.UseTestServer();
@@ -1513,23 +1659,19 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
                         services.AddScoped<EnvironmentRuntimePlacementReader>();
                         services.AddScoped<EnvironmentSandboxManager>();
-                        services.AddSingleton(new AgentSandboxOptions(
-                            AgentSandboxOptions.CurrentOptionsSchemaVersion, "unused-sandbox-options",
-                            "agentweaver", "azure-files-csi",
-                            "runtime-test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                            "linux/amd64", 1, "kata-test", "kata-test", "100m", "128Mi", 20, 100,
-                            new(30, 30, 30, 30, 30, 120)));
-                        services.AddHttpClient<KubernetesAgentSandboxClient>(client =>
-                            client.BaseAddress = new Uri("https://kubernetes.test/"))
-                            .ConfigurePrimaryHttpMessageHandler(() => new UnusedRuntimePlacementTransport());
-                        services.AddScoped<ISandboxProvider, AgentSandboxProvider>();
+                        services.AddSingleton(sandboxOptions);
+                        services.AddSingleton<ISandboxProvider>(sandboxProvider);
                         services.AddScoped<EnvironmentEgressManager>();
                         services.AddScoped<EnvironmentWorkspaceVolumeManager>();
                         services.AddSingleton(networkOptions);
-                        services.AddSingleton<ICiliumPolicyResourceStore, UnusedRuntimeNetworkTransport>();
+                        services.AddSingleton<ICiliumPolicyResourceStore>(networkStore);
                         services.AddScoped<CiliumEgressPolicyAdapter>();
+                        services.AddScoped<IEnvironmentRuntimeBootstrapProfileReplacementStore,
+                            EnvironmentRuntimeBootstrapProfileReplacementStore>();
+                        services.AddHttpClient<EnvironmentRuntimeEndpointVerifier>()
+                            .ConfigurePrimaryHttpMessageHandler(() => new RuntimeEndpointHealthTransport());
                         services.AddSingleton(new EnvironmentRuntimeBootstrapProfileRegistry(
-                            [new(owner, profile, resource)]));
+                            [new(owner, profile, provisioned.Resource)]));
                         services.AddSingleton(new EnvironmentRuntimeBootstrapDeliveryOptions(
                             new("https://orchestrator.test/"), new("https://broker.test/")));
                         services.AddHttpClient<EnvironmentRuntimeBootstrapDelivery>()
@@ -1559,11 +1701,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         });
                     });
                 }).StartAsync();
-                return new(host, dataSource, lease, readTimeProvider);
+                return new(host, dataSource, sandboxHttpClient!, lease, readTimeProvider);
             }
             catch
             {
                 host?.Dispose();
+                sandboxHttpClient?.Dispose();
                 await dataSource.DisposeAsync();
                 throw;
             }
@@ -1573,6 +1716,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         {
             await host.StopAsync();
             host.Dispose();
+            sandboxHttpClient.Dispose();
             await dataSource.DisposeAsync();
         }
     }
@@ -1598,23 +1742,316 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             TimeProvider.System.GetUtcNow().AddMinutes(5);
     }
 
-    private sealed class UnusedRuntimeNetworkTransport : ICiliumPolicyResourceStore
+    private sealed class RuntimePlacementNetworkTransport : ICiliumPolicyResourceStore
     {
+        private CiliumNetworkPolicyDocument? _policy;
+
         public Task<CiliumNetworkPolicyDocument?> GetAsync(string ns, string name, CancellationToken token) =>
-            throw new InvalidOperationException("The placement getter must not use Kubernetes.");
-        public Task<CiliumNetworkPolicyDocument> CreateAsync(CiliumNetworkPolicyDocument policy, CancellationToken token) =>
-            throw new InvalidOperationException("The placement getter must not use Kubernetes.");
+            Task.FromResult(_policy is { } policy &&
+                policy.Metadata.Namespace == ns && policy.Metadata.Name == name ? policy : null);
+
+        public Task<CiliumNetworkPolicyDocument> CreateAsync(
+            CiliumNetworkPolicyDocument policy, CancellationToken token)
+        {
+            if (_policy is not null)
+                throw new InvalidOperationException("The controlled runtime network policy already exists.");
+            var created = policy with
+            {
+                Metadata = policy.Metadata with { ResourceVersion = "1", Generation = 1 }
+            };
+            _policy = created;
+            return Task.FromResult(created);
+        }
+
         public Task<CiliumNetworkPolicyDocument> ReplaceAsync(
-            CiliumNetworkPolicyDocument policy, string version, CancellationToken token) =>
-            throw new InvalidOperationException("The placement getter must not use Kubernetes.");
-        public Task DeleteAsync(string ns, string name, string version, CancellationToken token) =>
-            throw new InvalidOperationException("The placement getter must not use Kubernetes.");
+            CiliumNetworkPolicyDocument policy, string version, CancellationToken token)
+        {
+            var current = _policy;
+            if (current?.Metadata.ResourceVersion != version)
+                throw new InvalidOperationException("The controlled runtime network policy version changed.");
+            var updated = policy with
+            {
+                Metadata = policy.Metadata with
+                {
+                    ResourceVersion = "2",
+                    Generation = (current.Metadata.Generation ?? 0) + 1
+                }
+            };
+            _policy = updated;
+            return Task.FromResult(updated);
+        }
+
+        public Task DeleteAsync(string ns, string name, string version, CancellationToken token)
+        {
+            if (_policy is null || _policy.Metadata.Namespace != ns ||
+                _policy.Metadata.Name != name || _policy.Metadata.ResourceVersion != version)
+                throw new InvalidOperationException("The controlled runtime network policy changed.");
+            _policy = null;
+            return Task.CompletedTask;
+        }
     }
 
-    private sealed class UnusedRuntimePlacementTransport : HttpMessageHandler
+    private sealed class RuntimeEndpointHealthTransport : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request, CancellationToken cancellationToken) =>
-            throw new InvalidOperationException("A current placement read must not dispatch a provider effect.");
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.Method != HttpMethod.Get || request.RequestUri?.AbsolutePath != "/health/live")
+                throw new InvalidOperationException("The controlled runtime health transport received an unexpected request.");
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = new StringContent("{\"status\":\"live\"}", Encoding.UTF8, "application/json")
+            };
+            response.Headers.CacheControl = new() { NoStore = true };
+            return Task.FromResult(response);
+        }
+    }
+
+    private sealed class RuntimePlacementKubernetesTransport : HttpMessageHandler
+    {
+        private readonly AgentSandboxOptions _options;
+        private readonly Dictionary<string, JsonNode> _resources = new(StringComparer.Ordinal);
+        private JsonNode? _pods;
+        private JsonNode? _events;
+
+        public RuntimePlacementKubernetesTransport(
+            AgentSandboxOptions options, EnvironmentOwnerIdentity owner, SandboxProvisionApiRequest provisionRequest)
+        {
+            _options = options;
+            _resources["api/v1/namespaces/agentweaver/persistentvolumeclaims/workspace-claim"] =
+                JsonSerializer.SerializeToNode(new
+                {
+                    apiVersion = "v1",
+                    kind = "PersistentVolumeClaim",
+                    metadata = new
+                    {
+                        name = "workspace-claim",
+                        @namespace = "agentweaver",
+                        uid = "workspace-claim-uid",
+                        annotations = new Dictionary<string, string>
+                        {
+                            ["agentweaver.dev/project-id"] = owner.ProjectId,
+                            ["agentweaver.dev/volume-id"] = provisionRequest.VolumeId,
+                            ["agentweaver.dev/generation"] =
+                                provisionRequest.VolumeResourceGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                            ["agentweaver.dev/environment-id"] = owner.EnvironmentId
+                        }
+                    },
+                    status = new { phase = "Bound" }
+                })!;
+            _resources["apis/node.k8s.io/v1/runtimeclasses/kata-test"] =
+                JsonSerializer.SerializeToNode(new
+                {
+                    apiVersion = "node.k8s.io/v1",
+                    kind = "RuntimeClass",
+                    metadata = new { name = "kata-test" },
+                    handler = "kata-test"
+                })!;
+        }
+
+        public void AddReadySandbox(SandboxProvisionedResource provisioned, DateTimeOffset leaseCreatedAt)
+        {
+            var descriptor = provisioned.ProviderBinding.ReleaseDescriptor;
+            var kubernetesNamespace = descriptor.GetProperty("namespace").GetString()!;
+            var claimName = descriptor.GetProperty("claimName").GetString()!;
+            var templateName = descriptor.GetProperty("templateName").GetString()!;
+            var claimPath = $"apis/extensions.agents.x-k8s.io/v1beta1/namespaces/{kubernetesNamespace}/sandboxclaims/{claimName}";
+            var templatePath = $"apis/extensions.agents.x-k8s.io/v1beta1/namespaces/{kubernetesNamespace}/sandboxtemplates/{templateName}";
+            var claim = _resources[claimPath];
+            claim["status"] = new JsonObject
+            {
+                ["sandbox"] = new JsonObject { ["name"] = "sandbox-a" }
+            };
+
+            const string sandboxName = "sandbox-a";
+            const string sandboxUid = "sandbox-uid";
+            const string podName = "sandbox-pod";
+            const string podUid = "pod-uid";
+            const string serviceName = "sandbox-a";
+            const string podAddress = "10.2.3.4";
+            var claimUid = provisioned.Resource.ResourceId;
+            var sandboxPath =
+                $"apis/agents.x-k8s.io/v1beta1/namespaces/{kubernetesNamespace}/sandboxes/{sandboxName}";
+            _resources[sandboxPath] = JsonSerializer.SerializeToNode(new
+            {
+                apiVersion = "agents.x-k8s.io/v1beta1",
+                kind = "Sandbox",
+                metadata = new
+                {
+                    name = sandboxName,
+                    @namespace = kubernetesNamespace,
+                    uid = sandboxUid,
+                    ownerReferences = new[] { new { uid = claimUid, controller = true } }
+                },
+                status = new
+                {
+                    service = serviceName,
+                    serviceFQDN = $"{serviceName}.{kubernetesNamespace}.svc.cluster.local"
+                }
+            })!;
+
+            var template = _resources[templatePath];
+            var podTemplate = template["spec"]!["podTemplate"]!;
+            var labels = podTemplate["metadata"]!["labels"]!.DeepClone().AsObject();
+            labels["agents.x-k8s.io/claim-uid"] = claimUid;
+            var startedAt = leaseCreatedAt.AddSeconds(2);
+            var pulledAt = leaseCreatedAt.AddSeconds(1);
+            var pod = JsonSerializer.SerializeToNode(new
+            {
+                apiVersion = "v1",
+                kind = "Pod",
+                metadata = new
+                {
+                    name = podName,
+                    @namespace = kubernetesNamespace,
+                    uid = podUid,
+                    labels,
+                    ownerReferences = new[] { new { uid = sandboxUid, controller = true } }
+                },
+                spec = podTemplate["spec"]!.DeepClone(),
+                status = new
+                {
+                    phase = "Running",
+                    podIP = podAddress,
+                    conditions = new[]
+                    {
+                        new
+                        {
+                            type = "PodScheduled",
+                            status = "True",
+                            lastTransitionTime = leaseCreatedAt.AddMilliseconds(500)
+                        }
+                    },
+                    containerStatuses = new[]
+                    {
+                        new
+                        {
+                            name = "agenthost",
+                            imageID = _options.ContainerImage,
+                            ready = true,
+                            state = new { running = new { startedAt } }
+                        }
+                    }
+                }
+            })!;
+            _pods = new JsonObject
+            {
+                ["items"] = new JsonArray(pod)
+            };
+            _events = JsonSerializer.SerializeToNode(new
+            {
+                items = new[]
+                {
+                    new
+                    {
+                        reason = "Pulled",
+                        message = $"Successfully pulled image {_options.ContainerImageDigest}",
+                        involvedObject = new { uid = podUid },
+                        eventTime = pulledAt
+                    }
+                }
+            })!;
+
+            _resources[$"api/v1/namespaces/{kubernetesNamespace}/services/{serviceName}"] =
+                JsonSerializer.SerializeToNode(new
+                {
+                    apiVersion = "v1",
+                    kind = "Service",
+                    metadata = new
+                    {
+                        name = serviceName,
+                        @namespace = kubernetesNamespace,
+                        uid = "service-uid",
+                        ownerReferences = new[] { new { kind = "Sandbox", uid = sandboxUid, controller = true } }
+                    },
+                    spec = new
+                    {
+                        type = "ClusterIP",
+                        selector = new Dictionary<string, string>
+                        {
+                            ["agentweaver.io/service"] = "agenthost"
+                        },
+                        ports = new[]
+                        {
+                            new { name = "https", port = 8443, targetPort = "https", protocol = "TCP" }
+                        }
+                    }
+                })!;
+            var configureEndpoint = RuntimeReceiverConfigureEndpoint;
+            _resources[$"api/v1/namespaces/{kubernetesNamespace}/configmaps/{_options.AgentHost!.ConfigurationMapName}"] =
+                JsonSerializer.SerializeToNode(new
+                {
+                    apiVersion = "v1",
+                    kind = "ConfigMap",
+                    metadata = new
+                    {
+                        name = _options.AgentHost.ConfigurationMapName,
+                        @namespace = kubernetesNamespace
+                    },
+                    immutable = true,
+                    data = new Dictionary<string, string>
+                    {
+                        ["appsettings.json"] = JsonSerializer.Serialize(new
+                        {
+                            AgentHost = new
+                            {
+                                ConfigureEndpoint = configureEndpoint,
+                                Authentication = new { Audience = configureEndpoint }
+                            }
+                        })
+                    }
+                })!;
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri?.AbsolutePath.TrimStart('/')
+                ?? throw new InvalidOperationException("The controlled Kubernetes request has no path.");
+            if (request.Method == HttpMethod.Get)
+            {
+                if (path == "api/v1/namespaces/agentweaver/pods")
+                    return JsonResponse(_pods ?? new JsonObject { ["items"] = new JsonArray() });
+                if (path == "api/v1/namespaces/agentweaver/events")
+                    return JsonResponse(_events ?? new JsonObject { ["items"] = new JsonArray() });
+                return _resources.TryGetValue(path, out var resource)
+                    ? JsonResponse(resource)
+                    : new HttpResponseMessage(HttpStatusCode.NotFound);
+            }
+
+            if (request.Method == HttpMethod.Post)
+            {
+                var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(cancellationToken))
+                    ?? throw new InvalidOperationException("The controlled Kubernetes create body is empty.");
+                var metadata = body["metadata"]!.AsObject();
+                var name = metadata["name"]!.GetValue<string>();
+                var resourceType = path[(path.LastIndexOf('/') + 1)..];
+                metadata["uid"] = resourceType switch
+                {
+                    "sandboxtemplates" => "sandbox-template-uid",
+                    "sandboxwarmpools" => "sandbox-warm-pool-uid",
+                    "sandboxclaims" => name,
+                    _ => throw new InvalidOperationException(
+                        $"Unexpected controlled Kubernetes create resource '{resourceType}'.")
+                };
+                metadata["generation"] = 1;
+                metadata["resourceVersion"] = "1";
+                _resources[$"{path}/{Uri.EscapeDataString(name)}"] = body;
+                return JsonResponse(body, HttpStatusCode.Created);
+            }
+
+            if (request.Method == HttpMethod.Patch)
+                return new HttpResponseMessage(HttpStatusCode.OK);
+
+            throw new InvalidOperationException(
+                $"Unexpected controlled Kubernetes request '{request.Method} {path}'.");
+        }
+
+        private static HttpResponseMessage JsonResponse(JsonNode body, HttpStatusCode status = HttpStatusCode.OK) =>
+            new(status)
+            {
+                Content = new StringContent(body.ToJsonString(), Encoding.UTF8, "application/json")
+            };
     }
 }

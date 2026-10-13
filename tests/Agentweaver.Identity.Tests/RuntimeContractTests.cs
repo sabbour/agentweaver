@@ -118,7 +118,7 @@ public sealed class RuntimeContractTests
     }
 
     [Fact]
-    public void NumericRunPoliciesAreBoundValidatedAndOnlyWorkflowModelTurnLimitsAreSupported()
+    public void NumericRunPoliciesAreBoundValidatedAndDispatchLimitsRequireWorkflowBinding()
     {
         var registration = CreateRegistration();
         RuntimeContractValidation.Validate(registration);
@@ -142,12 +142,11 @@ public sealed class RuntimeContractTests
             {
                 MaxPromptTokens = 1024
             }));
-        Assert.Throws<RuntimeAuthorizationException>(() =>
-            RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
-            {
-                WorkflowStepId = "implement",
-                MaxToolCalls = 1
-            }));
+        RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
+        {
+            WorkflowStepId = "implement",
+            MaxToolCalls = 1
+        });
         Assert.Throws<RuntimeAuthorizationException>(() =>
             RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
             {
@@ -247,6 +246,38 @@ public sealed class RuntimeContractTests
         })
             Assert.Throws<RuntimeAuthorizationException>(() =>
                 RuntimeContractValidation.Validate(registration with { Binding = binding }));
+    }
+
+    [Fact]
+    public void CreditGuardSnapshotIsBoundToTheExactRegistrationAndRunIntent()
+    {
+        var registration = CreateRegistration();
+        registration = registration with
+        {
+            Binding = registration.Binding with
+            {
+                CopilotSoftCreditLimit = 3m,
+                CopilotHardCreditLimit = 5m
+            }
+        };
+        var intent = RuntimeCreditGuardObservationContract.CreateIntent(registration, "root");
+        var snapshot = RuntimeCreditGuardObservationContract.Seal(new(
+            1, intent, RuntimeContractValidation.RegistrationHash(registration), new string('b', 64),
+            "AIC", "root-run", 4m, 3, new string('c', 64), 2, true, false,
+            DateTimeOffset.UtcNow, string.Empty));
+
+        RuntimeCreditGuardObservationContract.RequireIntent(intent, registration);
+        RuntimeCreditGuardObservationContract.ValidateSnapshot(snapshot, registration, intent);
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeCreditGuardObservationContract.RequireIntent(
+                intent with { AcceptedSelectionHash = new string('d', 64) }, registration));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeCreditGuardObservationContract.ValidateSnapshot(
+                snapshot with { Intent = intent with { RootSessionId = "other-root" } },
+                registration, intent));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeCreditGuardObservationContract.ValidateSnapshot(
+                snapshot with { CanonicalPayloadHash = new string('e', 64) }, registration, intent));
     }
 
     [Fact]

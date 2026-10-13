@@ -51,7 +51,10 @@ trigger type, function body/owner, and absence of runtime EXECUTE.
 The source catalog requires Core versions 1 through 16 and 18 through 21.
 These are 20 registered versions; version 17 remains excluded.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
-The plan retains 93 tables and eight exact row-lock columns.
+The plan retains 94 tables and eight exact row-lock columns.
+The Environment runtime bootstrap profile replacement store requires a separate
+`SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
+That grant has not been executed; it adds no `UPDATE`, `DELETE`, or default privilege.
 It includes 28 exact function signatures, with runtime EXECUTE only for casting authority.
 Actual installed catalog state and restricted-role behavior still require
 separate database proof.

@@ -50,6 +50,21 @@ internal sealed class MafExecutionCheckpointStore
     internal async Task<MafExecutionFixedWorkAssociation?> ReadFixedWorkAssociationAsync(
         string childSessionId,
         string workPlanId,
+        CancellationToken cancellationToken) =>
+        await ReadFixedWorkAssociationAsync(
+            childSessionId, workPlanId, allowTerminal: false, cancellationToken).ConfigureAwait(false);
+
+    internal async Task<MafExecutionFixedWorkAssociation?> ReadFixedWorkAssociationForObservationAsync(
+        string childSessionId,
+        string workPlanId,
+        CancellationToken cancellationToken) =>
+        await ReadFixedWorkAssociationAsync(
+            childSessionId, workPlanId, allowTerminal: true, cancellationToken).ConfigureAwait(false);
+
+    private async Task<MafExecutionFixedWorkAssociation?> ReadFixedWorkAssociationAsync(
+        string childSessionId,
+        string workPlanId,
+        bool allowTerminal,
         CancellationToken cancellationToken)
     {
         var latest = await ReadLatestAsync(cancellationToken).ConfigureAwait(false);
@@ -58,12 +73,20 @@ internal sealed class MafExecutionCheckpointStore
             return null;
         var association = latest.State.FixedWorkAssociations.Values.SingleOrDefault(candidate =>
             string.Equals(candidate.ChildSessionId, childSessionId, StringComparison.Ordinal));
+        var status = association is null
+            ? MafExecutionTaskStatus.Pending
+            : latest.State.Progress.FixedWorkItems.GetValueOrDefault(association.AssociationId);
         return association is not null &&
-            latest.State.Progress.FixedWorkItems.GetValueOrDefault(association.AssociationId) ==
-            MafExecutionTaskStatus.Running
-                ? association
-                : null;
+            (allowTerminal
+                ? IsObservationFixedWorkStatus(status)
+                : status == MafExecutionTaskStatus.Running)
+            ? association
+            : null;
     }
+
+    internal static bool IsObservationFixedWorkStatus(MafExecutionTaskStatus status) =>
+        status is MafExecutionTaskStatus.Running or MafExecutionTaskStatus.Succeeded or
+            MafExecutionTaskStatus.Failed or MafExecutionTaskStatus.Indeterminate;
 
     internal async Task<MafExecutionCheckpointSnapshot?> ReadLatestInTransactionAsync(
         NpgsqlConnection connection,

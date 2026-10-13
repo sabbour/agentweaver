@@ -113,6 +113,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
             false, null, false, OwnerRunFailureState.Indeterminate, acceptedSkillJourney: true);
 
+    [Fact]
+    public Task AcceptedPromptTokenCapSurvivesOwnerProjectionAndRegistration() =>
+        RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
+            false, null, false, OwnerRunFailureState.Indeterminate, configuredMaxPromptTokens: 20000);
+
     private async Task<(SkillRuntimeContentV1 Skill, VersionedProjectConfiguration Configuration)>
         ImportAndAssignSkillAsync(
             HttpClient writer,
@@ -246,7 +251,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         bool stopAfterProducedRunCapture,
         OwnerRunFailureState captureFailureState,
         bool azureByok = false,
-        bool acceptedSkillJourney = false)
+        bool acceptedSkillJourney = false,
+        int? configuredMaxPromptTokens = null)
     {
         var sourceControlSecretBackend = new RecordingSecretRedemption();
         await RestartBrokerForSourceControlAsync(sourceControlSecretBackend);
@@ -378,6 +384,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             new ProjectAgentCast("test-agent", "implementer", 0),
                             new ProjectAgentCast("unassigned-agent", "reviewer", 1))
                         : ImmutableArray.Create(new ProjectAgentCast("test-agent", "implementer", 0)),
+                    RunLimits = configuredMaxPromptTokens is { } promptTokenLimit
+                        ? new CopilotRunLimitOverrides { MaxPromptTokens = promptTokenLimit }
+                        : new(),
                     SourceControl = new SourceControlProjectSettings(
                         new SourceControlRepositoryIdentity("octo", "agentweaver"),
                         new SecretRef("github-api", "api-v1"),
@@ -428,7 +437,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         MaxChildren = 7,
                         MaxConcurrentChildren = 2,
                         MaxWallTimeSeconds = 3600,
-                        MaxPromptTokens = 20000
                     }
                 }
             })
@@ -3231,6 +3239,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 runtimeOwner.ModelConnectionScope);
             Assert.Equal(azureByok ? ModelSourceMode.Byok : ModelSourceMode.HostedCopilot,
                 runtimeOwner.ModelSourceMode);
+            Assert.Equal(configuredMaxPromptTokens, runtimeOwner.MaxPromptTokens);
             if (azureByok)
                 Assert.Equal(AzureByokModelBindings().Pin("platform-model", ModelSourceMode.Byok),
                     runtimeOwner.ModelBindingPin);
@@ -3392,7 +3401,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(verifiedFixedAssociation.ModelSelectionReference, fixedRuntimeOwner.ModelSelectionReference);
             Assert.Equal(12, fixedRuntimeOwner.MaxModelTurns);
             Assert.Equal(100, fixedRuntimeOwner.MaxToolCalls);
-            Assert.Equal(20000, fixedRuntimeOwner.MaxPromptTokens);
+            Assert.Equal(configuredMaxPromptTokens, fixedRuntimeOwner.MaxPromptTokens);
             Assert.Equal(fixedStep.Id, fixedRuntimeOwner.WorkflowStepId);
             Assert.Equal(fixedChild.Node.ExecutionFence, fixedRuntimeOwner.ExecutionFence);
             Assert.Equal(fixedBoundary.LogicalTurnOrdinal, fixedRuntimeOwner.LogicalTurnOrdinal);
@@ -3406,6 +3415,26 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             if (azureByok)
                 Assert.Equal(AzureByokModelBindings().Pin("platform-model", ModelSourceMode.Byok),
                     fixedRuntimeOwner.ModelBindingPin);
+        }
+        using (var runtimeObservationResponse = await SendAsync(
+                   orchestrator,
+                   HttpMethod.Get,
+                   $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{fixedChild.Node.Identity.SessionId}/runtime-execution-observation",
+                   runToken,
+                   [TenantId]))
+        {
+            await AssertStatusAsync(runtimeObservationResponse, HttpStatusCode.OK);
+            Assert.True(runtimeObservationResponse.Headers.CacheControl?.NoStore);
+            var observation = await ReadJsonAsync<RuntimeExecutionObservation>(runtimeObservationResponse)
+                ?? throw new InvalidOperationException("The runtime execution observation was not returned.");
+            Assert.Equal(root.RootSessionId, observation.RootSessionId);
+            Assert.Equal(fixedChild.Node.Identity.SessionId, observation.SessionId);
+            Assert.Equal(root.ExecutionFence, observation.ExecutionFence);
+            Assert.Equal(acceptedPlan.Id, observation.WorkPlanId);
+            Assert.Equal(fixedAssociationId, observation.AssociationId);
+            Assert.Equal(RuntimeExecutionTaskStatus.Running, observation.Status);
+            Assert.Null(observation.PendingDispatch);
+            Assert.Null(observation.ResultDigest);
         }
         var latestFixedCheckpoint = await fixedExecutionStore.ReadLatestAsync(CancellationToken.None)
             ?? throw new InvalidOperationException("The fixed-work checkpoint was not persisted.");
@@ -3825,7 +3854,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 }, azureByok ? sourceControlSecretBackend : null,
                 acceptedSkill,
                 acceptedSkillJourney ? "unassigned-agent" : null,
-                skillWriter);
+                skillWriter,
+                stopAfterRegistration: configuredMaxPromptTokens is not null);
+            if (configuredMaxPromptTokens is not null)
+                return;
         }
 
         using var sendReply = await SendJsonAsync(

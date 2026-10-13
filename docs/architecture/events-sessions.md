@@ -327,7 +327,12 @@ read-only runtime-owner-context endpoint re-reads the child owner row and latest
 decision, then rechecks Projects authority and accepted selection before returning
 agent/model/turn metadata. A changed owner row, decision version, mapping, fence, or
 pending gate returns a conflict rather than stale context; it does not cancel or schedule
-runtime work.
+runtime work. The runtime-execution-observation endpoint uses the same current-owner
+checks to read only the child’s own checkpoint status and dispatch metadata. It hashes
+completed result text and returns only the digest and UTF-8 length; it never returns the
+result text itself. It can observe active, completed, or failed child sessions under the
+current execution fence; terminal state does not bypass owner, decision, or selection
+checks. Observation does not retry or schedule runtime work.
 
 At an explicit owner turn-boundary request, the Orchestrator asks Events to claim and
 present the next addressed message. Events re-reads the current owner session binding

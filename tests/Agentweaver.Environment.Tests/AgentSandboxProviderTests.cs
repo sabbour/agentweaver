@@ -341,7 +341,11 @@ public sealed partial class AgentSandboxProviderTests
             var endpointObservation = await provider.DescribeAsync(endpointRequest);
             Assert.Equal(new SandboxRuntimeHttpsEndpoint(
                 new("https://sandbox-a.agentweaver.svc.cluster.local:8443/"),
-                "10.2.3.4", "pod-uid", "service-uid"), endpointObservation.RuntimeEndpoint);
+                "10.2.3.4", "pod-uid", "service-uid")
+            {
+                ReceiverConfigureEndpoint =
+                    new("https://runtime-receiver.agentweaver.svc.cluster.local:8443/runtime/v1/configure")
+            }, endpointObservation.RuntimeEndpoint);
             Assert.Equal(SandboxObservedState.Pending, endpointObservation.State);
             foreach (var fault in new[]
             {
@@ -694,6 +698,27 @@ public sealed partial class AgentSandboxProviderTests
                  "spec":{"type":"ClusterIP","selector":{"egress.example/selector":"environment-a"},
                    "ports":[{"name":"https","port":8443,"targetPort":"https","protocol":"TCP"}]}}
                 """)!;
+            const string receiverEndpoint =
+                "https://runtime-receiver.agentweaver.svc.cluster.local:8443/runtime/v1/configure";
+            _resources["api/v1/namespaces/agentweaver/configmaps/agenthost-runtime-v1"] =
+                JsonSerializer.SerializeToNode(new
+                {
+                    apiVersion = "v1",
+                    kind = "ConfigMap",
+                    metadata = new { name = "agenthost-runtime-v1", @namespace = "agentweaver" },
+                    immutable = true,
+                    data = new Dictionary<string, string>
+                    {
+                        ["appsettings.json"] = JsonSerializer.Serialize(new
+                        {
+                            AgentHost = new
+                            {
+                                ConfigureEndpoint = receiverEndpoint,
+                                Authentication = new { Audience = receiverEndpoint }
+                            }
+                        })
+                    }
+                })!;
         }
 
         public void SetRuntimeEndpointFault(string? fault)

@@ -23,7 +23,7 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
         var binding = registration.Binding;
         var context = await placements.GetWorkspaceContextAsync(
             actor, binding.ProjectId, binding.RunId, binding.SessionId, binding.EnvironmentId,
-            binding.ProfileId, profiles, cancellationToken).ConfigureAwait(false)
+            binding.ProfileId, profiles, cancellationToken, profileReplacements).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_suspend_workspace_unavailable");
         if (!SameSuspendJson(context.Placement, placement))
             throw new RuntimeAuthorizationException("runtime_suspend_placement_stale");
@@ -87,7 +87,7 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
         var placement = await ReadPlacementAsync(registration, actor, cancellationToken).ConfigureAwait(false);
         var workspace = await placements.GetWorkspaceContextAsync(
             actor, binding.ProjectId, binding.RunId, binding.SessionId, binding.EnvironmentId,
-            binding.ProfileId, profiles, cancellationToken).ConfigureAwait(false)
+            binding.ProfileId, profiles, cancellationToken, profileReplacements).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_suspend_workspace_unavailable");
         RequireSuspendWorkspace(workspace, exactWorkspace, registration);
         await RequireCurrentSuspendAsync(bound, actor, cancellationToken).ConfigureAwait(false);
@@ -104,7 +104,7 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
         var afterPlacement = await ReadPlacementAsync(registration, actor, cancellationToken).ConfigureAwait(false);
         var afterWorkspace = await placements.GetWorkspaceContextAsync(
             actor, binding.ProjectId, binding.RunId, binding.SessionId, binding.EnvironmentId,
-            binding.ProfileId, profiles, cancellationToken).ConfigureAwait(false)
+            binding.ProfileId, profiles, cancellationToken, profileReplacements).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_suspend_workspace_unavailable");
         RequireSuspendWorkspace(afterWorkspace, exactWorkspace, registration);
         await RequireCurrentSuspendAsync(bound, actor, cancellationToken).ConfigureAwait(false);

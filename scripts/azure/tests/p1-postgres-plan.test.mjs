@@ -81,8 +81,10 @@ test('Core plan includes all 20 registered versions but never 017; source approv
   const plan = buildP1PostgresPlan();
   assert.deepEqual(plan.coreVersions,
     [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21]);
-  assert.equal(plan.executionRequirements.length, 4);
+  assert.equal(plan.executionRequirements.length, 5);
   assert.ok(plan.executionRequirements.some(item => item.includes('separate approval')));
+  assert.ok(plan.executionRequirements.some(item =>
+    item.includes('SELECT,INSERT on environment.runtime_bootstrap_profile_replacements')));
   assert.ok(plan.executionRequirements.some(item => item.includes('restricted-role PostgreSQL tests prove')));
 });
 
@@ -151,10 +153,12 @@ test('Current source catalog preserves exact Core and Events versions and embedd
   }
 });
 
-test('Catalog function inventory matches all 28 source signatures without changing table or lock grants', () => {
+test('Catalog inventory matches source signatures and exact table and lock grants', () => {
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 93);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 94);
   assert.deepEqual(plan.services.map(service => service.functions.length), [3, 0, 4, 4, 17]);
+  assert.deepEqual(plan.services.find(service => service.schema === 'environment').tables
+    .find(table => table.table === 'runtime_bootstrap_profile_replacements').privileges, ['SELECT', 'INSERT']);
   assert.deepEqual(plan.services.flatMap(service =>
     service.tables.filter(table => table.lockColumn)
       .map(table => `${service.schema}.${table.table}.${table.lockColumn}`)), [

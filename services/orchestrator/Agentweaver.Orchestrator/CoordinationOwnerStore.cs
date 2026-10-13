@@ -1667,6 +1667,21 @@ internal sealed partial class CoordinationOwnerStore
         CoordinationActor actor,
         SessionIdentity identity,
         CancellationToken cancellationToken)
+        => await ReadRuntimeOwnerStateAsync(actor, identity, allowTerminalChild: false, cancellationToken)
+            .ConfigureAwait(false);
+
+    public async Task<SessionRuntimeOwnerState> ReadRuntimeOwnerStateForObservationAsync(
+        CoordinationActor actor,
+        SessionIdentity identity,
+        CancellationToken cancellationToken)
+        => await ReadRuntimeOwnerStateAsync(actor, identity, allowTerminalChild: true, cancellationToken)
+            .ConfigureAwait(false);
+
+    private async Task<SessionRuntimeOwnerState> ReadRuntimeOwnerStateAsync(
+        CoordinationActor actor,
+        SessionIdentity identity,
+        bool allowTerminalChild,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(actor);
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
@@ -1677,9 +1692,13 @@ internal sealed partial class CoordinationOwnerStore
         var session = await ReadSessionAsync(
             connection, transaction, identity, forUpdate: true, cancellationToken).ConfigureAwait(false);
         RequireWriter(session, actor);
-        RequireCurrentActiveSession(session, run);
+        if (allowTerminalChild)
+            RequireCurrentObservationSession(session, run);
+        else
+            RequireCurrentActiveSession(session, run);
         if (session.NodeKind != "child_work" ||
-            session.TurnState != "active" ||
+            (session.TurnState != "active" &&
+                (!allowTerminalChild || session.TurnState is not ("completed" or "failed" or "indeterminate"))) ||
             session.LogicalTurnOrdinal < 1 ||
             session.StateVersion < 1)
             throw new CoordinationException(
@@ -1696,6 +1715,16 @@ internal sealed partial class CoordinationOwnerStore
             CreateRuntimeTurnId(identity, run.Fence, session.LogicalTurnOrdinal));
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result;
+    }
+
+    private static void RequireCurrentObservationSession(SessionRow session, AcceptedRunRow run)
+    {
+        if (session.ExecutionFence != run.Fence)
+            throw new CoordinationException("execution_fence_stale", StatusCodes.Status409Conflict);
+        if (run.ExecutionState is "failed" or "indeterminate")
+            throw new CoordinationException("execution_recovery_required", StatusCodes.Status409Conflict);
+        if (session.LifecycleState is not ("active" or "completed" or "failed"))
+            throw new CoordinationException("session_unavailable", StatusCodes.Status409Conflict);
     }
 
     private static bool RuntimeDecisionAllowsWorkPlanItem(

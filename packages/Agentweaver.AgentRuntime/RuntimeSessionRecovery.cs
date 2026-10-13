@@ -14,6 +14,7 @@ internal sealed record RuntimeSessionRecovery(
     IReadOnlyList<(string Role, string Content)> Turns)
 {
     internal RuntimeResumeJournalRebuildReceipt? JournalRebuild { get; init; }
+    internal RuntimeSessionJournalEvidence? JournalEvidence { get; init; }
 
     internal bool CacheMatches(RuntimeRegistration registration, string sdkVersion, string runtimeVersion,
         string modelId, int? maxPromptTokens = null)
@@ -42,3 +43,10 @@ internal sealed record RuntimeSessionRecovery(
         return context;
     }
 }
+
+internal sealed record RuntimeSessionJournalEvidence(long ThroughPosition, string JournalSha256);
+
+internal sealed record RuntimeSessionJournalHashEntry(
+    SessionEventEnvelope Event,
+    SessionMaterialAcknowledgment? TurnMaterial,
+    string? TurnContentSha256);

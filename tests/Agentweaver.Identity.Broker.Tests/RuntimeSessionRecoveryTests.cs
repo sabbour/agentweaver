@@ -18,7 +18,16 @@ public sealed class RuntimeSessionRecoveryTests
         long supportedAfterRestart, bool reject)
     {
         var registration = RuntimeCopilotSessionTests.Registration();
-        registration = registration with { Binding = registration.Binding with { MaxPromptTokens = 20000 } };
+        registration = registration with
+        {
+            Binding = registration.Binding with
+            {
+                MaxPromptTokens = 20000,
+                PlacementProviderId = "sandbox",
+                EnvironmentLifecycleGeneration = 1,
+                EnvironmentLeaseRevision = 1
+            }
+        };
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         SdkSessionFacts facts;
         await using (var external = new ControlledCopilotRuntime { MaxPromptTokens = 16000 })
@@ -29,8 +38,9 @@ public sealed class RuntimeSessionRecoveryTests
         Assert.Equal(16000, facts.MaxPromptTokens);
         var recovery = Recovery(registration, facts, NativeArchive("state/events.jsonl", "opaque events"));
         await using var replacement = new ControlledCopilotRuntime { MaxPromptTokens = supportedAfterRestart };
+        var replacementRegistration = registration with { RuntimeInstanceId = Guid.NewGuid() };
         var create = RuntimeCopilotSessionTests.Factory(replacement).CreateAsync(
-            registration with { RuntimeInstanceId = Guid.NewGuid() },
+            replacementRegistration,
             registration.Binding.ModelSelectionReference!, RuntimeCopilotSessionTests.SdkCredential(),
             _ => Task.CompletedTask, timeout.Token, recovery);
         if (reject)
@@ -43,7 +53,20 @@ public sealed class RuntimeSessionRecoveryTests
         {
             await using var resumed = await create;
             Assert.Equal(RuntimeSessionRecoveryMode.NativeCache, resumed.RecoveryMode);
+            Assert.Equal(recovery.Cache?.Material, resumed.ConsumedNativeCacheAcknowledgment);
+            Assert.Null(resumed.JournalEvidence);
             Assert.Equal(16000, resumed.Facts.MaxPromptTokens);
+            var readinessEvidence = new RuntimeHostRecoveryReceipt(
+                1,
+                replacementRegistration.RuntimeInstanceId,
+                replacementRegistration.Revision,
+                replacementRegistration.Binding.ExecutionFence,
+                RuntimeHostRecoveryMode.NativeCache,
+                resumed.Facts)
+            {
+                NativeCacheAcknowledgment = recovery.Cache?.Material
+            }.ValidateFor(replacementRegistration);
+            Assert.Equal(RuntimeHostRecoveryMode.NativeCache, readinessEvidence.RecoveryMode);
             var resume = Assert.Single(replacement.Requests, request => request.Method == "session.resume");
             Assert.Equal(16000, resume.Parameters.GetProperty("modelCapabilities")
                 .GetProperty("limits").GetProperty("max_prompt_tokens").GetInt32());
@@ -136,6 +159,15 @@ public sealed class RuntimeSessionRecoveryTests
     public async Task LostOrIncompatibleCacheRebuildsNativeContextWithoutReplayingATurn(string change)
     {
         var registration = RuntimeCopilotSessionTests.Registration();
+        registration = registration with
+        {
+            Binding = registration.Binding with
+            {
+                PlacementProviderId = "sandbox",
+                EnvironmentLifecycleGeneration = 1,
+                EnvironmentLeaseRevision = 1
+            }
+        };
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await using var external = new ControlledCopilotRuntime();
         SdkSessionFacts facts;
@@ -169,11 +201,24 @@ public sealed class RuntimeSessionRecoveryTests
             };
         }
         await using var replacement = new ControlledCopilotRuntime();
+        var replacementRegistration = registration with { RuntimeInstanceId = Guid.NewGuid() };
         await using var rebuilt = await RuntimeCopilotSessionTests.Factory(replacement).CreateAsync(
-            registration, registration.Binding.ModelSelectionReference!,
+            replacementRegistration, registration.Binding.ModelSelectionReference!,
             RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token, recovery);
         Assert.Equal(RuntimeSessionRecoveryMode.JournalRebuild, rebuilt.RecoveryMode);
         Assert.NotNull(rebuilt.RecoveryReason);
+        Assert.NotNull(rebuilt.JournalEvidence);
+        var readinessEvidence = new RuntimeHostRecoveryReceipt(
+            1,
+            replacementRegistration.RuntimeInstanceId,
+            replacementRegistration.Revision,
+            replacementRegistration.Binding.ExecutionFence,
+            RuntimeHostRecoveryMode.JournalRebuild,
+            rebuilt.Facts)
+        {
+            Journal = new(rebuilt.JournalEvidence.ThroughPosition, rebuilt.JournalEvidence.JournalSha256)
+        }.ValidateFor(replacementRegistration);
+        Assert.Equal(RuntimeHostRecoveryMode.JournalRebuild, readinessEvidence.RecoveryMode);
         var create = Assert.Single(replacement.Requests, request => request.Method == "session.create");
         Assert.Contains("previous user request", create.Parameters.GetProperty("systemMessage").GetProperty("content").GetString());
         Assert.Contains("previous answer", create.Parameters.GetProperty("systemMessage").GetProperty("content").GetString());
@@ -215,7 +260,10 @@ public sealed class RuntimeSessionRecoveryTests
         RuntimeRegistration registration, SdkSessionFacts facts, byte[] bytes) =>
         new(new(registration.Binding.ProjectId, registration.Binding.RunId, registration.Binding.SessionId),
             registration.Binding.TenantId, Cache(registration, facts, bytes),
-            [("user", "previous user request"), ("assistant", "previous answer")]);
+            [("user", "previous user request"), ("assistant", "previous answer")])
+        {
+            JournalEvidence = new(17, new string('a', 64))
+        };
 
     private static SessionMaterialReadResult Cache(
         RuntimeRegistration registration, SdkSessionFacts facts, byte[] bytes) =>

@@ -12,6 +12,24 @@ public sealed record RegisterRuntimeRequest(string EnvironmentId, string Profile
 internal sealed class RuntimeEnvironmentContextClient(
     HttpClient client, RuntimeRegistrationOwnerOptions options)
 {
+    public async Task<string> ResolveProfileIdAsync(
+        RuntimeActorAuthorization actor,
+        string projectId,
+        string runId,
+        string sessionId,
+        string environmentId,
+        string sourceProfileId,
+        CancellationToken cancellationToken)
+    {
+        var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeBootstrapProfileResolveReceipt>(
+            client, options.EnvironmentOwnerAddress,
+            $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}" +
+            $"/environments/{Uri.EscapeDataString(environmentId)}/coordination/sessions/{Uri.EscapeDataString(sessionId)}" +
+            $"/runtime-bootstrap/profiles/{Uri.EscapeDataString(sourceProfileId)}/resolve",
+            actor, new RuntimeBootstrapProfileResolveRequest(1), cancellationToken).ConfigureAwait(false);
+        return receipt.ValidateFor(sourceProfileId).ProfileId;
+    }
+
     public Task<EnvironmentRuntimeBootstrapContext> ReadAsync(
         RuntimeActorAuthorization actor, string projectId, string runId, string sessionId,
         string environmentId, string profileId, CancellationToken cancellationToken) =>
@@ -42,18 +60,23 @@ internal sealed class RuntimeRegistrationOwner(
     {
         RuntimeContractValidation.ValidateIdentifier(request.EnvironmentId);
         RuntimeContractValidation.ValidateIdentifier(request.ProfileId);
+        var resolvedRequest = request with
+        {
+            ProfileId = await ResolveProfileIdAsync(
+                context, projectId, runId, sessionId, request, cancellationToken).ConfigureAwait(false)
+        };
         var derived = await DeriveCurrentBindingAsync(
-            context, projectId, runId, sessionId, request, cancellationToken).ConfigureAwait(false);
+            context, projectId, runId, sessionId, resolvedRequest, cancellationToken).ConfigureAwait(false);
         var registration = await registrations.RegisterAsync(
             derived.Binding, derived.ExpiresAt, cancellationToken,
             async token =>
             {
                 var current = await DeriveCurrentBindingAsync(
-                    context, projectId, runId, sessionId, request, token).ConfigureAwait(false);
+                    context, projectId, runId, sessionId, resolvedRequest, token).ConfigureAwait(false);
                 RequireSame(derived, current);
             }).ConfigureAwait(false);
         var final = await DeriveCurrentBindingAsync(
-            context, projectId, runId, sessionId, request, cancellationToken).ConfigureAwait(false);
+            context, projectId, runId, sessionId, resolvedRequest, cancellationToken).ConfigureAwait(false);
         RequireSame(derived, final);
         return registration;
     }
@@ -92,19 +115,24 @@ internal sealed class RuntimeRegistrationOwner(
             throw new RuntimeAuthorizationException("runtime_registration_stale");
 
         var expectedExecutionFence = checked(releasedRegistration.Binding.ExecutionFence + 1);
+        var resolvedRequest = request with
+        {
+            ProfileId = await ResolveProfileIdAsync(
+                context, projectId, runId, sessionId, request, cancellationToken).ConfigureAwait(false)
+        };
         var derived = await DeriveCurrentBindingAsync(
-            context, projectId, runId, sessionId, request, cancellationToken).ConfigureAwait(false);
+            context, projectId, runId, sessionId, resolvedRequest, cancellationToken).ConfigureAwait(false);
         RequireNextFenceReplacement(releasedRegistration, derived.Binding, expectedExecutionFence);
         var replacement = await registrations.ReplaceAsync(
             releasedRegistration, operationId, derived.Binding, derived.ExpiresAt, cancellationToken,
             async token =>
             {
                 var current = await DeriveCurrentBindingAsync(
-                    context, projectId, runId, sessionId, request, token).ConfigureAwait(false);
+                    context, projectId, runId, sessionId, resolvedRequest, token).ConfigureAwait(false);
                 RequireSame(derived, current);
             }).ConfigureAwait(false);
         var final = await DeriveCurrentBindingAsync(
-            context, projectId, runId, sessionId, request, cancellationToken).ConfigureAwait(false);
+            context, projectId, runId, sessionId, resolvedRequest, cancellationToken).ConfigureAwait(false);
         RequireSame(derived, final);
         return replacement;
     }
@@ -270,6 +298,35 @@ internal sealed class RuntimeRegistrationOwner(
             var expiry = new DateTimeOffset(
                 placement.LeaseExpiresAt.UtcTicks - placement.LeaseExpiresAt.UtcTicks % 10, TimeSpan.Zero);
             return new(binding, expiry);
+        }
+
+        finally
+        {
+            credential.Invalidate();
+        }
+    }
+
+    private async Task<string> ResolveProfileIdAsync(
+        HttpContext context,
+        string projectId,
+        string runId,
+        string sessionId,
+        RegisterRuntimeRequest request,
+        CancellationToken cancellationToken)
+    {
+        var authenticated = await context.AuthenticateAsync().ConfigureAwait(false);
+        var expiresAt = context.User.GetExpirationDate() ?? authenticated.Properties?.ExpiresUtc;
+        if (!authenticated.Succeeded || expiresAt is null || expiresAt <= timeProvider.GetUtcNow())
+            throw new RuntimeAuthorizationException("runtime_actor_expired");
+        var credential = new SecretCredential(
+            CoordinationIdentity.RequireBearer(context).Parameter!, expiresAt.Value, timeProvider);
+        try
+        {
+            var actor = new RuntimeActorAuthorization(
+                credential, CoordinationIdentity.ReadTenantSelector(context));
+            return await environment.ResolveProfileIdAsync(
+                actor, projectId, runId, sessionId, request.EnvironmentId, request.ProfileId, cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {

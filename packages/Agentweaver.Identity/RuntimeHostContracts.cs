@@ -20,6 +20,33 @@ public sealed record EnvironmentRuntimeWorkspaceContext(
     long TransitionRevision);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeBootstrapProfileResolveRequest(int ContractVersion)
+{
+    public RuntimeBootstrapProfileResolveRequest Validate()
+    {
+        if (ContractVersion != 1)
+            throw new ArgumentException("The Runtime bootstrap profile request is invalid.");
+        return this;
+    }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeBootstrapProfileResolveReceipt(
+    int ContractVersion,
+    string SourceProfileId,
+    string ProfileId)
+{
+    public RuntimeBootstrapProfileResolveReceipt ValidateFor(string sourceProfileId)
+    {
+        if (ContractVersion != 1 ||
+            SourceProfileId != sourceProfileId)
+            throw new RuntimeAuthorizationException("runtime_bootstrap_profile_receipt_invalid");
+        RuntimeContractValidation.ValidateIdentifier(ProfileId);
+        return this;
+    }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeHostConfigureRequest(
     int ContractVersion,
     RuntimeRegistration Registration,
@@ -81,7 +108,85 @@ public sealed record RuntimeHostReadinessReceipt(
 {
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeHostResumeCacheReceipt? ResumeCache { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeHostRecoveryReceipt? Recovery { get; init; }
 }
+
+[JsonConverter(typeof(JsonStringEnumConverter<RuntimeHostRecoveryMode>))]
+public enum RuntimeHostRecoveryMode
+{
+    Fresh,
+    NativeCache,
+    JournalRebuild
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeHostJournalRecoveryEvidence(long ThroughPosition, string JournalSha256);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeHostRecoveryReceipt(
+    int ContractVersion,
+    Guid RuntimeInstanceId,
+    long RegistrationRevision,
+    long ExecutionFence,
+    RuntimeHostRecoveryMode RecoveryMode,
+    SdkSessionFacts Source)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SessionMaterialAcknowledgment? NativeCacheAcknowledgment { get; init; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeHostJournalRecoveryEvidence? Journal { get; init; }
+
+    public RuntimeHostRecoveryReceipt ValidateFor(RuntimeRegistration registration)
+    {
+        ArgumentNullException.ThrowIfNull(registration);
+        RuntimeUsageSourceReceiptContract.ValidateSource(registration, Source);
+        var binding = registration.Binding;
+        if (ContractVersion != 1 ||
+            RuntimeInstanceId != registration.RuntimeInstanceId ||
+            RegistrationRevision != registration.Revision ||
+            ExecutionFence != binding.ExecutionFence ||
+            Source.SdkSessionId != RuntimeContractValidation.NativeSessionId(binding) ||
+            !Enum.IsDefined(RecoveryMode))
+            throw new RuntimeAuthorizationException("runtime_recovery_receipt_invalid");
+
+        if (RecoveryMode == RuntimeHostRecoveryMode.NativeCache)
+        {
+            var cache = NativeCacheAcknowledgment
+                ?? throw new RuntimeAuthorizationException("runtime_recovery_receipt_invalid");
+            SessionMaterialValidation.Validate(cache.Reference);
+            var material = cache.Reference.Material!;
+            if (Journal is not null ||
+                cache.ContractVersion != 1 ||
+                cache.Identity != new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId) ||
+                cache.EventId == Guid.Empty || cache.Position < 1 ||
+                material.Kind != SessionMaterialKind.SdkCache ||
+                material.TenantId != binding.TenantId ||
+                material.AcceptedSelectionHash != binding.AcceptedSelectionHash ||
+                material.ModelSelectionReference != Source.ModelSelectionReference ||
+                material.SdkVersion != Source.SdkVersion ||
+                material.RuntimeVersion != Source.RuntimeVersion ||
+                material.ModelId != Source.ModelId ||
+                material.MaxPromptTokens != Source.MaxPromptTokens)
+                throw new RuntimeAuthorizationException("runtime_recovery_receipt_invalid");
+        }
+        else if (RecoveryMode == RuntimeHostRecoveryMode.JournalRebuild)
+        {
+            if (NativeCacheAcknowledgment is not null ||
+                Journal is not { ThroughPosition: > 0, JournalSha256: { Length: 64 } hash } ||
+                !hash.All(Uri.IsHexDigit))
+                throw new RuntimeAuthorizationException("runtime_recovery_receipt_invalid");
+        }
+        else if (NativeCacheAcknowledgment is not null || Journal is not null)
+            throw new RuntimeAuthorizationException("runtime_recovery_receipt_invalid");
+
+        return this;
+    }
+}
+
+public sealed record RuntimeHostLivenessReceipt(string Status);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeA2ATextPart(string Kind, string Text);

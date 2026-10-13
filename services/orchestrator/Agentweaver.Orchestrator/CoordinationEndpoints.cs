@@ -114,6 +114,9 @@ public static partial class CoordinationEndpoints
         app.MapGet(
             "/internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-owner-context",
             ReadRuntimeOwnerContextAsync).RequireAuthorization();
+        app.MapGet(
+            "/internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-execution-observation",
+            ReadRuntimeExecutionObservationAsync).RequireAuthorization();
         return app;
     }
 

@@ -145,6 +145,7 @@ public static class EnvironmentEndpoints
                 HttpContext context,
                 [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimePlacementReader reader,
                 [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimeBootstrapProfileRegistry profiles,
+                [Microsoft.AspNetCore.Mvc.FromServices] IEnvironmentRuntimeBootstrapProfileReplacementStore profileReplacements,
                 [Microsoft.AspNetCore.Mvc.FromServices] TimeProvider timeProvider,
                 CancellationToken cancellationToken) =>
             {
@@ -162,19 +163,22 @@ public static class EnvironmentEndpoints
                     if (suffix == "/workspace")
                     {
                         var workspace = await reader.GetWorkspaceContextAsync(
-                            actor, projectId, runId, sessionId, environmentId, profileId, profiles, cancellationToken)
+                            actor, projectId, runId, sessionId, environmentId, profileId, profiles, cancellationToken,
+                            profileReplacements)
                             .ConfigureAwait(false);
                         return workspace is null ? Results.NotFound() : Results.Ok(workspace);
                     }
                     if (suffix == "/readiness")
                     {
                         var observed = await reader.GetReadinessContextAsync(
-                            actor, projectId, runId, sessionId, environmentId, profileId, profiles, cancellationToken)
+                            actor, projectId, runId, sessionId, environmentId, profileId, profiles, cancellationToken,
+                            profileReplacements)
                             .ConfigureAwait(false);
                         return observed is null ? Results.NotFound() : Results.Ok(observed);
                     }
                     var bootstrap = await reader.GetBootstrapContextAsync(
-                        actor, projectId, runId, sessionId, environmentId, profileId, profiles, cancellationToken)
+                        actor, projectId, runId, sessionId, environmentId, profileId, profiles, cancellationToken,
+                        profileReplacements)
                         .ConfigureAwait(false);
                     return bootstrap is null ? Results.NotFound() : Results.Ok(bootstrap);
                 }

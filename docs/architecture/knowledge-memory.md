@@ -236,7 +236,8 @@ recency. It emits JSON inside explicit untrusted-context delimiters and instruct
 consumers never to follow instructions embedded in stored values. Each selected
 decision, memory, and SessionContext includes an immutable revision reference.
 Configured item and token limits can only be narrowed by a request; the token limit
-is also bounded by the accepted run's prompt-token limit. Candidate overflow and
+is also bounded by the accepted run's Knowledge retrieval budget. This does not
+limit the complete prompt sent to a model. Candidate overflow and
 mandatory-decision or output-budget overflow are visible errors, not silent
 truncation of mandatory content.
 

@@ -85,6 +85,9 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<IEnvironmentLifecycleStore, EnvironmentLifecycleStore>();
 builder.Services.AddScoped<IEnvironmentProviderLifecycleReportStore, EnvironmentProviderLifecycleReportStore>();
 builder.Services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
+builder.Services.AddScoped<
+    IEnvironmentRuntimeBootstrapProfileReplacementStore,
+    EnvironmentRuntimeBootstrapProfileReplacementStore>();
 builder.Services.AddScoped<IEnvironmentSandboxBuildTestCommandStore, EnvironmentSandboxBuildTestCommandStore>();
 builder.Services.AddScoped<RemoteMcpConnectionStore>();
 builder.AddRemoteMcpTrustedServiceTls();
@@ -96,6 +99,9 @@ builder.Services.AddScoped<EnvironmentRuntimePlacementReader>();
 builder.Services.AddSingleton(new EnvironmentRuntimeBootstrapProfileRegistry(
     builder.Configuration.GetSection("Environment:RuntimeBootstrap:Profiles")
         .Get<EnvironmentRuntimeBootstrapProfileRegistration[]>() ?? []));
+builder.Services.AddHttpClient<EnvironmentRuntimeEndpointVerifier>(client =>
+    client.Timeout = TimeSpan.FromSeconds(10))
+    .ConfigurePrimaryHttpMessageHandler(RuntimeSandboxHttpTransport.CreateHandler);
 var runtimeOrchestratorAddress = builder.Configuration["Environment:RuntimeBootstrap:OrchestratorOwnerAddress"];
 var runtimeBrokerAddress = builder.Configuration["Environment:RuntimeBootstrap:BrokerOwnerAddress"];
 var runtimeBootstrapEnabled = runtimeOrchestratorAddress is not null || runtimeBrokerAddress is not null;

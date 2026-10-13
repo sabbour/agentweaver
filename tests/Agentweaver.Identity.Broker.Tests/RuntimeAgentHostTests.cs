@@ -35,6 +35,7 @@ public sealed class RuntimeAgentHostTests
         await session.RegisterUsageAsync(source, timeout.Token);
         var turnReceipt = await session.CommitTurnContentAsync(
             material, Guid.NewGuid(), "user", "A normal user turn.", timeout.Token);
+        fixture.AddJournalTurn(turnReceipt, "user");
         Assert.Null(turnReceipt.Reference.Material!.RemoteToolResultProof);
         var proof = new RuntimeHostSessionProof(1, session.Registration, session.SourceGrant.GrantId,
             session.SourceGrant.Revision, RuntimeCredentialPurpose.Observe);
@@ -43,6 +44,9 @@ public sealed class RuntimeAgentHostTests
         Assert.All(fixture.Material.Where(item => item.Kind == SessionMaterialKind.SdkCache),
             item => Assert.Null(item.RemoteToolResultProof));
         Assert.Equal(2, fixture.Material.Count(item => item.Kind == SessionMaterialKind.SdkCache));
+        var recovery = await material.ReadRecoveryAsync(session.Registration, timeout.Token);
+        Assert.True(recovery.JournalEvidence?.ThroughPosition > 0);
+        Assert.Matches("^[0-9a-f]{64}$", recovery.JournalEvidence!.JournalSha256);
         var request = new RuntimeHostSuspendRequest(proof, Guid.NewGuid(), Guid.NewGuid(), 1);
         var receipt = await session.SuspendAsync(
             material, request, token => fixture.RequireCurrentSuspendAsync(request, token), timeout.Token);
@@ -1298,7 +1302,6 @@ public sealed class RuntimeAgentHostTests
     [InlineData(1, null, null, false)]
     [InlineData(null, 1, null, false)]
     [InlineData(null, null, 1024, false)]
-    [InlineData(null, 1, null, true)]
     [InlineData(null, null, 1024, true)]
     public async Task ConfiguredNumericRunPolicyFailsBeforeReadyOrNativeSessionCreation(
         int? maxModelTurns,
@@ -1327,9 +1330,9 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Fact]
-    public async Task WorkflowBoundMaxModelTurnsUsesOwnerAdmittedNativeDispatch()
+    public async Task WorkflowBoundModelAndToolLimitsUseOwnerAdmittedNativeDispatch()
     {
-        await using var fixture = new HostFixture(maxModelTurns: 1, workflowBound: true);
+        await using var fixture = new HostFixture(maxModelTurns: 1, maxToolCalls: 1, workflowBound: true);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
         var message = fixture.Message(proof);
@@ -1338,6 +1341,7 @@ public sealed class RuntimeAgentHostTests
 
         Assert.Equal(fixture.Sdk.AssistantResponse, Assert.Single(response.Parts).Text);
         Assert.Equal(1, fixture.Registration.Binding.MaxModelTurns);
+        Assert.Equal(1, fixture.Registration.Binding.MaxToolCalls);
         Assert.NotNull(fixture.Registration.Binding.WorkflowStepId);
         Assert.Single(fixture.NativeAdmissions);
         Assert.Single(fixture.NativeObservations);
@@ -2175,8 +2179,92 @@ public sealed class RuntimeAgentHostTests
         Assert.Equal(expected.ExecutionFence, receipt.ExecutionFence);
         Assert.Equal(expected.Image, receipt.Image);
         Assert.Equal(expected.SourceGrant, receipt.SourceGrant);
+        Assert.Equal(RuntimeHostRecoveryMode.Fresh, expected.Recovery?.RecoveryMode);
+        Assert.Equal(expected.RuntimeInstanceId, expected.Recovery?.RuntimeInstanceId);
+        Assert.Equal(expected.RegistrationRevision, expected.Recovery?.RegistrationRevision);
+        Assert.Equal(expected.ExecutionFence, expected.Recovery?.ExecutionFence);
+        Assert.Null(expected.Recovery?.NativeCacheAcknowledgment);
+        Assert.Null(expected.Recovery?.Journal);
         Assert.Equal(0, fixture.Rotations);
         Assert.Empty(fixture.NativeAdmissions);
+    }
+
+    [Fact]
+    public async Task OrdinaryReplacementReadinessReportsConsumedNativeCache()
+    {
+        await using var source = new HostFixture(workflowBound: true);
+        await using var replacement = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var suspend = await PrepareOrdinaryReplacementSourceAsync(source, timeout.Token);
+        replacement.ImportOrdinaryRecoverySourceFrom(source);
+        var replacementRegistration = source.Registration with { RuntimeInstanceId = Guid.NewGuid() };
+        replacement.UseReplacementRegistration(replacementRegistration, source.Readiness);
+
+        var configured = await replacement.ConfigureAsync(timeout.Token);
+        using var server = await replacement.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = replacement.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", replacement.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        using var response = await client.GetAsync("/runtime/v1/readiness", timeout.Token);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var readiness = await response.Content.ReadFromJsonAsync<RuntimeHostReadinessReceipt>(
+            HostFixture.Json, timeout.Token);
+        var recovery = readiness!.Recovery
+            ?? throw new InvalidOperationException("Ordinary replacement readiness must report recovery.");
+        Assert.Equal(replacementRegistration.RuntimeInstanceId, recovery.RuntimeInstanceId);
+        Assert.Equal(replacementRegistration.Revision, recovery.RegistrationRevision);
+        Assert.Equal(replacementRegistration.Binding.ExecutionFence, recovery.ExecutionFence);
+        Assert.Equal(RuntimeHostRecoveryMode.NativeCache, recovery.RecoveryMode);
+        Assert.Equal(suspend.CacheAcknowledgment, recovery.NativeCacheAcknowledgment);
+        Assert.NotEqual(source.Registration.RuntimeInstanceId, recovery.RuntimeInstanceId);
+        Assert.Equal(source.Registration.RuntimeInstanceId,
+            recovery.NativeCacheAcknowledgment!.Reference.Material!.RuntimeInstanceId);
+        Assert.Equal(configured.Recovery, recovery);
+        Assert.Empty(replacement.NativeAdmissions);
+        Assert.DoesNotContain(replacement.Sdk.Requests, item => item.Method == "session.send");
+        Assert.Single(replacement.Sdk.Requests, item => item.Method == "session.resume");
+    }
+
+    [Fact]
+    public async Task OrdinaryReplacementReadinessReportsAuthenticatedJournalEvidence()
+    {
+        await using var source = new HostFixture(workflowBound: true);
+        await using var replacement = new HostFixture(workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await PrepareOrdinaryReplacementSourceAsync(source, timeout.Token);
+        replacement.ImportOrdinaryRecoverySourceFrom(source);
+        var replacementRegistration = source.Registration with { RuntimeInstanceId = Guid.NewGuid() };
+        replacement.UseReplacementRegistration(replacementRegistration, source.Readiness);
+        replacement.Sdk.RuntimeVersion = "controlled-runtime-v2";
+
+        await replacement.ConfigureAsync(timeout.Token);
+        using var server = await replacement.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = replacement.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", replacement.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        using var response = await client.GetAsync("/runtime/v1/readiness", timeout.Token);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var readiness = await response.Content.ReadFromJsonAsync<RuntimeHostReadinessReceipt>(
+            HostFixture.Json, timeout.Token);
+        var recovery = readiness!.Recovery
+            ?? throw new InvalidOperationException("Ordinary replacement readiness must report recovery.");
+        Assert.Equal(replacementRegistration.RuntimeInstanceId, recovery.RuntimeInstanceId);
+        Assert.Equal(replacementRegistration.Revision, recovery.RegistrationRevision);
+        Assert.Equal(replacementRegistration.Binding.ExecutionFence, recovery.ExecutionFence);
+        Assert.Equal(RuntimeHostRecoveryMode.JournalRebuild, recovery.RecoveryMode);
+        Assert.Null(recovery.NativeCacheAcknowledgment);
+        Assert.NotNull(recovery.Journal);
+        Assert.True(recovery.Journal.ThroughPosition > 0);
+        Assert.Matches("^[0-9a-f]{64}$", recovery.Journal.JournalSha256);
+        Assert.Contains(source.SessionEvents, item => item.Position == recovery.Journal.ThroughPosition);
+        Assert.Empty(replacement.NativeAdmissions);
+        Assert.DoesNotContain(replacement.Sdk.Requests, item => item.Method == "session.send");
+        Assert.Single(replacement.Sdk.Requests, item => item.Method == "session.create");
+        Assert.DoesNotContain(replacement.Sdk.Requests, item => item.Method == "session.resume");
     }
 
     [Fact]
@@ -2202,6 +2290,18 @@ public sealed class RuntimeAgentHostTests
         Assert.Equal("runtime_registration_stale", error.GetProperty("code").GetString());
         Assert.Equal(0, fixture.Rotations);
         Assert.Empty(fixture.NativeAdmissions);
+    }
+
+    private static async Task<RuntimeHostSuspendReceipt> PrepareOrdinaryReplacementSourceAsync(
+        HostFixture source, CancellationToken token)
+    {
+        var readiness = await source.ConfigureAsync(token);
+        var proof = source.Proof(readiness);
+        await source.Host.SendAsync(source.Message(proof), source.Actor, token);
+        var suspend = await source.Host.SuspendAsync(
+            source.SuspendRequest(proof), source.Actor, token);
+        source.PrepareResumeJournal(suspend, includeVisibleAncestor: false);
+        return suspend;
     }
 
     private sealed class HostFixture : IAsyncDisposable
@@ -2426,6 +2526,17 @@ public sealed class RuntimeAgentHostTests
                 ResumeBootstrap = request
             };
         }
+        public void AddJournalTurn(SessionMaterialAcknowledgment acknowledgment, string role)
+        {
+            var envelope = CreateEnvelope(
+                acknowledgment.Identity,
+                acknowledgment.Position,
+                acknowledgment.EventId,
+                new TurnSessionPayload(role, acknowledgment.Reference));
+            SessionEvents = SessionEvents.Add(envelope)
+                .OrderBy(item => item.Position)
+                .ToImmutableArray();
+        }
         public void ImportResumeSourceFrom(HostFixture source, Guid missingCacheId)
         {
             foreach (var (eventId, material) in source._material)
@@ -2433,6 +2544,20 @@ public sealed class RuntimeAgentHostTests
             _position = source._position;
             SessionEvents = source.SessionEvents;
             MissingMaterialId = missingCacheId;
+        }
+        public void ImportOrdinaryRecoverySourceFrom(HostFixture source)
+        {
+            foreach (var (eventId, material) in source._material)
+                _material[eventId] = material;
+            _position = source._position;
+            SessionEvents = source.SessionEvents;
+        }
+        public void UseReplacementRegistration(
+            RuntimeRegistration registration, EnvironmentRuntimeReadinessContext readiness)
+        {
+            Registration = registration;
+            Configure = Configure with { Registration = registration };
+            Readiness = readiness with { WorkspaceMountPath = WorkingDirectory };
         }
         public void ReplaceFirstTurnFrom(HostFixture owner)
         {
