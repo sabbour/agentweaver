@@ -66,7 +66,7 @@ const TARGET = Object.freeze({
   nodeMax: 3,
 });
 const GATEWAY_NAMESPACE = 'agentweaver-v1-gateway';
-const SERVICE_NAMES = Object.freeze({
+export const SERVICE_NAMES = Object.freeze({
   'Agentweaver.AgentHost': 'agenthost',
   'Agentweaver.Identity.Broker': 'identity-broker',
   'Agentweaver.EventsAndSessions': 'events-and-sessions',
@@ -951,7 +951,7 @@ export function verifyAzureTarget(target, { root, run }) {
   return { cluster, contextName, server };
 }
 
-function verifyRuntimePrerequisites(runtimeManifest, target, { root, run }) {
+export function verifyRuntimePrerequisites(runtimeManifest, target, { root, run }) {
   for (const reference of resolvePodReferences(runtimeManifest)) {
     const plural = reference.kind === 'serviceaccount' ? 'serviceaccount'
       : reference.kind === 'configmap' ? 'configmap'

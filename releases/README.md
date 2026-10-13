@@ -432,6 +432,64 @@ The manual workflow has a separate publication choice.
   The publisher validates that provenance contains exactly the manifest's
   non-service components and requires no container registry credentials.
 
+### Source-only integration images
+
+Use the separate integration path to prepare and, when explicitly selected,
+publish only the ten product service images for one exact source commit. It
+requires a clean checkout at that commit. The image tags use the full source
+SHA, and the actual image configs must contain that SHA, the exact Git tree
+SHA, and the component version. NuGet packages and the acceptance-only
+Foundation Probe are not selected. This path does not create a GitHub Release
+or update the draft composition.
+
+```powershell
+npm run release:integration-pack -- --integration-source-sha <full-source-sha>
+```
+
+The manually dispatched `.github/workflows/v1-integration-images.yml` workflow
+requires the `v1` branch and an `expected_source` equal to the workflow SHA.
+Its default `publish: false` prepares and uploads the images only. Selecting
+`publish: true` runs a separate job in the `v1-publication` environment. That
+job publishes the exact source-SHA tags and creates immutable claim and result
+records; its `integration-publication.json` receipt is uploaded separately.
+The local publication command requires the same explicit image-only and
+confirmation flags:
+
+```powershell
+npm run release:integration-publish -- <full-source-sha> --integration-images-only --confirm-integration-publication
+```
+
+The local integration deployment consumes the tracked draft manifest, pack
+provenance, and integration publication receipt. It checks the immutable
+publication result and anonymously verifies that each registry image config
+still carries the exact source SHA, source tree, and manifest version.
+AgentHost config and platform evidence are checked separately. The default is
+read-only; `--execute` is required to apply the nine shared P0 services. It
+then verifies the live images and ready pods and creates a local result with
+hashes of the resource readbacks.
+
+```powershell
+npm run release:deploy-integration -- `
+  --source-sha <full-source-sha> `
+  --manifest releases/foundation.json `
+  --provenance artifacts/release/integration/provenance.json `
+  --publication artifacts/release/integration/integration-publication.json `
+  --subscription-id 90ab3701-83f0-4ba1-a90a-f2e68683adab `
+  --tenant-id 72f988bf-86f1-41af-91ab-2d7cd011db47 `
+  --resource-group aw-v1-p0 `
+  --cluster aw-v1-p0-aks `
+  --namespace agentweaver-v1-p0 `
+  --node-min 2 `
+  --node-max 3 `
+  --provider-catalog-configmap <existing-configmap-name> `
+  --provider-catalog-source-commit <40-character-source-sha>
+```
+
+This integration mode is not a release or acceptance result. The existing
+`release:deploy` path remains the separate final-release gate and requires the
+published v1 release composition and its full publication evidence. Add
+`--execute` only when the read-only preflight has passed and a rollout is intended.
+
 The manually dispatched `v1 release pack` GitHub Actions workflow
 (`.github/workflows/v1-release-pack.yml`) validates and prepares the exact dispatch source.
 Dispatch requires the `v1` branch and an `expected_source` equal to the full dispatch SHA.
