@@ -19,7 +19,10 @@ import {
   verifyAzureTarget,
 } from '../deploy.mjs';
 import { componentImageRepository } from '../pack.mjs';
-import { createRuntimeList } from '../runtime-list.mjs';
+import {
+  brokerRunBindingFingerprint, createBrokerRunBindingPolicies, createRuntimeList,
+  validateBrokerRunBinding,
+} from '../runtime-list.mjs';
 import { run as runProcess } from '../../azure/lib/exec.mjs';
 import { projectIdentityRoutingReadback } from '../../azure/lib/identity-broker-routing.mjs';
 
@@ -485,6 +488,76 @@ test('runtime manifest preserves only the existing Azure Workload Identity pod l
     .spec.template.metadata.labels['azure.workload.identity/use'] = 'true';
   assert.throws(() => validateRuntimeManifest(unexpected, images, target.namespace),
     /existing Azure Workload Identity injection setting/);
+});
+
+test('Broker run binding is explicit, pins both Pod templates, and adds two narrow network policies', () => {
+  const manifest = releaseManifest();
+  const images = validatePublicationReceipt(publicationReceipt(manifest), manifest, sourceSha);
+  const binding = {
+    projectsOwnerAddress: 'https://projects-config.agentweaver-v1-p0.svc.cluster.local:8443/',
+    projectsAudience: 'https://projects.agentweaver.io/run-binding',
+    projectsServerCertificateSha256: 'a'.repeat(64),
+    projectsTrustBundleSha256: 'b'.repeat(64),
+  };
+  const defaultManifest = runtimeManifest(manifest);
+  assert.equal(defaultManifest.items.length, 18);
+
+  const rendered = validateRuntimeManifest(
+    createRuntimeList(images, target.namespace, {
+      configMapName: 'projects-config-provider-catalog',
+      sourceCommit: sourceSha,
+    }, binding),
+    images,
+    target.namespace,
+    binding,
+  );
+  assert.equal(rendered.items.length, 20);
+  const item = (kind, name) => rendered.items.find(resource =>
+    resource.kind === kind && resource.metadata.name === name);
+  const fingerprint = brokerRunBindingFingerprint(binding);
+  for (const name of ['identity-broker', 'projects-config']) {
+    assert.equal(item('Deployment', name).spec.template.metadata.annotations[
+      'agentweaver.io/broker-run-binding-sha256'], fingerprint);
+  }
+  const broker = item('Deployment', 'identity-broker').spec.template.spec;
+  assert.ok(broker.volumes.some(volume => volume.name === 'projects-ca' &&
+    volume.configMap?.name === 'service-backend-ca' && volume.configMap.defaultMode === 0o440));
+  assert.ok(broker.containers[0].volumeMounts.some(mount => mount.name === 'projects-ca' &&
+    mount.mountPath === '/var/run/service-backend-ca' && mount.readOnly === true));
+  const expectedPolicies = createBrokerRunBindingPolicies(target.namespace);
+  assert.equal(rendered.items.filter(resource => resource.kind === 'CiliumNetworkPolicy').length, 2);
+  for (const policy of expectedPolicies) {
+    assert.deepEqual(item('CiliumNetworkPolicy', policy.metadata.name), policy);
+  }
+  assert.throws(() => validateBrokerRunBinding({ ...binding, unused: true }), /must contain exactly/);
+  for (const projectsAudience of [
+    'agentweaver-projects-config',
+    'http://projects.agentweaver.io/run-binding',
+    'https://user@projects.agentweaver.io/run-binding',
+    'https://projects.agentweaver.io/run-binding?mode=1',
+    'https://projects.agentweaver.io/run-binding#section',
+  ]) {
+    assert.throws(() => validateBrokerRunBinding({ ...binding, projectsAudience }),
+      /absolute HTTPS URI without user info, query, or fragment/);
+  }
+
+  const removedPolicy = structuredClone(rendered);
+  removedPolicy.items = removedPolicy.items.filter(resource => resource.kind !== 'CiliumNetworkPolicy');
+  assert.throws(() => validateRuntimeManifest(removedPolicy, images, target.namespace, binding),
+    /exactly two Broker-to-Projects/);
+  const extraPolicy = structuredClone(rendered);
+  extraPolicy.items.push({
+    ...structuredClone(expectedPolicies[0]),
+    metadata: { ...expectedPolicies[0].metadata, name: 'extra-broker-run-binding-policy' },
+  });
+  assert.throws(() => validateRuntimeManifest(extraPolicy, images, target.namespace, binding),
+    /only the exact opt-in Broker-to-Projects Cilium policies/);
+  const alteredPolicy = structuredClone(rendered);
+  alteredPolicy.items.find(resource => resource.metadata?.name ===
+    'identity-broker-projects-egress')
+    .spec.egress[0].toPorts[0].ports[0].port = '443';
+  assert.throws(() => validateRuntimeManifest(alteredPolicy, images, target.namespace, binding),
+    /exact opt-in Broker-to-Projects/);
 });
 
 test('runtime manifest labels only Gateway and Orchestrator as Identity Broker clients', () => {
