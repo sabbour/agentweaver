@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
@@ -147,8 +148,16 @@ public sealed class IdentityBrokerWebApplicationFactory : WebApplicationFactory<
                     BaseAddress = new Uri(_fakeIdp.AuthorityUri),
                 };
             });
-            _configureServices?.Invoke(services);
         });
+
+        ConfigureTestServiceOverrides(builder, _configureServices);
+    }
+
+    internal static void ConfigureTestServiceOverrides(
+        IWebHostBuilder builder, Action<IServiceCollection>? configureServices)
+    {
+        if (configureServices is not null)
+            builder.ConfigureTestServices(configureServices);
     }
 
     protected override void Dispose(bool disposing)

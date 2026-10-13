@@ -104,6 +104,7 @@ const FUNCTIONS = {
   projects_config: [
     'reject_immutable_record_mutation()',
     'reject_authority_audit_mutation()',
+    'reject_project_setup_operation_mutation()',
     'lock_casting_authority(uuid, text, text, text, bigint, text, boolean)',
   ],
   environment: [],
