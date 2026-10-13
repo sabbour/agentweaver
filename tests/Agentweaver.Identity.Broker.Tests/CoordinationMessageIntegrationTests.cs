@@ -5333,8 +5333,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             try
             {
                 await page.GetByRole(AriaRole.Button, new() { Name = "Continue with Identity Broker" }).ClickAsync();
-                await page.GetByRole(AriaRole.Heading, new() { Name = "Review access" }).WaitForAsync();
-                await page.GetByRole(AriaRole.Button, new() { Name = "Approve" }).ClickAsync();
+                if (await WaitForConsentPromptOrTokenAsync(page, reverseProxy))
+                    await page.GetByRole(AriaRole.Button, new() { Name = "Approve" }).ClickAsync();
                 await page.GetByRole(AriaRole.Button, new() { Name = "Sign in for this project and run" }).WaitForAsync();
                 var browserToken = reverseProxy.BrokerAccessToken
                     ?? throw new InvalidOperationException("The browser did not redeem a Broker access token.");
@@ -5403,6 +5403,23 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             await RemoveBrowserRedirectUriAsync(browserRedirectUri);
             await StopWebClientAsync(webClient);
         }
+    }
+
+    private static async Task<bool> WaitForConsentPromptOrTokenAsync(
+        IPage page,
+        BrowserIntegrationReverseProxy reverseProxy)
+    {
+        var reviewAccess = page.GetByRole(AriaRole.Heading, new() { Name = "Review access" });
+        for (var attempt = 0; attempt < 600; attempt++)
+        {
+            if (await reviewAccess.IsVisibleAsync())
+                return true;
+            if (reverseProxy.BrokerAccessToken is not null)
+                return false;
+            await page.WaitForTimeoutAsync(50);
+        }
+
+        throw new TimeoutException("The Broker did not show a consent prompt or return an access token.");
     }
 
     private async Task AddBrowserRedirectUriAsync(string redirectUri)
