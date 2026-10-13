@@ -111,6 +111,12 @@ Runtime responses use `Cache-Control: no-store`.
 Authentication rejection returns `401`.
 Current-authority rejection returns `403` with the exact `code`.
 Invalid input returns `400`; owner, execution, or startup failure returns `503`.
+When a zero-credit denial is stored, the `403` response also includes
+`fixedCreditGuard` with the typed guard receipt and no-send evidence. If the guard
+is stored but evidence writing fails, the `503` response includes the stored guard
+receipt with no evidence. An incomplete native event range or failed guard write
+does not return stored receipts, and neither path writes turn content or sends a
+model request.
 The authenticated readiness route does not reuse the configured actor as permission for a different caller.
 The health route remains a process probe, not caller authorization.
 

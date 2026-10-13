@@ -88,7 +88,13 @@ public static class RuntimeAgentHostEndpoints
         }
         catch (RuntimeAuthorizationException failure)
         {
-            return Results.Json(new { code = failure.Code }, statusCode: StatusCodes.Status403Forbidden);
+            var statusCode = failure.Code is
+                "runtime_fixed_credit_guard_unavailable" or "runtime_fixed_credit_no_send_unavailable"
+                ? StatusCodes.Status503ServiceUnavailable
+                : StatusCodes.Status403Forbidden;
+            return failure.FixedCreditGuard is { } fixedCreditGuard
+                ? Results.Json(new { code = failure.Code, fixedCreditGuard }, statusCode: statusCode)
+                : Results.Json(new { code = failure.Code }, statusCode: statusCode);
         }
         catch (RuntimeStartupException failure)
         {

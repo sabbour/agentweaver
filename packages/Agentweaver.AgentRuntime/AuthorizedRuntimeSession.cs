@@ -113,7 +113,7 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             throw new RuntimeAuthorizationException("runtime_usage_affinity_unavailable");
     }
 
-    internal async Task RecordFixedCreditNoSendAsync(
+    internal async Task<RuntimeFixedCreditGuardReadResult> RecordFixedCreditNoSendAsync(
         RuntimeA2ASendRequest request, RuntimeHostSessionProof expectedProof,
         RuntimeUsageSourceHttpClient source, CancellationToken cancellationToken)
     {
@@ -162,8 +162,17 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
                 RuntimeFixedCreditGuardContract.ValidateSourceTuple(
                     receipt, Registration, grant, sourceReceipt);
 
-                var stored = await source.RecordFixedCreditGuardAsync(
-                    this, expectedProof, receipt, cancellationToken).ConfigureAwait(false);
+                RuntimeFixedCreditGuardReceipt stored;
+                try
+                {
+                    stored = await source.RecordFixedCreditGuardAsync(
+                        this, expectedProof, receipt, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception failure) when (IsOwnerPersistenceUnavailable(failure, cancellationToken))
+                {
+                    throw new RuntimeAuthorizationException(
+                        "runtime_fixed_credit_guard_unavailable", null, failure);
+                }
                 var evidence = RuntimeFixedCreditGuardContract.Seal(new RuntimeFixedCreditNoSendReceipt(
                     1, Registration.RuntimeInstanceId, Registration.Revision,
                     Registration.Binding.ExecutionFence, message.MessageId,
@@ -175,8 +184,23 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
                     range.IsComplete, _timeProvider.GetUtcNow(), string.Empty));
                 RuntimeFixedCreditGuardContract.ValidateEvidence(
                     evidence, stored, Registration, grant, sourceReceipt);
-                await source.RecordFixedCreditNoSendAsync(
-                    this, expectedProof, stored, evidence, cancellationToken).ConfigureAwait(false);
+                RuntimeFixedCreditNoSendReceipt storedEvidence;
+                try
+                {
+                    storedEvidence = await source.RecordFixedCreditNoSendAsync(
+                        this, expectedProof, stored, evidence, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception failure) when (IsOwnerPersistenceUnavailable(failure, cancellationToken))
+                {
+                    throw new RuntimeAuthorizationException(
+                        "runtime_fixed_credit_no_send_unavailable",
+                        new(stored, null), failure);
+                }
+                catch (RuntimeAuthorizationException failure)
+                {
+                    throw new RuntimeAuthorizationException(failure.Code, new(stored, null), failure);
+                }
+                return new(stored, storedEvidence);
             }
             finally
             {
@@ -188,6 +212,11 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             _executionGate.Release();
         }
     }
+
+    private static bool IsOwnerPersistenceUnavailable(Exception failure, CancellationToken cancellationToken) =>
+        failure is HttpRequestException ||
+        failure is OperationCanceledException && !cancellationToken.IsCancellationRequested ||
+        failure is RuntimeAuthorizationException { Code: "runtime_owner_unavailable" };
 
     internal async Task<(string Response, RuntimeNativeTurnRecordedReceipt Receipt)> SendNativeTurnAsync(
         RuntimeA2ASendRequest request, RuntimeSessionMaterialHttpClient material,

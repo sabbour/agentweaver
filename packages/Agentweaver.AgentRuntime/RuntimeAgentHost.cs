@@ -310,10 +310,11 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         if (session.Registration.Binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
             session.Registration.Binding.CopilotHardCreditLimit is 0)
         {
+            RuntimeFixedCreditGuardReadResult? fixedCreditGuard = null;
             if (_usageSource is { } source)
-                await session.RecordFixedCreditNoSendAsync(
+                fixedCreditGuard = await session.RecordFixedCreditNoSendAsync(
                     request, message.Metadata.Runtime, source, token).ConfigureAwait(false);
-            throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
+            throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted", fixedCreditGuard, null);
         }
         PendingTurn pending;
         lock (_queueLock)

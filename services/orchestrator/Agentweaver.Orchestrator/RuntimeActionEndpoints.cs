@@ -135,12 +135,12 @@ internal sealed class RuntimeActionOwner(
         RuntimeFixedCreditGuardContract.ValidateReadRequest(request);
         if (request.Authorization is not null)
             throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_request_invalid");
+        var store = RequireFixedCreditGuardStore(services);
         var registration = await registrations.ReadCurrentAsync(
             context, request.RuntimeInstanceId, cancellationToken).ConfigureAwait(false);
         if (registration.Revision != request.RegistrationRevision ||
             registration.Binding.ExecutionFence != request.ExecutionFence)
             throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
-        var store = RequireFixedCreditGuardStore(services);
         return await store.ExecuteLockedAsync(registration.RuntimeInstanceId,
             (connection, transaction, token) => registrations.ExecuteCurrentAsync(
                 context, registration.RuntimeInstanceId, async (current, currentToken) =>

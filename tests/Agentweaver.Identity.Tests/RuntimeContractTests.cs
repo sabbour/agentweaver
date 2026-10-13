@@ -1,12 +1,19 @@
 using System.Text;
 using System.Text.Json;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Xunit;
 
 namespace Agentweaver.Identity.Tests;
 
 public sealed class RuntimeContractTests
 {
+    [Fact]
+    public void RuntimeAuthorizationExceptionRetainsItsStringConstructor()
+    {
+        Assert.NotNull(typeof(RuntimeAuthorizationException).GetConstructor([typeof(string)]));
+    }
+
     [Theory]
     [InlineData(1, 0, false)]
     [InlineData(1, 1, true)]
