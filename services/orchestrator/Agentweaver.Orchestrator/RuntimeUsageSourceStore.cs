@@ -735,7 +735,167 @@ internal sealed class RuntimeUsageSourceStore(
         return request.Evidence;
     }
 
-    private async Task<RuntimeNativeTurnNoSendReceipt?> ReadNativeTurnNoSendWithinTransactionAsync(
+    internal async Task<RuntimeFixedCreditGuardReceipt> RecordFixedCreditGuardWithinTransactionAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
+        RuntimeFixedCreditGuardReceipt receipt, RuntimeGrantReceipt? grant,
+        RuntimeSdkSourceReceipt? sourceReceipt, CancellationToken cancellationToken)
+    {
+        RuntimeFixedCreditGuardContract.ValidateReceipt(receipt);
+        if (receipt.Registration != registration || (grant is null) != (sourceReceipt is null))
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
+        if (receipt.SourceGrantId is not null)
+        {
+            if (grant is null || sourceReceipt is null)
+                throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_source_invalid");
+            RuntimeFixedCreditGuardContract.ValidateSourceTuple(receipt, registration, grant, sourceReceipt);
+        }
+        else if (grant is not null || receipt.Stage == RuntimeFixedCreditGuardStage.HostPreQueue)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_source_invalid");
+
+        var existing = await ReadFixedCreditGuardWithinTransactionAsync(
+            connection, transaction, registration, receipt.Stage, receipt.RequestId, cancellationToken)
+            .ConfigureAwait(false);
+        if (existing is not null)
+        {
+            RequireFixedCreditGuardReplay(existing, receipt);
+            return existing;
+        }
+
+        var eventId = FixedCreditGuardEventId(receipt);
+        await _outbox.EnqueueAsync(connection, transaction, new OutboxEvent(
+            eventId,
+            FixedCreditGuardStream(registration),
+            $"fixed-credit-denial/{eventId:D}",
+            "orchestrator.runtime.fixed_credit_denial", 1,
+            JsonSerializer.SerializeToElement(receipt, JsonOptions),
+            receipt.RecordedAt), cancellationToken).ConfigureAwait(false);
+        return receipt;
+    }
+
+    internal async Task<RuntimeFixedCreditNoSendReceipt> RecordFixedCreditNoSendWithinTransactionAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
+        RuntimeGrantReceipt grant, RuntimeSdkSourceReceipt sourceReceipt,
+        RuntimeFixedCreditNoSendEvidenceRequest request, CancellationToken cancellationToken)
+    {
+        var stored = await ReadFixedCreditGuardWithinTransactionAsync(
+            connection, transaction, registration, request.Receipt.Stage,
+            request.Receipt.RequestId, cancellationToken).ConfigureAwait(false)
+            ?? throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
+        if (stored.CanonicalPayloadHash != request.Receipt.CanonicalPayloadHash)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
+        RuntimeFixedCreditGuardContract.ValidateSourceTuple(stored, registration, grant, sourceReceipt);
+        RuntimeFixedCreditGuardContract.ValidateEvidence(
+            request.Evidence, stored, registration, grant, sourceReceipt);
+
+        var existing = await ReadFixedCreditNoSendWithinTransactionAsync(
+            connection, transaction, registration, stored.CanonicalPayloadHash, cancellationToken)
+            .ConfigureAwait(false);
+        if (existing is not null)
+        {
+            RuntimeFixedCreditGuardContract.ValidateEvidence(
+                existing, stored, registration, grant, sourceReceipt);
+            return existing;
+        }
+
+        var eventId = FixedCreditNoSendEventId(stored.CanonicalPayloadHash);
+        await _outbox.EnqueueAsync(connection, transaction, new OutboxEvent(
+            eventId,
+            FixedCreditGuardStream(registration),
+            $"fixed-credit-no-send/{eventId:D}",
+            "orchestrator.runtime.fixed_credit_no_send", 1,
+            JsonSerializer.SerializeToElement(request.Evidence, JsonOptions),
+            request.Evidence.VerifiedAt), cancellationToken).ConfigureAwait(false);
+        return request.Evidence;
+    }
+
+    internal async Task<RuntimeFixedCreditGuardReadResult?> ReadFixedCreditGuardResultWithinTransactionAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
+        RuntimeFixedCreditGuardReadRequest request, bool includeEvidence,
+        RuntimeGrantReceipt? grant, RuntimeSdkSourceReceipt? sourceReceipt,
+        CancellationToken cancellationToken)
+    {
+        RuntimeFixedCreditGuardContract.ValidateReadRequest(request);
+        if (request.RuntimeInstanceId != registration.RuntimeInstanceId ||
+            request.RegistrationRevision != registration.Revision ||
+            request.ExecutionFence != registration.Binding.ExecutionFence)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
+        var receipt = await ReadFixedCreditGuardWithinTransactionAsync(
+            connection, transaction, registration, request.Stage, request.RequestId, cancellationToken)
+            .ConfigureAwait(false);
+        if (receipt is null)
+            return null;
+        if (receipt.RequestHash != request.RequestHash)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
+
+        RuntimeFixedCreditNoSendReceipt? evidence = null;
+        if (includeEvidence)
+        {
+            evidence = await ReadFixedCreditNoSendWithinTransactionAsync(
+                connection, transaction, registration, receipt.CanonicalPayloadHash, cancellationToken)
+                .ConfigureAwait(false);
+            if (evidence is not null)
+            {
+                if (grant is null || sourceReceipt is null)
+                    throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_source_invalid");
+                RuntimeFixedCreditGuardContract.ValidateEvidence(
+                    evidence, receipt, registration, grant, sourceReceipt);
+            }
+            else if (receipt.SourceGrantId is not null &&
+                (grant is null || sourceReceipt is null ||
+                 receipt.SourceGrantId != grant.GrantId ||
+                 receipt.SourceGrantRevision != grant.Revision ||
+                 receipt.SourceHash != RuntimeUsageSourceReceiptContract.HashSource(
+                     registration, sourceReceipt.Source)))
+                throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
+        }
+        return new(receipt, evidence);
+    }
+
+    internal async Task<RuntimeFixedCreditGuardReceipt?> ReadFixedCreditGuardWithinTransactionAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
+        RuntimeFixedCreditGuardStage stage, Guid requestId, CancellationToken cancellationToken)
+    {
+        if (!Enum.IsDefined(stage) || requestId == Guid.Empty)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_request_invalid");
+        await using var command = new NpgsqlCommand($"""
+            SELECT payload::text FROM {_outboxEvents}
+            WHERE stream_id = @stream AND event_type = 'orchestrator.runtime.fixed_credit_denial'
+                AND event_version = 1
+                AND payload->'registration'->>'runtimeInstanceId' = @runtime
+                AND payload->'registration'->>'revision' = @revision
+                AND payload->'registration'->'binding'->>'executionFence' = @fence
+                AND payload->>'stage' = @stage
+                AND payload->>'requestId' = @request
+            ORDER BY sequence DESC LIMIT 1
+            """, connection, transaction);
+        AddFixedCreditGuardScope(command, registration, stage, requestId);
+        var payload = (string?)await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        if (payload is null)
+            return null;
+        var receipt = Deserialize<RuntimeFixedCreditGuardReceipt>(payload);
+        RuntimeFixedCreditGuardContract.ValidateReceipt(receipt);
+        if (receipt.Registration != registration)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
+        return receipt;
+    }
+
+    private async Task<RuntimeFixedCreditNoSendReceipt?> ReadFixedCreditNoSendWithinTransactionAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
+        string guardReceiptHash, CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT payload::text FROM {_outboxEvents}
+            WHERE stream_id = @stream AND event_type = 'orchestrator.runtime.fixed_credit_no_send'
+                AND event_version = 1 AND payload->>'guardReceiptHash' = @guard
+            ORDER BY sequence DESC LIMIT 1
+            """, connection, transaction);
+        command.Parameters.AddWithValue("stream", NpgsqlDbType.Text, FixedCreditGuardStream(registration));
+        command.Parameters.AddWithValue("guard", NpgsqlDbType.Text, guardReceiptHash);
+        var payload = (string?)await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return payload is null ? null : Deserialize<RuntimeFixedCreditNoSendReceipt>(payload);
+    }
+
+    internal async Task<RuntimeNativeTurnNoSendReceipt?> ReadNativeTurnNoSendWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         string denialHash, CancellationToken cancellationToken)
     {
@@ -755,6 +915,31 @@ internal sealed class RuntimeUsageSourceStore(
     private static Guid NativeTurnNoSendEventId(string denialHash) =>
         Guid.ParseExact(RuntimeContractValidation.Hash(
             Encoding.UTF8.GetBytes($"native-turn-no-send\0{denialHash}"))[..32], "N");
+
+    private static string FixedCreditGuardStream(RuntimeRegistration registration) =>
+        $"coordination/{registration.Binding.ProjectId}/{registration.Binding.RunId}/fixed-credit-denials";
+
+    private static Guid FixedCreditGuardEventId(RuntimeFixedCreditGuardReceipt receipt) =>
+        Guid.ParseExact(RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
+            $"fixed-credit-denial\0{receipt.Registration.RuntimeInstanceId:D}\0" +
+            $"{receipt.Registration.Revision}\0{receipt.Registration.Binding.ExecutionFence}\0" +
+            $"{receipt.Stage}\0{receipt.RequestId:D}"))[..32], "N");
+
+    private static Guid FixedCreditNoSendEventId(string guardReceiptHash) =>
+        Guid.ParseExact(RuntimeContractValidation.Hash(
+            Encoding.UTF8.GetBytes($"fixed-credit-no-send\0{guardReceiptHash}"))[..32], "N");
+
+    private static void RequireFixedCreditGuardReplay(
+        RuntimeFixedCreditGuardReceipt existing, RuntimeFixedCreditGuardReceipt requested)
+    {
+        if (existing.Registration != requested.Registration ||
+            existing.RegistrationHash != requested.RegistrationHash ||
+            existing.RequestHash != requested.RequestHash ||
+            existing.SourceHash != requested.SourceHash ||
+            existing.SourceGrantId != requested.SourceGrantId ||
+            existing.SourceGrantRevision != requested.SourceGrantRevision)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
+    }
 
     internal async Task<RuntimeNativeTurnRecordedReceipt> ReadNativeTurnWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
@@ -984,6 +1169,20 @@ internal sealed class RuntimeUsageSourceStore(
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, registration.Binding.ProjectId);
         command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, registration.Binding.RunId);
         command.Parameters.AddWithValue("message", NpgsqlDbType.Uuid, messageId);
+    }
+
+    private static void AddFixedCreditGuardScope(
+        NpgsqlCommand command, RuntimeRegistration registration,
+        RuntimeFixedCreditGuardStage stage, Guid requestId)
+    {
+        command.Parameters.AddWithValue("stream", NpgsqlDbType.Text, FixedCreditGuardStream(registration));
+        command.Parameters.AddWithValue("runtime", NpgsqlDbType.Text, registration.RuntimeInstanceId.ToString("D"));
+        command.Parameters.AddWithValue("revision", NpgsqlDbType.Text,
+            registration.Revision.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("fence", NpgsqlDbType.Text,
+            registration.Binding.ExecutionFence.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        command.Parameters.AddWithValue("stage", NpgsqlDbType.Text, stage.ToString());
+        command.Parameters.AddWithValue("request", NpgsqlDbType.Text, requestId.ToString("D"));
     }
 
     private static async Task AcquireNativeExecutionLockAsync(

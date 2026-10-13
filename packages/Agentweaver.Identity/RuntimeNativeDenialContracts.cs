@@ -9,6 +9,83 @@ public enum RuntimeCreditLimitDenialStage { Preparation, NativeTurnBegin }
 
 public enum RuntimeCreditLimitDenialCode { HardLimitReached }
 
+[JsonConverter(typeof(JsonStringEnumConverter<RuntimeFixedCreditGuardStage>))]
+public enum RuntimeFixedCreditGuardStage { ActionAuthorize, ActionVerify, HostPreQueue }
+
+[JsonConverter(typeof(JsonStringEnumConverter<RuntimeFixedCreditGuardCode>))]
+public enum RuntimeFixedCreditGuardCode { HardLimitZero }
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeFixedCreditGuardReceipt(
+    int ContractVersion,
+    RuntimeFixedCreditGuardStage Stage,
+    RuntimeFixedCreditGuardCode Code,
+    RuntimeRegistration Registration,
+    string RegistrationHash,
+    Guid RequestId,
+    string RequestHash,
+    string? SourceHash,
+    Guid? SourceGrantId,
+    long? SourceGrantRevision,
+    DateTimeOffset RecordedAt,
+    string CanonicalPayloadHash);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeFixedCreditNoSendReceipt(
+    int ContractVersion,
+    Guid RuntimeInstanceId,
+    long RegistrationRevision,
+    long ExecutionFence,
+    Guid RequestId,
+    RuntimeFixedCreditGuardStage Stage,
+    string GuardReceiptHash,
+    string RegistrationHash,
+    string SourceHash,
+    Guid SourceGrantId,
+    long SourceGrantRevision,
+    string NativeSessionHash,
+    string BeforeCursorHash,
+    string AfterCursorHash,
+    int ObservedEventCount,
+    bool RangeComplete,
+    DateTimeOffset VerifiedAt,
+    string CanonicalPayloadHash);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeFixedCreditGuardRecordRequest(
+    RuntimeCredentialHttpRequest Authorization,
+    RuntimeFixedCreditGuardReceipt Receipt)
+{
+    public override string ToString() => nameof(RuntimeFixedCreditGuardRecordRequest) + " [REDACTED]";
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeFixedCreditNoSendEvidenceRequest(
+    RuntimeCredentialHttpRequest Authorization,
+    RuntimeFixedCreditGuardReceipt Receipt,
+    RuntimeFixedCreditNoSendReceipt Evidence)
+{
+    public override string ToString() => nameof(RuntimeFixedCreditNoSendEvidenceRequest) + " [REDACTED]";
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeFixedCreditGuardReadRequest(
+    RuntimeCredentialHttpRequest? Authorization,
+    Guid RuntimeInstanceId,
+    long RegistrationRevision,
+    long ExecutionFence,
+    RuntimeFixedCreditGuardStage Stage,
+    Guid RequestId,
+    string RequestHash)
+{
+    public override string ToString() => nameof(RuntimeFixedCreditGuardReadRequest) + " [REDACTED]";
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeFixedCreditGuardReadResult(
+    RuntimeFixedCreditGuardReceipt? Receipt,
+    RuntimeFixedCreditNoSendReceipt? Evidence);
+
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeNativeCreditDenialReceipt(
     int ContractVersion,
@@ -52,7 +129,9 @@ public sealed record RuntimeNativeCreditDenialReadRequest(
 }
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
-public sealed record RuntimeNativeCreditDenialReadResult(RuntimeNativeCreditDenialReceipt? Receipt);
+public sealed record RuntimeNativeCreditDenialReadResult(
+    RuntimeNativeCreditDenialReceipt? Receipt,
+    RuntimeNativeTurnNoSendReceipt? NoSend = null);
 
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeNativeTurnNoSendReceipt(
@@ -183,6 +262,30 @@ public static class RuntimeNativeDenialContract
         RuntimeContractValidation.ValidateHash(evidence.AfterCursorHash);
     }
 
+    public static void ValidateReadResult(
+        RuntimeNativeCreditDenialReadResult result,
+        RuntimeRegistration registration,
+        RuntimeSdkSourceReceipt sourceReceipt,
+        Guid dispatchId,
+        RuntimeCreditLimitDenialStage stage)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (result.Receipt is { } denial)
+        {
+            ValidateDenial(denial, registration, sourceReceipt);
+            if (denial.DispatchId != dispatchId || denial.Stage != stage)
+                throw new RuntimeAuthorizationException("runtime_native_credit_denial_conflict");
+        }
+        if (result.NoSend is { } evidence)
+        {
+            if (result.Receipt is not { } nativeDenial ||
+                stage != RuntimeCreditLimitDenialStage.NativeTurnBegin ||
+                nativeDenial.Stage != RuntimeCreditLimitDenialStage.NativeTurnBegin)
+                throw new RuntimeAuthorizationException("runtime_native_credit_denial_read_invalid");
+            ValidateNoSend(evidence, nativeDenial, registration, sourceReceipt);
+        }
+    }
+
     public static void ValidateRequest(
         RuntimeNativeTurnNoSendEvidenceRequest request,
         RuntimeRegistration registration,
@@ -234,4 +337,183 @@ public static class RuntimeNativeDenialContract
     private static string NoSendPayloadHash(RuntimeNativeTurnNoSendReceipt receipt) =>
         RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(
             receipt with { CanonicalPayloadHash = string.Empty }));
+}
+
+public static class RuntimeFixedCreditGuardContract
+{
+    public static RuntimeFixedCreditGuardReceipt Seal(
+        RuntimeFixedCreditGuardReceipt receipt) =>
+        receipt with { CanonicalPayloadHash = GuardPayloadHash(receipt) };
+
+    public static RuntimeFixedCreditNoSendReceipt Seal(
+        RuntimeFixedCreditNoSendReceipt evidence) =>
+        evidence with { CanonicalPayloadHash = EvidencePayloadHash(evidence) };
+
+    public static string HashHostRequest(RuntimeA2ASendRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var message = request.Message
+            ?? throw new ArgumentException("A host message is required.", nameof(request));
+        var metadata = message.Metadata
+            ?? throw new ArgumentException("Host message metadata is required.", nameof(request));
+        return RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            message.Kind,
+            message.MessageId,
+            message.ContextId,
+            message.Role,
+            message.Parts,
+            metadata.Runtime.Registration,
+            metadata.Runtime.Purpose,
+            metadata.DeliveryMode
+        }));
+    }
+
+    public static void ValidateReceipt(RuntimeFixedCreditGuardReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        ArgumentNullException.ThrowIfNull(receipt.Registration);
+        RuntimeContractValidation.Validate(receipt.Registration);
+        var registration = receipt.Registration;
+        var sourceParts = (receipt.SourceHash is not null ? 1 : 0) +
+            (receipt.SourceGrantId is not null ? 1 : 0) +
+            (receipt.SourceGrantRevision is not null ? 1 : 0);
+        if (receipt.ContractVersion != 1 ||
+            !Enum.IsDefined(receipt.Stage) ||
+            receipt.Code != RuntimeFixedCreditGuardCode.HardLimitZero ||
+            registration.Binding.ModelSourceMode != ModelSourceMode.HostedCopilot ||
+            registration.Binding.CopilotHardCreditLimit is not 0m ||
+            receipt.RequestId == Guid.Empty ||
+            receipt.RecordedAt == default ||
+            receipt.RegistrationHash != RuntimeContractValidation.RegistrationHash(registration) ||
+            sourceParts is not (0 or 3) ||
+            receipt.Stage == RuntimeFixedCreditGuardStage.HostPreQueue && sourceParts != 3 ||
+            receipt.SourceGrantId == Guid.Empty ||
+            receipt.SourceGrantRevision is <= 0)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_invalid");
+        RuntimeContractValidation.ValidateHash(receipt.RequestHash);
+        if (receipt.SourceHash is not null)
+            RuntimeContractValidation.ValidateHash(receipt.SourceHash);
+        if (receipt.CanonicalPayloadHash != GuardPayloadHash(receipt))
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_invalid");
+    }
+
+    public static void ValidateEvidence(
+        RuntimeFixedCreditNoSendReceipt evidence,
+        RuntimeFixedCreditGuardReceipt receipt,
+        RuntimeRegistration registration,
+        RuntimeGrantReceipt grant,
+        RuntimeSdkSourceReceipt sourceReceipt)
+    {
+        ArgumentNullException.ThrowIfNull(evidence);
+        ArgumentNullException.ThrowIfNull(receipt);
+        ArgumentNullException.ThrowIfNull(registration);
+        ArgumentNullException.ThrowIfNull(grant);
+        ArgumentNullException.ThrowIfNull(sourceReceipt);
+        ValidateSourceTuple(receipt, registration, grant, sourceReceipt);
+        var sourceHash = sourceReceipt.CanonicalPayloadHash;
+        if (receipt.Stage != RuntimeFixedCreditGuardStage.HostPreQueue ||
+            evidence.ContractVersion != 1 ||
+            evidence.RuntimeInstanceId != registration.RuntimeInstanceId ||
+            evidence.RegistrationRevision != registration.Revision ||
+            evidence.ExecutionFence != registration.Binding.ExecutionFence ||
+            evidence.RequestId != receipt.RequestId ||
+            evidence.Stage != receipt.Stage ||
+            evidence.GuardReceiptHash != receipt.CanonicalPayloadHash ||
+            evidence.RegistrationHash != receipt.RegistrationHash ||
+            evidence.SourceHash != sourceHash ||
+            evidence.SourceGrantId != grant.GrantId ||
+            evidence.SourceGrantRevision != grant.Revision ||
+            evidence.NativeSessionHash != RuntimeContractValidation.Hash(
+                Encoding.UTF8.GetBytes(sourceReceipt.Source.SdkSessionId)) ||
+            evidence.BeforeCursorHash != evidence.AfterCursorHash ||
+            evidence.ObservedEventCount != 0 ||
+            !evidence.RangeComplete ||
+            evidence.VerifiedAt == default ||
+            evidence.CanonicalPayloadHash != EvidencePayloadHash(evidence))
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_no_send_invalid");
+        RuntimeContractValidation.ValidateHash(evidence.NativeSessionHash);
+        RuntimeContractValidation.ValidateHash(evidence.BeforeCursorHash);
+        RuntimeContractValidation.ValidateHash(evidence.AfterCursorHash);
+    }
+
+    public static void ValidateSourceTuple(
+        RuntimeFixedCreditGuardReceipt receipt,
+        RuntimeRegistration registration,
+        RuntimeGrantReceipt grant,
+        RuntimeSdkSourceReceipt sourceReceipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        ArgumentNullException.ThrowIfNull(registration);
+        ArgumentNullException.ThrowIfNull(grant);
+        ArgumentNullException.ThrowIfNull(sourceReceipt);
+        ValidateReceipt(receipt);
+        RuntimeContractValidation.Validate(registration);
+        RuntimeUsageSourceReceiptContract.ValidateSource(registration, sourceReceipt.Source);
+        var sourceHash = RuntimeUsageSourceReceiptContract.HashSource(registration, sourceReceipt.Source);
+        if (sourceReceipt.RuntimeInstanceId != registration.RuntimeInstanceId ||
+            sourceReceipt.RegistrationRevision != registration.Revision ||
+            sourceReceipt.SourceGrantId != grant.GrantId ||
+            sourceReceipt.CanonicalPayloadHash != sourceHash ||
+            grant.RuntimeInstanceId != registration.RuntimeInstanceId ||
+            grant.RegistrationRevision != registration.Revision ||
+            receipt.Registration != registration ||
+            receipt.SourceHash != sourceHash ||
+            receipt.SourceGrantId != grant.GrantId ||
+            receipt.SourceGrantRevision != grant.Revision)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_source_invalid");
+    }
+
+    public static void ValidateReadRequest(RuntimeFixedCreditGuardReadRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.RuntimeInstanceId == Guid.Empty ||
+            request.RegistrationRevision <= 0 ||
+            request.ExecutionFence <= 0 ||
+            request.RequestId == Guid.Empty ||
+            !Enum.IsDefined(request.Stage))
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_request_invalid");
+        RuntimeContractValidation.ValidateHash(request.RequestHash);
+    }
+
+    public static void ValidateReadResult(
+        RuntimeFixedCreditGuardReadResult result,
+        RuntimeRegistration registration,
+        RuntimeFixedCreditGuardReadRequest request,
+        RuntimeGrantReceipt? grant = null,
+        RuntimeSdkSourceReceipt? sourceReceipt = null)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(registration);
+        ArgumentNullException.ThrowIfNull(request);
+        if (result.Receipt is not { } receipt)
+        {
+            if (result.Evidence is not null)
+                throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_read_invalid");
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_read_invalid");
+        }
+        ValidateReceipt(receipt);
+        if (receipt.Registration != registration ||
+            receipt.Registration.RuntimeInstanceId != request.RuntimeInstanceId ||
+            receipt.Registration.Revision != request.RegistrationRevision ||
+            receipt.Registration.Binding.ExecutionFence != request.ExecutionFence ||
+            receipt.Stage != request.Stage ||
+            receipt.RequestId != request.RequestId ||
+            receipt.RequestHash != request.RequestHash)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
+        if (result.Evidence is { } evidence)
+        {
+            if (grant is null || sourceReceipt is null)
+                throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_read_invalid");
+            ValidateEvidence(evidence, receipt, registration, grant, sourceReceipt);
+        }
+    }
+
+    private static string GuardPayloadHash(RuntimeFixedCreditGuardReceipt receipt) =>
+        RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(
+            receipt with { CanonicalPayloadHash = string.Empty }));
+
+    private static string EvidencePayloadHash(RuntimeFixedCreditNoSendReceipt evidence) =>
+        RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(
+            evidence with { CanonicalPayloadHash = string.Empty }));
 }

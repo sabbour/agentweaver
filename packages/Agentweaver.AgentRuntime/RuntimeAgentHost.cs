@@ -306,20 +306,15 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         var session = await RequireSessionAsync(message.Metadata.Runtime, actor, token).ConfigureAwait(false);
         if (message.ContextId != session.Facts.SdkSessionId)
             throw new RuntimeAuthorizationException("runtime_a2a_context_invalid");
+        var fingerprint = RuntimeFixedCreditGuardContract.HashHostRequest(request);
         if (session.Registration.Binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
             session.Registration.Binding.CopilotHardCreditLimit is 0)
-            throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
-        var fingerprint = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(new
         {
-            message.Kind,
-            message.MessageId,
-            message.ContextId,
-            message.Role,
-            message.Parts,
-            message.Metadata.Runtime.Registration,
-            message.Metadata.Runtime.Purpose,
-            message.Metadata.DeliveryMode
-        }));
+            if (_usageSource is { } source)
+                await session.RecordFixedCreditNoSendAsync(
+                    request, message.Metadata.Runtime, source, token).ConfigureAwait(false);
+            throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
+        }
         PendingTurn pending;
         lock (_queueLock)
         {

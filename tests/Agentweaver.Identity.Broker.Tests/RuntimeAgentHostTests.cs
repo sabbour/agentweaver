@@ -1405,6 +1405,57 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Fact]
+    public async Task ZeroHardCreditLimitRecordsNoSendAfterCompleteReadUsingRotatedSourceGrant()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 0m);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var ready = await fixture.ConfigureAsync(timeout.Token);
+        var originalProof = fixture.Proof(ready);
+        var refreshed = await fixture.Host.RefreshAsync(
+            new(originalProof, Guid.NewGuid()), fixture.Actor, timeout.Token);
+        Assert.Equal(2, refreshed.SourceGrant.Revision);
+        var proof = originalProof with { SourceGrantRevision = refreshed.SourceGrant.Revision };
+        var message = fixture.Message(proof);
+        fixture.Sdk.RequestObserved = method => fixture.FixedCreditPathEvents.Enqueue($"sdk:{method}");
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+
+        Assert.Equal("runtime_cost_budget_exhausted", failure.Code);
+        var receipt = Assert.Single(fixture.FixedCreditGuards);
+        Assert.Equal(refreshed.SourceGrant.GrantId, receipt.SourceGrantId);
+        Assert.Equal(refreshed.SourceGrant.Revision, receipt.SourceGrantRevision);
+        Assert.Equal(message.Message.MessageId, receipt.RequestId);
+        Assert.Equal(RuntimeFixedCreditGuardContract.HashHostRequest(message), receipt.RequestHash);
+        var evidence = Assert.Single(fixture.FixedCreditNoSendEvidence);
+        Assert.Equal(receipt.CanonicalPayloadHash, evidence.GuardReceiptHash);
+        Assert.Equal(refreshed.SourceGrant.Revision, evidence.SourceGrantRevision);
+        Assert.Equal(0, evidence.ObservedEventCount);
+        Assert.True(evidence.RangeComplete);
+        var replayFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+        Assert.Equal("runtime_cost_budget_exhausted", replayFailure.Code);
+        var receipts = fixture.FixedCreditGuards.ToArray();
+        Assert.Equal(2, receipts.Length);
+        Assert.Equal(receipt, receipts[1]);
+        var evidences = fixture.FixedCreditNoSendEvidence.ToArray();
+        Assert.Equal(2, evidences.Length);
+        Assert.Equal(evidence, evidences[1]);
+        var path = fixture.FixedCreditPathEvents.ToArray();
+        var tail = Array.IndexOf(path, "sdk:session.eventLog.tail");
+        var read = Array.IndexOf(path, "sdk:session.eventLog.read");
+        var record = Array.IndexOf(path, "fixed-credit-record");
+        var replayTail = Array.FindIndex(path, record + 1, item => item == "sdk:session.eventLog.tail");
+        var replayRead = Array.FindIndex(path, read + 1, item => item == "sdk:session.eventLog.read");
+        var replayRecord = Array.LastIndexOf(path, "fixed-credit-record");
+        Assert.True(tail >= 0 && tail < read && read < record &&
+            replayTail > record && replayTail < replayRead && replayRead < replayRecord,
+            "Each native event range must be read completely before its fixed-credit receipt is recorded.");
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.DoesNotContain(fixture.Material, material => material.Kind == SessionMaterialKind.TurnContent);
+    }
+
+    [Fact]
     public async Task UnbudgetedHostedCopilotKeepsLegacyStartupAndSelectionHash()
     {
         await using var fixture = new HostFixture();
@@ -1741,6 +1792,12 @@ public sealed class RuntimeAgentHostTests
         private int _position;
         private readonly ConcurrentDictionary<Guid, SessionMaterialReadResult> _material = new();
         private readonly ConcurrentDictionary<Guid, SessionMaterialWriteRequest> _materialWrites = new();
+        private readonly ConcurrentDictionary<
+            (Guid RuntimeId, long RegistrationRevision, long ExecutionFence,
+                RuntimeFixedCreditGuardStage Stage, Guid RequestId),
+            RuntimeFixedCreditGuardReceipt> _fixedCreditGuardRecords = new();
+        private readonly ConcurrentDictionary<string, RuntimeFixedCreditNoSendReceipt> _fixedCreditNoSendRecords =
+            new(StringComparer.Ordinal);
         public HostFixture(
             ModelSourceMode sourceMode = ModelSourceMode.HostedCopilot,
             decimal? hardCreditLimit = null,
@@ -1863,6 +1920,9 @@ public sealed class RuntimeAgentHostTests
         public ConcurrentQueue<RuntimeUsageSourceReceipt> Usage { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnBeginRequest> NativeAdmissions { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnNoSendEvidenceRequest> NativeNoSendEvidence { get; } = new();
+        public ConcurrentQueue<RuntimeFixedCreditGuardReceipt> FixedCreditGuards { get; } = new();
+        public ConcurrentQueue<RuntimeFixedCreditNoSendReceipt> FixedCreditNoSendEvidence { get; } = new();
+        public ConcurrentQueue<string> FixedCreditPathEvents { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnObservationRequest> NativeObservations { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnAccountingRequest> NativeAccounting { get; } = new();
         public ConcurrentQueue<Guid> CostTurnRequests { get; } = new();
@@ -2255,6 +2315,52 @@ public sealed class RuntimeAgentHostTests
                     costBinding, CostPreflightPriced, CostPreflightPriced ? null : "fixture-unpriced");
                 NativePathEvents.Enqueue("preflight");
                 return Response(request, receipt);
+            }
+            if (path == "/internal/runtime/turns/fixed-credit-denials/record")
+            {
+                var record = await ReadAsync<RuntimeFixedCreditGuardRecordRequest>(request, token);
+                var grant = Grant(_source, RuntimeCredentialPurpose.Observe, revision: _sourceRevision);
+                var sourceReceipt = new RuntimeSdkSourceReceipt(
+                    Registration.RuntimeInstanceId, Registration.Revision, grant.GrantId, _facts!,
+                    RuntimeUsageSourceReceiptContract.HashSource(Registration, _facts!), Time.GetUtcNow());
+                Assert.Equal(_sourceRevision, record.Authorization.Revision);
+                RuntimeFixedCreditGuardContract.ValidateSourceTuple(
+                    record.Receipt, Registration, grant, sourceReceipt);
+                var key = (Registration.RuntimeInstanceId, Registration.Revision,
+                    Registration.Binding.ExecutionFence, record.Receipt.Stage, record.Receipt.RequestId);
+                var stored = _fixedCreditGuardRecords.GetOrAdd(key, record.Receipt);
+                if (stored.RequestHash != record.Receipt.RequestHash ||
+                    stored.SourceHash != record.Receipt.SourceHash ||
+                    stored.SourceGrantId != record.Receipt.SourceGrantId ||
+                    stored.SourceGrantRevision != record.Receipt.SourceGrantRevision)
+                    throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
+                RuntimeFixedCreditGuardContract.ValidateSourceTuple(
+                    stored, Registration, grant, sourceReceipt);
+                FixedCreditGuards.Enqueue(stored);
+                FixedCreditPathEvents.Enqueue("fixed-credit-record");
+                return Response(request, stored);
+            }
+            if (path == "/internal/runtime/turns/fixed-credit-denials/no-send")
+            {
+                var evidence = await ReadAsync<RuntimeFixedCreditNoSendEvidenceRequest>(request, token);
+                var grant = Grant(_source, RuntimeCredentialPurpose.Observe, revision: _sourceRevision);
+                var sourceReceipt = new RuntimeSdkSourceReceipt(
+                    Registration.RuntimeInstanceId, Registration.Revision, grant.GrantId, _facts!,
+                    RuntimeUsageSourceReceiptContract.HashSource(Registration, _facts!), Time.GetUtcNow());
+                Assert.Equal(_sourceRevision, evidence.Authorization.Revision);
+                RuntimeFixedCreditGuardContract.ValidateEvidence(
+                    evidence.Evidence, evidence.Receipt, Registration, grant, sourceReceipt);
+                var key = (Registration.RuntimeInstanceId, Registration.Revision,
+                    Registration.Binding.ExecutionFence, evidence.Receipt.Stage, evidence.Receipt.RequestId);
+                Assert.True(_fixedCreditGuardRecords.TryGetValue(key, out var storedGuard));
+                Assert.Equal(storedGuard, evidence.Receipt);
+                var stored = _fixedCreditNoSendRecords.GetOrAdd(
+                    evidence.Receipt.CanonicalPayloadHash, evidence.Evidence);
+                RuntimeFixedCreditGuardContract.ValidateEvidence(
+                    stored, storedGuard!, Registration, grant, sourceReceipt);
+                FixedCreditNoSendEvidence.Enqueue(stored);
+                FixedCreditPathEvents.Enqueue("fixed-credit-no-send");
+                return Response(request, stored);
             }
             if (path.StartsWith("/internal/runtime/sources/", StringComparison.Ordinal))
             {

@@ -40,6 +40,13 @@ and `MaxPromptTokens` remain unsupported and fail before SDK setup.
 The SDK has prompt-capacity configuration, but that alone does not establish
 end-to-end limit enforcement.
 These boundaries do not count the SDK's internal model API calls.
+For a zero Hosted Copilot hard limit, startup remains allowed, but the host
+blocks a message before it enters the turn queue. It reads the native event log
+and requires a complete empty range before the owner stores a guard receipt and
+linked no-send evidence. The receipt binds the message hash and current Observe
+grant, not the prompt text. An incomplete range or failed owner write fails
+closed. Orchestrator also stores a stage-specific receipt before denying a
+model-turn action at its authorization or verification boundary.
 
 Before native session creation, AgentHost reads skills through the current runtime
 registration. Orchestrator checks the accepted run selection and current read
@@ -183,7 +190,7 @@ Unsupported control characters, such as NUL, deny before dispatch.
 It does not interrupt an active native turn.
 
 Hosted Copilot runs with no hard credit limit retain legacy startup and do not require a price quote.
-A zero hard limit permits startup but blocks model-turn dispatch. A positive hard limit requires a priceable source and workflow-bound dispatch admission against observed whole-run usage; an unbound positive hard limit is rejected before readiness.
+A zero hard limit permits startup but blocks model-turn dispatch after the host records the complete-empty-range proof described above. A positive hard limit requires a priceable source and workflow-bound dispatch admission against observed whole-run usage; an unbound positive hard limit is rejected before readiness.
 BYOK remains token-metered and does not use the Copilot nano-AIU price preflight.
 An exact message replay shares the original completion; changed content under the same ID denies.
 Completed responses remain available for the configured host lifetime, independent of the pending-turn limit.
@@ -354,7 +361,13 @@ Observed pricing and accounting-source finality are separate facts.
 
 ```mermaid
 flowchart LR
-    N["Current source and MAF intent"] --> Q{"Whole-run model slot available?"}
+    N["Current source and MAF intent"] --> Z{"Hosted Copilot hard limit is zero?"}
+    Z -->|"Yes"| ZeroCursor["Host reads native event log before queueing"]
+    ZeroCursor --> EmptyRange{"Complete empty range?"}
+    EmptyRange -->|"No"| ZeroFail["Fail closed; do not record no-send proof"]
+    EmptyRange -->|"Yes"| ZeroProof["Owner stores fixed-zero guard and linked no-send proof"]
+    ZeroProof --> BudgetError
+    Z -->|"No"| Q{"Whole-run model slot available?"}
     Q -->|"No"| R["Deny new send; retain existing reservations"]
     Q -->|"Yes or exact replay"| A["Prepared immutable MAF intent and reserved slot"]
     A --> P["Current Policy grant matches dispatch and prompt"]

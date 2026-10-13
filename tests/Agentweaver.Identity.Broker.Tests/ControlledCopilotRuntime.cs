@@ -35,6 +35,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
     }
 
     public ConcurrentQueue<(string Method, JsonElement Parameters)> Requests { get; } = [];
+    public Action<string>? RequestObserved { get; set; }
     public string ModelId { get; set; } = "controlled-model";
     public string RuntimeVersion { get; set; } = "controlled-runtime-v1";
     public string SdkCredential { get; set; } = "ghu_external-sdk-credential";
@@ -253,6 +254,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                     if (parameters.ValueKind == JsonValueKind.Array && parameters.GetArrayLength() > 0)
                         parameters = parameters[0];
                     Requests.Enqueue((method, parameters.Clone()));
+                    RequestObserved?.Invoke(method);
                     Console.WriteLine($"Controlled native SDK {DateTimeOffset.UtcNow:O}: {method} received.");
                     object result;
                     switch (method)

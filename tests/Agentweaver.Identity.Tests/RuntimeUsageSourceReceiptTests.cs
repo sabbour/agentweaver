@@ -581,6 +581,174 @@ public sealed class RuntimeUsageSourceReceiptTests
             });
     }
 
+    [Fact]
+    public void FixedCreditGuardReceiptRetainsRegistrationAndBindsTheExactActionRequest()
+    {
+        var native = Receipt();
+        var registration = native.Registration with
+        {
+            Binding = native.Registration.Binding with { CopilotHardCreditLimit = 0m }
+        };
+        var action = new RuntimeActionRequest(
+            1, registration.RuntimeInstanceId, registration.Revision,
+            registration.Binding.ExecutionFence, Guid.NewGuid(), "model.turn",
+            RuntimeContractValidation.Hash("bounded input"u8));
+        var receipt = RuntimeFixedCreditGuardContract.Seal(new RuntimeFixedCreditGuardReceipt(
+            1, RuntimeFixedCreditGuardStage.ActionAuthorize, RuntimeFixedCreditGuardCode.HardLimitZero,
+            registration, RuntimeContractValidation.RegistrationHash(registration), action.EventId,
+            RuntimeActionContract.Hash(action), null, null, null, DateTimeOffset.UtcNow, string.Empty));
+
+        RuntimeFixedCreditGuardContract.ValidateReceipt(receipt);
+        Assert.Equal(registration, receipt.Registration);
+        Assert.Equal(action.EventId, receipt.RequestId);
+        Assert.Equal(RuntimeActionContract.Hash(action), receipt.RequestHash);
+        Assert.DoesNotContain("bounded input", JsonSerializer.Serialize(receipt), StringComparison.Ordinal);
+        Assert.DoesNotContain("credential", JsonSerializer.Serialize(receipt), StringComparison.OrdinalIgnoreCase);
+
+        var hostReceiptWithoutSource = RuntimeFixedCreditGuardContract.Seal(receipt with
+        {
+            Stage = RuntimeFixedCreditGuardStage.HostPreQueue
+        });
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+        {
+            RuntimeFixedCreditGuardContract.ValidateReceipt(hostReceiptWithoutSource);
+        });
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+        {
+            RuntimeFixedCreditGuardContract.ValidateReceipt(
+                RuntimeFixedCreditGuardContract.Seal(receipt with { SourceHash = new string('a', 64) }));
+        });
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+        {
+            RuntimeFixedCreditGuardContract.ValidateReceipt(RuntimeFixedCreditGuardContract.Seal(receipt with
+            {
+                Registration = registration with
+                {
+                    Binding = registration.Binding with { CopilotHardCreditLimit = 1m }
+                }
+            }));
+        });
+    }
+
+    [Fact]
+    public void FixedCreditNoSendEvidenceRequiresCurrentGrantAndCompleteEmptySdkRange()
+    {
+        var native = Receipt();
+        var registration = native.Registration with
+        {
+            Binding = native.Registration.Binding with { CopilotHardCreditLimit = 0m }
+        };
+        var source = native.Usage.SdkSource!;
+        var grant = new RuntimeGrantReceipt(
+            Guid.NewGuid(), registration.RuntimeInstanceId, registration.Revision, 7,
+            registration.Binding.ActorIssuer, RuntimeCredentialPurpose.Observe,
+            registration.Binding.ObservationEndpoint, RuntimeCredentialState.Active,
+            new string('a', 64), registration.ExpiresAt, DateTimeOffset.UtcNow);
+        var sourceHash = RuntimeUsageSourceReceiptContract.HashSource(registration, source);
+        var sourceReceipt = new RuntimeSdkSourceReceipt(
+            registration.RuntimeInstanceId, registration.Revision, grant.GrantId,
+            source, sourceHash, DateTimeOffset.UtcNow);
+        var messageId = Guid.NewGuid();
+        var request = new RuntimeA2ASendRequest(new(
+            "message", messageId, source.SdkSessionId, "user",
+            [new("text", "A protected prompt.")],
+            new(new(1, registration, grant.GrantId, grant.Revision, RuntimeCredentialPurpose.Observe),
+                AddressedMessageDeliveryMode.Immediate)));
+        var requestHash = RuntimeFixedCreditGuardContract.HashHostRequest(request);
+        var receipt = RuntimeFixedCreditGuardContract.Seal(new RuntimeFixedCreditGuardReceipt(
+            1, RuntimeFixedCreditGuardStage.HostPreQueue, RuntimeFixedCreditGuardCode.HardLimitZero,
+            registration, RuntimeContractValidation.RegistrationHash(registration), messageId,
+            requestHash, sourceHash, grant.GrantId, grant.Revision, DateTimeOffset.UtcNow, string.Empty));
+        RuntimeFixedCreditGuardContract.ValidateSourceTuple(receipt, registration, grant, sourceReceipt);
+        var cursorHash = new string('d', 64);
+        var evidence = RuntimeFixedCreditGuardContract.Seal(new RuntimeFixedCreditNoSendReceipt(
+            1, registration.RuntimeInstanceId, registration.Revision, registration.Binding.ExecutionFence,
+            messageId, RuntimeFixedCreditGuardStage.HostPreQueue, receipt.CanonicalPayloadHash,
+            receipt.RegistrationHash, sourceHash, grant.GrantId, grant.Revision,
+            RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(source.SdkSessionId)),
+            cursorHash, cursorHash, 0, true, DateTimeOffset.UtcNow, string.Empty));
+
+        RuntimeFixedCreditGuardContract.ValidateEvidence(
+            evidence, receipt, registration, grant, sourceReceipt);
+        Assert.NotEqual(registration.Revision, evidence.SourceGrantRevision);
+        Assert.DoesNotContain("A protected prompt", JsonSerializer.Serialize(receipt), StringComparison.Ordinal);
+
+        var read = new RuntimeFixedCreditGuardReadRequest(
+            null, registration.RuntimeInstanceId, registration.Revision,
+            registration.Binding.ExecutionFence, receipt.Stage, receipt.RequestId, receipt.RequestHash);
+        RuntimeFixedCreditGuardContract.ValidateReadResult(
+            new(receipt, null), registration, read);
+        RuntimeFixedCreditGuardContract.ValidateReadResult(
+            new(receipt, evidence), registration, read, grant, sourceReceipt);
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+        {
+            RuntimeFixedCreditGuardContract.ValidateReadResult(
+                new(null, evidence), registration, read, grant, sourceReceipt);
+        });
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+        {
+            RuntimeFixedCreditGuardContract.ValidateReadResult(
+                new(receipt, evidence), registration, read with { RequestHash = new string('e', 64) },
+                grant, sourceReceipt);
+        });
+
+        foreach (var invalid in new[]
+        {
+            RuntimeFixedCreditGuardContract.Seal(evidence with { ObservedEventCount = 1 }),
+            RuntimeFixedCreditGuardContract.Seal(evidence with { RangeComplete = false }),
+            RuntimeFixedCreditGuardContract.Seal(evidence with { AfterCursorHash = new string('e', 64) }),
+            RuntimeFixedCreditGuardContract.Seal(evidence with { SourceGrantRevision = registration.Revision }),
+            RuntimeFixedCreditGuardContract.Seal(evidence with { GuardReceiptHash = new string('f', 64) })
+        })
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+            {
+                RuntimeFixedCreditGuardContract.ValidateEvidence(
+                    invalid, receipt, registration, grant, sourceReceipt);
+            });
+    }
+
+    [Fact]
+    public void NativeDenialReadRejectsUnpairedOrWrongRequestNoSendEvidence()
+    {
+        var native = Receipt();
+        var registration = native.Registration with
+        {
+            Binding = native.Registration.Binding with { CopilotHardCreditLimit = 5m }
+        };
+        var source = native.Usage.SdkSource!;
+        var sourceReceipt = new RuntimeSdkSourceReceipt(
+            registration.RuntimeInstanceId, registration.Revision, Guid.NewGuid(), source,
+            RuntimeUsageSourceReceiptContract.HashSource(registration, source), DateTimeOffset.UtcNow);
+        var denial = NativeCreditDenial(
+            registration, sourceReceipt, RuntimeCreditLimitDenialStage.NativeTurnBegin);
+        var cursorHash = new string('d', 64);
+        var evidence = RuntimeNativeDenialContract.SealNoSend(new(
+            1, registration.RuntimeInstanceId, registration.Revision, denial.DispatchId,
+            denial.CanonicalPayloadHash, denial.RegistrationHash, denial.SourceHash,
+            RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(source.SdkSessionId)),
+            cursorHash, cursorHash, 0, true, DateTimeOffset.UtcNow, string.Empty));
+        var request = new RuntimeNativeCreditDenialReadRequest(
+            new(Guid.NewGuid(), registration.RuntimeInstanceId, 1, RuntimeCredentialPurpose.Observe,
+                registration.Binding.ObservationEndpoint, new string('a', 64),
+                new string('a', 64), DateTimeOffset.UtcNow.AddMinutes(1), Guid.Empty),
+            denial.DispatchId, RuntimeCreditLimitDenialStage.NativeTurnBegin);
+
+        RuntimeNativeDenialContract.ValidateReadResult(
+            new(denial), registration, sourceReceipt, denial.DispatchId, request.Stage);
+        RuntimeNativeDenialContract.ValidateReadResult(
+            new(denial, evidence), registration, sourceReceipt, denial.DispatchId, request.Stage);
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeNativeDenialContract.ValidateReadResult(
+                new(null, evidence), registration, sourceReceipt, denial.DispatchId, request.Stage));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeNativeDenialContract.ValidateReadResult(
+                new(denial, evidence), registration, sourceReceipt, Guid.NewGuid(), request.Stage));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeNativeDenialContract.ValidateReadResult(
+                new(denial, evidence), registration, sourceReceipt, denial.DispatchId,
+                RuntimeCreditLimitDenialStage.Preparation));
+    }
+
     private static RuntimeNativeCreditDenialReceipt NativeCreditDenial(
         RuntimeRegistration registration, RuntimeSdkSourceReceipt sourceReceipt,
         RuntimeCreditLimitDenialStage stage = RuntimeCreditLimitDenialStage.Preparation)

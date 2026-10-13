@@ -113,6 +113,82 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             throw new RuntimeAuthorizationException("runtime_usage_affinity_unavailable");
     }
 
+    internal async Task RecordFixedCreditNoSendAsync(
+        RuntimeA2ASendRequest request, RuntimeHostSessionProof expectedProof,
+        RuntimeUsageSourceHttpClient source, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(expectedProof);
+        ArgumentNullException.ThrowIfNull(source);
+        var message = request.Message
+            ?? throw new RuntimeAuthorizationException("runtime_a2a_message_invalid");
+        var requestHash = RuntimeFixedCreditGuardContract.HashHostRequest(request);
+        if (message.MessageId == Guid.Empty ||
+            expectedProof.ContractVersion != 1 || expectedProof.Registration != Registration ||
+            expectedProof.Purpose != RuntimeCredentialPurpose.Observe ||
+            Registration.Binding.ModelSourceMode != ModelSourceMode.HostedCopilot ||
+            Registration.Binding.CopilotHardCreditLimit is not 0m)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_invalid");
+
+        await _executionGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await _authorityGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                RequireTurnAdmission();
+                RequireExpectedSourceGrant(expectedProof);
+                await RequireCurrentCoreAsync(cancellationToken).ConfigureAwait(false);
+                var beforeCursor = await _session.CaptureNativeEventCursorAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                var range = await _session.RequireNoNativeEventsSinceAsync(beforeCursor, cancellationToken)
+                    .ConfigureAwait(false);
+                if (!range.IsComplete || range.ObservedEventCount != 0 ||
+                    range.BeforeCursorHash != range.AfterCursorHash)
+                    throw new RuntimeAuthorizationException("runtime_fixed_credit_no_send_invalid");
+                await RequireCurrentCoreAsync(cancellationToken).ConfigureAwait(false);
+                RequireExpectedSourceGrant(expectedProof);
+
+                var grant = SourceGrant;
+                var sourceReceipt = new RuntimeSdkSourceReceipt(
+                    Registration.RuntimeInstanceId, Registration.Revision, grant.GrantId, Facts,
+                    RuntimeUsageSourceReceiptContract.HashSource(Registration, Facts),
+                    _timeProvider.GetUtcNow());
+                var receipt = RuntimeFixedCreditGuardContract.Seal(new RuntimeFixedCreditGuardReceipt(
+                    1, RuntimeFixedCreditGuardStage.HostPreQueue, RuntimeFixedCreditGuardCode.HardLimitZero,
+                    Registration, RuntimeContractValidation.RegistrationHash(Registration),
+                    message.MessageId, requestHash, sourceReceipt.CanonicalPayloadHash,
+                    grant.GrantId, grant.Revision, _timeProvider.GetUtcNow(), string.Empty));
+                RuntimeFixedCreditGuardContract.ValidateSourceTuple(
+                    receipt, Registration, grant, sourceReceipt);
+
+                var stored = await source.RecordFixedCreditGuardAsync(
+                    this, expectedProof, receipt, cancellationToken).ConfigureAwait(false);
+                var evidence = RuntimeFixedCreditGuardContract.Seal(new RuntimeFixedCreditNoSendReceipt(
+                    1, Registration.RuntimeInstanceId, Registration.Revision,
+                    Registration.Binding.ExecutionFence, message.MessageId,
+                    RuntimeFixedCreditGuardStage.HostPreQueue, stored.CanonicalPayloadHash,
+                    receipt.RegistrationHash, sourceReceipt.CanonicalPayloadHash,
+                    grant.GrantId, grant.Revision,
+                    RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(Facts.SdkSessionId)),
+                    range.BeforeCursorHash, range.AfterCursorHash, range.ObservedEventCount,
+                    range.IsComplete, _timeProvider.GetUtcNow(), string.Empty));
+                RuntimeFixedCreditGuardContract.ValidateEvidence(
+                    evidence, stored, Registration, grant, sourceReceipt);
+                await source.RecordFixedCreditNoSendAsync(
+                    this, expectedProof, stored, evidence, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                _authorityGate.Release();
+            }
+        }
+        finally
+        {
+            _executionGate.Release();
+        }
+    }
+
     internal async Task<(string Response, RuntimeNativeTurnRecordedReceipt Receipt)> SendNativeTurnAsync(
         RuntimeA2ASendRequest request, RuntimeSessionMaterialHttpClient material,
         RuntimeUsageSourceHttpClient source, CancellationToken cancellationToken)
@@ -411,6 +487,14 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
     {
         if (Volatile.Read(ref _suspended) != 0)
             throw new RuntimeAuthorizationException("runtime_session_suspended");
+    }
+
+    private void RequireExpectedSourceGrant(RuntimeHostSessionProof proof)
+    {
+        var grant = SourceGrant;
+        if (proof.Registration != Registration || proof.Purpose != RuntimeCredentialPurpose.Observe ||
+            proof.SourceGrantId != grant.GrantId || proof.SourceGrantRevision != grant.Revision)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_source_invalid");
     }
 
     public async IAsyncEnumerable<RuntimeUsageSourceReceipt> CommitUsageAsync(
