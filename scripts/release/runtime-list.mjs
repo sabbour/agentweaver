@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 const SERVICE_NAMES = Object.freeze([
   'identity-broker',
   'events-and-sessions',
@@ -13,6 +15,19 @@ const SERVICE_NAMES = Object.freeze([
 const TARGET_NAMESPACE = 'agentweaver-v1-p0';
 const TLS_MODE = 0o440;
 const BACKEND_TLS_CA_CONFIGMAP = 'service-backend-ca';
+export const BROKER_RUN_BINDING_EGRESS_POLICY_NAME = 'identity-broker-projects-egress';
+export const BROKER_RUN_BINDING_INGRESS_POLICY_NAME = 'projects-config-broker-ingress';
+export const BROKER_RUN_BINDING_POLICY_LABEL = 'agentweaver.io/run-binding';
+export const BROKER_RUN_BINDING_ANNOTATION = 'agentweaver.io/broker-run-binding-sha256';
+export const BROKER_RUN_BINDING_CA_BUNDLE_PATH = '/var/run/service-backend-ca/ca.crt';
+export const PROJECTS_CONFIG_TLS_CERTIFICATE_PATH = '/var/run/projects-config-tls/tls.crt';
+export const PROJECTS_CONFIG_TLS_KEY_PATH = '/var/run/projects-config-tls/tls.key';
+const BROKER_RUN_BINDING_FIELDS = Object.freeze([
+  'projectsOwnerAddress',
+  'projectsAudience',
+  'projectsServerCertificateSha256',
+  'projectsTrustBundleSha256',
+]);
 const WORKLOAD_IDENTITY_SERVICES = new Set([
   'identity-broker', 'events-and-sessions', 'environment', 'knowledge', 'orchestrator', 'projects-config',
 ]);
@@ -29,7 +44,111 @@ function requiredImage(images, name) {
   return image;
 }
 
-function createWorkload(name, image, namespace, providerCatalog, agentHost) {
+export function validateBrokerRunBinding(binding) {
+  if (!binding || typeof binding !== 'object' || Array.isArray(binding)) {
+    fail('an explicit Broker run-binding descriptor must be an object');
+  }
+  const keys = Reflect.ownKeys(binding);
+  if (keys.length !== BROKER_RUN_BINDING_FIELDS.length ||
+      keys.some((key) => typeof key !== 'string' || !BROKER_RUN_BINDING_FIELDS.includes(key))) {
+    fail(`Broker run-binding descriptor must contain exactly: ${BROKER_RUN_BINDING_FIELDS.join(', ')}`);
+  }
+  const descriptor = Object.fromEntries(BROKER_RUN_BINDING_FIELDS.map((key) => {
+    const value = binding[key];
+    if (typeof value !== 'string' || value.length === 0 || value.trim() !== value || value.length > 2048) {
+      fail(`Broker run-binding ${key} must be an exact nonempty string`);
+    }
+    return [key, value];
+  }));
+  for (const key of ['projectsServerCertificateSha256', 'projectsTrustBundleSha256']) {
+    if (!/^[a-f0-9]{64}$/.test(descriptor[key])) {
+      fail(`Broker run-binding ${key} must be a lowercase SHA-256 hex digest`);
+    }
+  }
+  let audience;
+  try {
+    audience = new URL(descriptor.projectsAudience);
+  } catch {
+    fail('Broker run-binding projectsAudience must be an absolute HTTPS URI without user info, query, or fragment');
+  }
+  const audienceAuthority = descriptor.projectsAudience.slice('https://'.length).split(/[/?#]/, 1)[0];
+  if (audience.protocol !== 'https:' || audience.username || audience.password ||
+      audienceAuthority.includes('@') || descriptor.projectsAudience.includes('?') ||
+      descriptor.projectsAudience.includes('#')) {
+    fail('Broker run-binding projectsAudience must be an absolute HTTPS URI without user info, query, or fragment');
+  }
+  let ownerAddress;
+  try {
+    ownerAddress = new URL(descriptor.projectsOwnerAddress);
+  } catch {
+    fail('Broker run-binding projectsOwnerAddress must be the exact Projects Config HTTPS service address');
+  }
+  if (ownerAddress.protocol !== 'https:' ||
+      ownerAddress.hostname !== `projects-config.${TARGET_NAMESPACE}.svc.cluster.local` ||
+      ownerAddress.port !== '8443' || ownerAddress.username || ownerAddress.password ||
+      ownerAddress.pathname !== '/' || ownerAddress.search || ownerAddress.hash) {
+    fail('Broker run-binding projectsOwnerAddress must target the exact Projects Config HTTPS service on port 8443');
+  }
+  return descriptor;
+}
+
+export function brokerRunBindingFingerprint(binding) {
+  const descriptor = validateBrokerRunBinding(binding);
+  return createHash('sha256').update(JSON.stringify(descriptor)).digest('hex');
+}
+
+function runBindingPolicyMetadata(name, service, namespace) {
+  return {
+    name,
+    namespace,
+    labels: {
+      'agentweaver.io/service': service,
+      [BROKER_RUN_BINDING_POLICY_LABEL]: 'projects',
+    },
+  };
+}
+
+export function createBrokerRunBindingPolicies(namespace) {
+  return [{
+    apiVersion: 'cilium.io/v2',
+    kind: 'CiliumNetworkPolicy',
+    metadata: runBindingPolicyMetadata(BROKER_RUN_BINDING_EGRESS_POLICY_NAME, 'identity-broker', namespace),
+    spec: {
+      endpointSelector: {
+        matchLabels: { 'agentweaver.io/workload': 'identity-broker' },
+      },
+      egress: [{
+        toEndpoints: [{
+          matchLabels: {
+            'k8s:io.kubernetes.pod.namespace': namespace,
+            'agentweaver.io/workload': 'projects-config',
+          },
+        }],
+        toPorts: [{ ports: [{ port: '8443', protocol: 'TCP' }] }],
+      }],
+    },
+  }, {
+    apiVersion: 'cilium.io/v2',
+    kind: 'CiliumNetworkPolicy',
+    metadata: runBindingPolicyMetadata(BROKER_RUN_BINDING_INGRESS_POLICY_NAME, 'projects-config', namespace),
+    spec: {
+      endpointSelector: {
+        matchLabels: { 'agentweaver.io/workload': 'projects-config' },
+      },
+      ingress: [{
+        fromEndpoints: [{
+          matchLabels: {
+            'k8s:io.kubernetes.pod.namespace': namespace,
+            'agentweaver.io/workload': 'identity-broker',
+          },
+        }],
+        toPorts: [{ ports: [{ port: '8443', protocol: 'TCP' }] }],
+      }],
+    },
+  }];
+}
+
+function createWorkload(name, image, namespace, providerCatalog, agentHost, brokerRunBinding, bindingFingerprint) {
   const web = name === 'web';
   const identity = name === 'identity-broker';
   const portName = web ? 'http' : 'https';
@@ -112,6 +231,22 @@ function createWorkload(name, image, namespace, providerCatalog, agentHost) {
       { name: 'signing-material', mountPath: '/var/run/identity-broker-signing', readOnly: true },
       { name: 'key-ring', mountPath: '/var/lib/identity-broker/key-ring' },
     );
+    if (brokerRunBinding) {
+      volumes.push({
+        name: 'projects-ca',
+        configMap: {
+          name: BACKEND_TLS_CA_CONFIGMAP,
+          optional: false,
+          defaultMode: TLS_MODE,
+          items: [{ key: 'ca.crt', path: 'ca.crt' }],
+        },
+      });
+      volumeMounts.push({
+        name: 'projects-ca',
+        mountPath: '/var/run/service-backend-ca',
+        readOnly: true,
+      });
+    }
   }
 
   if (name === 'projects-config') {
@@ -140,6 +275,12 @@ function createWorkload(name, image, namespace, providerCatalog, agentHost) {
   const podMetadata = { labels: podLabels };
   if (name === 'projects-config') {
     podMetadata.annotations = { 'agentweaver.io/provider-catalog-source': providerCatalog.sourceCommit };
+  }
+  if (brokerRunBinding && ['identity-broker', 'projects-config'].includes(name)) {
+    podMetadata.annotations = {
+      ...podMetadata.annotations,
+      [BROKER_RUN_BINDING_ANNOTATION]: bindingFingerprint,
+    };
   }
 
   const deployment = {
@@ -220,10 +361,14 @@ function createWorkload(name, image, namespace, providerCatalog, agentHost) {
   return [deployment, service];
 }
 
-export function createRuntimeList(images, namespace, providerCatalog) {
+export function createRuntimeList(images, namespace, providerCatalog, brokerRunBinding) {
   if (namespace !== TARGET_NAMESPACE) {
     fail(`namespace must be the exact approved v1 P0 namespace (${TARGET_NAMESPACE})`);
   }
+  const binding = brokerRunBinding === undefined
+    ? undefined
+    : validateBrokerRunBinding(brokerRunBinding);
+  const bindingFingerprint = binding ? brokerRunBindingFingerprint(binding) : undefined;
   if (typeof providerCatalog?.configMapName !== 'string' ||
       providerCatalog.configMapName.length > 253 ||
       !/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/.test(providerCatalog.configMapName) ||
@@ -241,6 +386,8 @@ export function createRuntimeList(images, namespace, providerCatalog) {
   }
 
   const items = SERVICE_NAMES.flatMap((name) =>
-    createWorkload(name, requiredImage(images, name), namespace, providerCatalog, agentHost));
+    createWorkload(name, requiredImage(images, name), namespace, providerCatalog, agentHost,
+      binding, bindingFingerprint));
+  if (binding) items.push(...createBrokerRunBindingPolicies(namespace));
   return { apiVersion: 'v1', kind: 'List', items };
 }
