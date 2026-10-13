@@ -1,12 +1,19 @@
 using System.Text;
 using System.Text.Json;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Xunit;
 
 namespace Agentweaver.Identity.Tests;
 
 public sealed class RuntimeContractTests
 {
+    [Fact]
+    public void RuntimeAuthorizationExceptionRetainsItsStringConstructor()
+    {
+        Assert.NotNull(typeof(RuntimeAuthorizationException).GetConstructor([typeof(string)]));
+    }
+
     [Theory]
     [InlineData(1, 0, false)]
     [InlineData(1, 1, true)]
@@ -39,6 +46,32 @@ public sealed class RuntimeContractTests
         Assert.Throws<RuntimeAuthorizationException>(() =>
             RuntimeActionContract.Validate(request with { ActionId = "model.turn", IsToolInvocation = true }));
         RuntimeActionContract.Validate(request with { ActionId = "model.turn", DispatchId = Guid.NewGuid() });
+    }
+
+    [Fact]
+    public void PositiveHostedCreditCapRequiresDispatchIdentityWithoutAModelTurnCount()
+    {
+        var binding = CreateRegistration().Binding with
+        {
+            WorkflowStepId = "implement",
+            MaxModelTurns = null,
+            ModelSourceMode = ModelSourceMode.HostedCopilot,
+            CopilotHardCreditLimit = 5m
+        };
+        var request = new RuntimeActionRequest(1, Guid.NewGuid(), 1, 1, Guid.NewGuid(),
+            "model.turn", new string('a', 64));
+
+        Assert.Equal("runtime_model_turn_admission_required",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeActionContract.RequireNativeDispatchAdmission(binding, request)).Code);
+        RuntimeActionContract.RequireNativeDispatchAdmission(
+            binding, request with { DispatchId = Guid.NewGuid() });
+        RuntimeActionContract.RequireNativeDispatchAdmission(
+            binding with { CopilotHardCreditLimit = null }, request);
+        Assert.Equal("runtime_model_turn_admission_required",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeActionContract.RequireNativeDispatchAdmission(
+                    binding with { MaxModelTurns = 1, CopilotHardCreditLimit = null }, request)).Code);
     }
 
     [Fact]
@@ -85,7 +118,7 @@ public sealed class RuntimeContractTests
     }
 
     [Fact]
-    public void NumericRunPoliciesAreBoundValidatedAndFailClosedWhenUnsupported()
+    public void NumericRunPoliciesAreBoundValidatedAndOnlyWorkflowModelTurnLimitsAreSupported()
     {
         var registration = CreateRegistration();
         RuntimeContractValidation.Validate(registration);
@@ -94,6 +127,11 @@ public sealed class RuntimeContractTests
             {
                 MaxModelTurns = 1
             }));
+        RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
+        {
+            WorkflowStepId = "implement",
+            MaxModelTurns = 1
+        });
         Assert.Throws<RuntimeAuthorizationException>(() =>
             RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
             {
@@ -102,6 +140,18 @@ public sealed class RuntimeContractTests
         Assert.Throws<RuntimeAuthorizationException>(() =>
             RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
             {
+                MaxPromptTokens = 1024
+            }));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
+            {
+                WorkflowStepId = "implement",
+                MaxToolCalls = 1
+            }));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
+            {
+                WorkflowStepId = "implement",
                 MaxPromptTokens = 1024
             }));
 

@@ -11,10 +11,44 @@ internal sealed record RuntimeCopilotNativeTurnResult(
     string Response,
     RuntimeNativeTurnObservation Receipt);
 
+internal sealed record RuntimeNativeEmptyRangeEvidence(
+    string BeforeCursorHash, string AfterCursorHash, int ObservedEventCount, bool IsComplete);
+
 #pragma warning disable GHCP001 // This private native receipt bridge is pinned to SDK 1.0.18.
 internal static class RuntimeCopilotNativeTurnJournal
 {
     internal const int MaximumEvents = 512;
+
+    internal static async Task<string> CaptureCursorAsync(
+        CopilotSession session, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        var cursor = (await session.Rpc.EventLog.TailAsync(cancellationToken).ConfigureAwait(false)).Cursor;
+        ValidateCursor(cursor);
+        return cursor;
+    }
+
+    internal static async Task<RuntimeNativeEmptyRangeEvidence> RequireEmptyRangeAsync(
+        CopilotSession session, string startCursor, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        ValidateCursor(startCursor);
+        var batch = await session.Rpc.EventLog.ReadAsync(
+            cursor: startCursor,
+            max: 128,
+            waitMs: TimeSpan.Zero,
+            types: "*",
+            agentScope: EventsAgentScope.All,
+            direction: EventsReadDirection.Forward,
+            includeEphemeral: false,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (batch.CursorStatus != EventsCursorStatus.Ok || batch.Events is null ||
+            batch.Events.Count != 0 || batch.HasMore || batch.Cursor != startCursor)
+            throw new RuntimeAuthorizationException("runtime_native_turn_no_send_invalid");
+        ValidateCursor(batch.Cursor);
+        var cursorHash = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(startCursor));
+        return new(cursorHash, cursorHash, 0, true);
+    }
 
     internal static async Task<RuntimeNativeTurnObservation> ReadAsync(
         CopilotSession session,
@@ -144,7 +178,7 @@ internal static class RuntimeCopilotNativeTurnJournal
         return -1;
     }
 
-    private static void ValidateCursor(string? cursor)
+    internal static void ValidateCursor(string? cursor)
     {
         if (string.IsNullOrWhiteSpace(cursor) || cursor.Length > 4096 || cursor.Any(char.IsControl))
             throw Unavailable();

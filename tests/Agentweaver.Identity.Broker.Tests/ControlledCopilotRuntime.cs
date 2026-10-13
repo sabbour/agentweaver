@@ -35,6 +35,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
     }
 
     public ConcurrentQueue<(string Method, JsonElement Parameters)> Requests { get; } = [];
+    public Action<string>? RequestObserved { get; set; }
     public string ModelId { get; set; } = "controlled-model";
     public string RuntimeVersion { get; set; } = "controlled-runtime-v1";
     public string SdkCredential { get; set; } = "ghu_external-sdk-credential";
@@ -42,6 +43,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
     public string ExpectedPrompt { get; set; } = "A bounded user request.";
     public string? EffectiveModelId { get; set; }
     public long? MaxPromptTokens { get; set; } = 200000;
+    public bool IncompleteNativeEventRange { get; set; }
     public Action? BeforeEffectiveModelResponse { get; set; }
     public Func<CancellationToken, Task>? BeforeStatusResponse { get; set; }
     public bool EmitUsageAfterCreate { get; set; } = true;
@@ -253,6 +255,7 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                     if (parameters.ValueKind == JsonValueKind.Array && parameters.GetArrayLength() > 0)
                         parameters = parameters[0];
                     Requests.Enqueue((method, parameters.Clone()));
+                    RequestObserved?.Invoke(method);
                     Console.WriteLine($"Controlled native SDK {DateTimeOffset.UtcNow:O}: {method} received.");
                     object result;
                     switch (method)
@@ -344,7 +347,8 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                                     cursor = $"controlled-cursor-{offset + page.Length}",
                                     cursorStatus = "ok",
                                     events = page,
-                                    hasMore = offset + page.Length < _durableEvents.Count
+                                    hasMore = IncompleteNativeEventRange ||
+                                        offset + page.Length < _durableEvents.Count
                                 };
                             }
                             break;

@@ -45,6 +45,31 @@ public static class RuntimeUsageSourceEndpoints
                 [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
                 ExecuteAsync(context, () => owner.BeginNativeTurnAsync(context, request, cancellationToken)))
             .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/turns/denials/read",
+            (RuntimeNativeCreditDenialReadRequest request, HttpContext context,
+                [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => owner.ReadNativeCreditDenialAsync(context, request, cancellationToken)))
+            .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/turns/fixed-credit-denials/record",
+            (RuntimeFixedCreditGuardRecordRequest request, HttpContext context,
+                [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => owner.RecordFixedCreditGuardAsync(context, request, cancellationToken)))
+            .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/turns/fixed-credit-denials/read",
+            (RuntimeFixedCreditGuardReadRequest request, HttpContext context,
+                [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => owner.ReadFixedCreditGuardAsync(context, request, cancellationToken)))
+            .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/turns/fixed-credit-denials/no-send",
+            (RuntimeFixedCreditNoSendEvidenceRequest request, HttpContext context,
+                [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => owner.RecordFixedCreditNoSendAsync(context, request, cancellationToken)))
+            .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/turns/no-send",
+            (RuntimeNativeTurnNoSendEvidenceRequest request, HttpContext context,
+                [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => owner.RecordNativeTurnNoSendAsync(context, request, cancellationToken)))
+            .RequireAuthorization();
         endpoints.MapPost("/internal/runtime/turns/observations",
             (RuntimeNativeTurnObservationRequest request, HttpContext context,
                 [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>

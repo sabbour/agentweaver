@@ -689,7 +689,7 @@ public sealed class RuntimeAgentHostTests
 
     [Theory]
     [InlineData(HttpStatusCode.Forbidden, "runtime_owner_denied")]
-    [InlineData(HttpStatusCode.Conflict, "runtime_owner_unavailable")]
+    [InlineData(HttpStatusCode.Conflict, "runtime_owner_binding_changed")]
     [InlineData(HttpStatusCode.NotFound, "runtime_owner_unavailable")]
     [InlineData(HttpStatusCode.ServiceUnavailable, "runtime_owner_unavailable")]
     public async Task NativeSuspendNeedsCoreAuthorityBeforeStoppingTurns(
@@ -762,7 +762,7 @@ public sealed class RuntimeAgentHostTests
                 fixture.SuspendStatus = HttpStatusCode.Conflict;
         };
 
-        Assert.Equal("runtime_owner_unavailable",
+        Assert.Equal("runtime_owner_binding_changed",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token))).Code);
         Assert.Single(fixture.Material, material => material.EventId == request.ManifestId);
@@ -787,7 +787,7 @@ public sealed class RuntimeAgentHostTests
                 fixture.SuspendStatus = HttpStatusCode.Conflict;
         };
 
-        Assert.Equal("runtime_owner_unavailable",
+        Assert.Equal(missingCache ? "runtime_owner_unavailable" : "runtime_owner_binding_changed",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 fixture.Host.SuspendAsync(request, fixture.Actor, timeout.Token))).Code);
         Assert.Equal(2, fixture.Material.Count(material => material.Kind == SessionMaterialKind.SdkCache));
@@ -1123,7 +1123,10 @@ public sealed class RuntimeAgentHostTests
     public async Task WorkflowTurnRequiresExactDurableAdmissionAndCurrentAuthorityBeforeNativeSend(
         string fault, string expectedCode)
     {
-        await using var fixture = new HostFixture(workflowBound: true) { NativeAdmissionFault = fault };
+        await using var fixture = new HostFixture(maxModelTurns: 1, workflowBound: true)
+        {
+            NativeAdmissionFault = fault
+        };
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var message = fixture.Message(fixture.Proof(await fixture.ConfigureAsync(timeout.Token)));
 
@@ -1131,6 +1134,7 @@ public sealed class RuntimeAgentHostTests
             fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
 
         Assert.Equal(expectedCode, failure.Code);
+        Assert.Equal(1, fixture.Registration.Binding.MaxModelTurns);
         Assert.Single(fixture.NativeAdmissions);
         Assert.DoesNotContain(fixture.Material,
             material => material.Kind is SessionMaterialKind.TurnContent or SessionMaterialKind.SdkCache);
@@ -1291,18 +1295,22 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Theory]
-    [InlineData(1, null, null)]
-    [InlineData(null, 1, null)]
-    [InlineData(null, null, 1024)]
+    [InlineData(1, null, null, false)]
+    [InlineData(null, 1, null, false)]
+    [InlineData(null, null, 1024, false)]
+    [InlineData(null, 1, null, true)]
+    [InlineData(null, null, 1024, true)]
     public async Task ConfiguredNumericRunPolicyFailsBeforeReadyOrNativeSessionCreation(
         int? maxModelTurns,
         int? maxToolCalls,
-        int? maxPromptTokens)
+        int? maxPromptTokens,
+        bool workflowBound)
     {
         await using var fixture = new HostFixture(
             maxModelTurns: maxModelTurns,
             maxToolCalls: maxToolCalls,
-            maxPromptTokens: maxPromptTokens);
+            maxPromptTokens: maxPromptTokens,
+            workflowBound: workflowBound);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         await fixture.DeliverAsync(timeout.Token);
 
@@ -1316,6 +1324,564 @@ public sealed class RuntimeAgentHostTests
         Assert.Equal("runtime_host_not_ready",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 fixture.Host.ReadinessAsync(timeout.Token))).Code);
+    }
+
+    [Fact]
+    public async Task WorkflowBoundMaxModelTurnsUsesOwnerAdmittedNativeDispatch()
+    {
+        await using var fixture = new HostFixture(maxModelTurns: 1, workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var message = fixture.Message(proof);
+
+        var response = await fixture.Host.SendAsync(message, fixture.Actor, timeout.Token);
+
+        Assert.Equal(fixture.Sdk.AssistantResponse, Assert.Single(response.Parts).Text);
+        Assert.Equal(1, fixture.Registration.Binding.MaxModelTurns);
+        Assert.NotNull(fixture.Registration.Binding.WorkflowStepId);
+        Assert.Single(fixture.NativeAdmissions);
+        Assert.Single(fixture.NativeObservations);
+        Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.Equal(0, fixture.CostPreflightRequests);
+        Assert.Empty(fixture.CostTurnRequests);
+    }
+
+    [Fact]
+    public async Task WorkflowBoundPositiveHardCreditLimitUsesPreparedDispatchBeforeContentAndSend()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 100m, workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        fixture.Sdk.BeforeTurnResponse = _ =>
+        {
+            fixture.NativePathEvents.Enqueue("sdk-send");
+            return Task.CompletedTask;
+        };
+        var message = fixture.Message(proof);
+
+        var response = await fixture.Host.SendAsync(message, fixture.Actor, timeout.Token);
+
+        Assert.Equal(fixture.Sdk.AssistantResponse, Assert.Single(response.Parts).Text);
+        Assert.Equal(1, fixture.CostPreflightRequests);
+        var action = Assert.Single(fixture.ModelTurnActions);
+        Assert.Equal(message.Message.MessageId, action.DispatchId);
+        Assert.Equal(message.Message.MessageId,
+            Assert.Single(fixture.NativeAdmissions).Message.Message.MessageId);
+        Assert.Equal(
+            ["preflight", "action-authorize", "action-verify", "begin", "user-content", "sdk-send"],
+            fixture.NativePathEvents.ToArray());
+        Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.send");
+    }
+
+    [Fact]
+    public async Task PositiveHardCreditLimitOwnerDenialDoesNotWriteContentOrSend()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 100m, workflowBound: true)
+        {
+            NativeAdmissionFault = "hard-limit-denied"
+        };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var message = fixture.Message(proof);
+
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+
+        Assert.Equal(1, fixture.CostPreflightRequests);
+        Assert.Equal(message.Message.MessageId, Assert.Single(fixture.ModelTurnActions).DispatchId);
+        Assert.Single(fixture.NativeAdmissions);
+        var noSend = Assert.Single(fixture.NativeNoSendEvidence);
+        Assert.Equal(message.Message.MessageId, noSend.Denial.DispatchId);
+        Assert.Equal(0, noSend.Evidence.ObservedEventCount);
+        Assert.True(noSend.Evidence.RangeComplete);
+        Assert.DoesNotContain(fixture.Material, material =>
+            material.Kind is SessionMaterialKind.TurnContent or SessionMaterialKind.SdkCache);
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.Contains(fixture.Sdk.Requests, request => request.Method == "session.eventLog.tail");
+        Assert.Contains(fixture.Sdk.Requests, request => request.Method == "session.eventLog.read");
+        Assert.Equal(
+            ["preflight", "action-authorize", "action-verify", "begin", "no-send"],
+            fixture.NativePathEvents.ToArray());
+    }
+
+    [Fact]
+    public async Task ZeroHardCreditLimitRecordsNoSendAfterCompleteReadUsingRotatedSourceGrant()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 0m);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var ready = await fixture.ConfigureAsync(timeout.Token);
+        var originalProof = fixture.Proof(ready);
+        var refreshed = await fixture.Host.RefreshAsync(
+            new(originalProof, Guid.NewGuid()), fixture.Actor, timeout.Token);
+        Assert.Equal(2, refreshed.SourceGrant.Revision);
+        var proof = originalProof with { SourceGrantRevision = refreshed.SourceGrant.Revision };
+        var message = fixture.Message(proof);
+        fixture.Sdk.RequestObserved = method => fixture.FixedCreditPathEvents.Enqueue($"sdk:{method}");
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+
+        Assert.Equal("runtime_cost_budget_exhausted", failure.Code);
+        var receipt = Assert.Single(fixture.FixedCreditGuards);
+        Assert.Equal(refreshed.SourceGrant.GrantId, receipt.SourceGrantId);
+        Assert.Equal(refreshed.SourceGrant.Revision, receipt.SourceGrantRevision);
+        Assert.Equal(message.Message.MessageId, receipt.RequestId);
+        Assert.Equal(RuntimeFixedCreditGuardContract.HashHostRequest(message), receipt.RequestHash);
+        var evidence = Assert.Single(fixture.FixedCreditNoSendEvidence);
+        Assert.Equal(receipt.CanonicalPayloadHash, evidence.GuardReceiptHash);
+        Assert.Equal(refreshed.SourceGrant.Revision, evidence.SourceGrantRevision);
+        Assert.Equal(0, evidence.ObservedEventCount);
+        Assert.True(evidence.RangeComplete);
+        var replayFailure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+        Assert.Equal("runtime_cost_budget_exhausted", replayFailure.Code);
+        var receipts = fixture.FixedCreditGuards.ToArray();
+        Assert.Equal(2, receipts.Length);
+        Assert.Equal(receipt, receipts[1]);
+        var evidences = fixture.FixedCreditNoSendEvidence.ToArray();
+        Assert.Equal(2, evidences.Length);
+        Assert.Equal(evidence, evidences[1]);
+        var path = fixture.FixedCreditPathEvents.ToArray();
+        var tail = Array.IndexOf(path, "sdk:session.eventLog.tail");
+        var read = Array.IndexOf(path, "sdk:session.eventLog.read");
+        var record = Array.IndexOf(path, "fixed-credit-record");
+        var replayTail = Array.FindIndex(path, record + 1, item => item == "sdk:session.eventLog.tail");
+        var replayRead = Array.FindIndex(path, read + 1, item => item == "sdk:session.eventLog.read");
+        var replayRecord = Array.LastIndexOf(path, "fixed-credit-record");
+        Assert.True(tail >= 0 && tail < read && read < record &&
+            replayTail > record && replayTail < replayRead && replayRead < replayRecord,
+            "Each native event range must be read completely before its fixed-credit receipt is recorded.");
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.DoesNotContain(fixture.Material, material => material.Kind == SessionMaterialKind.TurnContent);
+    }
+
+    [Fact]
+    public async Task ZeroHardCreditLimitHttpDenialReturnsStoredGuardAndEvidence()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 0m);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var message = fixture.Message(proof);
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+
+        using var response = await client.PostAsJsonAsync(
+            "/runtime/v1/a2a/message:send", message, HostFixture.Json, timeout.Token);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(HostFixture.Json, timeout.Token);
+        Assert.Equal("runtime_cost_budget_exhausted", body.GetProperty("code").GetString());
+        var stored = body.GetProperty("fixedCreditGuard")
+            .Deserialize<RuntimeFixedCreditGuardReadResult>(HostFixture.Json)
+            ?? throw new InvalidOperationException("The stored fixed-credit denial was not returned.");
+        Assert.Equal(Assert.Single(fixture.FixedCreditGuards), stored.Receipt);
+        Assert.Equal(Assert.Single(fixture.FixedCreditNoSendEvidence), stored.Evidence);
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.DoesNotContain(fixture.Material, material => material.Kind == SessionMaterialKind.TurnContent);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task FixedCreditReadReturnsStoredGuardAndOptionalEvidence(bool evidenceIsStored)
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 0m)
+        {
+            FixedCreditNoSendWriteFailureStatus = evidenceIsStored ? null : HttpStatusCode.ServiceUnavailable
+        };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var message = fixture.Message(proof);
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+        Assert.Equal(evidenceIsStored
+            ? "runtime_cost_budget_exhausted"
+            : "runtime_fixed_credit_no_send_unavailable", failure.Code);
+
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        var fixedCreditWriteCount = fixture.FixedCreditPathEvents.Count;
+        var fixedCreditGuardCount = fixture.FixedCreditGuards.Count;
+        var fixedCreditNoSendCount = fixture.FixedCreditNoSendEvidence.Count;
+        var sdkRequestCount = fixture.Sdk.Requests.Count;
+        var request = new
+        {
+            proof,
+            requestId = message.Message.MessageId,
+            requestHash = RuntimeFixedCreditGuardContract.HashHostRequest(message)
+        };
+
+        using var response = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/fixed-credit-denials/read", request, HostFixture.Json, timeout.Token);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        Assert.Equal(0, fixture.Rotations);
+        Assert.Single(fixture.FixedCreditReadCalls);
+        var responseJson = await response.Content.ReadAsStringAsync(timeout.Token);
+        var body = JsonSerializer.Deserialize<JsonElement>(responseJson, HostFixture.Json);
+        var receipt = body.GetProperty("receipt");
+        Assert.Equal("hostPreQueue", receipt.GetProperty("stage").GetString());
+        Assert.Equal("hardLimitZero", receipt.GetProperty("code").GetString());
+        var result = JsonSerializer.Deserialize<RuntimeFixedCreditGuardReadResult>(
+            responseJson, HostFixture.Json);
+        Assert.NotNull(result);
+        Assert.Equal(Assert.Single(fixture.FixedCreditGuards), result.Receipt);
+        Assert.Equal(evidenceIsStored ? Assert.Single(fixture.FixedCreditNoSendEvidence) : null, result.Evidence);
+        Assert.Equal(fixedCreditWriteCount, fixture.FixedCreditPathEvents.Count);
+        Assert.Equal(fixedCreditGuardCount, fixture.FixedCreditGuards.Count);
+        Assert.Equal(fixedCreditNoSendCount, fixture.FixedCreditNoSendEvidence.Count);
+        Assert.Equal(sdkRequestCount, fixture.Sdk.Requests.Count);
+    }
+
+    [Fact]
+    public async Task FixedCreditReadReturnsServiceUnavailableWhenSourceOwnerIsUnavailable()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 0m)
+        {
+            FixedCreditNoSendWriteFailureStatus = HttpStatusCode.ServiceUnavailable
+        };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var message = fixture.Message(proof);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+        fixture.FixedCreditReadStatus = HttpStatusCode.ServiceUnavailable;
+
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        using var response = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/fixed-credit-denials/read",
+            new
+            {
+                proof,
+                requestId = message.Message.MessageId,
+                requestHash = RuntimeFixedCreditGuardContract.HashHostRequest(message)
+            },
+            HostFixture.Json, timeout.Token);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(HostFixture.Json, timeout.Token);
+        Assert.Equal("runtime_usage_source_unavailable", body.GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task NativeDenialReadReturnsStoredReceiptAndNoSendPair()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 100m, workflowBound: true)
+        {
+            NativeAdmissionFault = "hard-limit-denied"
+        };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var message = fixture.Message(proof);
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+        Assert.Equal("runtime_cost_budget_exhausted", failure.Code);
+
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        var nativeNoSendCount = fixture.NativeNoSendEvidence.Count;
+        var nativePathEventCount = fixture.NativePathEvents.Count;
+        var sdkRequestCount = fixture.Sdk.Requests.Count;
+        var request = new
+        {
+            proof,
+            dispatchId = message.Message.MessageId,
+            stage = RuntimeCreditLimitDenialStage.NativeTurnBegin
+        };
+
+        using var response = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/denials/read", request, HostFixture.Json, timeout.Token);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        Assert.Equal(0, fixture.Rotations);
+        Assert.Single(fixture.DenialReadWire);
+        Assert.Contains("\"stage\":\"nativeTurnBegin\"", Assert.Single(fixture.DenialReadWire));
+        var responseJson = await response.Content.ReadAsStringAsync(timeout.Token);
+        Assert.Contains("\"stage\":\"nativeTurnBegin\"", responseJson);
+        Assert.Contains("\"code\":\"hardLimitReached\"", responseJson);
+        var result = JsonSerializer.Deserialize<RuntimeNativeCreditDenialReadResult>(
+            responseJson, HostFixture.Json);
+        Assert.NotNull(result);
+        Assert.Equal(Assert.Single(fixture.NativeNoSendEvidence).Denial, result.Receipt);
+        Assert.Equal(Assert.Single(fixture.NativeNoSendEvidence).Evidence, result.NoSend);
+        Assert.Equal(nativeNoSendCount, fixture.NativeNoSendEvidence.Count);
+        Assert.Equal(nativePathEventCount, fixture.NativePathEvents.Count);
+        Assert.Equal(sdkRequestCount, fixture.Sdk.Requests.Count);
+    }
+
+    [Fact]
+    public async Task NativeDenialReadReturnsServiceUnavailableWhenSourceOwnerIsUnavailable()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 100m, workflowBound: true)
+        {
+            NativeAdmissionFault = "hard-limit-denied"
+        };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var message = fixture.Message(proof);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+        fixture.NativeDenialReadStatus = HttpStatusCode.ServiceUnavailable;
+
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        using var response = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/denials/read",
+            new
+            {
+                proof,
+                dispatchId = message.Message.MessageId,
+                stage = RuntimeCreditLimitDenialStage.NativeTurnBegin
+            },
+            HostFixture.Json, timeout.Token);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(HostFixture.Json, timeout.Token);
+        Assert.Equal("runtime_usage_source_unavailable", body.GetProperty("code").GetString());
+    }
+
+    [Fact]
+    public async Task NativeDenialReadPreservesMissingStoredPair()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 100m, workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+
+        using var response = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/denials/read",
+            new
+            {
+                proof,
+                dispatchId = Guid.NewGuid(),
+                stage = RuntimeCreditLimitDenialStage.NativeTurnBegin
+            },
+            HostFixture.Json, timeout.Token);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<RuntimeNativeCreditDenialReadResult>(
+            HostFixture.Json, timeout.Token);
+        Assert.NotNull(result);
+        Assert.Null(result.Receipt);
+        Assert.Null(result.NoSend);
+    }
+
+    [Fact]
+    public async Task DenialReadRejectsUnauthenticatedCallerAndInvalidSessionProofBeforeSourceRead()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 100m, workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        var request = new
+        {
+            proof,
+            dispatchId = Guid.NewGuid(),
+            stage = RuntimeCreditLimitDenialStage.NativeTurnBegin
+        };
+
+        using var anonymous = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/denials/read", request, HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.Unauthorized, anonymous.StatusCode);
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "another-tenant");
+        using var foreign = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/denials/read", request, HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.Forbidden, foreign.StatusCode);
+
+        client.DefaultRequestHeaders.Remove("X-Agentweaver-Tenant");
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        using var invalidProof = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/denials/read",
+            new
+            {
+                proof = proof with { SourceGrantRevision = proof.SourceGrantRevision + 1 },
+                request.dispatchId,
+                request.stage
+            },
+            HostFixture.Json, timeout.Token);
+        Assert.Equal(HttpStatusCode.Forbidden, invalidProof.StatusCode);
+        var body = await invalidProof.Content.ReadFromJsonAsync<JsonElement>(HostFixture.Json, timeout.Token);
+        Assert.Equal("runtime_session_proof_invalid", body.GetProperty("code").GetString());
+        Assert.Empty(fixture.DenialReadWire);
+    }
+
+    [Fact]
+    public async Task FixedCreditReadWithholdsResultWhenSourceGrantRotatesDuringRead()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 0m)
+        {
+            FixedCreditNoSendWriteFailureStatus = HttpStatusCode.ServiceUnavailable
+        };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var message = fixture.Message(proof);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+        fixture.AfterFixedCreditRead = async token =>
+        {
+            await fixture.Host.RefreshAsync(new(proof, Guid.NewGuid()), fixture.Actor, token);
+        };
+
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        using var response = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/fixed-credit-denials/read",
+            new
+            {
+                proof,
+                requestId = message.Message.MessageId,
+                requestHash = RuntimeFixedCreditGuardContract.HashHostRequest(message)
+            },
+            HostFixture.Json, timeout.Token);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync(timeout.Token);
+        Assert.Contains("runtime_session_proof_invalid", body);
+        Assert.DoesNotContain("\"receipt\"", body);
+        Assert.Equal(1, fixture.Rotations);
+    }
+
+    [Fact]
+    public async Task NativeDenialReadWithholdsResultWhenRegistrationChangesDuringRead()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 100m, workflowBound: true)
+        {
+            NativeAdmissionFault = "hard-limit-denied"
+        };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var message = fixture.Message(proof);
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+        fixture.AfterNativeDenialRead = _ =>
+        {
+            fixture.Registration = fixture.Registration with { Revision = fixture.Registration.Revision + 1 };
+            return Task.CompletedTask;
+        };
+
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+        using var response = await client.PostAsJsonAsync(
+            "/runtime/v1/turns/denials/read",
+            new
+            {
+                proof,
+                dispatchId = message.Message.MessageId,
+                stage = RuntimeCreditLimitDenialStage.NativeTurnBegin
+            },
+            HostFixture.Json, timeout.Token);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync(timeout.Token);
+        Assert.Contains("runtime_registration_stale", body);
+        Assert.DoesNotContain("\"receipt\"", body);
+    }
+
+    [Fact]
+    public async Task ZeroHardCreditLimitDoesNotRecordOrSendWhenNativeEventRangeIsIncomplete()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 0m);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        fixture.Sdk.IncompleteNativeEventRange = true;
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token));
+
+        Assert.Equal("runtime_native_turn_no_send_invalid", failure.Code);
+        Assert.Empty(fixture.FixedCreditGuards);
+        Assert.Empty(fixture.FixedCreditNoSendEvidence);
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.DoesNotContain(fixture.Material, material => material.Kind == SessionMaterialKind.TurnContent);
+    }
+
+    [Fact]
+    public async Task ZeroHardCreditLimitDoesNotSendWhenGuardWriteFails()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 0m)
+        {
+            FailFixedCreditGuardWrite = true
+        };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(fixture.Message(proof), fixture.Actor, timeout.Token));
+
+        Assert.Equal("runtime_fixed_credit_guard_unavailable", failure.Code);
+        Assert.Null(failure.FixedCreditGuard);
+        Assert.Empty(fixture.FixedCreditGuards);
+        Assert.Empty(fixture.FixedCreditNoSendEvidence);
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.DoesNotContain(fixture.Material, material => material.Kind == SessionMaterialKind.TurnContent);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.ServiceUnavailable, "runtime_fixed_credit_no_send_unavailable",
+        HttpStatusCode.ServiceUnavailable)]
+    [InlineData(HttpStatusCode.Forbidden, "runtime_owner_denied", HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.Conflict, "runtime_owner_binding_changed", HttpStatusCode.Forbidden)]
+    public async Task ZeroHardCreditLimitEvidenceWriteFailureReturnsStoredGuardOnly(
+        HttpStatusCode ownerStatus, string expectedCode, HttpStatusCode expectedStatus)
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 0m)
+        {
+            FixedCreditNoSendWriteFailureStatus = ownerStatus
+        };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var message = fixture.Message(proof);
+        using var server = await fixture.StartHttpAsync();
+        using var client = server.GetTestClient();
+        client.BaseAddress = fixture.Registration.Binding.ConfigureEndpoint;
+        client.DefaultRequestHeaders.Authorization = new("Bearer", fixture.Token);
+        client.DefaultRequestHeaders.Add("X-Agentweaver-Tenant", "tenant");
+
+        using var response = await client.PostAsJsonAsync(
+            "/runtime/v1/a2a/message:send", message, HostFixture.Json, timeout.Token);
+
+        Assert.Equal(expectedStatus, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(HostFixture.Json, timeout.Token);
+        Assert.Equal(expectedCode, body.GetProperty("code").GetString());
+        var stored = body.GetProperty("fixedCreditGuard")
+            .Deserialize<RuntimeFixedCreditGuardReadResult>(HostFixture.Json)
+            ?? throw new InvalidOperationException("The stored guard reference was not returned.");
+        Assert.Equal(Assert.Single(fixture.FixedCreditGuards), stored.Receipt);
+        Assert.Null(stored.Evidence);
+        Assert.Empty(fixture.FixedCreditNoSendEvidence);
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.DoesNotContain(fixture.Material, material => material.Kind == SessionMaterialKind.TurnContent);
     }
 
     [Fact]
@@ -1655,6 +2221,18 @@ public sealed class RuntimeAgentHostTests
         private int _position;
         private readonly ConcurrentDictionary<Guid, SessionMaterialReadResult> _material = new();
         private readonly ConcurrentDictionary<Guid, SessionMaterialWriteRequest> _materialWrites = new();
+        private readonly ConcurrentDictionary<
+            (Guid RuntimeId, long RegistrationRevision, long ExecutionFence,
+                RuntimeFixedCreditGuardStage Stage, Guid RequestId),
+            RuntimeFixedCreditGuardReceipt> _fixedCreditGuardRecords = new();
+        private readonly ConcurrentDictionary<string, RuntimeFixedCreditNoSendReceipt> _fixedCreditNoSendRecords =
+            new(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<
+            (Guid DispatchId, RuntimeCreditLimitDenialStage Stage), RuntimeNativeCreditDenialReceipt>
+            _nativeCreditDenials = new();
+        private readonly ConcurrentDictionary<
+            (Guid DispatchId, RuntimeCreditLimitDenialStage Stage), RuntimeNativeTurnNoSendReceipt>
+            _nativeNoSendRecords = new();
         public HostFixture(
             ModelSourceMode sourceMode = ModelSourceMode.HostedCopilot,
             decimal? hardCreditLimit = null,
@@ -1765,6 +2343,8 @@ public sealed class RuntimeAgentHostTests
         public string WorkingDirectory { get; }
         public string ConfigurationHash => _hash;
         public ConcurrentQueue<SessionMaterialWriteRequest> Material { get; } = new();
+        public ConcurrentQueue<RuntimeActionRequest> ModelTurnActions { get; } = new();
+        public ConcurrentQueue<string> NativePathEvents { get; } = new();
         public ImmutableArray<SessionEventEnvelope> SessionEvents { get; private set; } = [];
         public int PositionIncrement { get; set; } = 1;
         public int SessionEventPageSize { get; set; } = 100;
@@ -1774,6 +2354,12 @@ public sealed class RuntimeAgentHostTests
         public ConcurrentQueue<string> ResumeMaterialReadRequests { get; } = new();
         public ConcurrentQueue<RuntimeUsageSourceReceipt> Usage { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnBeginRequest> NativeAdmissions { get; } = new();
+        public ConcurrentQueue<RuntimeNativeTurnNoSendEvidenceRequest> NativeNoSendEvidence { get; } = new();
+        public ConcurrentQueue<RuntimeFixedCreditGuardReceipt> FixedCreditGuards { get; } = new();
+        public ConcurrentQueue<RuntimeFixedCreditNoSendReceipt> FixedCreditNoSendEvidence { get; } = new();
+        public ConcurrentQueue<string> FixedCreditPathEvents { get; } = new();
+        public ConcurrentQueue<string> FixedCreditReadCalls { get; } = new();
+        public ConcurrentQueue<string> DenialReadWire { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnObservationRequest> NativeObservations { get; } = new();
         public ConcurrentQueue<RuntimeNativeTurnAccountingRequest> NativeAccounting { get; } = new();
         public ConcurrentQueue<Guid> CostTurnRequests { get; } = new();
@@ -1795,12 +2381,18 @@ public sealed class RuntimeAgentHostTests
         public Guid? ResumeProvenanceRuntimeInstanceId { get; set; }
         public Action<SessionMaterialWriteRequest>? AfterMaterialWrite { get; set; }
         public Action<SessionMaterialReadResult>? AfterMaterialRead { get; set; }
+        public Func<CancellationToken, Task>? AfterFixedCreditRead { get; set; }
+        public Func<CancellationToken, Task>? AfterNativeDenialRead { get; set; }
+        public HttpStatusCode? FixedCreditReadStatus { get; set; }
+        public HttpStatusCode? NativeDenialReadStatus { get; set; }
         public Guid? MissingMaterialId { get; set; }
         public int Accounted { get; private set; }
         public int Rotations { get; private set; }
         public int CostPreflightRequests { get; private set; }
         public bool CostPreflightPriced { get; set; } = true;
         public bool CostPreflightSourceHashMismatch { get; set; }
+        public bool FailFixedCreditGuardWrite { get; set; }
+        public HttpStatusCode? FixedCreditNoSendWriteFailureStatus { get; set; }
         public int SourceRevocations { get; private set; }
 
         public Guid FirstTurnEventId => _materialWrites.Values
@@ -2128,11 +2720,18 @@ public sealed class RuntimeAgentHostTests
                 if (path.EndsWith("/authorize", StringComparison.Ordinal))
                 {
                     var action = await ReadAsync<RuntimeActionRequest>(request, token);
+                    if (action.ActionId == "model.turn")
+                    {
+                        ModelTurnActions.Enqueue(action);
+                        NativePathEvents.Enqueue("action-authorize");
+                    }
                     if (action.CostTurnId is { } costTurnId)
                         CostTurnRequests.Enqueue(costTurnId);
                     _admission = new(1, action, action.EventId.ToString("N"), "1", action.EventId,
                         PolicyEvaluationOutcome.Allow, PolicyEvaluationReasonCode.Allowed);
                 }
+                else if (_admission?.Request.ActionId == "model.turn")
+                    NativePathEvents.Enqueue("action-verify");
                 return Response(request, _admission!);
             }
             if (path.EndsWith("/cost-preflight", StringComparison.Ordinal))
@@ -2149,14 +2748,86 @@ public sealed class RuntimeAgentHostTests
                     _facts.MeterSource, "fixture.cost", "1.0.0", 1, "fixture-revision",
                     "fixture-resource", 1,
                     ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal), rateCard);
-                return Response(request, new RuntimeUsageCostPreflightReceipt(
+                var receipt = new RuntimeUsageCostPreflightReceipt(
                     1, Registration.RuntimeInstanceId, Registration.Revision,
                     Registration.Binding.ExecutionFence, _facts.ModelSelectionReference, _facts.ModelId,
                     _facts.MeterSource, _facts.AcceptedSelectionHash,
                     CostPreflightSourceHashMismatch
                         ? new string('f', 64)
                         : RuntimeUsageSourceReceiptContract.HashSource(Registration, _facts),
-                    costBinding, CostPreflightPriced, CostPreflightPriced ? null : "fixture-unpriced"));
+                    costBinding, CostPreflightPriced, CostPreflightPriced ? null : "fixture-unpriced");
+                NativePathEvents.Enqueue("preflight");
+                return Response(request, receipt);
+            }
+            if (path == "/internal/runtime/turns/fixed-credit-denials/record")
+            {
+                if (FailFixedCreditGuardWrite)
+                    return Response(request, new { }, HttpStatusCode.ServiceUnavailable);
+                var record = await ReadAsync<RuntimeFixedCreditGuardRecordRequest>(request, token);
+                var grant = Grant(_source, RuntimeCredentialPurpose.Observe, revision: _sourceRevision);
+                var sourceReceipt = new RuntimeSdkSourceReceipt(
+                    Registration.RuntimeInstanceId, Registration.Revision, grant.GrantId, _facts!,
+                    RuntimeUsageSourceReceiptContract.HashSource(Registration, _facts!), Time.GetUtcNow());
+                Assert.Equal(_sourceRevision, record.Authorization.Revision);
+                RuntimeFixedCreditGuardContract.ValidateSourceTuple(
+                    record.Receipt, Registration, grant, sourceReceipt);
+                var key = (Registration.RuntimeInstanceId, Registration.Revision,
+                    Registration.Binding.ExecutionFence, record.Receipt.Stage, record.Receipt.RequestId);
+                var stored = _fixedCreditGuardRecords.GetOrAdd(key, record.Receipt);
+                if (stored.RequestHash != record.Receipt.RequestHash ||
+                    stored.SourceHash != record.Receipt.SourceHash ||
+                    stored.SourceGrantId != record.Receipt.SourceGrantId ||
+                    stored.SourceGrantRevision != record.Receipt.SourceGrantRevision)
+                    throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
+                RuntimeFixedCreditGuardContract.ValidateSourceTuple(
+                    stored, Registration, grant, sourceReceipt);
+                FixedCreditGuards.Enqueue(stored);
+                FixedCreditPathEvents.Enqueue("fixed-credit-record");
+                return Response(request, stored);
+            }
+            if (path == "/internal/runtime/turns/fixed-credit-denials/read")
+            {
+                var read = await ReadAsync<RuntimeFixedCreditGuardReadRequest>(request, token);
+                FixedCreditReadCalls.Enqueue(path);
+                RuntimeFixedCreditGuardContract.ValidateReadRequest(read);
+                Assert.Equal(_sourceRevision, read.Authorization?.Revision);
+                var key = (read.RuntimeInstanceId, read.RegistrationRevision,
+                    read.ExecutionFence, read.Stage, read.RequestId);
+                if (!_fixedCreditGuardRecords.TryGetValue(key, out var stored) ||
+                    stored.RequestHash != read.RequestHash)
+                    return Response(request, new { error = "runtime_fixed_credit_guard_not_found" },
+                        HttpStatusCode.NotFound);
+                _fixedCreditNoSendRecords.TryGetValue(stored.CanonicalPayloadHash, out var evidence);
+                var result = new RuntimeFixedCreditGuardReadResult(stored, evidence);
+                if (AfterFixedCreditRead is { } afterRead)
+                    await afterRead(token);
+                if (FixedCreditReadStatus is { } status)
+                    return Response(request, new { }, status);
+                return Response(request, result);
+            }
+            if (path == "/internal/runtime/turns/fixed-credit-denials/no-send")
+            {
+                if (FixedCreditNoSendWriteFailureStatus is { } failureStatus)
+                    return Response(request, new { }, failureStatus);
+                var evidence = await ReadAsync<RuntimeFixedCreditNoSendEvidenceRequest>(request, token);
+                var grant = Grant(_source, RuntimeCredentialPurpose.Observe, revision: _sourceRevision);
+                var sourceReceipt = new RuntimeSdkSourceReceipt(
+                    Registration.RuntimeInstanceId, Registration.Revision, grant.GrantId, _facts!,
+                    RuntimeUsageSourceReceiptContract.HashSource(Registration, _facts!), Time.GetUtcNow());
+                Assert.Equal(_sourceRevision, evidence.Authorization.Revision);
+                RuntimeFixedCreditGuardContract.ValidateEvidence(
+                    evidence.Evidence, evidence.Receipt, Registration, grant, sourceReceipt);
+                var key = (Registration.RuntimeInstanceId, Registration.Revision,
+                    Registration.Binding.ExecutionFence, evidence.Receipt.Stage, evidence.Receipt.RequestId);
+                Assert.True(_fixedCreditGuardRecords.TryGetValue(key, out var storedGuard));
+                Assert.Equal(storedGuard, evidence.Receipt);
+                var stored = _fixedCreditNoSendRecords.GetOrAdd(
+                    evidence.Receipt.CanonicalPayloadHash, evidence.Evidence);
+                RuntimeFixedCreditGuardContract.ValidateEvidence(
+                    stored, storedGuard!, Registration, grant, sourceReceipt);
+                FixedCreditNoSendEvidence.Enqueue(stored);
+                FixedCreditPathEvents.Enqueue("fixed-credit-no-send");
+                return Response(request, stored);
             }
             if (path.StartsWith("/internal/runtime/sources/", StringComparison.Ordinal))
             {
@@ -2171,8 +2842,31 @@ public sealed class RuntimeAgentHostTests
                 Assert.Equal(NativeAdmissions.Count, Sdk.Requests.Count(request => request.Method == "session.send"));
                 var begin = await ReadAsync<RuntimeNativeTurnBeginRequest>(request, token);
                 NativeAdmissions.Enqueue(begin);
+                NativePathEvents.Enqueue("begin");
                 if (NativeAdmissionFault == "denied")
                     return Response(request, new { }, HttpStatusCode.Forbidden);
+                if (NativeAdmissionFault == "hard-limit-denied")
+                {
+                    var source = _facts!;
+                    var sourceHash = RuntimeUsageSourceReceiptContract.HashSource(Registration, source);
+                    var checkpointHash = new string('a', 64);
+                    var dispatchId = begin.Message.Message.MessageId;
+                    var registrationHash = RuntimeContractValidation.RegistrationHash(Registration);
+                    var denial = RuntimeNativeDenialContract.SealDenial(new(
+                        1, Registration.RuntimeInstanceId, Registration.Revision,
+                        Registration.Binding.ExecutionFence, begin.Authorization.GrantId,
+                        dispatchId, RuntimeCreditLimitDenialStage.NativeTurnBegin,
+                        RuntimeCreditLimitDenialCode.HardLimitReached,
+                        registrationHash, sourceHash,
+                        RuntimeNativeDenialContract.DispatchHash(
+                            dispatchId, registrationHash, sourceHash, checkpointHash, "prepared", 1),
+                        checkpointHash, Registration.Binding.CopilotHardCreditLimit!.Value,
+                        Registration.Binding.CopilotHardCreditLimit.Value, 1, new string('b', 64),
+                        new string('c', 64), 2, 3, "prepared", 1, "prepared", 1,
+                        Time.GetUtcNow(), string.Empty));
+                    _nativeCreditDenials[(dispatchId, denial.Stage)] = denial;
+                    return Response(request, new RuntimeNativeTurnBeginResult(null, denial));
+                }
                 var admission = new RuntimeNativeTurnAdmissionReceipt(Configure.Registration, _facts!,
                     begin.Message.Message.MessageId,
                     RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(begin.Message.Message.Parts[0].Text)),
@@ -2186,7 +2880,36 @@ public sealed class RuntimeAgentHostTests
                 };
                 if (NativeAdmissionFault == "stale")
                     Registration = Registration with { Revision = 2 };
-                return Response(request, admission);
+                return Response(request, new RuntimeNativeTurnBeginResult(admission, null));
+            }
+            if (path == "/internal/runtime/turns/denials/read")
+            {
+                DenialReadWire.Enqueue(await request.Content!.ReadAsStringAsync(token));
+                var read = await ReadAsync<RuntimeNativeCreditDenialReadRequest>(request, token);
+                RuntimeNativeDenialContract.ValidateReadRequest(read);
+                Assert.Equal(_sourceRevision, read.Authorization.Revision);
+                var key = (read.DispatchId, read.Stage);
+                _nativeCreditDenials.TryGetValue(key, out var denial);
+                _nativeNoSendRecords.TryGetValue(key, out var noSend);
+                var result = new RuntimeNativeCreditDenialReadResult(denial, noSend);
+                if (AfterNativeDenialRead is { } afterRead)
+                    await afterRead(token);
+                if (NativeDenialReadStatus is { } status)
+                    return Response(request, new { }, status);
+                return Response(request, result);
+            }
+            if (path == "/internal/runtime/turns/no-send")
+            {
+                var noSend = await ReadAsync<RuntimeNativeTurnNoSendEvidenceRequest>(request, token);
+                var source = _facts!;
+                var sourceReceipt = new RuntimeSdkSourceReceipt(
+                    Registration.RuntimeInstanceId, Registration.Revision, noSend.Authorization.GrantId,
+                    source, RuntimeUsageSourceReceiptContract.HashSource(Registration, source), Time.GetUtcNow());
+                RuntimeNativeDenialContract.ValidateRequest(noSend, Registration, sourceReceipt);
+                NativeNoSendEvidence.Enqueue(noSend);
+                _nativeNoSendRecords[(noSend.Denial.DispatchId, noSend.Denial.Stage)] = noSend.Evidence;
+                NativePathEvents.Enqueue("no-send");
+                return Response(request, noSend.Evidence);
             }
             if (path == "/internal/runtime/turns/observations")
             {
@@ -2329,6 +3052,8 @@ public sealed class RuntimeAgentHostTests
                     });
                 _material[material.EventId] = new(receipt, material.Bytes);
                 _materialWrites[material.EventId] = material;
+                if (material.Kind == SessionMaterialKind.TurnContent && material.Role == "user")
+                    NativePathEvents.Enqueue("user-content");
                 AfterMaterialWrite?.Invoke(material);
                 return Response(request, receipt);
             }

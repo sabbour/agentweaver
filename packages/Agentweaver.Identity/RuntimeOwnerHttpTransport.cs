@@ -214,8 +214,13 @@ public static class RuntimeOwnerHttpTransport
         }
         if (!response.IsSuccessStatusCode)
             throw new RuntimeAuthorizationException(
-                response.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden
-                    ? "runtime_owner_denied" : "runtime_owner_unavailable");
+                response.StatusCode switch
+                {
+                    System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden =>
+                        "runtime_owner_denied",
+                    System.Net.HttpStatusCode.Conflict => "runtime_owner_binding_changed",
+                    _ => "runtime_owner_unavailable"
+                });
         if (response.Headers.CacheControl?.NoStore != true)
             throw new RuntimeAuthorizationException("runtime_owner_cache_contract_invalid");
         try

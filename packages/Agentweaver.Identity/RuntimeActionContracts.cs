@@ -58,6 +58,18 @@ public static class RuntimeActionContract
         RuntimeContractValidation.ValidateHash(request.InputHash);
     }
 
+    public static void RequireNativeDispatchAdmission(RuntimeBinding binding, RuntimeActionRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        ArgumentNullException.ThrowIfNull(request);
+        if (request.ActionId == "model.turn" &&
+            (binding.MaxModelTurns is not null ||
+             binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
+                 binding.CopilotHardCreditLimit is > 0) &&
+            request.DispatchId is null)
+            throw new RuntimeAuthorizationException("runtime_model_turn_admission_required");
+    }
+
     public static void RequireInvocationCapacity(int? limit, long reserved, string exhaustedCode)
     {
         if (reserved < 0 || limit is < 1)

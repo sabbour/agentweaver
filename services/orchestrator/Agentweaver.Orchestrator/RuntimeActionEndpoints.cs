@@ -26,7 +26,8 @@ internal sealed class RuntimeActionOwner(
             context, request.RuntimeInstanceId, cancellationToken).ConfigureAwait(false);
         RequireRequest(registration, request);
         var binding = registration.Binding;
-        RequireCostTurnEnabled(binding, request);
+        await RequireCostTurnEnabledAsync(context, registration, request,
+            RuntimeFixedCreditGuardStage.ActionAuthorize, cancellationToken).ConfigureAwait(false);
         var accepted = await projects.ReadAcceptedSelectionWithAuthorityAsync(
             context, binding.ProjectId, binding.RunId, cancellationToken).ConfigureAwait(false);
         var policyOptions = services.GetService<AgtPolicyProviderOptions>()
@@ -66,7 +67,8 @@ internal sealed class RuntimeActionOwner(
         var registration = await registrations.ReadCurrentAsync(
             context, admission.Request.RuntimeInstanceId, cancellationToken).ConfigureAwait(false);
         RequireRequest(registration, admission.Request);
-        RequireCostTurnEnabled(registration.Binding, admission.Request);
+        await RequireCostTurnEnabledAsync(context, registration, admission.Request,
+            RuntimeFixedCreditGuardStage.ActionVerify, cancellationToken).ConfigureAwait(false);
         var reference = await grants.IssueRuntimeActionGrantAsync(
             context, registration, admission.Request, cancellationToken).ConfigureAwait(false);
         if (reference.GrantId != admission.GrantId || reference.Revision != admission.GrantRevision)
@@ -127,14 +129,72 @@ internal sealed class RuntimeActionOwner(
             throw new RuntimeAuthorizationException("runtime_action_binding_invalid");
     }
 
-    private static void RequireCostTurnEnabled(RuntimeBinding binding, RuntimeActionRequest request)
+    internal async Task<RuntimeFixedCreditGuardReadResult> ReadFixedCreditGuardAsync(
+        HttpContext context, RuntimeFixedCreditGuardReadRequest request, CancellationToken cancellationToken)
     {
-        if (request.ActionId == "model.turn" && binding.MaxModelTurns is not null && request.DispatchId is null)
-            throw new RuntimeAuthorizationException("runtime_model_turn_admission_required");
-        if (request.ActionId == "model.turn" && binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
-            binding.CopilotHardCreditLimit is 0)
-            throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
+        RuntimeFixedCreditGuardContract.ValidateReadRequest(request);
+        if (request.Authorization is not null)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_request_invalid");
+        var store = RequireFixedCreditGuardStore(services);
+        var registration = await registrations.ReadCurrentAsync(
+            context, request.RuntimeInstanceId, cancellationToken).ConfigureAwait(false);
+        if (registration.Revision != request.RegistrationRevision ||
+            registration.Binding.ExecutionFence != request.ExecutionFence)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
+        return await store.ExecuteLockedAsync(registration.RuntimeInstanceId,
+            (connection, transaction, token) => registrations.ExecuteCurrentAsync(
+                context, registration.RuntimeInstanceId, async (current, currentToken) =>
+                {
+                    if (current != registration)
+                        throw new RuntimeAuthorizationException("runtime_registration_changed");
+                    var result = await store.ReadFixedCreditGuardResultWithinTransactionAsync(
+                        connection, transaction, current, request, includeEvidence: false,
+                        grant: null, sourceReceipt: null, currentToken).ConfigureAwait(false)
+                        ?? throw new CoordinationException(
+                            "runtime_fixed_credit_guard_unknown", StatusCodes.Status404NotFound);
+                    RuntimeFixedCreditGuardContract.ValidateReadResult(result, current, request);
+                    await transaction.CommitAsync(currentToken).ConfigureAwait(false);
+                    return result;
+                }, token), cancellationToken).ConfigureAwait(false);
     }
+
+    internal async Task RequireCostTurnEnabledAsync(
+        HttpContext context, RuntimeRegistration registration, RuntimeActionRequest request,
+        RuntimeFixedCreditGuardStage stage, CancellationToken cancellationToken)
+    {
+        var binding = registration.Binding;
+        RuntimeActionContract.RequireNativeDispatchAdmission(binding, request);
+        if (request.ActionId != "model.turn" ||
+            binding.ModelSourceMode != ModelSourceMode.HostedCopilot ||
+            binding.CopilotHardCreditLimit is not 0m)
+            return;
+
+        var store = services.GetService<RuntimeUsageSourceStore>();
+        if (store is not null)
+        {
+            var receipt = RuntimeFixedCreditGuardContract.Seal(new RuntimeFixedCreditGuardReceipt(
+                1, stage, RuntimeFixedCreditGuardCode.HardLimitZero, registration,
+                RuntimeContractValidation.RegistrationHash(registration), request.EventId,
+                RuntimeActionContract.Hash(request), null, null, null, DateTimeOffset.UtcNow, string.Empty));
+            await store.ExecuteLockedAsync(registration.RuntimeInstanceId,
+                (connection, transaction, token) => registrations.ExecuteCurrentAsync(
+                    context, registration.RuntimeInstanceId, async (current, currentToken) =>
+                    {
+                        if (current != registration)
+                            throw new RuntimeAuthorizationException("runtime_registration_changed");
+                        _ = await store.RecordFixedCreditGuardWithinTransactionAsync(
+                            connection, transaction, current, receipt, grant: null,
+                            sourceReceipt: null, currentToken).ConfigureAwait(false);
+                        await transaction.CommitAsync(currentToken).ConfigureAwait(false);
+                        return true;
+                    }, token), cancellationToken).ConfigureAwait(false);
+        }
+        throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
+    }
+
+    internal static RuntimeUsageSourceStore RequireFixedCreditGuardStore(IServiceProvider services) =>
+        services.GetService<RuntimeUsageSourceStore>()
+        ?? throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_unavailable");
 }
 
 public static class RuntimeActionEndpoints
@@ -149,9 +209,14 @@ public static class RuntimeActionEndpoints
             (HttpContext context, RuntimeActionAdmission admission, [FromServices] RuntimeActionOwner owner,
                 CancellationToken token) => ExecuteAsync(context, () => owner.VerifyAsync(context, admission, token)))
             .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/actions/credit-denials/read",
+            (HttpContext context, RuntimeFixedCreditGuardReadRequest request,
+                [FromServices] RuntimeActionOwner owner, CancellationToken token) =>
+                ExecuteAsync(context, () => owner.ReadFixedCreditGuardAsync(context, request, token)))
+            .RequireAuthorization();
     }
 
-    private static async Task<IResult> ExecuteAsync(HttpContext context, Func<Task<RuntimeActionAdmission>> action)
+    private static async Task<IResult> ExecuteAsync<T>(HttpContext context, Func<Task<T>> action)
     {
         context.Response.Headers.CacheControl = "no-store";
         try
@@ -164,7 +229,10 @@ public static class RuntimeActionEndpoints
         }
         catch (RuntimeAuthorizationException failure)
         {
-            return Results.Json(new { error = failure.Code }, statusCode: StatusCodes.Status403Forbidden);
+            var status = failure.Code == "runtime_fixed_credit_guard_unavailable"
+                ? StatusCodes.Status503ServiceUnavailable
+                : StatusCodes.Status403Forbidden;
+            return Results.Json(new { error = failure.Code }, statusCode: status);
         }
         catch (ArgumentException)
         {
