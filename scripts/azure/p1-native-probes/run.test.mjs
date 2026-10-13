@@ -550,6 +550,9 @@ function successDependencies(input, { token = ownerId => `private-${ownerId}` } 
       recipes.push(recipeId);
       const base = { clusterIdentity: input.pins.context.clusterIdentity };
       if (recipeId === 'observe-cluster') return base;
+      if (recipeId === 'verify-hubble') {
+        return { ...base, relayEndpoint: '127.0.0.1:4245', healthy: true };
+      }
       if (recipeId === 'observe-storage') {
         const owner = owners.find(item => item.ownerId === args.owner.ownerId);
         return {
@@ -802,6 +805,25 @@ test('live Environment volume owner must match the pinned volume owner', async (
   assert.equal(result.overallStatus, 'blocked');
   assert.ok(result.probes.every(probe => probe.code === 'live_volume_receipt_mismatch'));
   assert.ok(harness.recipes.every(recipeId => recipeId === 'observe-sandbox'));
+});
+
+test('Hubble prerequisite blocks before any probe mutation', async () => {
+  const input = createInput();
+  const harness = successDependencies(input);
+  const nativeRun = harness.dependencies.processProvider.run;
+  harness.dependencies.processProvider.run = async request => {
+    if (request.recipeId === 'verify-hubble') {
+      throw new Error('Hubble is unavailable');
+    }
+    return nativeRun(request);
+  };
+
+  const result = await runP1NativeProbes(input, harness.dependencies);
+
+  assert.equal(result.overallStatus, 'blocked');
+  assert.ok(result.probes.every(probe => probe.code === 'hubble_prerequisite_unavailable'));
+  assert.deepEqual(harness.authorizations, []);
+  assert.ok(harness.calls.every(call => call.method === 'GET'));
 });
 
 test('run and session identity, execution fences, and explicit receipt resource IDs are mandatory', async () => {

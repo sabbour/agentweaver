@@ -119,6 +119,30 @@ test('a context pointing at a different API server fails closed', async () => {
   assert.equal(harness.calls.length, 1);
 });
 
+test('Hubble preflight requires the configured relay to report healthy', async () => {
+  let status = 0;
+  const harness = createHarness((command, args) => {
+    if (args.includes('config')) {
+      return { status: 0, stdout: JSON.stringify(configResponse()), stderr: '' };
+    }
+    assert.equal(command, 'hubble');
+    assert.deepEqual(args, ['--server', '127.0.0.1:4245', 'status']);
+    return { status, stdout: '', stderr: '' };
+  });
+  const request = {
+    recipeId: 'verify-hubble',
+    args: { expectedClusterIdentity },
+  };
+
+  assert.deepEqual(await harness.provider.run(request), {
+    clusterIdentity: expectedClusterIdentity,
+    relayEndpoint: '127.0.0.1:4245',
+    healthy: true,
+  });
+  status = 1;
+  await assert.rejects(harness.provider.run(request), /Hubble Relay health check failed/);
+});
+
 test('storage readback verifies PVC, PV, claim, and Environment owner annotations', async () => {
   const ownerAnnotations = {
     'agentweaver.dev/owner-kind': 'Run',

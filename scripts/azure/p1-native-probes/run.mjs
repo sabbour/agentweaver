@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 const TENANT_SELECTOR_HEADER = 'X-Agentweaver-Tenant';
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+const HUBBLE_RELAY_ENDPOINT = '127.0.0.1:4245';
 const PROBE_NAMES = Object.freeze([
   'storage-owner-isolation',
   'network-policy-datapath',
@@ -28,6 +29,7 @@ const STARTUP_BUDGET_FIELDS = Object.freeze([
 ]);
 const SAFE_RECIPES = new Set([
   'observe-cluster',
+  'verify-hubble',
   'observe-storage',
   'observe-sandbox',
   'observe-network-policy',
@@ -1226,6 +1228,20 @@ export async function runP1NativeProbes(input, dependencies) {
   try {
     const cluster = await native('observe-cluster', { namespace: input.pins.namespace });
     verifyCluster(cluster, input.pins.context.clusterIdentity);
+    let hubble;
+    try {
+      hubble = await native('verify-hubble', {});
+    } catch (error) {
+      const cause = evidenceError(error, secrets);
+      block('hubble_prerequisite_unavailable',
+        'An available Hubble CLI and healthy, owner-verified Relay for the pinned cluster are required before probe mutations.',
+        { causeCode: cause.code, relayEndpoint: HUBBLE_RELAY_ENDPOINT });
+    }
+    if (hubble?.healthy !== true || hubble?.relayEndpoint !== HUBBLE_RELAY_ENDPOINT) {
+      block('hubble_prerequisite_unavailable',
+        'An available Hubble CLI and healthy, owner-verified Relay for the pinned cluster are required before probe mutations.',
+        { relayEndpoint: HUBBLE_RELAY_ENDPOINT });
+    }
   } catch (error) {
     const issue = evidenceError(error, secrets);
     for (const name of PROBE_NAMES) probes.push(resultFor(name, 'blocked', issue, secrets));

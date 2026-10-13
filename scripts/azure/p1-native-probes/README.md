@@ -156,6 +156,7 @@ where `journey` must exactly match a supplied opaque fixture value.
 `processProvider.run` accepts only the runner's fixed recipe IDs:
 
 - `observe-cluster`
+- `verify-hubble` (required preflight before any probe mutation)
 - `observe-storage`
 - `observe-sandbox`
 - `observe-network-policy`
@@ -183,13 +184,15 @@ the original exact marker bytes.
 native executables are the fixed `kubectl` and `hubble` commands. It checks the
 selected kubeconfig server's SHA-256 origin against the Azure Files provider's
 cluster identity before each recipe. The service-probe recipe performs a
-bounded `nc` attempt from the exact `agenthost` container and reads matching
-recent flow records using Hubble at `127.0.0.1:4245`; it fails closed if a
-ready endpoint, exact current Pod, or consistent Cilium verdict is missing.
-The caller must separately arrange an authenticated Hubble Relay port-forward
-before live use. The adapter does not start that process or contact a cluster
-when imported. Focused tests inject a fake command runner and never invoke
-`kubectl` or `hubble`.
+bounded Bash `/dev/tcp` attempt from the exact `agenthost` container and reads
+matching recent flow records using Hubble at `127.0.0.1:4245`; it fails closed
+if a ready endpoint, exact current Pod, or consistent Cilium verdict is
+missing. A Hubble executable and authenticated, owner-verified Relay for the
+pinned cluster at `127.0.0.1:4245` must already be available. Before any probe
+mutation, the runner checks the fixed Hubble status recipe; a missing CLI or
+unhealthy Relay blocks all probes. The adapter does not install Hubble or
+start a port-forward, and importing it contacts no service. Focused tests
+inject a fake command runner and never invoke `kubectl` or `hubble`.
 
 The adapter uses a fixed, source-owned `sh` script only for the four marker
 operations. The path must be one direct child of the pinned AgentHost mount,

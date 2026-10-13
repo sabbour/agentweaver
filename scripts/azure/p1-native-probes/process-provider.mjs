@@ -3,6 +3,7 @@ import { run } from '../lib/exec.mjs';
 
 const SAFE_RECIPES = new Set([
   'observe-cluster',
+  'verify-hubble',
   'observe-storage',
   'observe-sandbox',
   'observe-network-policy',
@@ -432,6 +433,14 @@ export function createP1NativeProcessProvider({
     };
   };
 
+  const verifyHubble = () => {
+    const result = invoke('hubble', ['--server', HUBBLE_SERVER, 'status'], 5_000);
+    if (result.status !== 0) {
+      throw new Error('The configured Hubble Relay health check failed.');
+    }
+    return { relayEndpoint: HUBBLE_SERVER, healthy: true };
+  };
+
   const findPod = (namespace, labels, expectedUid) => {
     const selector = labelSelector(labels);
     const pods = kubectlJson(namespace, [
@@ -669,6 +678,9 @@ export function createP1NativeProcessProvider({
           result = { namespace: { name: namespace, uid: observed.metadata.uid } };
           break;
         }
+        case 'verify-hubble':
+          result = verifyHubble();
+          break;
         case 'observe-storage':
           result = observeStorage(args);
           break;
