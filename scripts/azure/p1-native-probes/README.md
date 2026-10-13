@@ -245,8 +245,11 @@ utility instead of `nc`, which is not installed in the AgentHost image.
 Unique marker files are removed only when their exact current owner Pod UID
 and marker contents are still observed. Final Sandbox cleanup uses the
 Environment abandon/reconcile routes only after matching the in-memory
-invocation-created resource ID, Pod UID, and owner binding. Cleanup uncertainty
-is reported in the result and makes an otherwise-passing probe `blocked`.
+invocation-created resource ID, Pod UID, and owner binding. Native absence
+readbacks list only the pinned namespace, check the exact known claim and Pod
+UIDs before owner or claim labels, and treat any present-but-mismatched identity
+as uncertain rather than absent. Cleanup uncertainty is reported in the result
+and makes an otherwise-passing probe `blocked`.
 
 Run the focused tests from the repository root:
 

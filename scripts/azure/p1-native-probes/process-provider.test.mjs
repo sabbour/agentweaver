@@ -515,11 +515,13 @@ test('Sandbox Pod reads select a replacement by its actual placement, operation,
 
 test('owned-resource absence readback still reports a matching dependent Pod', async () => {
   const sandboxClaimUid = 'sandbox-claim-uid-a';
+  const expectedPodUid = 'previously-observed-pod-uid';
   const harness = createHarness((command, args) => {
     if (args.includes('config')) {
       return { status: 0, stdout: JSON.stringify(configResponse()), stderr: '' };
     }
     if (args.includes('sandboxclaims.extensions.agents.x-k8s.io')) {
+      assert.equal(args[args.indexOf('--namespace') + 1], 'p1-fixture');
       return {
         status: 0,
         stdout: JSON.stringify({ apiVersion: 'v1', kind: 'List', items: [] }),
@@ -527,8 +529,8 @@ test('owned-resource absence readback still reports a matching dependent Pod', a
       };
     }
     assert.ok(args.includes('pods'));
-    assert.ok(args.some(value =>
-      typeof value === 'string' && value.includes(`agents.x-k8s.io/claim-uid=${sandboxClaimUid}`)));
+    assert.equal(args[args.indexOf('--namespace') + 1], 'p1-fixture');
+    assert.equal(args.includes('--selector'), false);
     return {
       status: 0,
       stdout: JSON.stringify({
@@ -561,6 +563,7 @@ test('owned-resource absence readback still reports a matching dependent Pod', a
       owner: mountOwner,
       resourceId: sandboxClaimUid,
       expectedUid: sandboxClaimUid,
+      expectedPodUids: [expectedPodUid],
     },
   });
 
@@ -569,6 +572,111 @@ test('owned-resource absence readback still reports a matching dependent Pod', a
     exists: false,
     dependentPods: [{ name: 'orphan-agenthost', uid: 'orphan-pod-uid' }],
   });
+});
+
+test('owned-resource readback rejects an exact claim UID with changed owner labels', async () => {
+  const sandboxClaimUid = 'sandbox-claim-uid-owner-mismatch';
+  let podListRead = false;
+  const harness = createHarness((command, args) => {
+    if (args.includes('config')) {
+      return { status: 0, stdout: JSON.stringify(configResponse()), stderr: '' };
+    }
+    if (args.includes('sandboxclaims.extensions.agents.x-k8s.io')) {
+      assert.equal(args[args.indexOf('--namespace') + 1], 'p1-fixture');
+      assert.equal(args.includes('--selector'), false);
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          apiVersion: 'v1',
+          kind: 'List',
+          items: [{
+            apiVersion: 'extensions.agents.x-k8s.io/v1beta1',
+            kind: 'SandboxClaim',
+            metadata: {
+              name: 'claim-a',
+              namespace: 'p1-fixture',
+              uid: sandboxClaimUid,
+              labels: {
+                'agentweaver.dev/managed-sandbox': 'true',
+                'agentweaver.dev/sandbox-owner': 'changed-owner',
+              },
+            },
+          }],
+        }),
+        stderr: '',
+      };
+    }
+    podListRead = true;
+    throw new Error('Pod read must not follow an owner-mismatched claim.');
+  });
+
+  await assert.rejects(harness.provider.run({
+    recipeId: 'observe-owned-resource',
+    args: {
+      expectedClusterIdentity,
+      namespace: 'p1-fixture',
+      owner: mountOwner,
+      resourceId: sandboxClaimUid,
+      expectedUid: sandboxClaimUid,
+      expectedPodUids: ['previously-observed-pod-uid'],
+    },
+  }), /exact SandboxClaim UID is present but its owner labels do not match/);
+  assert.equal(podListRead, false);
+});
+
+test('owned-resource readback rejects a known Pod UID with a changed claim label', async () => {
+  const sandboxClaimUid = 'sandbox-claim-uid-pod-mismatch';
+  const expectedPodUid = 'previously-observed-pod-uid';
+  const harness = createHarness((command, args) => {
+    if (args.includes('config')) {
+      return { status: 0, stdout: JSON.stringify(configResponse()), stderr: '' };
+    }
+    if (args.includes('sandboxclaims.extensions.agents.x-k8s.io')) {
+      assert.equal(args[args.indexOf('--namespace') + 1], 'p1-fixture');
+      return {
+        status: 0,
+        stdout: JSON.stringify({ apiVersion: 'v1', kind: 'List', items: [] }),
+        stderr: '',
+      };
+    }
+    assert.ok(args.includes('pods'));
+    assert.equal(args[args.indexOf('--namespace') + 1], 'p1-fixture');
+    assert.equal(args.includes('--selector'), false);
+    return {
+      status: 0,
+      stdout: JSON.stringify({
+        apiVersion: 'v1',
+        kind: 'List',
+        items: [{
+          apiVersion: 'v1',
+          kind: 'Pod',
+          metadata: {
+            name: 'previous-agenthost',
+            namespace: 'p1-fixture',
+            uid: expectedPodUid,
+            labels: {
+              'agentweaver.dev/managed-sandbox': 'true',
+              'agentweaver.dev/sandbox-owner': ownerLabel,
+              'agents.x-k8s.io/claim-uid': 'different-claim-uid',
+            },
+          },
+        }],
+      }),
+      stderr: '',
+    };
+  });
+
+  await assert.rejects(harness.provider.run({
+    recipeId: 'observe-owned-resource',
+    args: {
+      expectedClusterIdentity,
+      namespace: 'p1-fixture',
+      owner: mountOwner,
+      resourceId: sandboxClaimUid,
+      expectedUid: sandboxClaimUid,
+      expectedPodUids: [expectedPodUid],
+    },
+  }), /known Sandbox Pod UID has a mismatched SandboxClaim UID label/);
 });
 
 test('marker reads are bound to the current Pod UID, owner, and exact PVC mount', async () => {

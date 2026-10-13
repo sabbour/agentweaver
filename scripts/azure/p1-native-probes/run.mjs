@@ -973,11 +973,18 @@ export async function runP1NativeProbes(input, dependencies) {
   const verifyOwnedSandboxResourcesAbsent = async (owner, resources) => {
     const readbacks = [];
     for (const resource of resources) {
+      if (!nonEmpty(resource.uid)) {
+        block('sandbox_pod_receipt_missing', 'Every invocation-owned Sandbox claim must retain its exact previously observed Pod UID for absence verification.', {
+          ownerId: owner.storage.ownerId,
+          resourceId: resource.resourceId,
+        });
+      }
       readbacks.push(await native('observe-owned-resource', {
         namespace: input.pins.namespace,
         owner: ownerSelector(owner.storage),
         resourceId: resource.resourceId,
         expectedUid: resource.resourceId,
+        expectedPodUids: [resource.uid],
       }));
     }
     return {

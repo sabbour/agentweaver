@@ -358,6 +358,7 @@ function successDependencies(input, { token = ownerId => `private-${ownerId}` } 
   const mountKey = args => `${podOwnerByUid.get(args.podUid)}:${args.path}`;
   const calls = [];
   const recipes = [];
+  const recipeRequests = [];
   const authorizations = [];
   const response = (status, body) => ({ status, body });
   const placementFor = state => {
@@ -566,6 +567,7 @@ function successDependencies(input, { token = ownerId => `private-${ownerId}` } 
   const processProvider = {
     async run({ recipeId, args }) {
       recipes.push(recipeId);
+      recipeRequests.push({ recipeId, args });
       const base = { clusterIdentity: input.pins.context.clusterIdentity };
       if (recipeId === 'observe-cluster') return base;
       if (recipeId === 'verify-hubble') {
@@ -752,6 +754,7 @@ function successDependencies(input, { token = ownerId => `private-${ownerId}` } 
   return {
     calls,
     recipes,
+    recipeRequests,
     authorizations,
     states: stateByOwner,
     dependencies: {
@@ -1103,6 +1106,14 @@ test('four native probes pass with injected production-shaped reads, mutations, 
   assert.ok(harness.recipes.includes('observe-storage'));
   assert.ok(harness.recipes.includes('probe-service'));
   assert.ok(harness.recipes.includes('mount-file'));
+  const absenceRequests = harness.recipeRequests.filter(request =>
+    request.recipeId === 'observe-owned-resource');
+  for (const runtime of input.pins.runtimeReceipt.owners) {
+    assert.ok(absenceRequests.some(request =>
+      request.args.resourceId === runtime.sandboxResourceId &&
+      request.args.expectedPodUids.length === 1 &&
+      request.args.expectedPodUids[0] === runtime.sandboxUid));
+  }
   assert.ok(harness.authorizations.some(request => request.action === 'sandbox-abandon'));
   assert.ok(harness.authorizations.some(request => request.action === 'workspace-volume-release'));
   assert.ok(harness.authorizations.some(request => request.action === 'network-policy-revoke'));

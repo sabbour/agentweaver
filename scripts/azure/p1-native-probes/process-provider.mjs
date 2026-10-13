@@ -548,50 +548,70 @@ export function createP1NativeProcessProvider({
     if (resourceId !== expectedUid) {
       throw new Error('The SandboxClaim UID must match its provider resource ID.');
     }
+    if (!Array.isArray(args.expectedPodUids) || args.expectedPodUids.length === 0) {
+      throw new Error('The exact previously observed AgentHost Pod UIDs are required.');
+    }
+    const expectedPodUids = args.expectedPodUids.map(uid =>
+      requireString(uid, 'previously observed Sandbox Pod UID'));
+    const expectedPodUidSet = new Set(expectedPodUids);
+    if (expectedPodUidSet.size !== expectedPodUids.length) {
+      throw new Error('Previously observed Sandbox Pod UIDs must be unique.');
+    }
     const fingerprint = ownerFingerprint(args.owner);
     const items = kubectlJson(namespace, [
       'get', 'sandboxclaims.extensions.agents.x-k8s.io',
-      '--selector', `${MANAGED}=true,${OWNER}=${fingerprint}`,
     ], 'Sandbox claim list');
     if (items.apiVersion !== 'v1' || items.kind !== 'List' || !Array.isArray(items.items)) {
       throw new Error('The current Sandbox claim list is invalid.');
     }
-    const matches = items.items.filter(item =>
-      item.metadata?.namespace === namespace &&
-      item.metadata?.uid === expectedUid &&
-      item.metadata?.labels?.[MANAGED] === 'true' &&
-      item.metadata?.labels?.[OWNER] === fingerprint);
-    if (matches.some(item =>
-      item.apiVersion !== 'extensions.agents.x-k8s.io/v1beta1' ||
-      item.kind !== 'SandboxClaim')) {
-      throw new Error('The exact owned resource is not a SandboxClaim.');
+    const matches = items.items.filter(item => item.metadata?.uid === expectedUid);
+    if (matches.length > 1) throw new Error('The invocation-owned Sandbox claim UID is ambiguous.');
+    if (matches.length === 1) {
+      const claim = matches[0];
+      if (claim.metadata?.namespace !== namespace ||
+          claim.apiVersion !== 'extensions.agents.x-k8s.io/v1beta1' ||
+          claim.kind !== 'SandboxClaim') {
+        throw new Error('The exact resource UID is not a SandboxClaim in the pinned namespace.');
+      }
+      if (claim.metadata?.labels?.[MANAGED] !== 'true' ||
+          claim.metadata?.labels?.[OWNER] !== fingerprint) {
+        throw new Error('The exact SandboxClaim UID is present but its owner labels do not match.');
+      }
     }
-    if (matches.length > 1) throw new Error('The invocation-owned Sandbox claim is ambiguous.');
     const pods = kubectlJson(namespace, [
       'get', 'pods',
-      '--selector', `${CLAIM_UID}=${expectedUid}`,
     ], 'Sandbox claim Pod list');
     if (pods.apiVersion !== 'v1' || pods.kind !== 'List' || !Array.isArray(pods.items)) {
       throw new Error('The current Sandbox claim Pod list is invalid.');
     }
-    const dependentPods = pods.items
-      .filter(pod =>
-        pod.metadata?.namespace === namespace &&
-        pod.metadata?.labels?.[CLAIM_UID] === expectedUid)
-      .map(pod => {
-        if (pod.apiVersion !== 'v1' || pod.kind !== 'Pod') {
-          throw new Error('The exact Sandbox claim child is not a Pod.');
-        }
-        return pod;
-      })
-      .map(pod => ({
+    const dependentPods = new Map();
+    for (const pod of pods.items) {
+      const podUid = pod.metadata?.uid;
+      const knownPod = expectedPodUidSet.has(podUid);
+      const claimLinkedPod = pod.metadata?.labels?.[CLAIM_UID] === expectedUid;
+      if (!knownPod && !claimLinkedPod) continue;
+      if (pod.metadata?.namespace !== namespace ||
+          pod.apiVersion !== 'v1' || pod.kind !== 'Pod') {
+        throw new Error('A known Sandbox Pod UID is not a Pod in the pinned namespace.');
+      }
+      const labels = pod.metadata?.labels;
+      if (labels?.[MANAGED] !== 'true' || labels?.[OWNER] !== fingerprint) {
+        throw new Error('A known Sandbox Pod UID has mismatched owner labels.');
+      }
+      if (knownPod && labels?.[CLAIM_UID] !== expectedUid) {
+        throw new Error('A known Sandbox Pod UID has a mismatched SandboxClaim UID label.');
+      }
+      const uid = requireString(podUid, 'Sandbox claim Pod UID');
+      if (dependentPods.has(uid)) throw new Error('The Sandbox claim Pod UID is ambiguous.');
+      dependentPods.set(uid, {
         name: requireString(pod.metadata?.name, 'Sandbox claim Pod name', DNS_LABEL),
-        uid: requireString(pod.metadata?.uid, 'Sandbox claim Pod UID'),
-      }));
+        uid,
+      });
+    }
     return {
       clusterIdentity: expectedClusterIdentity,
       exists: matches.length === 1,
-      dependentPods,
+      dependentPods: [...dependentPods.values()],
       ...(matches.length === 1
         ? { uid: matches[0].metadata.uid, ownerId: args.owner.ownerId }
         : {}),
