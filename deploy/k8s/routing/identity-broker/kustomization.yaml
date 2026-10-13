@@ -4,7 +4,15 @@ resources:
   - gateway-namespace.yaml
   - gateway-certificate.yaml
   - gateway-ingress.yaml
+  - web-gateway-ingress.yaml
+  - gateway-api-ingress.yaml
   - default-domain-certificate.yaml
   - gateway.yaml
   - httproute.yaml
   - backend-tls-policy.yaml
+  - web-application.yaml
+  - gateway-api.yaml
+  - gateway-api-backend-tls.yaml
+  - gateway-mcp.yaml
+  - gateway-mcp-backend-tls.yaml
+  - mcp-gateway-ingress.yaml

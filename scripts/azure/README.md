@@ -41,16 +41,20 @@ A created identity does not prove database access or a ready service.
 
 ### P1 PostgreSQL initializer source proposal
 
-`tools/P1PostgresInitializer` remains a blocked source proposal.
-Source review does not authorize role creation, migrations, grants, or deployment.
-The existing credential check blocks initialization before any credential request
-or database connection. The later row-lock column check also remains blocked.
+`tools/P1PostgresInitializer` is source-only; no initialization or database
+connection has been run. Source review does not authorize role creation,
+migrations, grants, or deployment. The existing credential check blocks
+initialization before any credential request or database connection. The source
+validates all planned row-lock mutation guards and, before committing grants,
+reads back each installed trigger and function to verify the exact table,
+trigger type, function body/owner, and absence of runtime EXECUTE.
 The source catalog requires Core versions 1 through 16 and 18 through 21.
 These are 20 registered versions; version 17 remains excluded.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
 The plan retains 93 tables and eight exact row-lock columns.
 It includes 28 exact function signatures, with runtime EXECUTE only for casting authority.
-Installed guards and restricted-role behavior still require separate database proof.
+Actual installed catalog state and restricted-role behavior still require
+separate database proof.
 The five new update guards reject changes with SQLSTATE `55000`.
 The three older history guards retain `P0001` and their update, delete, and truncate protections.
 
@@ -184,8 +188,16 @@ The P0 namespace retains restricted enforcement, audit, and warning labels.
 
 After namespace setup, this option creates the approved dedicated Gateway
 namespace and native managed certificates in both namespaces.
-It applies only the Gateway, HTTPRoute, BackendTLSPolicy, and narrow Cilium
-ingress policy. It adds no mesh addon, Istio API resource, injection label,
+It applies the Gateway, Broker/Web/Gateway API/MCP HTTPRoutes, corresponding
+BackendTLSPolicies, and narrow Cilium ingress policies. The portal listener
+sends `/` to Web, `/api/v1` plus exact `/openapi/v1.json` to Gateway, and exact
+`/mcp` plus `/.well-known/oauth-protected-resource/mcp` to MCP over HTTPS.
+Gateway and MCP backend TLS use operator-owned
+`gateway-tls` and `mcp-tls` Secrets, validated against the public `ca.crt` in
+the existing `service-backend-ca` ConfigMap. Their leaf certificates must
+match the exact in-cluster service DNS names. The installer reads back the
+native routes and BackendTLSPolicies; it does not create or rotate these
+service certificates. It adds no mesh addon, Istio API resource, injection label,
 custom DNS zone, role assignment, application registration, or signing key.
 It waits for the Gateway and route conditions with bounded commands.
 The installer reads the public issuer from the admitted route hostname.

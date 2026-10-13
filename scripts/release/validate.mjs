@@ -197,7 +197,13 @@ export function validateManifest(manifest, { root = repositoryRoot, readProject 
   if (manifest.stage === 'draft') {
     if (manifest.evidence !== undefined) fail('manifest.evidence', 'draft must not claim deployment or persona evidence');
   } else {
-    const services = [...components.values()].filter((component) => component.kind === 'service');
+    const probe = components.get('Agentweaver.FoundationProbe');
+    if (probe && (probe.kind !== 'service' || probe.version !== '0.0.1')) {
+      fail('manifest.components[Agentweaver.FoundationProbe]',
+        'FoundationProbe is acceptance-only and must remain service 0.0.1 in a product release');
+    }
+    const services = [...components.values()].filter((component) =>
+      component.kind === 'service' && component.id !== 'Agentweaver.FoundationProbe');
     if (services.length === 0) {
       fail('manifest.components', 'release requires an actual deployable service');
     }

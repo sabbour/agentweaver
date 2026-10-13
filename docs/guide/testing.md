@@ -9,9 +9,20 @@ They verify the canonical receipt and archived source notes.
 They check exact dependency compatibility and confirm that version application changes
 only version fields and release records, not runtime code or external package pins.
 These checks do not publish artifacts, apply SQL, or prove deployed behavior.
-Workflow source checks verify job-local package permission and the approved GitHub Packages feed.
-They execute the destination guard locally with accepted and rejected values.
-They do not authenticate a token, publish a package or prove registry access.
+The local deployment-tool tests validate the exact v1 P0 target, release-stage
+manifest, source-bound publication result, ten digest-pinned GHCR service images,
+nine shared Deployment/Service pairs, and the receipt-measured AgentHost image,
+platform, and byte-count pin supplied to Environment. Fake
+transports prove that the default dry-run issues no write command, GHCR
+verification uses the registry HTTP API without Docker/Podman, and resume still
+repeats target, provenance, and live health checks. These are local contract
+tests; they do not contact GitHub, GHCR, Azure, or Kubernetes and do not prove
+that a published release or complete runtime manifest currently exists.
+Workflow source checks verify job-local package permission, the approved GitHub
+Packages feed, and the exact `ghcr.io/sabbour` destination guard. They execute
+both destination guards locally with accepted and rejected values. They do not
+authenticate a token, publish a package, prove package-write access, or prove
+that published images are publicly pullable.
 Release build-input checks bind the three image references and all 467 dependencies to the approved source.
 They reject source drift, wrong image digests, an isolated builder, and dependency integrity failures before packing.
 A builder fixture uses standard `docker buildx inspect default` text output and rejects missing, duplicate, or unexpected driver and endpoint fields.
@@ -126,7 +137,7 @@ These source results do not prove native TLS, mounted restore contents, Cilium t
 | Blob tests | Azure SDK requests, streamed data, create-only writes, and missing-object results through a fake HTTP transport. | Live credentials, permissions, durability, or cloud access. |
 | Telemetry tests | In-process OpenTelemetry setup and Azure Monitor exporter behavior through an injected transport. | Azure Monitor ingestion. |
 | Azure tooling tests | Target, source, digest, command, and acceptance guards through fake `az` and `git` executors. | A live Azure call or provisioned resource. |
-| P1 PostgreSQL initializer source tests | Canonical database grant comparisons, pre-write rejection, five exact principal mappings and memberships, function ownership and EXECUTE grants, ordered role-stage checks, partial-stage receipts, and original-error preservation when the failure receipt fails. The existing Foundation Probe test project compiles the same dependency-free helper used by the initializer. | Initializer execution, PostgreSQL catalog or transaction behavior, live Entra principal creation, installed mutation guards, runtime identity proof, or deployment. |
+| P1 PostgreSQL initializer source tests | Canonical database grant comparisons, pre-write rejection, five exact principal mappings and memberships, function ownership and EXECUTE grants, planned and read-back installed mutation guard checks, ordered role-stage checks, partial-stage receipts, and original-error preservation when the failure receipt fails. The existing Foundation Probe test project compiles the same dependency-free helper used by the initializer. | Initializer execution, actual PostgreSQL catalog or transaction behavior, live Entra principal creation, restricted-role mutation tests, runtime identity proof, or deployment. |
 | Foundation Probe tests | Receipt and token checks, provider pins, exact-version Key Vault read, owned Blob cleanup, PostgreSQL effects, and trace evidence. | Azure resource access or Identity broker redemption. |
 | AgentHost tests | Actual native SDK transport, authenticated configure/refresh/A2A, exact replay, current owner/source rejection, guarded effects, turn content, idle-boundary priority, accounting acknowledgment, cache recovery, and exact startup-time ceilings. CI separately measures the compressed amd64 OCI image and starts its image-owned pinned runtime with non-executable private mounts, without network or a model call. | Automatic scheduling, deployed TLS/Sandbox placement, live OAuth/entitlement, paid model execution, or publication. |
 
@@ -198,6 +209,7 @@ normalized Broker issuer separately from the ephemeral transport URL.
 Run these commands from the repository root:
 
 ```powershell
+node --test scripts\release\tests\deploy.test.mjs
 dotnet restore Agentweaver.slnx --locked-mode
 dotnet build Agentweaver.slnx --no-restore --configuration Release
 dotnet test tests\Agentweaver.SourceControl.Tests\Agentweaver.SourceControl.Tests.csproj --no-build --no-restore --configuration Release

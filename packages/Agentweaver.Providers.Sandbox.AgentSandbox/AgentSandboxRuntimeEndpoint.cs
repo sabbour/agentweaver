@@ -34,10 +34,14 @@ public sealed partial class AgentSandboxProvider
         var spec = RequiredObject(service, "spec");
         var selector = ReadStringDictionary(spec, "selector");
         var owners = RequiredArray(metadata, "ownerReferences");
+        var ports = RequiredArray(spec, "ports");
         if (RequiredString(metadata, "name") != serviceName ||
             RequiredString(metadata, "namespace") != @namespace ||
             metadata.TryGetProperty("deletionTimestamp", out var deleted) &&
                 deleted.ValueKind != JsonValueKind.Null ||
+            ReadOptionalString(spec, "type") != "ClusterIP" ||
+            ports.GetArrayLength() != 1 ||
+            !IsAgentHostServicePort(ports[0]) ||
             !owners.EnumerateArray().Any(owner =>
                 ReadOptionalString(owner, "kind") == "Sandbox" &&
                 ReadOptionalString(owner, "uid") == sandboxUid &&
@@ -62,6 +66,14 @@ public sealed partial class AgentSandboxProvider
                 "sandbox_runtime_endpoint_invalid", exception.Message, effectMayHaveApplied: false, exception);
         }
     }
+
+    private static bool IsAgentHostServicePort(JsonElement port) =>
+        ReadOptionalString(port, "name") == "https" &&
+        TryGetInt64(port, "port", out var servicePort) &&
+        servicePort == 8443 &&
+        ReadOptionalString(port, "protocol") == "TCP" &&
+        (ReadOptionalString(port, "targetPort") == "https" ||
+         TryGetInt64(port, "targetPort", out var targetPort) && targetPort == 8443);
 
     private static bool IsRuntimeDnsLabel(string label) =>
         label.Length is > 0 and <= 63 &&

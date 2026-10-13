@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { renderProjectsProfile } from '../../../deploy/k8s/profiles/projects-config/render.mjs';
+import { runtimeContractSettings, runtimeListFixture } from '../../release/tests/runtime-list-fixture.mjs';
 
 const rendererUrl = new URL('../../../deploy/k8s/profiles/projects-config/render.mjs', import.meta.url);
 const exampleUrl = new URL('../../../deploy/k8s/profiles/projects-config/runtime-inputs.example.json', import.meta.url);
@@ -236,6 +237,13 @@ test('workload remains private, restricted and bounded without migration or addi
   assert.equal(container.command, undefined);
   assert.equal(result.items.some(value => ['Secret', 'Job', 'Ingress', 'Gateway'].includes(value.kind)), false);
   assert.doesNotMatch(JSON.stringify(result), /Migration|--migrate|SSL_CERT|ClientSecret|SkillContent|blob\.core/);
+});
+
+test('release runtime preserves the accepted Projects identity, provider catalog, listener and health contract', () => {
+  const accepted = item(renderProjectsProfile(fixture()), 'Deployment');
+  const runtime = runtimeListFixture().items.find(value =>
+    value.kind === 'Deployment' && value.metadata.name === 'projects-config');
+  assert.deepEqual(runtimeContractSettings(runtime), runtimeContractSettings(accepted));
 });
 
 test('network access is limited to scoped callers, health probes, DNS, issuer, Entra and PostgreSQL', () => {

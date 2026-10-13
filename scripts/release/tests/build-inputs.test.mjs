@@ -224,8 +224,14 @@ test('standard locked npm install supplies its unchanged offline install for SHA
     response.writeHead(bytes ? 200 : 404, { 'content-type': 'application/octet-stream' });
     response.end(bytes);
   });
+  const closeServer = () => {
+    if (!server.listening) return Promise.resolve();
+    const closed = new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    server.closeAllConnections();
+    return closed;
+  };
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  t.after(() => server.close());
+  t.after(closeServer);
   const origin = `http://127.0.0.1:${server.address().port}`;
   const packages = { '': { name: 'cache-fixture', version: '1.0.0', dependencies: {
     'cache-sha1': '1.0.0', 'cache-sha512': '1.0.0',
@@ -258,7 +264,7 @@ test('standard locked npm install supplies its unchanged offline install for SHA
   for (const name of ['cache-sha1', 'cache-sha512']) {
     assert.equal(existsSync(path.join(root, 'node_modules', name, 'script-ran')), false);
   }
-  await new Promise(resolve => server.close(resolve));
+  await closeServer();
   await install(true);
   assert.equal(requests.length, 2);
   assert.deepEqual(readFileSync(lockPath), lockBefore);

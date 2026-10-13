@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
-import { packComponents } from '../pack.mjs';
+import { packComponents, selectIntegrationImageComponents } from '../pack.mjs';
 
 const csproj = (version) => `<Project><PropertyGroup><Version>${version}</Version></PropertyGroup></Project>`;
 
@@ -126,6 +126,50 @@ test('platform-only preparation rejects conflicting selections before any build 
       dotnet() { assert.fail('conflicting selection must not build'); },
     }), /platform-only preparation cannot combine/);
   }
+});
+
+test('integration image selection requires all product services and excludes packages and FoundationProbe', () => {
+  const manifest = manifestBase();
+  const ids = [
+    'Agentweaver.AgentHost', 'Agentweaver.Identity.Broker', 'Agentweaver.EventsAndSessions',
+    'Agentweaver.Gateway', 'Agentweaver.Mcp', 'Agentweaver.Web', 'Agentweaver.Orchestrator',
+    'Agentweaver.Environment', 'Agentweaver.Knowledge', 'Agentweaver.Projects.Config',
+  ];
+  manifest.components.push(...ids.map(id => ({
+    id, kind: 'service', version: '1.0.0', project: `services/${id}/${id}.csproj`,
+  })), {
+    id: 'Agentweaver.FoundationProbe', kind: 'service', version: '0.0.1',
+    project: 'tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj',
+  });
+  assert.deepEqual(
+    selectIntegrationImageComponents(manifest).map(({ id }) => id).sort(),
+    ids.sort(),
+  );
+  manifest.components.pop();
+  manifest.components.pop();
+  assert.throws(() => selectIntegrationImageComponents(manifest),
+    /exact ten product services and excludes FoundationProbe/);
+});
+
+test('ordinary service container labels require explicit integration source properties', () => {
+  const dotnet = process.env.DOTNET_HOST_PATH || 'dotnet';
+  const project = path.resolve('services', 'gateway', 'Agentweaver.Gateway', 'Agentweaver.Gateway.csproj');
+  const evaluate = (properties = []) => JSON.parse(execFileSync(dotnet, [
+    'msbuild', project, '-nologo', '-p:EnableSdkContainerSupport=true',
+    ...properties, '-getItem:ContainerLabel',
+  ], { encoding: 'utf8' })).Items.ContainerLabel;
+  assert.deepEqual(evaluate(), []);
+  const labels = Object.fromEntries(evaluate([
+    '-p:AgentweaverIntegrationImagesOnly=true',
+    `-p:AgentweaverIntegrationSourceSha=${'a'.repeat(40)}`,
+    `-p:AgentweaverIntegrationSourceTree=${'b'.repeat(40)}`,
+    '-p:AgentweaverIntegrationVersion=1.0.0',
+  ]).map(({ Identity, Value }) => [Identity, Value]));
+  assert.deepEqual(labels, {
+    'org.opencontainers.image.revision': 'a'.repeat(40),
+    'io.agentweaver.source-tree': 'b'.repeat(40),
+    'org.opencontainers.image.version': '1.0.0',
+  });
 });
 
 test('Probe SDK image preparation embeds independently derived image source metadata in build and publish', t => {

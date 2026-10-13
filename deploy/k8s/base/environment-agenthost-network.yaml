@@ -1,0 +1,74 @@
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: agenthost-environment-ingress
+  namespace: agentweaver-v1-p0
+  labels:
+    agentweaver.io/service: agenthost
+spec:
+  endpointSelector:
+    matchLabels:
+      agentweaver.io/workload: agenthost
+  ingress:
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: environment
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: environment-agenthost-egress
+  namespace: agentweaver-v1-p0
+  labels:
+    agentweaver.io/service: environment
+spec:
+  endpointSelector:
+    matchLabels:
+      agentweaver.io/workload: environment
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: agenthost
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: projects-config
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: environment-agenthost-ingress
+  namespace: agentweaver-v1-p0
+  labels:
+    agentweaver.io/service: environment
+spec:
+  endpointSelector:
+    matchLabels:
+      agentweaver.io/workload: environment
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: agenthost
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: orchestrator
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP

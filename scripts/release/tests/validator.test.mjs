@@ -197,6 +197,16 @@ test('draft dependency declarations allow pure version preparation without chang
   const manifestText = readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8');
   const receipt = JSON.parse(readFileSync(path.join(root, 'releases', 'receipts',
     '62a0dcf5307dc7ef58c805d4c66b45baecd98e43.json'), 'utf8'));
+  const sourcePaths = new Set([
+    ...fixture.components.map(({ project }) => project),
+    'apps/web/package-lock.json',
+    'releases/CHANGELOG.md',
+    receipt.manifestPath,
+    ...receipt.changesets.map(({ archivedPath }) => archivedPath),
+  ]);
+  const sourceSnapshot = new Map([...sourcePaths]
+    .filter(file => existsSync(path.join(root, file)))
+    .map(file => [file, readFileSync(path.join(root, file))]));
   const prepared = verifyPreparation(root, receipt);
   const readSource = file => {
     const result = spawnSync('git', ['show', `${receipt.sourceSha}:${file}`], { cwd: root, encoding: 'utf8' });
@@ -240,8 +250,8 @@ test('draft dependency declarations allow pure version preparation without chang
     ...component, version: preparedVersions.get(component.id) ?? component.version,
   })));
   assert.deepEqual(preparedManifest, fixture);
-  for (const [file, expected] of prepared.files) {
-    assert.deepEqual(readFileSync(path.join(root, file)), Buffer.from(expected), file);
+  for (const [file, original] of sourceSnapshot) {
+    assert.deepEqual(readFileSync(path.join(root, file)), original, file);
   }
   for (const file of prepared.deleted) assert.ok(!existsSync(path.join(root, file)), file);
   assert.equal(readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8'), manifestText);
@@ -408,7 +418,9 @@ const validEvidence = {
 const release = () => edit((m) => {
   m.stage = 'release';
   for (const component of m.components) {
-    if (component.kind === 'service') component.imageDigest = `sha256:${'b'.repeat(64)}`;
+    if (component.kind === 'service' && component.id !== 'Agentweaver.FoundationProbe') {
+      component.imageDigest = `sha256:${'b'.repeat(64)}`;
+    }
   }
   m.components.push({
     id: 'Agentweaver.Example',
@@ -475,4 +487,20 @@ test('draft services may honestly omit an image digest, but release services may
   assert.throws(() => check(draftWithBadDigest, { readProject: releaseProject }), /sha256 image digest/);
   assert.throws(() => checkRelease(editRelease((m) => { delete m.components.at(-1).imageDigest; })),
     /requires a published sha256 image digest/);
+});
+
+test('release product images are digest-pinned while the acceptance-only Probe stays outside the release', () => {
+  const released = release();
+  const probe = released.components.find(({ id }) => id === 'Agentweaver.FoundationProbe');
+  assert.equal(probe.version, '0.0.1');
+  assert.equal(probe.imageDigest, undefined);
+  assert.equal(checkRelease(released).stage, 'release');
+  const changedProbe = editRelease((m) => {
+    m.components.find(({ id }) => id === 'Agentweaver.FoundationProbe').version = '0.0.2';
+  });
+  assert.throws(() => check(changedProbe, {
+    readProject: (file) => file.includes('Agentweaver.FoundationProbe.csproj')
+      ? readProject(file).replace('<Version>0.0.1</Version>', '<Version>0.0.2</Version>')
+      : releaseProject(file),
+  }), /acceptance-only and must remain service 0.0.1 in a product release/);
 });
