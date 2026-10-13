@@ -122,9 +122,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
             },
             configureServices: services =>
             {
-                services.AddSingleton<BrokerRunBindingTlsIdentity>(_ =>
-                    BrokerRunBindingTlsIdentity.Load(
-                        _runBindingOptions, _runBindingTlsAuthority.TrustBundleBytes));
+                ConfigureRunBindingTlsIdentity(services);
                 services.RemoveAll<ISecretVersionWriter>();
                 services.AddSingleton<ISecretVersionWriter>(_ =>
                     new BrowserRepoAppSecretVersionWriter(
@@ -176,6 +174,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         settings["IdentityBroker__RunBinding__ProjectsTrustBundleSha256"] =
             _runBindingOptions.ProjectsTrustBundleSha256;
     }
+
+    private void ConfigureRunBindingTlsIdentity(IServiceCollection services) =>
+        ConfigureRunBindingTlsIdentity(
+            services, _runBindingOptions, _runBindingTlsAuthority.TrustBundleBytes);
+
+    internal static void ConfigureRunBindingTlsIdentity(
+        IServiceCollection services, BrokerRunBindingOptions options, byte[] trustBundleBytes) =>
+        services.AddSingleton<BrokerRunBindingTlsIdentity>(_ =>
+            BrokerRunBindingTlsIdentity.Load(options, trustBundleBytes));
 
     [Fact]
     public async Task UnboundOrchestratorAcceptsFirstRunSelectionBeforeBrokerIssuesBoundTokens()
