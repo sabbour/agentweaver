@@ -1515,7 +1515,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         var browserRedirectUri = $"{webAuthority}/auth/callback";
         var scopes = string.Join(
             " ",
-            IdentityBrokerWebApplicationFactory.TestClientScopes.Concat(ProjectScopes));
+            IdentityBrokerWebApplicationFactory.TestClientScopes.Append("projects.orchestrator"));
         var webClient = await StartWebClientAsync(brokerAuthority, browserRedirectUri, scopes);
         try
         {

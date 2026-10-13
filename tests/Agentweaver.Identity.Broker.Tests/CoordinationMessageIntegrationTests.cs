@@ -5225,7 +5225,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var browserRedirectUri = $"{brokerAuthority}/auth/callback";
         var scopes = string.Join(
             " ",
-            IdentityBrokerWebApplicationFactory.TestClientScopes.Concat(ProjectScopes));
+            IdentityBrokerWebApplicationFactory.TestClientScopes.Append("projects.orchestrator"));
 
         await using var gateway = GatewayProductionResourceServer.Start(
             signingKey,

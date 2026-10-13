@@ -217,16 +217,20 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             signingCertificate: _signingCertificate,
             configure: settings =>
             {
+                ConfigureRunBindingSettings(settings);
                 settings["IdentityBroker__Clients__0__Resources__0"] = audience;
                 settings["IdentityBroker__SecretRedemption__Audience"] = audience;
                 for (var i = 0; i < extraScopes.Length; i++)
                     settings[$"IdentityBroker__Clients__0__Scopes__{i + IdentityBrokerWebApplicationFactory.TestClientScopes.Length}"] =
                         extraScopes[i];
             },
-            configureServices: accessTokenLifetime is { } lifetime
-                ? services => services.PostConfigure<OpenIddictServerOptions>(
-                    options => options.AccessTokenLifetime = lifetime)
-                : null);
+            configureServices: services =>
+            {
+                ConfigureRunBindingTlsIdentity(services);
+                if (accessTokenLifetime is { } lifetime)
+                    services.PostConfigure<OpenIddictServerOptions>(
+                        options => options.AccessTokenLifetime = lifetime);
+            });
 
         _fakeIdp.Subject = subject;
         _fakeIdp.TenantIds = [TenantId];
