@@ -203,19 +203,22 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     }
 
     [Fact]
-    public async Task PrepareRejectsExistingDispatchWithMismatchedRegistrationRevisionBeforeCreditDenial()
+    public async Task PrepareRejectsExistingDispatchWithMismatchedCheckpointBeforeCreditDenial()
     {
         await RegisterPositiveHardCreditAsync(0);
         Assert.Null(await PrepareAsync(0, PricedSnapshot(0, 4m, 1)));
         var dispatchId = _intents[0].MessageId;
         var guardBefore = await ReadCreditGuardAsync();
-
-        await IncrementDispatchRegistrationRevisionAsync(dispatchId);
         var dispatchBefore = await ReadDispatchBindingAsync(dispatchId);
+        await AdvanceNativeCheckpointAsync("retry-native-prepare", _checkpoint.State with
+        {
+            Revision = _checkpoint.State.Revision + 1
+        });
+        Assert.NotEqual(dispatchBefore.CheckpointId, _checkpoint.Info.CheckpointId);
         var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
             PrepareAsync(0, PricedSnapshot(0, 5m, 2)));
 
-        Assert.Equal("runtime_native_turn_admission_invalid", failure.Code);
+        Assert.Equal("runtime_native_turn_conflict", failure.Code);
         Assert.Equal(guardBefore, await ReadCreditGuardAsync());
         Assert.Equal(dispatchBefore, await ReadDispatchBindingAsync(dispatchId));
         Assert.Null(await ReadCreditDenialAsync(
@@ -786,12 +789,13 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         return (reader.GetDecimal(0), reader.GetInt64(1), reader.GetBoolean(2), reader.GetInt64(3));
     }
 
-    private async Task<(long RegistrationRevision, string State, long OwnerRevision)>
+    private async Task<(string CheckpointId, long CheckpointRevision, long DecisionStateVersion,
+        string State, long OwnerRevision)>
         ReadDispatchBindingAsync(Guid dispatchId)
     {
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
-            SELECT registration_revision, dispatch_state, owner_revision
+            SELECT checkpoint_id, checkpoint_revision, decision_state_version, dispatch_state, owner_revision
             FROM "{_schema}".maf_execution_dispatches
             WHERE project_id = @project AND run_id = @run AND dispatch_id = @dispatch
             """, connection);
@@ -800,21 +804,8 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         command.Parameters.AddWithValue("dispatch", dispatchId);
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
-        return (reader.GetInt64(0), reader.GetString(1), reader.GetInt64(2));
-    }
-
-    private async Task IncrementDispatchRegistrationRevisionAsync(Guid dispatchId)
-    {
-        await using var connection = await fixture.DataSource.OpenConnectionAsync();
-        await using var command = new NpgsqlCommand($"""
-            UPDATE "{_schema}".maf_execution_dispatches
-            SET registration_revision = registration_revision + 1
-            WHERE project_id = @project AND run_id = @run AND dispatch_id = @dispatch
-            """, connection);
-        command.Parameters.AddWithValue("project", _root.ProjectId);
-        command.Parameters.AddWithValue("run", _root.RunId);
-        command.Parameters.AddWithValue("dispatch", dispatchId);
-        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+        return (reader.GetString(0), reader.GetInt64(1), reader.GetInt64(2),
+            reader.GetString(3), reader.GetInt64(4));
     }
 
     private Task<RuntimeNativeCreditDenialReceipt?> ReadCreditDenialAsync(
