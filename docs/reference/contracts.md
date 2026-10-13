@@ -940,8 +940,10 @@ Config for a fresh authorization-context check; Knowledge does not keep membersh
 roles, or authorization caches. Private content reads and writes require fresh effective
 `AccessPrivateKnowledge` for the target project; `ReadProjects` alone is metadata-only
 and does not authorize private Knowledge records, revisions, or context. A run-bound
-project Owner with `projects.admin` receives this Knowledge-specific permission but
-not generic `WriteProjects`. Memory-provider
+project Owner with `projects.admin` retains this Knowledge-specific permission but
+not generic `WriteProjects`. A run-bound Owner also receives it with `api.read` and
+`projects.orchestrator` when the same current project has an Orchestrator assignment
+and the token is bound to the exact project/run. Memory-provider
 resolution additionally requires effective project `ReadRunSelection`. If the validated
 caller token is already bound to a project/run, those bindings must match the requested
 route and the authority response.

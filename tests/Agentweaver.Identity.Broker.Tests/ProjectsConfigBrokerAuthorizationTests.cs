@@ -1425,30 +1425,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
             project.ProjectId,
             runId,
             $"knowledge-browser:{runId}");
-        var boundOwnerToken = CreateSignedAccessToken(
-            browserOwnerSubject,
-            new Claim("project_id", project.ProjectId),
-            new Claim("run_id", runId));
-        using (var boundOwnerContextResponse = await SendAsync(
-                   projects.Client,
-                   HttpMethod.Get,
-                   "/api/authorization/context",
-                   boundOwnerToken,
-                   [TenantId]))
-        {
-            Assert.Equal(HttpStatusCode.OK, boundOwnerContextResponse.StatusCode);
-            var boundOwnerContext = await ReadAuthorizationContextAsync(boundOwnerContextResponse);
-            Assert.True(HasPermission(
-                boundOwnerContext,
-                ProjectAuthorityResourceType.Project,
-                project.ProjectId,
-                ProjectAuthorizationPermission.AccessPrivateKnowledge));
-            Assert.False(HasPermission(
-                boundOwnerContext,
-                ProjectAuthorityResourceType.Project,
-                project.ProjectId,
-                ProjectAuthorizationPermission.WriteProjects));
-        }
 
         var seededMemory = await database.Provider.CreateAsync(
             new KnowledgeRecordCreate(

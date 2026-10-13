@@ -199,6 +199,14 @@ public sealed class ProjectAuthorizationContext
                         if (BoundRunId is null)
                             Add(grant, ProjectAuthorizationPermission.WriteProjects);
                     }
+                    else if (BoundProjectId is not null &&
+                        BoundRunId is not null &&
+                        orchestratorScope &&
+                        HasRole(
+                            ProjectAuthorityResourceType.Project,
+                            BoundProjectId,
+                            ProjectAuthorityRole.Orchestrator))
+                        Add(grant, ProjectAuthorizationPermission.AccessPrivateKnowledge);
                     break;
                 case (ProjectAuthorityResourceType.Project,
                     ProjectAuthorityRole.Contributor or ProjectAuthorityRole.Viewer)
