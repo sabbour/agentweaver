@@ -85,10 +85,13 @@ Closing the adapter is not product-resource cleanup.
 
 ## Executable P1 journey
 
-The shared P1 runner contains gate, message, and journal journeys through this
-adapter. Its CLI currently blocks before importing a page provider because a
-JSON manifest cannot prove that this invocation created the project, run,
-selection, and sessions. Supply a module whose default async function returns
+The exported `runP1UiJourney` function opens the pinned run and reads the
+committed-event journal through this borrowed UI adapter. It checks the actual
+cursor pages and Activity view. It does not use MCP replay as UI evidence.
+
+The CLI still blocks before importing a page provider because a JSON manifest
+cannot prove that this invocation created the project, run, selection, and
+sessions. Supply a module whose default async function returns
 an already authorized page on the selected Environment web origin when a
 supported same-invocation setup path is available:
 

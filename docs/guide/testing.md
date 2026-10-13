@@ -475,6 +475,11 @@ API tests use actual loopback HTTP with controlled contracts.
 MCP tests use the pinned SDK with an actual loopback JSON-RPC server.
 UI tests use a controlled injected-page contract, not a browser.
 These checks do not prove a real cross-surface journey, native model execution, or deployment.
+The bounded journal function uses only its selected surface: the API route,
+the MCP replay tool, or the borrowed UI Activity view. It checks the actual
+page cursors, event IDs, and project/run/session identities. The CLI and all
+gate and message writes remain blocked until the required same-invocation
+setup and owner routes are available.
 
 The P1 adapters contain five bounded journeys:
 `gate-answer`, `gate-approve`, `gate-reject`, `message`, and `journal`.

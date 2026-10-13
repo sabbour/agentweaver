@@ -74,9 +74,14 @@ Record created resource identities and obtain current revisions and authority be
 
 ## Executable P1 journey
 
-The shared runner contains a bounded API journey, but its CLI currently blocks
-before API access because a JSON manifest cannot prove that this invocation
-created the project, run, selection, and sessions. It requires an
+The exported `runP1ApiJourney` function reads journal pages through the
+discovered Gateway `replayRunEvents` operation:
+`GET /api/v1/projects/{projectId}/runs/{runId}/events`. It checks the actual
+cursor chain, event IDs, and project, run, and session identities. MCP replay
+does not count as API evidence.
+
+The CLI still blocks before API access because a JSON manifest cannot prove
+that this invocation created the project, run, selection, and sessions. It requires an
 `executionIntent: "execute"` manifest with the direct Environment target,
 provider/runtime/storage/source/image receipts, current owner fences, and
 caller-supplied creation and readback receipt claims for the fixture.

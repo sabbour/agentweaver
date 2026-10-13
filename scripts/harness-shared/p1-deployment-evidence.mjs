@@ -48,6 +48,7 @@ const IDENTITY_SERVICES = new Set([
   'projects-config',
 ]);
 const SOURCE_ANNOTATION = 'agentweaver.io/provider-catalog-source';
+const PROVIDER_CATALOG_PREFIX = 'ProjectsConfig__ProviderCatalog__';
 
 function requireTarget(context, namespace) {
   if (typeof context !== 'string' || !/^[A-Za-z0-9._:/@-]{1,128}$/.test(context)) {
@@ -178,6 +179,16 @@ function deploymentContainers(deployment, image) {
   return containers;
 }
 
+function hasExactProviderCatalogBinding(envFrom, configMapName) {
+  if (!Array.isArray(envFrom)) return false;
+  const bindings = envFrom.filter(source =>
+    source?.prefix === PROVIDER_CATALOG_PREFIX || source?.configMapRef?.name === configMapName);
+  return bindings.length === 1
+    && bindings[0].prefix === PROVIDER_CATALOG_PREFIX
+    && bindings[0].configMapRef?.name === configMapName
+    && bindings[0].configMapRef?.optional === false;
+}
+
 function selectRuntimeObjects(items, kind, namespace) {
   return items.filter(item => item.kind === kind && item.metadata?.namespace === namespace);
 }
@@ -293,10 +304,9 @@ export async function observeP1ServiceDeployments({
     if (image.name === 'projects-config') {
       const template = deployment.spec?.template;
       const catalogAnnotations = template?.metadata?.annotations ?? {};
-      const catalogMounts = template?.spec?.volumes?.filter(volume =>
-        volume.configMap?.name === providerCatalog.configMapName) ?? [];
+      const templateContainer = deploymentContainers(deployment, image.image)[0];
       if (catalogAnnotations[SOURCE_ANNOTATION] !== providerCatalog.sourceCommit
-        || catalogMounts.length !== 1) {
+        || !hasExactProviderCatalogBinding(templateContainer.envFrom, providerCatalog.configMapName)) {
         throw new Error('Projects does not bind the exact observed provider catalog source and ConfigMap.');
       }
     }
@@ -324,6 +334,7 @@ export async function observeP1ServiceDeployments({
       const ready = pod.status?.conditions?.some(condition =>
         condition.type === 'Ready' && condition.status === 'True');
       const containers = deploymentContainers({ ...deployment, spec: { ...deployment.spec, template: { spec: pod.spec } } }, image.image);
+      const applicationContainer = pod.spec?.containers?.[0];
       const status = pod.status?.containerStatuses;
       if (pod.status?.phase !== 'Running' || !ready || typeof pod.metadata?.uid !== 'string'
         || !pod.metadata.uid || status?.length !== containers.length
@@ -331,8 +342,8 @@ export async function observeP1ServiceDeployments({
         || pod.spec?.containers?.[0]?.name !== image.name
         || pod.metadata?.labels?.['agentweaver.io/service'] !== image.name
         || pod.metadata?.labels?.['agentweaver.io/workload'] !== image.name
-        || pod.spec?.volumes?.filter(volume => volume.configMap?.name === providerCatalog.configMapName).length !== 1
-          && image.name === 'projects-config') {
+        || image.name === 'projects-config'
+          && !hasExactProviderCatalogBinding(applicationContainer?.envFrom, providerCatalog.configMapName)) {
         throw new Error(`Pod ${pod.metadata?.name ?? '[unknown]'} is not a ready owner of ${image.name}.`);
       }
       if (IDENTITY_SERVICES.has(image.name)

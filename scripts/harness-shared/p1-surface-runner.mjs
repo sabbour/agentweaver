@@ -8,6 +8,7 @@ import {
   newP1IdempotencyKey,
   p1Timestamp,
   readP1OwnerSnapshots,
+  replayP1ApiJournal,
   replayP1Journal,
   requireP1DecisionReceipt,
   requireP1DeniedApiActor,
@@ -21,6 +22,7 @@ import {
 
 const SURFACES = new Set(['api', 'mcp', 'ui']);
 const JOURNEYS = new Set(['gate-answer', 'gate-approve', 'gate-reject', 'message', 'journal']);
+const EVENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function validateActorAnswer(snapshot, input) {
   const { gate, blocker } = requireP1OwnedGate(snapshot, input);
@@ -195,7 +197,8 @@ export async function runP1SurfaceJourney(surface, input, {
   let surfaceStatus = 'blocked';
   let failure;
   let uiAdapterCloseStatus = surface === 'ui' ? 'not-started' : 'not-required';
-  let mcpCloseStatus = mcp && typeof mcp.close === 'function' ? 'not-started' : 'not-required';
+  let mcpCloseStatus = surface === 'mcp' && mcp && typeof mcp.close === 'function'
+    ? 'not-started' : 'not-required';
   const observations = {};
   const actionReceipts = [];
   let safeSourceEvidence;
@@ -214,10 +217,12 @@ export async function runP1SurfaceJourney(surface, input, {
     validateP1AdapterBindings(adapters, environment, pins.fixtureScope, surface);
     safeSourceEvidence = summarizeP1SourceEvidence(sourceEvidence, pins);
     await api.discover();
-    try {
-      await mcp.discoverTools();
-    } catch (error) {
-      throw new P1BlockedError(`The live MCP tool catalog is unavailable: ${error.message}`);
+    if (surface === 'mcp') {
+      try {
+        await mcp.discoverTools();
+      } catch (error) {
+        throw new P1BlockedError(`The live MCP tool catalog is unavailable: ${error.message}`);
+      }
     }
     let capabilities;
     try {
@@ -241,18 +246,53 @@ export async function runP1SurfaceJourney(surface, input, {
     steps.push({ id: 'valid-denied-actor-403', status: 'passed', operationId: denied.operationId, httpStatus: 403 });
     const snapshot = await readP1OwnerSnapshots(api, pins.ownerFences);
     steps.push({ id: 'current-owner-fences', status: 'passed', operationId: 'readRunStatus/readSessionStatus/readDecisions' });
-    const journal = await replayP1Journal(mcp, pins.ownerFences, environment.tenantId);
-    observations.journal = { eventCount: journal.eventCount, pageCount: journal.pageCount };
-    steps.push({
-      id: 'committed-run-journal',
-      status: 'passed',
-      toolName: 'agentweaver_replayRunEvents',
-      correlationId: journal.correlationId,
-    });
-
     if (input.journey.startsWith('gate-')) validateActorAnswer(snapshot, input);
     if (input.journey === 'message') await readMessageTree(api, input);
     if (surface === 'ui') await ui.openRun({ projectId: pins.ownerFences.projectId, runId: pins.ownerFences.runId });
+    if (input.journey === 'journal') {
+      const journal = surface === 'api'
+        ? await replayP1ApiJournal(api, pins.ownerFences)
+        : surface === 'mcp'
+          ? await replayP1Journal(mcp, pins.ownerFences, environment.tenantId)
+          : await ui.replayJournal();
+      if (surface === 'ui') {
+        const events = journal?.events;
+        const eventIds = new Set();
+        const positions = new Set();
+        let lastPosition = Number.POSITIVE_INFINITY;
+        if (!Array.isArray(events) || events.length === 0
+          || !Number.isSafeInteger(journal.pageCount) || journal.pageCount < 1
+          || journal.transcriptContentAvailable !== false) {
+          throw new Error('The UI did not return a nonempty committed-event view without transcript content.');
+        }
+        for (const event of events) {
+          const identity = event?.identity;
+          if (typeof event?.eventId !== 'string' || !EVENT_ID.test(event.eventId)
+            || !identity || Object.keys(identity).sort().join(',') !== 'projectId,runId,sessionId'
+            || identity.projectId !== pins.ownerFences.projectId || identity.runId !== pins.ownerFences.runId
+            || typeof identity.sessionId !== 'string' || !identity.sessionId
+            || !Number.isSafeInteger(event.position) || event.position < 1
+            || eventIds.has(event.eventId) || positions.has(event.position) || event.position >= lastPosition) {
+            throw new Error('The UI replay contains a foreign, repeated, or unordered event identity.');
+          }
+          eventIds.add(event.eventId);
+          positions.add(event.position);
+          lastPosition = event.position;
+        }
+        observations.uiJournalEventCount = events.length;
+        observations.journal = { eventCount: events.length, pageCount: journal.pageCount };
+      } else {
+        observations.journal = { eventCount: journal.eventCount, pageCount: journal.pageCount };
+      }
+      steps.push({
+        id: 'committed-run-journal',
+        status: 'passed',
+        ...(surface === 'api' ? { operationId: 'replayRunEvents' } : {}),
+        ...(surface === 'mcp' ? { toolName: 'agentweaver_replayRunEvents' } : {}),
+        ...(surface === 'ui' ? { uiMethod: 'replayJournal' } : {}),
+        ...(journal.correlationId ? { correlationId: journal.correlationId } : {}),
+      });
+    }
     if (input.journey !== 'journal') {
       throw new P1BlockedError('Gate and message writes are blocked until a supported authenticated setup path proves same-invocation creation and readback.');
     }
@@ -304,22 +344,20 @@ export async function runP1SurfaceJourney(surface, input, {
         reason: 'The current owner API exposes no delete operation for an accepted addressed message.',
       };
     } else {
-      if (surface === 'ui') {
-        const uiJournal = await ui.replayJournal();
-        if (!Array.isArray(uiJournal?.events) || uiJournal.events.length === 0
-          || uiJournal.transcriptContentAvailable !== false) {
-          throw new Error('The UI did not return a nonempty committed-event view without transcript content.');
-        }
-        observations.uiJournalEventCount = uiJournal.events.length;
-      }
-      steps.push({ id: 'journal', status: 'passed', operationId: 'agentweaver_replayRunEvents' });
+      steps.push({
+        id: 'journal',
+        status: 'passed',
+        ...(surface === 'api' ? { operationId: 'replayRunEvents' } : {}),
+        ...(surface === 'mcp' ? { toolName: 'agentweaver_replayRunEvents' } : {}),
+        ...(surface === 'ui' ? { uiMethod: 'replayJournal' } : {}),
+      });
     }
     surfaceStatus = 'passed';
   } catch (error) {
     failure = sanitizeP1Failure(error);
     surfaceStatus = error instanceof P1BlockedError ? 'blocked' : 'failed';
   } finally {
-    if (mcp && typeof mcp.close === 'function') {
+    if (surface === 'mcp' && mcp && typeof mcp.close === 'function') {
       try {
         await mcp.close();
         mcpCloseStatus = 'closed';

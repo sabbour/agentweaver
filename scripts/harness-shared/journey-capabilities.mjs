@@ -21,7 +21,7 @@ const JOURNEYS = {
     uiMethod: 'sendMessage',
   },
   journal: {
-    apiOperations: [],
+    apiOperations: ['replayRunEvents'],
     mcpTools: ['agentweaver_replayRunEvents'],
     uiMethod: 'replayJournal',
   },
@@ -33,8 +33,8 @@ export function requireJourneyCapabilities({ api, mcp, ui }, journey, surface) {
   if (surface !== undefined && !['api', 'mcp', 'ui'].includes(surface)) {
     throw new Error('A known P1 surface is required for capability checks.');
   }
-  const checkApi = surface === undefined || required.apiOperations.length > 0;
-  const checkMcp = surface === undefined || required.mcpTools.length > 0;
+  const checkApi = surface === undefined || surface === 'api' && required.apiOperations.length > 0;
+  const checkMcp = surface === undefined || surface === 'mcp' && required.mcpTools.length > 0;
   const checkUi = surface === undefined || surface === 'ui';
   if (checkApi && !(api?.operations instanceof Map)) {
     throw new Error('Discover the actual API menu before checking journey capabilities.');
@@ -56,8 +56,8 @@ export function requireJourneyCapabilities({ api, mcp, ui }, journey, surface) {
   if (missing.length) throw new Error(`Required P1 journey capabilities are missing: ${missing.join(', ')}`);
   return {
     journey,
-    apiOperations: [...required.apiOperations],
-    mcpTools: [...required.mcpTools],
+    apiOperations: surface === undefined || surface === 'api' ? [...required.apiOperations] : [],
+    mcpTools: surface === undefined || surface === 'mcp' ? [...required.mcpTools] : [],
     uiMethod: required.uiMethod,
   };
 }

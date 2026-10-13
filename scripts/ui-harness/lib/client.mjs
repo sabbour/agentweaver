@@ -351,7 +351,7 @@ export class UiHarnessClient {
     }
     this.requirePageScope();
     return redact({ source: 'Gateway replay DTOs and current journal DOM', events: ordered,
-      nextCursor: cursor, transcriptContentAvailable: false });
+      pageCount: pages.length, nextCursor: cursor, transcriptContentAvailable: false });
   }
 
   async close() {

@@ -289,6 +289,7 @@ test('replay correlates actual cursor pages with deduplicated reverse DOM order,
     const proof = await client.replayJournal();
     assert.deepEqual(proof.events.map(item => item.eventId), ['event-2', 'event-1']);
     assert.equal(proof.nextCursor, 'cursor-2');
+    assert.equal(proof.pageCount, 2);
     assert.equal(proof.transcriptContentAvailable, false);
   } finally { await client.close(); }
 });

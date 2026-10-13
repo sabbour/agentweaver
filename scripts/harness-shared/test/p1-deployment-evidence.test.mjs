@@ -13,6 +13,7 @@ const sourceTree = 'b'.repeat(40);
 const providerSource = 'c'.repeat(40);
 const context = 'approved-aks-context';
 const namespace = 'agentweaver-v1-p0';
+const sourceAnnotation = 'agentweaver.io/provider-catalog-source';
 const providerCatalog = { configMapName: 'provider-catalog-v1', sourceCommit: providerSource };
 const serviceNames = [
   'identity-broker',
@@ -109,11 +110,16 @@ function fixture({ webTreeLabel, gatewayIndex = false, gatewayRuntimeDigest } = 
       ...(identityServices.has(name) ? { 'azure.workload.identity/use': 'true' } : {}),
     };
     const annotations = name === 'projects-config'
-      ? { 'agentweaver.io/provider-catalog-source': providerSource }
+      ? { [sourceAnnotation]: providerSource }
       : {};
-    const volumes = name === 'projects-config'
-      ? [{ name: 'provider-catalog', configMap: { name: providerCatalog.configMapName } }]
-      : [];
+    const providerCatalogBinding = () => name === 'projects-config'
+      ? {
+        envFrom: [{
+          prefix: 'ProjectsConfig__ProviderCatalog__',
+          configMapRef: { name: providerCatalog.configMapName, optional: false },
+        }],
+      }
+      : {};
     items.push({
       apiVersion: 'v1',
       kind: 'Service',
@@ -138,7 +144,7 @@ function fixture({ webTreeLabel, gatewayIndex = false, gatewayRuntimeDigest } = 
         selector: { matchLabels: { 'app.kubernetes.io/name': name } },
         template: {
           metadata: { labels, annotations },
-          spec: { containers: [{ name, image }], volumes },
+          spec: { containers: [{ name, image, ...providerCatalogBinding() }] },
         },
       },
       status: { observedGeneration: 2, updatedReplicas: 1, readyReplicas: 1, availableReplicas: 1 },
@@ -166,7 +172,7 @@ function fixture({ webTreeLabel, gatewayIndex = false, gatewayRuntimeDigest } = 
         annotations,
         ownerReferences: [{ kind: 'ReplicaSet', uid: replicaSetUid, controller: true }],
       },
-      spec: { containers: [{ name, image }], volumes, nodeName: 'node-a' },
+      spec: { containers: [{ name, image, ...providerCatalogBinding() }], nodeName: 'node-a' },
       status: {
         phase: 'Running',
         conditions: [{ type: 'Ready', status: 'True' }],
@@ -363,6 +369,73 @@ test('records native service UIDs and verifies pod imageIDs plus registry source
   assert.equal(result.agentHostRuntime.status, 'blocked');
   assert.ok(calls.length >= 18);
   assert.ok(calls.every(call => !new Headers(call.options.headers).has('authorization')));
+});
+
+test('requires the exact provider catalog binding on the Deployment template and ready owner Pod', async () => {
+  const data = fixture();
+  const observe = items => observeP1ServiceDeployments({
+    context,
+    namespace,
+    sourceSha,
+    sourceTree,
+    images: data.images,
+    providerCatalog,
+    readObjects: async () => items,
+    fetchImpl: async url => {
+      const body = data.registryBodies.get(String(url));
+      if (!body) return new Response('missing', { status: 404 });
+      const expectedDigest = String(url).split('/').at(-1);
+      return new Response(body, { status: 200, headers: { 'docker-content-digest': expectedDigest } });
+    },
+  });
+  const mutateProjectsContainer = (items, kind, mutate) => {
+    const resource = items.find(item => item.kind === kind
+      && item.metadata.name === (kind === 'Deployment' ? 'projects-config' : 'projects-config-pod'));
+    const spec = kind === 'Deployment' ? resource.spec.template.spec : resource.spec;
+    mutate(spec.containers[0]);
+  };
+
+  const badTemplatePrefix = structuredClone(data.items);
+  mutateProjectsContainer(badTemplatePrefix, 'Deployment', container => {
+    container.envFrom[0].prefix = 'Wrong__Prefix__';
+  });
+  await assert.rejects(observe(badTemplatePrefix), /exact observed provider catalog source and ConfigMap/);
+
+  const missingTemplateBinding = structuredClone(data.items);
+  mutateProjectsContainer(missingTemplateBinding, 'Deployment', container => {
+    delete container.envFrom;
+  });
+  await assert.rejects(observe(missingTemplateBinding), /exact observed provider catalog source and ConfigMap/);
+
+  const optionalTemplateBinding = structuredClone(data.items);
+  mutateProjectsContainer(optionalTemplateBinding, 'Deployment', container => {
+    container.envFrom[0].configMapRef.optional = true;
+  });
+  await assert.rejects(observe(optionalTemplateBinding), /exact observed provider catalog source and ConfigMap/);
+
+  const duplicateTemplateBinding = structuredClone(data.items);
+  mutateProjectsContainer(duplicateTemplateBinding, 'Deployment', container => {
+    container.envFrom.push(structuredClone(container.envFrom[0]));
+  });
+  await assert.rejects(observe(duplicateTemplateBinding), /exact observed provider catalog source and ConfigMap/);
+
+  const wrongSourceAnnotation = structuredClone(data.items);
+  const deployment = wrongSourceAnnotation.find(item =>
+    item.kind === 'Deployment' && item.metadata.name === 'projects-config');
+  deployment.spec.template.metadata.annotations[sourceAnnotation] = 'd'.repeat(40);
+  await assert.rejects(observe(wrongSourceAnnotation), /exact observed provider catalog source and ConfigMap/);
+
+  const foreignPodConfigMap = structuredClone(data.items);
+  mutateProjectsContainer(foreignPodConfigMap, 'Pod', container => {
+    container.envFrom[0].configMapRef.name = 'other-catalog';
+  });
+  await assert.rejects(observe(foreignPodConfigMap), /ready owner of projects-config/);
+
+  const missingPodBinding = structuredClone(data.items);
+  mutateProjectsContainer(missingPodBinding, 'Pod', container => {
+    delete container.envFrom;
+  });
+  await assert.rejects(observe(missingPodBinding), /ready owner of projects-config/);
 });
 
 test('accepts only the reviewed index or its verified linux/amd64 child as a runtime imageID', async () => {

@@ -17,17 +17,32 @@ test('requires exact discovered operations and UI adapters for each selected P1 
   assert.throws(() => requireJourneyCapabilities(adapters, 'unknown'), /Unknown/);
 });
 
-test('journal uses the discovered MCP replay tool without inventing an API SSE route', () => {
+test('journal capabilities are surface-specific and use the Gateway replay operation or the actual MCP/UI surface', () => {
   const adapters = {
-    api: { operations: new Map() },
+    api: { operations: new Map([['replayRunEvents', {}]]) },
     mcp: { tools: new Map([['agentweaver_replayRunEvents', {}]]) },
     ui: { replayJournal() {} },
   };
   const required = requireJourneyCapabilities(adapters, 'journal');
-  assert.deepEqual(required.apiOperations, []);
+  assert.deepEqual(required.apiOperations, ['replayRunEvents']);
   assert.deepEqual(required.mcpTools, ['agentweaver_replayRunEvents']);
+  const api = requireJourneyCapabilities({ api: adapters.api }, 'journal', 'api');
+  assert.equal(api.journey, 'journal');
+  assert.deepEqual(api.apiOperations, ['replayRunEvents']);
+  const mcp = requireJourneyCapabilities({ mcp: adapters.mcp }, 'journal', 'mcp');
+  assert.equal(mcp.journey, 'journal');
+  assert.deepEqual(mcp.apiOperations, []);
+  assert.deepEqual(mcp.mcpTools, ['agentweaver_replayRunEvents']);
+  const ui = requireJourneyCapabilities({ ui: adapters.ui }, 'journal', 'ui');
+  assert.equal(ui.journey, 'journal');
+  assert.deepEqual(ui.apiOperations, []);
+  assert.deepEqual(ui.mcpTools, []);
+
+  assert.throws(() => requireJourneyCapabilities({ api: { operations: new Map() } }, 'journal', 'api'),
+    /api:replayRunEvents/);
   adapters.mcp.tools.clear();
-  assert.throws(() => requireJourneyCapabilities(adapters, 'journal'), /mcp:agentweaver_replayRunEvents/);
+  assert.throws(() => requireJourneyCapabilities({ mcp: adapters.mcp }, 'journal', 'mcp'),
+    /mcp:agentweaver_replayRunEvents/);
 });
 
 test('surface checks require only that surface adapter while preserving shared live dependencies', () => {

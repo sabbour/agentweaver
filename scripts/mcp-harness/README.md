@@ -67,8 +67,12 @@ Product cleanup needs separate current owner authority and observed receipts.
 
 ## Executable P1 journey
 
-The shared runner contains bounded MCP gate, message, and journal journeys.
-Its CLI currently blocks before MCP access because a JSON manifest cannot
+The exported `runP1McpJourney` function reads journal pages through the
+discovered `agentweaver_replayRunEvents` tool. The API client still reads
+owner snapshots and verifies a denied-actor `403`, but API replay does not
+count as MCP evidence.
+
+The CLI currently blocks before MCP access because a JSON manifest cannot
 prove that this invocation created the project, run, selection, and sessions.
 The input manifest must contain
 `executionIntent: "execute"`, direct Environment identity metadata, pinned

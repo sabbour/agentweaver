@@ -60,8 +60,8 @@ export function summarizeP1SourceEvidence(sourceEvidence, pins) {
 export function validateP1AdapterBindings({ api, deniedApi, mcp, ui }, environment, fixtureScope, surface) {
   const origin = new URL(environment.baseUrl).origin;
   const deniedIdentity = fixtureScope.deniedActor;
-  if (!api || !deniedApi || !mcp || surface === 'ui' && !ui) {
-    throw new P1BlockedError('The API, denied-actor API, MCP, and surface-required adapters are required.');
+  if (!api || !deniedApi || surface === 'mcp' && !mcp || surface === 'ui' && !ui) {
+    throw new P1BlockedError('The API, denied-actor API, and selected-surface adapters are required.');
   }
   if (api.target?.origin !== origin || api.tenantId !== environment.tenantId
     || api.authProvider?.origin !== origin || api.authProvider.issuer !== environment.issuer
@@ -74,10 +74,10 @@ export function validateP1AdapterBindings({ api, deniedApi, mcp, ui }, environme
     || deniedApi.authProvider.actorId !== deniedIdentity?.actorId) {
     throw new P1BlockedError('The denied-actor API client is not bound to its selected Environment identity.');
   }
-  if (mcp.target?.origin !== origin || mcp.target.pathname !== '/mcp'
+  if (surface === 'mcp' && (mcp.target?.origin !== origin || mcp.target.pathname !== '/mcp'
     || mcp.tenantId !== environment.tenantId
     || mcp.authProvider?.origin !== origin || mcp.authProvider.issuer !== environment.issuer
-    || mcp.authProvider.audience !== environment.audience || mcp.authProvider.actorId !== environment.actorId) {
+    || mcp.authProvider.audience !== environment.audience || mcp.authProvider.actorId !== environment.actorId)) {
     throw new P1BlockedError('The MCP client is not bound to the selected Environment origin, tenant, and actor.');
   }
   if (surface === 'ui' && (ui.target?.origin !== origin || ui.gateway?.origin !== origin
@@ -237,26 +237,26 @@ export async function callP1McpTool(mcp, toolName, arguments_) {
   };
 }
 
-export async function replayP1Journal(mcp, fences, tenantId) {
+const P1_JOURNAL_PAGE_LIMIT = 100;
+const P1_JOURNAL_PAGE_LIMIT_MAX = 20;
+const P1_EVENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function replayP1JournalPages(readPage, fences, surface) {
   const eventIds = new Set();
   const positions = new Set();
   const cursors = new Set();
   let cursor = null;
   let lastPosition = 0;
-  for (let pageNumber = 0; pageNumber < 20; pageNumber++) {
-    const pageCall = await callP1McpTool(mcp, 'agentweaver_replayRunEvents', {
-      projectId: fences.projectId,
-      runId: fences.runId,
-      limit: 100,
-      tenantSelector: tenantId,
-      ...(cursor === null ? {} : { cursor }),
-    });
+  let correlationId;
+  for (let pageNumber = 0; pageNumber < P1_JOURNAL_PAGE_LIMIT_MAX; pageNumber++) {
+    const pageCall = await readPage(cursor);
     if (pageCall.isError || pageCall.status !== 200) {
-      throw new Error('The MCP replay tool did not return an accepted owner event page.');
+      throw new Error(`The ${surface} replay did not return an accepted owner event page.`);
     }
-    const page = pageCall.ownerResponse;
+    const page = pageCall.page;
     if (!Array.isArray(page?.events) || typeof page.hasMore !== 'boolean'
-      || page.nextCursor !== null && (typeof page.nextCursor !== 'string' || !page.nextCursor)) {
+      || page.nextCursor !== null && (typeof page.nextCursor !== 'string'
+        || !page.nextCursor || page.nextCursor.length > 8192 || /[\r\n\0]/.test(page.nextCursor))) {
       throw new Error('The actual owner replay page does not match the event-page contract.');
     }
     if (page.events.length === 0) {
@@ -264,10 +264,15 @@ export async function replayP1Journal(mcp, fences, tenantId) {
         ? 'The actual owner event journal is empty.'
         : 'The actual owner replay cursor advanced to an empty page.');
     }
+    if (page.events.length > P1_JOURNAL_PAGE_LIMIT) {
+      throw new Error('The actual owner replay page exceeds the requested event limit.');
+    }
     for (const event of page.events) {
-      if (typeof event?.eventId !== 'string' || !event.eventId
-        || event.identity?.projectId !== fences.projectId || event.identity.runId !== fences.runId
-        || typeof event.identity.sessionId !== 'string' || !event.identity.sessionId
+      const identity = event?.identity;
+      if (typeof event?.eventId !== 'string' || !P1_EVENT_ID.test(event.eventId)
+        || !identity || Object.keys(identity).sort().join(',') !== 'projectId,runId,sessionId'
+        || identity.projectId !== fences.projectId || identity.runId !== fences.runId
+        || typeof identity.sessionId !== 'string' || !identity.sessionId
         || !Number.isSafeInteger(event.position) || event.position < 1
         || eventIds.has(event.eventId) || positions.has(event.position) || event.position <= lastPosition) {
         throw new Error('The actual owner replay contains a foreign, repeated, or reordered event identity.');
@@ -277,13 +282,46 @@ export async function replayP1Journal(mcp, fences, tenantId) {
       lastPosition = event.position;
     }
     if (!page.nextCursor || page.nextCursor === cursor || cursors.has(page.nextCursor)) {
-      throw new Error('The actual owner replay cursor did not advance.');
+      throw new Error(`The actual ${surface} replay cursor did not advance.`);
     }
     cursors.add(page.nextCursor);
-    if (!page.hasMore) return { eventCount: eventIds.size, pageCount: pageNumber + 1, correlationId: pageCall.correlationId };
+    correlationId = pageCall.correlationId ?? correlationId;
+    if (!page.hasMore) return { eventCount: eventIds.size, pageCount: pageNumber + 1, correlationId };
     cursor = page.nextCursor;
   }
   throw new Error('The actual owner replay exceeded the 20-page bound.');
+}
+
+export async function replayP1ApiJournal(api, fences) {
+  return replayP1JournalPages(async cursor => {
+    const call = await api.invoke('replayRunEvents', {
+      pathParameters: { projectId: fences.projectId, runId: fences.runId },
+      query: { limit: P1_JOURNAL_PAGE_LIMIT, ...(cursor === null ? {} : { cursor }) },
+    });
+    return {
+      status: call.status,
+      page: requireP1Http(call, [200], 'replayRunEvents'),
+      correlationId: call.traceId,
+    };
+  }, fences, 'API');
+}
+
+export async function replayP1Journal(mcp, fences, tenantId) {
+  return replayP1JournalPages(async cursor => {
+    const call = await callP1McpTool(mcp, 'agentweaver_replayRunEvents', {
+      projectId: fences.projectId,
+      runId: fences.runId,
+      limit: P1_JOURNAL_PAGE_LIMIT,
+      tenantSelector: tenantId,
+      ...(cursor === null ? {} : { cursor }),
+    });
+    return {
+      isError: call.isError,
+      status: call.status,
+      page: call.ownerResponse,
+      correlationId: call.correlationId,
+    };
+  }, fences, 'MCP');
 }
 
 export async function requireP1DeniedApiActor(deniedApi, input) {

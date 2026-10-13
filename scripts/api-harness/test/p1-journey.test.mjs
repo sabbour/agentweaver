@@ -55,21 +55,41 @@ function openApiDocument() {
     [routePath('/sessions/{sessionId}/messages')]: {
       post: { operationId: 'sendMessage', requestBody: { required: true } },
     },
+    '/api/v1/projects/{projectId}/runs/{runId}/events': {
+      get: {
+        operationId: 'replayRunEvents',
+        parameters: [
+          { name: 'cursor', in: 'query' },
+          { name: 'limit', in: 'query' },
+        ],
+      },
+    },
   };
   return { openapi: '3.1.0', paths };
 }
 
 function eventPage(events = [{
-  eventId: 'controlled-event',
-  identity: { ...IDS },
+  eventId: '00000000-0000-4000-8000-000000000001',
+  identity: {
+    projectId: IDS.projectId,
+    runId: IDS.runId,
+    sessionId: IDS.sessionId,
+  },
   position: 1,
 }], { nextCursor = 'cursor-1', hasMore = false } = {}) {
   return { events, nextCursor, hasMore };
 }
 
-async function host({ deniedStatus = 403, gate = true, eventPages = [eventPage()] } = {}) {
+async function host({
+  deniedStatus = 403,
+  gate = true,
+  eventPages = [eventPage()],
+  apiEventPages = eventPages,
+  replayOperation = true,
+} = {}) {
   const requests = [];
   let resolvedGate = false;
+  let apiPageIndex = 0;
   const server = createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
@@ -84,7 +104,14 @@ async function host({ deniedStatus = 403, gate = true, eventPages = [eventPage()
     response.setHeader('X-Correlation-Id', request.headers['x-correlation-id'] ?? 'controlled-trace');
     const url = new URL(request.url, 'http://localhost');
     if (url.pathname === '/openapi/v1.json') {
-      response.end(JSON.stringify(openApiDocument()));
+      const document = openApiDocument();
+      if (!replayOperation) delete document.paths['/api/v1/projects/{projectId}/runs/{runId}/events'];
+      response.end(JSON.stringify(document));
+      return;
+    }
+    if (url.pathname === '/api/v1/projects/controlled-project/runs/controlled-run/events') {
+      const page = apiEventPages[apiPageIndex++] ?? apiEventPages.at(-1);
+      response.end(JSON.stringify(page));
       return;
     }
     if (request.headers.authorization === 'Bearer denied') {
@@ -251,6 +278,7 @@ async function host({ deniedStatus = 403, gate = true, eventPages = [eventPage()
   };
   let uiOpened = false;
   let uiClosed = false;
+  let uiReplayCount = 0;
   const ui = {
     target: new URL(baseUrl),
     gateway: new URL('/api/v1', baseUrl),
@@ -285,7 +313,8 @@ async function host({ deniedStatus = 403, gate = true, eventPages = [eventPage()
       };
     },
     async replayJournal() {
-      return { events: [eventPage().events[0]], transcriptContentAvailable: false };
+      uiReplayCount++;
+      return { events: [eventPage().events[0]], pageCount: 1, transcriptContentAvailable: false };
     },
     async close() { uiClosed = true; },
   };
@@ -297,6 +326,7 @@ async function host({ deniedStatus = 403, gate = true, eventPages = [eventPage()
     mcp,
     ui,
     uiState: () => ({ opened: uiOpened, closed: uiClosed }),
+    uiReplayCount: () => uiReplayCount,
     close: () => new Promise((resolve, reject) => {
       server.close(error => error ? reject(error) : resolve());
       server.closeAllConnections();
@@ -444,11 +474,12 @@ const SOURCE_EVIDENCE = {
 };
 const CLOCK = () => Date.parse('2026-10-13T00:00:00.000Z');
 
-test('P1 API journal journey checks a real denied-actor 403 and correlated, nonempty MCP cursor evidence', async () => {
+test('P1 API journal journey checks a real denied-actor 403 and correlated Gateway replay evidence', async () => {
   const fixture = await host();
   try {
     const result = await runP1ApiJourney(input(fixture.baseUrl), {
       ...fixture,
+      mcp: undefined,
       sourceEvidence: SOURCE_EVIDENCE,
       clock: CLOCK,
     });
@@ -460,11 +491,94 @@ test('P1 API journal journey checks a real denied-actor 403 and correlated, none
     );
     assert.deepEqual(result.observations.journal, { eventCount: 1, pageCount: 1 });
     assert.ok(result.steps.some(step => step.id === 'valid-denied-actor-403' && step.httpStatus === 403));
-    assert.ok(result.steps.find(step => step.id === 'committed-run-journal').correlationId);
+    const journalStep = result.steps.find(step => step.id === 'committed-run-journal');
+    assert.equal(journalStep.operationId, 'replayRunEvents');
+    assert.ok(journalStep.correlationId);
+    assert.ok(fixture.requests.some(request =>
+      request.method === 'GET' && request.url.startsWith('/api/v1/projects/controlled-project/runs/controlled-run/events')));
+    assert.equal(fixture.mcp.protocol.some(item =>
+      item.message?.params?.name === 'agentweaver_replayRunEvents'), false);
     assert.doesNotMatch(JSON.stringify(result), /Bearer|allowed-actor|controlled-tenant/);
     assert.ok(fixture.requests.some(request => request.authorization === 'Bearer denied' && request.method === 'GET'));
   } finally {
     await fixture.close();
+  }
+});
+
+test('P1 API journal follows the discovered cursor chain across Gateway pages', async () => {
+  const secondEvent = {
+    ...eventPage().events[0],
+    eventId: '00000000-0000-4000-8000-000000000002',
+    position: 2,
+  };
+  const fixture = await host({
+    apiEventPages: [
+      eventPage(undefined, { nextCursor: 'cursor-1', hasMore: true }),
+      eventPage([secondEvent], { nextCursor: 'cursor-2', hasMore: false }),
+    ],
+  });
+  try {
+    const result = await runP1ApiJourney(input(fixture.baseUrl), {
+      ...fixture,
+      mcp: undefined,
+      sourceEvidence: SOURCE_EVIDENCE,
+      clock: CLOCK,
+    });
+    assert.equal(result.surfaceStatus, 'passed');
+    assert.deepEqual(result.observations.journal, { eventCount: 2, pageCount: 2 });
+    const replayRequests = fixture.requests.filter(request => request.url.includes('/runs/controlled-run/events'));
+    assert.equal(replayRequests.length, 2);
+    assert.equal(new URL(replayRequests[0].url, fixture.baseUrl).searchParams.get('limit'), '100');
+    assert.equal(new URL(replayRequests[0].url, fixture.baseUrl).searchParams.has('cursor'), false);
+    assert.equal(new URL(replayRequests[1].url, fixture.baseUrl).searchParams.get('cursor'), 'cursor-1');
+    assert.equal(fixture.mcp.protocol.length, 0);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('P1 API journal blocks a missing Gateway operation and foreign or invalid page evidence', async () => {
+  const missing = await host({ replayOperation: false });
+  try {
+    const result = await runP1ApiJourney(input(missing.baseUrl), {
+      ...missing,
+      mcp: undefined,
+      sourceEvidence: SOURCE_EVIDENCE,
+      clock: CLOCK,
+    });
+    assert.equal(result.surfaceStatus, 'blocked');
+    assert.match(result.failure.message, /api:replayRunEvents/);
+    assert.equal(missing.requests.some(request => request.url.includes('/runs/controlled-run/events')), false);
+    assert.equal(missing.mcp.protocol.length, 0);
+  } finally {
+    await missing.close();
+  }
+
+  const event = eventPage().events[0];
+  for (const apiEventPages of [
+    [eventPage([{ ...event, identity: { ...event.identity, runId: 'foreign-run' } }])],
+    [eventPage([{ ...event, eventId: 'not-a-guid' }])],
+    [
+      eventPage(undefined, { nextCursor: 'cursor-1', hasMore: true }),
+      eventPage([{ ...event, eventId: '00000000-0000-4000-8000-000000000002', position: 2 }], {
+        nextCursor: 'cursor-1',
+        hasMore: false,
+      }),
+    ],
+  ]) {
+    const fixture = await host({ apiEventPages });
+    try {
+      const result = await runP1ApiJourney(input(fixture.baseUrl), {
+        ...fixture,
+        mcp: undefined,
+        sourceEvidence: SOURCE_EVIDENCE,
+        clock: CLOCK,
+      });
+      assert.equal(result.surfaceStatus, 'failed');
+      assert.match(result.failure.message, /foreign, repeated, or reordered event identity|cursor did not advance/);
+    } finally {
+      await fixture.close();
+    }
   }
 });
 
@@ -535,6 +649,8 @@ test('a denied-actor 401 is not mistaken for a valid forbidden result', async ()
     test('the MCP runner allows read-only discovery but blocks gate writes when ownership receipts are caller-supplied', async () => {
       const fixture = await host();
       try {
+        let discoveryCalls = 0;
+        fixture.mcp.discoverTools = async () => { discoveryCalls++; };
         const result = await runP1McpJourney(input(fixture.baseUrl, 'gate-answer'), {
           ...fixture,
           sourceEvidence: SOURCE_EVIDENCE,
@@ -542,7 +658,8 @@ test('a denied-actor 401 is not mistaken for a valid forbidden result', async ()
         });
         assert.equal(result.surfaceStatus, 'blocked');
         assert.match(result.failure.message, /supported authenticated setup path proves same-invocation creation and readback/);
-        assert.ok(fixture.mcp.protocol.length > 0);
+        assert.equal(discoveryCalls, 1);
+        assert.equal(fixture.mcp.protocol.length, 0);
         assert.equal(fixture.mcp.protocol.some(item =>
           ['agentweaver_answerGate', 'agentweaver_approveGate', 'agentweaver_rejectGate', 'agentweaver_sendMessage']
             .includes(item.message?.params?.name)), false);
@@ -556,12 +673,14 @@ test('a denied-actor 401 is not mistaken for a valid forbidden result', async ()
       try {
         const result = await runP1UiJourney(input(fixture.baseUrl, 'gate-answer'), {
           ...fixture,
+          mcp: undefined,
           sourceEvidence: SOURCE_EVIDENCE,
           clock: CLOCK,
         });
         assert.equal(result.surfaceStatus, 'blocked');
         assert.match(result.failure.message, /supported authenticated setup path proves same-invocation creation and readback/);
         assert.equal(fixture.requests.some(request => request.method === 'POST'), false);
+        assert.equal(fixture.uiReplayCount(), 0);
         assert.deepEqual(fixture.uiState(), { opened: true, closed: true });
       } finally {
         await fixture.close();
@@ -573,11 +692,16 @@ test('a denied-actor 401 is not mistaken for a valid forbidden result', async ()
       try {
         const result = await runP1UiJourney(input(fixture.baseUrl), {
           ...fixture,
+          mcp: undefined,
           sourceEvidence: SOURCE_EVIDENCE,
           clock: CLOCK,
         });
         assert.equal(result.surfaceStatus, 'passed');
         assert.equal(result.observations.uiJournalEventCount, 1);
+        assert.deepEqual(result.observations.journal, { eventCount: 1, pageCount: 1 });
+        assert.equal(fixture.uiReplayCount(), 1);
+        assert.equal(fixture.mcp.protocol.some(item =>
+          item.message?.params?.name === 'agentweaver_replayRunEvents'), false);
         assert.deepEqual(fixture.uiState(), { opened: true, closed: true });
         assert.equal(result.observations.adapterCleanup.ui, 'closed');
       } finally {
@@ -608,12 +732,38 @@ test('a denied-actor 401 is not mistaken for a valid forbidden result', async ()
   }
 });
 
+test('P1 MCP journal uses the discovered replay tool instead of the Gateway API route', async () => {
+  const fixture = await host();
+  try {
+    const result = await runP1McpJourney(input(fixture.baseUrl), {
+      ...fixture,
+      sourceEvidence: SOURCE_EVIDENCE,
+      clock: CLOCK,
+    });
+    assert.equal(result.surfaceStatus, 'passed');
+    assert.deepEqual(result.observations.journal, { eventCount: 1, pageCount: 1 });
+    const journalStep = result.steps.find(step => step.id === 'committed-run-journal');
+    assert.equal(journalStep.toolName, 'agentweaver_replayRunEvents');
+    assert.ok(journalStep.correlationId);
+    assert.ok(fixture.mcp.protocol.some(item =>
+      item.message?.params?.name === 'agentweaver_replayRunEvents'));
+    assert.equal(fixture.requests.some(request =>
+      new URL(request.url, fixture.baseUrl).pathname.endsWith('/runs/controlled-run/events')), false);
+  } finally {
+    await fixture.close();
+  }
+});
+
 test('empty or repeated MCP journal cursors fail instead of producing P1 evidence', async () => {
   for (const eventPages of [
     [eventPage([], { nextCursor: null, hasMore: false })],
     [
       eventPage(undefined, { nextCursor: 'cursor-1', hasMore: true }),
-      eventPage([{ ...eventPage().events[0], eventId: 'second-event', position: 2 }], {
+      eventPage([{
+        ...eventPage().events[0],
+        eventId: '00000000-0000-4000-8000-000000000002',
+        position: 2,
+      }], {
         nextCursor: 'cursor-1',
         hasMore: false,
       }),
