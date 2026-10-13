@@ -8,10 +8,13 @@ import { fileURLToPath } from 'node:url';
 import { componentImageRepository } from './pack.mjs';
 import { createRuntimeList } from './runtime-list.mjs';
 import { validateManifest } from './validate.mjs';
+import { verifyRegistryImage } from './registry.mjs';
 import { run as runProcess } from '../azure/lib/exec.mjs';
 import {
   observeExistingP0BrokerRouting, projectIdentityRoutingReadback,
 } from '../azure/lib/identity-broker-routing.mjs';
+
+export { verifyRegistryImage };
 
 const REPOSITORY = 'sabbour/agentweaver';
 const REGISTRY = 'ghcr.io/sabbour';
@@ -715,38 +718,6 @@ function clearCheckpoint(key, io) {
   } catch (error) {
     fail(`cannot clear successful deployment checkpoint: ${error.message}`);
   }
-}
-
-export async function verifyRegistryImage(image, fetchImpl = globalThis.fetch) {
-  const separator = image.indexOf('/', 'ghcr.io/'.length);
-  const repository = image.slice('ghcr.io/'.length, image.lastIndexOf('@'));
-  const digest = image.slice(image.lastIndexOf('@') + 1);
-  if (separator < 0 || !repository || !DIGEST.test(digest)) fail(`invalid immutable GHCR image reference "${image}"`);
-  const tokenUrl = new URL('https://ghcr.io/token');
-  tokenUrl.searchParams.set('service', 'ghcr.io');
-  tokenUrl.searchParams.set('scope', `repository:${repository}:pull`);
-  const tokenResponse = await fetchImpl(tokenUrl, { headers: { accept: 'application/json' } });
-  if (!tokenResponse.ok) fail(`GHCR does not expose ${repository} for anonymous pull verification (HTTP ${tokenResponse.status})`);
-  const tokenJson = await tokenResponse.json();
-  const token = tokenJson.token ?? tokenJson.access_token;
-  if (typeof token !== 'string' || !token) fail(`GHCR returned no anonymous pull token for ${repository}`);
-  const manifestResponse = await fetchImpl(`https://ghcr.io/v2/${repository}/manifests/${digest}`, {
-    headers: { accept: registryManifestAccept, authorization: `Bearer ${token}` },
-  });
-  if (!manifestResponse.ok) fail(`published image ${image} is unavailable from GHCR (HTTP ${manifestResponse.status})`);
-  if (manifestResponse.headers.get('docker-content-digest') !== digest) {
-    fail(`GHCR returned a different manifest digest for ${image}`);
-  }
-  const manifest = await manifestResponse.json();
-  const acceptedDigests = new Set([digest]);
-  if (Array.isArray(manifest.manifests)) {
-    const amd64 = manifest.manifests.filter((entry) =>
-      entry.platform?.os === 'linux' && entry.platform?.architecture === 'amd64' &&
-      DIGEST.test(entry.digest ?? ''));
-    if (amd64.length === 0) fail(`published image ${image} has no linux/amd64 manifest`);
-    for (const entry of amd64) acceptedDigests.add(entry.digest);
-  }
-  return acceptedDigests;
 }
 
 export async function verifyAgentHostRegistryImage(image, fetchImpl = globalThis.fetch) {
