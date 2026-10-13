@@ -68,7 +68,7 @@ function imageMetadata(name, treeLabel) {
   return { config, configDigest, manifest, manifestDigest: digest(manifest) };
 }
 
-function fixture({ webTreeLabel } = {}) {
+function fixture({ webTreeLabel, gatewayIndex = false, gatewayRuntimeDigest } = {}) {
   const items = [{
     apiVersion: 'v1',
     kind: 'ConfigMap',
@@ -77,10 +77,29 @@ function fixture({ webTreeLabel } = {}) {
   }];
   const images = [];
   const registryBodies = new Map();
+  let gatewayChildDigest = null;
   for (const name of serviceNames) {
     const metadata = imageMetadata(name, name === 'web' ? webTreeLabel : sourceTree);
     const repository = `sabbour/agentweaver/${name}`;
-    const image = `ghcr.io/${repository}@${metadata.manifestDigest}`;
+    let registryManifest = metadata.manifest;
+    let registryDigest = metadata.manifestDigest;
+    let runtimeDigest = metadata.manifestDigest;
+    if (name === 'gateway' && gatewayIndex) {
+      gatewayChildDigest = metadata.manifestDigest;
+      registryManifest = Buffer.from(JSON.stringify({
+        schemaVersion: 2,
+        mediaType: 'application/vnd.oci.image.index.v1+json',
+        manifests: [{
+          digest: metadata.manifestDigest,
+          mediaType: 'application/vnd.oci.image.manifest.v1+json',
+          size: metadata.manifest.length,
+          platform: { os: 'linux', architecture: 'amd64' },
+        }],
+      }));
+      registryDigest = digest(registryManifest);
+      runtimeDigest = gatewayRuntimeDigest ?? registryDigest;
+    }
+    const image = `ghcr.io/${repository}@${registryDigest}`;
     const deploymentUid = `deployment-${name}-uid`;
     const replicaSetUid = `replicaset-${name}-uid`;
     const labels = {
@@ -151,10 +170,13 @@ function fixture({ webTreeLabel } = {}) {
       status: {
         phase: 'Running',
         conditions: [{ type: 'Ready', status: 'True' }],
-        containerStatuses: [{ name, ready: true, imageID: image }],
+        containerStatuses: [{ name, ready: true, imageID: `ghcr.io/${repository}@${runtimeDigest}` }],
       },
     });
-    registryBodies.set(`https://ghcr.io/v2/${repository}/manifests/${metadata.manifestDigest}`, metadata.manifest);
+    registryBodies.set(`https://ghcr.io/v2/${repository}/manifests/${registryDigest}`, registryManifest);
+    if (registryDigest !== metadata.manifestDigest) {
+      registryBodies.set(`https://ghcr.io/v2/${repository}/manifests/${metadata.manifestDigest}`, metadata.manifest);
+    }
     registryBodies.set(`https://ghcr.io/v2/${repository}/blobs/${metadata.configDigest}`, metadata.config);
     images.push({
       id: `Agentweaver.${name}`,
@@ -171,7 +193,7 @@ function fixture({ webTreeLabel } = {}) {
     sandboxImageDigest: hostMetadata.manifestDigest,
     compressedPullBytes: 1024,
   });
-  return { items, images, registryBodies };
+  return { items, images, registryBodies, gatewayChildDigest };
 }
 
 test('validates exact source-bound publication products before treating images as receipts', async () => {
@@ -343,6 +365,37 @@ test('records native service UIDs and verifies pod imageIDs plus registry source
   assert.ok(calls.every(call => !new Headers(call.options.headers).has('authorization')));
 });
 
+test('accepts only the reviewed index or its verified linux/amd64 child as a runtime imageID', async () => {
+  const data = fixture({ gatewayIndex: true, gatewayRuntimeDigest: undefined });
+  const observe = (items) => observeP1ServiceDeployments({
+    context,
+    namespace,
+    sourceSha,
+    sourceTree,
+    images: data.images,
+    providerCatalog,
+    readObjects: async () => items,
+    fetchImpl: async url => {
+      const body = data.registryBodies.get(String(url));
+      if (!body) return new Response('missing', { status: 404 });
+      const expectedDigest = String(url).split('/').at(-1);
+      return new Response(body, { status: 200, headers: { 'docker-content-digest': expectedDigest } });
+    },
+  });
+
+  const valid = structuredClone(data.items);
+  const gatewayPod = valid.find(item => item.kind === 'Pod' && item.metadata.name === 'gateway-pod');
+  gatewayPod.status.containerStatuses[0].imageID =
+    `ghcr.io/sabbour/agentweaver/gateway@${data.gatewayChildDigest}`;
+  assert.equal((await observe(valid)).status, 'passed');
+
+  const unlisted = structuredClone(data.items);
+  const unlistedGatewayPod = unlisted.find(item => item.kind === 'Pod' && item.metadata.name === 'gateway-pod');
+  unlistedGatewayPod.status.containerStatuses[0].imageID =
+    `ghcr.io/sabbour/agentweaver/gateway@sha256:${'f'.repeat(64)}`;
+  await assert.rejects(observe(unlisted), /running container imageID does not match the reviewed registry manifest/);
+});
+
 test('blocks stale, incomplete, foreign, or unverifiable deployment evidence', async () => {
   const data = fixture();
   const observe = (overrides = {}) => observeP1ServiceDeployments({
@@ -378,7 +431,7 @@ test('blocks stale, incomplete, foreign, or unverifiable deployment evidence', a
   stalePod.status.containerStatuses[0].imageID = 'ghcr.io/sabbour/agentweaver/gateway@sha256:' + 'f'.repeat(64);
   await assert.rejects(
     observe({ readObjects: async () => staleImage }),
-    /imageID differs/,
+    /running container imageID does not match the reviewed registry manifest/,
   );
 
   const wrongLabels = structuredClone(data.items);

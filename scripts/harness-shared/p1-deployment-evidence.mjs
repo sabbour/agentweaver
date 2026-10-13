@@ -343,11 +343,6 @@ export async function observeP1ServiceDeployments({
         && pod.metadata?.annotations?.[SOURCE_ANNOTATION] !== providerCatalog.sourceCommit) {
         throw new Error('The running Projects Pod does not bind the validated provider catalog source commit.');
       }
-      const runtimeImageDigest = status[0].imageID.slice(status[0].imageID.lastIndexOf('@') + 1);
-      const receiptDigest = imageParts(image.image).digest;
-      if (runtimeImageDigest !== receiptDigest) {
-        throw new Error(`Pod ${pod.metadata.name} imageID differs from the reviewed image receipt.`);
-      }
       const registry = await verifyRegistryImage(
         image.image,
         status[0].imageID,
