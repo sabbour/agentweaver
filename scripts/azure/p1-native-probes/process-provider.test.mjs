@@ -574,6 +574,76 @@ test('owned-resource absence readback still reports a matching dependent Pod', a
   });
 });
 
+test('late-resource discovery explicitly supports a claim with no linked Pod', async () => {
+  const sandboxClaimUid = 'late-sandbox-claim-without-pod';
+  const harness = createHarness((command, args) => {
+    if (args.includes('config')) {
+      return { status: 0, stdout: JSON.stringify(configResponse()), stderr: '' };
+    }
+    if (args.includes('sandboxclaims.extensions.agents.x-k8s.io')) {
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          apiVersion: 'v1',
+          kind: 'List',
+          items: [{
+            apiVersion: 'extensions.agents.x-k8s.io/v1beta1',
+            kind: 'SandboxClaim',
+            metadata: {
+              name: 'late-agenthost',
+              namespace: 'p1-fixture',
+              uid: sandboxClaimUid,
+              labels: {
+                'agentweaver.dev/managed-sandbox': 'true',
+                'agentweaver.dev/sandbox-owner': ownerLabel,
+              },
+            },
+          }],
+        }),
+        stderr: '',
+      };
+    }
+    assert.ok(args.includes('pods'));
+    return {
+      status: 0,
+      stdout: JSON.stringify({ apiVersion: 'v1', kind: 'List', items: [] }),
+      stderr: '',
+    };
+  });
+
+  const result = await harness.provider.run({
+    recipeId: 'observe-owned-resource',
+    args: {
+      expectedClusterIdentity,
+      namespace: 'p1-fixture',
+      owner: mountOwner,
+      resourceId: sandboxClaimUid,
+      expectedUid: sandboxClaimUid,
+      expectedPodUids: [],
+      allowEmptyPodUidInventory: true,
+    },
+  });
+  assert.deepEqual(result, {
+    clusterIdentity: expectedClusterIdentity,
+    exists: true,
+    dependentPods: [],
+    uid: sandboxClaimUid,
+    ownerId: mountOwner.ownerId,
+  });
+
+  await assert.rejects(harness.provider.run({
+    recipeId: 'observe-owned-resource',
+    args: {
+      expectedClusterIdentity,
+      namespace: 'p1-fixture',
+      owner: mountOwner,
+      resourceId: sandboxClaimUid,
+      expectedUid: sandboxClaimUid,
+      expectedPodUids: [],
+    },
+  }), /nonempty previously observed AgentHost Pod UID inventory is required/);
+});
+
 test('owned-resource readback rejects an exact claim UID with changed owner labels', async () => {
   const sandboxClaimUid = 'sandbox-claim-uid-owner-mismatch';
   let podListRead = false;

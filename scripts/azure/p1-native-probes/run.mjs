@@ -1435,13 +1435,31 @@ export async function runP1NativeProbes(input, dependencies) {
       owner: ownerSelector(storage),
       resourceId: late.resourceId,
       expectedUid: late.uid,
+      expectedPodUids: [],
+      allowEmptyPodUidInventory: true,
     });
     if (lateBefore?.exists !== true || lateBefore?.uid !== late.uid ||
-        lateBefore?.ownerId !== storage.ownerId) {
+        lateBefore?.ownerId !== storage.ownerId ||
+        !Array.isArray(lateBefore?.dependentPods)) {
       block('late_resource_receipt_mismatch', 'The late provider resource must be observed with its exact invocation-owned UID before reconcile.', {
         ownerId: storage.ownerId,
         expectedUid: late.uid,
         observedUid: lateBefore?.uid ?? null,
+      });
+    }
+    const latePodUids = lateBefore.dependentPods.map(pod => {
+      if (!isRecord(pod) || !nonEmpty(pod.name) || !nonEmpty(pod.uid)) {
+        block('late_resource_pod_receipt_mismatch', 'Every linked late-resource Pod must have its actual observed name and UID before reconcile.', {
+          ownerId: storage.ownerId,
+          resourceId: late.resourceId,
+        });
+      }
+      return pod.uid;
+    });
+    if (new Set(latePodUids).size !== latePodUids.length) {
+      block('late_resource_pod_receipt_ambiguous', 'Late-resource Pod readback contains duplicate UIDs.', {
+        ownerId: storage.ownerId,
+        resourceId: late.resourceId,
       });
     }
     await authorizeMutation('sandbox-reconcile', storage);
@@ -1458,6 +1476,8 @@ export async function runP1NativeProbes(input, dependencies) {
       owner: ownerSelector(storage),
       resourceId: late.resourceId,
       expectedUid: late.uid,
+      expectedPodUids: latePodUids,
+      allowEmptyPodUidInventory: latePodUids.length === 0,
     });
     if (typeof lateAfter?.exists !== 'boolean' || !Array.isArray(lateAfter.dependentPods)) {
       block('late_resource_readback_missing', 'Native readback did not report the late resource existence after reconciliation.', {

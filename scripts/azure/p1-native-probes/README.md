@@ -189,6 +189,12 @@ policy must still have the exact Cilium API version, kind, UID, generation,
 hash, and selector. The adapter must not evaluate input-provided shell,
 scripts, argv, or commands. No direct Kubernetes deletes are used; Sandbox
 release/reconcile and policy revoke use Environment routes.
+`observe-owned-resource` requires nonempty `expectedPodUids` from invocation
+inventory. Only late-resource discovery may explicitly pass an empty list with
+`allowEmptyPodUidInventory: true`; it reads the actual linked Pod UIDs before
+reconcile, and the runner supplies those same UIDs to the post-reconcile
+absence check. This exception does not permit empty UID inventories for known
+Sandbox resources.
 Every `mount-file` response must also echo the exact target `podUid` and
 `ownerId`. The runner checks these fields on marker stat, write, read, and
 unlink; after release/rebind, cleanup is bound to the new current Pod UID and

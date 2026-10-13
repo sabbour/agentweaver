@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
+import { createP1NativeProcessProvider } from './process-provider.mjs';
 import { runP1NativeProbes } from './run.mjs';
 
 const invocationId = 'a6a04b52-34bd-4c58-8d95-537912dc8e55';
@@ -1140,6 +1141,144 @@ test('four native probes pass with injected production-shaped reads, mutations, 
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes(opaqueToken), false);
   assert.equal(serialized.includes('private-owner-b'), false);
+});
+
+test('late Sandbox lifecycle rejects a changed-label Pod using the real adapter contract', async () => {
+  const input = createInput();
+  const clusterServer = 'https://p1-cluster.example.test/';
+  input.pins.context.clusterIdentity.uid = createHash('sha256')
+    .update(new URL(clusterServer).origin)
+    .digest('hex');
+  const harness = successDependencies(input);
+  const fakeProvider = harness.dependencies.processProvider;
+  const lateResourceId = input.pins.runtimeReceipt.owners[1].lateSandboxResourceId;
+  const latePodUid = 'actual-late-agenthost-pod-uid';
+  const disposableOwner = input.pins.storageReceipt.owners[1];
+  const lateOwnerLabel = createHash('sha256')
+    .update([
+      disposableOwner.tenantId,
+      disposableOwner.projectId,
+      disposableOwner.runId,
+      disposableOwner.environmentId,
+    ].join('\0'))
+    .digest('hex')
+    .slice(0, 40);
+  let reconciled = false;
+  let lateReadError;
+  const adapter = createP1NativeProcessProvider({
+    kubeContext: input.pins.context.kubeContext,
+    clusterIdentity: input.pins.context.clusterIdentity,
+    execute(command, args) {
+      assert.equal(command, 'kubectl');
+      if (args.includes('config')) {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            apiVersion: 'v1',
+            kind: 'Config',
+            contexts: [{
+              name: input.pins.context.kubeContext,
+              context: { cluster: 'p1-cluster' },
+            }],
+            clusters: [{
+              name: 'p1-cluster',
+              cluster: { server: clusterServer },
+            }],
+          }),
+          stderr: '',
+        };
+      }
+      if (args.includes('sandboxclaims.extensions.agents.x-k8s.io')) {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            apiVersion: 'v1',
+            kind: 'List',
+            items: reconciled
+              ? []
+              : [{
+                apiVersion: 'extensions.agents.x-k8s.io/v1beta1',
+                kind: 'SandboxClaim',
+                metadata: {
+                  name: 'late-agenthost',
+                  namespace: input.pins.namespace,
+                  uid: lateResourceId,
+                  labels: {
+                    'agentweaver.dev/managed-sandbox': 'true',
+                    'agentweaver.dev/sandbox-owner': lateOwnerLabel,
+                  },
+                },
+              }],
+          }),
+          stderr: '',
+        };
+      }
+      assert.ok(args.includes('pods'));
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          apiVersion: 'v1',
+          kind: 'List',
+          items: [{
+            apiVersion: 'v1',
+            kind: 'Pod',
+            metadata: {
+              name: 'late-agenthost-pod',
+              namespace: input.pins.namespace,
+              uid: latePodUid,
+              labels: {
+                'agentweaver.dev/managed-sandbox': 'true',
+                'agentweaver.dev/sandbox-owner': lateOwnerLabel,
+                'agents.x-k8s.io/claim-uid': reconciled
+                  ? 'changed-claim-label'
+                  : lateResourceId,
+              },
+            },
+          }],
+        }),
+        stderr: '',
+      };
+    },
+  });
+  const fakeFetch = harness.dependencies.fetch;
+  harness.dependencies.fetch = async (urlValue, init) => {
+    const response = await fakeFetch(urlValue, init);
+    const url = new URL(String(urlValue));
+    if (url.pathname.endsWith('/sandbox/reconcile') && init.method === 'POST') {
+      reconciled = true;
+    }
+    return response;
+  };
+  harness.dependencies.processProvider = {
+    async run(request) {
+      if (request.recipeId === 'observe-owned-resource' &&
+          request.args.resourceId === lateResourceId) {
+        harness.recipeRequests.push(request);
+        try {
+          return await adapter.run(request);
+        } catch (error) {
+          lateReadError = error;
+          throw error;
+        }
+      }
+      return fakeProvider.run(request);
+    },
+  };
+
+  const result = await runP1NativeProbes(input, harness.dependencies);
+  const lifecycle = result.probes.find(probe => probe.name === 'sandbox-owner-lifecycle');
+  assert.equal(lifecycle.status, 'blocked');
+  assert.equal(reconciled, true);
+  assert.match(lateReadError?.message ?? '', /mismatched SandboxClaim UID label/);
+  const lateReads = harness.recipeRequests.filter(request =>
+    request.recipeId === 'observe-owned-resource' &&
+    request.args.resourceId === lateResourceId);
+  assert.equal(lateReads.length, 2);
+  assert.deepEqual(lateReads[0].args.expectedPodUids, []);
+  assert.equal(lateReads[0].args.allowEmptyPodUidInventory, true);
+  assert.deepEqual(lateReads[1].args.expectedPodUids, [latePodUid]);
+  assert.equal(lateReads[1].args.expectedPodUids.includes(lateResourceId), false);
+  assert.equal(lateReads[1].args.allowEmptyPodUidInventory, false);
 });
 
 test('a remaining exact Pod makes Sandbox cleanup uncertain after its claim is gone', async () => {

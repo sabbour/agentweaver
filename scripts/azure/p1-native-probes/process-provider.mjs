@@ -548,8 +548,13 @@ export function createP1NativeProcessProvider({
     if (resourceId !== expectedUid) {
       throw new Error('The SandboxClaim UID must match its provider resource ID.');
     }
-    if (!Array.isArray(args.expectedPodUids) || args.expectedPodUids.length === 0) {
-      throw new Error('The exact previously observed AgentHost Pod UIDs are required.');
+    const allowEmptyPodUidInventory = args.allowEmptyPodUidInventory === true;
+    if ((args.allowEmptyPodUidInventory !== undefined &&
+         typeof args.allowEmptyPodUidInventory !== 'boolean') ||
+        !Array.isArray(args.expectedPodUids) ||
+        (args.expectedPodUids.length === 0 && !allowEmptyPodUidInventory) ||
+        (args.expectedPodUids.length > 0 && allowEmptyPodUidInventory)) {
+      throw new Error('A nonempty previously observed AgentHost Pod UID inventory is required, except for explicit late-resource discovery.');
     }
     const expectedPodUids = args.expectedPodUids.map(uid =>
       requireString(uid, 'previously observed Sandbox Pod UID'));
