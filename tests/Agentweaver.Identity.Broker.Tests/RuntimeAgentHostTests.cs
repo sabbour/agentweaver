@@ -1123,7 +1123,10 @@ public sealed class RuntimeAgentHostTests
     public async Task WorkflowTurnRequiresExactDurableAdmissionAndCurrentAuthorityBeforeNativeSend(
         string fault, string expectedCode)
     {
-        await using var fixture = new HostFixture(workflowBound: true) { NativeAdmissionFault = fault };
+        await using var fixture = new HostFixture(maxModelTurns: 1, workflowBound: true)
+        {
+            NativeAdmissionFault = fault
+        };
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         var message = fixture.Message(fixture.Proof(await fixture.ConfigureAsync(timeout.Token)));
 
@@ -1131,6 +1134,7 @@ public sealed class RuntimeAgentHostTests
             fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
 
         Assert.Equal(expectedCode, failure.Code);
+        Assert.Equal(1, fixture.Registration.Binding.MaxModelTurns);
         Assert.Single(fixture.NativeAdmissions);
         Assert.DoesNotContain(fixture.Material,
             material => material.Kind is SessionMaterialKind.TurnContent or SessionMaterialKind.SdkCache);
