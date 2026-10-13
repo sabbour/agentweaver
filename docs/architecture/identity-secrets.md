@@ -18,6 +18,10 @@ sequenceDiagram
     User->>IdP: Authenticate
     IdP-->>Broker: Validated upstream identity
     Broker->>Broker: Replace upstream subject with local broker subject
+    opt Projects-owned project/run authorization
+        Broker->>Projects: Private signed proof request for actor and exact project/run
+        Projects-->>Broker: Current membership, Orchestrator assignment, and accepted-selection receipt
+    end
     Broker->>Broker: Apply registered scopes and resource audience
     Broker-->>API: Signed access token (sub, scope, audience, optional project/run binding)
     API->>API: Validate issuer, signature, lifetime, and audience
@@ -35,7 +39,13 @@ sequenceDiagram
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-identity-redemption.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-identity-redemption.drawio'">Open editable draw.io source</a></p>
 
-The broker issues `project_id` and `run_id` claims only after it finds an active grant for the authenticated local user. Token exchange and refresh repeat that binding check. These claims constrain a request to the signed project/run; they do not grant a project role. Projects & Config owns its issuer-and-subject memberships, resource-role assignments, and immutable authorization audit in `projects_config`. Its runtime database principal can read but cannot insert, update, or delete those records; provisioning and revocation use a separate privileged source path.
+The broker issues `project_id` and `run_id` claims only after it finds an active grant for the authenticated local user. For a Projects-owned binding, it also obtains a private, no-store receipt for the active project, current actor membership, active Orchestrator assignment, and matching accepted run selection. It repeats that owner check when the authorization resumes and before exchanging the code, and rejects a changed receipt. The short-lived service token uses a separate audience; its receipt does not become a role claim. Token exchange and refresh also repeat the underlying grant check. Project/run claims constrain a request to the exact signed binding; they do not grant a project role. Projects & Config owns its issuer-and-subject memberships, resource-role assignments, and immutable authorization audit in `projects_config`. Its runtime database principal can read but cannot insert, update, or delete those records; provisioning and revocation use a separate privileged source path.
+
+The Broker owner call uses `IdentityBroker:RunBinding:ProjectsOwnerAddress` and
+`IdentityBroker:RunBinding:ProjectsAudience`. The corresponding
+`ProjectsConfig:Authentication:BrokerRunBindingAudience` is a separate HTTPS
+audience and enables only the private proof route; it does not replace the
+public Projects bearer audience.
 
 `POST /secrets/redeem` accepts a `SecretRef` identifier and exact version, purpose, and run ID. The bearer token supplies actor, project, and run claims. The broker does not accept caller-supplied identity claims.
 

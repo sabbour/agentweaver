@@ -242,6 +242,26 @@ It contains no predicted native message or turn ID.
 `MaxModelTurns` reserves whole-run send capacity when that existing MAF dispatch is prepared.
 Exact replay consumes no new slot; sending or uncertain work cannot be resent or refunded.
 This is not a count of internal SDK model API calls.
+`RuntimeNativeTurnBeginResult` contains exactly one admission or
+`RuntimeNativeCreditDenialReceipt`. A hard-limit denial binds the current
+registration, source, dispatch, checkpoint, measured credits, ledger digest and
+count, Cost identity, and before/after guard and dispatch revisions. Orchestrator
+stores it in the existing outbox with the credit-guard update, without a schema
+migration. `POST /internal/runtime/turns/denials/read` returns the stored denial
+for the exact dispatch and stage under current source authorization.
+At preparation, the existing budget error remains after the denial commits.
+At native begin, AgentHost receives the typed denial while the dispatch remains
+`prepared` at the same owner revision.
+For hard-capped Hosted Copilot, AgentHost captures the native event-log cursor
+before begin. After a denial, it accepts only a complete bounded range with zero
+events and unchanged cursor hashes. `RuntimeNativeTurnNoSendReceipt` binds that
+range to the denial, registration, source, and SDK session hash. The Host submits
+it through `POST /internal/runtime/turns/no-send`; Orchestrator verifies the
+persisted denial and unchanged prepared dispatch and stores the evidence in the
+existing outbox. Only after that receipt is stored does the Host return the
+budget error. Any event, incomplete range, or changed cursor fails closed; the
+Host does not call native Send. This evidence does not prove later usage
+accounting is complete.
 `RuntimeNativeTurnObservation` carries actual native IDs, the durable completion range,
 output hash, observed root usage-event IDs, and an optional accounting checkpoint.
 `RuntimeNativeTurnRecordedReceipt` binds that observation hash to the admitted intent.
@@ -718,10 +738,10 @@ All runtime responses are no-store.
 | Method and path | Contract |
 | --- | --- |
 | `POST /runtime/v1/configure` | `RuntimeBootstrapDeliveryRequest`. Delivers the pending configure nonce without activating a model session. |
-| `POST /runtime/v1/configure/activate` | `RuntimeHostConfigureRequest`: version 1, exact registration, consume/exchange operation IDs, and delivered configuration. Exact replay returns the existing immutable session. Hosted Copilot with a positive hard credit limit fails with `runtime_usage_affinity_unavailable` until native usage callbacks can be bound to their exact A2A send; the prepared session is cleaned up and readiness is withheld. |
+| `POST /runtime/v1/configure/activate` | `RuntimeHostConfigureRequest`: version 1, exact registration, consume/exchange operation IDs, and delivered configuration. Exact replay returns the existing immutable session. Workflow-bound Hosted Copilot may use a hard credit limit through prepared-dispatch and native-begin admission. An unbound positive hard limit still fails with `runtime_usage_affinity_unavailable`; the prepared session is cleaned up and readiness is withheld. |
 | `POST /runtime/v1/refresh` | `RuntimeHostRefreshRequest`: exact `RuntimeHostSessionProof` and operation ID. Current Identity and owner authority control rotation and replay. |
 | `GET /runtime/v1/readiness` | Returns the existing noncredential `RuntimeHostReadinessReceipt` after it revalidates the caller, current registration, session, Observe grant, and readiness evidence. It does not start an SDK session or send a turn. |
-| `POST /runtime/v1/a2a/message:send` | `RuntimeA2ASendRequest`: one user text message, GUID message ID, native context ID, exact runtime proof, and delivery mode. `immediate` precedes pending `enqueue` work only at the next native idle boundary. |
+| `POST /runtime/v1/a2a/message:send` | `RuntimeA2ASendRequest`: one user text message, GUID message ID, native context ID, exact runtime proof, and delivery mode. `immediate` precedes pending `enqueue` work only at the next native idle boundary. A hard-cap denial returns only after the Host records the complete empty native range as source-owned no-send evidence. |
 | `GET /health/live` | Process liveness. It does not prove permission or readiness. |
 | `GET /health/ready` | Fresh registration/source/lease/isolation/workspace/egress evidence plus authenticated configuration and measured startup ceilings. Missing evidence returns `503`. |
 
@@ -894,6 +914,7 @@ This route belongs to the unpublished Projects & Config candidate. It resolves o
 | --- | --- |
 | `GET /api/authorization/context` | Versioned current effective permission context, filtered by the validated audience, `api.read` scope, purpose, optional tenant selector, and project/run bindings. Returns `Cache-Control: no-store`. |
 | `GET /api/projects/{projectId}?runId={runId}` | Read project metadata for an exactly matching run-bound token after fresh current `ReadProjects` authorization. Purpose-bound, unbound, or mismatched tokens and duplicate/unknown query parameters are denied; the response is `Cache-Control: no-store`. |
+| `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, enabled only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. It accepts no query or body and returns a bounded `Cache-Control: no-store` receipt only for the active project, current actor membership, active Orchestrator assignment, exact project/run token binding, and an existing matching run selection. The receipt carries actor, tenant, membership/assignment IDs and revisions, project/configuration/platform-runtime/context revisions, and the SHA-256 selection hash. |
 
 Contract version 1 contains the caller and selected tenant, current membership revision, optional project/run binding, and grouped effective permissions with their current role revisions. It omits assignment IDs and raw role rows. Purpose-bound tokens are denied; resource services must request fresh context for each privileged operation and must not cache or pin it.
 
@@ -989,6 +1010,7 @@ current event-delivery boundaries.
 | `IdentityBroker:SecretRedemption:WorkloadIdentityTenantId` | Explicit Entra tenant ID. |
 | `IdentityBroker:SecretRedemption:WorkloadIdentityClientId` | Explicit Entra client ID. |
 | `IdentityBroker:SecretRedemption:WorkloadIdentityTokenFilePath` | Absolute projected token-file path. |
+| `IdentityBroker:RunBinding:ProjectsOwnerAddress` / `ProjectsAudience` | Fixed absolute HTTPS Projects & Config owner root and the distinct private audience used for short-lived Broker-to-Projects run-binding proof requests. |
 | `IdentityBroker:RemoteMcpOAuth:ProjectsOwnerAddress` | Fixed absolute HTTPS root for current Projects authorization and project status. |
 | `IdentityBroker:RemoteMcpOAuth:EnvironmentOwnerAddress` | Fixed absolute HTTPS root for Environment connection configuration reads and identity-binding updates. Both Remote MCP owner addresses are required when this section is configured. |
 | `IdentityBroker:RemoteMcpOAuth:Providers[n]` | Each fixed provider has exact `IssuerUri`, `ClientId`, `RedirectUri`, and nonempty `ApprovedResources`, `ApprovedOAuthEndpoints`, and `ApprovedScopes`. Consent metadata reads use only the exact approved resource and issuer URLs, reject redirects, and accept discovered authorization/token endpoints only when they exactly match `ApprovedOAuthEndpoints`. |
@@ -1000,6 +1022,11 @@ current event-delivery boundaries.
 | `IdentityBroker:RuntimeBootstrap:BootstrapLifetime` / `SourceLifetime` | Explicit positive lifetimes bounded by the current registration and actor expiry. |
 
 The host does not use ambient credentials or a development-certificate fallback.
+
+`ProjectsConfig:Authentication:BrokerRunBindingAudience` is an optional, distinct
+absolute HTTPS audience. When configured, Projects & Config enables the private
+run-binding route and validates its short-lived signed Broker request tokens
+separately from public bearer tokens.
 
 ## Identity PostgreSQL access
 

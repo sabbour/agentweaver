@@ -1,7 +1,12 @@
 using System.Collections.Immutable;
+using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Text.Json;
 using Agentweaver.Abstractions;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Tokens;
 
 namespace Agentweaver.Projects.Config;
 
@@ -241,6 +246,11 @@ public sealed class ProjectAuthorizationOwner(
     public const string ProjectAdminScope = "projects.admin";
     public const string OrchestratorScope = "projects.orchestrator";
     public const string PlatformResourceId = "default";
+    public const string BrokerRunBindingAuthenticationScheme = "ProjectsBrokerRunBinding";
+    public const string BrokerRunBindingAuthorizationPolicy = "ProjectsBrokerRunBinding";
+    public const string BrokerRunBindingTokenType = "agentweaver-run-binding-query+jwt";
+    public const string BrokerRunBindingPurpose = "run-binding-query";
+    public const string BrokerRunBindingServiceSubject = "identity-broker";
 
     public async Task<ProjectAuthorizationContext> ResolveAsync(
         ClaimsPrincipal principal,
@@ -311,6 +321,53 @@ public sealed class ProjectAuthorizationOwner(
             request.Purpose);
     }
 
+    public async Task<ProjectAuthorizationContext> ResolveBrokerRunBindingAsync(
+        ClaimsPrincipal principal,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        if (principal.Identity?.IsAuthenticated != true ||
+            !TryGetSingleClaim(principal, "sub", out var serviceSubject) ||
+            serviceSubject != BrokerRunBindingServiceSubject ||
+            !TryGetSingleClaim(principal, "actor_iss", out var actorIssuer) ||
+            actorIssuer != identityOptions.Issuer ||
+            !TryGetSingleClaim(principal, "actor_sub", out var actorSubject) ||
+            !Guid.TryParseExact(actorSubject, "D", out var actorId) ||
+            actorId == Guid.Empty ||
+            actorSubject != actorId.ToString("D") ||
+            !TryGetSingleClaim(principal, "project_id", out var tokenProjectId) ||
+            tokenProjectId != projectId ||
+            !TryGetSingleClaim(principal, "run_id", out var tokenRunId) ||
+            tokenRunId != runId ||
+            !TryGetSingleClaim(principal, "purpose", out var purpose) ||
+            purpose != BrokerRunBindingPurpose ||
+            !TryGetSingleClaim(principal, "jti", out var tokenId) ||
+            !Guid.TryParseExact(tokenId, "N", out var parsedTokenId) ||
+            parsedTokenId == Guid.Empty ||
+            principal.Claims.Any(claim => claim.Type is "tenant_id" or "tid" or "scope" or "scp" or
+                "role" or "roles" or ClaimTypes.Role))
+            throw ProjectConfigException.Forbidden();
+
+        if (!Guid.TryParseExact(projectId, "N", out _) || !IsOpaqueIdentifier(runId))
+            throw ProjectConfigException.NotFound();
+        var project = await db.Projects.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.ProjectId == projectId, cancellationToken)
+            .ConfigureAwait(false);
+        if (project is null || project.State != ProjectLifecycleState.Active)
+            throw ProjectConfigException.NotFound();
+
+        var actor = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("sub", actorSubject),
+            new Claim("tenant_id", project.TenantId),
+            new Claim("scope", $"{ApiReadScope} {OrchestratorScope}"),
+            new Claim("project_id", projectId),
+            new Claim("run_id", runId),
+        ], authenticationType: "BrokerRunBinding"));
+        return await ResolveAsync(actor, [project.TenantId], cancellationToken).ConfigureAwait(false);
+    }
+
     private static RequestIdentity ReadRequestIdentity(ClaimsPrincipal principal, string configuredIssuer)
     {
         ArgumentNullException.ThrowIfNull(principal);
@@ -366,6 +423,13 @@ public sealed class ProjectAuthorizationOwner(
         value.All(character => char.IsAsciiLetterOrDigit(character) ||
             character is '.' or '_' or '-' or ':');
 
+    private static bool TryGetSingleClaim(ClaimsPrincipal principal, string type, out string value)
+    {
+        var claims = principal.FindAll(type).Take(2).ToArray();
+        value = claims.Length == 1 ? claims[0].Value : string.Empty;
+        return claims.Length == 1;
+    }
+
     private sealed record RequestIdentity(
         string Issuer,
         string Subject,
@@ -374,4 +438,97 @@ public sealed class ProjectAuthorizationOwner(
         string? ProjectId,
         string? RunId,
         string? Purpose);
+}
+
+internal static class BrokerRunBindingTokenValidation
+{
+    private const long MaximumLifetimeSeconds = 30;
+    private const long ClockSkewSeconds = 5;
+    private const long MaximumAgeSeconds = MaximumLifetimeSeconds + ClockSkewSeconds;
+
+    public static JwtBearerEvents CreateEvents(TimeProvider timeProvider) => new()
+    {
+        OnTokenValidated = context =>
+        {
+            var now = timeProvider.GetUtcNow();
+            var valid = context.SecurityToken switch
+            {
+                JwtSecurityToken token => HasValidTimeProfile(token.Payload, now),
+                JsonWebToken token => HasValidTimeProfile(token.EncodedPayload, now),
+                _ => false,
+            };
+            if (!valid)
+                context.Fail("The Broker run-binding ticket lifetime is invalid.");
+            return Task.CompletedTask;
+        },
+    };
+
+    internal static bool HasValidTimeProfile(JwtPayload payload, DateTimeOffset now)
+    {
+        if (!TryReadNumericDate(payload, "iat", out var issuedAt) ||
+            !TryReadNumericDate(payload, "nbf", out var notBefore) ||
+            !TryReadNumericDate(payload, "exp", out var expires))
+            return false;
+
+        return HasValidTimeProfile(issuedAt, notBefore, expires, now);
+    }
+
+    private static bool HasValidTimeProfile(string encodedPayload, DateTimeOffset now)
+    {
+        using var document = JsonDocument.Parse(Base64UrlEncoder.DecodeBytes(encodedPayload));
+        var payload = document.RootElement;
+        if (!TryReadNumericDate(payload, "iat", out var issuedAt) ||
+            !TryReadNumericDate(payload, "nbf", out var notBefore) ||
+            !TryReadNumericDate(payload, "exp", out var expires))
+            return false;
+
+        return HasValidTimeProfile(issuedAt, notBefore, expires, now);
+    }
+
+    private static bool HasValidTimeProfile(
+        long issuedAt,
+        long notBefore,
+        long expires,
+        DateTimeOffset now)
+    {
+        var nowSeconds = now.ToUnixTimeSeconds();
+        return issuedAt <= nowSeconds + ClockSkewSeconds &&
+            issuedAt >= nowSeconds - MaximumAgeSeconds &&
+            notBefore <= issuedAt &&
+            notBefore >= issuedAt - ClockSkewSeconds &&
+            expires > issuedAt &&
+            expires <= issuedAt + MaximumLifetimeSeconds &&
+            expires > nowSeconds - ClockSkewSeconds;
+    }
+
+    private static bool TryReadNumericDate(JsonElement payload, string name, out long value)
+    {
+        value = 0;
+        return payload.TryGetProperty(name, out var raw) &&
+            raw.ValueKind == JsonValueKind.Number &&
+            raw.TryGetInt64(out value) &&
+            value >= 0;
+    }
+
+    private static bool TryReadNumericDate(JwtPayload payload, string name, out long value)
+    {
+        value = 0;
+        if (!payload.TryGetValue(name, out var raw))
+            return false;
+        switch (raw)
+        {
+            case long number when number >= 0:
+                value = number;
+                return true;
+            case int number when number >= 0:
+                value = number;
+                return true;
+            case JsonElement { ValueKind: JsonValueKind.Number } element when element.TryGetInt64(out var number):
+                value = number;
+                return number >= 0;
+            default:
+                return false;
+        }
+    }
+
 }

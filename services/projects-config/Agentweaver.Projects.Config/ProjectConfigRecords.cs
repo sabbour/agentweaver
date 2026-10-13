@@ -122,6 +122,22 @@ public sealed class ProjectRunSelectionRecord
     public DateTimeOffset CreatedAt { get; set; }
 }
 
+public sealed record BrokerRunBindingProofResponse(
+    string ActorIssuer,
+    string ActorSubject,
+    string TenantId,
+    Guid MembershipId,
+    long MembershipRevision,
+    string ProjectId,
+    string RunId,
+    Guid AssignmentId,
+    long AssignmentRevision,
+    long ProjectRevision,
+    long ProjectConfigurationRevision,
+    long PlatformRuntimeRevision,
+    string ContextRevision,
+    string SelectionHash);
+
 public enum ProjectSetupOperationKind
 {
     Setup,

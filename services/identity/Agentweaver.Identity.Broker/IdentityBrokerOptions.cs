@@ -30,6 +30,8 @@ public sealed class IdentityBrokerOptions
     [Required]
     public required SecretRedemptionOptions SecretRedemption { get; set; }
 
+    public BrokerRunBindingOptions? RunBinding { get; set; }
+
     public RemoteMcpOAuthOptions? RemoteMcpOAuth { get; set; }
 
     public GitHubRepoAppOptions? GitHubRepoApp { get; set; }
@@ -40,6 +42,13 @@ public sealed class IdentityBrokerOptions
     [Required]
     [MinLength(1)]
     public required IReadOnlyList<BrokerClientOptions> Clients { get; set; }
+}
+
+public sealed class BrokerRunBindingOptions
+{
+    public string? ProjectsOwnerAddress { get; set; }
+
+    public string? ProjectsAudience { get; set; }
 }
 
 public sealed class RemoteMcpOAuthOptions

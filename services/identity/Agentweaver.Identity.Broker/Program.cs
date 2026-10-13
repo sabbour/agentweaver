@@ -329,6 +329,16 @@ if (builder.AddRemoteMcpCredentialUseTls())
 // PFX; there is no "development certificate" escape hatch in this host.
 var signingCertificate = X509CertificateLoader.LoadPkcs12FromFile(
     identityOptions.Signing.PfxPath, identityOptions.Signing.PfxPassword, X509KeyStorageFlags.EphemeralKeySet);
+builder.Services.AddSingleton(signingCertificate);
+builder.Services.AddHttpClient(BrokerRunBindingAuthority.HttpClientName, client =>
+        client.Timeout = TimeSpan.FromSeconds(15))
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+builder.Services.AddScoped(provider => new BrokerRunBindingAuthority(
+    identityOptions,
+    provider.GetRequiredService<X509Certificate2>(),
+    provider.GetRequiredService<IHttpClientFactory>()
+        .CreateClient(BrokerRunBindingAuthority.HttpClientName),
+    provider.GetRequiredService<TimeProvider>()));
 builder.Services.AddDataProtection()
     .SetApplicationName("Agentweaver.Identity.Broker")
     .PersistKeysToFileSystem(new DirectoryInfo(identityOptions.DataProtectionKeyPath))

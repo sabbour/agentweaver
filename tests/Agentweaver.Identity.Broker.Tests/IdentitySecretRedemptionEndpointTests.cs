@@ -621,11 +621,15 @@ public sealed class IdentitySecretRedemptionEndpointTests(PostgresContainerFixtu
                 settings["IdentityBroker__Clients__0__Resources__0"] = orchestratorAudience;
                 settings["IdentityBroker__Clients__0__Resources__1"] = brokerAudience;
                 settings["IdentityBroker__Clients__0__Scopes__5"] = "projects.orchestrator";
+                settings["IdentityBroker__RunBinding__ProjectsOwnerAddress"] = "https://projects.test/";
+                settings["IdentityBroker__RunBinding__ProjectsAudience"] = "https://projects-private.test/";
             },
             configureServices: services =>
             {
                 services.RemoveAll<ISecretRedemption>();
                 services.AddSingleton<ISecretRedemption>(_backend);
+                services.AddHttpClient(BrokerRunBindingAuthority.HttpClientName)
+                    .ConfigurePrimaryHttpMessageHandler(() => new ProjectsRunBindingResponseHandler());
             });
         _broker = _factory.CreateClient(new WebApplicationFactoryClientOptions
         {
@@ -665,6 +669,39 @@ public sealed class IdentitySecretRedemptionEndpointTests(PostgresContainerFixtu
             new SigningCredentials(signingKey, SecurityAlgorithms.RsaSha256));
         token.Header["typ"] = "at+jwt";
         return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    private sealed class ProjectsRunBindingResponseHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var token = new JwtSecurityTokenHandler().ReadJwtToken(
+                request.Headers.Authorization!.Parameter!);
+            var receipt = new BrokerRunBindingReceipt(
+                token.Claims.Single(claim => claim.Type == "actor_iss").Value,
+                token.Claims.Single(claim => claim.Type == "actor_sub").Value,
+                "source-control-tenant",
+                Guid.Parse("3e152378-43a3-4ac4-8db9-d2ce1361800b"),
+                1,
+                token.Claims.Single(claim => claim.Type == "project_id").Value,
+                token.Claims.Single(claim => claim.Type == "run_id").Value,
+                Guid.Parse("b360b9ed-27b4-4f2a-bc0b-1ab842cbcf4a"),
+                1,
+                1,
+                1,
+                1,
+                "source-control-context",
+                new string('A', 64));
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = System.Net.Http.Json.JsonContent.Create(receipt),
+            };
+            response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true };
+            return Task.FromResult(response);
+        }
     }
 }
 
