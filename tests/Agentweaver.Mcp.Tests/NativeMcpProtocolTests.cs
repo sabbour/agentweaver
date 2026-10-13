@@ -1241,11 +1241,22 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
                             new StaticConfigurationManager<OpenIddictConfiguration>(
                                 validationConfiguration));
                 }
-                services.AddHttpClient<GatewayApiClient>()
-                    .ConfigurePrimaryHttpMessageHandler(
-                        () => gatewayApiHandler ?? gateway.Server.CreateHandler());
-                services.AddHttpClient<GatewayToolCatalog>()
-                    .ConfigurePrimaryHttpMessageHandler(() => gateway.Server.CreateHandler());
+                services.PostConfigure<HttpClientFactoryOptions>(
+                    typeof(GatewayApiClient).Name,
+                    options =>
+                    {
+                        options.HttpMessageHandlerBuilderActions.Clear();
+                        options.HttpMessageHandlerBuilderActions.Add(builder =>
+                            builder.PrimaryHandler = gatewayApiHandler ?? gateway.Server.CreateHandler());
+                    });
+                services.PostConfigure<HttpClientFactoryOptions>(
+                    typeof(GatewayToolCatalog).Name,
+                    options =>
+                    {
+                        options.HttpMessageHandlerBuilderActions.Clear();
+                        options.HttpMessageHandlerBuilderActions.Add(builder =>
+                            builder.PrimaryHandler = gateway.Server.CreateHandler());
+                    });
             });
         }
     }

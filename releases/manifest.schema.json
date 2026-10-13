@@ -78,13 +78,19 @@
     { "if": { "properties": { "stage": { "const": "draft" } }, "required": ["stage"] }, "then": { "not": { "required": ["evidence"] } } },
     { "if": { "properties": { "stage": { "const": "release" } }, "required": ["stage"] }, "then": { "required": ["evidence"] } },
     {
-      "$comment": "A draft service may honestly omit imageDigest (unpublished); a release stage must pin an actual published digest for every service component.",
+      "$comment": "A draft service may honestly omit imageDigest (unpublished); a release stage pins every product service image. FoundationProbe is acceptance-only and is never part of the product release.",
       "if": { "properties": { "stage": { "const": "release" } }, "required": ["stage"] },
       "then": {
         "properties": {
           "components": {
             "items": {
-              "if": { "properties": { "kind": { "const": "service" } }, "required": ["kind"] },
+              "if": {
+                "properties": {
+                  "kind": { "const": "service" },
+                  "id": { "not": { "const": "Agentweaver.FoundationProbe" } }
+                },
+                "required": ["kind", "id"]
+              },
               "then": { "required": ["imageDigest"] }
             }
           }

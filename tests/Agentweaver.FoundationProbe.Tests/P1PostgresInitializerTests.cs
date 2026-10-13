@@ -88,6 +88,65 @@ public sealed class P1PostgresInitializerTests
     }
 
     [Fact]
+    public void MutationDenialPlanRequiresAllEightOneColumnGrantsToNameNonExecutableGuards()
+    {
+        var services = MutationServices();
+        InitializerChecks.AssertMutationDenialPlan(services);
+
+        var missingGuard = MutationServices();
+        missingGuard[3] = missingGuard[3] with
+        {
+            Tables = [missingGuard[3].Tables[0] with { MutationDenialGuard = null },
+                .. missingGuard[3].Tables.Skip(1)],
+        };
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(missingGuard));
+
+        var broadUpdate = MutationServices();
+        broadUpdate[3] = broadUpdate[3] with
+        {
+            Tables = [broadUpdate[3].Tables[0] with { Privileges = ["SELECT", "INSERT", "UPDATE"] },
+                .. broadUpdate[3].Tables.Skip(1)],
+        };
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(broadUpdate));
+
+        var executableGuard = MutationServices();
+        executableGuard[3] = executableGuard[3] with
+        {
+            Functions = [executableGuard[3].Functions[0] with { Execute = true },
+                .. executableGuard[3].Functions.Skip(1)],
+        };
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertMutationDenialPlan(executableGuard));
+    }
+
+    [Fact]
+    public void MutationDenialReadbackRequiresEnabledExactTriggersAndNonExecutableRejectingFunctions()
+    {
+        foreach (var service in MutationServices().Skip(3))
+        {
+            var guards = service.Tables.Select(table => MutationGuardReadback(service, table)).ToArray();
+            InitializerChecks.AssertMutationDenialGuards(service, guards, Owner, Runtime);
+            MutationGuardState[][] changedCases =
+            {
+                guards.Skip(1).ToArray(),
+                [guards[0] with { TriggerName = "foreign_trigger" }, .. guards.Skip(1)],
+                [guards[0] with { FunctionName = "allow_mutation()" }, .. guards.Skip(1)],
+                [guards[0] with { TriggerType = 27 }, .. guards.Skip(1)],
+                [guards[0] with { Enabled = "D" }, .. guards.Skip(1)],
+                [guards[0] with { IsInternal = true }, .. guards.Skip(1)],
+                [guards[0] with { NoColumnFilter = false }, .. guards.Skip(1)],
+                [guards[0] with { NoCondition = false }, .. guards.Skip(1)],
+                [guards[0] with { ArgumentCount = 1 }, .. guards.Skip(1)],
+                [guards[0] with { FunctionOwnerOid = Owner + 1 }, .. guards.Skip(1)],
+                [guards[0] with { RuntimeCanExecute = true }, .. guards.Skip(1)],
+                [guards[0] with { FunctionSource = "BEGIN RETURN NEW; END" }, .. guards.Skip(1)],
+            };
+            foreach (var changed in changedCases)
+                Assert.Throws<InvalidOperationException>(() =>
+                    InitializerChecks.AssertMutationDenialGuards(service, changed, Owner, Runtime));
+        }
+    }
+
+    [Fact]
     public void FivePrincipalReadbacksBindObjectsFlagsAndOnlyTheExactOperatorMembership()
     {
         var services = Services();
@@ -249,6 +308,73 @@ public sealed class P1PostgresInitializerTests
     private static ServicePlan[] Services() => Enumerable.Range(0, 5).Select(index =>
         new ServicePlan($"service-{index}", $"schema_{index}", $"runtime_{index}",
             $"00000000-0000-0000-0000-{index + 1:000000000000}", [], [])).ToArray();
+
+    private static ServicePlan[] MutationServices()
+    {
+        var services = Services();
+        services[3] = services[3] with
+        {
+            Service = "events-and-sessions",
+            Schema = "events_sessions",
+            Tables =
+            [
+                LockTable("sessions", "session_id", "sessions_no_update", "reject_row_lock_record_update()",
+                    19, "Session identity, provider binding, and fork lineage records cannot be updated.", "55000"),
+                LockTable("session_provider_bindings", "run_id", "session_provider_bindings_no_update",
+                    "reject_row_lock_record_update()", 19,
+                    "Session identity, provider binding, and fork lineage records cannot be updated.", "55000"),
+                LockTable("session_fork_lineage", "target_session_id", "session_fork_lineage_no_update",
+                    "reject_row_lock_record_update()", 19,
+                    "Session identity, provider binding, and fork lineage records cannot be updated.", "55000"),
+                LockTable("usage_rate_cards", "card_id", "usage_rate_cards_immutable",
+                    "reject_usage_history_mutation()", 27, "usage accounting history is append-only", null),
+                LockTable("usage_ledger", "event_id", "usage_ledger_append_only",
+                    "reject_usage_history_mutation()", 27, "usage accounting history is append-only", null),
+            ],
+            Functions =
+            [
+                new("reject_row_lock_record_update()", false),
+                new("reject_usage_history_mutation()", false),
+            ],
+        };
+        services[4] = services[4] with
+        {
+            Service = "orchestrator",
+            Schema = "orchestrator",
+            Tables =
+            [
+                LockTable("coordinator_decisions", "decision_id", "coordinator_decisions_no_update",
+                    "reject_row_lock_record_update()", 19,
+                    "Coordinator decision and MAF checkpoint records cannot be updated.", "55000"),
+                LockTable("maf_workflow_checkpoints", "checkpoint_id", "maf_workflow_checkpoints_no_update",
+                    "reject_row_lock_record_update()", 19,
+                    "Coordinator decision and MAF checkpoint records cannot be updated.", "55000"),
+                LockTable("session_consistency_manifests", "manifest_id", "session_consistency_manifests_immutable",
+                    "reject_session_consistency_manifest_mutation()", 27,
+                    "session consistency manifests are immutable", null),
+            ],
+            Functions =
+            [
+                new("reject_row_lock_record_update()", false),
+                new("reject_session_consistency_manifest_mutation()", false),
+            ],
+        };
+        return services;
+    }
+
+    private static TablePlan LockTable(string table, string column, string trigger, string function,
+        int triggerType, string message, string? sqlState) => new(table, ["SELECT", "INSERT"], column, true,
+        new(trigger, function, triggerType, message, sqlState));
+
+    private static MutationGuardState MutationGuardReadback(ServicePlan service, TablePlan table)
+    {
+        var guard = table.MutationDenialGuard!;
+        var source = $"BEGIN RAISE EXCEPTION '{guard.Message}'" +
+            (guard.SqlState is null ? string.Empty : $" USING ERRCODE = '{guard.SqlState}'") +
+            "; END";
+        return new MutationGuardState(table.Table, guard.Trigger, service.Schema, guard.Function,
+            guard.TriggerType, "O", false, true, true, 0, Owner, false, source);
+    }
 
     private static RuntimePrincipal[] Principals(ServicePlan[] services) => services.Select((service, index) =>
         new RuntimePrincipal(Runtime + (uint)index, service.Role, service.PrincipalObjectId, "service",

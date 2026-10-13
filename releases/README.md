@@ -432,6 +432,64 @@ The manual workflow has a separate publication choice.
   The publisher validates that provenance contains exactly the manifest's
   non-service components and requires no container registry credentials.
 
+### Source-only integration images
+
+Use the separate integration path to prepare and, when explicitly selected,
+publish only the ten product service images for one exact source commit. It
+requires a clean checkout at that commit. The image tags use the full source
+SHA, and the actual image configs must contain that SHA, the exact Git tree
+SHA, and the component version. NuGet packages and the acceptance-only
+Foundation Probe are not selected. This path does not create a GitHub Release
+or update the draft composition.
+
+```powershell
+npm run release:integration-pack -- --integration-source-sha <full-source-sha>
+```
+
+The manually dispatched `.github/workflows/v1-integration-images.yml` workflow
+requires the `v1` branch and an `expected_source` equal to the workflow SHA.
+Its default `publish: false` prepares and uploads the images only. Selecting
+`publish: true` runs a separate job in the `v1-publication` environment. That
+job publishes the exact source-SHA tags and creates immutable claim and result
+records; its `integration-publication.json` receipt is uploaded separately.
+The local publication command requires the same explicit image-only and
+confirmation flags:
+
+```powershell
+npm run release:integration-publish -- <full-source-sha> --integration-images-only --confirm-integration-publication
+```
+
+The local integration deployment consumes the tracked draft manifest, pack
+provenance, and integration publication receipt. It checks the immutable
+publication result and anonymously verifies that each registry image config
+still carries the exact source SHA, source tree, and manifest version.
+AgentHost config and platform evidence are checked separately. The default is
+read-only; `--execute` is required to apply the nine shared P0 services. It
+then verifies the live images and ready pods and creates a local result with
+hashes of the resource readbacks.
+
+```powershell
+npm run release:deploy-integration -- `
+  --source-sha <full-source-sha> `
+  --manifest releases/foundation.json `
+  --provenance artifacts/release/integration/provenance.json `
+  --publication artifacts/release/integration/integration-publication.json `
+  --subscription-id 90ab3701-83f0-4ba1-a90a-f2e68683adab `
+  --tenant-id 72f988bf-86f1-41af-91ab-2d7cd011db47 `
+  --resource-group aw-v1-p0 `
+  --cluster aw-v1-p0-aks `
+  --namespace agentweaver-v1-p0 `
+  --node-min 2 `
+  --node-max 3 `
+  --provider-catalog-configmap <existing-configmap-name> `
+  --provider-catalog-source-commit <40-character-source-sha>
+```
+
+This integration mode is not a release or acceptance result. The existing
+`release:deploy` path remains the separate final-release gate and requires the
+published v1 release composition and its full publication evidence. Add
+`--execute` only when the read-only preflight has passed and a rollout is intended.
+
 The manually dispatched `v1 release pack` GitHub Actions workflow
 (`.github/workflows/v1-release-pack.yml`) validates and prepares the exact dispatch source.
 Dispatch requires the `v1` branch and an `expected_source` equal to the full dispatch SHA.
@@ -472,14 +530,17 @@ The workflow's `publish: true` choice runs the `v1-publication` environment job.
 Repository owners can configure approval on that environment.
 This change does not modify environment policy or branch protection.
 
-Configure `RELEASE_NUGET_SOURCE` and `RELEASE_REGISTRY` as environment variables.
-Configure `RELEASE_NUGET_API_KEY`, `RELEASE_REGISTRY_USER`, and
-`RELEASE_REGISTRY_PASSWORD` as environment secrets.
+Configure `RELEASE_NUGET_SOURCE` as an environment variable. The product
+publication job fixes the registry destination to `ghcr.io/sabbour` and checks
+that exact value before downloading artifacts. Its existing `GITHUB_TOKEN` is
+used for both GitHub Packages and GHCR; no separate registry credential secrets
+or alternate account token are used. The job remains behind the protected
+`v1-publication` environment. If the token cannot publish to the existing
+packages, publication fails; this workflow change does not grant or verify
+package access or prove that published images are publicly pullable.
 `RELEASE_REGISTRY` is a lowercase registry host, optionally followed by a
-lowercase repository namespace/path. The host is used for Docker login; the full
-value prefixes each component image path. For example, `ghcr.io/sabbour`
-publishes `ghcr.io/sabbour/<component-id>:<version>`. A host-only value keeps
-the existing `registry.example/<component-id>:<version>` behavior. Schemes,
+lowercase repository namespace/path for other callers. The host is used for
+Docker login; the full value prefixes each component image path. Schemes,
 credentials, query/fragment suffixes, empty path elements, and traversal
 segments are rejected.
 Feed URLs must use HTTPS without embedded credentials or query tokens.
@@ -553,3 +614,91 @@ changing product code, project files, schema, or package configuration is not.
 Existing historical records do not satisfy a new diff. The validator checks
 records against the actual manifest and changed component paths, not npm
 workspaces or a global `agentweaver` package.
+
+## Local v1 release deployment
+
+`npm run release:deploy` is the operator-hosted, image-only Kubernetes rollout
+tool. It consumes an already published `v1.x.y` GitHub Release, the release-stage
+composition manifest, the matching immutable publication receipt, and a
+rendered runtime `List`. It is deliberately separate from `release:apply`,
+`release:pack`, and the existing publication workflow; it does not build or
+publish artifacts.
+
+The command requires explicit subscription, tenant, resource group, AKS,
+namespace, and node-bound arguments. These must match the approved P0 target:
+subscription `90ab3701-83f0-4ba1-a90a-f2e68683adab`, tenant
+`72f988bf-86f1-41af-91ab-2d7cd011db47`, resource group `aw-v1-p0`, cluster
+`aw-v1-p0-aks`, namespace `agentweaver-v1-p0`, and node bounds 2–3. It does not
+select a default Azure account, change kubectl context, or request credentials.
+The local checkout must be clean at the exact annotated release tag commit.
+The checked-in runtime List source supplies the nine shared Deployment/Service
+pairs from the validated publication receipt. It also requires the existing
+Projects provider-catalog ConfigMap name and the exact reviewed source commit.
+Use `--runtime-manifest` only when supplying a complete operator-rendered
+replacement List.
+
+```powershell
+npm run release:deploy -- v1.0.0 `
+  --manifest <published-release-manifest.json> `
+  --publication <publication.json> `
+  --subscription-id 90ab3701-83f0-4ba1-a90a-f2e68683adab `
+  --tenant-id 72f988bf-86f1-41af-91ab-2d7cd011db47 `
+  --resource-group aw-v1-p0 `
+  --cluster aw-v1-p0-aks `
+  --namespace agentweaver-v1-p0 `
+  --node-min 2 `
+  --node-max 3 `
+  --provider-catalog-configmap <existing-configmap-name> `
+  --provider-catalog-source-commit <40-character-source-sha>
+```
+
+The default is a read-only dry-run: it verifies the annotated GitHub tag and
+published Release, the source-bound immutable publication result, all 23
+product components and ten GHCR image digests, the exact Azure/kubectl target,
+the generated nine shared-service runtime pairs, existing references and required Cilium
+policy names, and client-rendered Kubernetes resources. The receipt-measured
+AgentHost image, platform, and compressed pull bytes are passed through the
+Environment Deployment to the per-Sandbox provider.
+Registry checks use GHCR's HTTPS API and require anonymous image access; they do
+not call Docker or Podman. A real rollout requires a separate explicit
+`--execute`. The execution path applies only the nine named shared-service
+Deployments and private ClusterIP Services in the supplied runtime List. It
+does not create a shared AgentHost Deployment or Service. It then rechecks
+image provenance, target, ready pods, health probes, and live image IDs. `--resume`
+may skip only an already-applied stage from a checkpoint bound to the release,
+source, manifest, publication receipt, runtime List, and exact target. Resume
+always repeats live verification. Checkpoint read/write/cleanup errors fail
+explicitly.
+
+The runtime List cannot create or change namespaces, ServiceAccounts, Secrets,
+ConfigMaps, PVCs, NetworkPolicies, Cilium policies, Jobs, routes, Gateway
+resources, or databases. Those references must already exist and be operator
+reviewed. The tool does not bootstrap SQL, assign identities or grants, add
+private routing/TLS, or bypass missing health/access prerequisites. The current
+checkout has no published `stage: release` manifest or successful product
+publication receipt; the checked-in composition is still `draft`. The runtime
+List source exists but has not been deployed. The source now defines the AgentHost
+per-Sandbox private HTTPS Service and identity-client label contract, but that
+does not prove production scheduling or a live controller result. Required
+Cilium policy names exist in source for Identity Broker, Events & Sessions,
+Projects & Config, AgentHost, Environment, Gateway, MCP, Orchestrator, and
+Knowledge, and Web. The optional routing overlay lets only the exact selected
+Gateway pods and host health probes reach Web on its source-owned HTTP port; it
+does not create a Web route. Missing inputs remain hard failures, not
+placeholder defaults.
+
+```mermaid
+flowchart LR
+  Release["Annotated v1 tag + published GitHub Release"] --> Source["Exact clean source SHA"]
+  Source --> Receipt["Immutable publication result + release-stage manifest"]
+  Receipt --> Images["Verify 10 public GHCR digests over HTTPS"]
+  Target["Explicit v1 P0 Azure and kubectl target"] --> Preflight["Read-only target and prerequisite checks"]
+  Images --> Preflight
+  Runtime["Nine shared-service runtime pairs"] --> Preflight
+  Receipt --> Host["Measured AgentHost image and pull bytes"]
+  Host --> Environment["Pin per-Sandbox AgentHost in Environment options"]
+  Preflight --> DryRun["Default: client-side render, no remote writes"]
+  DryRun -->|separate --execute| Apply["Apply only nine shared-service pairs"]
+  Apply --> Verify["Recheck provenance, live image IDs, health, and readiness"]
+  Verify --> Checkpoint["Clear exact-source, exact-target checkpoint"]
+```

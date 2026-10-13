@@ -23,3 +23,18 @@ spec:
           selector:
             matchLabels:
               kubernetes.io/metadata.name: agentweaver-v1-p0
+    - name: portal
+      port: 443
+      protocol: HTTPS
+      hostname: CHANGEME-PORTAL-HOST
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - kind: Secret
+            name: identity-broker-tls
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              kubernetes.io/metadata.name: agentweaver-v1-p0

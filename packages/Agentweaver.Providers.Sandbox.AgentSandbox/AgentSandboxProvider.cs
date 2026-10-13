@@ -931,6 +931,13 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         var podLabels = request.EgressSelectorLabels.ToBuilder();
         foreach (var label in resourceLabels)
             podLabels[label.Key] = label.Value;
+        if (options.AgentHost is not null)
+        {
+            podLabels["app.kubernetes.io/name"] = "agenthost";
+            podLabels["agentweaver.io/service"] = "agenthost";
+            podLabels["agentweaver.io/workload"] = "agenthost";
+            podLabels["agentweaver.io/identity-client"] = "true";
+        }
 
         var template = JsonSerializer.SerializeToElement(new
         {
@@ -951,7 +958,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
                 networkPolicyManagement = "Unmanaged",
                 envVarsInjectionPolicy = "Disallowed",
                 volumeClaimTemplatesPolicy = "Disallowed",
-                service = false,
+                service = options.AgentHost is not null,
                 podTemplate = new
                 {
                     metadata = new { labels = podLabels.ToImmutable() },
@@ -1218,7 +1225,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             ReadOptionalString(spec, "envVarsInjectionPolicy") != "Disallowed" ||
             ReadOptionalString(spec, "volumeClaimTemplatesPolicy") != "Disallowed" ||
             !TryGetBoolean(spec, "service", out var serviceEnabled) ||
-            serviceEnabled)
+            serviceEnabled != (options.AgentHost is not null))
             throw ProviderResourceMismatch("The owned SandboxTemplate has unsupported policy settings.");
 
         var podTemplate = RequiredObject(spec, "podTemplate");
@@ -1229,6 +1236,12 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         foreach (var label in labels)
             if (!HasAnnotationOrLabel(podLabels, label.Key, label.Value))
                 throw ProviderResourceMismatch("The owned Pod template is missing an ownership or egress label.");
+        if (options.AgentHost is not null &&
+            (!HasAnnotationOrLabel(podLabels, "app.kubernetes.io/name", "agenthost") ||
+             !HasAnnotationOrLabel(podLabels, "agentweaver.io/service", "agenthost") ||
+             !HasAnnotationOrLabel(podLabels, "agentweaver.io/workload", "agenthost") ||
+             !HasAnnotationOrLabel(podLabels, "agentweaver.io/identity-client", "true")))
+            throw ProviderResourceMismatch("The AgentHost Pod template is missing its service-owner selectors.");
 
         var podSpec = RequiredObject(podTemplate, "spec");
         if (!string.Equals(

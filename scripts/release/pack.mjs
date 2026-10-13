@@ -21,9 +21,22 @@ import {
   readAgentHostSource, agentHostArchiveMetadata, verifyAgentHostArchives, verifyAgentHostMeasurement, verifyLoadedAgentHostImage,
 } from './agenthost-image.mjs';
 import { measureAgentHostArchiveSync } from './measure-agenthost-image.mjs';
+import { readDockerArchiveConfig } from './docker-archive.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const sha = /^[a-f0-9]{40}$/;
+const INTEGRATION_SERVICE_IDS = Object.freeze([
+  'Agentweaver.AgentHost',
+  'Agentweaver.Identity.Broker',
+  'Agentweaver.EventsAndSessions',
+  'Agentweaver.Gateway',
+  'Agentweaver.Mcp',
+  'Agentweaver.Web',
+  'Agentweaver.Orchestrator',
+  'Agentweaver.Environment',
+  'Agentweaver.Knowledge',
+  'Agentweaver.Projects.Config',
+].sort());
 
 export function componentImageRepository(componentId) {
   if (componentId === 'Agentweaver.FoundationProbe') return 'agentweaver-foundation-probe';
@@ -32,8 +45,44 @@ export function componentImageRepository(componentId) {
   return componentId.toLowerCase();
 }
 
+export function selectIntegrationImageComponents(manifest) {
+  const components = manifest.components.filter(component =>
+    component.kind === 'service' && component.id !== 'Agentweaver.FoundationProbe');
+  const ids = components.map(component => component.id).sort();
+  if (ids.length !== INTEGRATION_SERVICE_IDS.length ||
+      ids.some((id, index) => id !== INTEGRATION_SERVICE_IDS[index])) {
+    fail('selection', 'integration images-only preparation requires the exact ten product services and excludes FoundationProbe');
+  }
+  return components;
+}
+
 function fail(location, message) {
   throw new Error(`${location}: ${message}`);
+}
+
+function verifyIntegrationDockerConfig(archive, imageReference, sourceSha, sourceTree, version) {
+  let image;
+  try {
+    image = readDockerArchiveConfig(archive, imageReference);
+  } catch (error) {
+    fail('docker', `cannot verify prepared image config from ${archive}: ${error.message}`);
+  }
+  const labels = image.config?.config?.Labels;
+  if (!/^sha256:[a-f0-9]{64}$/.test(image.configDigest) ||
+      image.config.os !== 'linux' || image.config.architecture !== 'amd64' ||
+      labels?.['org.opencontainers.image.revision'] !== sourceSha ||
+      labels?.['io.agentweaver.source-tree'] !== sourceTree ||
+      labels?.['org.opencontainers.image.version'] !== version) {
+    fail('docker', `prepared image ${imageReference} does not match the exact source, tree, version, and linux/amd64 platform`);
+  }
+  return {
+    imageConfigDigest: image.configDigest,
+    labels: {
+      'org.opencontainers.image.revision': labels['org.opencontainers.image.revision'],
+      'io.agentweaver.source-tree': labels['io.agentweaver.source-tree'],
+      'org.opencontainers.image.version': labels['org.opencontainers.image.version'],
+    },
+  };
 }
 
 function defaultGit(root) {
@@ -268,12 +317,22 @@ export function packComponents(manifest, {
   packagesOnly = false,
   foundationProbeOnly = false,
   platformOnly = false,
+  integrationSourceSha,
 } = {}) {
   if (typeof outDir !== 'string' || outDir.trim() === '') fail('outDir', 'expected an output directory path');
+  const integrationImagesOnly = integrationSourceSha !== undefined;
+  if (integrationImagesOnly && !sha.test(integrationSourceSha)) {
+    fail('selection', 'integration image preparation requires an exact 40-character source SHA');
+  }
+  if (integrationImagesOnly && (packagesOnly || foundationProbeOnly || platformOnly)) {
+    fail('selection', 'integration images-only preparation cannot combine with another selection');
+  }
   if (packagesOnly && foundationProbeOnly) fail('selection', 'package-only and Foundation Probe-only preparation are mutually exclusive');
   if (platformOnly && (packagesOnly || foundationProbeOnly))
     fail('selection', 'platform-only preparation cannot combine with package-only or Foundation Probe-only preparation');
-  const components = platformOnly
+  const components = integrationImagesOnly
+    ? selectIntegrationImageComponents(manifest)
+    : platformOnly
     ? manifest.components.filter(component => component.id !== 'Agentweaver.FoundationProbe')
     : foundationProbeOnly
     ? manifest.components.filter(component => component.id === 'Agentweaver.FoundationProbe' && component.kind === 'service')
@@ -281,13 +340,28 @@ export function packComponents(manifest, {
     ? manifest.components.filter((component) => component.kind !== 'service')
     : manifest.components;
   if (components.length === 0) fail('manifest.components', 'no components to prepare');
+  if (integrationImagesOnly && (manifest.stage !== 'draft' || manifest.evidence !== undefined)) {
+    fail('manifest', 'integration image preparation requires a tracked draft manifest with no deployment evidence');
+  }
 
   const before = status();
   if (before.trim() !== '') fail('git', 'working tree must be clean before packing: commit or stash pending changes first');
 
   const sourceSha = git('rev-parse', 'HEAD');
   if (!sha.test(sourceSha)) fail('git', 'cannot resolve a full 40-character commit SHA for HEAD');
+  if (integrationImagesOnly && integrationSourceSha !== sourceSha) {
+    fail('git', 'integration source SHA must match the exact clean local HEAD');
+  }
   if (manifest.stage === 'release' && manifest.evidence.sourceSha !== sourceSha) fail('manifest.evidence', 'released composition evidence must match preparation HEAD');
+  const integrationSourceTree = integrationImagesOnly ? git('rev-parse', `${sourceSha}^{tree}`) : undefined;
+  if (integrationImagesOnly && !sha.test(integrationSourceTree ?? '')) {
+    fail('git', 'cannot resolve the exact 40-character source tree for integration images');
+  }
+  const integrationLabels = integrationImagesOnly ? (version) => ({
+    'org.opencontainers.image.revision': sourceSha,
+    'io.agentweaver.source-tree': integrationSourceTree,
+    'org.opencontainers.image.version': version,
+  }) : undefined;
   const probeSource = components.some(component => component.id === 'Agentweaver.FoundationProbe')
     ? resolveProbeImageSource({ repoRoot: root, readFile }) : undefined;
   if (probeSource && probeSource.sourceSha !== sourceSha) fail('git', 'Probe image source changed before preparation');
@@ -342,7 +416,7 @@ export function packComponents(manifest, {
       const dockerfile = readFile(dockerfilePath, 'utf8');
       const baseImages = parseWebDockerfile(dockerfile);
       const artifactName = `${component.id}.${component.version}.tar`;
-      const tag = `${component.version.replaceAll('+', '_')}-${sourceSha}`;
+      const tag = integrationImagesOnly ? sourceSha : `${component.version.replaceAll('+', '_')}-${sourceSha}`;
       if (tag.length > 128) fail(component.id, 'version-derived Docker tag exceeds the 128-character limit');
       const imageReference = `${componentImageRepository(component.id)}:${tag}`;
       webSources.set(component.id, {
@@ -362,6 +436,7 @@ export function packComponents(manifest, {
         imageReference,
         platform: 'linux/amd64',
         baseImages,
+        ...(integrationImagesOnly ? { integrationLabels: integrationLabels(component.version) } : {}),
       });
       continue;
     }
@@ -376,14 +451,18 @@ export function packComponents(manifest, {
       if (component.id !== AGENTHOST_ID || component.project !== AGENTHOST_PROJECT || component.kind !== 'service')
         fail(component.project, 'only the AgentHost service may use its native Dockerfile preparation');
       const source = readAgentHostSource(root, sourceSha, git);
-      const tag = `${component.version.replaceAll('+', '_')}-${sourceSha}`;
+      const tag = integrationImagesOnly ? sourceSha : `${component.version.replaceAll('+', '_')}-${sourceSha}`;
       if (tag.length > 128) fail(component.id, 'version-derived Docker tag exceeds the 128-character limit');
       agentHostSources.set(component.id, source);
       auxiliaryArchives.add(`${component.id}.${component.version}.oci.tar`);
       expectedArtifacts.set(`${component.id}.${component.version}.tar`, {
         componentId: component.id, kind: 'image', repository: componentImageRepository(component.id),
         tag, imageReference: `${componentImageRepository(component.id)}:${tag}`, platform: 'linux/amd64',
+        ...(integrationImagesOnly ? { integrationLabels: integrationLabels(component.version) } : {}),
       });
+      if (integrationImagesOnly && source.sourceTree !== integrationSourceTree) {
+        fail(component.id, 'AgentHost source tree differs from the exact integration source tree');
+      }
       continue;
     }
     if (component.kind === 'service') {
@@ -394,7 +473,12 @@ export function packComponents(manifest, {
         fail(component.project, 'service preparation requires exactly one active explicit immutable ContainerBaseImage digest in the project');
       }
       expectedArtifacts.set(`${component.id}.${component.version}.tar.gz`, {
-        componentId: component.id, kind: 'image', repository: componentImageRepository(component.id), tag: component.version, baseImage,
+        componentId: component.id, kind: 'image', repository: componentImageRepository(component.id),
+        tag: integrationImagesOnly ? sourceSha : component.version, baseImage,
+        ...(integrationImagesOnly ? {
+          imageReference: `${componentImageRepository(component.id)}:${sourceSha}`,
+          integrationLabels: integrationLabels(component.version),
+        } : {}),
       });
     } else {
       expectedArtifacts.set(`${path.basename(component.project, '.csproj')}.${component.version}.nupkg`, { componentId: component.id, kind: 'package' });
@@ -437,6 +521,15 @@ export function packComponents(manifest, {
         const measured = measureAgentHostArchive(path.join(resolvedOutDir, ociPath), root);
         verifyAgentHostMeasurement(measured, source, component.version);
         runDocker(['save', '--output', path.join(resolvedOutDir, dockerPath), artifact.imageReference]);
+        if (integrationImagesOnly) {
+          const prepared = verifyIntegrationDockerConfig(path.join(resolvedOutDir, dockerPath),
+            artifact.imageReference, sourceSha, integrationSourceTree, component.version);
+          if (prepared.imageConfigDigest !== measured.image.configDigest) {
+            fail(component.id, 'Docker archive config digest differs from the measured OCI config');
+          }
+          artifact.imageConfigDigest = prepared.imageConfigDigest;
+          artifact.labels = prepared.labels;
+        }
         const archives = {
           docker: agentHostArchiveMetadata(path.join(resolvedOutDir, dockerPath), dockerPath, measured.image.configDigest),
           oci: { ...ociArchive, configDigest: measured.image.configDigest },
@@ -514,6 +607,9 @@ export function packComponents(manifest, {
           '--tag', artifact.imageReference,
           '--build-arg', `IMAGE_TAG=${component.version}`,
           '--build-arg', `GIT_SHA=${sourceSha}`,
+          ...(integrationImagesOnly
+            ? Object.entries(integrationLabels(component.version)).flatMap(([name, value]) => ['--label', `${name}=${value}`])
+            : []),
           '--file', 'Dockerfile', '.',
         ], contextDir);
         let imageInfo;
@@ -525,15 +621,30 @@ export function packComponents(manifest, {
         if (!imageInfo || !/^sha256:[a-f0-9]{64}$/.test(imageInfo.Id ?? '') ||
             imageInfo.Os !== 'linux' || imageInfo.Architecture !== 'amd64' ||
             imageInfo.Config?.Labels?.['org.opencontainers.image.revision'] !== sourceSha ||
+            (integrationImagesOnly &&
+              imageInfo.Config?.Labels?.['io.agentweaver.source-tree'] !== integrationSourceTree) ||
             imageInfo.Config?.Labels?.['org.opencontainers.image.version'] !== component.version) {
           fail('docker', 'built web image is missing its source-SHA or component-version labels');
         }
         const artifactName = `${component.id}.${component.version}.tar`;
         const artifactPath = path.join(resolvedOutDir, artifactName);
         runDocker(['save', '--output', artifactPath, artifact.imageReference], contextDir);
+        const preparedConfig = integrationImagesOnly
+          ? verifyIntegrationDockerConfig(artifactPath, artifact.imageReference, sourceSha, integrationSourceTree, component.version)
+          : undefined;
+        if (preparedConfig && JSON.stringify(preparedConfig.labels) !== JSON.stringify({
+          'org.opencontainers.image.revision': imageInfo.Config.Labels['org.opencontainers.image.revision'],
+          'io.agentweaver.source-tree': imageInfo.Config.Labels['io.agentweaver.source-tree'],
+          'org.opencontainers.image.version': imageInfo.Config.Labels['org.opencontainers.image.version'],
+        })) {
+          fail(component.id, 'saved web image config differs from the inspected built image labels');
+        }
+        if (preparedConfig) artifact.imageConfigDigest = preparedConfig.imageConfigDigest;
         artifact.imageId = imageInfo.Id;
         artifact.labels = {
           'org.opencontainers.image.revision': imageInfo.Config.Labels['org.opencontainers.image.revision'],
+          ...(integrationImagesOnly
+            ? { 'io.agentweaver.source-tree': imageInfo.Config.Labels['io.agentweaver.source-tree'] } : {}),
           'org.opencontainers.image.version': imageInfo.Config.Labels['org.opencontainers.image.version'],
         };
         artifact.buildOutput = buildOutput;
@@ -577,6 +688,12 @@ export function packComponents(manifest, {
       `-p:ProbeSourceTree=${probeSource.sourceTree}`,
       `-p:ProbeInfrastructureHash=${probeSource.sourceHash}`,
     ] : [];
+    const integrationLabelArgs = integrationImagesOnly && component.kind === 'service' ? [
+      '-p:AgentweaverIntegrationImagesOnly=true',
+      `-p:AgentweaverIntegrationSourceSha=${sourceSha}`,
+      `-p:AgentweaverIntegrationSourceTree=${integrationSourceTree}`,
+      `-p:AgentweaverIntegrationVersion=${component.version}`,
+    ] : [];
     dotnet(['restore', project, '--locked-mode']);
     dotnet(['build', project, '--configuration', 'Release', '--no-restore',
       '-p:ContinuousIntegrationBuild=true', `-p:RepositoryCommit=${sourceSha}`, ...baseImageArgs, ...probeSourceArgs]);
@@ -586,8 +703,8 @@ export function packComponents(manifest, {
     if (component.kind === 'service') {
       dotnet(['publish', project, '--configuration', 'Release', '--no-restore', '-t:PublishContainer',
         '-p:EnableSdkContainerSupport=true', '-p:ContinuousIntegrationBuild=true', `-p:RepositoryCommit=${sourceSha}`,
-        ...baseImageArgs, ...probeSourceArgs,
-        `-p:ContainerRepository=${image.repository}`, `-p:ContainerImageTag=${component.version}`,
+        ...baseImageArgs, ...probeSourceArgs, ...integrationLabelArgs,
+        `-p:ContainerRepository=${image.repository}`, `-p:ContainerImageTag=${integrationImagesOnly ? sourceSha : component.version}`,
         `-p:ContainerArchiveOutputPath=${path.join(resolvedOutDir, expectedFile)}`]);
     } else {
       dotnet(['pack', project, '--configuration', 'Release', '--no-build', '--no-restore', '--output', resolvedOutDir,
@@ -595,6 +712,15 @@ export function packComponents(manifest, {
     }
     if (!existsImpl(path.join(resolvedOutDir, expectedFile))) {
       fail('pack', `expected ${component.kind === 'service' ? 'image' : 'package'} artifact ${expectedFile} was not produced for ${component.id}`);
+    }
+    if (integrationImagesOnly && component.kind === 'service') {
+      const artifactPath = path.join(resolvedOutDir, expectedFile);
+      const imageReference = image.imageReference;
+      runDocker(['load', '--input', artifactPath]);
+      const prepared = verifyIntegrationDockerConfig(artifactPath, imageReference,
+        sourceSha, integrationSourceTree, component.version);
+      image.imageConfigDigest = prepared.imageConfigDigest;
+      image.labels = prepared.labels;
     }
   }
 
@@ -626,6 +752,9 @@ export function packComponents(manifest, {
   const provenance = {
     schemaVersion: 1,
     sourceSha,
+    ...(integrationImagesOnly ? {
+      integration: { mode: 'images-only', sourceTree: integrationSourceTree, imageTag: sourceSha },
+    } : {}),
     manifestSha256: createHash('sha256').update(JSON.stringify(manifest)).digest('hex'),
     stage: manifest.stage,
     createdAt: now().toISOString(),
@@ -666,16 +795,28 @@ export function packComponentsFromFile(manifestPath, options = {}) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const args = process.argv.slice(2);
-    const manifestArg = args.find((arg) => !arg.startsWith('--'));
     const outIndex = args.indexOf('--out');
     const out = outIndex >= 0 ? args[outIndex + 1] : 'artifacts/release/pack';
+    const integrationIndex = args.indexOf('--integration-source-sha');
+    const integrationSourceSha = integrationIndex >= 0 ? args[integrationIndex + 1] : undefined;
+    if (integrationIndex >= 0 &&
+        (args.lastIndexOf('--integration-source-sha') !== integrationIndex || !sha.test(integrationSourceSha ?? ''))) {
+      fail('selection', '--integration-source-sha requires one exact 40-character source SHA');
+    }
+    const excludedIndices = new Set([
+      ...(integrationIndex >= 0 ? [integrationIndex + 1] : []),
+      ...(outIndex >= 0 ? [outIndex + 1] : []),
+    ]);
+    const manifestArg = args.find((arg, index) => !arg.startsWith('--') && !excludedIndices.has(index));
     const packagesOnly = args.includes('--packages-only');
     const foundationProbeOnly = args.includes('--foundation-probe-only');
     const platformOnly = args.includes('--platform-only');
     if (!manifestArg || (outIndex >= 0 && !args[outIndex + 1])) {
-      fail('usage', 'node scripts/release/pack.mjs <manifest.json> [--packages-only | --foundation-probe-only | --platform-only] [--out <dir>]');
+      fail('usage', 'node scripts/release/pack.mjs <manifest.json> [--packages-only | --foundation-probe-only | --platform-only | --integration-source-sha <sha>] [--out <dir>]');
     }
-    const provenance = packComponentsFromFile(manifestArg, { root: repositoryRoot, outDir: out, packagesOnly, foundationProbeOnly, platformOnly });
+    const provenance = packComponentsFromFile(manifestArg, {
+      root: repositoryRoot, outDir: out, packagesOnly, foundationProbeOnly, platformOnly, integrationSourceSha,
+    });
     console.log(`Packed ${provenance.components.length} component(s) at source ${provenance.sourceSha} into ${out}`);
     for (const artifact of provenance.artifacts) {
       console.log(`  ${artifact.path} (${artifact.sha256})`);

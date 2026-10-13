@@ -18,6 +18,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Http;
 using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Tokens;
 using Npgsql;
@@ -585,10 +586,22 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             Issuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer),
                             SigningKeys = { new X509SecurityKey(signingCertificate) },
                         }));
-                services.AddHttpClient<McpGatewayApiClient>()
-                    .ConfigurePrimaryHttpMessageHandler(gateway.CreateHandler);
-                services.AddHttpClient<McpGatewayToolCatalog>()
-                    .ConfigurePrimaryHttpMessageHandler(gateway.CreateHandler);
+                services.PostConfigure<HttpClientFactoryOptions>(
+                    typeof(McpGatewayApiClient).Name,
+                    options =>
+                    {
+                        options.HttpMessageHandlerBuilderActions.Clear();
+                        options.HttpMessageHandlerBuilderActions.Add(builder =>
+                            builder.PrimaryHandler = gateway.CreateHandler());
+                    });
+                services.PostConfigure<HttpClientFactoryOptions>(
+                    typeof(McpGatewayToolCatalog).Name,
+                    options =>
+                    {
+                        options.HttpMessageHandlerBuilderActions.Clear();
+                        options.HttpMessageHandlerBuilderActions.Add(builder =>
+                            builder.PrimaryHandler = gateway.CreateHandler());
+                    });
             });
         }
     }

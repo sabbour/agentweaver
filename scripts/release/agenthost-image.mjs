@@ -134,10 +134,10 @@ export function verifyLoadedAgentHostImage(imageReference, measured, source, ver
 }
 
 export function validateAgentHostArtifact(component, artifact, record, root, directory, sourceSha, git,
-  measure = measureAgentHostArchiveSync) {
+  measure = measureAgentHostArchiveSync, integrationImagesOnly = false) {
   const source = readAgentHostSource(root, sourceSha, git);
   const repository = 'agentweaver-agenthost';
-  const tag = `${component.version.replaceAll('+', '_')}-${sourceSha}`;
+  const tag = integrationImagesOnly ? sourceSha : `${component.version.replaceAll('+', '_')}-${sourceSha}`;
   const imageReference = `${repository}:${tag}`;
   const dockerPath = `${AGENTHOST_ID}.${component.version}.tar`;
   const ociPath = `${AGENTHOST_ID}.${component.version}.oci.tar`;
@@ -145,6 +145,11 @@ export function validateAgentHostArtifact(component, artifact, record, root, dir
   if (component.id !== AGENTHOST_ID || component.project !== AGENTHOST_PROJECT || component.kind !== 'service' ||
       artifact.repository !== repository || artifact.tag !== tag || artifact.imageReference !== imageReference ||
       artifact.path !== dockerPath || artifact.platform !== 'linux/amd64' ||
+      (integrationImagesOnly && !equal(artifact.integrationLabels, {
+        'org.opencontainers.image.revision': sourceSha,
+        'io.agentweaver.source-tree': source.sourceTree,
+        'org.opencontainers.image.version': component.version,
+      })) ||
       !equal(record?.source, source)) fail();
   const archives = {
     docker: agentHostArchiveMetadata(path.join(directory, dockerPath), dockerPath, artifact.imageId),
