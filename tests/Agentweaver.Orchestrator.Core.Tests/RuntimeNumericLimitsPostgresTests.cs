@@ -203,6 +203,26 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     }
 
     [Fact]
+    public async Task PrepareRejectsExistingDispatchWithMismatchedRegistrationRevisionBeforeCreditDenial()
+    {
+        await RegisterPositiveHardCreditAsync(0);
+        Assert.Null(await PrepareAsync(0, PricedSnapshot(0, 4m, 1)));
+        var dispatchId = _intents[0].MessageId;
+        var guardBefore = await ReadCreditGuardAsync();
+
+        await IncrementDispatchRegistrationRevisionAsync(dispatchId);
+        var dispatchBefore = await ReadDispatchBindingAsync(dispatchId);
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            PrepareAsync(0, PricedSnapshot(0, 5m, 2)));
+
+        Assert.Equal("runtime_native_turn_admission_invalid", failure.Code);
+        Assert.Equal(guardBefore, await ReadCreditGuardAsync());
+        Assert.Equal(dispatchBefore, await ReadDispatchBindingAsync(dispatchId));
+        Assert.Null(await ReadCreditDenialAsync(
+            0, dispatchId, RuntimeCreditLimitDenialStage.Preparation));
+    }
+
+    [Fact]
     public async Task ObservedSoftCreditBoundaryEmitsOneWarningAndLaterTotalsStillAdvanceTheFloor()
     {
         await RegisterPositiveHardCreditAsync(0, softLimit: 3m);
@@ -764,6 +784,55 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         await using var reader = await command.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         return (reader.GetDecimal(0), reader.GetInt64(1), reader.GetBoolean(2), reader.GetInt64(3));
+    }
+
+    private async Task<(long RegistrationRevision, string State, long OwnerRevision)>
+        ReadDispatchBindingAsync(Guid dispatchId)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT registration_revision, dispatch_state, owner_revision
+            FROM "{_schema}".maf_execution_dispatches
+            WHERE project_id = @project AND run_id = @run AND dispatch_id = @dispatch
+            """, connection);
+        command.Parameters.AddWithValue("project", _root.ProjectId);
+        command.Parameters.AddWithValue("run", _root.RunId);
+        command.Parameters.AddWithValue("dispatch", dispatchId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (reader.GetInt64(0), reader.GetString(1), reader.GetInt64(2));
+    }
+
+    private async Task IncrementDispatchRegistrationRevisionAsync(Guid dispatchId)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            UPDATE "{_schema}".maf_execution_dispatches
+            SET registration_revision = registration_revision + 1
+            WHERE project_id = @project AND run_id = @run AND dispatch_id = @dispatch
+            """, connection);
+        command.Parameters.AddWithValue("project", _root.ProjectId);
+        command.Parameters.AddWithValue("run", _root.RunId);
+        command.Parameters.AddWithValue("dispatch", dispatchId);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
+    private Task<RuntimeNativeCreditDenialReceipt?> ReadCreditDenialAsync(
+        int index, Guid dispatchId, RuntimeCreditLimitDenialStage stage)
+    {
+        var registration = _registrations[index];
+        var source = new RuntimeSdkSourceReceipt(
+            registration.RuntimeInstanceId, registration.Revision, _grants[index].GrantId, _sources[index],
+            RuntimeUsageSourceReceiptContract.HashSource(registration, _sources[index]), DateTimeOffset.UtcNow);
+        var store = SourceStore();
+        return store.ExecuteLockedAsync(registration.RuntimeInstanceId,
+            async (connection, transaction, token) =>
+            {
+                var denial = await store.ReadNativeCreditDenialWithinTransactionAsync(
+                    connection, transaction, registration, source, dispatchId, stage, token);
+                await transaction.CommitAsync(token);
+                return denial;
+            }, default);
     }
 
     private async Task SetDispatchStateAsync(Guid dispatchId, string state)
