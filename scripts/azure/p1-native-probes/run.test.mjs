@@ -117,13 +117,13 @@ function createInput() {
       'ownerId', 'actorId', 'tenantId', 'projectId', 'runId', 'environmentId',
       'rootSessionId', 'sessionId', 'executionFence',
     ].map(key => [key, owner[key]])),
-    sandboxResourceId: `sandbox-${index ? 'b' : 'a'}`,
+    sandboxResourceId: `sandbox-claim-uid-${index ? 'b' : 'a'}`,
     sandboxResourceGeneration: owner.volume.resourceGeneration,
     sandboxUid: `pod-uid-${index ? 'b' : 'a'}`,
     networkPolicyResourceId: `test/policy-${index ? 'b' : 'a'}`,
     networkPolicyUid: `policy-uid-${index ? 'b' : 'a'}`,
-    lateSandboxResourceId: `late-${index ? 'b' : 'a'}`,
-    lateSandboxUid: `late-uid-${index ? 'b' : 'a'}`,
+    lateSandboxResourceId: `late-claim-uid-${index ? 'b' : 'a'}`,
+    lateSandboxUid: `late-claim-uid-${index ? 'b' : 'a'}`,
     sandboxLabels: {
       [sandboxLabelKeys.managed]: 'true',
       [sandboxLabelKeys.owner]: `owner-fingerprint-${index ? 'b' : 'a'}`,
@@ -131,16 +131,16 @@ function createInput() {
       [sandboxLabelKeys.resourceGeneration]: String(owner.volume.resourceGeneration),
       [sandboxLabelKeys.fencingGeneration]: '5',
       [sandboxLabelKeys.operation]: `createdsandbox${index ? 'b' : 'a'}`,
-      [sandboxLabelKeys.claimUid]: owner.volume.claimUid,
+      [sandboxLabelKeys.claimUid]: `sandbox-claim-uid-${index ? 'b' : 'a'}`,
     },
   }));
   const ownershipReceipts = owners.flatMap((owner, index) => [
     receipt(owner, owner.environmentId, `environment-uid-${index}`),
     receipt(owner, owner.volume.volumeId, `volume-uid-${index}`),
-    receipt(owner, runtimeOwners[index].sandboxResourceId, runtimeOwners[index].sandboxUid),
+    receipt(owner, runtimeOwners[index].sandboxResourceId, runtimeOwners[index].sandboxResourceId),
     receipt(owner, runtimeOwners[index].networkPolicyResourceId, runtimeOwners[index].networkPolicyUid,
       policyOperationId),
-    receipt(owner, runtimeOwners[index].lateSandboxResourceId, runtimeOwners[index].lateSandboxUid),
+    receipt(owner, runtimeOwners[index].lateSandboxResourceId, runtimeOwners[index].lateSandboxResourceId),
   ]);
   const environmentFence = owner => ({
     owner: {
@@ -345,6 +345,7 @@ function successDependencies(input, { token = ownerId => `private-${ownerId}` } 
       },
       provisionCount: 0,
       lateExists: true,
+      dependentPods: [],
     }];
   }));
   const podOwnerByUid = new Map();
@@ -538,9 +539,26 @@ function successDependencies(input, { token = ownerId => `private-${ownerId}` } 
       return response(200, { state: 'Completed', transitionRevision: state.volume.transitionRevision });
     }
     if (url.pathname.endsWith('/sandbox') && url.searchParams.has('networkPolicyGeneration')) {
-      return response(200, {
-        readyForDispatch: true,
-        observation: { verifiedNetworkGeneration: 6 },
+      const current = state.current;
+      const resource = {
+        providerId: 'agent-sandbox',
+        resourceId: current.resourceId,
+        generation: current.generation,
+      };
+      return response(202, {
+        operationId: current.operationId,
+        state: 'active',
+        resourceGeneration: current.generation,
+        providerFencingGeneration: 5,
+        currentFencingGeneration: 5,
+        resource,
+        readyForDispatch: false,
+        observation: {
+          resource,
+          state: 'pending',
+          fencingGeneration: 5,
+          verifiedNetworkGeneration: 6,
+        },
       });
     }
     return response(404, null);
@@ -570,6 +588,7 @@ function successDependencies(input, { token = ownerId => `private-${ownerId}` } 
           exists: state.lateExists,
           uid: args.expectedUid,
           ownerId: args.owner.ownerId,
+          dependentPods: state.dependentPods,
         };
       }
       if (recipeId === 'observe-sandbox') {
@@ -588,6 +607,7 @@ function successDependencies(input, { token = ownerId => `private-${ownerId}` } 
           };
         const labels = {
           ...runtime.sandboxLabels,
+          [sandboxLabelKeys.claimUid]: resourceId,
           [sandboxLabelKeys.lifecycle]: String(args.placement.lifecycleGeneration),
           [sandboxLabelKeys.resourceGeneration]: String(args.placement.resource.generation),
           [sandboxLabelKeys.fencingGeneration]: String(args.placement.providerFencingGeneration),
@@ -716,6 +736,12 @@ function successDependencies(input, { token = ownerId => `private-${ownerId}` } 
           targetServiceUid: 'service-endpoint-uid',
           readyEndpointCount: 1,
           probedPorts: [80],
+          portVerdicts: [{
+            servicePort: 80,
+            targetPort: 8080,
+            verdict: allowed ? 'FORWARDED' : 'DROPPED',
+            connected: allowed,
+          }],
           datapathVerdict: allowed ? 'allowed' : 'denied',
           connected: allowed,
         };
@@ -727,6 +753,7 @@ function successDependencies(input, { token = ownerId => `private-${ownerId}` } 
     calls,
     recipes,
     authorizations,
+    states: stateByOwner,
     dependencies: {
       now: () => Date.parse('2026-01-01T00:06:00.000Z'),
       fetch,
@@ -771,6 +798,40 @@ test('missing input blocks all four probes without invoking dependencies', async
   assert.deepEqual(result.probes.map(probe => probe.status), ['blocked', 'blocked', 'blocked', 'blocked']);
   assert.ok(result.probes.every(probe => probe.cleanup.status === 'not-started'));
   assert.ok(Date.parse(result.completedAt) >= Date.parse(result.startedAt));
+});
+
+test('a missing runtime readiness reader blocks before dependency execution', async () => {
+  const input = createInput();
+  const harness = successDependencies(input);
+  delete harness.dependencies.runtimeReadinessProvider;
+
+  const result = await runP1NativeProbes(input, harness.dependencies);
+
+  assert.equal(result.overallStatus, 'blocked');
+  assert.ok(result.probes.every(probe => probe.code === 'runtime_current_readback_unavailable'));
+  assert.deepEqual(harness.calls, []);
+  assert.deepEqual(harness.recipes, []);
+  assert.deepEqual(harness.authorizations, []);
+});
+
+test('a mismatching current runtime read blocks every probe before mutation', async () => {
+  const input = createInput();
+  const harness = successDependencies(input);
+  harness.dependencies.runtimeReadinessProvider.readCurrent = async () => ({
+    registration: {
+      ...input.pins.runtimeReceipt.registration,
+      revision: input.pins.runtimeReceipt.registration.revision + 1,
+    },
+    readinessReceipt: input.pins.runtimeReceipt.activation,
+    acceptedOptions: input.pins.sourceReceipt.acceptedOptions,
+  });
+
+  const result = await runP1NativeProbes(input, harness.dependencies);
+
+  assert.equal(result.overallStatus, 'blocked');
+  assert.ok(result.probes.every(probe => probe.code === 'agenthost_current_readback_mismatch'));
+  assert.deepEqual(harness.authorizations, []);
+  assert.ok(harness.calls.every(call => call.method === 'GET'));
 });
 
 test('fixture ownership mismatch blocks before auth or native execution', async () => {
@@ -858,6 +919,15 @@ test('same actor is accepted for distinct tenant scopes, but auth tokens stay ou
   const token = 'secret-test-token-should-never-appear';
   const dependencies = {
     ...blockedDependencies(),
+    runtimeReadinessProvider: {
+      async readCurrent() {
+        return {
+          registration: input.pins.runtimeReceipt.registration,
+          readinessReceipt: input.pins.runtimeReceipt.activation,
+          acceptedOptions: input.pins.sourceReceipt.acceptedOptions,
+        };
+      },
+    },
     authProvider: {
       async getValidatedToken() {
         throw new Error(`Bearer ${token}`);
@@ -930,6 +1000,15 @@ test('validated owner tokens use their own tenant selectors and never enter evid
       },
     },
     journeyAuthorizer: { async authorize() { throw new Error('must not mutate'); } },
+    runtimeReadinessProvider: {
+      async readCurrent() {
+        return {
+          registration: input.pins.runtimeReceipt.registration,
+          readinessReceipt: input.pins.runtimeReceipt.activation,
+          acceptedOptions: input.pins.sourceReceipt.acceptedOptions,
+        };
+      },
+    },
     processProvider: {
       async run({ recipeId, args }) {
         if (recipeId === 'observe-cluster') throw new Error('native unavailable private-owner-a');
@@ -978,7 +1057,7 @@ test('input cannot supply arbitrary commands or credentials', async () => {
 test('protected active resources without same-invocation receipts block the run', async () => {
   const input = createInput();
   input.pins.fixtureScope.ownershipReceipts = input.pins.fixtureScope.ownershipReceipts
-    .filter(receipt => receipt.resourceId !== 'sandbox-b');
+    .filter(receipt => receipt.resourceId !== 'sandbox-claim-uid-b');
   const result = await runP1NativeProbes(input, blockedDependencies());
   assert.equal(result.overallStatus, 'blocked');
   assert.ok(result.probes.every(probe => probe.code === 'invocation_ownership_receipt_missing'),
@@ -988,7 +1067,7 @@ test('protected active resources without same-invocation receipts block the run'
 test('active Sandbox operation labels require the actual invocation creation receipt', async () => {
   const input = createInput();
   const sandboxReceipt = input.pins.fixtureScope.ownershipReceipts
-    .find(receipt => receipt.resourceId === 'sandbox-a');
+    .find(receipt => receipt.resourceId === 'sandbox-claim-uid-a');
   delete sandboxReceipt.creationReceipt.operationId;
   delete sandboxReceipt.observedReceipt.operationId;
   const harness = successDependencies(input);
@@ -1050,6 +1129,30 @@ test('four native probes pass with injected production-shaped reads, mutations, 
   const serialized = JSON.stringify(result);
   assert.equal(serialized.includes(opaqueToken), false);
   assert.equal(serialized.includes('private-owner-b'), false);
+});
+
+test('a remaining exact Pod makes Sandbox cleanup uncertain after its claim is gone', async () => {
+  const input = createInput();
+  const imageDigest = input.pins.runtimeReceipt.activation.image.digest;
+  const phases = input.pins.runtimeReceipt.activation.startupPhases;
+  phases[0].imageDigest = imageDigest;
+  delete phases[1].imageDigest;
+  delete phases[1].compressedPullBytes;
+  phases[2].compressedPullBytes = input.pins.runtimeReceipt.activation.image.compressedPullBytes;
+  const harness = successDependencies(input);
+  harness.states.get('owner-a').dependentPods = [{
+    name: 'orphan-agenthost',
+    uid: 'orphan-pod-uid',
+  }];
+
+  const result = await runP1NativeProbes(input, harness.dependencies);
+
+  const lifecycle = result.probes.find(probe => probe.name === 'sandbox-owner-lifecycle');
+  const release = lifecycle.cleanup.actions.find(action =>
+    action.action === 'final-sandbox-release' && action.evidence.ownerId === 'owner-a');
+  assert.equal(release.status, 'uncertain');
+  assert.equal(lifecycle.cleanup.status, 'uncertain');
+  assert.equal(lifecycle.status, 'blocked');
 });
 
 test('a supplied startup image field that disagrees with the receipt image blocks', async () => {

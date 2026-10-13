@@ -43,6 +43,152 @@ function createHarness(respond, providerOptions = {}) {
   };
 }
 
+function createServiceProbeHarness({
+  verdict = 'FORWARDED',
+  servicePorts = [{ name: 'http', protocol: 'TCP', port: 80, targetPort: 8080 }],
+  endpointPorts = [{ name: 'http', protocol: 'TCP', port: 8080 }],
+  flows,
+  probeStatuses = [verdict === 'FORWARDED' ? 0 : 1],
+  mutatePolicyAfterRead,
+  mutateServiceAfterRead,
+} = {}) {
+  const ownerHash = 'c'.repeat(40);
+  const policy = {
+    apiVersion: 'cilium.io/v2',
+    kind: 'CiliumNetworkPolicy',
+    metadata: {
+      name: 'egress-a',
+      namespace: 'p1-fixture',
+      uid: 'policy-uid-a',
+      annotations: {
+        'agentweaver.dev/egress-generation': '6',
+        'agentweaver.dev/egress-intent-sha256': 'd'.repeat(64),
+        'agentweaver.dev/egress-revoked': 'false',
+      },
+    },
+    spec: { endpointSelector: { matchLabels: { 'agentweaver.dev/sandbox-owner': ownerHash } } },
+  };
+  const service = {
+    apiVersion: 'v1',
+    kind: 'Service',
+    metadata: { name: 'allowed', namespace: 'p1-fixture', uid: 'service-uid-a' },
+    spec: { ports: servicePorts },
+  };
+  const observedFlows = flows ?? [{
+    time: '2026-01-01T00:00:00.000Z',
+    verdict,
+    source: { namespace: 'p1-fixture', podName: 'agenthost-a' },
+    destination: { ip: '10.0.0.8' },
+    l4: { TCP: { destinationPort: endpointPorts[0]?.port } },
+    isReply: false,
+  }];
+  let policyReads = 0;
+  let serviceReads = 0;
+  let probeIndex = 0;
+  const harness = createHarness((command, args) => {
+    if (command === 'hubble') {
+      return { status: 0, stdout: JSON.stringify(observedFlows.map(flow => ({ flow }))), stderr: '' };
+    }
+    if (args.includes('config')) {
+      return { status: 0, stdout: JSON.stringify(configResponse()), stderr: '' };
+    }
+    if (args.includes('ciliumnetworkpolicies.cilium.io')) {
+      policyReads += 1;
+      const current = policyReads > 1 && mutatePolicyAfterRead
+        ? mutatePolicyAfterRead(policy)
+        : policy;
+      return {
+        status: 0,
+        stdout: JSON.stringify({ apiVersion: 'v1', kind: 'List', items: [current] }),
+        stderr: '',
+      };
+    }
+    if (args.includes('endpointslices.discovery.k8s.io')) {
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          apiVersion: 'discovery.k8s.io/v1',
+          kind: 'EndpointSliceList',
+          items: [{
+            endpoints: [{ addresses: ['10.0.0.8'], conditions: { ready: true } }],
+            ports: endpointPorts,
+          }],
+        }),
+        stderr: '',
+      };
+    }
+    if (args.includes('service')) {
+      serviceReads += 1;
+      const current = serviceReads > 1 && mutateServiceAfterRead
+        ? mutateServiceAfterRead(service)
+        : service;
+      return { status: 0, stdout: JSON.stringify(current), stderr: '' };
+    }
+    if (args.includes('pods')) {
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          apiVersion: 'v1',
+          kind: 'List',
+          items: [{
+            apiVersion: 'v1',
+            kind: 'Pod',
+            metadata: {
+              name: 'agenthost-a',
+              namespace: 'p1-fixture',
+              uid: 'pod-uid-a',
+              labels: {
+                'agentweaver.dev/managed-sandbox': 'true',
+                'agentweaver.dev/sandbox-owner': ownerHash,
+                'agents.x-k8s.io/claim-uid': 'sandbox-claim-uid-a',
+              },
+            },
+          }],
+        }),
+        stderr: '',
+      };
+    }
+    if (args.includes('pod')) {
+      return {
+        status: 0,
+        stdout: JSON.stringify({
+          apiVersion: 'v1',
+          kind: 'Pod',
+          metadata: {
+            name: 'agenthost-a',
+            namespace: 'p1-fixture',
+            uid: 'pod-uid-a',
+          },
+        }),
+        stderr: '',
+      };
+    }
+    assert.ok(args.includes('exec'));
+    assert.ok(args.includes('bash'));
+    assert.ok(args.includes('timeout'));
+    assert.ok(args.some(value => typeof value === 'string' && value.includes('/dev/tcp/$1/$2')));
+    const status = probeStatuses[probeIndex] ?? probeStatuses.at(-1);
+    probeIndex += 1;
+    return { status, stdout: '', stderr: '' };
+  }, { now: () => Date.parse('2026-01-01T00:00:00.000Z') });
+  return {
+    harness,
+    request: {
+      recipeId: 'probe-service',
+      args: {
+        expectedClusterIdentity,
+        namespace: 'p1-fixture',
+        sourcePodUid: 'pod-uid-a',
+        serviceIdentity: 'p1-fixture/allowed',
+        networkPolicyResourceId: 'environment/policy-a',
+        networkPolicyUid: 'policy-uid-a',
+        networkPolicyGeneration: 6,
+        timeoutSeconds: 5,
+      },
+    },
+  };
+}
+
 function configResponse() {
   return {
     apiVersion: 'v1',
@@ -254,6 +400,142 @@ test('storage readback verifies PVC, PV, claim, and Environment owner annotation
   }
 });
 
+test('Sandbox Pod reads keep SandboxClaim and workspace PVC UIDs distinct', async () => {
+  const sandboxClaimUid = 'sandbox-claim-uid-a';
+  const workspacePvcUid = 'workspace-pvc-uid-a';
+  const pod = {
+    apiVersion: 'v1',
+    kind: 'Pod',
+    metadata: {
+      name: 'agenthost-a',
+      namespace: 'p1-fixture',
+      uid: 'pod-uid-a',
+      labels: {
+        'agentweaver.dev/managed-sandbox': 'true',
+        'agentweaver.dev/sandbox-owner': ownerLabel,
+        'agents.x-k8s.io/claim-uid': sandboxClaimUid,
+      },
+    },
+    spec: {
+      containers: [{
+        name: 'agenthost',
+        image: 'registry.example.test/agenthost:fixture',
+        volumeMounts: [{ name: 'workspace', mountPath: '/workspace' }],
+      }],
+      volumes: [{ name: 'workspace', persistentVolumeClaim: { claimName: 'workspace-a' } }],
+    },
+  };
+  const harness = createHarness((command, args) => {
+    if (args.includes('config')) {
+      return { status: 0, stdout: JSON.stringify(configResponse()), stderr: '' };
+    }
+    if (args.includes('pods')) {
+      assert.ok(args.some(value =>
+        typeof value === 'string' && value.includes(`agents.x-k8s.io/claim-uid=${sandboxClaimUid}`)));
+      return {
+        status: 0,
+        stdout: JSON.stringify({ apiVersion: 'v1', kind: 'List', items: [pod] }),
+        stderr: '',
+      };
+    }
+    assert.ok(args.includes('persistentvolumeclaim'));
+    return {
+      status: 0,
+      stdout: JSON.stringify({
+        apiVersion: 'v1',
+        kind: 'PersistentVolumeClaim',
+        metadata: { name: 'workspace-a', namespace: 'p1-fixture', uid: workspacePvcUid },
+      }),
+      stderr: '',
+    };
+  });
+
+  const result = await harness.provider.run({
+    recipeId: 'observe-sandbox',
+    args: {
+      expectedClusterIdentity,
+      namespace: 'p1-fixture',
+      owner: mountOwner,
+      workspaceClaimUid: workspacePvcUid,
+      sandboxClaimUid,
+      expectedPodUid: 'pod-uid-a',
+      expectedLabels: {
+        'agentweaver.dev/managed-sandbox': 'true',
+        'agentweaver.dev/sandbox-owner': ownerLabel,
+        'agents.x-k8s.io/claim-uid': sandboxClaimUid,
+      },
+    },
+  });
+
+  assert.equal(result.pod.uid, 'pod-uid-a');
+  assert.equal(result.pod.labels['agents.x-k8s.io/claim-uid'], sandboxClaimUid);
+  assert.deepEqual(result.pod.mounts, [{
+    name: 'workspace',
+    containerName: 'agenthost',
+    pvcName: 'workspace-a',
+    mountPath: '/workspace',
+    pvcUid: workspacePvcUid,
+  }]);
+});
+
+test('owned-resource absence readback still reports a matching dependent Pod', async () => {
+  const sandboxClaimUid = 'sandbox-claim-uid-a';
+  const harness = createHarness((command, args) => {
+    if (args.includes('config')) {
+      return { status: 0, stdout: JSON.stringify(configResponse()), stderr: '' };
+    }
+    if (args.includes('sandboxclaims.extensions.agents.x-k8s.io')) {
+      return {
+        status: 0,
+        stdout: JSON.stringify({ apiVersion: 'v1', kind: 'List', items: [] }),
+        stderr: '',
+      };
+    }
+    assert.ok(args.includes('pods'));
+    assert.ok(args.some(value =>
+      typeof value === 'string' && value.includes(`agents.x-k8s.io/claim-uid=${sandboxClaimUid}`)));
+    return {
+      status: 0,
+      stdout: JSON.stringify({
+        apiVersion: 'v1',
+        kind: 'List',
+        items: [{
+          apiVersion: 'v1',
+          kind: 'Pod',
+          metadata: {
+            name: 'orphan-agenthost',
+            namespace: 'p1-fixture',
+            uid: 'orphan-pod-uid',
+            labels: {
+              'agentweaver.dev/managed-sandbox': 'true',
+              'agentweaver.dev/sandbox-owner': ownerLabel,
+              'agents.x-k8s.io/claim-uid': sandboxClaimUid,
+            },
+          },
+        }],
+      }),
+      stderr: '',
+    };
+  });
+
+  const result = await harness.provider.run({
+    recipeId: 'observe-owned-resource',
+    args: {
+      expectedClusterIdentity,
+      namespace: 'p1-fixture',
+      owner: mountOwner,
+      resourceId: sandboxClaimUid,
+      expectedUid: sandboxClaimUid,
+    },
+  });
+
+  assert.deepEqual(result, {
+    clusterIdentity: expectedClusterIdentity,
+    exists: false,
+    dependentPods: [{ name: 'orphan-agenthost', uid: 'orphan-pod-uid' }],
+  });
+});
+
 test('marker reads are bound to the current Pod UID, owner, and exact PVC mount', async () => {
   const harness = createHarness((command, args) => {
     if (args.includes('config')) {
@@ -361,141 +643,15 @@ test('marker traversal is rejected before running a container command', async ()
 });
 
 test('service probes require ready endpoints and a matching current Cilium flow', async () => {
-  const ownerHash = 'c'.repeat(40);
-  const policy = {
-    apiVersion: 'cilium.io/v2',
-    kind: 'CiliumNetworkPolicy',
-    metadata: {
-      name: 'egress-a',
-      namespace: 'p1-fixture',
-      uid: 'policy-uid-a',
-      annotations: {
-        'agentweaver.dev/egress-generation': '6',
-        'agentweaver.dev/egress-intent-sha256': 'd'.repeat(64),
-        'agentweaver.dev/egress-revoked': 'false',
-      },
-    },
-    spec: { endpointSelector: { matchLabels: { 'agentweaver.dev/sandbox-owner': ownerHash } } },
-  };
-
   for (const [verdict, probeStatus, expectedConnected] of [
     ['FORWARDED', 0, true],
     ['DROPPED', 1, false],
   ]) {
-    const harness = createHarness((command, args) => {
-      if (command === 'hubble') {
-        return {
-          status: 0,
-          stdout: JSON.stringify({
-            flow: {
-              time: '2026-01-01T00:00:00.000Z',
-              verdict,
-              source: { namespace: 'p1-fixture', podName: 'agenthost-a' },
-              destination: { ip: '10.0.0.8' },
-              l4: { TCP: { destinationPort: 8080 } },
-              isReply: false,
-            },
-          }),
-          stderr: '',
-        };
-      }
-      if (args.includes('config')) {
-        return { status: 0, stdout: JSON.stringify(configResponse()), stderr: '' };
-      }
-      if (args.includes('ciliumnetworkpolicies.cilium.io')) {
-        return {
-          status: 0,
-          stdout: JSON.stringify({
-            apiVersion: 'cilium.io/v2',
-            kind: 'CiliumNetworkPolicyList',
-            items: [policy],
-          }),
-          stderr: '',
-        };
-      }
-      if (args.includes('endpointslices.discovery.k8s.io')) {
-        return {
-          status: 0,
-          stdout: JSON.stringify({
-            apiVersion: 'discovery.k8s.io/v1',
-            kind: 'EndpointSliceList',
-            items: [{
-              endpoints: [{ addresses: ['10.0.0.8'], conditions: { ready: true } }],
-              ports: [{ protocol: 'TCP', port: 8080 }],
-            }],
-          }),
-          stderr: '',
-        };
-      }
-      if (args.includes('service')) {
-        return {
-          status: 0,
-          stdout: JSON.stringify({
-            apiVersion: 'v1',
-            kind: 'Service',
-            metadata: { name: 'allowed', namespace: 'p1-fixture', uid: 'service-uid-a' },
-            spec: { ports: [{ protocol: 'TCP', port: 80 }] },
-          }),
-          stderr: '',
-        };
-      }
-      if (args.includes('pods')) {
-        return {
-          status: 0,
-          stdout: JSON.stringify({
-            apiVersion: 'v1',
-            kind: 'PodList',
-            items: [{
-              metadata: {
-                name: 'agenthost-a',
-                namespace: 'p1-fixture',
-                uid: 'pod-uid-a',
-                labels: {
-                  'agentweaver.dev/managed-sandbox': 'true',
-                  'agentweaver.dev/sandbox-owner': ownerHash,
-                  'agents.x-k8s.io/claim-uid': 'claim-uid-a',
-                },
-              },
-            }],
-          }),
-          stderr: '',
-        };
-      }
-      if (args.includes('get') && args.includes('pod')) {
-        return {
-          status: 0,
-          stdout: JSON.stringify({
-            apiVersion: 'v1',
-            kind: 'Pod',
-            metadata: {
-              name: 'agenthost-a',
-              namespace: 'p1-fixture',
-              uid: 'pod-uid-a',
-            },
-          }),
-          stderr: '',
-        };
-      }
-      assert.ok(args.includes('exec'));
-      assert.ok(args.includes('bash'));
-      assert.ok(args.includes('timeout'));
-      assert.ok(args.some(value => typeof value === 'string' && value.includes('/dev/tcp/$1/$2')));
-      return { status: probeStatus, stdout: '', stderr: '' };
-    }, { now: () => Date.parse('2026-01-01T00:00:00.000Z') });
-
-    const result = await harness.provider.run({
-      recipeId: 'probe-service',
-      args: {
-        expectedClusterIdentity,
-        namespace: 'p1-fixture',
-        sourcePodUid: 'pod-uid-a',
-        serviceIdentity: 'p1-fixture/allowed',
-        networkPolicyResourceId: 'environment/policy-a',
-        networkPolicyUid: 'policy-uid-a',
-        networkPolicyGeneration: 6,
-        timeoutSeconds: 5,
-      },
+    const fixture = createServiceProbeHarness({
+      verdict,
+      probeStatuses: [probeStatus],
     });
+    const result = await fixture.harness.provider.run(fixture.request);
     assert.deepEqual(result, {
       clusterIdentity: expectedClusterIdentity,
       sourcePodUid: 'pod-uid-a',
@@ -505,13 +661,80 @@ test('service probes require ready endpoints and a matching current Cilium flow'
       targetServiceUid: 'service-uid-a',
       readyEndpointCount: 1,
       probedPorts: [80],
+      portVerdicts: [{
+        servicePort: 80,
+        targetPort: 8080,
+        verdict,
+        connected: expectedConnected,
+      }],
       datapathVerdict: expectedConnected ? 'allowed' : 'denied',
       connected: expectedConnected,
     });
-    assert.ok(harness.calls.some(call =>
+    assert.ok(fixture.harness.calls.some(call =>
       call.command === 'hubble' &&
       call.args.includes('--from-pod') &&
       call.args.includes('--to-service')));
-    assert.ok(harness.calls.every(call => call.options.check === false && !call.options.shell));
+    assert.ok(fixture.harness.calls.every(call => call.options.check === false && !call.options.shell));
   }
+});
+
+test('every probed Service port requires its own fresh matching EndpointSlice flow', async () => {
+  const fixture = createServiceProbeHarness({
+    servicePorts: [
+      { name: 'http', protocol: 'TCP', port: 80, targetPort: 8080 },
+      { name: 'https', protocol: 'TCP', port: 443, targetPort: 8443 },
+    ],
+    endpointPorts: [
+      { name: 'http', protocol: 'TCP', port: 8080 },
+      { name: 'https', protocol: 'TCP', port: 8443 },
+    ],
+    flows: [{
+      time: '2026-01-01T00:00:00.000Z',
+      verdict: 'DROPPED',
+      source: { namespace: 'p1-fixture', podName: 'agenthost-a' },
+      destination: { ip: '10.0.0.8' },
+      l4: { TCP: { destinationPort: 8080 } },
+      isReply: false,
+    }],
+    probeStatuses: [1, 1],
+  });
+
+  await assert.rejects(
+    fixture.harness.provider.run(fixture.request),
+    /Each probed Service port requires a fresh matching Cilium datapath flow/,
+  );
+});
+
+test('a changed Cilium policy blocks the datapath receipt', async () => {
+  const fixture = createServiceProbeHarness({
+    mutatePolicyAfterRead: policy => ({
+      ...policy,
+      metadata: {
+        ...policy.metadata,
+        annotations: {
+          ...policy.metadata.annotations,
+          'agentweaver.dev/egress-generation': '7',
+        },
+      },
+    }),
+  });
+
+  await assert.rejects(
+    fixture.harness.provider.run(fixture.request),
+    /Cilium policy changed during the datapath probe/,
+  );
+});
+
+test('a replaced target Service blocks the datapath receipt', async () => {
+  const fixture = createServiceProbeHarness({
+    mutateServiceAfterRead: service => ({
+      ...service,
+      metadata: { ...service.metadata, uid: 'service-uid-replaced' },
+    }),
+  });
+
+  await assert.rejects(
+    fixture.harness.provider.run(fixture.request),
+    /target Service changed during the datapath probe/,
+  );
 });

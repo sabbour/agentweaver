@@ -89,6 +89,14 @@ function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function sameRecord(left, right) {
+  if (!isRecord(left) || !isRecord(right)) return false;
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return leftKeys.length === rightKeys.length &&
+    leftKeys.every((key, index) => key === rightKeys[index] && left[key] === right[key]);
+}
+
 function requireString(value, name, pattern = null) {
   if (typeof value !== 'string' || value.length === 0 || pattern && !pattern.test(value)) {
     throw new Error(`Invalid ${name} for the fixed native probe.`);
@@ -194,21 +202,42 @@ function mountReceipt(pod, namespace, expectedClaimUid, pvc) {
   return result;
 }
 
-function selectReadyEndpoints(slices) {
-  const addresses = new Set();
-  const ports = new Set();
-  for (const slice of Array.isArray(slices?.items) ? slices.items : []) {
-    for (const endpoint of Array.isArray(slice?.endpoints) ? slice.endpoints : []) {
-      if (endpoint?.conditions?.ready !== true || !Array.isArray(endpoint.addresses)) continue;
-      endpoint.addresses.forEach(address => {
-        if (typeof address === 'string' && address.length > 0) addresses.add(address);
-      });
+function selectReadyEndpointTargets(slices, servicePorts) {
+  if (!Array.isArray(slices?.items)) throw new Error('The current EndpointSlice list is invalid.');
+  const targets = new Map();
+  for (const servicePort of servicePorts) {
+    const requestedTarget = servicePort.targetPort ?? servicePort.port;
+    const servicePortName = servicePort.name ?? null;
+    if ((!Number.isSafeInteger(requestedTarget) || requestedTarget <= 0) &&
+        (typeof requestedTarget !== 'string' || requestedTarget.length === 0 || !servicePortName)) {
+      throw new Error('The exact TCP Service target port is invalid or ambiguous.');
     }
-    for (const port of Array.isArray(slice?.ports) ? slice.ports : []) {
-      if ((port?.protocol ?? 'TCP') === 'TCP' && Number.isSafeInteger(port.port) && port.port > 0) ports.add(port.port);
+    const addressesByPort = new Map();
+    for (const slice of slices.items) {
+      const matchingPorts = (Array.isArray(slice?.ports) ? slice.ports : [])
+        .filter(port =>
+          (port?.protocol ?? 'TCP') === 'TCP' &&
+          (servicePortName === null ? port?.name == null : port?.name === servicePortName) &&
+          (typeof requestedTarget !== 'number' || port?.port === requestedTarget) &&
+          Number.isSafeInteger(port?.port) && port.port > 0);
+      for (const port of matchingPorts) {
+        const readyAddresses = (Array.isArray(slice?.endpoints) ? slice.endpoints : [])
+          .filter(endpoint => endpoint?.conditions?.ready === true && Array.isArray(endpoint.addresses))
+          .flatMap(endpoint => endpoint.addresses)
+          .filter(address => typeof address === 'string' && address.length > 0);
+        if (readyAddresses.length === 0) continue;
+        if (!addressesByPort.has(port.port)) addressesByPort.set(port.port, new Set());
+        readyAddresses.forEach(address => addressesByPort.get(port.port).add(address));
+      }
     }
+    if (addressesByPort.size !== 1) {
+      throw new Error('The Service port does not map to one exact ready EndpointSlice target port.');
+    }
+    const [targetPort, addresses] = addressesByPort.entries().next().value;
+    if (addresses.size === 0) throw new Error('The target Service has no ready TCP endpoints.');
+    targets.set(servicePort.port, { targetPort, addresses });
   }
-  return { addresses, ports };
+  return targets;
 }
 
 function parseHubbleFlows(text) {
@@ -449,10 +478,14 @@ export function createP1NativeProcessProvider({
     if (pods.apiVersion !== 'v1' || pods.kind !== 'List' || !Array.isArray(pods.items)) {
       throw new Error('The current Pod list is invalid.');
     }
-    const matches = pods.items.filter(pod =>
+    const candidates = pods.items.filter(pod =>
       pod.metadata?.namespace === namespace &&
       Object.entries(labels).every(([key, value]) => pod.metadata?.labels?.[key] === value) &&
       (!expectedUid || pod.metadata?.uid === expectedUid));
+    if (candidates.some(pod => pod.apiVersion !== 'v1' || pod.kind !== 'Pod')) {
+      throw new Error('The exact current Pod list contains a non-Pod object.');
+    }
+    const matches = candidates;
     if (matches.length !== 1) throw new Error('The exact current owner Pod is missing or ambiguous.');
     return matches[0];
   };
@@ -461,16 +494,18 @@ export function createP1NativeProcessProvider({
     const namespace = requireString(args.namespace, 'namespace', DNS_LABEL);
     const owner = args.owner;
     const expectedLabels = args.expectedLabels;
+    const sandboxClaimUid = requireString(args.sandboxClaimUid, 'SandboxClaim UID');
+    const workspaceClaimUid = requireString(args.workspaceClaimUid, 'workspace PVC claim UID');
     if (expectedLabels?.[MANAGED] !== 'true' ||
         expectedLabels?.[OWNER] !== ownerFingerprint(owner) ||
-        expectedLabels?.[CLAIM_UID] !== args.workspaceClaimUid) {
+        expectedLabels?.[CLAIM_UID] !== sandboxClaimUid) {
       throw new Error('The exact owner, claim UID, and managed Sandbox labels are required.');
     }
     const pod = findPod(namespace, {
       ...expectedLabels,
-      [CLAIM_UID]: args.workspaceClaimUid,
+      [CLAIM_UID]: sandboxClaimUid,
     }, args.expectedPodUid);
-    const mounts = mountReceipt(pod, namespace, args.workspaceClaimUid,
+    const mounts = mountReceipt(pod, namespace, workspaceClaimUid,
       name => kubectlJson(namespace, ['get', 'persistentvolumeclaim', name], 'PVC'));
     const containers = (pod.spec?.containers ?? []).map(container => ({
       name: container.name,
@@ -492,6 +527,10 @@ export function createP1NativeProcessProvider({
   const observeOwnedResource = (args) => {
     const namespace = requireString(args.namespace, 'namespace', DNS_LABEL);
     const expectedUid = requireString(args.expectedUid, 'resource UID');
+    const resourceId = requireString(args.resourceId, 'resource ID');
+    if (resourceId !== expectedUid) {
+      throw new Error('The SandboxClaim UID must match its provider resource ID.');
+    }
     const fingerprint = ownerFingerprint(args.owner);
     const items = kubectlJson(namespace, [
       'get', 'sandboxclaims.extensions.agents.x-k8s.io',
@@ -505,10 +544,37 @@ export function createP1NativeProcessProvider({
       item.metadata?.uid === expectedUid &&
       item.metadata?.labels?.[MANAGED] === 'true' &&
       item.metadata?.labels?.[OWNER] === fingerprint);
+    if (matches.some(item =>
+      item.apiVersion !== 'extensions.agents.x-k8s.io/v1beta1' ||
+      item.kind !== 'SandboxClaim')) {
+      throw new Error('The exact owned resource is not a SandboxClaim.');
+    }
     if (matches.length > 1) throw new Error('The invocation-owned Sandbox claim is ambiguous.');
+    const pods = kubectlJson(namespace, [
+      'get', 'pods',
+      '--selector', `${CLAIM_UID}=${expectedUid}`,
+    ], 'Sandbox claim Pod list');
+    if (pods.apiVersion !== 'v1' || pods.kind !== 'List' || !Array.isArray(pods.items)) {
+      throw new Error('The current Sandbox claim Pod list is invalid.');
+    }
+    const dependentPods = pods.items
+      .filter(pod =>
+        pod.metadata?.namespace === namespace &&
+        pod.metadata?.labels?.[CLAIM_UID] === expectedUid)
+      .map(pod => {
+        if (pod.apiVersion !== 'v1' || pod.kind !== 'Pod') {
+          throw new Error('The exact Sandbox claim child is not a Pod.');
+        }
+        return pod;
+      })
+      .map(pod => ({
+        name: requireString(pod.metadata?.name, 'Sandbox claim Pod name', DNS_LABEL),
+        uid: requireString(pod.metadata?.uid, 'Sandbox claim Pod UID'),
+      }));
     return {
       clusterIdentity: expectedClusterIdentity,
       exists: matches.length === 1,
+      dependentPods,
       ...(matches.length === 1
         ? { uid: matches[0].metadata.uid, ownerId: args.owner.ownerId }
         : {}),
@@ -521,7 +587,8 @@ export function createP1NativeProcessProvider({
     const policies = kubectlJson(namespace, [
       'get', 'ciliumnetworkpolicies.cilium.io',
     ], 'Cilium policy list');
-    if (policies.apiVersion !== 'cilium.io/v2' || policies.kind !== 'CiliumNetworkPolicyList' ||
+    if (!((policies.apiVersion === 'cilium.io/v2' && policies.kind === 'CiliumNetworkPolicyList') ||
+          (policies.apiVersion === 'v1' && policies.kind === 'List')) ||
         !Array.isArray(policies.items)) {
       throw new Error('The current Cilium policy list is invalid.');
     }
@@ -590,23 +657,31 @@ export function createP1NativeProcessProvider({
       'get', 'endpointslices.discovery.k8s.io',
       '--selector', `kubernetes.io/service-name=${serviceName}`,
     ], 'EndpointSlice list');
-    const endpoints = selectReadyEndpoints(slices);
     const servicePorts = (service.spec?.ports ?? [])
       .filter(port => (port?.protocol ?? 'TCP') === 'TCP' &&
         Number.isSafeInteger(port.port) && port.port > 0)
-      .map(port => port.port);
-    if (endpoints.addresses.size === 0 || endpoints.ports.size === 0 || servicePorts.length === 0) {
+      .map(port => ({
+        name: typeof port.name === 'string' && port.name.length > 0 ? port.name : null,
+        port: port.port,
+        targetPort: port.targetPort,
+      }));
+    if (servicePorts.length === 0) {
       throw new Error('The target Service has no ready TCP endpoints.');
     }
-    const startedAt = now();
+    const endpointTargets = selectReadyEndpointTargets(slices, servicePorts);
     const host = `${serviceName}.${serviceNamespace}.svc`;
-    const statuses = [];
+    const attempts = [];
     for (const port of servicePorts) {
+      const startedAt = now();
       const probe = invoke('kubectl', kubectlArgs(namespace, [
         'exec', sourcePod.metadata.name, '--container', 'agenthost', '--',
-        'timeout', '3', 'bash', '-c', TCP_CONNECT_SCRIPT, 'bash', host, String(port),
+        'timeout', '3', 'bash', '-c', TCP_CONNECT_SCRIPT, 'bash', host, String(port.port),
       ]), 5_000);
-      statuses.push(probe.status === 0);
+      attempts.push({
+        servicePort: port.port,
+        connected: probe.status === 0,
+        startedAt,
+      });
     }
     const hubble = invoke('hubble', [
       'observe',
@@ -619,28 +694,73 @@ export function createP1NativeProcessProvider({
     ], 10_000);
     if (hubble.status !== 0) throw new Error('Hubble could not return current Cilium datapath evidence.');
     const nowMs = now();
-    const targetPorts = endpoints.ports;
     const flows = parseHubbleFlows(hubble.stdout)
       .map(flowFields)
       .filter(flow => flow.sourceNamespace === namespace &&
         flow.sourcePodName === sourcePod.metadata.name &&
-        endpoints.addresses.has(flow.destinationAddress) &&
-        targetPorts.has(flow.destinationPort) &&
         flow.isReply !== true &&
         Number.isFinite(Date.parse(flow.time)) &&
-        Date.parse(flow.time) >= startedAt &&
         Date.parse(flow.time) <= nowMs &&
         ['FORWARDED', 'DROPPED'].includes(flow.verdict));
-    const verdicts = new Set(flows.map(flow => flow.verdict));
-    if (flows.length === 0 || verdicts.size !== 1 ||
-        new Set(statuses).size !== 1 || statuses[0] !== (verdicts.has('FORWARDED'))) {
+    const usedFlows = new Set();
+    const portVerdicts = [];
+    for (const attempt of attempts) {
+      const target = endpointTargets.get(attempt.servicePort);
+      const matches = flows.flatMap((flow, index) =>
+        target?.targetPort === flow.destinationPort &&
+          target.addresses.has(flow.destinationAddress) &&
+          Date.parse(flow.time) >= attempt.startedAt && !usedFlows.has(index)
+          ? [{ flow, index }]
+          : []);
+      const verdicts = new Set(matches.map(({ flow }) => flow.verdict));
+      if (matches.length === 0 || verdicts.size !== 1) {
+        throw new Error('Each probed Service port requires a fresh matching Cilium datapath flow.');
+      }
+      const match = matches[0];
+      usedFlows.add(match.index);
+      const connected = match.flow.verdict === 'FORWARDED';
+      if (connected !== attempt.connected) {
+        throw new Error('The TCP probe result contradicts its exact Cilium datapath flow.');
+      }
+      portVerdicts.push({
+        servicePort: attempt.servicePort,
+        targetPort: target.targetPort,
+        verdict: match.flow.verdict,
+        connected,
+      });
+    }
+    const verdicts = new Set(portVerdicts.map(item => item.verdict));
+    if (verdicts.size !== 1) {
       throw new Error('The current source-to-Service probes lack one consistent Cilium verdict.');
     }
     const currentPod = readPod(namespace, sourcePod.metadata.name);
     if (currentPod.metadata.uid !== sourcePodUid) {
       throw new Error('The source Pod changed during the Cilium datapath probe.');
     }
+    const currentPolicy = observeNetworkPolicy({
+      namespace,
+      resourceId: networkPolicyResourceId,
+      expectedUid: policyUid,
+    });
+    if (currentPolicy.uid !== policy.uid ||
+        currentPolicy.appliedIntentGeneration !== policy.appliedIntentGeneration ||
+        currentPolicy.intentHash !== policy.intentHash ||
+        currentPolicy.revoked !== policy.revoked ||
+        !sameRecord(currentPolicy.selectorLabels, policy.selectorLabels)) {
+      throw new Error('The Cilium policy changed during the datapath probe.');
+    }
+    const currentService = kubectlJson(serviceNamespace,
+      ['get', 'service', serviceName], 'Service');
+    if (currentService.apiVersion !== 'v1' || currentService.kind !== 'Service' ||
+        currentService.metadata?.namespace !== serviceNamespace ||
+        currentService.metadata?.name !== serviceName ||
+        currentService.metadata?.uid !== service.metadata.uid) {
+      throw new Error('The target Service changed during the datapath probe.');
+    }
     const verdict = verdicts.has('FORWARDED') ? 'allowed' : 'denied';
+    const readyEndpointCount = new Set(
+      [...endpointTargets.values()].flatMap(target => [...target.addresses]),
+    ).size;
     return {
       clusterIdentity: expectedClusterIdentity,
       sourcePodUid,
@@ -648,8 +768,9 @@ export function createP1NativeProcessProvider({
       policyUid,
       policyGeneration,
       targetServiceUid: service.metadata.uid,
-      readyEndpointCount: endpoints.addresses.size,
-      probedPorts: servicePorts,
+      readyEndpointCount,
+      probedPorts: servicePorts.map(port => port.port),
+      portVerdicts,
       datapathVerdict: verdict,
       connected: verdict === 'allowed',
     };

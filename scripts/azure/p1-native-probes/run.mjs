@@ -383,6 +383,8 @@ function validateOwnerPins(input) {
     if (![runtime.sandboxResourceId, runtime.networkPolicyResourceId, runtime.lateSandboxResourceId]
       .every(nonEmpty) ||
         ![runtime.sandboxUid, runtime.networkPolicyUid, runtime.lateSandboxUid].every(nonEmpty) ||
+        runtime.sandboxLabels?.[SANDBOX_LABELS.claimUid] !== runtime.sandboxResourceId ||
+        runtime.lateSandboxUid !== runtime.lateSandboxResourceId ||
         !positive(runtime.sandboxResourceGeneration) ||
         !isRecord(runtime.sandboxLabels) ||
         !Object.values(SANDBOX_LABELS).every(key => nonEmpty(runtime.sandboxLabels[key])) ||
@@ -611,6 +613,9 @@ function validateInput(input, dependencies) {
       typeof dependencies.processProvider?.run !== 'function') {
     block('injected_dependencies_missing', 'Injected HTTP, validated-auth, allowed-journey authorization, and native process providers are required.');
   }
+  if (typeof dependencies.runtimeReadinessProvider?.readCurrent !== 'function') {
+    block('runtime_current_readback_unavailable', 'An independent current RuntimeHost registration and readiness reader is required before any probe can run.');
+  }
   return { baseUrl, owners };
 }
 
@@ -703,7 +708,7 @@ function verifySandboxOwnership(owner, observed, placement, operationId) {
     [SANDBOX_LABELS.resourceGeneration]: String(resourceGeneration),
     [SANDBOX_LABELS.fencingGeneration]: String(placement.providerFencingGeneration),
     [SANDBOX_LABELS.operation]: operationLabel,
-    [SANDBOX_LABELS.claimUid]: owner.storage.volume.claimUid,
+    [SANDBOX_LABELS.claimUid]: placementResourceId(placement),
   };
   if (Object.entries(expected).some(([key, value]) =>
     !nonEmpty(value) || labels[key] !== value)) {
@@ -713,6 +718,13 @@ function verifySandboxOwnership(owner, observed, placement, operationId) {
       podUid: observed?.pod?.uid ?? null,
     });
   }
+}
+
+function sandboxLabelsForResource(runtime, resourceId) {
+  return {
+    ...runtime.sandboxLabels,
+    [SANDBOX_LABELS.claimUid]: resourceId,
+  };
 }
 
 function verifySandboxMount(owner, observed) {
@@ -938,6 +950,61 @@ export async function runP1NativeProbes(input, dependencies) {
     verifyCluster(result, input.pins.context.clusterIdentity);
     return result;
   };
+  const observeSandbox = (owner, placement, options = {}) => {
+    const sandboxClaimUid = placementResourceId(placement);
+    return native('observe-sandbox', {
+      namespace: input.pins.namespace,
+      owner: ownerSelector(owner.storage),
+      placement,
+      workspaceClaimUid: owner.storage.volume.claimUid,
+      sandboxClaimUid,
+      expectedLabels: sandboxLabelsForResource(owner.runtime, sandboxClaimUid),
+      expectedPolicyGeneration: input.pins.runtimeReceipt.network.generation,
+      ...options,
+    });
+  };
+  const verifyOwnedSandboxResourcesAbsent = async (owner, resources) => {
+    const readbacks = [];
+    for (const resource of resources) {
+      readbacks.push(await native('observe-owned-resource', {
+        namespace: input.pins.namespace,
+        owner: ownerSelector(owner.storage),
+        resourceId: resource.resourceId,
+        expectedUid: resource.resourceId,
+      }));
+    }
+    return {
+      readbacks,
+      confirmed: resources.length > 0 && readbacks.length === resources.length &&
+        readbacks.every(readback =>
+          readback.exists === false &&
+          Array.isArray(readback.dependentPods) &&
+          readback.dependentPods.length === 0),
+    };
+  };
+  const validateCurrentRuntimeReadiness = async (owner, state) => {
+    const activation = input.pins.runtimeReceipt.activation;
+    const currentReadback = await dependencies.runtimeReadinessProvider.readCurrent({
+      owner: ownerSelector(owner.storage),
+      placement: state.placement,
+      expectedPodUid: state.sandboxObservation.pod.uid,
+      expectedRuntimeInstanceId: activation.runtimeInstanceId,
+    });
+    const registration = projectSafeRegistration(currentReadback?.registration);
+    const readiness = projectSafeReadinessReceipt(currentReadback?.readinessReceipt);
+    if (!registration ||
+        !sameJson(registration, projectSafeRegistration(input.pins.runtimeReceipt.registration)) ||
+        !readiness ||
+        !sameJson(readiness, projectSafeReadinessReceipt(activation)) ||
+        !sameJson(currentReadback?.acceptedOptions, input.pins.sourceReceipt.acceptedOptions) ||
+        registration.binding.placementUid !== state.sandboxObservation.pod.uid ||
+        registration.binding.placementGeneration !== placementResourceGeneration(state.placement)) {
+      block('agenthost_current_readback_mismatch', 'The independent current registration, Host readiness receipt, accepted options, and exact Pod placement must match the sanitized pins.', {
+        ownerId: owner.storage.ownerId,
+      });
+    }
+    return { registration, readiness };
+  };
   const provisionSandbox = async (state, reason) => {
     const { storage } = state;
     const volume = state.volume;
@@ -990,14 +1057,8 @@ export async function runP1NativeProbes(input, dependencies) {
         operationId: provision.body.operationId,
       });
     }
-    const observation = await native('observe-sandbox', {
-      namespace: input.pins.namespace,
-      owner: ownerSelector(storage),
-      placement: placementResponse.body,
-      workspaceClaimUid: storage.volume.claimUid,
+    const observation = await observeSandbox(state, placementResponse.body, {
       expectedOperationId: provision.body.operationId,
-      expectedLabels: state.runtime.sandboxLabels,
-      expectedPolicyGeneration: input.pins.runtimeReceipt.network.generation,
     });
     verifyCluster(observation, input.pins.context.clusterIdentity);
     if (!nonEmpty(observation?.pod?.uid) ||
@@ -1035,14 +1096,8 @@ export async function runP1NativeProbes(input, dependencies) {
     const ownedReceipt = (ownedSandboxResources.get(storage.ownerId) ?? []).find(item =>
       item.resourceId === resourceId &&
       item.resourceGeneration === placementResourceGeneration(placement));
-    const observation = await native('observe-sandbox', {
-      namespace: input.pins.namespace,
-      owner: ownerSelector(storage),
-      placement,
-      workspaceClaimUid: storage.volume.claimUid,
+    const observation = await observeSandbox(state, placement, {
       expectedOperationId: ownedReceipt?.operationId,
-      expectedLabels: state.runtime.sandboxLabels,
-      expectedPolicyGeneration: input.pins.runtimeReceipt.network.generation,
     });
     const inventory = ownedSandboxResources.get(storage.ownerId) ?? [];
     const owned = inventory.find(item => item.resourceId === resourceId && item.uid === observation?.pod?.uid);
@@ -1139,7 +1194,7 @@ export async function runP1NativeProbes(input, dependencies) {
     }
     const sandboxReceipt = scopedReceipts.find(receipt => receipt.resourceId === resourceId);
     if (!sandboxReceipt || !nonEmpty(runtime.sandboxUid) ||
-        receiptUid(sandboxReceipt.observedReceipt) !== runtime.sandboxUid) {
+        receiptUid(sandboxReceipt.observedReceipt) !== resourceId) {
       block('active_sandbox_receipt_missing', 'The current Sandbox must match an invocation-bound observed UID receipt.', {
         ownerId: storage.ownerId,
         resourceId,
@@ -1152,22 +1207,16 @@ export async function runP1NativeProbes(input, dependencies) {
         volume: findOwnershipReceipt(
           { storage, scopedReceipts }, storage.volume.volumeId),
         sandbox: findOwnershipReceipt(
-          { storage, scopedReceipts }, resourceId, runtime.sandboxUid),
+          { storage, scopedReceipts }, resourceId, resourceId),
         networkPolicy: findOwnershipReceipt(
           { storage, scopedReceipts }, runtime.networkPolicyResourceId, runtime.networkPolicyUid),
         lateSandbox: findOwnershipReceipt(
-          { storage, scopedReceipts }, runtime.lateSandboxResourceId, runtime.lateSandboxUid),
+          { storage, scopedReceipts }, runtime.lateSandboxResourceId, runtime.lateSandboxResourceId),
       },
     };
-    const sandboxObservation = await native('observe-sandbox', {
-      namespace: input.pins.namespace,
-      owner: ownerSelector(storage),
-      placement,
-      workspaceClaimUid: storage.volume.claimUid,
+    const sandboxObservation = await observeSandbox({ storage, runtime }, placement, {
       expectedPodUid: runtime.sandboxUid,
       expectedOperationId: creation.resources.sandbox.operationId,
-      expectedLabels: runtime.sandboxLabels,
-      expectedPolicyGeneration: input.pins.runtimeReceipt.network.generation,
     });
     verifyCluster(sandboxObservation, input.pins.context.clusterIdentity);
     requireUid(sandboxObservation?.pod?.uid, runtime.sandboxUid,
@@ -1185,7 +1234,7 @@ export async function runP1NativeProbes(input, dependencies) {
     live.set(storage.ownerId, state);
     ownedSandboxResources.set(storage.ownerId, [{
       resourceId: creation.resources.sandbox.resourceId,
-      uid: creation.resources.sandbox.uid,
+      uid: sandboxObservation.pod.uid,
       operationId: creation.resources.sandbox.operationId,
       resourceGeneration: placementResourceGeneration(placement),
       current: true,
@@ -1224,7 +1273,26 @@ export async function runP1NativeProbes(input, dependencies) {
       probes,
     };
   }
-
+  try {
+    const activationOwner = owners.find(item =>
+      item.storage.ownerId === input.pins.runtimeReceipt.activation.ownerId);
+    const activationState = activationOwner && live.get(activationOwner.storage.ownerId);
+    if (!activationOwner || !activationState) {
+      block('activation_owner_missing', 'The current Host readiness receipt must bind to one of the exact owner fixtures.');
+    }
+    await validateCurrentRuntimeReadiness(activationOwner, activationState);
+  } catch (error) {
+    const issue = evidenceError(error, secrets);
+    for (const name of PROBE_NAMES) probes.push(resultFor(name, 'blocked', issue, secrets));
+    return {
+      kind: 'p1-native-acceptance',
+      schemaVersion: 1,
+      overallStatus: 'blocked',
+      startedAt,
+      completedAt: new Date().toISOString(),
+      probes,
+    };
+  }
   try {
     const cluster = await native('observe-cluster', { namespace: input.pins.namespace });
     verifyCluster(cluster, input.pins.context.clusterIdentity);
@@ -1377,17 +1445,18 @@ export async function runP1NativeProbes(input, dependencies) {
       resourceId: late.resourceId,
       expectedUid: late.uid,
     });
-    if (typeof lateAfter?.exists !== 'boolean') {
+    if (typeof lateAfter?.exists !== 'boolean' || !Array.isArray(lateAfter.dependentPods)) {
       block('late_resource_readback_missing', 'Native readback did not report the late resource existence after reconciliation.', {
         ownerId: storage.ownerId,
         resourceId: late.resourceId,
       });
     }
-    if (lateAfter.exists) {
-      fail('late_resource_not_cleaned', 'The accepted reconcile route left the exact owned late resource present.', {
+    if (lateAfter.exists || lateAfter.dependentPods.length > 0) {
+      fail('late_resource_not_cleaned', 'The accepted reconcile route left the exact owned late resource or a dependent Pod present.', {
         ownerId: storage.ownerId,
         resourceId: late.resourceId,
         uid: late.uid,
+        dependentPodUids: lateAfter.dependentPods.map(pod => pod.uid),
       });
     }
     const reclaimed = await provisionSandbox(disposable, 'lifecycle-reclaim');
@@ -1724,9 +1793,29 @@ export async function runP1NativeProbes(input, dependencies) {
     }
     const environmentNetwork = await api(owner.storage, 'GET',
       `/sandbox?networkPolicyGeneration=${network.generation}`);
-    if (environmentNetwork.status !== 200 ||
-        environmentNetwork.body?.readyForDispatch !== true ||
-        environmentNetwork.body?.observation?.verifiedNetworkGeneration !== network.generation) {
+    const currentPlacement = state.placement;
+    const currentResource = placementResourceId(currentPlacement);
+    const currentGeneration = placementResourceGeneration(currentPlacement);
+    const currentOwnedResource = (ownedSandboxResources.get(owner.storage.ownerId) ?? []).find(resource =>
+      resource.resourceId === currentResource &&
+      resource.resourceGeneration === currentGeneration);
+    const environmentResult = environmentNetwork.body;
+    const environmentObservation = environmentResult?.observation;
+    if (![200, 202].includes(environmentNetwork.status) ||
+        !currentOwnedResource ||
+        environmentResult?.operationId !== currentOwnedResource.operationId ||
+        environmentResult?.resourceGeneration !== currentGeneration ||
+        environmentResult?.providerFencingGeneration !== currentPlacement?.providerFencingGeneration ||
+        environmentResult?.currentFencingGeneration !== currentPlacement?.currentFencingGeneration ||
+        environmentResult?.resource?.providerId !== 'agent-sandbox' ||
+        environmentResult?.resource?.resourceId !== currentResource ||
+        environmentResult?.resource?.generation !== currentGeneration ||
+        environmentObservation?.resource?.providerId !== 'agent-sandbox' ||
+        environmentObservation?.resource?.resourceId !== currentResource ||
+        environmentObservation?.resource?.generation !== currentGeneration ||
+        !['pending', 'ready'].includes(environmentObservation?.state) ||
+        environmentObservation?.fencingGeneration !== currentPlacement?.providerFencingGeneration ||
+        environmentObservation?.verifiedNetworkGeneration !== network.generation) {
       block('environment_network_generation_unverified', 'Environment did not confirm the same current network generation as the native policy and datapath probes.', {
         ownerId: owner.storage.ownerId,
         status: environmentNetwork.status,
@@ -1760,6 +1849,14 @@ export async function runP1NativeProbes(input, dependencies) {
             !Array.isArray(result?.probedPorts) ||
             result.probedPorts.length === 0 ||
             result.probedPorts.some(port => !positive(port)) ||
+            !Array.isArray(result?.portVerdicts) ||
+            result.portVerdicts.length !== result.probedPorts.length ||
+            result.portVerdicts.some((item, index) =>
+              !positive(item?.servicePort) ||
+              item.servicePort !== result.probedPorts[index] ||
+              !positive(item?.targetPort) ||
+              item?.verdict !== (expectedConnected ? 'FORWARDED' : 'DROPPED') ||
+              item?.connected !== expectedConnected) ||
             !['allowed', 'denied'].includes(result?.datapathVerdict) ||
             typeof result?.connected !== 'boolean') {
           block('network_probe_evidence_mismatch', 'The datapath result is not bound to the exact current pod, service identity, and policy generation.', {
@@ -1790,6 +1887,7 @@ export async function runP1NativeProbes(input, dependencies) {
           targetServiceUid: result.targetServiceUid,
           readyEndpointCount: result.readyEndpointCount,
           probedPorts: result.probedPorts,
+          portVerdicts: result.portVerdicts,
         });
       }
     }
@@ -1805,10 +1903,20 @@ export async function runP1NativeProbes(input, dependencies) {
       }
       try {
         const current = await api(owner.storage, 'GET', '/sandbox/v1/placement');
-        if (current.status === 404) {
-          recordCleanup('sandbox-owner-lifecycle', 'final-sandbox-release', 'complete', {
+        const resources = ownedSandboxResources.get(owner.storage.ownerId) ?? [];
+        if (current.status === 404 ||
+            (current.status === 200 && current.body?.isCurrent === false)) {
+          const absence = await verifyOwnedSandboxResourcesAbsent(owner, resources);
+          recordCleanup('sandbox-owner-lifecycle', 'final-sandbox-release',
+            absence.confirmed ? 'complete' : 'uncertain', {
             ownerId: owner.storage.ownerId,
-            alreadyReleased: true,
+            alreadyReleased: absence.confirmed,
+            resources: absence.readbacks.map(readback => ({
+              exists: readback.exists,
+              dependentPodCount: Array.isArray(readback.dependentPods)
+                ? readback.dependentPods.length
+                : null,
+            })),
           });
           continue;
         }
@@ -1819,19 +1927,12 @@ export async function runP1NativeProbes(input, dependencies) {
           });
           continue;
         }
-        const resources = ownedSandboxResources.get(owner.storage.ownerId) ?? [];
         const currentId = placementResourceId(current.body);
         const ownedResource = resources.find(resource =>
           resource.resourceId === currentId &&
           resource.resourceGeneration === placementResourceGeneration(current.body));
-        const currentNative = await native('observe-sandbox', {
-          namespace: input.pins.namespace,
-          owner: ownerSelector(owner.storage),
-          placement: current.body,
-          workspaceClaimUid: owner.storage.volume.claimUid,
+        const currentNative = await observeSandbox(owner, current.body, {
           expectedOperationId: ownedResource?.operationId,
-          expectedLabels: owner.runtime.sandboxLabels,
-          expectedPolicyGeneration: input.pins.runtimeReceipt.network.generation,
         });
         const owned = resources.find(resource =>
           resource.resourceId === currentId &&
@@ -1875,6 +1976,20 @@ export async function runP1NativeProbes(input, dependencies) {
             ownerId: owner.storage.ownerId,
             reconcileStatus: reconciliation.status,
             readbackStatus: readback.status,
+          });
+          continue;
+        }
+        const absence = await verifyOwnedSandboxResourcesAbsent(owner, resources);
+        if (!absence.confirmed) {
+          recordCleanup('sandbox-owner-lifecycle', 'final-sandbox-release', 'uncertain', {
+            ownerId: owner.storage.ownerId,
+            resourceId: currentId,
+            resources: absence.readbacks.map(readback => ({
+              exists: readback.exists,
+              dependentPodCount: Array.isArray(readback.dependentPods)
+                ? readback.dependentPods.length
+                : null,
+            })),
           });
           continue;
         }
@@ -1938,14 +2053,8 @@ export async function runP1NativeProbes(input, dependencies) {
           });
           continue;
         }
-        const currentObservation = await native('observe-sandbox', {
-          namespace: input.pins.namespace,
-          owner: ownerSelector(owner),
-          placement,
-          workspaceClaimUid: owner.volume.claimUid,
+        const currentObservation = await observeSandbox(state, placement, {
           expectedOperationId: owned.operationId,
-          expectedLabels: state.runtime.sandboxLabels,
-          expectedPolicyGeneration: input.pins.runtimeReceipt.network.generation,
         });
         verifyCluster(currentObservation, input.pins.context.clusterIdentity);
         if (currentObservation?.pod?.uid !== owned.uid) {
@@ -2258,37 +2367,18 @@ export async function runP1NativeProbes(input, dependencies) {
         ownerId: owner.storage.ownerId,
       });
     }
-    const observed = await native('observe-sandbox', {
-      namespace: input.pins.namespace,
-      owner: ownerSelector(owner.storage),
-      placement: placement.body,
-      workspaceClaimUid: owner.storage.volume.claimUid,
+    const observed = await observeSandbox(owner, placement.body, {
       expectedPodUid: owner.runtime.sandboxUid,
       expectedOperationId: sandboxReceipt.operationId,
-      expectedLabels: owner.runtime.sandboxLabels,
-      expectedPolicyGeneration: runtime.network.generation,
     });
     verifyCluster(observed, input.pins.context.clusterIdentity);
-    const pinnedRegistration = projectSafeRegistration(runtime.registration);
-    if (typeof dependencies.runtimeReadinessProvider?.readCurrent !== 'function') {
-      block('runtime_current_readback_unavailable', 'An independent current RuntimeHost registration and readiness reader is required; pinned activation data is not current proof.', {
-        ownerId: owner.storage.ownerId,
+    const { registration, readiness: actualReadiness } =
+      await validateCurrentRuntimeReadiness(owner, {
+        ...state,
+        placement: readinessPlacement.body,
+        sandboxObservation: observed,
       });
-    }
-    const currentReadback = await dependencies.runtimeReadinessProvider.readCurrent({
-      owner: ownerSelector(owner.storage),
-      placement: readinessPlacement.body,
-      expectedPodUid: observed?.pod?.uid,
-      expectedRuntimeInstanceId: activation.runtimeInstanceId,
-    });
-    const registration = projectSafeRegistration(currentReadback?.registration);
-    const actualReadiness = projectSafeReadinessReceipt(currentReadback?.readinessReceipt);
     const pinnedReadiness = projectSafeReadinessReceipt(activation);
-    if (!registration || !sameJson(registration, pinnedRegistration) ||
-        !actualReadiness || !sameJson(actualReadiness, pinnedReadiness) ||
-        !sameJson(currentReadback?.acceptedOptions, input.pins.sourceReceipt.acceptedOptions)) {
-      block('agenthost_current_readback_mismatch', 'The independent current registration, Host readiness receipt, and accepted options must match the exact sanitized pins.');
-    }
     const binding = registration.binding;
     const placementUid = observed?.pod?.uid;
     verifySandboxOwnership(owner, observed, placement.body, sandboxReceipt.operationId);

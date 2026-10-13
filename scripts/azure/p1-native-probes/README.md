@@ -89,6 +89,13 @@ receipt entries pin those owner PVC/PV UIDs and provider bindings to
 `context.clusterIdentity.uid`. The Kubernetes process adapter independently
 checks the PVC/PV UIDs, claim reference, and both Azure Files owner annotations
 against the current volume specification.
+For AgentSandbox, `sandboxResourceId` is the SandboxClaim UID and
+`sandboxUid` is the distinct AgentHost Pod UID. The claim UID must match the
+Pod's `agents.x-k8s.io/claim-uid` label; `volume.claimUid` is the separate
+workspace PVC UID used only to verify the mounted volume. The late Sandbox
+resource ID and UID both identify its SandboxClaim. Native cleanup readbacks
+must check for dependent Pods as well as the SandboxClaim so a removed claim
+with a leftover Pod remains uncertain.
 The complete provider binding is cross-checked between the provider receipt
 and fresh Environment volume readback; it is not echoed as native evidence.
 
@@ -168,12 +175,16 @@ These are structured operations, not command strings. The adapter must map
 them to fixed, source-owned safe argv recipes, constrain all targets to the
 pinned same-cluster namespace and exact owner UID, and return structured
 readback evidence. A service probe must use ready endpoints, return the exact
-target Service UID and probed TCP ports, and include a current Cilium datapath
-verdict bound to the source Pod UID and policy UID/generation. A timeout or a
-policy object by itself is not proof of a deny. Every recipe result must
-include the expected cluster identity. The adapter must not evaluate
-input-provided shell, scripts, argv, or commands. No direct Kubernetes deletes
-are used; Sandbox release/reconcile and policy revoke use Environment routes.
+target Service UID and each tested TCP port's exact EndpointSlice target port
+and fresh Cilium datapath verdict, bound to the source Pod UID and policy
+UID/generation. It must reread the policy identity and Service UID after the
+tests. A timeout or a policy object by itself is not proof of a deny. Every
+recipe result must include the expected cluster identity. Cilium policy
+collections may use Kubernetes' generic `v1/List` envelope, but each selected
+policy must still have the exact Cilium API version, kind, UID, generation,
+hash, and selector. The adapter must not evaluate input-provided shell,
+scripts, argv, or commands. No direct Kubernetes deletes are used; Sandbox
+release/reconcile and policy revoke use Environment routes.
 Every `mount-file` response must also echo the exact target `podUid` and
 `ownerId`. The runner checks these fields on marker stat, write, read, and
 unlink; after release/rebind, cleanup is bound to the new current Pod UID and
