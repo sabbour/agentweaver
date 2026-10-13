@@ -369,6 +369,7 @@ function input(baseUrl, journey = 'journal') {
       publicationPath: 'artifacts/p1/publication.json',
       manifestPath: 'releases/foundation.json',
       agentHostArchivePath: 'artifacts/p1/Agentweaver.AgentHost.oci.tar',
+      integrationDeploymentReceiptPath: 'artifacts/p1/integration-deployment.json',
     },
     environment: {
       baseUrl,
@@ -405,6 +406,16 @@ function input(baseUrl, journey = 'journal') {
 
 const SOURCE_EVIDENCE = {
   source: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
+  integrationDeployment: {
+    status: 'deployed',
+    sourceSha: SOURCE_SHA,
+    sourceTree: SOURCE_TREE,
+    manifestSha256: 'a'.repeat(64),
+    publicationSha256: 'b'.repeat(64),
+    readbackSha256: 'c'.repeat(64),
+    completedAt: '2026-10-13T00:00:00.000Z',
+    target: { clusterName: 'controlled-cluster', namespace: 'agentweaver-v1-p0' },
+  },
   providerCatalog: {
     name: 'provider-catalog-v1',
     sourceCommit: PROVIDER_SOURCE,
@@ -485,6 +496,7 @@ test('P1 API journal journey checks a real denied-actor 403 and correlated Gatew
     });
     assert.equal(result.surfaceStatus, 'passed');
     assert.equal(result.fullP1Status, 'blocked');
+    assert.equal(result.sourceEvidence.integrationDeployment.status, 'deployed');
     assert.deepEqual(
       result.sourceEvidence.services.services.map(service => service.componentId),
       P1_SERVICE_COMPONENTS.map(([componentId]) => componentId),
@@ -582,7 +594,7 @@ test('P1 API journal blocks a missing Gateway operation and foreign or invalid p
   }
 });
 
-test('P1 API gate answer blocks caller-supplied ownership receipts before workflow writes', async () => {
+test('P1 API gate answer blocks caller-supplied ownership receipts before network access', async () => {
   const fixture = await host();
   try {
     const result = await runP1ApiJourney(input(fixture.baseUrl, 'gate-answer'), {
@@ -591,15 +603,15 @@ test('P1 API gate answer blocks caller-supplied ownership receipts before workfl
       clock: CLOCK,
     });
     assert.equal(result.surfaceStatus, 'blocked');
-    assert.match(result.failure.message, /supported authenticated setup path proves same-invocation creation and readback/);
-    assert.ok(fixture.requests.some(request => request.method === 'GET'));
+    assert.match(result.failure.message, /fixture created by this runner invocation/);
+    assert.equal(fixture.requests.length, 0);
     assert.equal(fixture.requests.some(request => request.method === 'POST'), false);
   } finally {
     await fixture.close();
   }
 });
 
-test('P1 API message blocks caller-supplied ownership receipts before workflow writes', async () => {
+test('P1 API message blocks caller-supplied ownership receipts before network access', async () => {
   const fixture = await host();
   try {
     const result = await runP1ApiJourney(input(fixture.baseUrl, 'message'), {
@@ -608,8 +620,8 @@ test('P1 API message blocks caller-supplied ownership receipts before workflow w
       clock: CLOCK,
     });
     assert.equal(result.surfaceStatus, 'blocked');
-    assert.match(result.failure.message, /supported authenticated setup path proves same-invocation creation and readback/);
-    assert.ok(fixture.requests.some(request => request.method === 'GET'));
+    assert.match(result.failure.message, /fixture created by this runner invocation/);
+    assert.equal(fixture.requests.length, 0);
     assert.equal(fixture.requests.some(request => request.method === 'POST'), false);
   } finally {
     await fixture.close();
@@ -652,7 +664,7 @@ test('a denied-actor 401 is not mistaken for a valid forbidden result', async ()
   }
 });
 
-test('the MCP runner allows read-only discovery but blocks gate writes when ownership receipts are caller-supplied', async () => {
+test('the MCP runner rejects caller ownership claims before tool discovery', async () => {
   const fixture = await host();
   try {
     let discoveryCalls = 0;
@@ -664,8 +676,8 @@ test('the MCP runner allows read-only discovery but blocks gate writes when owne
     });
     assert.equal(result.surface, 'mcp');
     assert.equal(result.surfaceStatus, 'blocked');
-    assert.match(result.failure.message, /supported authenticated setup path proves same-invocation creation and readback/);
-    assert.equal(discoveryCalls, 1);
+    assert.match(result.failure.message, /fixture created by this runner invocation/);
+    assert.equal(discoveryCalls, 0);
     assert.equal(fixture.mcp.protocol.length, 0);
     assert.equal(fixture.mcp.protocol.some(item =>
       ['agentweaver_answerGate', 'agentweaver_approveGate', 'agentweaver_rejectGate', 'agentweaver_sendMessage']
@@ -675,7 +687,7 @@ test('the MCP runner allows read-only discovery but blocks gate writes when owne
   }
 });
 
-test('the UI runner can inspect the pinned run but blocks gate writes with caller-supplied ownership receipts', async () => {
+test('the UI runner rejects caller ownership claims before opening the page', async () => {
   const fixture = await host();
   try {
     const result = await runP1UiJourney(input(fixture.baseUrl, 'gate-answer'), {
@@ -686,10 +698,10 @@ test('the UI runner can inspect the pinned run but blocks gate writes with calle
     });
     assert.equal(result.surface, 'ui');
     assert.equal(result.surfaceStatus, 'blocked');
-    assert.match(result.failure.message, /supported authenticated setup path proves same-invocation creation and readback/);
+    assert.match(result.failure.message, /fixture created by this runner invocation/);
     assert.equal(fixture.requests.some(request => request.method === 'POST'), false);
     assert.equal(fixture.uiReplayCount(), 0);
-    assert.deepEqual(fixture.uiState(), { opened: true, closed: true });
+    assert.deepEqual(fixture.uiState(), { opened: false, closed: true });
   } finally {
     await fixture.close();
   }

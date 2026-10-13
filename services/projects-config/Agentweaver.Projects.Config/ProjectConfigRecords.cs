@@ -166,6 +166,10 @@ public sealed class ProjectSetupOperationRecord
     public long ProjectConfigurationRevision { get; set; }
     public Guid AssignmentId { get; set; }
     public long AssignmentRevision { get; set; }
+    public Guid? OwnerAssignmentId { get; set; }
+    public long? OwnerAssignmentRevision { get; set; }
+    public Guid? OwnerAuthorityAuditEventId { get; set; }
+    public Guid? OwnerRevocationAuditEventId { get; set; }
     public long? ExpectedProjectRevision { get; set; }
     public long? ExpectedAssignmentRevision { get; set; }
     public Guid? AuthorityAuditEventId { get; set; }
@@ -205,7 +209,12 @@ public sealed record ProjectSetupReceipt(
     Guid AssignmentId,
     long AssignmentRevision,
     Guid AuthorityAuditEventId,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt)
+{
+    public Guid? OwnerAssignmentId { get; init; }
+    public long? OwnerAssignmentRevision { get; init; }
+    public Guid? OwnerAuthorityAuditEventId { get; init; }
+}
 
 public sealed record ProjectSetupReadback(
     bool ProjectExists,
@@ -216,7 +225,12 @@ public sealed record ProjectSetupReadback(
     bool AssignmentExists,
     ProjectAuthorityRecordState? AssignmentState,
     long? AssignmentRevision,
-    bool AuthorityAuditExists);
+    bool AuthorityAuditExists,
+    Guid? OwnerAssignmentId = null,
+    bool OwnerAssignmentExists = false,
+    ProjectAuthorityRecordState? OwnerAssignmentState = null,
+    long? OwnerAssignmentRevision = null,
+    bool OwnerAuthorityAuditExists = false);
 
 public sealed record ProjectCleanupReceipt(
     Guid InvocationId,
@@ -228,7 +242,12 @@ public sealed record ProjectCleanupReceipt(
     long ProjectConfigurationRevision,
     long AssignmentRevision,
     Guid? AuthorityAuditEventId,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt)
+{
+    public Guid? OwnerAssignmentId { get; init; }
+    public long? OwnerAssignmentRevision { get; init; }
+    public Guid? OwnerRevocationAuditEventId { get; init; }
+}
 
 public sealed record ProjectSetupCommandResult(
     ProjectSetupOperationKind OperationKind,

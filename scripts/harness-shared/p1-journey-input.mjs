@@ -7,7 +7,7 @@ const PIN_RECEIPTS = [
   'sourceReceipt',
   'imageReceipt',
 ];
-const SECRET_PROPERTY = /^(?:accessToken|authorization|connectionString|password|secret|token)$/i;
+const SECRET_PROPERTY = /^(?:accessToken|authorization|connectionString|password|secret|setupToken|token)$/i;
 const SURFACE_JOURNEYS = new Set(['gate-answer', 'gate-approve', 'gate-reject', 'message', 'journal']);
 const SOURCE_SHA = /^[a-f0-9]{40}$/;
 const IMAGE_DIGEST = /^sha256:[a-f0-9]{64}$/;
@@ -42,7 +42,7 @@ function rejectSecrets(value) {
   }
 }
 
-export function validateP1JourneyInput(input, { now = () => Date.now() } = {}) {
+function validateP1StaticInput(input) {
   if (!isRecord(input) || input.executionIntent !== 'execute') {
     throw new Error('P1 runner input must explicitly set executionIntent to "execute".');
   }
@@ -70,8 +70,14 @@ export function validateP1JourneyInput(input, { now = () => Date.now() } = {}) {
   }
   const deploymentEvidence = input.deploymentEvidence;
   requireExactKeys(deploymentEvidence,
-    ['publicationPath', 'manifestPath', 'agentHostArchivePath'], 'deployment evidence input');
-  for (const name of ['publicationPath', 'manifestPath', 'agentHostArchivePath']) {
+    ['publicationPath', 'manifestPath', 'agentHostArchivePath', 'integrationDeploymentReceiptPath'],
+    'deployment evidence input');
+  for (const name of [
+    'publicationPath',
+    'manifestPath',
+    'agentHostArchivePath',
+    'integrationDeploymentReceiptPath',
+  ]) {
     requireString(deploymentEvidence[name], `deployment evidence ${name}`);
   }
   requireExactKeys(pins.providerReceipt,
@@ -106,6 +112,10 @@ export function validateP1JourneyInput(input, { now = () => Date.now() } = {}) {
     throw new Error('The AgentHost image receipt must pin its immutable registry, archive, OCI, config, and byte identities.');
   }
 
+  return { environment, pins, deploymentEvidence };
+}
+
+function validateFixtureOwnership(input, pins, now) {
   const fences = pins.ownerFences;
   if (!isRecord(fences)) throw new Error('Current owner fences are required.');
   for (const name of ['projectId', 'runId', 'rootSessionId', 'sessionId']) {
@@ -164,7 +174,83 @@ export function validateP1JourneyInput(input, { now = () => Date.now() } = {}) {
   if (typeof input.journey !== 'string' || !fixture.allowedJourneys.includes(input.journey)) {
     throw new Error('The selected journey is not allowed by the active fixture scope.');
   }
-  return { environment, pins, fences, fixture, deploymentEvidence };
+  return { fences, fixture };
+}
+
+function validatePlan(input, { environment, pins }) {
+  if (Object.hasOwn(pins, 'ownerFences') || Object.hasOwn(pins, 'fixtureScope')) {
+    throw new Error('Runner plans cannot contain caller-supplied owner fences or fixture receipts.');
+  }
+  if (typeof input.journey !== 'string' || !SURFACE_JOURNEYS.has(input.journey)) {
+    throw new Error('A supported P1 journey is required.');
+  }
+  const plan = input.fixturePlan;
+  if (!isRecord(plan)) throw new Error('An explicit runner fixture plan is required.');
+  requireExactKeys(plan,
+    ['expectedPlatformRuntimeRevision', 'selectionContext', 'deniedActor', 'gate', 'message'],
+    'runner fixture plan');
+  if (!Number.isSafeInteger(plan.expectedPlatformRuntimeRevision)
+    || plan.expectedPlatformRuntimeRevision < 1) {
+    throw new Error('A positive expected platform runtime revision is required in the runner fixture plan.');
+  }
+  const context = plan.selectionContext;
+  requireExactKeys(context,
+    ['revision', 'availableModelSelectionReferences', 'providerRequirements', 'requiredEgress'],
+    'run selection context');
+  requireString(context.revision, 'run selection context revision');
+  for (const field of ['availableModelSelectionReferences', 'providerRequirements', 'requiredEgress']) {
+    if (!Array.isArray(context[field])) throw new Error(`The run selection ${field} must be an array.`);
+  }
+  if (context.availableModelSelectionReferences.some(value => typeof value !== 'string' || !value.trim())
+    || context.providerRequirements.some(value => !isRecord(value))
+    || context.requiredEgress.some(value => !isRecord(value))) {
+    throw new Error('The run selection context contains an invalid reference or requirement.');
+  }
+
+  const deniedActor = plan.deniedActor;
+  requireExactKeys(deniedActor, ['actorId', 'tenantId'], 'denied actor');
+  requireString(deniedActor.actorId, 'denied actor ID');
+  requireString(deniedActor.tenantId, 'denied actor tenant ID');
+  if (deniedActor.actorId === environment.actorId && deniedActor.tenantId === environment.tenantId) {
+    throw new Error('The denied actor must be different from the selected P1 actor.');
+  }
+
+  if (input.journey.startsWith('gate-')) {
+    const gate = plan.gate;
+    requireExactKeys(gate, ['prompt', 'allowedChoices', 'allowsFreeform', 'answer'], 'gate plan');
+    requireString(gate.prompt, 'gate prompt');
+    if (!Array.isArray(gate.allowedChoices)
+      || gate.allowedChoices.some(choice => typeof choice !== 'string' || !choice.trim())
+      || typeof gate.allowsFreeform !== 'boolean'
+      || typeof gate.answer !== 'string' || !gate.answer.trim()) {
+      throw new Error('The gate plan must contain exact choices, freeform behavior, and an answer.');
+    }
+    if (input.journey === 'gate-answer'
+      && !gate.allowedChoices.includes(gate.answer)
+      && !(gate.allowsFreeform && !gate.allowedChoices.includes(gate.answer))) {
+      throw new Error('The planned gate does not allow its exact answer.');
+    }
+  } else if (plan.gate !== null) {
+    throw new Error('A gate plan is only valid for a gate journey.');
+  }
+  if (input.journey === 'message') {
+    requireExactKeys(plan.message, ['text'], 'message plan');
+    requireString(plan.message.text, 'addressed-message text');
+  } else if (plan.message !== null) {
+    throw new Error('A message plan is only valid for the message journey.');
+  }
+  return { fixturePlan: plan, journey: input.journey };
+}
+
+export function validateP1RunnerPlanInput(input, options = {}) {
+  const base = validateP1StaticInput(input);
+  return { ...base, ...validatePlan(input, base) };
+}
+
+export function validateP1JourneyInput(input, { now = () => Date.now() } = {}) {
+  const base = validateP1StaticInput(input);
+  const { fences, fixture } = validateFixtureOwnership(input, base.pins, now);
+  return { ...base, fences, fixture, journey: input.journey };
 }
 
 export function requireP1OwnedResources(fixture, requiredResources) {

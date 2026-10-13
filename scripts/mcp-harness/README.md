@@ -70,30 +70,37 @@ Product cleanup needs separate current owner authority and observed receipts.
 The exported `runP1McpJourney` function reads journal pages through the
 discovered `agentweaver_replayRunEvents` tool. The API client still reads
 owner snapshots and verifies a denied-actor `403`, but API replay does not
-count as MCP evidence.
+count as MCP evidence. Gate-answer, approval, rejection, and addressed-message
+journeys call the corresponding discovered Gateway-derived MCP tool.
 
-The CLI currently blocks before MCP access because a JSON manifest cannot
-prove that this invocation created the project, run, selection, and sessions.
-The input manifest must contain
-`executionIntent: "execute"`, direct Environment identity metadata, pinned
-runtime receipts, current owner fences, and caller-supplied creation/readback
-receipt claims for the fixture.
-The manifest also needs `deploymentEvidence` paths named `publicationPath`,
-`manifestPath`, and `agentHostArchivePath`. Before reading bearer credentials
-or connecting to MCP, the runner verifies the pinned clean Git commit/tree,
-published images and AgentHost archive, then performs read-only Kubernetes and
-public GHCR observations. It then returns blocked without reading credentials
-or connecting to MCP. Public project, selection, root, and session endpoints
-exist, but they require separately authorized actors and current role grants.
-Project roles are provisioned only through a privileged source path, and
-caller receipts cannot create that authority. Gateway does not expose the
-Orchestrator dispatch handler to this harness.
-Direct MCP gate and message journeys allow read-only tool discovery but block
-before write tool calls; caller-supplied receipts do not authorize writes.
+The shared CLI creates and verifies an invocation-owned project, grants,
+selection, and sessions before it supplies those receipts to the selected
+surface. It rejects caller-supplied `ownerFences` and `fixtureScope` claims.
+Cleanup revokes setup grants and archives the project only when no run
+selection was accepted; otherwise it reports `retainedPending` and preserves
+the active grants. The runner does not invoke an Orchestrator dispatch method.
+
+Supply the same `executionIntent: "execute"` manifest and four
+`deploymentEvidence` paths documented by the API harness. `fixturePlan`
+requires a positive `expectedPlatformRuntimeRevision`, the exact selection
+context, a distinct denied actor, and the selected gate or message content.
+The runner sends that expected revision through the existing run-selection
+request and verifies the accepted and observed owner selection revisions.
+This plan value is not authority or an ownership receipt; the owner
+compare-and-swap checks it against current state. The fixture retains its
+project-configuration read and does not call the PlatformAdmin-only global
+runtime-default endpoint. After source and deployment checks pass,
+set `AGENTWEAVER_P1_SETUP_TOKEN` in the process environment and provide
+`--identity-module <authorized-identity-provider.mjs>` returning already-issued
+run-bound and denied-actor tokens. No sign-in, token refresh, or consent is
+performed. The unfinished invocation ID is persisted so setup and idempotent
+MCP actions can be replayed with the same IDs.
 
 ```powershell
-npm run harness:p1 -- --surface mcp --input <manifest.json> --output <evidence.jsonl>
+npm run harness:p1 -- --surface mcp --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs>
 ```
 
-The example currently exits with code `2` and a blocked result. The controlled
-MCP adapter tests do not prove a deployed P1 journey.
+Surface results are reported separately from full P1 acceptance. Full P1 stays
+blocked until the required native probes have real evidence. Controlled MCP
+and runner tests use local fixtures; they do not prove a deployed Gateway,
+Broker, owner, native execution, or AKS acceptance.

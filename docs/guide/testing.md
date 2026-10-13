@@ -484,38 +484,59 @@ npm run test:harness:ui
 npm run test:harness:mcp
 ```
 
-The combined command runs controlled adapter checks.
-API tests use actual loopback HTTP with controlled contracts.
-MCP tests use the pinned SDK with an actual loopback JSON-RPC server.
-UI tests use a controlled injected-page contract, not a browser.
-These checks do not prove a real cross-surface journey, native model execution, or deployment.
-The bounded journal function uses only its selected surface: the API route,
-the MCP replay tool, or the borrowed UI Activity view. It checks the actual
-page cursors, event IDs, and project/run/session identities. The CLI and all
-gate and message writes remain blocked until the required same-invocation
-setup and owner routes are available.
+These commands run controlled local tests. API tests use loopback HTTP with
+controlled contracts; MCP tests use the pinned SDK and a loopback JSON-RPC
+server; UI tests use injected page doubles, not a browser. The tests cover the
+shared runner creating same-invocation fixtures, reaching the selected API,
+MCP, or UI gate/message method, retaining cleanup outcomes, and refusing
+unverified caller ownership claims. They do not prove live owner behavior,
+native model execution, or deployment.
 
 The P1 adapters contain five bounded journeys:
 `gate-answer`, `gate-approve`, `gate-reject`, `message`, and `journal`.
-The shared CLI currently blocks before it reads credentials or opens an API,
-MCP, or UI adapter. A JSON manifest cannot prove that this invocation created
-its project, run, selection, and sessions. Public endpoints exist for project
-creation, run selection, root acceptance, and child-session spawn, but they
-require different authenticated scopes and current role grants. Project
-creation does not assign an Owner, and role grants are made only through a
-privileged source path. Projects Config now provides the one-shot
-`--privileged-project-setup` command for same-invocation setup and cleanup. It
-creates a project, its default configuration, and one Orchestrator assignment
-for an active TenantAdmin. The command stores immutable setup and cleanup
-receipts under one invocation ID. It reads one JSON request from standard
-input and writes one typed receipt to standard output.
+The shared CLI verifies source and deployment evidence before reading
+credentials or creating surface clients. It requires an
+`executionIntent: "execute"` manifest with Environment identity metadata,
+provider/runtime/storage/source/image receipt pins, and `deploymentEvidence`
+paths named `publicationPath`, `manifestPath`, `agentHostArchivePath`, and
+`integrationDeploymentReceiptPath`. The deployment receipt must come from
+`release:deploy-integration` and match the source, tree, manifest, publication,
+target namespace, image identities, and service readbacks. `fixturePlan`
+requires a positive `expectedPlatformRuntimeRevision`, the exact selection
+context, a distinct denied actor, and only the gate or message details needed
+by the selected journey. The expected revision is sent through the existing
+run-selection request and checked by the owner compare-and-swap; it is not an
+authority or ownership receipt. The fixture does not read the PlatformAdmin-only
+global runtime-default endpoint. Do not include tokens,
+`ownerFences`, or `fixtureScope` in the manifest; caller-created ownership
+receipts cannot authorize writes.
 
-Cleanup revokes that assignment and archives the project only when no accepted
+After source and deployment checks pass, set
+`AGENTWEAVER_P1_SETUP_TOKEN` in the process environment and supply
+`--identity-module <authorized-identity-provider.mjs>`. That module returns
+already-issued run-bound and denied-actor broker tokens. The runner does not
+sign in, refresh tokens, or request consent. For UI runs, also provide
+`--page-module <authorized-page-provider.mjs>`, which returns an already
+authorized Playwright-compatible page on the selected web origin. The runner
+does not start a browser or change its profile.
+
+The runner persists one invocation ID before setup. Projects Config's
+`--privileged-project-setup` command uses that ID to create the project, default
+configuration, and Owner and Orchestrator assignments for an active TenantAdmin, with
+typed setup and readback receipts. The command reads a JSON request from
+standard input and writes a typed receipt to standard output. The runner then
+reads current authorization and project configuration; accepts the selected
+run context using the plan's expected platform-runtime revision; creates the
+root (and message child) session;
+and reads the exact owner state back before running the selected surface
+journey.
+
+Cleanup revokes those invocation-owned assignments and archives the project only when no accepted
 run selection exists. If a selection exists, cleanup returns
 `retainedPending` and keeps the project and assignment active. The command does
 not delete SQL, cloud, or Kubernetes resources.
 
-The command requires `ConnectionStrings:ProjectsConfigAuthority`,
+The privileged command requires `ConnectionStrings:ProjectsConfigAuthority`,
 `ProjectsConfig:AuthorityDatabase:WorkloadIdentity`,
 `ProjectsConfig:PrivilegedSetup:ApprovedIssuer`,
 `ProjectsConfig:PrivilegedSetup:ApprovedSubject`, and
@@ -526,42 +547,34 @@ identity. It does not fall back to the runtime or migration identity.
 
 The command authenticates the supplied access token with the existing issuer.
 It requires an unbound token, an active TenantAdmin grant, and the
-`api.read`, `projects.admin`, and `projects.orchestrator` scopes. The API, MCP,
-and UI runners do not call this command or consume its receipts. The harness
-remains blocked until it uses this producer and the run-selection, dispatch,
-and session routes are available.
-Orchestrator has a dispatch handler, but Gateway has no dispatch route for the
-admitted harness client. Caller receipts do not prove ownership.
+`api.read`, `projects.admin`, and `projects.orchestrator` scopes. The setup
+token is sent to the privileged command through standard input, not command
+arguments. The runner never invokes an Orchestrator dispatch operation.
 
-The CLI still validates an `executionIntent: "execute"` manifest and the
-read-only source/deployment evidence inputs. It requires direct Environment
-identity metadata, pinned deployment receipts, owner fences, and
-`deploymentEvidence` paths for the published-image receipt, source manifest,
-and AgentHost OCI archive. Before the blocked result, it verifies the exact
-clean Git commit and tree, validates the publication receipt against that
-source and manifest, measures the archive, and performs read-only Kubernetes
-and public GHCR observations. Use repository-relative paths in the manifest
-when possible. The runner rejects credentials in the manifest.
+Before reading the setup token or importing a UI page provider, the runner
+checks the exact clean Git commit/tree, publication receipt, AgentHost archive,
+Kubernetes service observations, and public GHCR image identities. Use
+repository-relative artifact paths where possible. Credential fields and
+caller-supplied ownership receipts are rejected in the manifest.
 
 ```powershell
-npm run harness:p1 -- --surface api --input <manifest.json> --output <evidence.jsonl>
-npm run harness:p1 -- --surface mcp --input <manifest.json> --output <evidence.jsonl>
-npm run harness:p1 -- --surface ui --input <manifest.json> --output <evidence.jsonl> --page-module <authorized-page-provider.mjs>
+npm run harness:p1 -- --surface api --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs>
+npm run harness:p1 -- --surface mcp --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs>
+npm run harness:p1 -- --surface ui --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs> --page-module <authorized-page-provider.mjs>
 ```
 
-These commands currently return exit code `2` with a blocked result before
-reading `AGENTWEAVER_ENVIRONMENT_BEARER` or importing a UI page provider.
+The JSONL output keeps source evidence, owner receipts, surface results, and
+cleanup status. A surface can pass while `fullP1Status` remains `blocked`
+because the admitted clients cannot produce the required native receipts.
+If privileged setup may have completed without a verified receipt, the output
+reports an indeterminate state; reconcile the invocation before retrying.
 
-The shared runner blocks gate and message journeys before API, MCP, or UI
-access. Caller receipts do not authorize writes. The journal journey is
-read-only. These controlled checks do not prove live acceptance. Message
-acceptance does not prove delivery.
-
-The CLI remains blocked until the same-invocation producer connects to the
-runner. A complete surface pass still requires actual receipts for every
-native probe.
-The Host replacement probe may use a fresh lease with the workspace retained;
-a same-lease restart API is not required.
+API and MCP retries reuse the persisted invocation ID and deterministic
+idempotency keys. A UI gate or message action uses an application-generated
+key that cannot be restored after a process crash. Before that action, the
+runner appends a `p1-ui-action-started` output record; a later invocation
+refuses to repeat it. Read the current owner state and reconcile before
+starting a new UI run. Read-only UI journal journeys do not use this marker.
 
 The UI adapter requires an already authorized page and exact Broker identity metadata.
 It neither starts a browser nor changes its profile or stored credentials.
@@ -583,9 +596,9 @@ The retained surfaces observe owner evidence; they do not create authority from 
 Use the shared redacted JSONL writer and the [P1 judge brief](https://github.com/sabbour/agentweaver/blob/v1/scripts/harness-judge/README.md).
 Record exact source, target, scenario, surface, and owner evidence references.
 Do not persist transient raw bodies or credential values.
-An expected source SHA does not observe a deployment.
-Client disposal does not clean up a project, run, session, or Environment.
-Product cleanup requires current authority, exact test-owned identities, and verified owner receipts.
+An expected source SHA does not observe a deployment. Closing a browser or
+client does not clean up a project, run, session, or Environment; only the
+invocation-owned Projects Config cleanup receipt records setup-resource cleanup.
 
 ## Validate the documentation site
 

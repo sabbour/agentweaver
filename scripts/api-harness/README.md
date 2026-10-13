@@ -15,6 +15,36 @@ npm run test:harness:api
 The tests use an actual loopback Node HTTP server with controlled contract and owner responses.
 They do not prove a deployed Gateway, real Broker signature validation, native model execution, or AKS acceptance.
 
+## Direct Orchestrator credit-guard read
+
+`lib/runtime-credit-guard-contract.mjs` is a separate static OpenAPI contract for
+`POST /internal/runtime/credit-guards/read`; it is not added to or discovered through
+the Gateway OpenAPI document. `RuntimeCreditGuardClient` sends that one direct,
+read-only owner request, requires an explicit Orchestrator base URL and an injected
+actor auth provider bound to that exact origin, and sends `Cache-Control: no-store`.
+It does not acquire actor credentials, issue runtime credentials, proxy through the
+Gateway, or change dispatch DTOs. A `200` must echo the exact intent; non-`200`
+responses such as `404 runtime_credit_guard_unknown` retain their HTTP status and
+redacted response evidence rather than becoming a synthetic success.
+
+```javascript
+import { RuntimeCreditGuardClient } from './scripts/api-harness/lib/runtime-credit-guard-client.mjs';
+
+const api = new RuntimeCreditGuardClient({
+  baseUrl: approvedDirectOrchestratorOrigin,
+  authProvider: alreadyAuthenticatedProjectsActor,
+});
+const evidence = await api.read({ authorization: observeProof, intent });
+if (evidence.status !== 200) {
+  // Preserve the explicit status and redacted responseBody in evidence.
+}
+```
+
+The P1 API runner does not currently provision a direct Orchestrator URL and
+already-authenticated actor source. Supplying both is an explicit prerequisite for
+runner integration; this adapter never falls back to the Gateway. Contract tests use
+controlled loopback HTTP only and do not perform live owner or credential operations.
+
 ## Use a separately authorized target
 
 ```javascript
@@ -78,33 +108,49 @@ The exported `runP1ApiJourney` function reads journal pages through the
 discovered Gateway `replayRunEvents` operation:
 `GET /api/v1/projects/{projectId}/runs/{runId}/events`. It checks the actual
 cursor chain, event IDs, and project, run, and session identities. MCP replay
-does not count as API evidence.
+does not count as API evidence. Gate-answer, approval, rejection, and addressed
+message journeys use the matching discovered API operation.
 
-The CLI still blocks before API access because a JSON manifest cannot prove
-that this invocation created the project, run, selection, and sessions. It requires an
-`executionIntent: "execute"` manifest with the direct Environment target,
-provider/runtime/storage/source/image receipts, current owner fences, and
-caller-supplied creation and readback receipt claims for the fixture.
-It also requires `deploymentEvidence` paths named `publicationPath`,
-`manifestPath`, and `agentHostArchivePath`. Before reading bearer credentials
-or creating clients, the runner verifies the pinned clean Git commit/tree,
-published image receipt and AgentHost archive, then performs read-only
-Kubernetes and public GHCR observations. It then returns a blocked result
-without reading credentials or making API, MCP, or UI requests. Direct API
-gate and message journeys preserve read-only discovery but block before
-workflow writes; caller-supplied receipts do not authorize writes. The setup
-endpoints need a tenant administrator for project creation, a project
-Orchestrator role and scope for run selection, and a run-bound actor for root
-and session creation. Project creation does not assign an Owner; role grants
-use a privileged source path.
+The shared CLI creates a new invocation-owned project through the privileged
+Projects Config setup command, reads back the current Owner and Orchestrator
+grants, accepts the selected run configuration, and creates and reads back the
+root session (and a child session for a message journey). Caller-supplied
+`ownerFences` or `fixtureScope` are rejected; only receipts produced and checked
+during this invocation can authorize a write. Cleanup revokes the setup grants
+and archives the project only if no run selection was accepted. An accepted
+selection is retained as `retainedPending` with its grants still active.
+
+Supply an `executionIntent: "execute"` JSON manifest with the direct Environment
+identity metadata, pinned provider/runtime/storage/source/image receipts, and
+`deploymentEvidence` paths named `publicationPath`, `manifestPath`,
+`agentHostArchivePath`, and `integrationDeploymentReceiptPath`. The deployment
+receipt must come from `release:deploy-integration` and match the source,
+manifest, publication, target namespace, image identities, and service
+readbacks. `fixturePlan` requires a positive
+`expectedPlatformRuntimeRevision` alongside the selection context, a distinct
+denied actor, and only the gate or message content needed by the selected
+journey. The runner passes the expected revision through the existing
+run-selection request and verifies the accepted and observed owner selection
+revisions. The plan value is not authority or an ownership receipt; the owner
+compare-and-swap checks it against current state. The fixture keeps the
+project-configuration read and does not call the PlatformAdmin-only global
+runtime-default endpoint.
+Do not put tokens or ownership receipts in the manifest.
+
+After read-only source and deployment checks pass, set
+`AGENTWEAVER_P1_SETUP_TOKEN` in the process environment and provide an
+`--identity-module` that returns already-issued run-bound and denied-actor
+tokens. The runner does not sign in, refresh credentials, or request consent.
+These credentials are read only after source evidence passes. The command
+records the invocation ID in its JSONL output so an unfinished API or MCP run
+can replay setup and idempotent actions with the same IDs.
 
 ```powershell
-npm run harness:p1 -- --surface api --input <manifest.json> --output <evidence.jsonl>
+npm run harness:p1 -- --surface api --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs>
 ```
 
-The example currently exits with code `2` and a blocked result. The controlled
-adapter tests do not make live owner or deployment claims.
-
-Do not use caller-supplied receipts to authorize writes against a pre-existing
-project, run, session, Environment, Sandbox, or policy. Retain actual owner
-cleanup receipts when a supported setup path is available.
+The output distinguishes the selected surface result from full P1 status.
+Surface actions can pass while full P1 remains blocked by required native
+probes that the admitted clients cannot perform. Controlled adapter and runner
+tests use local fixtures; they do not prove a deployed Gateway, Broker, owner,
+native model execution, or AKS acceptance.

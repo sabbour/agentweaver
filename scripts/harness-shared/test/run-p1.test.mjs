@@ -1,22 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { createP1AcceptanceResult } from '../p1-acceptance-result.mjs';
 import { runP1Cli } from '../run-p1.mjs';
 
 function validInput() {
   const sourceSha = 'a'.repeat(40);
   const sourceTree = 'b'.repeat(40);
   const registryDigest = `sha256:${'c'.repeat(64)}`;
-  const fences = {
-    projectId: 'controlled-project',
-    runId: 'controlled-run',
-    rootSessionId: 'controlled-root',
-    sessionId: 'controlled-session',
-    executionFence: 1,
-  };
-  const invocationId = 'controlled-invocation';
   return {
     executionIntent: 'execute',
     journey: 'journal',
@@ -31,6 +25,7 @@ function validInput() {
       publicationPath: 'artifacts/p1/publication.json',
       manifestPath: 'releases/foundation.json',
       agentHostArchivePath: 'artifacts/p1/Agentweaver.AgentHost.oci.tar',
+      integrationDeploymentReceiptPath: 'artifacts/p1/integration-deployment.json',
     },
     pins: {
       context: 'p1-control',
@@ -52,39 +47,58 @@ function validInput() {
         configDigest: `sha256:${'1'.repeat(64)}`,
         compressedPullBytes: 1024,
       },
-      ownerFences: fences,
-      fixtureScope: {
-        kind: 'p1-runner-owned',
-        status: 'ready',
-        invocationId,
-        fixtureId: 'controlled-fixture',
-        ...fences,
-        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
-        allowedJourneys: ['journal'],
-        ownershipReceipts: [fences.projectId, fences.runId, fences.rootSessionId, fences.sessionId]
-          .map(resourceId => ({
-            resourceType: 'owner-resource',
-            resourceId,
-            invocationId,
-            creationReceipt: { resourceId },
-            observedReceipt: { resourceId },
-            ownerFence: fences.executionFence,
-          })),
+    },
+    fixturePlan: {
+      expectedPlatformRuntimeRevision: 7,
+      selectionContext: {
+        revision: 'provider-catalog-v1',
+        availableModelSelectionReferences: ['platform-model'],
+        providerRequirements: [],
+        requiredEgress: [],
       },
+      deniedActor: { actorId: 'controlled-denied-actor', tenantId: 'controlled-tenant' },
+      gate: null,
+      message: null,
     },
   };
 }
 
-test('P1 CLI help describes the current blocked state without exposing credential arguments', async () => {
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key =>
+      `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function invocationRecord(input, surface, invocationId) {
+  const validated = {
+    environment: input.environment,
+    pins: input.pins,
+    deploymentEvidence: input.deploymentEvidence,
+    fixturePlan: input.fixturePlan,
+    journey: input.journey,
+  };
+  return {
+    kind: 'p1-setup-invocation',
+    schemaVersion: 2,
+    invocationId,
+    executionPlanSha256: createHash('sha256').update(stableJson(validated)).digest('hex'),
+    surface,
+  };
+}
+
+test('P1 CLI help describes the explicit identity providers without exposing credential arguments', async () => {
   const output = [];
   const code = await runP1Cli(['--help'], {}, { log: text => output.push(text), error() {} });
   assert.equal(code, 0);
   assert.match(output.join('\n'), /--surface api\|mcp\|ui/);
-  assert.match(output.join('\n'), /blocked result before reading credentials/);
+  assert.match(output.join('\n'), /supplied setup token only after source and deployment evidence pass/);
   assert.doesNotMatch(output.join('\n'), /--token/);
 });
 
-test('P1 CLI rejects non-execute input and writes a blocked result without credentials or network activity', async () => {
+test('P1 CLI rejects non-execute input before credentials or network activity', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-cli-'));
   const inputPath = path.join(directory, 'input.json');
   const outputPath = path.join(directory, 'evidence.jsonl');
@@ -93,6 +107,7 @@ test('P1 CLI rejects non-execute input and writes a blocked result without crede
     await writeFile(inputPath, JSON.stringify({ executionIntent: 'preview' }), { encoding: 'utf8' });
     const code = await runP1Cli([
       '--surface', 'api', '--input', inputPath, '--output', outputPath,
+      '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
     ], {}, { log: text => output.push(text), error: text => output.push(text) });
     assert.equal(code, 2);
     const lines = (await readFile(outputPath, 'utf8')).trim().split('\n');
@@ -113,14 +128,23 @@ test('P1 CLI parses the UI page module and prepares exact deployment evidence be
   const output = [];
   let prepared = 0;
   let preparation;
+  const credentialEnv = new Proxy({}, {
+    get(_target, name) {
+      if (name === 'AGENTWEAVER_P1_SETUP_TOKEN') {
+        throw new Error('The runner read credentials before source evidence passed.');
+      }
+      return undefined;
+    },
+  });
   try {
     await writeFile(inputPath, JSON.stringify(validInput()), { encoding: 'utf8' });
     const code = await runP1Cli([
       '--surface', 'ui',
       '--input', inputPath,
       '--output', outputPath,
+      '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
       '--page-module', path.join(directory, 'authorized-page-provider.mjs'),
-    ], {}, { log: text => output.push(text), error: text => output.push(text) }, {
+    ], credentialEnv, { log: text => output.push(text), error: text => output.push(text) }, {
       async prepareDeploymentEvidence(options) {
         prepared += 1;
         preparation = options;
@@ -136,28 +160,459 @@ test('P1 CLI parses the UI page module and prepares exact deployment evidence be
     assert.equal(path.basename(preparation.publicationPath), 'publication.json');
     assert.equal(path.basename(preparation.manifestPath), 'foundation.json');
     assert.equal(path.basename(preparation.agentHostArchivePath), 'Agentweaver.AgentHost.oci.tar');
+    assert.equal(path.basename(preparation.integrationDeploymentReceiptPath), 'integration-deployment.json');
     const result = JSON.parse(output.at(-1));
     assert.match(result.failure.message, /Controlled source-evidence stop/);
+    assert.doesNotMatch(result.failure.message, /read credentials/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('P1 CLI stops before setup when the setup token is missing', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-cli-'));
+  const inputPath = path.join(directory, 'input.json');
+  const outputPath = path.join(directory, 'evidence.jsonl');
+  const output = [];
+  const calls = [];
+  try {
+    await writeFile(inputPath, JSON.stringify(validInput()), { encoding: 'utf8' });
+    const code = await runP1Cli([
+      '--surface', 'api', '--input', inputPath, '--output', outputPath,
+      '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
+    ], {}, { log: text => output.push(text), error: text => output.push(text) }, {
+      async prepareDeploymentEvidence() {
+        calls.push('deployment');
+        return {};
+      },
+      createSetupApi() {
+        calls.push('setup-api');
+        throw new Error('The setup API must not be created without a token.');
+      },
+      async createFixture() {
+        calls.push('fixture');
+      },
+      async createSurfaceAdapters() {
+        calls.push('adapters');
+      },
+    });
+    assert.equal(code, 2);
+    assert.deepEqual(calls, ['deployment']);
+    const result = JSON.parse(output.at(-1));
+    assert.equal(result.surfaceStatus, 'blocked');
+    assert.match(result.failure.message, /setup token is unavailable/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('P1 CLI fails closed when privileged setup has no verified receipt', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-cli-'));
+  const inputPath = path.join(directory, 'input.json');
+  const outputPath = path.join(directory, 'evidence.jsonl');
+  const output = [];
+  try {
+    await writeFile(inputPath, JSON.stringify(validInput()), { encoding: 'utf8' });
+    const setupError = new Error('Controlled privileged setup receipt loss.');
+    setupError.p1SetupState = {
+      invocationId: '00000000-0000-4000-8000-000000000323',
+      setup: null,
+      setupAttempted: true,
+    };
+    setupError.p1SetupCleanup = async () => ({
+      invocationId: setupError.p1SetupState.invocationId,
+      state: 'indeterminate',
+    });
+    const code = await runP1Cli([
+      '--surface', 'api', '--input', inputPath, '--output', outputPath,
+      '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
+    ], { AGENTWEAVER_P1_SETUP_TOKEN: 'controlled-setup-token' },
+    { log: text => output.push(text), error: text => output.push(text) }, {
+      async prepareDeploymentEvidence() { return {}; },
+      createSetupApi() { return {}; },
+      async createFixture() { throw setupError; },
+      async createSurfaceAdapters() {
+        throw new Error('The surface adapter must not be created after setup receipt loss.');
+      },
+    });
+    assert.equal(code, 1);
+    const result = JSON.parse(output.at(-1));
+    assert.equal(result.surfaceStatus, 'failed');
+    assert.equal(result.fullP1Status, 'failed');
+    assert.equal(result.observations.fixtureSetup.cleanup.state, 'indeterminate');
+    assert.match(result.failure.message, /reconcile the invocation before retrying/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('P1 CLI resumes the same invocation, runs the selected journey, and records cleanup state', async () => {
+  for (const cleanupState of ['retainedPending', 'cleaned']) {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-cli-'));
+    const inputPath = path.join(directory, 'input.json');
+    const outputPath = path.join(directory, 'evidence.jsonl');
+    const invocationId = '00000000-0000-4000-8000-000000000321';
+    const output = [];
+    const calls = [];
+    const sourceEvidence = {
+      services: { status: 'passed' },
+      agentHostImageMeasurement: { status: 'passed' },
+    };
+    try {
+      const input = validInput();
+      input.journey = 'gate-answer';
+      input.fixturePlan.gate = {
+        prompt: 'Continue?',
+        allowedChoices: ['continue'],
+        allowsFreeform: false,
+        answer: 'continue',
+      };
+      await writeFile(inputPath, JSON.stringify(input), { encoding: 'utf8' });
+      await writeFile(outputPath, `${JSON.stringify(invocationRecord(input, 'api', invocationId))}\n`, { encoding: 'utf8' });
+      let fixtureInput;
+      const code = await runP1Cli([
+        '--surface', 'api', '--input', inputPath, '--output', outputPath,
+        '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
+      ], { AGENTWEAVER_P1_SETUP_TOKEN: 'controlled-setup-token' },
+      { log: text => output.push(text), error: text => output.push(text) }, {
+        async prepareDeploymentEvidence() {
+          calls.push('deployment');
+          return sourceEvidence;
+        },
+        createSetupApi({ setupToken }) {
+          calls.push('setup-api');
+          assert.equal(setupToken, 'controlled-setup-token');
+          return { marker: 'setup-api' };
+        },
+        async createFixture(validated, options) {
+          calls.push('fixture');
+          assert.equal(options.invocationId, invocationId);
+          assert.equal(options.setupToken, 'controlled-setup-token');
+          assert.deepEqual(options.api, { marker: 'setup-api' });
+          const identity = await options.acquireRunIdentity({
+            projectId: 'runner-owned-project',
+            runId: 'runner-owned-run',
+          });
+          assert.equal(identity.projectId, 'runner-owned-project');
+          assert.equal(identity.runId, 'runner-owned-run');
+          fixtureInput = validated;
+          const state = {
+            invocationId,
+            setup: { projectId: 'runner-owned-project', assignmentId: 'runner-owned-assignment' },
+            selection: { runId: 'runner-owned-run' },
+          };
+          return {
+            input: fixtureInput,
+            identity,
+            state,
+            async cleanup() {
+              calls.push('cleanup');
+              return { state: cleanupState, invocationId, projectId: 'runner-owned-project' };
+            },
+          };
+        },
+        async acquireRunIdentity(options) {
+          calls.push('identity');
+          assert.equal(options.projectId, 'runner-owned-project');
+          assert.equal(options.runId, 'runner-owned-run');
+          return {
+            token: 'controlled-run-token',
+            deniedToken: 'controlled-denied-token',
+            projectId: options.projectId,
+            runId: options.runId,
+            createClients: () => ({ api: {}, deniedApi: {} }),
+          };
+        },
+        async createSurfaceAdapters({ surface, identity }) {
+          calls.push('adapters');
+          assert.equal(surface, 'api');
+          assert.equal(identity.projectId, 'runner-owned-project');
+          return { api: {}, deniedApi: {} };
+        },
+        async runSurfaceJourney(surface, journeyInput, dependencies) {
+          calls.push('journey');
+          assert.equal(surface, 'api');
+          assert.equal(journeyInput, fixtureInput);
+          assert.equal(dependencies.sourceEvidence, sourceEvidence);
+          return createP1AcceptanceResult({
+            surface,
+            surfaceStatus: 'passed',
+            sourceEvidence,
+          });
+        },
+      });
+
+      assert.equal(code, 2);
+      assert.deepEqual(calls, ['deployment', 'setup-api', 'fixture', 'identity', 'adapters', 'journey', 'cleanup']);
+      const records = (await readFile(outputPath, 'utf8')).trim().split(/\r?\n/).map(JSON.parse);
+      assert.equal(records.filter(record => record.kind === 'p1-setup-invocation').length, 1);
+      assert.equal(records[0].invocationId, invocationId);
+      assert.equal(records[0].schemaVersion, 2);
+      assert.match(records[0].executionPlanSha256, /^[a-f0-9]{64}$/);
+      assert.equal(records[0].surface, 'api');
+      const result = records.find(record => record.kind === 'p1-acceptance-result');
+      assert.equal(result.surfaceStatus, 'passed');
+      assert.equal(result.fullP1Status, 'blocked');
+      assert.equal(result.observations.fixtureSetup.cleanup.state, cleanupState);
+      assert.equal(result.observations.fixtureSetup.nativeFence.status, 'not-started');
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test('P1 CLI rejects changed-plan, changed-surface, and unbound legacy invocation resumes before credentials or setup', async () => {
+  for (const mismatch of ['plan', 'surface', 'legacy']) {
+    const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-cli-'));
+    const inputPath = path.join(directory, 'input.json');
+    const outputPath = path.join(directory, 'evidence.jsonl');
+    const invocationId = '00000000-0000-4000-8000-000000000325';
+    const input = validInput();
+    const recordedInput = validInput();
+    const surface = mismatch === 'surface' ? 'ui' : 'api';
+    const record = mismatch === 'legacy'
+      ? { kind: 'p1-setup-invocation', schemaVersion: 1, invocationId }
+      : invocationRecord(recordedInput, 'api', invocationId);
+    if (mismatch === 'plan') {
+      input.fixturePlan.selectionContext.revision = 'changed-provider-catalog';
+    }
+    const output = [];
+    const calls = [];
+    const credentials = new Proxy({}, {
+      get(_target, name) {
+        if (name === 'AGENTWEAVER_P1_SETUP_TOKEN') calls.push('credential');
+        return undefined;
+      },
+    });
+    try {
+      await writeFile(inputPath, JSON.stringify(input), { encoding: 'utf8' });
+      await writeFile(outputPath, `${JSON.stringify(record)}\n`, { encoding: 'utf8' });
+      const args = [
+        '--surface', surface, '--input', inputPath, '--output', outputPath,
+        '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
+      ];
+      if (surface === 'ui') args.push('--page-module', path.join(directory, 'authorized-page-provider.mjs'));
+      const code = await runP1Cli(
+        args,
+        credentials,
+        { log: text => output.push(text), error: text => output.push(text) },
+        {
+          async prepareDeploymentEvidence() {
+            calls.push('deployment');
+            return {};
+          },
+          createSetupApi() { calls.push('setup-api'); },
+          async createFixture() { calls.push('fixture'); },
+        },
+      );
+      assert.equal(code, 2);
+      assert.deepEqual(calls, ['deployment']);
+      const result = JSON.parse(output.at(-1));
+      assert.equal(result.surfaceStatus, 'blocked');
+      if (mismatch === 'plan') {
+        assert.match(result.failure.message, /different validated execution plan/);
+      } else if (mismatch === 'surface') {
+        assert.match(result.failure.message, /different selected surface/);
+      } else {
+        assert.match(result.failure.message, /no complete validated-plan and surface binding/);
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  }
+});
+
+test('P1 CLI persists the UI write marker before invoking the selected journey', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-cli-'));
+  const inputPath = path.join(directory, 'input.json');
+  const outputPath = path.join(directory, 'evidence.jsonl');
+  const output = [];
+  const calls = [];
+  const sourceEvidence = {
+    services: { status: 'passed' },
+    agentHostImageMeasurement: { status: 'passed' },
+  };
+  try {
+    const input = validInput();
+    input.journey = 'message';
+    input.fixturePlan.message = { text: 'Controlled UI write.' };
+    await writeFile(inputPath, JSON.stringify(input), { encoding: 'utf8' });
+    const code = await runP1Cli([
+      '--surface', 'ui', '--input', inputPath, '--output', outputPath,
+      '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
+      '--page-module', path.join(directory, 'authorized-page-provider.mjs'),
+    ], { AGENTWEAVER_P1_SETUP_TOKEN: 'controlled-setup-token' },
+    { log: text => output.push(text), error: text => output.push(text) }, {
+      async prepareDeploymentEvidence() { return sourceEvidence; },
+      createSetupApi() { return {}; },
+      async createFixture(validated) {
+        return {
+          input: validated,
+          identity: { projectId: 'runner-owned-project', runId: 'runner-owned-run' },
+          state: { invocationId: 'controlled-invocation', setup: null, selection: null },
+          async cleanup() {
+            calls.push('cleanup');
+            return { state: 'retainedPending' };
+          },
+        };
+      },
+      async createSurfaceAdapters() { return { ui: {} }; },
+      async runSurfaceJourney(_surface, _input, dependencies) {
+        await dependencies.beforeUiAction({ journey: 'message' });
+        const records = (await readFile(outputPath, 'utf8')).trim().split(/\r?\n/).map(JSON.parse);
+        const marker = records.find(record => record.kind === 'p1-ui-action-started');
+        assert.equal(marker.surface, 'ui');
+        assert.equal(marker.journey, 'message');
+        calls.push('marker-persisted');
+        calls.push('ui-message');
+        return createP1AcceptanceResult({
+          surface: 'ui',
+          surfaceStatus: 'passed',
+          sourceEvidence,
+        });
+      },
+    });
+    assert.equal(code, 2);
+    assert.deepEqual(calls, ['marker-persisted', 'ui-message', 'cleanup']);
+    const records = (await readFile(outputPath, 'utf8')).trim().split(/\r?\n/).map(JSON.parse);
+    const markerIndex = records.findIndex(record => record.kind === 'p1-ui-action-started');
+    const resultIndex = records.findIndex(record => record.kind === 'p1-acceptance-result');
+    assert.ok(markerIndex > 0);
+    assert.ok(resultIndex > markerIndex);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('P1 CLI still cleans up the owned fixture when surface adapter creation fails', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-cli-'));
+  const inputPath = path.join(directory, 'input.json');
+  const outputPath = path.join(directory, 'evidence.jsonl');
+  const output = [];
+  const calls = [];
+  const invocationId = '00000000-0000-4000-8000-000000000324';
+  try {
+    await writeFile(inputPath, JSON.stringify(validInput()), { encoding: 'utf8' });
+    await writeFile(outputPath, `${JSON.stringify(invocationRecord(validInput(), 'api', invocationId))}\n`, { encoding: 'utf8' });
+    const code = await runP1Cli([
+      '--surface', 'api', '--input', inputPath, '--output', outputPath,
+      '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
+    ], { AGENTWEAVER_P1_SETUP_TOKEN: 'controlled-setup-token' },
+    { log: text => output.push(text), error: text => output.push(text) }, {
+      async prepareDeploymentEvidence() { return {}; },
+      createSetupApi() { return {}; },
+      async createFixture(validated, { invocationId: currentInvocationId }) {
+        calls.push('fixture');
+        assert.equal(currentInvocationId, invocationId);
+        const state = {
+          invocationId,
+          setup: { projectId: 'runner-owned-project' },
+          selection: { runId: 'runner-owned-run' },
+        };
+        return {
+          input: validated,
+          state,
+          async cleanup() {
+            calls.push('cleanup');
+            return { state: 'retainedPending', invocationId };
+          },
+        };
+      },
+      async createSurfaceAdapters() {
+        calls.push('adapters');
+        throw new Error('Controlled adapter construction failure.');
+      },
+      async runSurfaceJourney() {
+        calls.push('journey');
+        throw new Error('The journey must not run without adapters.');
+      },
+    });
+    assert.equal(code, 2);
+    assert.deepEqual(calls, ['fixture', 'adapters', 'cleanup']);
+    const result = JSON.parse(output.at(-1));
+    assert.equal(result.observations.fixtureSetup.cleanup.state, 'retainedPending');
+    assert.match(result.failure.message, /Controlled adapter construction failure/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('P1 CLI refuses to resume a UI write after its durable action-start marker', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-cli-'));
+  const inputPath = path.join(directory, 'input.json');
+  const outputPath = path.join(directory, 'evidence.jsonl');
+  const output = [];
+  const calls = [];
+  const invocationId = '00000000-0000-4000-8000-000000000322';
+  const credentialEnv = new Proxy({}, {
+    get(_target, name) {
+      if (name === 'AGENTWEAVER_P1_SETUP_TOKEN') {
+        calls.push('credential');
+        throw new Error('Credentials must not be read for an unsafe UI resume.');
+      }
+      return undefined;
+    },
+  });
+  try {
+    const input = validInput();
+    input.journey = 'message';
+    input.fixturePlan.message = { text: 'Controlled retry boundary.' };
+    await writeFile(inputPath, JSON.stringify(input), { encoding: 'utf8' });
+    await writeFile(outputPath, [
+      JSON.stringify(invocationRecord(input, 'ui', invocationId)),
+      JSON.stringify({
+        kind: 'p1-ui-action-started',
+        schemaVersion: 1,
+        invocationId,
+        surface: 'ui',
+        journey: 'message',
+      }),
+    ].join('\n') + '\n', { encoding: 'utf8' });
+    const code = await runP1Cli([
+      '--surface', 'ui', '--input', inputPath, '--output', outputPath,
+      '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
+      '--page-module', path.join(directory, 'authorized-page-provider.mjs'),
+    ], credentialEnv, { log: text => output.push(text), error: text => output.push(text) }, {
+      async prepareDeploymentEvidence() {
+        calls.push('deployment');
+        return {};
+      },
+      createSetupApi() { calls.push('setup-api'); },
+      async createFixture() { calls.push('fixture'); },
+      async createSurfaceAdapters() { calls.push('adapters'); },
+      async runSurfaceJourney() { calls.push('journey'); },
+    });
+    assert.equal(code, 2);
+    assert.deepEqual(calls, ['deployment']);
+    const result = JSON.parse(output.at(-1));
+    assert.equal(result.surfaceStatus, 'blocked');
+    assert.match(result.failure.message, /reconcile its owner state before retrying/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
 test('P1 CLI does not persist a blocked result over an input or deployment artifact', async () => {
-  for (const artifact of ['input', 'publication']) {
+  for (const artifact of ['input', 'publication', 'integration-deployment']) {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-cli-'));
     const inputPath = path.join(directory, 'input.json');
-    const protectedPath = artifact === 'input' ? inputPath : path.join(directory, 'publication.json');
-    const original = artifact === 'input' ? JSON.stringify(validInput()) : 'protected deployment evidence';
+    const protectedPath = artifact === 'input'
+      ? inputPath
+      : path.join(directory, artifact === 'publication' ? 'publication.json' : 'integration-deployment.json');
     const input = validInput();
+    const original = artifact === 'input' ? JSON.stringify(input) : 'protected deployment evidence';
     if (artifact === 'publication') input.deploymentEvidence.publicationPath = protectedPath;
+    if (artifact === 'integration-deployment') {
+      input.deploymentEvidence.integrationDeploymentReceiptPath = protectedPath;
+    }
     const output = [];
     let prepared = 0;
     try {
       await writeFile(inputPath, JSON.stringify(input), { encoding: 'utf8' });
-      if (artifact === 'publication') await writeFile(protectedPath, original, { encoding: 'utf8' });
+      if (artifact !== 'input') await writeFile(protectedPath, original, { encoding: 'utf8' });
       const code = await runP1Cli([
         '--surface', 'api', '--input', inputPath, '--output', protectedPath,
+        '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
       ], {}, { log: text => output.push(text), error: text => output.push(text) }, {
         async prepareDeploymentEvidence() {
           prepared += 1;
@@ -175,7 +630,7 @@ test('P1 CLI does not persist a blocked result over an input or deployment artif
   }
 });
 
-test('P1 CLI blocks forged or pre-existing fixture receipts before credentials or surface adapters', async () => {
+test('P1 CLI rejects caller-supplied fixture receipts before credentials or surface adapters', async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-cli-'));
   const inputPath = path.join(directory, 'input.json');
   const outputPath = path.join(directory, 'evidence.jsonl');
@@ -183,16 +638,8 @@ test('P1 CLI blocks forged or pre-existing fixture receipts before credentials o
   let prepared = 0;
   try {
     const input = validInput();
-    input.pins.ownerFences.runId = 'pre-existing-run';
-    input.pins.fixtureScope.runId = 'pre-existing-run';
-    for (const receipt of input.pins.fixtureScope.ownershipReceipts) {
-      if (receipt.resourceId === 'controlled-run') {
-        receipt.resourceId = 'pre-existing-run';
-        receipt.creationReceipt.resourceId = 'pre-existing-run';
-        receipt.observedReceipt.resourceId = 'pre-existing-run';
-      }
-      receipt.claimedCreation = 'caller-supplied';
-    }
+    input.pins.ownerFences = { runId: 'pre-existing-run' };
+    input.pins.fixtureScope = { claimedCreation: 'caller-supplied' };
     await writeFile(inputPath, JSON.stringify(input), { encoding: 'utf8' });
     const credentialAccess = new Proxy({}, {
       get() { throw new Error('The blocked runner read a bearer credential.'); },
@@ -201,6 +648,7 @@ test('P1 CLI blocks forged or pre-existing fixture receipts before credentials o
       '--surface', 'ui',
       '--input', inputPath,
       '--output', outputPath,
+      '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
       '--page-module', path.join(directory, 'missing-page-provider.mjs'),
     ], credentialAccess, { log: text => output.push(text), error: text => output.push(text) }, {
       async prepareDeploymentEvidence() {
@@ -210,10 +658,10 @@ test('P1 CLI blocks forged or pre-existing fixture receipts before credentials o
     });
 
     assert.equal(code, 2);
-    assert.equal(prepared, 1);
+    assert.equal(prepared, 0);
     const result = JSON.parse(output.at(-1));
     assert.equal(result.surfaceStatus, 'blocked');
-    assert.match(result.failure.message, /same-invocation setup and cleanup/);
+    assert.match(result.failure.message, /caller-supplied owner fences or fixture receipts/);
     assert.doesNotMatch(result.failure.message, /bearer credential|missing-page-provider/);
     const evidenceLines = (await readFile(outputPath, 'utf8')).trim().split('\n');
     assert.equal(JSON.parse(evidenceLines.at(-1)).surfaceStatus, 'blocked');

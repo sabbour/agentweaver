@@ -631,6 +631,22 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasColumnType("bigint")
                         .HasColumnName("membership_revision");
 
+                    b.Property<Guid?>("OwnerAssignmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("owner_assignment_id");
+
+                    b.Property<long?>("OwnerAssignmentRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("owner_assignment_revision");
+
+                    b.Property<Guid?>("OwnerAuthorityAuditEventId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("owner_authority_audit_event_id");
+
+                    b.Property<Guid?>("OwnerRevocationAuditEventId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("owner_revocation_audit_event_id");
+
                     b.Property<long>("ProjectConfigurationRevision")
                         .HasColumnType("bigint")
                         .HasColumnName("project_configuration_revision");
@@ -682,6 +698,12 @@ namespace Agentweaver.Projects.Config.Migrations
 
                     b.HasIndex("MembershipId");
 
+                    b.HasIndex("OwnerAssignmentId");
+
+                    b.HasIndex("OwnerAuthorityAuditEventId");
+
+                    b.HasIndex("OwnerRevocationAuditEventId");
+
                     b.HasIndex("ProjectId");
 
                     b.ToTable("project_setup_operations", "projects_config", t =>
@@ -692,7 +714,11 @@ namespace Agentweaver.Projects.Config.Migrations
 
                             t.HasCheckConstraint("ck_project_setup_operations_kind", "operation_kind IN ('Setup', 'Cleanup')");
 
-                            t.HasCheckConstraint("ck_project_setup_operations_revision", "membership_revision > 0 AND project_revision > 0 AND project_configuration_revision > 0 AND assignment_revision > 0");
+                            t.HasCheckConstraint("ck_project_setup_operations_owner_binding", "(owner_assignment_id IS NULL AND owner_assignment_revision IS NULL AND owner_authority_audit_event_id IS NULL) OR (owner_assignment_id IS NOT NULL AND owner_assignment_id <> assignment_id AND owner_assignment_revision IS NOT NULL AND owner_authority_audit_event_id IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_project_setup_operations_owner_revocation_audit", "owner_revocation_audit_event_id IS NULL OR operation_kind = 'Cleanup'");
+
+                            t.HasCheckConstraint("ck_project_setup_operations_revision", "membership_revision > 0 AND project_revision > 0 AND project_configuration_revision > 0 AND assignment_revision > 0 AND (owner_assignment_revision IS NULL OR owner_assignment_revision > 0)");
 
                             t.HasCheckConstraint("ck_project_setup_operations_state", "result_state IN ('Created', 'Cleaned', 'RetainedPending')");
                         });
@@ -1028,6 +1054,21 @@ namespace Agentweaver.Projects.Config.Migrations
                         .HasForeignKey("MembershipId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("Agentweaver.Projects.Config.ProjectRoleAssignmentRecord", null)
+                        .WithMany()
+                        .HasForeignKey("OwnerAssignmentId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Agentweaver.Projects.Config.ProjectAuthorityAuditRecord", null)
+                        .WithMany()
+                        .HasForeignKey("OwnerAuthorityAuditEventId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Agentweaver.Projects.Config.ProjectAuthorityAuditRecord", null)
+                        .WithMany()
+                        .HasForeignKey("OwnerRevocationAuditEventId")
+                        .OnDelete(DeleteBehavior.Restrict);
 
                     b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
                         .WithMany()

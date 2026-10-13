@@ -28,12 +28,20 @@ export function summarizeP1SourceEvidence(sourceEvidence, pins) {
     throw new P1BlockedError('The exact source-bound service and AgentHost image observations are required.');
   }
   const { sourceReceipt, providerReceipt, imageReceipt } = pins;
+  const integrationDeployment = sourceEvidence.integrationDeployment;
   const measurement = sourceEvidence.agentHostImageMeasurement;
   const provider = sourceEvidence.providerCatalog;
   if (sourceEvidence.source?.sourceSha !== sourceReceipt.sourceSha
     || sourceEvidence.source?.sourceTree !== sourceReceipt.sourceTree
     || sourceEvidence.services.sourceSha !== sourceReceipt.sourceSha
     || sourceEvidence.services.sourceTree !== sourceReceipt.sourceTree
+    || integrationDeployment?.status !== 'deployed'
+    || integrationDeployment.sourceSha !== sourceReceipt.sourceSha
+    || integrationDeployment.sourceTree !== sourceReceipt.sourceTree
+    || !/^[a-f0-9]{64}$/.test(integrationDeployment.manifestSha256 ?? '')
+    || !/^[a-f0-9]{64}$/.test(integrationDeployment.publicationSha256 ?? '')
+    || !/^[a-f0-9]{64}$/.test(integrationDeployment.readbackSha256 ?? '')
+    || integrationDeployment.target?.namespace !== pins.namespace
     || measurement.sourceSha !== sourceReceipt.sourceSha
     || measurement.sourceTree !== sourceReceipt.sourceTree
     || provider?.name !== providerReceipt.configMapName
@@ -50,6 +58,7 @@ export function summarizeP1SourceEvidence(sourceEvidence, pins) {
   }
   return redact({
     source: sourceEvidence.source,
+    integrationDeployment,
     providerCatalog: provider,
     services: sourceEvidence.services,
     agentHostImageMeasurement: measurement,

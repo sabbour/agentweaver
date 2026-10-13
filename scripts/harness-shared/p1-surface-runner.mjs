@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { createP1AcceptanceResult } from './p1-acceptance-result.mjs';
 import { requireJourneyCapabilities } from './journey-capabilities.mjs';
 import { validateP1JourneyInput } from './p1-journey-input.mjs';
+import { isP1RunnerOwnedFixtureInput } from './p1-fixture-setup.mjs';
 import {
   P1BlockedError,
   callP1McpTool,
@@ -51,6 +52,7 @@ async function dispatchGate(surface, adapters, input, snapshot, dependencies) {
     ? 'answerGate'
     : input.journey === 'gate-approve' ? 'approveGate' : 'rejectGate';
   if (surface === 'ui') {
+    await requireUiActionEvidence(dependencies.beforeUiAction, input.journey);
     const call = await adapters.ui.gate({
       sessionId: input.pins.ownerFences.sessionId,
       requestId: gate.requestId,
@@ -125,6 +127,7 @@ async function dispatchMessage(surface, adapters, input, dependencies) {
   const message = await readMessageTree(adapters.api, input);
   const operationId = 'sendMessage';
   if (surface === 'ui') {
+    await requireUiActionEvidence(dependencies.beforeUiAction, input.journey);
     const call = await adapters.ui.sendMessage({
       rootSessionId: input.pins.ownerFences.rootSessionId,
       senderSessionId: message.senderSessionId,
@@ -171,6 +174,13 @@ async function dispatchMessage(surface, adapters, input, dependencies) {
   return { operationId, status: result.status, receipt: result.ownerResponse, correlationId: result.correlationId };
 }
 
+async function requireUiActionEvidence(beforeUiAction, journey) {
+  if (typeof beforeUiAction !== 'function') {
+    throw new P1BlockedError('UI writes require durable action-start evidence to prevent duplicate retries.');
+  }
+  await beforeUiAction({ journey });
+}
+
 function requireMessageReceipt(receipt, recipientSessionId) {
   if (typeof receipt?.ownerMessageId !== 'string' || !receipt.ownerMessageId
     || receipt.recipientSessionId !== recipientSessionId
@@ -189,6 +199,7 @@ export async function runP1SurfaceJourney(surface, input, {
   clock = () => Date.now(),
   sleep = delay => new Promise(resolve => setTimeout(resolve, delay)),
   createIdempotencyKey = randomUUID,
+  beforeUiAction,
   gateTimeoutMs = 5000,
 } = {}) {
   if (!SURFACES.has(surface)) throw new Error('A known P1 surface is required.');
@@ -213,6 +224,9 @@ export async function runP1SurfaceJourney(surface, input, {
       throw new P1BlockedError(error.message);
     }
     if (!JOURNEYS.has(input.journey)) throw new P1BlockedError('The selected P1 journey is unsupported.');
+    if (input.journey !== 'journal' && !isP1RunnerOwnedFixtureInput(input)) {
+      throw new P1BlockedError('Gate and message journeys require a fixture created by this runner invocation; caller-supplied ownership receipts are not authority.');
+    }
     const { environment, pins } = validated;
     validateP1AdapterBindings(adapters, environment, pins.fixtureScope, surface);
     safeSourceEvidence = summarizeP1SourceEvidence(sourceEvidence, pins);
@@ -293,11 +307,11 @@ export async function runP1SurfaceJourney(surface, input, {
         ...(journal.correlationId ? { correlationId: journal.correlationId } : {}),
       });
     }
-    if (input.journey !== 'journal') {
-      throw new P1BlockedError('Gate and message writes are blocked until a supported authenticated setup path proves same-invocation creation and readback.');
-    }
     if (input.journey.startsWith('gate-')) {
-      const result = await dispatchGate(surface, adapters, input, snapshot, { createIdempotencyKey });
+      const result = await dispatchGate(surface, adapters, input, snapshot, {
+        createIdempotencyKey,
+        beforeUiAction,
+      });
       actionReceipts.push({
         operationId: result.operationId,
         httpStatus: result.status,
@@ -317,7 +331,10 @@ export async function runP1SurfaceJourney(surface, input, {
       });
       cleanup = { intent: 'resolve-runner-owned-gate', status: 'verified-by-owner-snapshot' };
     } else if (input.journey === 'message') {
-      const result = await dispatchMessage(surface, adapters, input, { createIdempotencyKey });
+      const result = await dispatchMessage(surface, adapters, input, {
+        createIdempotencyKey,
+        beforeUiAction,
+      });
       actionReceipts.push({
         operationId: result.operationId,
         httpStatus: result.status,

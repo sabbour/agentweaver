@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateP1JourneyInput } from '../p1-journey-input.mjs';
+import {
+  validateP1JourneyInput,
+  validateP1RunnerPlanInput,
+} from '../p1-journey-input.mjs';
 
 const fences = {
   projectId: 'controlled-project',
@@ -23,6 +26,7 @@ function input() {
       publicationPath: 'artifacts/p1/publication.json',
       manifestPath: 'releases/foundation.json',
       agentHostArchivePath: 'artifacts/p1/Agentweaver.AgentHost.oci.tar',
+      integrationDeploymentReceiptPath: 'artifacts/p1/integration-deployment.json',
     },
     environment: {
       baseUrl: 'https://environment.controlled.test/',
@@ -74,6 +78,25 @@ function input() {
   };
 }
 
+function planInput() {
+  const value = input();
+  delete value.pins.ownerFences;
+  delete value.pins.fixtureScope;
+  value.fixturePlan = {
+    expectedPlatformRuntimeRevision: 7,
+    selectionContext: {
+      revision: 'provider-catalog-v1',
+      availableModelSelectionReferences: ['platform-model'],
+      providerRequirements: [],
+      requiredEgress: [],
+    },
+    deniedActor: { actorId: 'different-actor', tenantId: 'controlled-tenant' },
+    gate: null,
+    message: null,
+  };
+  return value;
+}
+
 test('accepts an execute input with actual invocation-owned resource receipts and exact fences', () => {
   const result = validateP1JourneyInput(input(), { now });
   assert.equal(result.fixture.invocationId, 'controlled-invocation');
@@ -109,7 +132,46 @@ test('rejects a malformed deployment evidence path or mismatched image receipt p
   delete missingPath.deploymentEvidence.publicationPath;
   assert.throws(() => validateP1JourneyInput(missingPath, { now }), /deployment evidence input/);
 
+  const missingDeploymentReceipt = input();
+  delete missingDeploymentReceipt.deploymentEvidence.integrationDeploymentReceiptPath;
+  assert.throws(() => validateP1JourneyInput(missingDeploymentReceipt, { now }), /deployment evidence input/);
+
   const mutableImage = input();
   mutableImage.pins.imageReceipt.registryImage = 'ghcr.io/sabbour/agentweaver/agenthost:latest';
   assert.throws(() => validateP1JourneyInput(mutableImage, { now }), /immutable registry/);
+});
+
+test('accepts an execution plan without caller-created owner receipts', () => {
+  const value = validateP1RunnerPlanInput(planInput(), { now });
+  assert.equal(value.journey, 'journal');
+  assert.equal(value.fixturePlan.expectedPlatformRuntimeRevision, 7);
+  assert.equal(value.fixturePlan.selectionContext.revision, 'provider-catalog-v1');
+  assert.equal(Object.hasOwn(value.pins, 'fixtureScope'), false);
+  assert.equal(Object.hasOwn(value.pins, 'ownerFences'), false);
+});
+
+test('requires a positive expected platform-runtime revision in runner fixture plans', () => {
+  const missing = planInput();
+  delete missing.fixturePlan.expectedPlatformRuntimeRevision;
+  assert.throws(() => validateP1RunnerPlanInput(missing, { now }), /expectedPlatformRuntimeRevision/);
+
+  for (const revision of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+    const invalid = planInput();
+    invalid.fixturePlan.expectedPlatformRuntimeRevision = revision;
+    assert.throws(() => validateP1RunnerPlanInput(invalid, { now }), /positive expected platform runtime revision/);
+  }
+});
+
+test('rejects caller-supplied owner receipts, malformed fixture plans, and plan credentials', () => {
+  const claimed = planInput();
+  claimed.pins.ownerFences = { runId: 'claimed-run' };
+  assert.throws(() => validateP1RunnerPlanInput(claimed, { now }), /caller-supplied owner fences/);
+
+  const missingContext = planInput();
+  delete missingContext.fixturePlan.selectionContext.revision;
+  assert.throws(() => validateP1RunnerPlanInput(missingContext, { now }), /run selection context/);
+
+  const secret = planInput();
+  secret.fixturePlan.setupToken = 'do-not-include';
+  assert.throws(() => validateP1RunnerPlanInput(secret, { now }), /Credentials/);
 });

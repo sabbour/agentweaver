@@ -51,6 +51,10 @@ const IDENTITY_SERVICES = new Set([
 const SOURCE_ANNOTATION = 'agentweaver.io/provider-catalog-source';
 const PROVIDER_CATALOG_PREFIX = 'ProjectsConfig__ProviderCatalog__';
 
+function hashJson(value) {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
 function requireTarget(context, namespace) {
   if (typeof context !== 'string' || !/^[A-Za-z0-9._:/@-]{1,128}$/.test(context)) {
     throw new Error('An exact Kubernetes context is required.');
@@ -448,9 +452,15 @@ export async function loadValidatedPublicationImages({
 }
 
 export function validateP1PublicationReceipt(publication, manifest, sourceSha, sourceTree) {
+  const integrationImagesOnly = publication?.mode === 'images-only';
   if (!publication || typeof publication !== 'object' || Array.isArray(publication)
     || publication.schemaVersion !== 1 || publication.status !== 'published'
     || publication.sourceSha !== sourceSha || !SHA.test(sourceTree ?? '')
+    || publication.mode !== undefined && !integrationImagesOnly
+    || integrationImagesOnly && publication.sourceTree !== sourceTree
+    || integrationImagesOnly && (manifest?.stage !== 'draft' || manifest.evidence !== undefined
+      || publication.planned?.length !== P1_SERVICE_COMPONENTS.length
+      || publication.published?.length !== P1_SERVICE_COMPONENTS.length)
     || !SHA256.test(publication.provenanceSha256 ?? '')
     || !Array.isArray(publication.planned) || !Array.isArray(publication.published)
     || !Array.isArray(manifest?.components)) {
@@ -478,7 +488,8 @@ export function validateP1PublicationReceipt(publication, manifest, sourceSha, s
       || published[0].archiveSha256 !== planned[0].sha256) {
       throw new Error(`The publication receipt does not contain one source-matched image for ${id}.`);
     }
-    const versionSuffix = `:${component.version}`;
+    const tag = integrationImagesOnly ? sourceSha : component.version;
+    const versionSuffix = `:${tag}`;
     const destination = planned[0].destination;
     if (typeof destination !== 'string' || !destination.startsWith('ghcr.io/')
       || !destination.endsWith(versionSuffix) || destination.includes('@')) {
@@ -487,7 +498,14 @@ export function validateP1PublicationReceipt(publication, manifest, sourceSha, s
     const destinationRepository = destination.slice(0, -versionSuffix.length);
     const publishedImage = imageParts(published[0].image);
     if (publishedImage.repository !== destinationRepository.slice('ghcr.io/'.length)
-      || component.imageDigest !== undefined && component.imageDigest !== publishedImage.digest) {
+      || component.imageDigest !== undefined && component.imageDigest !== publishedImage.digest
+      || integrationImagesOnly && (
+        destinationRepository !== `ghcr.io/sabbour/agentweaver/${name}`
+        || published[0].sourceSha !== sourceSha
+        || published[0].sourceTree !== sourceTree
+        || published[0].tag !== sourceSha
+        || !DIGEST.test(published[0].configDigest ?? '')
+      )) {
       throw new Error(`The published immutable image for ${id} does not match its planned destination or manifest pin.`);
     }
 
@@ -495,6 +513,7 @@ export function validateP1PublicationReceipt(publication, manifest, sourceSha, s
       const measurement = published[0].preparedOciMeasurement;
       if (!SHA256.test(published[0].ociArchiveSha256 ?? '')
         || !DIGEST.test(published[0].imageConfigDigest ?? '')
+        || integrationImagesOnly && published[0].configDigest !== published[0].imageConfigDigest
         || measurement?.kind !== 'agenthost-image' || measurement.schemaVersion !== 1
         || measurement.sourceSha !== sourceSha || measurement.sourceTree !== sourceTree
         || measurement.image?.platform !== 'linux/amd64'
@@ -508,6 +527,8 @@ export function validateP1PublicationReceipt(publication, manifest, sourceSha, s
       images.push({
         id,
         name,
+        component,
+        result: published[0],
         image: published[0].image,
         sandboxImage: published[0].image,
         sandboxImageDigest: publishedImage.digest,
@@ -516,10 +537,123 @@ export function validateP1PublicationReceipt(publication, manifest, sourceSha, s
         preparedOciMeasurement: measurement,
       });
     } else {
-      images.push({ id, name, image: published[0].image });
+      images.push({ id, name, component, result: published[0], image: published[0].image });
     }
   }
   return images;
+}
+
+export function validateP1IntegrationDeploymentReceipt(receipt, {
+  sourceSha,
+  sourceTree,
+  manifest,
+  publication,
+  namespace,
+  images,
+}) {
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)
+    || receipt.schemaVersion !== 1 || receipt.status !== 'deployed'
+    || !SHA.test(sourceSha ?? '') || !SHA.test(sourceTree ?? '')
+    || receipt.sourceSha !== sourceSha || receipt.sourceTree !== sourceTree
+    || !SHA256.test(receipt.manifestSha256 ?? '')
+    || receipt.manifestSha256 !== hashJson(manifest)
+    || !SHA256.test(receipt.provenanceSha256 ?? '')
+    || receipt.provenanceSha256 !== publication?.provenanceSha256
+    || !SHA256.test(receipt.publicationSha256 ?? '')
+    || receipt.publicationSha256 !== hashJson(publication)
+    || !SHA256.test(receipt.runtimeManifestSha256 ?? '')
+    || !Number.isFinite(Date.parse(receipt.completedAt ?? ''))) {
+    throw new Error('The integration deployment receipt is not bound to the exact source, manifest, and publication.');
+  }
+  if (publication?.mode !== 'images-only' || publication.sourceTree !== sourceTree) {
+    throw new Error('The integration deployment receipt requires the source-matched images-only publication.');
+  }
+
+  const target = receipt.target;
+  if (!target || typeof target !== 'object' || Array.isArray(target)
+    || target.namespace !== namespace
+    || typeof target.subscriptionId !== 'string' || !target.subscriptionId
+    || typeof target.tenantId !== 'string' || !target.tenantId
+    || typeof target.resourceGroup !== 'string' || !target.resourceGroup
+    || typeof target.clusterName !== 'string' || !target.clusterName
+    || !Number.isSafeInteger(target.nodeMin) || target.nodeMin < 1
+    || !Number.isSafeInteger(target.nodeMax) || target.nodeMax < target.nodeMin) {
+    throw new Error('The integration deployment receipt does not name the exact P1 namespace and deployment target.');
+  }
+
+  if (!Array.isArray(images)) {
+    throw new Error('The integration deployment receipt has no validated source image set.');
+  }
+  const expectedImages = new Map(images.map(image => [image.id, image]));
+  if (expectedImages.size !== P1_SERVICE_COMPONENTS.length
+    || !Array.isArray(receipt.registryImages)
+    || receipt.registryImages.length !== P1_SERVICE_COMPONENTS.length) {
+    throw new Error('The integration deployment receipt does not contain the complete P1 image set.');
+  }
+  const registryImages = new Map();
+  for (const image of receipt.registryImages) {
+    if (!image || typeof image !== 'object' || Array.isArray(image)
+      || typeof image.id !== 'string' || registryImages.has(image.id)) {
+      throw new Error('The integration deployment receipt contains an invalid or duplicate image identity.');
+    }
+    registryImages.set(image.id, image);
+  }
+  for (const [id, expected] of expectedImages) {
+    const image = registryImages.get(id);
+    const expectedReference = id === 'Agentweaver.AgentHost' ? expected.sandboxImage : expected.image;
+    if (!image || image.image !== expectedReference
+      || image.configDigest !== expected.result?.configDigest
+      || image.sourceSha !== sourceSha || image.sourceTree !== sourceTree
+      || image.version !== expected.component?.version) {
+      throw new Error(`The integration deployment receipt image for ${id} differs from its publication receipt.`);
+    }
+  }
+
+  const readbacks = receipt.readbacks;
+  if (!readbacks || typeof readbacks !== 'object' || Array.isArray(readbacks)
+    || !Array.isArray(readbacks.resources) || readbacks.resources.length < SERVICE_NAMES.length * 3
+    || !SHA256.test(readbacks.sha256 ?? '')
+    || readbacks.brokerRunBinding !== undefined
+      && (!readbacks.brokerRunBinding || typeof readbacks.brokerRunBinding !== 'object'
+        || Array.isArray(readbacks.brokerRunBinding))) {
+    throw new Error('The integration deployment receipt has no complete resource readback set.');
+  }
+  const identities = new Set();
+  for (const resource of readbacks.resources) {
+    if (!resource || typeof resource !== 'object' || Array.isArray(resource)
+      || typeof resource.kind !== 'string' || !resource.kind
+      || typeof resource.name !== 'string' || !resource.name
+      || !SHA256.test(resource.sha256 ?? '')) {
+      throw new Error('The integration deployment receipt contains an invalid resource readback.');
+    }
+    const identity = `${resource.kind}\u0000${resource.name}`;
+    if (identities.has(identity)) throw new Error('The integration deployment receipt contains duplicate resource readbacks.');
+    identities.add(identity);
+  }
+  for (const name of SERVICE_NAMES) {
+    for (const kind of ['deployment', 'service', 'pods']) {
+      if (!identities.has(`${kind}\u0000${name}`)) {
+        throw new Error(`The integration deployment receipt is missing the ${kind} readback for ${name}.`);
+      }
+    }
+  }
+  const readbackDocument = readbacks.brokerRunBinding === undefined
+    ? readbacks.resources
+    : { resources: readbacks.resources, brokerRunBinding: readbacks.brokerRunBinding };
+  if (hashJson(readbackDocument) !== readbacks.sha256) {
+    throw new Error('The integration deployment receipt readback digest does not match its resource readbacks.');
+  }
+
+  return {
+    status: receipt.status,
+    sourceSha,
+    sourceTree,
+    manifestSha256: receipt.manifestSha256,
+    publicationSha256: receipt.publicationSha256,
+    readbackSha256: readbacks.sha256,
+    completedAt: receipt.completedAt,
+    target: { clusterName: target.clusterName, namespace: target.namespace },
+  };
 }
 
 function runGit(args, repoRoot, spawnSyncImpl = spawnSync) {
@@ -568,6 +702,7 @@ export async function prepareP1DeploymentEvidence({
   publicationPath,
   manifestPath,
   agentHostArchivePath,
+  integrationDeploymentReceiptPath,
   providerCatalog,
   context,
   namespace,
@@ -580,6 +715,7 @@ export async function prepareP1DeploymentEvidence({
   let publication;
   let manifest;
   let manifestFile;
+  let integrationDeploymentReceipt;
   try {
     publication = JSON.parse(readFileSync(publicationPath, 'utf8'));
     manifestFile = path.resolve(repoRoot, manifestPath);
@@ -589,8 +725,9 @@ export async function prepareP1DeploymentEvidence({
       throw new Error('The release manifest must be inside the exact source repository.');
     }
     manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
+    integrationDeploymentReceipt = JSON.parse(readFileSync(integrationDeploymentReceiptPath, 'utf8'));
   } catch {
-    throw new Error('The exact source-bound publication receipt or manifest is missing or malformed.');
+    throw new Error('The exact source-bound publication, integration deployment receipt, or manifest is missing or malformed.');
   }
   const relativeManifest = path.relative(path.resolve(repoRoot), manifestFile).replaceAll('\\', '/');
   let committedManifest;
@@ -610,6 +747,14 @@ export async function prepareP1DeploymentEvidence({
     validatePublicationReceipt: validatePublicationReceipt
       ?? ((receipt, sourceManifest, sourceSha) =>
         validateP1PublicationReceipt(receipt, sourceManifest, sourceSha, source.sourceTree)),
+  });
+  const integrationDeployment = validateP1IntegrationDeploymentReceipt(integrationDeploymentReceipt, {
+    sourceSha: source.sourceSha,
+    sourceTree: source.sourceTree,
+    manifest,
+    publication,
+    namespace,
+    images,
   });
   const serviceEvidence = await observeP1ServiceDeployments({
     context,
@@ -647,6 +792,7 @@ export async function prepareP1DeploymentEvidence({
   }
   return {
     source,
+    integrationDeployment,
     providerCatalog: serviceEvidence.providerCatalog,
     services: serviceEvidence,
     agentHostImageMeasurement: {

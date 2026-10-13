@@ -89,28 +89,45 @@ The exported `runP1UiJourney` function opens the pinned run and reads the
 committed-event journal through this borrowed UI adapter. It checks the actual
 cursor pages and Activity view. It does not use MCP replay as UI evidence.
 
-The CLI still blocks before importing a page provider because a JSON manifest
-cannot prove that this invocation created the project, run, selection, and
-sessions. Supply a module whose default async function returns
-an already authorized page on the selected Environment web origin when a
-supported same-invocation setup path is available:
+Gate-answer, approval, rejection, and addressed-message journeys use the
+borrowed page and verify the actual owner response.
+
+The shared CLI creates and verifies an invocation-owned project, grants,
+selection, and sessions before it supplies those receipts to the selected
+surface. It rejects caller-supplied `ownerFences` and `fixtureScope` claims.
+Cleanup revokes setup grants and archives the project only when no run
+selection was accepted; otherwise it reports `retainedPending` and preserves
+the active grants.
+
+Use the same `executionIntent: "execute"` manifest and four
+`deploymentEvidence` paths documented by the API harness. Set
+`AGENTWEAVER_P1_SETUP_TOKEN` in the process environment and provide
+`--identity-module <authorized-identity-provider.mjs>` returning already-issued
+run-bound and denied-actor tokens. The required `--page-module` must return an
+already-authorized page on the selected Environment web origin. The runner
+does not start a browser, sign in, refresh credentials, or request consent.
+Credentials and the page provider are used only after source and deployment
+evidence passes.
+
+UI writes use an application-generated idempotency key that cannot be restored
+by the harness after a process crash. Before a UI gate or message action, the
+runner appends a `p1-ui-action-started` record to the evidence file. If it finds
+that marker on a later invocation, it refuses to replay the action; reconcile
+the current owner state before starting a new run. Read-only UI journal
+journeys do not use this marker.
 
 ```powershell
-npm run harness:p1 -- --surface ui --input <manifest.json> --output <evidence.jsonl> --page-module <authorized-page-provider.mjs>
+npm run harness:p1 -- --surface ui --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs> --page-module <authorized-page-provider.mjs>
 ```
 
-The manifest also needs `deploymentEvidence` paths named `publicationPath`,
-`manifestPath`, and `agentHostArchivePath`. Before reading bearer credentials
-or importing the page provider, the runner verifies the pinned clean Git
-commit/tree, published images and AgentHost archive, then performs read-only
-Kubernetes and public GHCR observations. It then returns blocked without
-reading credentials or importing the page provider. Public project, selection,
-root, and session endpoints exist, but they require separately authorized
-actors and current role grants. Project roles are provisioned only through a
-privileged source path, and caller receipts cannot create that authority.
-Gateway does not expose the Orchestrator dispatch handler to this harness.
+Surface results are reported separately from full P1 acceptance. Full P1 stays
+blocked until required native probes have real evidence. Controlled UI and
+runner tests do not start a browser or prove a deployed Gateway, Broker, owner,
+native execution, or AKS acceptance.
 
-The command currently exits with code `2` and a blocked result. It does not
-start a browser or sign in. Direct UI gate and message journeys also block
-before workflow writes; caller-supplied receipts do not authorize them. The
-controlled UI adapter tests do not prove a deployed P1 journey.
+The required `fixturePlan.expectedPlatformRuntimeRevision` is a positive
+expected value passed through the existing run-selection request and verified
+against the accepted and observed owner selection. It is not authority or an
+ownership receipt; the owner compare-and-swap checks the current revision. The
+fixture keeps its project-configuration read and does not call the
+PlatformAdmin-only global runtime-default endpoint.

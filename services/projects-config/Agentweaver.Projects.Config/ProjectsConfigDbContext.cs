@@ -232,7 +232,17 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                 table.HasCheckConstraint(
                     "ck_project_setup_operations_revision",
                     "membership_revision > 0 AND project_revision > 0 AND " +
-                    "project_configuration_revision > 0 AND assignment_revision > 0");
+                    "project_configuration_revision > 0 AND assignment_revision > 0 AND " +
+                    "(owner_assignment_revision IS NULL OR owner_assignment_revision > 0)");
+                table.HasCheckConstraint(
+                    "ck_project_setup_operations_owner_binding",
+                    "(owner_assignment_id IS NULL AND owner_assignment_revision IS NULL AND " +
+                    "owner_authority_audit_event_id IS NULL) OR " +
+                    "(owner_assignment_id IS NOT NULL AND owner_assignment_id <> assignment_id AND " +
+                    "owner_assignment_revision IS NOT NULL AND owner_authority_audit_event_id IS NOT NULL)");
+                table.HasCheckConstraint(
+                    "ck_project_setup_operations_owner_revocation_audit",
+                    "owner_revocation_audit_event_id IS NULL OR operation_kind = 'Cleanup'");
                 table.HasCheckConstraint(
                     "ck_project_setup_operations_cleanup_revision",
                     "(operation_kind = 'Setup' AND result_state = 'Created' AND " +
@@ -261,6 +271,12 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                 .HasColumnName("project_configuration_revision");
             entity.Property(operation => operation.AssignmentId).HasColumnName("assignment_id");
             entity.Property(operation => operation.AssignmentRevision).HasColumnName("assignment_revision");
+            entity.Property(operation => operation.OwnerAssignmentId).HasColumnName("owner_assignment_id");
+            entity.Property(operation => operation.OwnerAssignmentRevision).HasColumnName("owner_assignment_revision");
+            entity.Property(operation => operation.OwnerAuthorityAuditEventId)
+                .HasColumnName("owner_authority_audit_event_id");
+            entity.Property(operation => operation.OwnerRevocationAuditEventId)
+                .HasColumnName("owner_revocation_audit_event_id");
             entity.Property(operation => operation.ExpectedProjectRevision).HasColumnName("expected_project_revision");
             entity.Property(operation => operation.ExpectedAssignmentRevision).HasColumnName("expected_assignment_revision");
             entity.Property(operation => operation.AuthorityAuditEventId).HasColumnName("authority_audit_event_id");
@@ -284,6 +300,18 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
             entity.HasOne<ProjectAuthorityAuditRecord>()
                 .WithMany()
                 .HasForeignKey(operation => operation.AuthorityAuditEventId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<ProjectRoleAssignmentRecord>()
+                .WithMany()
+                .HasForeignKey(operation => operation.OwnerAssignmentId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<ProjectAuthorityAuditRecord>()
+                .WithMany()
+                .HasForeignKey(operation => operation.OwnerAuthorityAuditEventId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<ProjectAuthorityAuditRecord>()
+                .WithMany()
+                .HasForeignKey(operation => operation.OwnerRevocationAuditEventId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 

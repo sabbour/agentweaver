@@ -237,6 +237,18 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             GrantedBy = caller.ActorId,
             GrantedAt = now,
         };
+        var ownerAssignment = new ProjectRoleAssignmentRecord
+        {
+            AssignmentId = Guid.NewGuid(),
+            MembershipId = caller.MembershipId,
+            ResourceType = ProjectAuthorityResourceType.Project,
+            ResourceId = projectId,
+            Role = ProjectAuthorityRole.Owner,
+            State = ProjectAuthorityRecordState.Active,
+            Revision = 1,
+            GrantedBy = caller.ActorId,
+            GrantedAt = now,
+        };
         var audit = ToAudit(
             new ProjectTenantMembershipRecord
             {
@@ -250,6 +262,21 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                 GrantedAt = now,
             },
             assignment,
+            "role_assigned",
+            caller.ActorId);
+        var ownerAudit = ToAudit(
+            new ProjectTenantMembershipRecord
+            {
+                MembershipId = caller.MembershipId,
+                Issuer = caller.Issuer,
+                Subject = caller.ActorId,
+                TenantId = caller.TenantId,
+                State = ProjectAuthorityRecordState.Active,
+                Revision = caller.MembershipRevision,
+                GrantedBy = caller.ActorId,
+                GrantedAt = now,
+            },
+            ownerAssignment,
             "role_assigned",
             caller.ActorId);
         var receipt = new ProjectSetupReceipt(
@@ -266,7 +293,12 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             assignment.AssignmentId,
             assignment.Revision,
             audit.EventId,
-            now);
+            now)
+        {
+            OwnerAssignmentId = ownerAssignment.AssignmentId,
+            OwnerAssignmentRevision = ownerAssignment.Revision,
+            OwnerAuthorityAuditEventId = ownerAudit.EventId,
+        };
         var operation = new ProjectSetupOperationRecord
         {
             InvocationId = request.InvocationId,
@@ -282,6 +314,9 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             ProjectConfigurationRevision = project.ConfigurationRevision,
             AssignmentId = assignment.AssignmentId,
             AssignmentRevision = assignment.Revision,
+            OwnerAssignmentId = ownerAssignment.AssignmentId,
+            OwnerAssignmentRevision = ownerAssignment.Revision,
+            OwnerAuthorityAuditEventId = ownerAudit.EventId,
             AuthorityAuditEventId = audit.EventId,
             ResultState = ProjectSetupOperationResultState.Created,
             ResultJson = JsonSerializer.Serialize(receipt, ProjectSetupJsonOptions),
@@ -291,7 +326,9 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         db.Projects.Add(project);
         db.ProjectConfigurationRevisions.Add(configuration);
         db.RoleAssignments.Add(assignment);
+        db.RoleAssignments.Add(ownerAssignment);
         db.AuthorityAudit.Add(audit);
+        db.AuthorityAudit.Add(ownerAudit);
         db.ProjectSetupOperations.Add(operation);
         await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         return new ProjectSetupCommandResult(
@@ -307,7 +344,12 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                 AssignmentExists: true,
                 ProjectAuthorityRecordState.Active,
                 assignment.Revision,
-                AuthorityAuditExists: true),
+                AuthorityAuditExists: true,
+                ownerAssignment.AssignmentId,
+                OwnerAssignmentExists: true,
+                ProjectAuthorityRecordState.Active,
+                ownerAssignment.Revision,
+                OwnerAuthorityAuditExists: true),
             Cleanup: null);
     }
 
@@ -356,6 +398,35 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             throw new ProjectAuthorityConcurrencyException(
                 "The Orchestrator assignment no longer matches the immutable setup receipt.");
 
+        ProjectRoleAssignmentRecord? ownerAssignment = null;
+        if (setup.OwnerAssignmentId is { } ownerAssignmentId)
+        {
+            if (setup.OwnerAssignmentRevision is not > 0 || setup.OwnerAuthorityAuditEventId is null)
+                throw new InvalidOperationException("The project setup Owner assignment binding is incomplete.");
+            ownerAssignment = await db.RoleAssignments
+                .FromSqlInterpolated($"""
+                    SELECT *
+                    FROM projects_config.project_role_assignments
+                    WHERE assignment_id = {ownerAssignmentId}
+                      AND membership_id = {setup.MembershipId}
+                      AND resource_type = 'Project'
+                      AND resource_id = {setup.ProjectId}
+                      AND role = 'Owner'
+                    FOR UPDATE
+                    """)
+                .SingleOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (ownerAssignment is null ||
+                ownerAssignment.State != ProjectAuthorityRecordState.Active ||
+                ownerAssignment.Revision != setup.OwnerAssignmentRevision)
+                throw new ProjectAuthorityConcurrencyException(
+                    "The Owner assignment no longer matches the immutable setup receipt.");
+        }
+        else if (setup.OwnerAssignmentRevision is not null || setup.OwnerAuthorityAuditEventId is not null)
+        {
+            throw new InvalidOperationException("The project setup Owner assignment binding is incomplete.");
+        }
+
         var hasAnySelection = await db.RunSelections.AsNoTracking()
             .AnyAsync(selection => selection.ProjectId == setup.ProjectId, cancellationToken)
             .ConfigureAwait(false);
@@ -364,6 +435,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             ? ProjectSetupOperationResultState.RetainedPending
             : ProjectSetupOperationResultState.Cleaned;
         ProjectAuthorityAuditRecord? audit = null;
+        ProjectAuthorityAuditRecord? ownerAudit = null;
         if (!hasAnySelection)
         {
             assignment.State = ProjectAuthorityRecordState.Revoked;
@@ -389,6 +461,29 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                 "role_revoked",
                 caller.ActorId);
             db.AuthorityAudit.Add(audit);
+            if (ownerAssignment is not null)
+            {
+                ownerAssignment.State = ProjectAuthorityRecordState.Revoked;
+                ownerAssignment.Revision = checked(ownerAssignment.Revision + 1);
+                ownerAssignment.RevokedBy = caller.ActorId;
+                ownerAssignment.RevokedAt = now;
+                ownerAudit = ToAudit(
+                    new ProjectTenantMembershipRecord
+                    {
+                        MembershipId = setup.MembershipId,
+                        Issuer = setup.Issuer,
+                        Subject = setup.Subject,
+                        TenantId = setup.TenantId,
+                        State = ProjectAuthorityRecordState.Active,
+                        Revision = setup.MembershipRevision,
+                        GrantedBy = caller.ActorId,
+                        GrantedAt = now,
+                    },
+                    ownerAssignment,
+                    "role_revoked",
+                    caller.ActorId);
+                db.AuthorityAudit.Add(ownerAudit);
+            }
         }
 
         var receipt = new ProjectCleanupReceipt(
@@ -401,7 +496,12 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             project.ConfigurationRevision,
             assignment.Revision,
             audit?.EventId,
-            now);
+            now)
+        {
+            OwnerAssignmentId = ownerAssignment?.AssignmentId,
+            OwnerAssignmentRevision = ownerAssignment?.Revision,
+            OwnerRevocationAuditEventId = ownerAudit?.EventId,
+        };
         var operation = new ProjectSetupOperationRecord
         {
             InvocationId = request.InvocationId,
@@ -417,6 +517,10 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             ProjectConfigurationRevision = setup.ProjectConfigurationRevision,
             AssignmentId = setup.AssignmentId,
             AssignmentRevision = receipt.AssignmentRevision,
+            OwnerAssignmentId = setup.OwnerAssignmentId,
+            OwnerAssignmentRevision = receipt.OwnerAssignmentRevision,
+            OwnerAuthorityAuditEventId = setup.OwnerAuthorityAuditEventId,
+            OwnerRevocationAuditEventId = receipt.OwnerRevocationAuditEventId,
             ExpectedProjectRevision = request.ExpectedProjectRevision,
             ExpectedAssignmentRevision = request.ExpectedAssignmentRevision,
             AuthorityAuditEventId = audit?.EventId,
@@ -451,7 +555,10 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             receipt.MembershipRevision != operation.MembershipRevision ||
             receipt.Issuer != operation.Issuer ||
             receipt.Subject != operation.Subject ||
-            receipt.TenantId != operation.TenantId)
+            receipt.TenantId != operation.TenantId ||
+            receipt.OwnerAssignmentId != operation.OwnerAssignmentId ||
+            receipt.OwnerAssignmentRevision != operation.OwnerAssignmentRevision ||
+            receipt.OwnerAuthorityAuditEventId != operation.OwnerAuthorityAuditEventId)
             throw new InvalidOperationException("The project setup operation receipt does not match its immutable binding.");
 
         var project = await db.Projects.AsNoTracking()
@@ -475,6 +582,25 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                     item.Revision == operation.AssignmentRevision,
                     cancellationToken)
                 .ConfigureAwait(false);
+        ProjectRoleAssignmentRecord? ownerAssignment = null;
+        if (operation.OwnerAssignmentId is { } ownerAssignmentId)
+        {
+            ownerAssignment = await db.RoleAssignments.AsNoTracking()
+                .SingleOrDefaultAsync(item => item.AssignmentId == ownerAssignmentId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        var ownerAuditExists = operation.OwnerAuthorityAuditEventId is { } ownerAuditId &&
+            await db.AuthorityAudit.AsNoTracking()
+                .AnyAsync(item =>
+                    item.EventId == ownerAuditId &&
+                    item.AssignmentId == operation.OwnerAssignmentId &&
+                    item.EventType == "role_assigned" &&
+                    item.Revision == operation.OwnerAssignmentRevision &&
+                    item.ResourceType == ProjectAuthorityResourceType.Project &&
+                    item.ResourceId == operation.ProjectId &&
+                    item.Role == ProjectAuthorityRole.Owner,
+                    cancellationToken)
+                .ConfigureAwait(false);
         return new ProjectSetupCommandResult(
             ProjectSetupOperationKind.Setup,
             Replayed: true,
@@ -494,7 +620,16 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                     assignment.Role == ProjectAuthorityRole.Orchestrator,
                 assignment?.State,
                 assignment?.Revision,
-                auditExists),
+                auditExists,
+                operation.OwnerAssignmentId,
+                ownerAssignment is not null &&
+                    ownerAssignment.MembershipId == operation.MembershipId &&
+                    ownerAssignment.ResourceType == ProjectAuthorityResourceType.Project &&
+                    ownerAssignment.ResourceId == operation.ProjectId &&
+                    ownerAssignment.Role == ProjectAuthorityRole.Owner,
+                ownerAssignment?.State,
+                ownerAssignment?.Revision,
+                ownerAuditExists),
             Cleanup: null);
     }
 
@@ -512,7 +647,10 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             receipt.AssignmentRevision != operation.AssignmentRevision ||
             receipt.AuthorityAuditEventId != operation.AuthorityAuditEventId ||
             receipt.TenantId != operation.TenantId ||
-            receipt.State != operation.ResultState)
+            receipt.State != operation.ResultState ||
+            receipt.OwnerAssignmentId != operation.OwnerAssignmentId ||
+            receipt.OwnerAssignmentRevision != operation.OwnerAssignmentRevision ||
+            receipt.OwnerRevocationAuditEventId != operation.OwnerRevocationAuditEventId)
             throw new InvalidOperationException("The project cleanup operation receipt does not match its immutable binding.");
 
         _ = await db.Projects.AsNoTracking().SingleOrDefaultAsync(
@@ -528,6 +666,33 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                 cancellationToken)
             .ConfigureAwait(false)
             ?? throw new InvalidOperationException("The assignment referenced by the cleanup receipt is missing.");
+        if (operation.OwnerAssignmentId is { } ownerAssignmentId)
+        {
+            var ownerAssignment = await db.RoleAssignments.AsNoTracking().SingleOrDefaultAsync(
+                    item => item.AssignmentId == ownerAssignmentId &&
+                        item.MembershipId == operation.MembershipId &&
+                        item.ResourceType == ProjectAuthorityResourceType.Project &&
+                        item.ResourceId == operation.ProjectId &&
+                        item.Role == ProjectAuthorityRole.Owner,
+                    cancellationToken)
+                .ConfigureAwait(false)
+                ?? throw new InvalidOperationException("The Owner assignment referenced by the cleanup receipt is missing.");
+            var expectedOwnerState = operation.ResultState == ProjectSetupOperationResultState.Cleaned
+                ? ProjectAuthorityRecordState.Revoked
+                : ProjectAuthorityRecordState.Active;
+            if (ownerAssignment.State != expectedOwnerState ||
+                ownerAssignment.Revision != operation.OwnerAssignmentRevision)
+                throw new InvalidOperationException("The Owner assignment no longer matches the cleanup receipt.");
+        }
+        if (operation.OwnerRevocationAuditEventId is { } ownerRevocationAuditId &&
+            !await db.AuthorityAudit.AsNoTracking().AnyAsync(
+                item => item.EventId == ownerRevocationAuditId &&
+                    item.AssignmentId == operation.OwnerAssignmentId &&
+                    item.EventType == "role_revoked" &&
+                    item.Revision == operation.OwnerAssignmentRevision,
+                cancellationToken)
+                .ConfigureAwait(false))
+            throw new InvalidOperationException("The Owner revocation audit referenced by the cleanup receipt is missing.");
         return new ProjectSetupCommandResult(
             ProjectSetupOperationKind.Cleanup,
             Replayed: true,

@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   loadValidatedPublicationImages,
   observeP1ServiceDeployments,
+  validateP1IntegrationDeploymentReceipt,
   validateP1PublicationReceipt,
 } from '../p1-deployment-evidence.mjs';
 
@@ -372,6 +373,185 @@ test('validates the exact P1 published image rows and source-bound AgentHost mea
   missingService.published = missingService.published.filter(row => row.id !== 'Agentweaver.Gateway');
   assert.throws(() => validateP1PublicationReceipt(missingService, manifest, sourceSha, sourceTree),
     /one source-matched image for Agentweaver.Gateway/);
+});
+
+function integrationReceiptFixture() {
+  const manifest = {
+    schemaVersion: 1,
+    stage: 'draft',
+    components: p1ServiceComponents.map(([id]) => ({
+      id,
+      kind: 'service',
+      version: '1.0.0',
+      project: `services/${id}.csproj`,
+    })),
+    compatibility: [],
+  };
+  const planned = [];
+  const published = [];
+  for (const [index, [id, name]] of p1ServiceComponents.entries()) {
+    const repository = `ghcr.io/sabbour/agentweaver/${name}`;
+    const archiveSha256 = String(index + 1).padStart(2, '0').repeat(32);
+    const imageDigest = `sha256:${String(index + 11).padStart(2, '0').repeat(32)}`;
+    const configDigest = `sha256:${String(index + 21).padStart(2, '0').repeat(32)}`;
+    planned.push({
+      id,
+      version: '1.0.0',
+      kind: 'image',
+      sha256: archiveSha256,
+      destination: `${repository}:${sourceSha}`,
+    });
+    published.push({
+      id,
+      version: '1.0.0',
+      kind: 'image',
+      archiveSha256,
+      image: `${repository}@${imageDigest}`,
+      sourceSha,
+      sourceTree,
+      tag: sourceSha,
+      configDigest,
+      ...(id === 'Agentweaver.AgentHost' ? {
+        ociArchiveSha256: 'a'.repeat(64),
+        imageConfigDigest: configDigest,
+        preparedOciMeasurement: {
+          kind: 'agenthost-image',
+          schemaVersion: 1,
+          sourceSha,
+          sourceTree,
+          image: {
+            digest: imageDigest,
+            configDigest,
+            version: '1.0.0',
+            platform: 'linux/amd64',
+            compressedPullBytes: 2048,
+          },
+        },
+      } : {}),
+    });
+  }
+  const publication = {
+    schemaVersion: 1,
+    mode: 'images-only',
+    sourceSha,
+    sourceTree,
+    provenanceSha256: '9'.repeat(64),
+    status: 'published',
+    planned,
+    published,
+  };
+  const images = validateP1PublicationReceipt(publication, manifest, sourceSha, sourceTree);
+  const resources = serviceNames.flatMap(name => ['deployment', 'service', 'pods'].map(kind => ({
+    kind,
+    name,
+    sha256: 'b'.repeat(64),
+  })));
+  const readbacks = {
+    resources,
+    sha256: createHash('sha256').update(JSON.stringify(resources)).digest('hex'),
+  };
+  const receipt = {
+    schemaVersion: 1,
+    status: 'deployed',
+    sourceSha,
+    sourceTree,
+    manifestSha256: createHash('sha256').update(JSON.stringify(manifest)).digest('hex'),
+    provenanceSha256: publication.provenanceSha256,
+    publicationSha256: createHash('sha256').update(JSON.stringify(publication)).digest('hex'),
+    runtimeManifestSha256: 'c'.repeat(64),
+    target: {
+      subscriptionId: 'controlled-subscription',
+      tenantId: 'controlled-tenant',
+      resourceGroup: 'controlled-resource-group',
+      clusterName: 'controlled-cluster',
+      namespace,
+      nodeMin: 2,
+      nodeMax: 3,
+    },
+    registryImages: images.map(image => ({
+      id: image.id,
+      image: image.id === 'Agentweaver.AgentHost' ? image.sandboxImage : image.image,
+      configDigest: image.result.configDigest,
+      sourceSha,
+      sourceTree,
+      version: image.component.version,
+    })),
+    readbacks,
+    completedAt: '2026-10-13T00:00:00.000Z',
+  };
+  return { manifest, publication, images, receipt };
+}
+
+test('accepts an exact integration deployment receipt bound to its publication and service readbacks', () => {
+  const fixture = integrationReceiptFixture();
+  const evidence = validateP1IntegrationDeploymentReceipt(fixture.receipt, {
+    sourceSha,
+    sourceTree,
+    manifest: fixture.manifest,
+    publication: fixture.publication,
+    namespace,
+    images: fixture.images,
+  });
+  assert.deepEqual(evidence, {
+    status: 'deployed',
+    sourceSha,
+    sourceTree,
+    manifestSha256: fixture.receipt.manifestSha256,
+    publicationSha256: fixture.receipt.publicationSha256,
+    readbackSha256: fixture.receipt.readbacks.sha256,
+    completedAt: fixture.receipt.completedAt,
+    target: { clusterName: 'controlled-cluster', namespace },
+  });
+
+  const invalidSource = structuredClone(fixture.receipt);
+  invalidSource.sourceSha = 'f'.repeat(40);
+  assert.throws(() => validateP1IntegrationDeploymentReceipt(invalidSource, {
+    sourceSha, sourceTree, manifest: fixture.manifest, publication: fixture.publication, namespace, images: fixture.images,
+  }), /exact source, manifest, and publication/);
+
+  const wrongManifest = structuredClone(fixture.receipt);
+  wrongManifest.manifestSha256 = 'f'.repeat(64);
+  assert.throws(() => validateP1IntegrationDeploymentReceipt(wrongManifest, {
+    sourceSha, sourceTree, manifest: fixture.manifest, publication: fixture.publication, namespace, images: fixture.images,
+  }), /exact source, manifest, and publication/);
+
+  const wrongPublication = structuredClone(fixture.receipt);
+  wrongPublication.publicationSha256 = 'f'.repeat(64);
+  assert.throws(() => validateP1IntegrationDeploymentReceipt(wrongPublication, {
+    sourceSha, sourceTree, manifest: fixture.manifest, publication: fixture.publication, namespace, images: fixture.images,
+  }), /exact source, manifest, and publication/);
+
+  const wrongNamespace = structuredClone(fixture.receipt);
+  wrongNamespace.target.namespace = 'default';
+  assert.throws(() => validateP1IntegrationDeploymentReceipt(wrongNamespace, {
+    sourceSha, sourceTree, manifest: fixture.manifest, publication: fixture.publication, namespace, images: fixture.images,
+  }), /exact P1 namespace/);
+
+  const wrongImage = structuredClone(fixture.receipt);
+  wrongImage.registryImages[0].image = 'ghcr.io/sabbour/agentweaver/gateway@sha256:' + 'f'.repeat(64);
+  assert.throws(() => validateP1IntegrationDeploymentReceipt(wrongImage, {
+    sourceSha, sourceTree, manifest: fixture.manifest, publication: fixture.publication, namespace, images: fixture.images,
+  }), /differs from its publication receipt/);
+
+  const missingReadback = structuredClone(fixture.receipt);
+  missingReadback.readbacks.resources = missingReadback.readbacks.resources
+    .filter(resource => !(resource.kind === 'pods' && resource.name === 'gateway'));
+  missingReadback.readbacks.resources.push({
+    kind: 'replicaset',
+    name: 'gateway',
+    sha256: 'd'.repeat(64),
+  });
+  missingReadback.readbacks.sha256 = createHash('sha256')
+    .update(JSON.stringify(missingReadback.readbacks.resources)).digest('hex');
+  assert.throws(() => validateP1IntegrationDeploymentReceipt(missingReadback, {
+    sourceSha, sourceTree, manifest: fixture.manifest, publication: fixture.publication, namespace, images: fixture.images,
+  }), /missing the pods readback for gateway/);
+
+  const wrongReadbackDigest = structuredClone(fixture.receipt);
+  wrongReadbackDigest.readbacks.sha256 = 'f'.repeat(64);
+  assert.throws(() => validateP1IntegrationDeploymentReceipt(wrongReadbackDigest, {
+    sourceSha, sourceTree, manifest: fixture.manifest, publication: fixture.publication, namespace, images: fixture.images,
+  }), /readback digest does not match/);
 });
 
 test('records native service UIDs and verifies pod imageIDs plus registry source labels without credentials', async () => {

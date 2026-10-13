@@ -1237,16 +1237,25 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         Assert.Equal(1, receipt.ProjectRevision);
         Assert.Equal(1, receipt.ProjectConfigurationRevision);
         Assert.Equal(1, receipt.AssignmentRevision);
+        Assert.NotNull(receipt.OwnerAssignmentId);
+        Assert.Equal(1, receipt.OwnerAssignmentRevision);
+        Assert.NotNull(receipt.OwnerAuthorityAuditEventId);
         Assert.True(first.SetupReadback!.ProjectExists);
         Assert.True(first.SetupReadback.InitialConfigurationExists);
         Assert.True(first.SetupReadback.AssignmentExists);
         Assert.True(first.SetupReadback.AuthorityAuditExists);
+        Assert.Equal(receipt.OwnerAssignmentId, first.SetupReadback.OwnerAssignmentId);
+        Assert.True(first.SetupReadback.OwnerAssignmentExists);
+        Assert.Equal(ProjectAuthorityRecordState.Active, first.SetupReadback.OwnerAssignmentState);
+        Assert.Equal(1, first.SetupReadback.OwnerAssignmentRevision);
+        Assert.True(first.SetupReadback.OwnerAuthorityAuditExists);
         Assert.Equal(ProjectLifecycleState.Active, first.SetupReadback.ProjectState);
 
         var replay = await authorityStore.ExecuteProjectSetupOperationAsync(firstCaller, setupRequest);
         Assert.True(replay.Replayed);
         Assert.Equal(receipt, replay.Setup);
         Assert.True(replay.SetupReadback!.AssignmentExists);
+        Assert.True(replay.SetupReadback.OwnerAssignmentExists);
         Assert.True(replay.SetupReadback.ProjectExists);
         Assert.Equal(1, await db.ProjectSetupOperations.AsNoTracking()
             .CountAsync(item => item.InvocationId == invocationId));
@@ -1254,6 +1263,8 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             .CountAsync(item => item.ProjectId == receipt.ProjectId));
         Assert.Equal(1, await db.RoleAssignments.AsNoTracking()
             .CountAsync(item => item.AssignmentId == receipt.AssignmentId));
+        Assert.Equal(1, await db.RoleAssignments.AsNoTracking()
+            .CountAsync(item => item.AssignmentId == receipt.OwnerAssignmentId));
 
         var secondCaller = await SeedCallerAsync(
             db,
@@ -1309,6 +1320,9 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         Assert.Equal(2, cleanupReceipt.ProjectRevision);
         Assert.Equal(2, cleanupReceipt.AssignmentRevision);
         Assert.NotNull(cleanupReceipt.AuthorityAuditEventId);
+        Assert.Equal(receipt.OwnerAssignmentId, cleanupReceipt.OwnerAssignmentId);
+        Assert.Equal(2, cleanupReceipt.OwnerAssignmentRevision);
+        Assert.NotNull(cleanupReceipt.OwnerRevocationAuditEventId);
 
         var cleanupReplay = await authorityStore.ExecuteProjectSetupOperationAsync(firstCaller, cleanupRequest);
         Assert.True(cleanupReplay.Replayed);
@@ -1317,7 +1331,9 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         Assert.True(setupAfterCleanup.Replayed);
         Assert.Equal(ProjectLifecycleState.Archived, setupAfterCleanup.SetupReadback!.ProjectState);
         Assert.Equal(ProjectAuthorityRecordState.Revoked, setupAfterCleanup.SetupReadback.AssignmentState);
+        Assert.Equal(ProjectAuthorityRecordState.Revoked, setupAfterCleanup.SetupReadback.OwnerAssignmentState);
         Assert.True(setupAfterCleanup.SetupReadback.AssignmentExists);
+        Assert.True(setupAfterCleanup.SetupReadback.OwnerAssignmentExists);
 
         await using var verify = CreateDbContext();
         var storedProject = await verify.Projects.AsNoTracking()
@@ -1334,6 +1350,9 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                 item.OperationKind == ProjectSetupOperationKind.Cleanup);
         Assert.Equal(cleanupReceipt.ProjectRevision, cleanupOperation.ProjectRevision);
         Assert.Equal(cleanupReceipt.AssignmentRevision, cleanupOperation.AssignmentRevision);
+        Assert.Equal(cleanupReceipt.OwnerAssignmentId, cleanupOperation.OwnerAssignmentId);
+        Assert.Equal(cleanupReceipt.OwnerAssignmentRevision, cleanupOperation.OwnerAssignmentRevision);
+        Assert.Equal(cleanupReceipt.OwnerRevocationAuditEventId, cleanupOperation.OwnerRevocationAuditEventId);
         Assert.Equal(1, await verify.AuthorityAudit.AsNoTracking()
             .CountAsync(item =>
                 item.AssignmentId == receipt.AssignmentId &&
@@ -1342,6 +1361,19 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         Assert.Equal(1, await verify.AuthorityAudit.AsNoTracking()
             .CountAsync(item =>
                 item.AssignmentId == receipt.AssignmentId &&
+                item.EventType == "role_revoked" &&
+                item.Revision == 2));
+        Assert.Equal(ProjectAuthorityRecordState.Revoked,
+            (await verify.RoleAssignments.AsNoTracking()
+                .SingleAsync(item => item.AssignmentId == receipt.OwnerAssignmentId)).State);
+        Assert.Equal(1, await verify.AuthorityAudit.AsNoTracking()
+            .CountAsync(item =>
+                item.AssignmentId == receipt.OwnerAssignmentId &&
+                item.EventType == "role_assigned" &&
+                item.Revision == 1));
+        Assert.Equal(1, await verify.AuthorityAudit.AsNoTracking()
+            .CountAsync(item =>
+                item.AssignmentId == receipt.OwnerAssignmentId &&
                 item.EventType == "role_revoked" &&
                 item.Revision == 2));
         await AssertImmutableAsync(
@@ -1606,7 +1638,11 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             Assert.Equal(ProjectAuthorityRecordState.Active,
                 (await verify.RoleAssignments.AsNoTracking()
                     .SingleAsync(item => item.AssignmentId == setupReceipt.AssignmentId)).State);
+            Assert.Equal(ProjectAuthorityRecordState.Active,
+                (await verify.RoleAssignments.AsNoTracking()
+                    .SingleAsync(item => item.AssignmentId == setupReceipt.OwnerAssignmentId)).State);
             Assert.Null(cleanupReceipt.AuthorityAuditEventId);
+            Assert.Null(cleanupReceipt.OwnerRevocationAuditEventId);
         }
         finally
         {
