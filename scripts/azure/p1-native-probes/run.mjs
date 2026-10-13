@@ -3,6 +3,11 @@ import { isDeepStrictEqual } from 'node:util';
 
 const TENANT_SELECTOR_HEADER = 'X-Agentweaver-Tenant';
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+const SHA256_HASH = /^[a-f0-9]{64}$/i;
+const GUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const EMPTY_GUID = '00000000-0000-0000-0000-000000000000';
+const FIXED_CREDIT_READ_PATH = '/runtime/v1/turns/fixed-credit-denials/read';
+const NATIVE_CREDIT_READ_PATH = '/runtime/v1/turns/denials/read';
 const HUBBLE_RELAY_ENDPOINT = '127.0.0.1:4245';
 const PROBE_NAMES = Object.freeze([
   'storage-owner-isolation',
@@ -199,6 +204,14 @@ function projectSafeRegistration(registration) {
       environmentProviderFencingGeneration: binding.environmentProviderFencingGeneration,
     },
   };
+}
+
+function isSha256Hash(value) {
+  return typeof value === 'string' && SHA256_HASH.test(value);
+}
+
+function sha256Utf8(value) {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
 function projectSafeReadinessReceipt(receipt) {
@@ -2532,4 +2545,419 @@ export async function runP1NativeProbes(input, dependencies) {
     completedAt: new Date().toISOString(),
     probes,
   };
+}
+
+function hasExactKeys(value, keys) {
+  return isRecord(value) &&
+    Object.keys(value).length === keys.length &&
+    keys.every(key => Object.hasOwn(value, key));
+}
+
+function isHttpsUrl(value, path) {
+  if (!nonEmpty(value)) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' &&
+      url.hostname.length > 0 &&
+      !url.username &&
+      !url.password &&
+      (!path || url.pathname === path) &&
+      !url.search &&
+      !url.hash;
+  } catch {
+    return false;
+  }
+}
+
+function hasCredentialMaterial(value) {
+  if (Array.isArray(value)) return value.some(hasCredentialMaterial);
+  if (!isRecord(value)) return false;
+  return Object.entries(value).some(([key, item]) => {
+    if (/^maxPromptTokens$/i.test(key)) {
+      return item !== null &&
+        (!Number.isSafeInteger(item) || item < 1 || item > 200000);
+    }
+    return /(?:authorization|bearer|token|credential|password|cookie|secret)/i.test(key) ||
+      hasCredentialMaterial(item);
+  });
+}
+
+function isNonEmptyGuid(value) {
+  return typeof value === 'string' && GUID.test(value) &&
+    value.toLowerCase() !== EMPTY_GUID;
+}
+
+function validateCreditReaderPin(pin, kind) {
+  const strings = [
+    'ownerId',
+    'actorId',
+    'tenantId',
+    'projectId',
+    'runId',
+    'sessionId',
+    'environmentId',
+    'runtimeInstanceId',
+    'sourceGrantId',
+  ];
+  const stage = kind === 'fixedZero' ? 'hostPreQueue' : 'nativeTurnBegin';
+  if (!isRecord(pin) ||
+      strings.some(key => !nonEmpty(pin[key])) ||
+      !isNonEmptyGuid(pin.runtimeInstanceId) ||
+      !isNonEmptyGuid(pin.sourceGrantId) ||
+      !positive(pin.registrationRevision) ||
+      !positive(pin.executionFence) ||
+      !positive(pin.sourceGrantRevision) ||
+      !isSha256Hash(pin.registrationHash) ||
+      !isSha256Hash(pin.sourceHash) ||
+      pin.stage !== stage ||
+      (kind === 'fixedZero'
+        ? pin.expectedHardCreditLimit !== 0 ||
+          !isNonEmptyGuid(pin.requestId) ||
+          !isSha256Hash(pin.requestHash)
+        : !Number.isFinite(pin.expectedHardCreditLimit) ||
+          pin.expectedHardCreditLimit <= 0 ||
+          !isNonEmptyGuid(pin.dispatchId))) {
+    block('credit_reader_input_incomplete', 'Both credit-denial cases require complete non-secret owner, runtime, source-grant, and receipt pins.');
+  }
+  if (!hasExactKeys(pin.current, ['registration', 'sourceGrant', 'sourceReceipt']) ||
+      !hasExactKeys(pin.proof, [
+        'contractVersion',
+        'registration',
+        'sourceGrantId',
+        'sourceGrantRevision',
+        'purpose',
+      ]) ||
+      hasCredentialMaterial(pin.current) ||
+      hasCredentialMaterial(pin.proof)) {
+    block('credit_reader_context_incomplete', 'Each case requires an actual non-secret current registration, grant, source receipt, and Host session proof.');
+  }
+}
+
+function validateCreditReaderProof(pin) {
+  if (pin.proof.contractVersion !== 1 ||
+      !sameJson(pin.proof.registration, pin.current.registration) ||
+      pin.proof.sourceGrantId !== pin.current.sourceGrant.grantId ||
+      pin.proof.sourceGrantRevision !== pin.current.sourceGrant.revision ||
+      String(pin.proof.purpose).toLowerCase() !== 'observe') {
+    block('credit_reader_proof_mismatch', 'The Host session proof must bind the actual current registration and Observe grant.');
+  }
+}
+
+function validateCurrentCreditContext(pin, readback, now) {
+  if (!hasExactKeys(readback, ['registration', 'sourceGrant', 'sourceReceipt', 'result']) ||
+      hasCredentialMaterial(readback)) {
+    block('credit_reader_context_incomplete', 'The source reader must return only the current typed registration, grant, source receipt, and read result.');
+  }
+  const { registration, sourceGrant, sourceReceipt } = readback;
+  const binding = registration?.binding;
+  const source = sourceReceipt?.source;
+  const registrationExpiry = Date.parse(registration?.expiresAt);
+  const grantExpiry = Date.parse(sourceGrant?.expiresAt);
+  const observationEndpoint = binding?.observationEndpoint;
+  const configureEndpoint = binding?.configureEndpoint;
+  if (!isRecord(registration) ||
+      registration.runtimeInstanceId !== pin.runtimeInstanceId ||
+      registration.revision !== pin.registrationRevision ||
+      String(registration.state).toLowerCase() !== 'active' ||
+      !Number.isFinite(registrationExpiry) ||
+      registrationExpiry <= now ||
+      !isRecord(binding) ||
+      binding.actorId !== pin.actorId ||
+      binding.tenantId !== pin.tenantId ||
+      binding.projectId !== pin.projectId ||
+      binding.runId !== pin.runId ||
+      binding.sessionId !== pin.sessionId ||
+      binding.environmentId !== pin.environmentId ||
+      binding.executionFence !== pin.executionFence ||
+      binding.copilotHardCreditLimit !== pin.expectedHardCreditLimit ||
+      !isHttpsUrl(configureEndpoint) ||
+      !isHttpsUrl(observationEndpoint, '/internal/runtime/observations') ||
+      !nonEmpty(binding.actorIssuer) ||
+      !nonEmpty(binding.agentId) ||
+      !nonEmpty(binding.turnId) ||
+      !nonEmpty(binding.placementUid) ||
+      !positive(binding.placementGeneration) ||
+      !nonEmpty(binding.profileId) ||
+      !isSha256Hash(binding.acceptedSelectionHash) ||
+      !nonEmpty(binding.modelSelectionReference) ||
+      !isRecord(sourceGrant) ||
+      sourceGrant.grantId !== pin.sourceGrantId ||
+      sourceGrant.runtimeInstanceId !== pin.runtimeInstanceId ||
+      sourceGrant.registrationRevision !== pin.registrationRevision ||
+      sourceGrant.revision !== pin.sourceGrantRevision ||
+      String(sourceGrant.purpose).toLowerCase() !== 'observe' ||
+      String(sourceGrant.state).toLowerCase() !== 'active' ||
+      sourceGrant.audience !== observationEndpoint ||
+      !nonEmpty(sourceGrant.issuer) ||
+      !isSha256Hash(sourceGrant.configurationHash) ||
+      !Number.isFinite(grantExpiry) ||
+      grantExpiry <= now ||
+      grantExpiry > registrationExpiry ||
+      !Number.isFinite(Date.parse(sourceGrant.recordedAt)) ||
+      !isRecord(sourceReceipt) ||
+      sourceReceipt.runtimeInstanceId !== pin.runtimeInstanceId ||
+      sourceReceipt.registrationRevision !== pin.registrationRevision ||
+      sourceReceipt.sourceGrantId !== pin.sourceGrantId ||
+      sourceReceipt.canonicalPayloadHash !== pin.sourceHash ||
+      !isSha256Hash(sourceReceipt.canonicalPayloadHash) ||
+      !Number.isFinite(Date.parse(sourceReceipt.recordedAt)) ||
+      !isRecord(source) ||
+      source.runtimeInstanceId !== pin.runtimeInstanceId ||
+      source.registrationRevision !== pin.registrationRevision ||
+      !nonEmpty(source.sdkSessionId) ||
+      !nonEmpty(source.sdkVersion) ||
+      !nonEmpty(source.runtimeVersion) ||
+      source.sourceMode !== 'hosted-copilot' ||
+      source.meterSource !== 'copilot.nano_aiu' ||
+      source.byokProvider != null ||
+      source.modelSelectionReference !== binding.modelSelectionReference ||
+      source.acceptedSelectionHash !== binding.acceptedSelectionHash ||
+      !nonEmpty(source.modelId) ||
+      !isSha256Hash(source.catalogHash)) {
+    block('credit_reader_current_context_mismatch', 'The current registration, owner scope, Observe grant, audience, and native source receipt do not match the pinned references.');
+  }
+  return { registration, sourceGrant, sourceReceipt };
+}
+
+function validateFixedZeroCreditRead(pin, readback, now) {
+  const current = validateCurrentCreditContext(pin, readback, now);
+  const { result } = readback;
+  const receipt = result?.receipt;
+  const evidence = result?.evidence;
+  if (!hasExactKeys(result, ['receipt', 'evidence']) ||
+      !isRecord(receipt) ||
+      receipt.contractVersion !== 1 ||
+      receipt.stage !== 'hostPreQueue' ||
+      receipt.code !== 'hardLimitZero' ||
+      !sameJson(receipt.registration, current.registration) ||
+      receipt.registrationHash !== pin.registrationHash ||
+      receipt.requestId !== pin.requestId ||
+      receipt.requestHash !== pin.requestHash ||
+      receipt.sourceHash !== pin.sourceHash ||
+      receipt.sourceGrantId !== pin.sourceGrantId ||
+      receipt.sourceGrantRevision !== pin.sourceGrantRevision ||
+      !isSha256Hash(receipt.canonicalPayloadHash) ||
+      !Number.isFinite(Date.parse(receipt.recordedAt)) ||
+      !isRecord(evidence) ||
+      evidence.contractVersion !== 1 ||
+      evidence.runtimeInstanceId !== pin.runtimeInstanceId ||
+      evidence.registrationRevision !== pin.registrationRevision ||
+      evidence.executionFence !== pin.executionFence ||
+      evidence.requestId !== pin.requestId ||
+      evidence.stage !== 'hostPreQueue' ||
+      evidence.guardReceiptHash !== receipt.canonicalPayloadHash ||
+      evidence.registrationHash !== pin.registrationHash ||
+      evidence.sourceHash !== pin.sourceHash ||
+      evidence.sourceGrantId !== pin.sourceGrantId ||
+      evidence.sourceGrantRevision !== pin.sourceGrantRevision ||
+      evidence.observedEventCount !== 0 ||
+      evidence.rangeComplete !== true ||
+      !isSha256Hash(evidence.nativeSessionHash) ||
+      evidence.nativeSessionHash !== sha256Utf8(current.sourceReceipt.source.sdkSessionId) ||
+      !isSha256Hash(evidence.beforeCursorHash) ||
+      evidence.afterCursorHash !== evidence.beforeCursorHash ||
+      !isSha256Hash(evidence.canonicalPayloadHash) ||
+      !Number.isFinite(Date.parse(evidence.verifiedAt))) {
+    block('credit_reader_receipt_invalid', 'The fixed hostPreQueue receipt must bind the actual zero-limit request and a complete empty native-event range.');
+  }
+  return {
+    ownerId: pin.ownerId,
+    runtimeInstanceId: pin.runtimeInstanceId,
+    registrationRevision: pin.registrationRevision,
+    executionFence: pin.executionFence,
+    registrationHash: pin.registrationHash,
+    sourceGrantId: pin.sourceGrantId,
+    sourceGrantRevision: pin.sourceGrantRevision,
+    sourceHash: pin.sourceHash,
+    sourceReceiptHash: current.sourceReceipt.canonicalPayloadHash,
+    stage: 'hostPreQueue',
+    requestId: pin.requestId,
+    requestHash: pin.requestHash,
+    receiptHash: receipt.canonicalPayloadHash,
+    evidenceHash: evidence.canonicalPayloadHash,
+  };
+}
+
+function validatePositiveCreditDenialRead(pin, readback, now) {
+  const current = validateCurrentCreditContext(pin, readback, now);
+  const { result } = readback;
+  const receipt = result?.receipt;
+  const noSend = result?.noSend;
+  const validDispatch = receipt?.dispatchStateBefore === 'prepared' &&
+    positive(receipt.dispatchRevisionBefore) &&
+    receipt.dispatchStateAfter === receipt.dispatchStateBefore &&
+    receipt.dispatchRevisionAfter === receipt.dispatchRevisionBefore;
+  if (!hasExactKeys(result, ['receipt', 'noSend']) ||
+      !isRecord(receipt) ||
+      receipt.contractVersion !== 1 ||
+      receipt.runtimeInstanceId !== pin.runtimeInstanceId ||
+      receipt.registrationRevision !== pin.registrationRevision ||
+      receipt.executionFence !== pin.executionFence ||
+      receipt.sourceGrantId !== pin.sourceGrantId ||
+      receipt.dispatchId !== pin.dispatchId ||
+      receipt.stage !== 'nativeTurnBegin' ||
+      receipt.code !== 'hardLimitReached' ||
+      receipt.registrationHash !== pin.registrationHash ||
+      receipt.sourceHash !== pin.sourceHash ||
+      receipt.hardCreditLimit !== pin.expectedHardCreditLimit ||
+      !Number.isFinite(receipt.observedCredits) ||
+      receipt.observedCredits < pin.expectedHardCreditLimit ||
+      !Number.isSafeInteger(receipt.ledgerEventCount) ||
+      receipt.ledgerEventCount < 0 ||
+      !positive(receipt.guardRevisionBefore) ||
+      receipt.guardRevisionBefore === Number.MAX_SAFE_INTEGER ||
+      receipt.guardRevisionAfter !== receipt.guardRevisionBefore + 1 ||
+      !validDispatch ||
+      !['dispatchHash', 'checkpointHash', 'ledgerDigest', 'costIdentity', 'canonicalPayloadHash']
+        .every(key => isSha256Hash(receipt[key])) ||
+      !Number.isFinite(Date.parse(receipt.recordedAt)) ||
+      !isRecord(noSend) ||
+      noSend.contractVersion !== 1 ||
+      noSend.runtimeInstanceId !== pin.runtimeInstanceId ||
+      noSend.registrationRevision !== pin.registrationRevision ||
+      noSend.dispatchId !== pin.dispatchId ||
+      noSend.denialReceiptHash !== receipt.canonicalPayloadHash ||
+      noSend.registrationHash !== pin.registrationHash ||
+      noSend.sourceHash !== pin.sourceHash ||
+      noSend.observedEventCount !== 0 ||
+      noSend.rangeComplete !== true ||
+      !isSha256Hash(noSend.nativeSessionHash) ||
+      noSend.nativeSessionHash !== sha256Utf8(current.sourceReceipt.source.sdkSessionId) ||
+      !isSha256Hash(noSend.beforeCursorHash) ||
+      noSend.afterCursorHash !== noSend.beforeCursorHash ||
+      !isSha256Hash(noSend.canonicalPayloadHash) ||
+      !Number.isFinite(Date.parse(noSend.verifiedAt))) {
+    block('credit_reader_receipt_invalid', 'The positive NativeTurnBegin denial must bind the configured hard limit and a complete no-send receipt.');
+  }
+  return {
+    ownerId: pin.ownerId,
+    runtimeInstanceId: pin.runtimeInstanceId,
+    registrationRevision: pin.registrationRevision,
+    executionFence: pin.executionFence,
+    registrationHash: pin.registrationHash,
+    sourceGrantId: pin.sourceGrantId,
+    sourceGrantRevision: pin.sourceGrantRevision,
+    sourceHash: pin.sourceHash,
+    sourceReceiptHash: current.sourceReceipt.canonicalPayloadHash,
+    stage: 'nativeTurnBegin',
+    dispatchId: pin.dispatchId,
+    expectedHardCreditLimit: pin.expectedHardCreditLimit,
+    receiptHash: receipt.canonicalPayloadHash,
+    noSendReceiptHash: noSend.canonicalPayloadHash,
+    observedEventCount: noSend.observedEventCount,
+    rangeComplete: noSend.rangeComplete,
+  };
+}
+
+function creditReaderCaseError(error) {
+  if (error instanceof ProbeIssue) {
+    return {
+      status: error.status,
+      code: error.code,
+      reason: sanitize(error.message),
+      evidence: sanitize(error.evidence),
+    };
+  }
+  return {
+    status: 'blocked',
+    code: 'credit_source_read_unavailable',
+    reason: 'The current authorized-runtime source reader did not return a validated owner readback.',
+    evidence: {},
+  };
+}
+
+function creditReaderOutput(startedAt, cases) {
+  return {
+    kind: 'p1-native-credit-denial-readers',
+    schemaVersion: 1,
+    overallStatus: Object.values(cases).every(item => item.status === 'passed')
+      ? 'passed'
+      : 'blocked',
+    startedAt,
+    completedAt: new Date().toISOString(),
+    cases,
+  };
+}
+
+export async function runP1NativeCreditDenialReaders(input = {}, dependencies = {}) {
+  const fixedZero = input?.fixedZero;
+  const positive = input?.positive;
+  const startedAt = new Date().toISOString();
+  const now = () => typeof dependencies?.now === 'function' ? dependencies.now() : Date.now();
+  try {
+    inspectInputForSecrets({
+      fixedZero: fixedZero && Object.fromEntries(Object.entries(fixedZero)
+        .filter(([key]) => key !== 'current' && key !== 'proof')),
+      positive: positive && Object.fromEntries(Object.entries(positive)
+        .filter(([key]) => key !== 'current' && key !== 'proof')),
+    });
+    if (hasCredentialMaterial({ fixedZero: fixedZero?.current, positive: positive?.current,
+      fixedProof: fixedZero?.proof, positiveProof: positive?.proof })) {
+      block('credential_in_input', 'Host proofs and pinned source context must not contain bearer credentials or credential references.');
+    }
+    validateCreditReaderPin(fixedZero, 'fixedZero');
+    validateCreditReaderPin(positive, 'positive');
+    if (fixedZero.runtimeInstanceId.toLowerCase() === positive.runtimeInstanceId.toLowerCase()) {
+      block('credit_reader_instances_not_distinct', 'The zero and positive cases must pin different current RuntimeHost registrations.');
+    }
+    validateCreditReaderProof(fixedZero);
+    validateCreditReaderProof(positive);
+    validateCurrentCreditContext(fixedZero, { ...fixedZero.current, result: {} }, now());
+    validateCurrentCreditContext(positive, { ...positive.current, result: {} }, now());
+  } catch (error) {
+    const failure = creditReaderCaseError(error);
+    if (!(error instanceof ProbeIssue)) {
+      failure.code = 'credit_reader_input_incomplete';
+      failure.reason = 'Both independently pinned credit-denial cases are required.';
+    }
+    return creditReaderOutput(startedAt, {
+      fixedZero: { ...failure },
+      positive: { ...failure },
+    });
+  }
+
+  const hostCaller = dependencies?.hostCaller;
+  if (typeof hostCaller?.postJson !== 'function') {
+    const failure = {
+      status: 'blocked',
+      code: 'credit_source_reader_unavailable',
+      reason: 'An already-authorized RuntimeHost caller is required for both fixed read routes.',
+      evidence: {},
+    };
+    return creditReaderOutput(startedAt, {
+      fixedZero: { ...failure },
+      positive: { ...failure },
+    });
+  }
+
+  const readCase = async (pin, path, body, validate) => {
+    let readback;
+    try {
+      const result = await hostCaller.postJson(path, body);
+      readback = { ...pin.current, result };
+    } catch {
+      return creditReaderCaseError(new Error('source read failed'));
+    }
+    try {
+      return { status: 'passed', evidence: validate(pin, readback, now()) };
+    } catch (error) {
+      return creditReaderCaseError(error);
+    }
+  };
+  const [fixedZeroResult, positiveResult] = await Promise.all([
+    readCase(fixedZero, FIXED_CREDIT_READ_PATH, {
+      proof: fixedZero.proof,
+      requestId: fixedZero.requestId,
+      requestHash: fixedZero.requestHash,
+    }, validateFixedZeroCreditRead),
+    readCase(positive, NATIVE_CREDIT_READ_PATH, {
+      proof: positive.proof,
+      dispatchId: positive.dispatchId,
+      stage: positive.stage,
+    }, validatePositiveCreditDenialRead),
+  ]);
+  return creditReaderOutput(startedAt, {
+    fixedZero: fixedZeroResult,
+    positive: positiveResult,
+  });
 }
