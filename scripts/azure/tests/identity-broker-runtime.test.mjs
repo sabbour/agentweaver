@@ -15,36 +15,129 @@ const config = {
 };
 const zone = '6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
 const hostname = `agentweaver.${zone}`;
+const portalHostname = `portal.${zone}`;
 const legacyHostname = `identity-broker.${zone}`;
 const issuer = `https://eastus2euap.oic.prod-aks.azure.com/${clientId}/cluster/`;
 const ok = stdout => ({ status: 0, stdout: stdout ?? '', stderr: '' });
-function object(kind, spec, status) {
+function object(kind, spec, status, { name = 'identity-broker', service = 'identity-broker' } = {}) {
   return { apiVersion: kind === 'DefaultDomainCertificate'
     ? 'approuting.kubernetes.azure.com/v1alpha1' : 'gateway.networking.k8s.io/v1',
-  kind, metadata: { name: 'identity-broker', namespace, uid: `${kind}-uid`, resourceVersion: '1',
-    generation: 1, labels: { 'agentweaver.io/service': 'identity-broker' } }, spec, status };
+  kind, metadata: { name, namespace, uid: `${kind}-${name}-uid`, resourceVersion: '1',
+    generation: 1, labels: { 'agentweaver.io/service': service } }, spec, status };
 }
-function routing(host = legacyHostname) {
-  return {
+function routing(host = legacyHostname, includeApplicationRoutes = false) {
+  const gatewayListeners = [{
+    name: 'https', hostname: host, protocol: 'HTTPS', port: 443,
+    tls: { mode: 'Terminate', certificateRefs: [{ name: 'identity-broker-tls' }] },
+    allowedRoutes: { namespaces: { from: 'Same' } },
+  }];
+  const gatewayListenerStatus = [{
+    name: 'https', conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
+      { type: 'Programmed', status: 'True', observedGeneration: 1 },
+      { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }],
+  }];
+  const state = {
     certificate: object('DefaultDomainCertificate', { target: { secret: 'identity-broker-tls' } }, {
       domain: `*.${zone}`, conditions: [{ type: 'Available', status: 'True', observedGeneration: 1 }],
     }),
-    gateway: object('Gateway', { gatewayClassName: 'approuting-istio', listeners: [{
-      name: 'https', hostname: host, protocol: 'HTTPS', port: 443,
-      tls: { mode: 'Terminate', certificateRefs: [{ name: 'identity-broker-tls' }] },
-      allowedRoutes: { namespaces: { from: 'Same' } },
-    }] }, { conditions: [{ type: 'Programmed', status: 'False', observedGeneration: 1 }] }),
+    gateway: object('Gateway', { gatewayClassName: 'approuting-istio', listeners: gatewayListeners }, {
+      conditions: [{ type: 'Programmed', status: 'False', observedGeneration: 1 }],
+      listeners: gatewayListenerStatus,
+    }),
     route: object('HTTPRoute', { hostnames: [host], parentRefs: [{ name: 'identity-broker', sectionName: 'https' }],
       rules: [{ matches: [{ path: { type: 'PathPrefix', value: '/' } }],
-        backendRefs: [{ name: 'identity-broker', port: 443 }] }] }),
+        backendRefs: [{ name: 'identity-broker', port: 443 }] }] }, { parents: [{
+      controllerName: 'istio.aks.azure.com/gateway-controller',
+      parentRef: { name: 'identity-broker', sectionName: 'https' },
+      conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
+        { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }],
+    }] }),
     backendPolicy: object('BackendTLSPolicy', { targetRefs: [{
       name: 'identity-broker', kind: 'Service', group: '', sectionName: 'https',
-    }], validation: { hostname: host, wellKnownCACertificates: 'System' } }),
+    }], validation: { hostname: host, wellKnownCACertificates: 'System' } }, { ancestors: [{
+      controllerName: 'istio.aks.azure.com/gateway-controller', ancestorRef: { name: 'identity-broker' },
+      conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
+        { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }],
+    }] }),
   };
+  if (includeApplicationRoutes) {
+    gatewayListeners.push({
+      name: 'portal', hostname: portalHostname, protocol: 'HTTPS', port: 443,
+      tls: { mode: 'Terminate', certificateRefs: [{ name: 'identity-broker-tls' }] },
+      allowedRoutes: { namespaces: { from: 'Same' } },
+    });
+    gatewayListenerStatus.push({
+      name: 'portal', conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
+        { type: 'Programmed', status: 'True', observedGeneration: 1 },
+        { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }],
+    });
+    state.webRoute = object('HTTPRoute', {
+      hostnames: [portalHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'portal' }],
+      rules: [{ matches: [{ path: { type: 'PathPrefix', value: '/' } }],
+        backendRefs: [{ name: 'web', port: 8080 }] }],
+    }, { parents: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
+      parentRef: { name: 'identity-broker', sectionName: 'portal' },
+      conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
+        { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
+    { name: 'web-application', service: 'web' });
+    state.apiRoute = object('HTTPRoute', {
+      hostnames: [portalHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'portal' }],
+      rules: [{ matches: [
+        { path: { type: 'PathPrefix', value: '/api/v1' } },
+        { path: { type: 'Exact', value: '/openapi/v1.json' } },
+      ],
+        backendRefs: [{ name: 'gateway', port: 8443 }] }],
+    }, { parents: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
+      parentRef: { name: 'identity-broker', sectionName: 'portal' },
+      conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
+        { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
+    { name: 'gateway-api', service: 'gateway' });
+    state.apiBackendPolicy = object('BackendTLSPolicy', { targetRefs: [{
+      name: 'gateway', kind: 'Service', group: '', sectionName: 'https',
+    }], validation: {
+      hostname: 'gateway.agentweaver-v1-p0.svc.cluster.local',
+      caCertificateRefs: [{ group: '', kind: 'ConfigMap', name: 'service-backend-ca' }],
+    } }, { ancestors: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
+      ancestorRef: { name: 'identity-broker' },
+      conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
+        { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
+    { name: 'gateway-api', service: 'gateway' });
+    state.mcpRoute = object('HTTPRoute', {
+      hostnames: [portalHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'portal' }],
+      rules: [{ matches: [
+        { path: { type: 'Exact', value: '/mcp' } },
+        { path: { type: 'Exact', value: '/.well-known/oauth-protected-resource/mcp' } },
+      ], backendRefs: [{ name: 'mcp', port: 8443 }] }],
+    }, { parents: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
+      parentRef: { name: 'identity-broker', sectionName: 'portal' },
+      conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
+        { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
+    { name: 'mcp', service: 'mcp' });
+    state.mcpBackendPolicy = object('BackendTLSPolicy', { targetRefs: [{
+      name: 'mcp', kind: 'Service', group: '', sectionName: 'https',
+    }], validation: {
+      hostname: 'mcp.agentweaver-v1-p0.svc.cluster.local',
+      caCertificateRefs: [{ group: '', kind: 'ConfigMap', name: 'service-backend-ca' }],
+    } }, { ancestors: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
+      ancestorRef: { name: 'identity-broker' },
+      conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
+        { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
+    { name: 'mcp', service: 'mcp' });
+  }
+  return state;
 }
 const resourceKeys = {
   defaultdomaincertificate: 'certificate', gateway: 'gateway', httproute: 'route', backendtlspolicy: 'backendPolicy',
 };
+function resourceKey(resource, name) {
+  if (resource === 'httproute') return ({
+    'identity-broker': 'route', 'web-application': 'webRoute', 'gateway-api': 'apiRoute', mcp: 'mcpRoute',
+  })[name];
+  if (resource === 'backendtlspolicy') return ({
+    'identity-broker': 'backendPolicy', 'gateway-api': 'apiBackendPolicy', mcp: 'mcpBackendPolicy',
+  })[name];
+  return resourceKeys[resource];
+}
 
 test('Deployment hashing normalizes only an equal explicit deprecated ServiceAccount alias', () => {
   const desired = { kind: 'Deployment', spec: { strategy: { type: 'Recreate' },
@@ -61,13 +154,28 @@ test('Deployment hashing normalizes only an equal explicit deprecated ServiceAcc
   assert.notEqual(brokerObjectHash(actual), brokerObjectHash(desired));
 });
 
-function gatewayRouting(host = hostname) {
-  const state = routing(host);
+function gatewayRouting(host = hostname, includeApplicationRoutes = false) {
+  const state = routing(host, includeApplicationRoutes);
   state.gateway.metadata.namespace = 'agentweaver-v1-gateway';
-  state.gateway.spec.listeners[0].allowedRoutes = { namespaces: {
-    from: 'Selector', selector: { matchLabels: { 'kubernetes.io/metadata.name': namespace } },
-  } };
+  for (const listener of state.gateway.spec.listeners) {
+    listener.allowedRoutes = { namespaces: {
+      from: 'Selector', selector: { matchLabels: { 'kubernetes.io/metadata.name': namespace } },
+    } };
+  }
   state.route.spec.parentRefs[0].namespace = 'agentweaver-v1-gateway';
+  if (state.route.status?.parents?.[0]) {
+    state.route.status.parents[0].parentRef.namespace = 'agentweaver-v1-gateway';
+  }
+  if (state.backendPolicy.status?.ancestors?.[0]) {
+    state.backendPolicy.status.ancestors[0].ancestorRef.namespace = 'agentweaver-v1-gateway';
+  }
+  for (const route of [state.webRoute, state.apiRoute, state.mcpRoute].filter(Boolean)) {
+    route.spec.parentRefs[0].namespace = 'agentweaver-v1-gateway';
+    route.status.parents[0].parentRef.namespace = 'agentweaver-v1-gateway';
+  }
+  for (const policy of [state.apiBackendPolicy, state.mcpBackendPolicy].filter(Boolean)) {
+    policy.status.ancestors[0].ancestorRef.namespace = 'agentweaver-v1-gateway';
+  }
   return state;
 }
 
@@ -80,17 +188,21 @@ test('post-placement alignment reads the exact Gateway namespace and leaves alig
       calls.push(args);
       assert.ok(!args.includes('patch'));
       const resource = args[args.indexOf('get') + 1];
+      const name = args[args.indexOf('get') + 2];
       const expectedNamespace = resource === 'gateway' ? 'agentweaver-v1-gateway' : namespace;
       assert.equal(args[args.indexOf('--namespace') + 1], expectedNamespace);
-      return ok(JSON.stringify(options.projectJson(state[resourceKeys[resource]])));
+      return ok(JSON.stringify(options.projectJson(state[resourceKey(resource, name)])));
     },
   });
   assert.equal(result.changed, false);
   assert.equal(result.gatewayNamespace, 'agentweaver-v1-gateway');
   assert.equal(result.configurationOnly, true);
+  assert.equal(result.applicationRoutesConfigured, false);
   assert.ok(calls.length > 0);
   state.gateway.spec.listeners[0].allowedRoutes.namespaces.selector.matchLabels.foreign = 'allowed';
-  assert.throws(() => observeExistingP0BrokerRouting(state), /configuration changed/);
+  assert.throws(() => observeExistingP0BrokerRouting({
+    ...state, requireApplicationRoutes: false,
+  }), /configuration changed/);
 });
 
 test('existing P0 alignment replaces only hostname fields with optimistic tests and keeps programming blocked', () => {
@@ -102,7 +214,8 @@ test('existing P0 alignment replaces only hostname fields with optimistic tests 
     execKubectl(args, options) {
       const verb = args.includes('patch') ? 'patch' : 'get';
       const resource = args[args.indexOf(verb) + 1];
-      const target = state[resourceKeys[resource]];
+      const name = args[args.indexOf(verb) + 2];
+      const target = state[resourceKey(resource, name)];
       if (verb === 'get') return ok(JSON.stringify(options.projectJson(target)));
       const patch = JSON.parse(args[args.indexOf('--patch') + 1]);
       assert.deepEqual(patch.slice(0, 2), [
@@ -142,7 +255,9 @@ test('hostname alignment rejects changed ownership, namespace, routes, trust, an
   ]) {
     const state = gatewayRouting(legacyHostname);
     mutate(state);
-    assert.throws(() => observeExistingP0BrokerRouting(state), /exact|changed|trust/);
+    assert.throws(() => observeExistingP0BrokerRouting({
+      ...state, requireApplicationRoutes: false,
+    }), /exact|changed|trust/);
   }
 });
 
@@ -156,12 +271,15 @@ test('old same-name P0 Gateway parents are rejected before any hostname patch', 
       execKubectl(args, options) {
         calls.push(args);
         const resource = args[args.indexOf('get') + 1];
+        const name = args[args.indexOf('get') + 2];
         assert.notEqual(resource, 'gateway');
-        return ok(JSON.stringify(options.projectJson(state[resourceKeys[resource]])));
+        return ok(JSON.stringify(options.projectJson(state[resourceKey(resource, name)])));
       },
     }), /exact approved Gateway namespace/);
     assert.ok(!calls.some(args => args.includes('patch')));
-    assert.throws(() => observeExistingP0BrokerRouting(state), /exact approved Gateway namespace/);
+    assert.throws(() => observeExistingP0BrokerRouting({
+      ...state, requireApplicationRoutes: false,
+    }), /exact approved Gateway namespace/);
   }
 });
 
@@ -184,7 +302,7 @@ test('public acceptance client is explicit run-owned configuration, not producti
 });
 
 test('runtime setup creates absent native objects once and never overwrites conflicting state', () => {
-  const state = gatewayRouting();
+  const state = gatewayRouting(hostname, true);
   const created = new Map();
   const calls = [];
   const rendered = [
@@ -226,7 +344,7 @@ test('runtime setup creates absent native objects once and never overwrites conf
         const singular = resource.replace(/ies$/, 'y').replace(/s$/, '');
         const field = args[args.indexOf('--field-selector') + 1];
         const name = field.split('=')[1];
-        const value = state[resourceKeys[singular]] ?? created.get(`${resource}/${name}`);
+        const value = state[resourceKey(singular, name)] ?? created.get(`${resource}/${name}`);
         return ok(JSON.stringify(options.projectJson({ items: value ? [value] : [] })));
       }
       assert.ok(args.includes('create'));

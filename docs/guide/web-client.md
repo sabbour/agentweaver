@@ -9,15 +9,26 @@ account lifecycle uses cookie-authenticated Identity Broker endpoints directly.
 ```mermaid
 flowchart LR
   Browser[Agentweaver web client]
+  McpClient[MCP clients]
   Broker[Identity Broker]
+  Portal[AKS-managed HTTPS portal listener]
+  Web[Web service]
   Gateway[Gateway / BFF]
+  Mcp[MCP service]
   Projects[Projects & Config]
   Orchestrator[Orchestrator]
   Events[Events & Sessions]
   Knowledge[Knowledge]
 
-  Browser -->|Allow-listed API calls: bearer + optional tenant selector| Gateway
-  Browser -->|Live event SSE: bearer only| Gateway
+  Browser -->|HTTPS /api/v1 and exact /openapi/v1.json| Portal
+  Portal -->|/api/v1 and exact /openapi/v1.json| Gateway
+  McpClient -->|HTTPS /mcp| Portal
+  Portal -->|/mcp| Mcp
+  McpClient -->|HTTPS protected-resource metadata| Portal
+  Portal -->|/.well-known/oauth-protected-resource/mcp| Mcp
+  Browser -->|HTTPS /| Portal
+  Portal -->|/| Web
+  Gateway -->|Live event SSE: bearer only| Events
 
   Browser -->|PKCE authorization, consent, token refresh| Broker
   Browser -->|Bearer API requests and ordered SSE| Gateway
@@ -44,6 +55,14 @@ policies are route-specific and non-credentialed except for the Copilot
 connection BFF, which narrowly allows credentials for its callback cookie.
 Direct Repo App browser requests use the Broker's independent credentialed
 endpoint allowlist; the Gateway origin setting does not configure Broker CORS.
+
+The optional managed portal routes send `/` to Web on port 8080, the `/api/v1`
+prefix plus exact `/openapi/v1.json` to Gateway, and exact `/mcp` plus the
+exact `/.well-known/oauth-protected-resource/mcp` metadata path to MCP on port
+8443. The OpenAPI document is not sent to the Web fallback route. These source
+manifests do not prove that the managed Gateway is accepting traffic;
+acceptance remains blocked by the Gateway pod's missing seccomp profile under
+the current P0 namespace policy.
 
 The Web host provides `/health/live` and `/health/ready` without sign-in.
 Readiness returns `503` when the built `wwwroot/index.html` file is missing.

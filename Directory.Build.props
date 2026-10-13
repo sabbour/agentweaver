@@ -7,4 +7,13 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
+  <ItemGroup Condition="'$(EnableSdkContainerSupport)' == 'true'
+      and '$(AgentweaverIntegrationImagesOnly)' == 'true'
+      and '$(AgentweaverIntegrationSourceSha)' != ''
+      and '$(AgentweaverIntegrationSourceTree)' != ''
+      and '$(AgentweaverIntegrationVersion)' != ''">
+    <ContainerLabel Include="org.opencontainers.image.revision" Value="$(AgentweaverIntegrationSourceSha)" />
+    <ContainerLabel Include="io.agentweaver.source-tree" Value="$(AgentweaverIntegrationSourceTree)" />
+    <ContainerLabel Include="org.opencontainers.image.version" Value="$(AgentweaverIntegrationVersion)" />
+  </ItemGroup>
 </Project>

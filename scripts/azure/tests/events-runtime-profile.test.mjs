@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { renderEventsProfile } from '../../../deploy/k8s/profiles/events-and-sessions/render.mjs';
+import { runtimeContractSettings, runtimeListFixture } from '../../release/tests/runtime-list-fixture.mjs';
 
 const exampleUrl = new URL('../../../deploy/k8s/profiles/events-and-sessions/runtime-inputs.example.json', import.meta.url);
 const example = JSON.parse(readFileSync(exampleUrl, 'utf8'));
@@ -225,6 +226,13 @@ test('workload is private, restricted, read-only and bounded without migration o
   assert.equal(container.command, undefined);
   assert.equal(result.items.some(value => ['Secret', 'Job', 'Ingress', 'Gateway'].includes(value.kind)), false);
   assert.doesNotMatch(JSON.stringify(result), /RemoteToolResults|Migration|--migrate|SSL_CERT|secretRef/);
+});
+
+test('release runtime preserves the accepted Events identity, listener and health contract', () => {
+  const accepted = item(renderEventsProfile(fixture()), 'Deployment');
+  const runtime = runtimeListFixture().items.find(value =>
+    value.kind === 'Deployment' && value.metadata.name === 'events-and-sessions');
+  assert.deepEqual(runtimeContractSettings(runtime), runtimeContractSettings(accepted));
 });
 
 test('network policy allows only exact callers, owners, required Azure endpoints and DNS names', () => {

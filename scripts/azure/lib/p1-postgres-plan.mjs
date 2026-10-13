@@ -55,18 +55,48 @@ const GROUPS = {
   },
 };
 
-const LOCK_COLUMNS = {
+const LOCK_GUARDS = {
   events_sessions: {
-    sessions: 'session_id',
-    session_provider_bindings: 'run_id',
-    session_fork_lineage: 'target_session_id',
-    usage_rate_cards: 'card_id',
-    usage_ledger: 'event_id',
+    sessions: {
+      column: 'session_id', trigger: 'sessions_no_update', function: 'reject_row_lock_record_update()',
+      triggerType: 19, message: 'Session identity, provider binding, and fork lineage records cannot be updated.',
+      sqlState: '55000',
+    },
+    session_provider_bindings: {
+      column: 'run_id', trigger: 'session_provider_bindings_no_update', function: 'reject_row_lock_record_update()',
+      triggerType: 19, message: 'Session identity, provider binding, and fork lineage records cannot be updated.',
+      sqlState: '55000',
+    },
+    session_fork_lineage: {
+      column: 'target_session_id', trigger: 'session_fork_lineage_no_update',
+      function: 'reject_row_lock_record_update()', triggerType: 19,
+      message: 'Session identity, provider binding, and fork lineage records cannot be updated.', sqlState: '55000',
+    },
+    usage_rate_cards: {
+      column: 'card_id', trigger: 'usage_rate_cards_immutable', function: 'reject_usage_history_mutation()',
+      triggerType: 27, message: 'usage accounting history is append-only', sqlState: null,
+    },
+    usage_ledger: {
+      column: 'event_id', trigger: 'usage_ledger_append_only', function: 'reject_usage_history_mutation()',
+      triggerType: 27, message: 'usage accounting history is append-only', sqlState: null,
+    },
   },
   orchestrator: {
-    coordinator_decisions: 'decision_id',
-    maf_workflow_checkpoints: 'checkpoint_id',
-    session_consistency_manifests: 'manifest_id',
+    coordinator_decisions: {
+      column: 'decision_id', trigger: 'coordinator_decisions_no_update',
+      function: 'reject_row_lock_record_update()', triggerType: 19,
+      message: 'Coordinator decision and MAF checkpoint records cannot be updated.', sqlState: '55000',
+    },
+    maf_workflow_checkpoints: {
+      column: 'checkpoint_id', trigger: 'maf_workflow_checkpoints_no_update',
+      function: 'reject_row_lock_record_update()', triggerType: 19,
+      message: 'Coordinator decision and MAF checkpoint records cannot be updated.', sqlState: '55000',
+    },
+    session_consistency_manifests: {
+      column: 'manifest_id', trigger: 'session_consistency_manifests_immutable',
+      function: 'reject_session_consistency_manifest_mutation()', triggerType: 27,
+      message: 'session consistency manifests are immutable', sqlState: null,
+    },
   },
 };
 
@@ -120,9 +150,16 @@ export function buildP1PostgresPlan() {
       names.split(' ').map(table => ({
         table,
         privileges: privileges.split(','),
-        ...(LOCK_COLUMNS[schema]?.[table] ? {
-          lockColumn: LOCK_COLUMNS[schema][table],
+        ...(LOCK_GUARDS[schema]?.[table] ? {
+          lockColumn: LOCK_GUARDS[schema][table].column,
           mutationDenialRequired: true,
+          mutationDenialGuard: {
+            trigger: LOCK_GUARDS[schema][table].trigger,
+            function: LOCK_GUARDS[schema][table].function,
+            triggerType: LOCK_GUARDS[schema][table].triggerType,
+            message: LOCK_GUARDS[schema][table].message,
+            sqlState: LOCK_GUARDS[schema][table].sqlState,
+          },
         } : {}),
       }))),
     functions: FUNCTIONS[schema].map(signature => ({
@@ -138,7 +175,7 @@ export function buildP1PostgresPlan() {
     executionRequirements: [
       'Exact reviewed source and actual Core merge are present in the current base.',
       'A separate approval permits the five SQL login mappings, schema initialization, and exact grants.',
-      'Restricted-role PostgreSQL tests prove row locks, mutation denial, and the two bounded DELETE paths.',
+      'The exact installed row-lock mutation-denial triggers are read back before grants; restricted-role PostgreSQL tests prove row locks, mutation denial, and the two bounded DELETE paths.',
       'The already approved private connection is ready; this command does not create a tunnel or cloud resources.',
     ],
   };

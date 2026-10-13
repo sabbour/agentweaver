@@ -26,6 +26,8 @@ purpose: 1.0 is a rebuild, not a refactor of 0.x.
 | [Orchestration](docs/architecture/design/orchestration.md) | Thin coordinator, workflow step catalogs, typed decision tools, rules in code |
 | [Applications and surfaces](docs/architecture/design/applications-and-surfaces.md) | One application model (`live` → `preview` → `published`), Application Hosting, the surface panel |
 | [Services and release](docs/architecture/design/services-and-release.md) | Service decomposition, data plane, per-service versioning and release |
+| [Component releases](releases/README.md) | v1 manifest/provenance contracts, package preparation, publication, and guarded local image deployment |
+| [P0 Kubernetes source](deploy/k8s/README.md) | Existing runtime profiles, operator-owned prerequisites, and the v1 rollout boundary |
 | [Projects & Config service](docs/architecture/projects-config.md) | Implemented candidate API, revisioned records, and immutable run-selection semantics |
 | [Skill marketplace sources](docs/architecture/skill-marketplace.md) | Revisioned project sources, bounded commit-pinned browsing, and the import ownership boundary |
 | [AgentHost source candidate](docs/architecture/agenthost.md) | Authenticated native SDK execution, guarded effects, durable turns, startup evidence, and pinned image |
@@ -146,6 +148,8 @@ Native AKS-managed Gateway routing has a separate default-off
 `--bootstrap-identity-routing` option.
 It requires explicit approved Gateway placement, security policy, and public-client inputs.
 It derives the issuer and `/signin-oidc` callback from the admitted native route.
+The separate portal listener sends `/` to Web and `/api/v1` plus exact
+`/openapi/v1.json` to Gateway; these source routes are not deployment evidence.
 The callback operation defaults to a read-only append/no-op plan.
 An append requires separate explicit registration and exact-URI confirmation options.
 An existing URI remains a no-op.

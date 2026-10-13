@@ -2,6 +2,62 @@ namespace Agentweaver.P1PostgresInitializer;
 
 internal static class InitializerChecks
 {
+    internal static void AssertMutationDenialPlan(ServicePlan[] services)
+    {
+        var protectedTables = services.SelectMany(service =>
+            service.Tables.Where(table => table.LockColumn is not null ||
+                table.MutationDenialRequired || table.MutationDenialGuard is not null)
+                .Select(table => (Service: service, Table: table))).ToArray();
+        if (services.Length != 5 || protectedTables.Length != 8)
+            throw new InvalidOperationException("The exact eight protected row-lock columns are required.");
+
+        foreach (var (service, table) in protectedTables)
+        {
+            var guard = table.MutationDenialGuard;
+            var matchingFunctions = guard is null
+                ? []
+                : service.Functions.Where(function => function.Signature == guard.Function).ToArray();
+            if (!table.MutationDenialRequired || string.IsNullOrWhiteSpace(table.LockColumn) ||
+                table.Privileges.Contains("UPDATE") || guard is null ||
+                string.IsNullOrWhiteSpace(guard.Trigger) || string.IsNullOrWhiteSpace(guard.Function) ||
+                guard.TriggerType is not (19 or 27) || string.IsNullOrWhiteSpace(guard.Message) ||
+                (guard.SqlState is not null && !System.Text.RegularExpressions.Regex.IsMatch(guard.SqlState, "^[0-9A-Z]{5}$")) ||
+                matchingFunctions.Length != 1 || matchingFunctions[0].Execute)
+                throw new InvalidOperationException(
+                    $"The {service.Service} {table.Table} one-column lock grant has no exact non-executable mutation guard.");
+        }
+    }
+
+    internal static void AssertMutationDenialGuards(ServicePlan service, MutationGuardState[] guards,
+        uint ownerOid, uint runtimeOid)
+    {
+        var protectedTables = service.Tables.Where(table => table.MutationDenialRequired).ToArray();
+        if (guards.Length != protectedTables.Length)
+            throw new InvalidOperationException($"The {service.Service} row-lock mutation guards are incomplete.");
+
+        foreach (var table in protectedTables)
+        {
+            var matches = guards.Where(guard => guard.Table == table.Table).ToArray();
+            var expected = table.MutationDenialGuard;
+            if (matches.Length != 1 || expected is null)
+                throw new InvalidOperationException($"The {service.Service} {table.Table} row-lock mutation guard is missing or duplicated.");
+            var actual = matches[0];
+            var expectedBody = NormalizeGuardSource(
+                $"BEGIN RAISE EXCEPTION '{expected.Message}'" +
+                (expected.SqlState is null ? string.Empty : $" USING ERRCODE = '{expected.SqlState}'") +
+                "; END");
+            if (actual.TriggerName != expected.Trigger || actual.FunctionSchema != service.Schema ||
+                actual.FunctionName != expected.Function || actual.TriggerType != expected.TriggerType ||
+                actual.Enabled != "O" || actual.IsInternal != false || actual.NoColumnFilter != true ||
+                actual.NoCondition != true || actual.ArgumentCount != 0 ||
+                actual.FunctionOwnerOid != ownerOid || actual.RuntimeCanExecute != false ||
+                actual.FunctionSource is null || NormalizeGuardSource(actual.FunctionSource) != expectedBody ||
+                ownerOid == 0 || runtimeOid == 0)
+                throw new InvalidOperationException(
+                    $"The {service.Service} {table.Table} mutation-denial trigger or function changed. The grants are not committed.");
+        }
+    }
+
     internal static void AssertPreflight(PreflightSnapshot state)
     {
         var boundary = state.Boundary;
@@ -78,6 +134,9 @@ internal static class InitializerChecks
         expected.Length == actual.Length && expected.Distinct().Count() == expected.Length &&
         actual.Distinct().Count() == actual.Length && expected.ToHashSet().SetEquals(actual);
 
+    private static string NormalizeGuardSource(string source) =>
+        string.Join(' ', source.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).TrimEnd(';');
+
     internal static async Task RunStageAsync(Func<Task> preflight, Func<Task> mutate,
         Func<Task> verify, Func<Task> commit, Func<Task> record)
     {
@@ -124,5 +183,12 @@ internal sealed record TargetPlan(string TenantId, string PostgresHost, string D
     string OperatorObjectId, string ConnectionHost, int ConnectionPort);
 internal sealed record ServicePlan(string Service, string Schema, string Role, string PrincipalObjectId,
     TablePlan[] Tables, FunctionPlan[] Functions);
-internal sealed record TablePlan(string Table, string[] Privileges, string? LockColumn, bool MutationDenialRequired);
+internal sealed record TablePlan(string Table, string[] Privileges, string? LockColumn, bool MutationDenialRequired,
+    MutationDenialGuardPlan? MutationDenialGuard);
+internal sealed record MutationDenialGuardPlan(string Trigger, string Function, int TriggerType,
+    string Message, string? SqlState);
+internal sealed record MutationGuardState(string Table, string? TriggerName, string? FunctionSchema,
+    string? FunctionName, int? TriggerType, string? Enabled, bool? IsInternal, bool? NoColumnFilter,
+    bool? NoCondition, int? ArgumentCount, uint? FunctionOwnerOid, bool? RuntimeCanExecute,
+    string? FunctionSource);
 internal sealed record FunctionPlan(string Signature, bool Execute);

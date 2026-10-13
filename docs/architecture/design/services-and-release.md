@@ -537,6 +537,113 @@ new release model does not imply that 0.x stops shipping or that 1.0 gains data 
 Platform versioning describes the tested deployment set; provider compatibility and per-run pinning
 still control which environment and AgentHost implementation a run may use.
 
+### Local source-only integration images
+
+The separate `release:integration-pack` command prepares only the ten product
+service images at a clean, exact source SHA. Their tags use that SHA, and each
+image config must carry the source SHA, exact Git tree SHA, and component
+version. NuGet packages, FoundationProbe, final-release evidence, and GitHub
+Releases are outside this path.
+
+The manual `v1-integration-images.yml` workflow checks that the dispatch is on
+`v1` and that the supplied source SHA matches the workflow commit. It prepares
+images by default. Only an explicit `publish: true` selection starts the
+separate `v1-publication` job, which publishes source-SHA tags and writes
+immutable claim and result records. The local publisher has its own required
+image-only and confirmation flags.
+
+`release:deploy-integration` checks the tracked draft manifest, prepared
+provenance, immutable publication result, and actual anonymous GHCR image
+configs before rendering the P0 runtime List. It is read-only unless the
+operator supplies `--execute`; that mode applies only the nine shared services.
+It then checks registry provenance again, verifies ready pods and image IDs,
+and writes a local deployment result containing the exact input hashes and
+hashes of Deployment, Service, and pod readbacks. This path does not complete
+the product release gate below.
+
+### Local published-image deployment
+
+The operator-hosted `release:deploy` command is a separate consumer of the
+existing source-bound publication receipt and release manifest. It accepts only
+an annotated v1 GitHub Release at the exact clean source commit, verifies all
+ten product image digests against the immutable publication result and GHCR,
+and never builds, pushes, or imports an image. Nine services run as shared
+Deployments and private ClusterIP Services. AgentHost remains per-Sandbox:
+read-only GHCR verification resolves its exact published `linux/amd64` child
+digest, validates the config against prepared source labels, and measures the
+published manifest, config, and compressed layers before Environment pins it
+with the byte total for the Sandbox provider. The 13 NuGet packages
+are checked as part of the publication composition but are not deployed. The
+0.0.1 Foundation Probe remains acceptance-only and is excluded from product images.
+
+The command requires all P0 subscription, tenant, resource-group, cluster,
+namespace, and 2–3 node-bound inputs; it does not choose an Azure account or
+kubectl context. Its default is read-only and the explicit `--execute` path
+applies only the nine shared-service Deployments and private ClusterIP Services
+in the supplied runtime List. It does not create a shared AgentHost Deployment
+or Service; the Sandbox controller owns each per-run Host Service.
+Existing identities, TLS Secrets, runtime ConfigMaps, storage claims, SQL
+mappings/grants, Cilium policies, and routing are prerequisites owned elsewhere,
+not resources the release tool creates. Resume state is keyed to the exact tag,
+source, publication and runtime manifests, and target; live image, target, and
+health verification always runs again.
+
+No v1 release-stage manifest or successful product publication exists in the
+current source. The checked-in `scripts/release/runtime-list.mjs` source creates
+the nine-service runtime List from verified publication images and explicit
+Projects provider-catalog inputs; no live runtime list has been applied.
+The AgentHost Sandbox provider has a source-defined private HTTPS Service and
+label contract, but that does not prove production scheduling or a live
+controller result. The release preflight requires existing Cilium policy names
+for Identity Broker, Events & Sessions, Projects & Config, AgentHost,
+Environment, Gateway, MCP, Orchestrator, Knowledge, and Web. The optional
+routing overlay allows Web HTTP only from the explicitly selected `identity-broker`
+Gateway pods and node health probes. The routing source defines a Web root
+HTTPRoute, Gateway API HTTPRoute for `/api/v1` and exact `/openapi/v1.json`,
+and exact `/mcp` plus `/.well-known/oauth-protected-resource/mcp` HTTPRoutes to
+MCP, all on the portal listener. Gateway and MCP
+BackendTLSPolicies pin their service DNS hostnames and the existing public
+`service-backend-ca` ConfigMap. MCP mounts that CA read-only to validate HTTPS
+calls to Gateway. Release preflight checks the public CA and both signed service
+certificates, and reads back the exact managed Gateway, routes, and backend TLS
+policies before apply; the release tool does not create or manage these routes
+or certificates. GHCR verification resolves the published AgentHost
+`linux/amd64` child manifest, checks its config against prepared source labels,
+and measures the published manifest, config, and compressed layers before
+pinning that child digest in Environment. Resume checks the live Environment
+pin and health probes again. Other source policies cover
+in-cluster owner edges, not unknown external destinations or routes. Runtime
+settings and database, access, TLS, provider-catalog, and routing prerequisites
+remain operator-owned.
+
+```mermaid
+flowchart LR
+  subgraph Integration["Source-only integration flow"]
+    Source["Clean exact source SHA and tree"] --> Prepare["Prepare 10 SHA-tagged images with source/tree/version config labels"]
+    Prepare -->|"default workflow path"| Prepared["Upload prepared images"]
+    Prepare -->|"explicit publish: true"| PublishImages["Publish images and immutable claim/result"]
+    PublishImages --> IntegrationCheck["Verify receipt and actual GHCR configs"]
+    IntegrationCheck --> IntegrationDryRun["Default read-only P0 preflight"]
+    IntegrationDryRun -->|"explicit --execute"| IntegrationApply["Apply only nine shared services"]
+    IntegrationApply --> IntegrationReadback["Verify live images and save local readback result"]
+  end
+  Tag["Annotated v1 tag and published GitHub Release"] --> Exact["Verify exact source commit"]
+  Exact --> Receipt["Verify immutable publication receipt"]
+  Receipt --> GHCR["Verify 10 digest-pinned GHCR images"]
+  Manifest["Release-stage composition manifest"] --> GHCR
+  Target["Explicit v1 P0 target"] --> ReadOnly["Read-only Azure, kubectl, and prerequisite checks"]
+  Portal["Existing portal routes: / to Web; API and exact OpenAPI to Gateway; /mcp and MCP metadata to MCP"] --> ReadOnly
+  GHCR --> ReadOnly
+  Runtime["Checked-in List source + explicit provider catalog inputs"] --> ReadOnly
+  Receipt --> Host["Prepared AgentHost evidence"]
+  GHCR --> Host
+  Host --> Environment["Pin per-Sandbox AgentHost in Environment options"]
+  ReadOnly --> DryRun["Default dry-run"]
+  DryRun -->|explicit --execute| Apply["Apply only nine shared-service pairs"]
+  Apply --> Live["Repeat target, provenance, health, and image-ID checks"]
+  Live --> Clear["Clear exact release/target checkpoint"]
+```
+
 ### Parity and cutover
 
 Every post-fork 0.x change enters a parity map with a 1.0 owner and a disposition: rebuild,

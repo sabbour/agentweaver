@@ -11,13 +11,14 @@ import {
   WEB_LOCK_PATH,
   WEB_PROJECT_PATH,
 } from './validate.mjs';
-import { componentImageRepository } from './pack.mjs';
+import { componentImageRepository, selectIntegrationImageComponents } from './pack.mjs';
 import { resolveProbeImageSource } from '../azure/build-foundation-probe-image.mjs';
 import { runPublicationCommand as command } from './command.mjs';
 import {
   AGENTHOST_ID, validateAgentHostArtifact, verifyAgentHostArchives, verifyLoadedAgentHostImage,
 } from './agenthost-image.mjs';
 import { measureAgentHostArchiveSync } from './measure-agenthost-image.mjs';
+import { readDockerArchiveConfig } from './docker-archive.mjs';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const fail = (message) => { throw new Error(`manual publication: ${message}`); };
@@ -39,11 +40,16 @@ function validBuildOutput(output) {
     hash(JSON.stringify(output.files)) === output.sha256;
 }
 
-function validateWebArtifact(component, artifact, componentProvenance, sourceSha, root, git) {
+function validateWebArtifact(component, artifact, componentProvenance, sourceSha, root, git, integrationSourceTree) {
   const reject = () => fail('prepared web image provenance does not match the exact source, version, or linux/amd64 artifact');
   const repository = componentImageRepository(component.id);
-  const tag = `${component.version.replaceAll('+', '_')}-${sourceSha}`;
+  const tag = integrationSourceTree ? sourceSha : `${component.version.replaceAll('+', '_')}-${sourceSha}`;
   const imageReference = `${repository}:${tag}`;
+  const integrationLabels = {
+    'org.opencontainers.image.revision': sourceSha,
+    'io.agentweaver.source-tree': integrationSourceTree,
+    'org.opencontainers.image.version': component.version,
+  };
   const source = componentProvenance?.source;
   const build = componentProvenance?.build;
   const sourceFiles = source?.files;
@@ -52,6 +58,9 @@ function validateWebArtifact(component, artifact, componentProvenance, sourceSha
       artifact.tag !== tag || artifact.imageReference !== imageReference ||
       artifact.platform !== 'linux/amd64' || !imageIdPattern.test(artifact.imageId ?? '') ||
       artifact.labels?.['org.opencontainers.image.revision'] !== sourceSha ||
+      (integrationSourceTree &&
+        (artifact.labels?.['io.agentweaver.source-tree'] !== integrationSourceTree ||
+          JSON.stringify(artifact.integrationLabels) !== JSON.stringify(integrationLabels))) ||
       artifact.labels?.['org.opencontainers.image.version'] !== component.version ||
       !Array.isArray(sourceFiles) || sourceFiles.length === 0) {
     reject();
@@ -157,12 +166,23 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   packagesOnly = false,
   foundationProbeOnly = false,
   platformOnly = false,
+  integrationImagesOnly = false,
+  integrationConfirmed = false,
   confirmFoundationProbeInitialReplacement,
   confirmFoundationProbeSamplerReplacement,
   expectedFoundationProbeSamplerDigest,
 } = {}) {
   root = path.resolve(root);
-  if (!confirmed || !/^[a-f0-9]{40}$/.test(sourceSha ?? '')) fail('explicit confirmation and exact source SHA are required');
+  if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '') ||
+      (integrationImagesOnly ? (!integrationConfirmed || confirmed) : (!confirmed || integrationConfirmed))) {
+    fail('explicit confirmation for the selected publication mode and an exact source SHA are required');
+  }
+  if (integrationImagesOnly && (packagesOnly || foundationProbeOnly || platformOnly ||
+      confirmFoundationProbeInitialReplacement !== undefined ||
+      confirmFoundationProbeSamplerReplacement !== undefined ||
+      expectedFoundationProbeSamplerDigest !== undefined)) {
+    fail('integration image-only publication cannot combine with another selection or Probe replacement');
+  }
   if (packagesOnly && foundationProbeOnly) fail('package-only and Foundation Probe-only publication are mutually exclusive');
   if (platformOnly && (packagesOnly || foundationProbeOnly))
     fail('platform-only publication cannot combine with package-only or Foundation Probe-only publication');
@@ -172,12 +192,32 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   const sourceManifest = JSON.parse(execFileSync('git', ['show', `${sourceSha}:${path.relative(root, path.resolve(root, manifestPath)).replaceAll('\\', '/')}`],
     { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
   if (JSON.stringify(sourceManifest) !== JSON.stringify(manifest)) fail('manifest differs from source');
+  if (integrationImagesOnly && (manifest.stage !== 'draft' || manifest.evidence !== undefined)) {
+    fail('integration image-only publication requires a tracked draft manifest with no deployment evidence');
+  }
+  if (integrationImagesOnly && git('rev-parse', 'HEAD^{tree}') !== git('rev-parse', `${sourceSha}^{tree}`)) {
+    fail('integration source tree must match the exact source SHA');
+  }
+  const integrationSourceTree = integrationImagesOnly ? git('rev-parse', `${sourceSha}^{tree}`) : undefined;
+  if (integrationImagesOnly && !/^[a-f0-9]{40}$/.test(integrationSourceTree ?? '')) {
+    fail('integration source tree must be an exact 40-character Git tree SHA');
+  }
   const directory = path.resolve(root, outDir);
-  if (existsSync(path.join(directory, 'publication.json'))) fail('publication receipt already exists; inspect prior or partial publication before any retry');
+  const receiptName = integrationImagesOnly ? 'integration-publication.json' : 'publication.json';
+  const receiptPath = path.join(directory, receiptName);
+  if (existsSync(receiptPath)) fail(`receipt already exists at ${receiptName}; inspect prior or partial publication before any retry`);
   const provenance = JSON.parse(readFileSync(path.join(directory, 'provenance.json'), 'utf8'));
   if (provenance.schemaVersion !== 1 || provenance.sourceSha !== sourceSha ||
       provenance.manifestSha256 !== hash(JSON.stringify(manifest))) fail('provenance does not match exact source composition');
-  const components = platformOnly
+  if (integrationImagesOnly &&
+      (JSON.stringify(provenance.integration) !== JSON.stringify({
+        mode: 'images-only', sourceTree: integrationSourceTree, imageTag: sourceSha,
+      }))) {
+    fail('provenance does not match the exact integration image-only source and tree');
+  }
+  const components = integrationImagesOnly
+    ? selectIntegrationImageComponents(manifest)
+    : platformOnly
     ? manifest.components.filter(component => component.id !== 'Agentweaver.FoundationProbe')
     : foundationProbeOnly
     ? manifest.components.filter(component => component.id === 'Agentweaver.FoundationProbe' && component.kind === 'service')
@@ -223,7 +263,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
         return !component || record?.id !== component.id || record?.kind !== component.kind ||
           record?.version !== component.version || record?.project !== component.project;
       })) {
-    fail(`provenance component selection does not match the ${platformOnly ? 'platform-only' : foundationProbeOnly ? 'Foundation Probe-only' : packagesOnly ? 'package-only' : 'full'} manifest selection`);
+    fail(`provenance component selection does not match the ${integrationImagesOnly ? 'integration images-only' : platformOnly ? 'platform-only' : foundationProbeOnly ? 'Foundation Probe-only' : packagesOnly ? 'package-only' : 'full'} manifest selection`);
   }
   if (!Array.isArray(provenance.artifacts) || provenance.artifacts.length !== components.length) {
     fail('missing or unexpected artifact provenance');
@@ -241,20 +281,61 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
       artifact.path === artifactFilename && artifact.kind === kind && artifact.componentId === component.id);
     if (matches.length !== 1) fail(`missing unique artifact for ${component.id}`);
     const artifact = matches[0];
+    if (integrationImagesOnly) {
+      const labels = {
+        'org.opencontainers.image.revision': sourceSha,
+        'io.agentweaver.source-tree': integrationSourceTree,
+        'org.opencontainers.image.version': component.version,
+      };
+      if (kind !== 'image' || artifact.tag !== sourceSha ||
+          artifact.imageReference !== `${componentImageRepository(component.id)}:${sourceSha}` ||
+          JSON.stringify(artifact.integrationLabels) !== JSON.stringify(labels)) {
+        fail(`prepared integration image metadata does not match the exact source for ${component.id}`);
+      }
+    }
     const file = path.join(directory, artifactFilename);
     if (component.id !== AGENTHOST_ID && hash(readFileSync(file)) !== artifact.sha256)
       fail(`artifact hash mismatch for ${component.id}`);
     const componentProvenance = provenance.components[index];
+    const integrationLabels = integrationImagesOnly ? {
+      'org.opencontainers.image.revision': sourceSha,
+      'io.agentweaver.source-tree': integrationSourceTree,
+      'org.opencontainers.image.version': component.version,
+    } : undefined;
+    let preparedImageConfig;
+    if (integrationImagesOnly) {
+      try {
+        preparedImageConfig = readDockerArchiveConfig(file, artifact.imageReference);
+      } catch (error) {
+        fail(`prepared integration image archive for ${component.id} cannot be verified: ${error.message}`);
+      }
+      const labels = preparedImageConfig.config?.config?.Labels;
+      if (preparedImageConfig.configDigest !== artifact.imageConfigDigest ||
+          preparedImageConfig.config?.os !== 'linux' ||
+          preparedImageConfig.config?.architecture !== 'amd64' ||
+          Object.entries(integrationLabels).some(([name, value]) => labels?.[name] !== value) ||
+          JSON.stringify(artifact.labels) !== JSON.stringify(integrationLabels)) {
+        fail(`prepared integration image config does not match the source, tree, version, and preparation receipt for ${component.id}`);
+      }
+    }
     const localImageReference = component.project === WEB_PROJECT_PATH
-      ? validateWebArtifact(component, artifact, componentProvenance, sourceSha, root, git)
+      ? validateWebArtifact(component, artifact, componentProvenance, sourceSha, root, git, integrationSourceTree)
       : undefined;
     const agentHost = component.id === AGENTHOST_ID
-      ? validateAgentHostArtifact(component, artifact, componentProvenance, root, directory, sourceSha, git, measureAgentHostArchive)
+      ? validateAgentHostArtifact(component, artifact, componentProvenance, root, directory, sourceSha, git,
+        measureAgentHostArchive, integrationImagesOnly)
       : undefined;
-    selected.push({ component, artifact, file, localImageReference: agentHost?.imageReference ?? localImageReference, agentHost });
+    selected.push({ component, artifact, file, preparedImageConfig,
+      localImageReference: integrationImagesOnly
+        ? agentHost?.imageReference ?? localImageReference ?? artifact.imageReference
+        : agentHost?.imageReference ?? localImageReference,
+      agentHost });
   }
   const hasPackages = selected.some(({ artifact }) => artifact.kind === 'package');
   const hasImages = selected.some(({ artifact }) => artifact.kind === 'image');
+  if (integrationImagesOnly && (hasPackages || selected.length !== 10)) {
+    fail('integration image-only publication requires exactly ten product service images and no packages');
+  }
   let registry;
   if (hasPackages) {
     let feed;
@@ -279,7 +360,9 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.GITHUB_REPOSITORY ?? '') || !env.GH_TOKEN) {
     fail('configure the GitHub repository and scoped publication token for durable claims');
   }
-  const namespace = `agentweaver-publication/${sourceSha}`;
+  const namespace = integrationImagesOnly
+    ? `agentweaver-integration/${sourceSha}`
+    : `agentweaver-publication/${sourceSha}`;
   const repository = `repos/${env.GITHUB_REPOSITORY}`;
   const api = (method, endpoint, body) => {
     const args = ['api', '--method', method, `${repository}/${endpoint}`];
@@ -336,10 +419,12 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   const planned = selected.map(({ component, artifact }) => ({
     id: component.id, version: component.version, kind: artifact.kind, sha256: artifact.sha256,
     destination: artifact.kind === 'package' ? env.RELEASE_NUGET_SOURCE
-      : `${imageRepositories.get(component.id)}:${component.version}`,
+      : `${imageRepositories.get(component.id)}:${integrationImagesOnly ? sourceSha : component.version}`,
   }));
   const receipt = {
-    schemaVersion: 1, sourceSha, provenanceSha256: hash(readFileSync(path.join(directory, 'provenance.json'))),
+    schemaVersion: 1, sourceSha,
+    ...(integrationImagesOnly ? { mode: 'images-only', sourceTree: integrationSourceTree } : {}),
+    provenanceSha256: hash(readFileSync(path.join(directory, 'provenance.json'))),
     planned, status: 'partial', published: [],
   };
   if (replaceProbe) receipt[replacementField] = {
@@ -370,7 +455,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   receipt.claimSha = createRecord('claim', { ...receipt, status: 'claimed' });
   let publicationError;
   try {
-    for (const { component, artifact, file, localImageReference, agentHost } of selected) {
+    for (const { component, artifact, file, localImageReference, agentHost, preparedImageConfig } of selected) {
       if (localImageReference === undefined) continue;
       if (agentHost) verifyAgentHostArchives(agentHost.archives, directory);
       run('docker', ['load', '--input', file]);
@@ -384,17 +469,29 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
       try {
         image = JSON.parse(run('docker', ['image', 'inspect', '--format', '{{json .}}', localImageReference]));
       } catch (error) {
-        fail(`loaded web image cannot be inspected: ${error.message}`);
+        fail(`loaded ${component.id} image cannot be inspected: ${error.message}`);
       }
       const labels = image?.Config?.Labels;
-      if (image?.Id !== artifact.imageId || image?.Os !== 'linux' || image?.Architecture !== 'amd64' ||
-          labels?.['org.opencontainers.image.revision'] !== sourceSha ||
-          labels?.['org.opencontainers.image.version'] !== component.version) {
-        fail('loaded web image does not match its source, version, local image identity, or linux/amd64 provenance');
+      const expectedLabels = integrationImagesOnly ? {
+        'org.opencontainers.image.revision': sourceSha,
+        'io.agentweaver.source-tree': integrationSourceTree,
+        'org.opencontainers.image.version': component.version,
+      } : {
+        'org.opencontainers.image.revision': sourceSha,
+        'org.opencontainers.image.version': component.version,
+      };
+      if ((artifact.imageId !== undefined && image?.Id !== artifact.imageId) ||
+          image?.Os !== 'linux' || image?.Architecture !== 'amd64' ||
+          Object.entries(expectedLabels).some(([name, value]) => labels?.[name] !== value) ||
+          (integrationImagesOnly &&
+            (preparedImageConfig?.configDigest !== artifact.imageConfigDigest ||
+              Object.entries(expectedLabels).some(([name, value]) =>
+                preparedImageConfig?.config?.config?.Labels?.[name] !== value)))) {
+        fail(`loaded ${component.id} image does not match its source, tree, version, identity, or linux/amd64 provenance`);
       }
     }
     if (hasImages) run('docker', ['login', registry.host, '--username', env.RELEASE_REGISTRY_USER, '--password-stdin'], env.RELEASE_REGISTRY_PASSWORD);
-    for (const { component, artifact, file, localImageReference, agentHost } of selected) {
+    for (const { component, artifact, file, localImageReference, agentHost, preparedImageConfig } of selected) {
       if (artifact.kind === 'package') {
         run('dotnet', ['nuget', 'push', file, '--source', env.RELEASE_NUGET_SOURCE, '--api-key', env.RELEASE_NUGET_API_KEY]);
         receipt.published.push({ id: component.id, version: component.version, kind: 'package', feed: env.RELEASE_NUGET_SOURCE, sha256: artifact.sha256 });
@@ -403,7 +500,8 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
           fail('AgentHost has no verified loaded image identity to tag');
         const local = agentHost ? agentHost.loadedImageId
           : localImageReference ?? `${componentImageRepository(component.id)}:${component.version}`;
-        const remote = `${imageRepositories.get(component.id)}:${component.version}`;
+        const imageTag = integrationImagesOnly ? sourceSha : component.version;
+        const remote = `${imageRepositories.get(component.id)}:${imageTag}`;
         if (localImageReference === undefined) run('docker', ['load', '--input', file]);
         if (replaceProbe) {
           const config = JSON.parse(run('docker', ['inspect', '--format', '{{json .Config}}', local]));
@@ -446,6 +544,10 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
         } else {
           receipt.published.push({
             id: component.id, version: component.version, kind: 'image', image: digest, archiveSha256: artifact.sha256,
+            ...(integrationImagesOnly ? {
+              sourceSha, sourceTree: integrationSourceTree, tag: sourceSha,
+              configDigest: agentHost?.measured.image.configDigest ?? preparedImageConfig?.configDigest,
+            } : {}),
             ...(agentHost ? {
               ociArchiveSha256: artifact.ociArchive.sha256,
               imageConfigDigest: agentHost.measured.image.configDigest,
@@ -469,7 +571,8 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
       failures.push(receiptError);
     }
     try {
-      writeReceipt(path.join(directory, 'publication.json'), JSON.stringify(receipt, null, 2) + '\n');
+      writeReceipt(receiptPath, JSON.stringify(receipt, null, 2) + '\n',
+        integrationImagesOnly ? { flag: 'wx' } : undefined);
     } catch (receiptError) {
       failures.push(receiptError);
     }
@@ -502,11 +605,15 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       packagesOnly: args.includes('--packages-only'),
       foundationProbeOnly: args.includes('--foundation-probe-only'),
       platformOnly: args.includes('--platform-only'),
+      integrationImagesOnly: args.includes('--integration-images-only'),
+      integrationConfirmed: args.includes('--confirm-integration-publication'),
       confirmFoundationProbeInitialReplacement: replacementIndex >= 0 ? args[replacementIndex + 1] : undefined,
       confirmFoundationProbeSamplerReplacement: samplerIndex >= 0 ? args[samplerIndex + 1] : undefined,
       expectedFoundationProbeSamplerDigest: expectedDigestIndex >= 0 ? args[expectedDigestIndex + 1] : undefined,
     });
-    console.log('Manual artifact publication completed; see publication.json. No platform release or deployment was performed.');
+    console.log(args.includes('--integration-images-only')
+      ? 'Manual integration image publication completed; see integration-publication.json. No package, release, or deployment was performed.'
+      : 'Manual artifact publication completed; see publication.json. No platform release or deployment was performed.');
   } catch (error) {
     console.error(`Publication failed: ${error.message}`);
     process.exitCode = 1;

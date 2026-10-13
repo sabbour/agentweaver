@@ -56,9 +56,14 @@ Application Routing implementation. Its Gateway class is `approuting-istio`.
 The class name describes Azure's internal implementation, not a service-mesh
 addon or an Istio API requirement.
 The separate default-off routing installer uses native managed certificates,
-v1 Gateway and HTTPRoute resources, and verified backend HTTPS.
+a v1 Gateway, Broker/Web/Gateway API/MCP HTTPRoutes, and verified backend HTTPS.
 It requires explicit approved Gateway namespace and security-policy inputs.
 The P0 workload namespace remains restricted.
+The portal listener routes `/` to Web, `/api/v1` plus exact
+`/openapi/v1.json` to Gateway, and exact `/mcp` plus the MCP protected-resource
+metadata path to MCP. Gateway and MCP use operator-owned TLS Secrets with
+service-DNS certificates signed by the public CA in the
+`service-backend-ca` ConfigMap. These source routes do not prove live traffic.
 The issuer comes from the admitted route hostname.
 Public callback changes default to read-only append/no-op plans.
 An append requires separate explicit registration and exact-URI confirmation.
@@ -100,15 +105,19 @@ Identity creation and federation do not prove database access or service readine
 The [operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#limited-p1-runtime-identities)
 describes the separate approval boundary.
 
-The P1 PostgreSQL initializer remains a blocked source proposal.
-Its pre-write checks reject incompatible existing privileges without changing them.
-Its role stage checks all five mappings before commit.
-Its grant checks preserve existing ownership and permit only exact runtime grants.
-The source checks functions by owner and effective EXECUTE privileges, not counts alone.
+The P1 PostgreSQL initializer remains source-only; no database initialization
+has been run. Its pre-write checks reject incompatible existing privileges
+without changing them. Before grants commit, it validates planned row-lock
+mutation guards and reads back each installed trigger/function against the
+exact table, trigger type, function source/owner, and runtime EXECUTE restriction.
+Its role stage checks all five mappings before commit. Its grant checks preserve
+existing ownership and permit only exact runtime grants. The source checks
+functions by owner and effective EXECUTE privileges, not counts alone.
 Its source catalog includes 20 Core migration versions, with version 17 excluded, and eight Events versions.
 It retains 93 tables, eight row-lock columns, and 28 exact function signatures.
 Only casting authority can receive direct runtime EXECUTE.
-Both execution blocks remain active; installed guards and restricted-role behavior still require separate database proof.
+Restricted-role behavior and actual PostgreSQL catalog behavior still require
+separate database proof; source tests do not execute the initializer.
 These source changes do not change the Azure topology shown above.
 See the [initializer source limits](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal)
 and the [source-test boundary](../guide/testing).
