@@ -400,21 +400,35 @@ test('storage readback verifies PVC, PV, claim, and Environment owner annotation
   }
 });
 
-test('Sandbox Pod reads keep SandboxClaim and workspace PVC UIDs distinct', async () => {
-  const sandboxClaimUid = 'sandbox-claim-uid-a';
+test('Sandbox Pod reads select a replacement by its actual placement, operation, and claim UID', async () => {
+  const sandboxClaimUid = 'sandbox-claim-uid-replacement';
   const workspacePvcUid = 'workspace-pvc-uid-a';
-  const pod = {
+  const originalLabels = {
+    'agentweaver.dev/managed-sandbox': 'true',
+    'agentweaver.dev/sandbox-owner': ownerLabel,
+    'agentweaver.dev/sandbox-lifecycle': '2',
+    'agentweaver.dev/sandbox-generation': '3',
+    'agentweaver.dev/sandbox-fence': '5',
+    'agentweaver.dev/sandbox-operation': 'originaloperation',
+    'agents.x-k8s.io/claim-uid': 'sandbox-claim-uid-original',
+  };
+  const replacementLabels = {
+    ...originalLabels,
+    'agentweaver.dev/sandbox-lifecycle': '12',
+    'agentweaver.dev/sandbox-generation': '13',
+    'agentweaver.dev/sandbox-fence': '14',
+    'agentweaver.dev/sandbox-operation': 'replacementoperation',
+    'agents.x-k8s.io/claim-uid': sandboxClaimUid,
+  };
+  const expectedLabels = replacementLabels;
+  const makePod = (name, uid, labels) => ({
     apiVersion: 'v1',
     kind: 'Pod',
     metadata: {
-      name: 'agenthost-a',
+      name,
       namespace: 'p1-fixture',
-      uid: 'pod-uid-a',
-      labels: {
-        'agentweaver.dev/managed-sandbox': 'true',
-        'agentweaver.dev/sandbox-owner': ownerLabel,
-        'agents.x-k8s.io/claim-uid': sandboxClaimUid,
-      },
+      uid,
+      labels,
     },
     spec: {
       containers: [{
@@ -424,17 +438,40 @@ test('Sandbox Pod reads keep SandboxClaim and workspace PVC UIDs distinct', asyn
       }],
       volumes: [{ name: 'workspace', persistentVolumeClaim: { claimName: 'workspace-a' } }],
     },
+  });
+  const originalPod = makePod('agenthost-original', 'pod-uid-original', originalLabels);
+  const replacementPod = makePod('agenthost-replacement', 'pod-uid-replacement', replacementLabels);
+  const placement = {
+    lifecycleGeneration: 12,
+    providerFencingGeneration: 14,
+    resource: { resourceId: sandboxClaimUid, generation: 13 },
   };
+  const expectedOperationId = 'replacement-operation';
+
+  for (const key of [
+    'agentweaver.dev/sandbox-lifecycle',
+    'agentweaver.dev/sandbox-generation',
+    'agentweaver.dev/sandbox-fence',
+    'agentweaver.dev/sandbox-operation',
+    'agents.x-k8s.io/claim-uid',
+  ]) {
+    assert.notEqual(originalLabels[key], replacementLabels[key]);
+  }
+
   const harness = createHarness((command, args) => {
     if (args.includes('config')) {
       return { status: 0, stdout: JSON.stringify(configResponse()), stderr: '' };
     }
     if (args.includes('pods')) {
-      assert.ok(args.some(value =>
-        typeof value === 'string' && value.includes(`agents.x-k8s.io/claim-uid=${sandboxClaimUid}`)));
+      const selectorPosition = args.indexOf('--selector');
+      assert.notEqual(selectorPosition, -1);
+      const selector = args[selectorPosition + 1];
+      const selectedLabels = Object.fromEntries(selector.split(',').map(entry => entry.split('=')));
+      assert.deepEqual(selectedLabels, expectedLabels);
+      const items = [originalPod, replacementPod].filter(pod =>
+        Object.entries(selectedLabels).every(([key, value]) => pod.metadata.labels[key] === value));
       return {
-        status: 0,
-        stdout: JSON.stringify({ apiVersion: 'v1', kind: 'List', items: [pod] }),
+        status: 0, stdout: JSON.stringify({ apiVersion: 'v1', kind: 'List', items }),
         stderr: '',
       };
     }
@@ -458,16 +495,14 @@ test('Sandbox Pod reads keep SandboxClaim and workspace PVC UIDs distinct', asyn
       owner: mountOwner,
       workspaceClaimUid: workspacePvcUid,
       sandboxClaimUid,
-      expectedPodUid: 'pod-uid-a',
-      expectedLabels: {
-        'agentweaver.dev/managed-sandbox': 'true',
-        'agentweaver.dev/sandbox-owner': ownerLabel,
-        'agents.x-k8s.io/claim-uid': sandboxClaimUid,
-      },
+      placement,
+      expectedOperationId,
+      expectedPodUid: 'pod-uid-replacement',
+      expectedLabels,
     },
   });
 
-  assert.equal(result.pod.uid, 'pod-uid-a');
+  assert.equal(result.pod.uid, 'pod-uid-replacement');
   assert.equal(result.pod.labels['agents.x-k8s.io/claim-uid'], sandboxClaimUid);
   assert.deepEqual(result.pod.mounts, [{
     name: 'workspace',

@@ -84,7 +84,11 @@ AgentSandbox label values for `agentweaver.dev/managed-sandbox`,
 `agentweaver.dev/sandbox-owner`, `agentweaver.dev/sandbox-lifecycle`,
 `agentweaver.dev/sandbox-generation`, `agentweaver.dev/sandbox-fence`,
 `agentweaver.dev/sandbox-operation`, and `agents.x-k8s.io/claim-uid`; these
-are matched to native Pod readbacks, not reconstructed from owner IDs. Provider
+are matched to native Pod readbacks, not reconstructed from owner IDs. Before
+each native Pod lookup, the selector is rebuilt from the current placement's
+lifecycle, resource, and provider-fencing generations, the actual creation
+operation ID, and the exact SandboxClaim UID; the same labels are used for
+subsequent ownership validation. Provider
 receipt entries pin those owner PVC/PV UIDs and provider bindings to
 `context.clusterIdentity.uid`. The Kubernetes process adapter independently
 checks the PVC/PV UIDs, claim reference, and both Azure Files owner annotations

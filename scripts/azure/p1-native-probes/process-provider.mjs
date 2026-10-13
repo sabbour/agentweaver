@@ -22,6 +22,10 @@ const CILIUM_REVOKED = 'agentweaver.dev/egress-revoked';
 const CLAIM_UID = 'agents.x-k8s.io/claim-uid';
 const MANAGED = 'agentweaver.dev/managed-sandbox';
 const OWNER = 'agentweaver.dev/sandbox-owner';
+const SANDBOX_LIFECYCLE = 'agentweaver.dev/sandbox-lifecycle';
+const SANDBOX_GENERATION = 'agentweaver.dev/sandbox-generation';
+const SANDBOX_FENCE = 'agentweaver.dev/sandbox-fence';
+const SANDBOX_OPERATION = 'agentweaver.dev/sandbox-operation';
 const PROJECT_ANNOTATION = 'agentweaver.dev/project-id';
 const VOLUME_ANNOTATION = 'agentweaver.dev/volume-id';
 const GENERATION_ANNOTATION = 'agentweaver.dev/generation';
@@ -493,18 +497,31 @@ export function createP1NativeProcessProvider({
   const observeSandbox = (args) => {
     const namespace = requireString(args.namespace, 'namespace', DNS_LABEL);
     const owner = args.owner;
-    const expectedLabels = args.expectedLabels;
     const sandboxClaimUid = requireString(args.sandboxClaimUid, 'SandboxClaim UID');
     const workspaceClaimUid = requireString(args.workspaceClaimUid, 'workspace PVC claim UID');
-    if (expectedLabels?.[MANAGED] !== 'true' ||
-        expectedLabels?.[OWNER] !== ownerFingerprint(owner) ||
-        expectedLabels?.[CLAIM_UID] !== sandboxClaimUid) {
-      throw new Error('The exact owner, claim UID, and managed Sandbox labels are required.');
+    const placement = args.placement;
+    const placementClaimUid = requireString(placement?.resource?.resourceId, 'placed SandboxClaim UID');
+    if (placementClaimUid !== sandboxClaimUid) {
+      throw new Error('The current placement must identify the exact SandboxClaim UID.');
     }
-    const pod = findPod(namespace, {
-      ...expectedLabels,
+    const expectedOperationId = requireString(args.expectedOperationId, 'Sandbox creation operation ID');
+    const expectedLabels = {
+      [MANAGED]: 'true',
+      [OWNER]: ownerFingerprint(owner),
+      [SANDBOX_LIFECYCLE]: String(requirePositive(
+        placement.lifecycleGeneration, 'Sandbox lifecycle generation')),
+      [SANDBOX_GENERATION]: String(requirePositive(
+        placement.resource.generation, 'Sandbox resource generation')),
+      [SANDBOX_FENCE]: String(requirePositive(
+        placement.providerFencingGeneration, 'Sandbox provider fencing generation')),
+      [SANDBOX_OPERATION]: expectedOperationId.replaceAll('-', '').toLowerCase(),
       [CLAIM_UID]: sandboxClaimUid,
-    }, args.expectedPodUid);
+    };
+    if (!expectedLabels[SANDBOX_OPERATION] ||
+        !sameRecord(args.expectedLabels, expectedLabels)) {
+      throw new Error('The native Sandbox selector must match the exact placement, operation, owner, and claim UID.');
+    }
+    const pod = findPod(namespace, expectedLabels, args.expectedPodUid);
     const mounts = mountReceipt(pod, namespace, workspaceClaimUid,
       name => kubectlJson(namespace, ['get', 'persistentvolumeclaim', name], 'PVC'));
     const containers = (pod.spec?.containers ?? []).map(container => ({

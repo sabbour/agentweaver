@@ -684,33 +684,8 @@ function verifyCluster(observed, expected) {
 
 function verifySandboxOwnership(owner, observed, placement, operationId) {
   const labels = observed?.pod?.labels;
-  const expectedLabels = owner.runtime.sandboxLabels;
-  const resourceGeneration = placementResourceGeneration(placement);
-  if (!nonEmpty(operationId)) {
-    block('sandbox_operation_receipt_missing', 'The actual invocation-owned Sandbox creation operation ID is required to validate its native ownership label.', {
-      ownerId: owner.storage.ownerId,
-      resourceId: placementResourceId(placement),
-    });
-  }
-  if (!isRecord(labels) || !isRecord(expectedLabels) ||
-      !positive(placement?.lifecycleGeneration) ||
-      !positive(resourceGeneration) ||
-      !positive(placement?.providerFencingGeneration)) {
-    block('sandbox_labels_missing', 'The native Pod readback and explicit AgentSandbox label receipt are required.', {
-      ownerId: owner.storage.ownerId,
-    });
-  }
-  const operationLabel = operationId.replaceAll('-', '').toLowerCase();
-  const expected = {
-    [SANDBOX_LABELS.managed]: 'true',
-    [SANDBOX_LABELS.owner]: expectedLabels[SANDBOX_LABELS.owner],
-    [SANDBOX_LABELS.lifecycle]: String(placement.lifecycleGeneration),
-    [SANDBOX_LABELS.resourceGeneration]: String(resourceGeneration),
-    [SANDBOX_LABELS.fencingGeneration]: String(placement.providerFencingGeneration),
-    [SANDBOX_LABELS.operation]: operationLabel,
-    [SANDBOX_LABELS.claimUid]: placementResourceId(placement),
-  };
-  if (Object.entries(expected).some(([key, value]) =>
+  const expected = sandboxLabelsForResource(owner.runtime, placement, operationId);
+  if (!isRecord(labels) || Object.entries(expected).some(([key, value]) =>
     !nonEmpty(value) || labels[key] !== value)) {
     block('sandbox_owner_labels_mismatch', 'Native Sandbox managed, owner, lifecycle, resource, fence, operation, or claim-UID labels differ from the exact owner receipt.', {
       ownerId: owner.storage.ownerId,
@@ -720,9 +695,38 @@ function verifySandboxOwnership(owner, observed, placement, operationId) {
   }
 }
 
-function sandboxLabelsForResource(runtime, resourceId) {
+function sandboxLabelsForResource(runtime, placement, operationId) {
+  const resourceId = placementResourceId(placement);
+  const resourceGeneration = placementResourceGeneration(placement);
+  if (!nonEmpty(operationId)) {
+    block('sandbox_operation_receipt_missing', 'The actual invocation-owned Sandbox creation operation ID is required to validate its native ownership label.', {
+      resourceId,
+    });
+  }
+  if (!isRecord(runtime?.sandboxLabels) ||
+      runtime.sandboxLabels[SANDBOX_LABELS.managed] !== 'true' ||
+      !nonEmpty(runtime.sandboxLabels[SANDBOX_LABELS.owner]) ||
+      !nonEmpty(resourceId) ||
+      !positive(placement?.lifecycleGeneration) ||
+      !positive(resourceGeneration) ||
+      !positive(placement?.providerFencingGeneration)) {
+    block('sandbox_labels_missing', 'The current placement and explicit AgentSandbox owner label receipt are required to derive the native selector.', {
+      resourceId,
+    });
+  }
+  const operationLabel = operationId.replaceAll('-', '').toLowerCase();
+  if (!nonEmpty(operationLabel)) {
+    block('sandbox_operation_receipt_missing', 'The actual Sandbox creation operation ID does not produce a valid ownership label.', {
+      resourceId,
+    });
+  }
   return {
-    ...runtime.sandboxLabels,
+    [SANDBOX_LABELS.managed]: 'true',
+    [SANDBOX_LABELS.owner]: runtime.sandboxLabels[SANDBOX_LABELS.owner],
+    [SANDBOX_LABELS.lifecycle]: String(placement.lifecycleGeneration),
+    [SANDBOX_LABELS.resourceGeneration]: String(resourceGeneration),
+    [SANDBOX_LABELS.fencingGeneration]: String(placement.providerFencingGeneration),
+    [SANDBOX_LABELS.operation]: operationLabel,
     [SANDBOX_LABELS.claimUid]: resourceId,
   };
 }
@@ -951,16 +955,19 @@ export async function runP1NativeProbes(input, dependencies) {
     return result;
   };
   const observeSandbox = (owner, placement, options = {}) => {
+    const { expectedOperationId, ...nativeOptions } = options;
     const sandboxClaimUid = placementResourceId(placement);
+    const expectedLabels = sandboxLabelsForResource(owner.runtime, placement, expectedOperationId);
     return native('observe-sandbox', {
+      ...nativeOptions,
       namespace: input.pins.namespace,
       owner: ownerSelector(owner.storage),
       placement,
+      expectedOperationId,
       workspaceClaimUid: owner.storage.volume.claimUid,
       sandboxClaimUid,
-      expectedLabels: sandboxLabelsForResource(owner.runtime, sandboxClaimUid),
+      expectedLabels,
       expectedPolicyGeneration: input.pins.runtimeReceipt.network.generation,
-      ...options,
     });
   };
   const verifyOwnedSandboxResourcesAbsent = async (owner, resources) => {
