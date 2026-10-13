@@ -130,6 +130,9 @@ jobs:
       - name: Test release validator with coverage
         if: ${{ !cancelled() }}
         run: npm run coverage:node
+      - name: Test controlled P1 API, MCP, and UI journeys
+        if: ${{ !cancelled() }}
+        run: node --test scripts/api-harness/test/p1-journey.test.mjs scripts/harness-shared/test/run-p1.test.mjs scripts/harness-shared/test/p1-deployment-evidence.test.mjs
       - name: Test coverage report guards
         if: ${{ !cancelled() }}
         run: node --test scripts/coverage/tests/*.test.mjs
