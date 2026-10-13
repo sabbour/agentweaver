@@ -903,14 +903,51 @@ async function verifyRelease(tag, publication, { root, run }) {
   return current;
 }
 
-function verifyAzureTarget(target, { root, run }) {
+function projectAksTargetReadback(value) {
+  return {
+    id: value?.id,
+    fqdn: value?.fqdn,
+    privateFqdn: value?.privateFqdn,
+    apiserverAccessProfile: { privateFqdn: value?.apiserverAccessProfile?.privateFqdn },
+    agentPoolProfiles: Array.isArray(value?.agentPoolProfiles)
+      ? value.agentPoolProfiles.map((pool) => ({
+        enableAutoScaling: pool?.enableAutoScaling,
+        minCount: pool?.minCount,
+        maxCount: pool?.maxCount,
+        count: pool?.count,
+      }))
+      : null,
+  };
+}
+
+function projectKubeconfigReadback(value) {
+  return {
+    'current-context': value?.['current-context'],
+    contexts: Array.isArray(value?.contexts)
+      ? value.contexts.map((entry) => ({
+        name: entry?.name,
+        context: { cluster: entry?.context?.cluster },
+      }))
+      : null,
+    clusters: Array.isArray(value?.clusters)
+      ? value.clusters.map((entry) => ({
+        name: entry?.name,
+        cluster: { server: entry?.cluster?.server },
+      }))
+      : null,
+  };
+}
+
+export function verifyAzureTarget(target, { root, run }) {
   const account = parseJson(run('az', ['account', 'show', '--subscription', target.subscriptionId, '--output', 'json'], { cwd: root }), 'Azure account');
   if (account.id?.toLowerCase() !== target.subscriptionId.toLowerCase() ||
       account.tenantId?.toLowerCase() !== target.tenantId.toLowerCase()) {
     fail('the existing Azure CLI context does not match the explicit v1 P0 subscription and tenant');
   }
   const cluster = parseJson(run('az', ['aks', 'show', '--name', target.clusterName,
-    '--resource-group', target.resourceGroup, '--subscription', target.subscriptionId, '--output', 'json'], { cwd: root }), 'AKS target');
+    '--resource-group', target.resourceGroup, '--subscription', target.subscriptionId, '--output', 'json'], {
+    cwd: root, projectJson: projectAksTargetReadback, preserveProjectedJson: true,
+  }), 'AKS target');
   const expectedResourceId = `/subscriptions/${target.subscriptionId}/resourceGroups/${target.resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${target.clusterName}`;
   if (cluster.id?.toLowerCase() !== expectedResourceId.toLowerCase()) fail('Azure returned a different AKS resource than the explicit v1 P0 target');
   const pools = cluster.agentPoolProfiles;
@@ -920,7 +957,9 @@ function verifyAzureTarget(target, { root, run }) {
       pools[0].count > target.nodeMax) {
     fail('the exact AKS target must have one autoscaling pool bounded to 2-3 nodes');
   }
-  const kubeconfig = parseJson(run('kubectl', ['config', 'view', '--minify', '--output', 'json'], { cwd: root }), 'current Kubernetes context');
+  const kubeconfig = parseJson(run('kubectl', ['config', 'view', '--minify', '--output', 'json'], {
+    cwd: root, projectJson: projectKubeconfigReadback, preserveProjectedJson: true,
+  }), 'current Kubernetes context');
   const contextName = kubeconfig['current-context'];
   const context = (kubeconfig.contexts ?? []).find((entry) => entry.name === contextName)?.context;
   const clusterName = context?.cluster;

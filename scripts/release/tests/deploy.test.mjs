@@ -16,9 +16,11 @@ import {
   verifyExistingP0BrokerRouting,
   verifyLiveDeployment,
   verifyRegistryImage,
+  verifyAzureTarget,
 } from '../deploy.mjs';
 import { componentImageRepository } from '../pack.mjs';
 import { createRuntimeList } from '../runtime-list.mjs';
+import { run as runProcess } from '../../azure/lib/exec.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const sourceSha = 'a'.repeat(40);
@@ -573,6 +575,70 @@ test('deployment preflight reads exact managed Gateway and application routing r
   ]);
   assert.ok(calls.every(args => args[0] === 'get' && args.includes('--output') &&
     args.at(-1) === 'json'));
+});
+
+test('Azure target readbacks preserve exact hostnames without exposing kubeconfig credentials', () => {
+  const fqdn = 'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
+  const privateFqdn = 'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.privatelink.azmk8s.io';
+  const apiPrivateFqdn = 'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.azmk8s.io';
+  const expectedResourceId = `/subscriptions/${target.subscriptionId}/resourceGroups/${target.resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${target.clusterName}`;
+  const fixtures = {
+    account: { id: target.subscriptionId, tenantId: target.tenantId },
+    aks: {
+      id: expectedResourceId,
+      fqdn,
+      privateFqdn,
+      apiserverAccessProfile: { privateFqdn: apiPrivateFqdn },
+      agentPoolProfiles: [{ enableAutoScaling: true, minCount: 2, maxCount: 3, count: 2 }],
+      properties: { adminUsername: 'sensitive-aks-property' },
+    },
+    kubeconfig: {
+      'current-context': 'aw-v1-p0',
+      contexts: [{ name: 'aw-v1-p0', context: { cluster: 'aw-v1-p0', user: 'admin' } }],
+      clusters: [{ name: 'aw-v1-p0', cluster: { server: `https://${apiPrivateFqdn}:443` } }],
+      users: [{ name: 'admin', user: { token: 'sensitive-kubeconfig-token' } }],
+    },
+    namespace: {
+      metadata: { name: target.namespace, labels: { 'agentweaver.io/environment': 'v1-p0' } },
+    },
+  };
+  const calls = [];
+  const run = (file, args, options) => {
+    const fixture = file === 'az'
+      ? args[0] === 'account' ? fixtures.account : fixtures.aks
+      : args[0] === 'config' ? fixtures.kubeconfig : fixtures.namespace;
+    const result = runProcess(process.execPath, ['-e',
+      `process.stdout.write(${JSON.stringify(JSON.stringify(fixture))})`], options);
+    const output = result.stdout.trim();
+    calls.push({ file, args, options, output });
+    return output;
+  };
+
+  const result = verifyAzureTarget(target, { root, run });
+
+  assert.equal(result.cluster.fqdn, fqdn);
+  assert.equal(result.cluster.privateFqdn, privateFqdn);
+  assert.equal(result.cluster.apiserverAccessProfile.privateFqdn, apiPrivateFqdn);
+  assert.equal(result.contextName, 'aw-v1-p0');
+  assert.equal(result.server, `https://${apiPrivateFqdn}:443`);
+  assert.deepEqual(JSON.parse(calls[1].output), {
+    id: expectedResourceId,
+    fqdn,
+    privateFqdn,
+    apiserverAccessProfile: { privateFqdn: apiPrivateFqdn },
+    agentPoolProfiles: [{ enableAutoScaling: true, minCount: 2, maxCount: 3, count: 2 }],
+  });
+  assert.deepEqual(JSON.parse(calls[2].output), {
+    'current-context': 'aw-v1-p0',
+    contexts: [{ name: 'aw-v1-p0', context: { cluster: 'aw-v1-p0' } }],
+    clusters: [{ name: 'aw-v1-p0', cluster: { server: `https://${apiPrivateFqdn}:443` } }],
+  });
+  assert.ok(calls[1].options.preserveProjectedJson);
+  assert.ok(calls[2].options.preserveProjectedJson);
+  assert.equal(calls[0].options.projectJson, undefined);
+  assert.equal(calls[3].options.projectJson, undefined);
+  assert.ok(!calls[1].output.includes('sensitive-aks-property'));
+  assert.ok(!calls[2].output.includes('sensitive-kubeconfig-token'));
 });
 
 test('runtime preflight checks shared backend certificates once after verifying required policy names', async () => {
