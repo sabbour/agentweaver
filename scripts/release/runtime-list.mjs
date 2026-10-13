@@ -12,6 +12,7 @@ const SERVICE_NAMES = Object.freeze([
 
 const TARGET_NAMESPACE = 'agentweaver-v1-p0';
 const TLS_MODE = 0o440;
+const BACKEND_TLS_CA_CONFIGMAP = 'service-backend-ca';
 const WORKLOAD_IDENTITY_SERVICES = new Set([
   'identity-broker', 'events-and-sessions', 'environment', 'knowledge', 'orchestrator', 'projects-config',
 ]);
@@ -70,6 +71,18 @@ function createWorkload(name, image, namespace, providerCatalog, agentHost) {
       },
     });
     volumeMounts.push({ name: 'tls', mountPath: tlsDirectory, readOnly: true });
+  }
+
+  if (name === 'mcp') {
+    volumes.push({
+      name: 'backend-ca',
+      configMap: {
+        name: BACKEND_TLS_CA_CONFIGMAP,
+        optional: false,
+        items: [{ key: 'ca.crt', path: 'ca.crt' }],
+      },
+    });
+    volumeMounts.push({ name: 'backend-ca', mountPath: '/var/run/service-backend-ca', readOnly: true });
   }
 
   if (identity) {

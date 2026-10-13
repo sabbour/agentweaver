@@ -95,7 +95,7 @@ function snapshot() {
       targetRefs: [{ group: '', kind: 'Service', name: 'gateway', sectionName: 'https' }],
       validation: {
         hostname: 'gateway.agentweaver-v1-p0.svc.cluster.local',
-        caCertificateRefs: [{ group: '', kind: 'Secret', name: 'service-backend-ca' }],
+        caCertificateRefs: [{ group: '', kind: 'ConfigMap', name: 'service-backend-ca' }],
       },
     }, { ancestors: [{ controllerName: controller,
       ancestorRef: { name: 'identity-broker', namespace: gatewayNamespace },
@@ -103,7 +103,10 @@ function snapshot() {
     mcpRoute: object('HTTPRoute', p0, {
       hostnames: [portalHostname],
       parentRefs: [{ name: 'identity-broker', namespace: gatewayNamespace, sectionName: 'portal' }],
-      rules: [{ matches: [{ path: { type: 'Exact', value: '/mcp' } }],
+      rules: [{ matches: [
+        { path: { type: 'Exact', value: '/mcp' } },
+        { path: { type: 'Exact', value: '/.well-known/oauth-protected-resource/mcp' } },
+      ],
         backendRefs: [{ name: 'mcp', port: 8443 }] }],
     }, { parents: [{ controllerName: controller,
       parentRef: { name: 'identity-broker', namespace: gatewayNamespace, sectionName: 'portal' },
@@ -112,7 +115,7 @@ function snapshot() {
       targetRefs: [{ group: '', kind: 'Service', name: 'mcp', sectionName: 'https' }],
       validation: {
         hostname: 'mcp.agentweaver-v1-p0.svc.cluster.local',
-        caCertificateRefs: [{ group: '', kind: 'Secret', name: 'service-backend-ca' }],
+        caCertificateRefs: [{ group: '', kind: 'ConfigMap', name: 'service-backend-ca' }],
       },
     }, { ancestors: [{ controllerName: controller,
       ancestorRef: { name: 'identity-broker', namespace: gatewayNamespace },
@@ -293,6 +296,7 @@ test('missing, stale, unprogrammed, cross-target, or unsafe native evidence neve
     value => { value.mcpBackendPolicy.spec.validation.hostname = portalHostname; },
     value => { value.mcpBackendPolicy.spec.validation.caCertificateRefs = [{ name: 'untrusted-ca' }]; },
     value => { value.mcpRoute.spec.rules[0].matches[0].path.value = '/'; },
+    value => { value.mcpRoute.spec.rules[0].matches[1].path.value = '/.well-known/oauth-protected-resource'; },
     value => { value.mcpRoute.spec.rules[0].backendRefs[0].name = 'gateway'; },
     value => { value.mcpBackendPolicy.spec.validation.hostname = portalHostname; },
     value => { value.backendPolicy.spec.validation.hostname = 'other.test.eastus2.aksapp.io'; },
@@ -526,11 +530,12 @@ test('guarded bootstrap uses normal user kubeconfig, managed certificates in bot
   assert.ok(mcpRoute);
   assert.ok(mcpRoute.includes(`- ${portalHostname}`));
   assert.match(mcpRoute, /type: Exact\s+value: \/mcp/);
+  assert.match(mcpRoute, /type: Exact\s+value: \/.well-known\/oauth-protected-resource\/mcp/);
   assert.match(mcpRoute, /backendRefs:\s+- name: mcp\s+port: 8443/);
   const mcpBackendPolicy = applies.find(text => text.includes('kind: BackendTLSPolicy') && text.includes('name: mcp'));
   assert.ok(mcpBackendPolicy);
   assert.match(mcpBackendPolicy, /hostname: mcp\.agentweaver-v1-p0\.svc\.cluster\.local/);
-  assert.match(mcpBackendPolicy, /caCertificateRefs:\s+- group: ""\s+kind: Secret\s+name: service-backend-ca/);
+  assert.match(mcpBackendPolicy, /caCertificateRefs:\s+- group: ""\s+kind: ConfigMap\s+name: service-backend-ca/);
   assert.ok(applies.some(text => text.includes('name: mcp-gateway-ingress') &&
     text.includes(`k8s:io.kubernetes.pod.namespace: ${gatewayNamespace}`) &&
     text.includes('k8s:gateway.networking.k8s.io/gateway-name: identity-broker')));

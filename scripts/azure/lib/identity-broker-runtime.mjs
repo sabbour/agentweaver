@@ -167,6 +167,8 @@ export function bootstrapIdentityBrokerRuntime(config, {
     const route = read('httproutes', 'identity-broker', projectIdentityRoutingReadback);
     const webRoute = read('httproutes', 'web-application', projectIdentityRoutingReadback);
     const apiRoute = read('httproutes', 'gateway-api', projectIdentityRoutingReadback);
+    const mcpRoute = read('httproutes', 'mcp', projectIdentityRoutingReadback);
+    const mcpBackendPolicy = read('backendtlspolicies', 'mcp', projectIdentityRoutingReadback);
     const gatewayNamespace = route?.spec?.parentRefs?.[0]?.namespace;
     if (gatewayNamespace !== 'agentweaver-v1-gateway') {
       throw new Error('Broker runtime route does not identify the exact approved Gateway namespace.');
@@ -179,6 +181,8 @@ export function bootstrapIdentityBrokerRuntime(config, {
       webRoute,
       apiRoute,
       apiBackendPolicy: read('backendtlspolicies', 'gateway-api', projectIdentityRoutingReadback),
+      mcpRoute,
+      mcpBackendPolicy,
     });
     if (!routing.hostnameAligned) throw new Error('Broker runtime setup requires independently observed aligned native routing specs.');
     if (application.appId !== config.upstreamClientId ||

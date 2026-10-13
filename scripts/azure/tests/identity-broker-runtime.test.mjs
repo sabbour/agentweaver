@@ -95,12 +95,34 @@ function routing(host = legacyHostname, includeApplicationRoutes = false) {
     state.apiBackendPolicy = object('BackendTLSPolicy', { targetRefs: [{
       name: 'gateway', kind: 'Service', group: '', sectionName: 'https',
     }], validation: {
-      hostname: 'gateway.agentweaver-v1-p0.svc.cluster.local', wellKnownCACertificates: 'System',
+      hostname: 'gateway.agentweaver-v1-p0.svc.cluster.local',
+      caCertificateRefs: [{ group: '', kind: 'ConfigMap', name: 'service-backend-ca' }],
     } }, { ancestors: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
       ancestorRef: { name: 'identity-broker' },
       conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
         { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
     { name: 'gateway-api', service: 'gateway' });
+    state.mcpRoute = object('HTTPRoute', {
+      hostnames: [portalHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'portal' }],
+      rules: [{ matches: [
+        { path: { type: 'Exact', value: '/mcp' } },
+        { path: { type: 'Exact', value: '/.well-known/oauth-protected-resource/mcp' } },
+      ], backendRefs: [{ name: 'mcp', port: 8443 }] }],
+    }, { parents: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
+      parentRef: { name: 'identity-broker', sectionName: 'portal' },
+      conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
+        { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
+    { name: 'mcp', service: 'mcp' });
+    state.mcpBackendPolicy = object('BackendTLSPolicy', { targetRefs: [{
+      name: 'mcp', kind: 'Service', group: '', sectionName: 'https',
+    }], validation: {
+      hostname: 'mcp.agentweaver-v1-p0.svc.cluster.local',
+      caCertificateRefs: [{ group: '', kind: 'ConfigMap', name: 'service-backend-ca' }],
+    } }, { ancestors: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
+      ancestorRef: { name: 'identity-broker' },
+      conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
+        { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
+    { name: 'mcp', service: 'mcp' });
   }
   return state;
 }
@@ -109,10 +131,10 @@ const resourceKeys = {
 };
 function resourceKey(resource, name) {
   if (resource === 'httproute') return ({
-    'identity-broker': 'route', 'web-application': 'webRoute', 'gateway-api': 'apiRoute',
+    'identity-broker': 'route', 'web-application': 'webRoute', 'gateway-api': 'apiRoute', mcp: 'mcpRoute',
   })[name];
   if (resource === 'backendtlspolicy') return ({
-    'identity-broker': 'backendPolicy', 'gateway-api': 'apiBackendPolicy',
+    'identity-broker': 'backendPolicy', 'gateway-api': 'apiBackendPolicy', mcp: 'mcpBackendPolicy',
   })[name];
   return resourceKeys[resource];
 }
@@ -147,12 +169,12 @@ function gatewayRouting(host = hostname, includeApplicationRoutes = false) {
   if (state.backendPolicy.status?.ancestors?.[0]) {
     state.backendPolicy.status.ancestors[0].ancestorRef.namespace = 'agentweaver-v1-gateway';
   }
-  for (const route of [state.webRoute, state.apiRoute].filter(Boolean)) {
+  for (const route of [state.webRoute, state.apiRoute, state.mcpRoute].filter(Boolean)) {
     route.spec.parentRefs[0].namespace = 'agentweaver-v1-gateway';
     route.status.parents[0].parentRef.namespace = 'agentweaver-v1-gateway';
   }
-  if (state.apiBackendPolicy) {
-    state.apiBackendPolicy.status.ancestors[0].ancestorRef.namespace = 'agentweaver-v1-gateway';
+  for (const policy of [state.apiBackendPolicy, state.mcpBackendPolicy].filter(Boolean)) {
+    policy.status.ancestors[0].ancestorRef.namespace = 'agentweaver-v1-gateway';
   }
   return state;
 }

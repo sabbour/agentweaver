@@ -12,6 +12,9 @@ import {
   validatePublishedManifest,
   validateRuntimeManifest,
   validateTarget,
+  verifyAgentHostRegistryImage,
+  verifyExistingP0BrokerRouting,
+  verifyLiveDeployment,
   verifyRegistryImage,
 } from '../deploy.mjs';
 import { componentImageRepository } from '../pack.mjs';
@@ -127,6 +130,101 @@ function publicationReceipt(manifest = releaseManifest()) {
           : { sha256: 'c'.repeat(64), feed: 'https://nuget.pkg.github.com/sabbour/index.json' }),
       };
     }),
+  };
+}
+
+function publishedAgentHostFixture(mutateConfig = () => {}) {
+  const manifest = releaseManifest();
+  const publication = publicationReceipt(manifest);
+  const component = manifest.components.find(({ id }) => id === 'Agentweaver.AgentHost');
+  const published = publication.published.find(({ id }) => id === 'Agentweaver.AgentHost');
+  const prepared = published.preparedOciMeasurement;
+  const digest = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+  const config = {
+    os: 'linux',
+    architecture: 'amd64',
+    config: {
+      User: '1654:1654',
+      Entrypoint: ['dotnet', 'Agentweaver.AgentHost.dll'],
+      Labels: {
+        'org.opencontainers.image.revision': sourceSha,
+        'io.agentweaver.source-tree': prepared.sourceTree,
+        'org.opencontainers.image.version': component.version,
+      },
+    },
+  };
+  mutateConfig(config);
+  const configText = JSON.stringify(config);
+  const configBytes = Buffer.from(configText);
+  const configDigest = digest(configBytes);
+  published.imageConfigDigest = configDigest;
+  prepared.image.configDigest = configDigest;
+  const layerBytes = Buffer.from([0x1f, 0x8b, 0x08, 0x00]);
+  const layer = {
+    mediaType: 'application/vnd.oci.image.layer.v1.tar+gzip',
+    digest: digest(layerBytes),
+    size: layerBytes.length,
+  };
+  const childText = JSON.stringify({
+    schemaVersion: 2,
+    mediaType: 'application/vnd.oci.image.manifest.v1+json',
+    config: {
+      mediaType: 'application/vnd.oci.image.config.v1+json',
+      digest: configDigest,
+      size: configBytes.length,
+    },
+    layers: [layer, { ...layer }],
+  });
+  const childDigest = digest(Buffer.from(childText));
+  const topText = JSON.stringify({
+    schemaVersion: 2,
+    mediaType: 'application/vnd.oci.image.index.v1+json',
+    manifests: [{
+      mediaType: 'application/vnd.oci.image.manifest.v1+json',
+      digest: childDigest,
+      size: Buffer.byteLength(childText),
+      platform: { os: 'linux', architecture: 'amd64' },
+    }],
+  });
+  const topDigest = digest(Buffer.from(topText));
+  component.imageDigest = topDigest;
+  published.image = `ghcr.io/sabbour/${componentImageRepository(component.id)}@${topDigest}`;
+  const images = validatePublicationReceipt(publication, manifest, sourceSha);
+  const genericIndex = JSON.stringify({
+    schemaVersion: 2,
+    manifests: [{
+      digest: `sha256:${'e'.repeat(64)}`,
+      platform: { os: 'linux', architecture: 'amd64' },
+    }],
+  });
+  const response = (text, responseDigest) => ({
+    ok: true,
+    status: 200,
+    headers: { get: name => name.toLowerCase() === 'docker-content-digest' ? responseDigest : null },
+    text: async () => text,
+    json: async () => JSON.parse(text),
+  });
+  const fetch = async url => {
+    const value = String(url);
+    if (value.startsWith('https://ghcr.io/token?')) {
+      return { ok: true, status: 200, json: async () => ({ token: 'test-pull-token' }) };
+    }
+    if (value.endsWith(`/manifests/${topDigest}`)) return response(topText, topDigest);
+    if (value.endsWith(`/manifests/${childDigest}`)) return response(childText, childDigest);
+    if (value.endsWith(`/blobs/${configDigest}`)) return response(configText, null);
+    const requestedDigest = value.slice(value.lastIndexOf('/') + 1);
+    return response(genericIndex, requestedDigest);
+  };
+  return {
+    manifest,
+    publication,
+    images,
+    topDigest,
+    childDigest,
+    configDigest,
+    configBytes,
+    childText,
+    fetch,
   };
 }
 
@@ -273,6 +371,11 @@ test('runtime manifest requires nine shared workloads and pins AgentHost through
   assert.equal(webContainer.ports[0].containerPort, 8080);
   assert.ok(webContainer.envFrom.some(({ configMapRef }) =>
     configMapRef?.name === 'web-runtime-config' && configMapRef.optional === false));
+  const mcp = item('Deployment', 'mcp').spec.template.spec;
+  assert.ok(mcp.volumes.some(volume => volume.configMap?.name === 'service-backend-ca' &&
+    volume.configMap.optional === false && volume.configMap.items?.[0]?.key === 'ca.crt'));
+  assert.ok(mcp.containers[0].volumeMounts.some(mount => mount.name === 'backend-ca' &&
+    mount.mountPath === '/var/run/service-backend-ca' && mount.readOnly === true));
   const mutable = structuredClone(rendered);
   mutable.items.find(({ kind, metadata }) => kind === 'Deployment' && metadata.name === 'web')
     .spec.template.spec.containers[0].image = 'ghcr.io/sabbour/agentweaver-web:1.0.0';
@@ -303,6 +406,55 @@ test('runtime manifest requires nine shared workloads and pins AgentHost through
     kind === 'Deployment' && metadata.name === 'gateway')
     .spec.template.spec.volumes.find(({ name }) => name === 'tls').secret.secretName = 'web-tls';
   assert.throws(() => validateRuntimeManifest(wrongTlsSecret, images, target.namespace), /exact service TLS Secret/);
+  const wrongMcpCa = structuredClone(rendered);
+  wrongMcpCa.items.find(({ kind, metadata }) => kind === 'Deployment' && metadata.name === 'mcp')
+    .spec.template.spec.volumes.find(({ name }) => name === 'backend-ca').configMap.name = 'untrusted-ca';
+  assert.throws(() => validateRuntimeManifest(wrongMcpCa, images, target.namespace),
+    /exact public backend CA ConfigMap/);
+  const missingMcpCaMount = structuredClone(rendered);
+  const missingMcpCaContainer = missingMcpCaMount.items.find(({ kind, metadata }) =>
+    kind === 'Deployment' && metadata.name === 'mcp').spec.template.spec.containers[0];
+  missingMcpCaContainer.volumeMounts =
+    missingMcpCaContainer.volumeMounts.filter(({ name }) => name !== 'backend-ca');
+  assert.throws(() => validateRuntimeManifest(missingMcpCaMount, images, target.namespace),
+    /exact public backend CA ConfigMap/);
+  const nonMcpCaMount = structuredClone(rendered);
+  const mcpBackendCaVolume = nonMcpCaMount.items.find(({ kind, metadata }) =>
+    kind === 'Deployment' && metadata.name === 'mcp').spec.template.spec.volumes
+    .find(({ name }) => name === 'backend-ca');
+  const webPodSpec = nonMcpCaMount.items.find(({ kind, metadata }) =>
+    kind === 'Deployment' && metadata.name === 'web').spec.template.spec;
+  webPodSpec.volumes.push(structuredClone(mcpBackendCaVolume));
+  assert.throws(() => validateRuntimeManifest(nonMcpCaMount, images, target.namespace),
+    /only MCP may mount the public backend CA ConfigMap/);
+  const aliasedNonMcpCa = structuredClone(rendered);
+  const aliasedCaVolume = structuredClone(aliasedNonMcpCa.items.find(({ kind, metadata }) =>
+    kind === 'Deployment' && metadata.name === 'mcp').spec.template.spec.volumes
+    .find(({ name }) => name === 'backend-ca'));
+  aliasedCaVolume.name = 'public-backend-ca';
+  const aliasedWeb = aliasedNonMcpCa.items.find(({ kind, metadata }) =>
+    kind === 'Deployment' && metadata.name === 'web').spec.template.spec;
+  aliasedWeb.volumes.push(aliasedCaVolume);
+  aliasedWeb.containers[0].volumeMounts.push({
+    name: 'public-backend-ca',
+    mountPath: '/var/run/service-backend-ca',
+    readOnly: true,
+  });
+  assert.throws(() => validateRuntimeManifest(aliasedNonMcpCa, images, target.namespace),
+    /only MCP may mount the public backend CA ConfigMap/);
+  const aliasedMcpCa = structuredClone(rendered);
+  const aliasedMcpPod = aliasedMcpCa.items.find(({ kind, metadata }) =>
+    kind === 'Deployment' && metadata.name === 'mcp').spec.template.spec;
+  const extraCaVolume = structuredClone(aliasedMcpPod.volumes.find(({ name }) => name === 'backend-ca'));
+  extraCaVolume.name = 'extra-backend-ca';
+  aliasedMcpPod.volumes.push(extraCaVolume);
+  aliasedMcpPod.containers[0].volumeMounts.push({
+    name: 'extra-backend-ca',
+    mountPath: '/var/run/extra-backend-ca',
+    readOnly: false,
+  });
+  assert.throws(() => validateRuntimeManifest(aliasedMcpCa, images, target.namespace),
+    /exact public backend CA ConfigMap/);
   const webHttps = structuredClone(rendered);
   const web = webHttps.items.find(({ kind, metadata }) => kind === 'Deployment' && metadata.name === 'web');
   web.spec.template.spec.containers[0].ports[0] = { name: 'https', containerPort: 8443, protocol: 'TCP' };
@@ -392,6 +544,35 @@ test('preflight requires source-owned Cilium policy names for all product worklo
   assert.match(mcpPolicy, /k8s:io\.kubernetes\.pod\.namespace: CHANGEME-GATEWAY-NAMESPACE/);
   assert.match(mcpPolicy, /k8s:gateway\.networking\.k8s\.io\/gateway-name: identity-broker/);
   assert.match(mcpPolicy, /port: "8443"/);
+  const environmentPolicy = readFileSync(path.join(root, 'deploy', 'k8s', 'base',
+    'environment-agenthost-network.yaml'), 'utf8');
+  assert.match(environmentPolicy, /name: environment-agenthost-egress[\s\S]*?agentweaver\.io\/workload: projects-config[\s\S]*?port: "8443"/);
+});
+
+test('deployment preflight reads exact managed Gateway and application routing resources', () => {
+  const calls = [];
+  assert.throws(() => verifyExistingP0BrokerRouting(target, {
+    root,
+    run: (_file, args) => {
+      calls.push(args);
+      return JSON.stringify({ items: [] });
+    },
+  }));
+  assert.deepEqual(calls.map(args => [
+    args[1], args[args.indexOf('--field-selector') + 1], args[args.indexOf('--namespace') + 1],
+  ]), [
+    ['defaultdomaincertificates', 'metadata.name=identity-broker', target.namespace],
+    ['gateways', 'metadata.name=identity-broker', 'agentweaver-v1-gateway'],
+    ['httproutes', 'metadata.name=identity-broker', target.namespace],
+    ['backendtlspolicies', 'metadata.name=identity-broker', target.namespace],
+    ['httproutes', 'metadata.name=web-application', target.namespace],
+    ['httproutes', 'metadata.name=gateway-api', target.namespace],
+    ['backendtlspolicies', 'metadata.name=gateway-api', target.namespace],
+    ['httproutes', 'metadata.name=mcp', target.namespace],
+    ['backendtlspolicies', 'metadata.name=mcp', target.namespace],
+  ]);
+  assert.ok(calls.every(args => args[0] === 'get' && args.includes('--output') &&
+    args.at(-1) === 'json'));
 });
 
 test('runtime preflight checks shared backend certificates once after verifying required policy names', async () => {
@@ -418,11 +599,15 @@ test('runtime preflight checks shared backend certificates once after verifying 
       if (args[1] === 'ciliumnetworkpolicies.cilium.io') {
         return JSON.stringify({ items: [...names].map(name => ({ metadata: { name } })) });
       }
-      if (args[1] === 'secret' && args[2] === 'service-backend-ca') return 'Opaque:';
+      if (args[1] === 'configmap' && args[2] === 'service-backend-ca') {
+        if (args.at(-1).startsWith('jsonpath=')) return '';
+        return JSON.stringify({ metadata: { name: 'service-backend-ca', namespace: target.namespace } });
+      }
       return JSON.stringify({ metadata: { name: args[2], namespace: target.namespace } });
     },
-  }), /exact service-backend-ca Secret must contain its public ca\.crt/);
-  assert.equal(calls.filter(args => args[1] === 'secret' && args[2] === 'service-backend-ca').length, 1);
+  }), /exact service-backend-ca ConfigMap must contain its public ca\.crt/);
+  assert.equal(calls.filter(args => args[1] === 'configmap' && args[2] === 'service-backend-ca' &&
+    args.at(-1).startsWith('jsonpath=')).length, 1);
 });
 
 test('default dry-run validates and renders without issuing any external write', async () => {
@@ -518,7 +703,8 @@ test('resume rechecks publication, GHCR, target and live deployment health befor
     verifyPrerequisites: () => { verification.prerequisites++; },
     verifyLive: async (images) => {
       verification.live++;
-      assert.equal(images.length, deployedServices.length);
+      assert.equal(images.length, productServices.length);
+      assert.ok(images.some(image => image.id === 'Agentweaver.AgentHost'));
     },
     run: (file, args) => {
       if (args[0] === 'apply' && args[1] === '--filename') verification.apply++;
@@ -607,4 +793,104 @@ test('GHCR digest verification uses registry HTTP only and accepts the verified 
   assert.match(calls[1][0], /\/v2\/sabbour\/agentweaver-web\/manifests\/sha256:/);
   assert.equal(calls[1][1].headers.authorization, 'Bearer opaque-test-token');
   assert.ok(calls.every(([url]) => url.startsWith('https://ghcr.io/')));
+});
+
+test('AgentHost registry verification pins the published child digest and measures its exact bytes', async () => {
+  const fixture = publishedAgentHostFixture();
+  const host = fixture.images.find(image => image.id === 'Agentweaver.AgentHost');
+  const result = await verifyAgentHostRegistryImage(host, fixture.fetch);
+  assert.equal(result.image,
+    `ghcr.io/sabbour/${componentImageRepository('Agentweaver.AgentHost')}@${fixture.childDigest}`);
+  assert.equal(result.digest, fixture.childDigest);
+  assert.notEqual(result.digest, host.preparedOciMeasurement.image.digest);
+  assert.equal(result.compressedPullBytes,
+    Buffer.byteLength(fixture.childText) + fixture.configBytes.length + 4);
+  assert.ok(result.acceptedDigests.has(fixture.topDigest));
+  assert.ok(result.acceptedDigests.has(fixture.childDigest));
+});
+
+test('AgentHost registry verification rejects source-label drift in the published config', async () => {
+  const fixture = publishedAgentHostFixture(config => {
+    config.config.Labels['org.opencontainers.image.revision'] = 'f'.repeat(40);
+  });
+  const host = fixture.images.find(image => image.id === 'Agentweaver.AgentHost');
+  await assert.rejects(verifyAgentHostRegistryImage(host, fixture.fetch),
+    /published AgentHost config does not match its prepared source/);
+});
+
+test('default dry-run uses the verified published AgentHost platform child and its measured bytes', async () => {
+  const fixture = publishedAgentHostFixture();
+  let runtimeInput;
+  const result = await deployRelease({
+    releaseTag: 'v1.0.0',
+    target,
+    manifest: fixture.manifest,
+    publication: fixture.publication,
+    providerCatalogConfigMapName: 'projects-config-provider-catalog',
+    providerCatalogSourceCommit: sourceSha,
+    dryRun: true,
+  }, {
+    root,
+    verifyRelease: async () => sourceSha,
+    verifyTarget: async () => undefined,
+    verifyPrerequisites: () => undefined,
+    fetch: fixture.fetch,
+    run: (_file, args, options) => {
+      assert.deepEqual(args, ['apply', '--dry-run=client', '--filename', '-']);
+      runtimeInput = JSON.parse(options.input);
+      return '';
+    },
+  });
+  const environment = runtimeInput.items.find(({ kind, metadata }) =>
+    kind === 'Deployment' && metadata.name === 'environment');
+  const env = new Map(environment.spec.template.spec.containers[0].env.map(({ name, value }) => [name, value]));
+  assert.equal(env.get('Environment__Sandbox__AgentSandbox__ContainerImage'),
+    `ghcr.io/sabbour/${componentImageRepository('Agentweaver.AgentHost')}@${fixture.childDigest}`);
+  assert.equal(env.get('Environment__Sandbox__AgentSandbox__ContainerImagePlatform'), 'linux/amd64');
+  assert.equal(env.get('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes'),
+    String(Buffer.byteLength(fixture.childText) + fixture.configBytes.length + 4));
+  assert.equal(runtimeInput.items.some(({ metadata }) => metadata.name === 'agenthost'), false);
+  assert.equal(result.dryRun, true);
+});
+
+test('live deployment verification checks source probes and the published Environment AgentHost pin', () => {
+  const manifest = releaseManifest();
+  const images = validatePublicationReceipt(publicationReceipt(manifest), manifest, sourceSha);
+  const runtime = runtimeManifest(manifest);
+  const makeRun = value => (_file, args) => {
+    if (args[0] === 'rollout') return '';
+    if (args[1] === 'deployment') {
+      return JSON.stringify(value.items.find(item =>
+        item.kind === 'Deployment' && item.metadata.name === args[2]));
+    }
+    if (args[1] === 'pods') {
+      const name = args[args.indexOf('--selector') + 1].split('=')[1];
+      const deployment = value.items.find(item => item.kind === 'Deployment' && item.metadata.name === name);
+      const image = deployment.spec.template.spec.containers[0].image;
+      return JSON.stringify({ items: [{
+        spec: { containers: [{ image }] },
+        status: {
+          conditions: [{ type: 'Ready', status: 'True' }],
+          containerStatuses: [{ ready: true, imageID: image }],
+        },
+      }] });
+    }
+    assert.fail(`unexpected command: ${args.join(' ')}`);
+  };
+  const accepted = verifiedImageDigests(manifest);
+  verifyLiveDeployment(images, target, accepted, { root, run: makeRun(runtime) });
+
+  const wrongAgentHostPin = structuredClone(runtime);
+  wrongAgentHostPin.items.find(item => item.kind === 'Deployment' && item.metadata.name === 'environment')
+    .spec.template.spec.containers[0].env
+    .find(entry => entry.name === 'Environment__Sandbox__AgentSandbox__ContainerImage').value =
+      'ghcr.io/sabbour/agentweaver-agenthost@sha256:' + 'f'.repeat(64);
+  assert.throws(() => verifyLiveDeployment(images, target, accepted,
+    { root, run: makeRun(wrongAgentHostPin) }), /exact published AgentHost/);
+
+  const wrongProbe = structuredClone(runtime);
+  wrongProbe.items.find(item => item.kind === 'Deployment' && item.metadata.name === 'environment')
+    .spec.template.spec.containers[0].readinessProbe.httpGet.path = '/health/live';
+  assert.throws(() => verifyLiveDeployment(images, target, accepted,
+    { root, run: makeRun(wrongProbe) }), /does not preserve its exact HTTPS \/health\/ready probe/);
 });

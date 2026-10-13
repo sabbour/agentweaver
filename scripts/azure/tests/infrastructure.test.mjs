@@ -432,7 +432,7 @@ test('separate routing candidate preserves native managed certificates and HTTPS
     item.includes('kind: BackendTLSPolicy\n'));
   assert.ok(apiBackend);
   assert.match(apiBackend, /hostname: gateway\.agentweaver-v1-p0\.svc\.cluster\.local/);
-  assert.match(apiBackend, /caCertificateRefs:\s+- group: ""\s+kind: Secret\s+name: service-backend-ca/);
+  assert.match(apiBackend, /caCertificateRefs:\s+- group: ""\s+kind: ConfigMap\s+name: service-backend-ca/);
   const mcpRoute = documents.find(item => item.includes('name: mcp\n') &&
     item.includes('kind: HTTPRoute\n'));
   assert.ok(mcpRoute);
@@ -443,7 +443,7 @@ test('separate routing candidate preserves native managed certificates and HTTPS
     item.includes('kind: BackendTLSPolicy\n'));
   assert.ok(mcpBackend);
   assert.match(mcpBackend, /hostname: mcp\.agentweaver-v1-p0\.svc\.cluster\.local/);
-  assert.match(mcpBackend, /caCertificateRefs:\s+- group: ""\s+kind: Secret\s+name: service-backend-ca/);
+  assert.match(mcpBackend, /caCertificateRefs:\s+- group: ""\s+kind: ConfigMap\s+name: service-backend-ca/);
   const backend = document('BackendTLSPolicy');
   assert.match(backend, /apiVersion: gateway\.networking\.k8s\.io\/v1/);
   assert.match(backend, /kind: Service\s+name: identity-broker\s+sectionName: https/);

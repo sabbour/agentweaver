@@ -1,5 +1,4 @@
 import { createHash, X509Certificate } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
 import {
   mkdirSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
@@ -9,6 +8,10 @@ import { fileURLToPath } from 'node:url';
 import { componentImageRepository } from './pack.mjs';
 import { createRuntimeList } from './runtime-list.mjs';
 import { validateManifest } from './validate.mjs';
+import { run as runProcess } from '../azure/lib/exec.mjs';
+import {
+  observeExistingP0BrokerRouting, projectIdentityRoutingReadback,
+} from '../azure/lib/identity-broker-routing.mjs';
 
 const REPOSITORY = 'sabbour/agentweaver';
 const REGISTRY = 'ghcr.io/sabbour';
@@ -59,6 +62,7 @@ const TARGET = Object.freeze({
   nodeMin: 2,
   nodeMax: 3,
 });
+const GATEWAY_NAMESPACE = 'agentweaver-v1-gateway';
 const SERVICE_NAMES = Object.freeze({
   'Agentweaver.AgentHost': 'agenthost',
   'Agentweaver.Identity.Broker': 'identity-broker',
@@ -79,7 +83,7 @@ const BACKEND_TLS_HOSTNAMES = Object.freeze({
   gateway: 'gateway.agentweaver-v1-p0.svc.cluster.local',
   mcp: 'mcp.agentweaver-v1-p0.svc.cluster.local',
 });
-const BACKEND_TLS_CA_SECRET = 'service-backend-ca';
+const BACKEND_TLS_CA_CONFIGMAP = 'service-backend-ca';
 export const SERVICE_NETWORK_POLICY_NAMES = Object.freeze({
   'identity-broker': 'identity-broker-egress',
   'events-and-sessions': 'events-and-sessions-network',
@@ -129,21 +133,8 @@ function parseJson(text, location) {
   }
 }
 
-function runCommand(file, args, { cwd, input, env } = {}) {
-  const result = spawnSync(file, args, {
-    cwd,
-    input,
-    encoding: 'utf8',
-    env,
-    windowsHide: true,
-    maxBuffer: 16 * 1024 * 1024,
-  });
-  if (result.error) fail(`could not run ${file}: ${result.error.message}`);
-  if (result.status !== 0) {
-    const detail = (result.stderr || result.stdout || '').trim();
-    fail(`${file} ${args.join(' ')} failed${detail ? `: ${detail}` : ''}`);
-  }
-  return result.stdout.trim();
+function runCommand(file, args, options = {}) {
+  return runProcess(file, args, options).stdout.trim();
 }
 
 export function parseArgs(argv = []) {
@@ -354,6 +345,7 @@ export function validatePublicationReceipt(receipt, manifest, sourceSha) {
           image: `${expectedRepository(component.id)}@${measurement.image.digest}`,
           digest: measurement.image.digest,
           compressedPullBytes: measurement.image.compressedPullBytes,
+          preparedOciMeasurement: measurement,
         };
       } else if (result.preparedOciMeasurement !== undefined ||
           result.imageConfigDigest !== undefined || result.ociArchiveSha256 !== undefined) {
@@ -375,6 +367,7 @@ export function validatePublicationReceipt(receipt, manifest, sourceSha) {
       result.sandboxImage = agentHostMeasurement.image;
       result.compressedPullBytes = agentHostMeasurement.compressedPullBytes;
       result.sandboxImageDigest = agentHostMeasurement.digest;
+      result.preparedOciMeasurement = agentHostMeasurement.preparedOciMeasurement;
     }
     return result;
   });
@@ -518,6 +511,29 @@ export function validateRuntimeManifest(document, images, namespace) {
         fail(`${name} must use its exact service TLS Secret ${name}-tls`);
       }
     }
+    const backendCaVolumes = (podSpec.volumes ?? []).filter((volume) =>
+      volume.name === 'backend-ca' || volume.configMap?.name === BACKEND_TLS_CA_CONFIGMAP);
+    const backendCaVolumeNames = new Set(backendCaVolumes.map((volume) => volume.name));
+    const backendCaMounts = (container.volumeMounts ?? []).filter((mount) =>
+      mount.name === 'backend-ca' || backendCaVolumeNames.has(mount.name));
+    if (name === 'mcp') {
+      const backendCaVolume = backendCaVolumes[0];
+      const backendCaMount = backendCaMounts[0];
+      if (backendCaVolumes.length !== 1 ||
+          backendCaVolume.name !== 'backend-ca' ||
+          backendCaVolume.configMap?.name !== BACKEND_TLS_CA_CONFIGMAP ||
+          backendCaVolume.configMap.optional === true ||
+          backendCaVolume.configMap.items?.length !== 1 ||
+          backendCaVolume.configMap.items[0].key !== 'ca.crt' ||
+          backendCaVolume.configMap.items[0].path !== 'ca.crt' ||
+          backendCaMounts.length !== 1 ||
+          backendCaMount.mountPath !== '/var/run/service-backend-ca' ||
+          backendCaMount.readOnly !== true) {
+        fail('MCP must mount the exact public backend CA ConfigMap read-only');
+      }
+    } else if (backendCaVolumes.length || backendCaMounts.length) {
+      fail('only MCP may mount the public backend CA ConfigMap');
+    }
     if (name === 'environment') {
       if (getEnvValue('Environment__Sandbox__AgentSandbox__ContainerImage') !== hostImage.sandboxImage ||
           getEnvValue('Environment__Sandbox__AgentSandbox__ContainerImagePlatform') !== 'linux/amd64' ||
@@ -594,23 +610,22 @@ function resolvePodReferences(runtimeManifest) {
 
 function verifyBackendCertificates(target, { root, run }) {
   const caOutput = run('kubectl', [
-    'get', 'secret', BACKEND_TLS_CA_SECRET, '--namespace', target.namespace,
-    '--output', 'jsonpath={.type}:{.data.ca\\.crt}',
+    'get', 'configmap', BACKEND_TLS_CA_CONFIGMAP, '--namespace', target.namespace,
+    '--output', 'jsonpath={.data.ca\\.crt}',
   ], { cwd: root });
-  const caSeparator = caOutput.indexOf(':');
-  if (caSeparator < 0 || caOutput.slice(0, caSeparator) !== 'Opaque' || !caOutput.slice(caSeparator + 1)) {
-    fail(`the exact ${BACKEND_TLS_CA_SECRET} Secret must contain its public ca.crt`);
+  if (typeof caOutput !== 'string' || !caOutput.trim()) {
+    fail(`the exact ${BACKEND_TLS_CA_CONFIGMAP} ConfigMap must contain its public ca.crt`);
   }
   let authority;
   try {
-    authority = new X509Certificate(Buffer.from(caOutput.slice(caSeparator + 1), 'base64'));
+    authority = new X509Certificate(caOutput);
   } catch (error) {
-    fail(`the ${BACKEND_TLS_CA_SECRET} Secret has an invalid public CA certificate: ${error.message}`);
+    fail(`the ${BACKEND_TLS_CA_CONFIGMAP} ConfigMap has an invalid public CA certificate: ${error.message}`);
   }
   const now = Date.now();
   if (!authority.ca || Date.parse(authority.validFrom) > now || Date.parse(authority.validTo) <= now ||
       !authority.verify(authority.publicKey)) {
-    fail(`${BACKEND_TLS_CA_SECRET} must contain a currently valid self-signed CA certificate`);
+    fail(`${BACKEND_TLS_CA_CONFIGMAP} must contain a currently valid self-signed CA certificate`);
   }
   for (const [name, hostname] of Object.entries(BACKEND_TLS_HOSTNAMES)) {
     const output = run('kubectl', [
@@ -630,9 +645,29 @@ function verifyBackendCertificates(target, { root, run }) {
     if (leaf.ca || leaf.checkHost(hostname, { subject: 'never' }) !== hostname ||
         Date.parse(leaf.validFrom) > now || Date.parse(leaf.validTo) <= now ||
         leaf.issuer !== authority.subject || !leaf.verify(authority.publicKey)) {
-      fail(`${name}-tls must be currently valid for ${hostname} and directly signed by ${BACKEND_TLS_CA_SECRET}`);
+      fail(`${name}-tls must be currently valid for ${hostname} and directly signed by ${BACKEND_TLS_CA_CONFIGMAP}`);
     }
   }
+}
+
+export function verifyExistingP0BrokerRouting(target, { root, run }) {
+  function read(resource, name, namespace = target.namespace) {
+    const value = parseJson(run('kubectl', [
+      'get', resource, '--namespace', namespace, '--field-selector', `metadata.name=${name}`, '--output', 'json',
+    ], { cwd: root }), `${resource} ${name} routing`);
+    return projectIdentityRoutingReadback(value);
+  }
+  return observeExistingP0BrokerRouting({
+    certificate: read('defaultdomaincertificates', 'identity-broker'),
+    gateway: read('gateways', 'identity-broker', GATEWAY_NAMESPACE),
+    route: read('httproutes', 'identity-broker'),
+    backendPolicy: read('backendtlspolicies', 'identity-broker'),
+    webRoute: read('httproutes', 'web-application'),
+    apiRoute: read('httproutes', 'gateway-api'),
+    apiBackendPolicy: read('backendtlspolicies', 'gateway-api'),
+    mcpRoute: read('httproutes', 'mcp'),
+    mcpBackendPolicy: read('backendtlspolicies', 'mcp'),
+  });
 }
 
 function checkpointKey(tag, sourceSha, target, identity) {
@@ -711,6 +746,124 @@ export async function verifyRegistryImage(image, fetchImpl = globalThis.fetch) {
     for (const entry of amd64) acceptedDigests.add(entry.digest);
   }
   return acceptedDigests;
+}
+
+export async function verifyAgentHostRegistryImage(image, fetchImpl = globalThis.fetch) {
+  const referenceSeparator = image.image.lastIndexOf('@');
+  const repository = image.image.slice('ghcr.io/'.length, referenceSeparator);
+  const topDigest = image.image.slice(referenceSeparator + 1);
+  const prepared = image.preparedOciMeasurement;
+  if (!image.image.startsWith('ghcr.io/') || referenceSeparator < 'ghcr.io/'.length ||
+      !repository || !DIGEST.test(topDigest) ||
+      prepared?.kind !== 'agenthost-image' || prepared.schemaVersion !== 1 ||
+      !SHA.test(prepared.sourceSha ?? '') || !SHA.test(prepared.sourceTree ?? '') ||
+      prepared.image?.platform !== 'linux/amd64' || typeof prepared.image.version !== 'string' ||
+      !DIGEST.test(prepared.image.configDigest ?? '')) {
+    fail('AgentHost registry verification requires the published GHCR image and exact prepared image evidence');
+  }
+
+  const tokenUrl = new URL('https://ghcr.io/token');
+  tokenUrl.searchParams.set('service', 'ghcr.io');
+  tokenUrl.searchParams.set('scope', `repository:${repository}:pull`);
+  const tokenResponse = await fetchImpl(tokenUrl, { headers: { accept: 'application/json' } });
+  if (!tokenResponse.ok) fail(`GHCR does not expose ${repository} for anonymous pull verification (HTTP ${tokenResponse.status})`);
+  const tokenJson = await tokenResponse.json();
+  const token = tokenJson.token ?? tokenJson.access_token;
+  if (typeof token !== 'string' || !token) fail(`GHCR returned no anonymous pull token for ${repository}`);
+
+  async function getManifest(digest) {
+    const response = await fetchImpl(`https://ghcr.io/v2/${repository}/manifests/${digest}`, {
+      headers: { accept: registryManifestAccept, authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) fail(`published image ${image.image} is unavailable from GHCR (HTTP ${response.status})`);
+    const text = await response.text();
+    const bytes = Buffer.from(text, 'utf8');
+    const actualDigest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+    if (response.headers.get('docker-content-digest') !== digest || actualDigest !== digest) {
+      fail(`GHCR manifest bytes do not match the exact published digest for ${image.image}`);
+    }
+    return { text, bytes, value: parseJson(text, `GHCR manifest ${digest}`) };
+  }
+
+  const top = await getManifest(topDigest);
+  let childDigest = topDigest;
+  let child = top;
+  if (Array.isArray(top.value.manifests)) {
+    const platforms = top.value.manifests.filter(entry =>
+      entry.platform?.os === 'linux' && entry.platform?.architecture === 'amd64');
+    if (platforms.length !== 1 || !DIGEST.test(platforms[0]?.digest ?? '') ||
+        !Number.isSafeInteger(platforms[0]?.size) || platforms[0].size <= 0) {
+      fail('published AgentHost image must have exactly one valid linux/amd64 platform manifest');
+    }
+    childDigest = platforms[0].digest;
+    child = await getManifest(childDigest);
+    if (child.bytes.length !== platforms[0].size) {
+      fail('published AgentHost platform manifest size does not match its index descriptor');
+    }
+  }
+
+  const manifest = child.value;
+  const supportedManifestTypes = new Set([
+    'application/vnd.oci.image.manifest.v1+json',
+    'application/vnd.docker.distribution.manifest.v2+json',
+  ]);
+  const supportedConfigTypes = new Set([
+    'application/vnd.oci.image.config.v1+json',
+    'application/vnd.docker.container.image.v1+json',
+  ]);
+  const supportedLayerTypes = new Set([
+    'application/vnd.oci.image.layer.v1.tar+gzip',
+    'application/vnd.docker.image.rootfs.diff.tar.gzip',
+  ]);
+  if (manifest.schemaVersion !== 2 || !supportedManifestTypes.has(manifest.mediaType) ||
+      !supportedConfigTypes.has(manifest.config?.mediaType) ||
+      manifest.config.digest !== prepared.image.configDigest ||
+      !Number.isSafeInteger(manifest.config.size) || manifest.config.size <= 0 ||
+      !Array.isArray(manifest.layers) || manifest.layers.length === 0) {
+    fail('published AgentHost manifest does not match its exact prepared OCI config and compressed layers');
+  }
+
+  const configResponse = await fetchImpl(`https://ghcr.io/v2/${repository}/blobs/${manifest.config.digest}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!configResponse.ok) fail(`published AgentHost config is unavailable from GHCR (HTTP ${configResponse.status})`);
+  const configText = await configResponse.text();
+  const configBytes = Buffer.from(configText, 'utf8');
+  if (configBytes.length !== manifest.config.size ||
+      `sha256:${createHash('sha256').update(configBytes).digest('hex')}` !== manifest.config.digest) {
+    fail('published AgentHost config bytes do not match their manifest descriptor');
+  }
+  const config = parseJson(configText, 'published AgentHost config');
+  const labels = config.config?.Labels;
+  if (config.os !== 'linux' || config.architecture !== 'amd64' ||
+      config.config?.User !== '1654:1654' ||
+      JSON.stringify(config.config?.Entrypoint) !== JSON.stringify(['dotnet', 'Agentweaver.AgentHost.dll']) ||
+      labels?.['org.opencontainers.image.revision'] !== prepared.sourceSha ||
+      labels?.['io.agentweaver.source-tree'] !== prepared.sourceTree ||
+      labels?.['org.opencontainers.image.version'] !== prepared.image.version) {
+    fail('published AgentHost config does not match its prepared source, tree, version, and runtime evidence');
+  }
+
+  const layers = new Map();
+  let compressedPullBytes = child.bytes.length + configBytes.length;
+  for (const layer of manifest.layers) {
+    if (!DIGEST.test(layer.digest ?? '') || !Number.isSafeInteger(layer.size) || layer.size <= 0 ||
+        !supportedLayerTypes.has(layer.mediaType) ||
+        layers.has(layer.digest) && layers.get(layer.digest) !== layer.size) {
+      fail('published AgentHost layer descriptors are invalid or conflicting');
+    }
+    if (layers.has(layer.digest)) continue;
+    layers.set(layer.digest, layer.size);
+    compressedPullBytes += layer.size;
+    if (!Number.isSafeInteger(compressedPullBytes)) fail('published AgentHost pull-byte total exceeds the exact integer range');
+  }
+
+  return {
+    image: `ghcr.io/${repository}@${childDigest}`,
+    digest: childDigest,
+    compressedPullBytes,
+    acceptedDigests: new Set([topDigest, childDigest]),
+  };
 }
 
 async function verifyRelease(tag, publication, { root, run }) {
@@ -820,6 +973,7 @@ function verifyRuntimePrerequisites(runtimeManifest, target, { root, run }) {
     }
   }
   verifyBackendCertificates(target, { root, run });
+  verifyExistingP0BrokerRouting(target, { root, run });
 }
 
 function verifyImageIds(runtimeManifest, images) {
@@ -842,12 +996,43 @@ function verifyMeasuredAgentHostDigest(images, acceptedDigests) {
   }
 }
 
-function verifyLiveDeployment(images, target, acceptedDigests, { root, run }) {
+export function verifyLiveDeployment(images, target, acceptedDigests, { root, run }) {
+  const agentHost = images.find((image) => image.id === 'Agentweaver.AgentHost');
   for (const image of images.filter((entry) => entry.id !== 'Agentweaver.AgentHost')) {
     run('kubectl', ['rollout', 'status', `deployment/${image.name}`, '--namespace', target.namespace, '--timeout=5m'], { cwd: root });
     const deployment = parseJson(run('kubectl', ['get', 'deployment', image.name, '--namespace', target.namespace, '--output', 'json'], { cwd: root }), `${image.name} deployment`);
-    if (deployment.spec?.template?.spec?.containers?.[0]?.image !== image.image) {
+    const containers = deployment.spec?.template?.spec?.containers;
+    if (!Array.isArray(containers) || containers.length !== 1 || containers[0].image !== image.image) {
       fail(`${image.name} is not running the exact published GHCR digest`);
+    }
+    const container = containers[0];
+    const web = image.name === 'web';
+    const port = web ? 'http' : 'https';
+    const scheme = web ? 'HTTP' : 'HTTPS';
+    for (const [probeName, probePath] of [
+      ['livenessProbe', '/health/live'],
+      ['readinessProbe', '/health/ready'],
+    ]) {
+      const probe = container[probeName];
+      if (probe?.httpGet?.path !== probePath || probe.httpGet.scheme !== scheme ||
+          probe.httpGet.port !== port) {
+        fail(`${image.name} live Deployment does not preserve its exact ${scheme} ${probePath} probe`);
+      }
+    }
+    if (image.name === 'environment') {
+      const env = container.env ?? [];
+      const expected = new Map([
+        ['Environment__Sandbox__AgentSandbox__ContainerImage', agentHost?.sandboxImage],
+        ['Environment__Sandbox__AgentSandbox__ContainerImagePlatform', 'linux/amd64'],
+        ['Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes',
+          String(agentHost?.compressedPullBytes)],
+      ]);
+      for (const [name, value] of expected) {
+        const matches = env.filter((entry) => entry.name === name);
+        if (matches.length !== 1 || matches[0].value !== value) {
+          fail(`Environment live Deployment does not pin the exact published AgentHost ${name}`);
+        }
+      }
     }
     const pods = parseJson(run('kubectl', ['get', 'pods', '--namespace', target.namespace,
       '--selector', `app.kubernetes.io/name=${image.name}`, '--output', 'json'], { cwd: root }), `${image.name} pods`);
@@ -910,19 +1095,29 @@ export async function deployRelease(options = {}, dependencies = {}) {
   const sourceSha = await (dependencies.verifyRelease ?? verifyRelease)(parsed.releaseTag, publication, { root, run });
   validatePublishedManifest(manifest, { root, sourceSha });
   const images = validatePublicationReceipt(publication, manifest, sourceSha);
+  const verifyImages = dependencies.verifyImages ?? (async (refs) => {
+    const result = new Map();
+    for (const image of refs) {
+      if (image.id === 'Agentweaver.AgentHost') {
+        const published = await verifyAgentHostRegistryImage(image, fetchImpl);
+        image.sandboxImage = published.image;
+        image.sandboxImageDigest = published.digest;
+        image.compressedPullBytes = published.compressedPullBytes;
+        result.set(image.name, published.acceptedDigests);
+      } else {
+        result.set(image.name, await verifyRegistryImage(image.image, fetchImpl));
+      }
+    }
+    return result;
+  });
+  let acceptedDigests = await verifyImages(images);
+  verifyMeasuredAgentHostDigest(images, acceptedDigests);
   const runtimeList = runtimeDocument ?? createRuntimeList(images, parsed.target.namespace, {
     configMapName: parsed.providerCatalogConfigMapName,
     sourceCommit: parsed.providerCatalogSourceCommit,
   });
   const runtimeManifest = validateRuntimeManifest(runtimeList, images, parsed.target.namespace);
   verifyImageIds(runtimeManifest, images);
-  const verifyImages = dependencies.verifyImages ?? (async (refs) => {
-    const result = new Map();
-    for (const image of refs) result.set(image.name, await verifyRegistryImage(image.image, fetchImpl));
-    return result;
-  });
-  let acceptedDigests = await verifyImages(images);
-  verifyMeasuredAgentHostDigest(images, acceptedDigests);
   const targetInfo = await (dependencies.verifyTarget ?? verifyAzureTarget)(parsed.target, { root, run });
   (dependencies.verifyPrerequisites ?? verifyRuntimePrerequisites)(runtimeManifest, parsed.target, { root, run });
   run('kubectl', ['apply', '--dry-run=client', '--filename', '-'], {
@@ -991,7 +1186,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
   const verifyLive = dependencies.verifyLive ?? ((refs, target, digests) =>
     verifyLiveDeployment(refs, target, digests, { root, run }));
   const deployedImages = images.filter((image) => image.id !== 'Agentweaver.AgentHost');
-  await verifyLive(deployedImages, parsed.target, acceptedDigests);
+  await verifyLive(images, parsed.target, acceptedDigests);
   clearCheckpoint(key, checkpointIo);
   return {
     ok: true,

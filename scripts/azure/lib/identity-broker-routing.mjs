@@ -222,7 +222,10 @@ export function observeExistingP0BrokerRouting({
       'gateway.agentweaver-v1-p0.svc.cluster.local', 'service-backend-ca');
     assertManagedRoute(mcpRoute, {
       name: 'mcp', service: 'mcp', hostname: portalHostname, gatewayNamespace,
-      sectionName: 'portal', paths: [{ type: 'Exact', value: '/mcp' }], backend: 'mcp', port: 8443,
+      sectionName: 'portal', paths: [
+        { type: 'Exact', value: '/mcp' },
+        { type: 'Exact', value: '/.well-known/oauth-protected-resource/mcp' },
+      ], backend: 'mcp', port: 8443,
     });
     assertManagedBackendTlsPolicy(mcpBackendPolicy, 'mcp', 'mcp',
       'mcp.agentweaver-v1-p0.svc.cluster.local', 'service-backend-ca');
@@ -364,7 +367,7 @@ function assertManagedRoute(route, {
   }
 }
 
-function assertManagedBackendTlsPolicy(policy, name, service, hostname, caSecretName) {
+function assertManagedBackendTlsPolicy(policy, name, service, hostname, caConfigMapName) {
   assertObject(policy, 'BackendTLSPolicy', P0_NAMESPACE, name);
   const target = policy.spec?.targetRefs?.[0];
   const validation = policy.spec?.validation;
@@ -372,12 +375,12 @@ function assertManagedBackendTlsPolicy(policy, name, service, hostname, caSecret
       policy.spec?.targetRefs?.length !== 1 || target?.name !== service ||
       (target.kind ?? 'Service') !== 'Service' || (target.group ?? '') !== '' ||
       (target.namespace ?? P0_NAMESPACE) !== P0_NAMESPACE || target.sectionName !== 'https' ||
-      validation?.hostname !== hostname || (caSecretName
+      validation?.hostname !== hostname || (caConfigMapName
         ? validation.wellKnownCACertificates !== undefined ||
           validation.caCertificateRefs?.length !== 1 ||
-          validation.caCertificateRefs[0].name !== caSecretName ||
+          validation.caCertificateRefs[0].name !== caConfigMapName ||
           (validation.caCertificateRefs[0].namespace ?? P0_NAMESPACE) !== P0_NAMESPACE ||
-          (validation.caCertificateRefs[0].kind ?? 'Secret') !== 'Secret' ||
+          (validation.caCertificateRefs[0].kind ?? 'ConfigMap') !== 'ConfigMap' ||
           (validation.caCertificateRefs[0].group ?? '') !== ''
         : validation.wellKnownCACertificates !== 'System' || validation.caCertificateRefs?.length) ||
       validation.subjectAltNames?.length) {
@@ -451,7 +454,10 @@ export function deriveIdentityRouting({
     'gateway.agentweaver-v1-p0.svc.cluster.local', 'service-backend-ca');
   assertManagedRoute(mcpRoute, {
     name: 'mcp', service: 'mcp', hostname: portalHostname, gatewayNamespace: GATEWAY_NAMESPACE,
-    sectionName: 'portal', paths: [{ type: 'Exact', value: '/mcp' }], backend: 'mcp', port: 8443,
+    sectionName: 'portal', paths: [
+      { type: 'Exact', value: '/mcp' },
+      { type: 'Exact', value: '/.well-known/oauth-protected-resource/mcp' },
+    ], backend: 'mcp', port: 8443,
   });
   assertManagedBackendTlsPolicy(mcpBackendPolicy, 'mcp', 'mcp',
     'mcp.agentweaver-v1-p0.svc.cluster.local', 'service-backend-ca');

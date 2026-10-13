@@ -852,3 +852,164 @@ Use exact current source context for each small patch and inspect partial change
 - Tags: patch, partial-application
 
 ---
+
+## [ERR-20261013-002] mcp-certificate-test-missing-using
+
+**Logged**: 2026-10-13T01:30:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The focused MCP test build found a missing namespace import for certificate OIDs.
+
+### Error
+```text
+error CS0246: The type or namespace name 'Oid' could not be found
+```
+
+### Context
+- The certificate validation change uses `Oid` for the required TLS server-auth application policy.
+- The first focused build stopped at compile time before running the tests.
+
+### Suggested Fix
+Import `System.Security.Cryptography` where the certificate validation code uses `Oid`.
+
+### Metadata
+- Reproducible: yes
+- Related Files: services/mcp/Agentweaver.Mcp/McpGatewayCertificateValidation.cs
+- Tags: dotnet, certificate-validation
+
+### Resolution
+- **Resolved**: 2026-10-13T01:30:00-07:00
+- **Notes**: Added the missing namespace import; rerun the focused test.
+
+---
+
+## [ERR-20261013-003] mcp-expired-certificate-fixture
+
+**Logged**: 2026-10-13T01:34:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The expired-leaf test fixture was outside its issuer certificate's validity window.
+
+### Error
+```text
+The requested notBefore value is earlier than issuerCertificate.NotBefore.
+```
+
+### Context
+- The test intentionally creates an expired Gateway leaf certificate.
+- Its test CA started validity five minutes before the test, so it could not issue the older leaf.
+
+### Suggested Fix
+Start the ephemeral test CA validity before the expired leaf's validity period.
+
+### Metadata
+- Reproducible: yes
+- Related Files: tests/Agentweaver.Mcp.Tests/BackendCertificateValidationTests.cs
+- Tags: dotnet, certificate-validation
+
+### Resolution
+- **Resolved**: 2026-10-13T01:34:00-07:00
+- **Notes**: Extended only the generated test CA's start time to four hours before the test.
+
+---
+
+## [ERR-20261013-004] runtime-list-mcp-ca-validator-placement
+
+**Logged**: 2026-10-13T01:36:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The MCP CA manifest validator was inserted inside the Environment environment-variable array.
+
+### Error
+```text
+SyntaxError: missing ) after argument list
+```
+
+### Context
+- The validator referenced `podSpec` and `container`, which are only in scope in `validateRuntimeManifest`.
+- The deploy test module could not load `runtime-list.mjs`.
+
+### Suggested Fix
+Keep runtime-list generation limited to adding the MCP CA volume and mount. Validate that shape in `deploy.mjs`, where workload Pod specs are already checked.
+
+### Metadata
+- Reproducible: yes
+- Related Files: scripts/release/runtime-list.mjs, scripts/release/deploy.mjs, scripts/release/tests/deploy.test.mjs
+- Tags: node, syntax, certificate-validation
+
+### Resolution
+- **Resolved**: 2026-10-13T01:36:00-07:00
+- **Notes**: Restored the Environment env array and moved exact MCP-only CA checks into runtime manifest validation, with negative coverage for a missing MCP mount and non-MCP CA volume.
+
+---
+
+## [ERR-20261013-005] release-agenthost-fixture-registry
+
+**Logged**: 2026-10-13T01:40:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+AgentHost tests used an incomplete GHCR repository path and a stale live-probe error expectation.
+
+### Error
+```text
+publication receipt and release manifest disagree on the published image for Agentweaver.AgentHost
+```
+
+### Context
+- Production expects the `ghcr.io/sabbour/` registry namespace.
+- The fixture and two assertions omitted the owner segment; a separate assertion expected previous error wording.
+
+### Suggested Fix
+Match fixture image references to the existing GHCR namespace and update the assertion to the current error message.
+
+### Metadata
+- Reproducible: yes
+- Related Files: scripts/release/tests/deploy.test.mjs
+- Tags: node, release, fixture
+
+### Resolution
+- **Resolved**: 2026-10-13T01:40:00-07:00
+- **Notes**: Corrected the namespace in the AgentHost fixture/assertions and matched the live readiness-probe error wording.
+
+---
+
+## [ERR-20261013-006] synchronous-reviewer-followup
+
+**Logged**: 2026-10-13T01:45:00-07:00
+**Priority**: low
+**Status**: pending
+**Area**: infra
+
+### Summary
+The original synchronous review agents could not accept the requested same-task follow-up.
+
+### Error
+```text
+write_agent only supports background agents. A new background task must be started for follow-up messages.
+```
+
+### Context
+- The reviewer IDs were recovered from the session agent list.
+- A bounded follow-up was requested, but starting new reviewers for the same objective is prohibited without user direction.
+
+### Suggested Fix
+Ask the user whether to authorize fresh bounded reviewers or proceed using the original review and the current passing checks.
+
+### Metadata
+- Reproducible: yes
+- Related Files: none
+- Tags: agent-workflow, review
+
+---

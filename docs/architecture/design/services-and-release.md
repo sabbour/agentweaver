@@ -545,8 +545,10 @@ an annotated v1 GitHub Release at the exact clean source commit, verifies all
 ten product image digests against the immutable publication result and GHCR,
 and never builds, pushes, or imports an image. Nine services run as shared
 Deployments and private ClusterIP Services. AgentHost remains per-Sandbox:
-Environment pins its exact receipt-measured image digest, `linux/amd64` platform,
-and compressed pull byte count for the Sandbox provider. The 13 NuGet packages
+read-only GHCR verification resolves its exact published `linux/amd64` child
+digest, validates the config against prepared source labels, and measures the
+published manifest, config, and compressed layers before Environment pins it
+with the byte total for the Sandbox provider. The 13 NuGet packages
 are checked as part of the publication composition but are not deployed. The
 0.0.1 Foundation Probe remains acceptance-only and is excluded from product images.
 
@@ -574,11 +576,18 @@ Environment, Gateway, MCP, Orchestrator, Knowledge, and Web. The optional
 routing overlay allows Web HTTP only from the explicitly selected `identity-broker`
 Gateway pods and node health probes. The routing source defines a Web root
 HTTPRoute, Gateway API HTTPRoute for `/api/v1` and exact `/openapi/v1.json`,
-and exact `/mcp` HTTPRoute to MCP, all on the portal listener. Gateway and MCP
-BackendTLSPolicies pin their service DNS hostnames and the existing
-`service-backend-ca` Secret. Release preflight checks that its public CA and
-both signed service certificates are already present; the release tool does
-not create or manage these routes or certificates. Other source policies cover
+and exact `/mcp` plus `/.well-known/oauth-protected-resource/mcp` HTTPRoutes to
+MCP, all on the portal listener. Gateway and MCP
+BackendTLSPolicies pin their service DNS hostnames and the existing public
+`service-backend-ca` ConfigMap. MCP mounts that CA read-only to validate HTTPS
+calls to Gateway. Release preflight checks the public CA and both signed service
+certificates, and reads back the exact managed Gateway, routes, and backend TLS
+policies before apply; the release tool does not create or manage these routes
+or certificates. GHCR verification resolves the published AgentHost
+`linux/amd64` child manifest, checks its config against prepared source labels,
+and measures the published manifest, config, and compressed layers before
+pinning that child digest in Environment. Resume checks the live Environment
+pin and health probes again. Other source policies cover
 in-cluster owner edges, not unknown external destinations or routes. Runtime
 settings and database, access, TLS, provider-catalog, and routing prerequisites
 remain operator-owned.
@@ -590,10 +599,11 @@ flowchart LR
   Receipt --> GHCR["Verify 10 digest-pinned GHCR images"]
   Manifest["Release-stage composition manifest"] --> GHCR
   Target["Explicit v1 P0 target"] --> ReadOnly["Read-only Azure, kubectl, and prerequisite checks"]
-  Portal["Existing portal routes: / to Web; API and exact OpenAPI to Gateway; /mcp to MCP"] --> ReadOnly
+  Portal["Existing portal routes: / to Web; API and exact OpenAPI to Gateway; /mcp and MCP metadata to MCP"] --> ReadOnly
   GHCR --> ReadOnly
   Runtime["Checked-in List source + explicit provider catalog inputs"] --> ReadOnly
-  Receipt --> Host["Measured AgentHost image and pull bytes"]
+  Receipt --> Host["Prepared AgentHost evidence"]
+  GHCR --> Host
   Host --> Environment["Pin per-Sandbox AgentHost in Environment options"]
   ReadOnly --> DryRun["Default dry-run"]
   DryRun -->|explicit --execute| Apply["Apply only nine shared-service pairs"]

@@ -7,7 +7,6 @@
     "release:apply": "node scripts/release/apply.mjs artifacts/release/plan.json releases/foundation.json",
     "release:pack": "node scripts/release/pack.mjs releases/foundation.json",
     "release:deploy": "node scripts/release/deploy.mjs",
-    "harness:p1": "node scripts/harness-shared/run-p1.mjs",
     "release:prepare-build-inputs": "node scripts/release/prepare-build-inputs.mjs",
     "test:release": "node --test scripts/release/tests/*.test.mjs",
     "test:azure": "node --test scripts/azure/tests/*.test.mjs",

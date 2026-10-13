@@ -191,9 +191,10 @@ namespace and native managed certificates in both namespaces.
 It applies the Gateway, Broker/Web/Gateway API/MCP HTTPRoutes, corresponding
 BackendTLSPolicies, and narrow Cilium ingress policies. The portal listener
 sends `/` to Web, `/api/v1` plus exact `/openapi/v1.json` to Gateway, and exact
-`/mcp` to MCP over HTTPS. Gateway and MCP backend TLS use operator-owned
+`/mcp` plus `/.well-known/oauth-protected-resource/mcp` to MCP over HTTPS.
+Gateway and MCP backend TLS use operator-owned
 `gateway-tls` and `mcp-tls` Secrets, validated against the public `ca.crt` in
-the existing Opaque `service-backend-ca` Secret. Their leaf certificates must
+the existing `service-backend-ca` ConfigMap. Their leaf certificates must
 match the exact in-cluster service DNS names. The installer reads back the
 native routes and BackendTLSPolicies; it does not create or rotate these
 service certificates. It adds no mesh addon, Istio API resource, injection label,

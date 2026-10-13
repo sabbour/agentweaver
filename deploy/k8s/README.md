@@ -82,12 +82,14 @@ BackendTLSPolicy requires HTTPS to Kestrel and validates its certificate
 with system trust and the exact route hostname.
 The portal listener uses `portal.<managed-domain>`. Its Web route sends `/`
 to the Web Service on port 8080. Its Gateway API route sends `/api/v1` and the
-exact `/openapi/v1.json` path to the Gateway Service on port 8443. The exact
-`/mcp` route sends MCP traffic to the MCP Service on port 8443. Gateway and MCP
+exact `/openapi/v1.json` path to the Gateway Service on port 8443. Exact
+`/mcp` and `/.well-known/oauth-protected-resource/mcp` paths send MCP traffic
+to the MCP Service on port 8443. Gateway and MCP
 use their own service TLS Secrets, `gateway-tls` and `mcp-tls`. Each leaf
 certificate must contain the exact service DNS name as a SAN and be directly
-signed by the operator-owned `service-backend-ca` Secret. Its `ca.crt` is public
-CA data in an Opaque Secret; private keys stay in the service TLS Secrets.
+signed by the public CA in the operator-owned `service-backend-ca` ConfigMap.
+MCP mounts that ConfigMap read-only to validate Gateway certificates. Private
+keys stay in the service TLS Secrets.
 BackendTLSPolicies validate the exact service DNS name against that CA.
 These are source-defined routes, not proof that the managed Gateway is accepting traffic.
 `CHANGEME-MANAGED-HOST` requires the `agentweaver` prefix within the certificate's
@@ -130,7 +132,7 @@ The ordinary base references, but does not create, these objects:
 | `identity-broker-signing` Secret | `signing.pfx` and its `password`; the PFX signs/encrypts tokens and protects the durable data-protection key ring. |
 | `identity-broker-client-secrets` Secret | Optional `IdentityBroker__ExternalProvider__ClientSecret` for a confidential upstream client and `IdentityBroker__Clients__<index>__ClientSecret` keys for configured confidential clients. Public clients omit their secrets. |
 | `identity-broker-tls` Secret | Approved `tls.crt` and `tls.key` for Kestrel HTTPS. No certificate is created here. |
-| `gateway-tls`, `mcp-tls`, and `service-backend-ca` Secrets | Operator-owned Kestrel certificates for Gateway and MCP, plus an Opaque Secret containing the public `ca.crt` that signs both leaf certificates. The leaves must include `gateway.agentweaver-v1-p0.svc.cluster.local` and `mcp.agentweaver-v1-p0.svc.cluster.local` as their respective SANs. Release preflight verifies their type, validity, hostnames, and direct signature. |
+| `gateway-tls` and `mcp-tls` Secrets; `service-backend-ca` ConfigMap | Operator-owned Kestrel certificates for Gateway and MCP, plus the public `ca.crt` that signs both leaf certificates. The leaves must include `gateway.agentweaver-v1-p0.svc.cluster.local` and `mcp.agentweaver-v1-p0.svc.cluster.local` as their respective SANs. Release preflight verifies the CA and leaf validity, hostnames, and direct signature. |
 | `identity-broker-key-ring` PVC | Durable writable storage mounted for the protected ASP.NET data-protection key ring. The host runs one replica with a recreate strategy. |
 | `identity-broker-migration-config` ConfigMap | `ConnectionStrings__IdentityBrokerMigration` and the separate migration workload-identity tenant, client, and absolute projected-token-file settings. |
 
@@ -256,9 +258,13 @@ operator may instead supply a complete rendered list with `--runtime-manifest`.
 The tool verifies the GitHub
 annotated tag and Release, source SHA, all ten public GHCR manifests, the exact
 Azure/kubectl target, and referenced prerequisites before it can render or apply.
-The measured AgentHost image is not deployed as a shared workload: the Environment
-Deployment pins its exact digest, `linux/amd64` platform, and measured compressed
-pull bytes for the per-Sandbox provider. The Foundation Probe is excluded.
+The measured AgentHost image is not deployed as a shared workload: anonymous
+GHCR verification resolves the exact published `linux/amd64` child manifest,
+checks its config against the prepared source labels, and measures the published
+manifest, config, and compressed layers. The Environment Deployment pins that
+child digest, platform, and byte total for the per-Sandbox provider. Resume also
+checks the live Environment pin and liveness/readiness probes. The Foundation
+Probe is excluded.
 
 The target must be passed explicitly each time: subscription
 `90ab3701-83f0-4ba1-a90a-f2e68683adab`, tenant
@@ -285,7 +291,7 @@ Orchestrator, Knowledge, and Web. The optional routing overlay defines Web
 ingress only from node health probes and the exact `identity-broker` Gateway
 pods in the explicitly selected Gateway namespace, on HTTP port 8080. The source also
 defines the Web root route, Gateway API routes for `/api/v1` and exact
-`/openapi/v1.json`, and exact `/mcp` to MCP; the release tool does not create
+`/openapi/v1.json`, and exact `/mcp` plus the protected-resource metadata path to MCP; the release tool does not create
 or manage these routes.
 The other owner policies cover source-verified internal service edges; they do
 not supply missing external endpoints or prove live traffic.

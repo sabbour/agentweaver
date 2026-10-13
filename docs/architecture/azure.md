@@ -60,9 +60,10 @@ a v1 Gateway, Broker/Web/Gateway API/MCP HTTPRoutes, and verified backend HTTPS.
 It requires explicit approved Gateway namespace and security-policy inputs.
 The P0 workload namespace remains restricted.
 The portal listener routes `/` to Web, `/api/v1` plus exact
-`/openapi/v1.json` to Gateway, and exact `/mcp` to MCP. Gateway and MCP use
-operator-owned TLS Secrets with service-DNS certificates signed by the
-`service-backend-ca` Secret. These source routes do not prove live traffic.
+`/openapi/v1.json` to Gateway, and exact `/mcp` plus the MCP protected-resource
+metadata path to MCP. Gateway and MCP use operator-owned TLS Secrets with
+service-DNS certificates signed by the public CA in the
+`service-backend-ca` ConfigMap. These source routes do not prove live traffic.
 The issuer comes from the admitted route hostname.
 Public callback changes default to read-only append/no-op plans.
 An append requires separate explicit registration and exact-URI confirmation.
