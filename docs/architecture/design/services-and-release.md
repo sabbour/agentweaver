@@ -561,6 +561,46 @@ and writes a local deployment result containing the exact input hashes and
 hashes of Deployment, Service, and pod readbacks. This path does not complete
 the product release gate below.
 
+The local command also has an optional, default-off Broker run-binding path.
+The operator supplies `--broker-run-binding <descriptor.json>` with exactly
+`projectsOwnerAddress`, `projectsAudience`,
+`projectsServerCertificateSha256`, and `projectsTrustBundleSha256`.
+`projectsAudience` must be an absolute HTTPS URI without user information, a
+query, or a fragment. The command checks these exact values against the
+existing Broker and Projects Config runtime ConfigMaps, the exact raw UTF-8
+bytes of the public backend CA ConfigMap, and the DER bytes of the Projects
+Config server certificate. The Broker settings are
+`IdentityBroker__RunBinding__ProjectsOwnerAddress`,
+`IdentityBroker__RunBinding__ProjectsAudience`,
+`IdentityBroker__RunBinding__ProjectsServerCertificateSha256`, and
+`IdentityBroker__RunBinding__ProjectsTrustBundleSha256`. The Projects Config
+settings are `ProjectsConfig__Tls__CertificatePath`,
+`ProjectsConfig__Tls__KeyPath`,
+`ProjectsConfig__Tls__ServerCertificateSha256`, and
+`ProjectsConfig__Authentication__BrokerRunBindingAudience`; the CA file path
+is fixed by the runtime and is not a configuration key. The binding audience
+must not be URI-equivalent to Projects Config's existing API audience or any
+Identity Broker client resource. The command compares the SecretRedemption
+audience string exactly against the binding URI's canonical HTTPS form. It
+checks the certificate chain with the .NET X.509 path builder, as well as the
+service name, validity dates, `serverAuth` purpose, and certificate
+fingerprint. This
+opt-in check requires PowerShell 7 (`pwsh`) on the operator's machine. It
+checks that the existing TLS Secret has its public certificate and private
+key, but does not print or save private-key data. Conflicting binding settings
+in the Broker client Secret are rejected.
+
+When the descriptor is supplied, the command accepts only its exact generated
+runtime List. It adds Broker egress and Projects Config ingress policies for
+TCP port 8443, mounts the public CA read-only in Broker, and fingerprints both
+Pod templates so a binding change rolls both workloads. Before apply, it checks
+the existing configuration and TLS inputs. After apply, it checks those inputs
+again, then verifies both template fingerprints, exactly those two live
+policies, and a Projects-owned EndpointSlice with one ready endpoint whose IP
+matches the ready Projects Config pod. This opt-in is supported only by the
+local integration command; it is not enabled by the image workflow or the
+final-release deploy command.
+
 ### Local published-image deployment
 
 The operator-hosted `release:deploy` command is a separate consumer of the
@@ -626,6 +666,11 @@ flowchart LR
     IntegrationCheck --> IntegrationDryRun["Default read-only P0 preflight"]
     IntegrationDryRun -->|"explicit --execute"| IntegrationApply["Apply only nine shared services"]
     IntegrationApply --> IntegrationReadback["Verify live images and save local readback result"]
+    Binding["Optional local descriptor"] --> BindingCheck["Check settings, raw CA and Projects certificate chain"]
+    BindingCheck --> BindingRuntime["Add CA mount, two rollout fingerprints and scoped policies"]
+    BindingRuntime --> IntegrationDryRun
+    IntegrationApply --> BindingPostcheck["Recheck settings and TLS; verify both policies and Projects-owned ready endpoint"]
+    BindingPostcheck --> IntegrationReadback
   end
   Tag["Annotated v1 tag and published GitHub Release"] --> Exact["Verify exact source commit"]
   Exact --> Receipt["Verify immutable publication receipt"]
