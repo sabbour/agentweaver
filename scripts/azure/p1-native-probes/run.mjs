@@ -2599,7 +2599,7 @@ function validateCreditReaderPin(pin, kind) {
     'runtimeInstanceId',
     'sourceGrantId',
   ];
-  const stage = kind === 'fixedZero' ? 'HostPreQueue' : 'nativeTurnBegin';
+  const stage = kind === 'fixedZero' ? 'hostPreQueue' : 'nativeTurnBegin';
   if (!isRecord(pin) ||
       strings.some(key => !nonEmpty(pin[key])) ||
       !isNonEmptyGuid(pin.runtimeInstanceId) ||
@@ -2727,8 +2727,8 @@ function validateFixedZeroCreditRead(pin, readback, now) {
   if (!hasExactKeys(result, ['receipt', 'evidence']) ||
       !isRecord(receipt) ||
       receipt.contractVersion !== 1 ||
-      receipt.stage !== 'HostPreQueue' ||
-      receipt.code !== 'HardLimitZero' ||
+      receipt.stage !== 'hostPreQueue' ||
+      receipt.code !== 'hardLimitZero' ||
       !sameJson(receipt.registration, current.registration) ||
       receipt.registrationHash !== pin.registrationHash ||
       receipt.requestId !== pin.requestId ||
@@ -2744,7 +2744,7 @@ function validateFixedZeroCreditRead(pin, readback, now) {
       evidence.registrationRevision !== pin.registrationRevision ||
       evidence.executionFence !== pin.executionFence ||
       evidence.requestId !== pin.requestId ||
-      evidence.stage !== 'HostPreQueue' ||
+      evidence.stage !== 'hostPreQueue' ||
       evidence.guardReceiptHash !== receipt.canonicalPayloadHash ||
       evidence.registrationHash !== pin.registrationHash ||
       evidence.sourceHash !== pin.sourceHash ||
@@ -2758,7 +2758,7 @@ function validateFixedZeroCreditRead(pin, readback, now) {
       evidence.afterCursorHash !== evidence.beforeCursorHash ||
       !isSha256Hash(evidence.canonicalPayloadHash) ||
       !Number.isFinite(Date.parse(evidence.verifiedAt))) {
-    block('credit_reader_receipt_invalid', 'The fixed HostPreQueue receipt must bind the actual zero-limit request and a complete empty native-event range.');
+    block('credit_reader_receipt_invalid', 'The fixed hostPreQueue receipt must bind the actual zero-limit request and a complete empty native-event range.');
   }
   return {
     ownerId: pin.ownerId,
@@ -2770,7 +2770,7 @@ function validateFixedZeroCreditRead(pin, readback, now) {
     sourceGrantRevision: pin.sourceGrantRevision,
     sourceHash: pin.sourceHash,
     sourceReceiptHash: current.sourceReceipt.canonicalPayloadHash,
-    stage: 'HostPreQueue',
+    stage: 'hostPreQueue',
     requestId: pin.requestId,
     requestHash: pin.requestHash,
     receiptHash: receipt.canonicalPayloadHash,

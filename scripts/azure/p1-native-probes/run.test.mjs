@@ -343,7 +343,7 @@ function createCreditReaderInput() {
     sourceGrantId: '00000000-0000-4000-8000-000000000011',
     sourceGrantRevision: 3,
     expectedHardCreditLimit: 0,
-    stage: 'HostPreQueue',
+    stage: 'hostPreQueue',
     requestId: '00000000-0000-4000-8000-000000000021',
     requestHash: hash('3'),
   };
@@ -449,8 +449,8 @@ function createCurrentCreditReadback(pin, kind) {
   if (kind === 'fixedZero') {
     const receipt = {
       contractVersion: 1,
-      stage: 'HostPreQueue',
-      code: 'HardLimitZero',
+      stage: 'hostPreQueue',
+      code: 'hardLimitZero',
       registration,
       registrationHash: pin.registrationHash,
       requestId: pin.requestId,
@@ -469,7 +469,7 @@ function createCurrentCreditReadback(pin, kind) {
         registrationRevision: pin.registrationRevision,
         executionFence: pin.executionFence,
         requestId: pin.requestId,
-        stage: 'HostPreQueue',
+        stage: 'hostPreQueue',
         guardReceiptHash: receipt.canonicalPayloadHash,
         registrationHash: pin.registrationHash,
         sourceHash: pin.sourceHash,
@@ -1098,12 +1098,13 @@ test('standalone reader accepts production-shaped enum values and returns safe s
     dispatchId: input.positive.dispatchId,
     stage: input.positive.stage,
   });
-  assert.equal(replies.fixedZero.receipt.stage, 'HostPreQueue');
-  assert.equal(replies.fixedZero.receipt.code, 'HardLimitZero');
+  assert.equal(replies.fixedZero.receipt.stage, 'hostPreQueue');
+  assert.equal(replies.fixedZero.receipt.code, 'hardLimitZero');
   assert.equal(replies.positive.receipt.stage, 'nativeTurnBegin');
   assert.equal(replies.positive.receipt.code, 'hardLimitReached');
   assert.deepEqual(Object.keys(result.cases), ['fixedZero', 'positive']);
-  assert.equal(result.cases.fixedZero.evidence.stage, 'HostPreQueue');
+  assert.equal(result.cases.fixedZero.evidence.stage, 'hostPreQueue');
+  assert.equal(input.fixedZero.stage, 'hostPreQueue');
   assert.equal(result.cases.positive.evidence.stage, 'nativeTurnBegin');
   assert.equal(input.fixedZero.current.registration.binding.maxPromptTokens, 8192);
   assert.equal(input.fixedZero.current.sourceReceipt.source.maxPromptTokens, 4096);

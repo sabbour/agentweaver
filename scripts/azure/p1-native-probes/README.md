@@ -204,8 +204,8 @@ request. No Environment bearer or caller-selected URL is accepted. The Host
 returns only its existing nullable `{ receipt, evidence }` or
 `{ receipt, noSend }` pair. The validator checks the current owner binding,
 active Observe grant, current source tuple, request or dispatch, denial stage
-and limit, and complete empty-event evidence. Fixed enum values retain
-`HostPreQueue` and `HardLimitZero`; native denial wire values are
+and limit, and complete empty-event evidence. Fixed denial wire values are
+`hostPreQueue` and `hardLimitZero`; native denial wire values are
 `nativeTurnBegin` and `hardLimitReached`. Both no-send records must bind their
 native-session hash to SHA-256 of the current SDK session ID's UTF-8 bytes.
 Registration and grant expiry are checked again after each read using the
