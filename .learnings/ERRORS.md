@@ -924,3 +924,97 @@ Retain the requested path after the exact input collision check, then clear it b
 - **Notes**: Retained safe output destinations after input-collision validation, cleared artifact collisions, and reran focused tests successfully.
 
 ---
+
+## [ERR-20261013-004] dependency-merge-unrelated-ancestry
+
+**Logged**: 2026-10-13T02:22:21-07:00
+**Priority**: medium
+**Status**: pending
+**Area**: config
+
+### Summary
+The approved dependency commit's ancestry included unrelated branch changes and caused a conflict during integration.
+
+### Error
+```
+CONFLICT (content): Merge conflict in .learnings/ERRORS.md
+```
+
+### Context
+- Started an ordinary no-fast-forward merge of the approved registry helper commit from a clean worktree.
+- Git also auto-merged `docs/guide/testing.md` and `package.json`, showing the source commit's ancestry carried unrelated changes.
+- Aborted the merge without resolving files; the original branch head and clean worktree were restored.
+
+### Suggested Fix
+Before merging a dependency commit, inspect the full merge-base-to-commit diff, not only the commit's own file list. If unrelated ownership areas are included, stop and ask for an isolated approved source bundle or branch.
+
+### Metadata
+- Reproducible: yes
+- Related Files: scripts/release/registry.mjs, scripts/release/tests/registry.test.mjs, .learnings/ERRORS.md
+- Tags: git, merge, branch-ownership
+
+---
+
+## [ERR-20261013-005] projects-config-build-assets-missing
+
+**Logged**: 2026-10-13T02:46:00-07:00
+**Priority**: low
+**Status**: pending
+**Area**: tests
+
+### Summary
+The focused Projects Config build could not start because its NuGet assets file was absent.
+
+### Error
+```
+NETSDK1004: Assets file '...\services\projects-config\Agentweaver.Projects.Config\obj\project.assets.json' not found. Run a NuGet package restore to generate this file.
+```
+
+### Context
+- Ran `dotnet build services\projects-config\Agentweaver.Projects.Config\Agentweaver.Projects.Config.csproj --no-restore --verbosity quiet`.
+- The worktree has no generated `obj\project.assets.json` for this project.
+
+### Suggested Fix
+Restore the existing locked dependencies, then rerun the focused build.
+
+### Metadata
+- Reproducible: yes
+- Related Files: services/projects-config/Agentweaver.Projects.Config/Agentweaver.Projects.Config.csproj
+- Tags: dotnet, restore, build
+
+---
+
+## [ERR-20261013-006] source-review-redacted-context
+
+**Logged**: 2026-10-13T03:22:00-07:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+A source edit failed because the displayed review context was masked and did not match the file.
+
+### Error
+```
+Failed to find expected lines in PrivilegedProjectSetupCommand.cs.
+```
+
+### Context
+- A view displayed the authorization-header expression as masked text.
+- A patch based on that display did not apply; no source edit was made.
+- Two follow-up inspection requests also used an invalid source path and a negative line number.
+- The first documentation replacement also used a wider context than the exact file lines; a narrower patch succeeded.
+
+### Suggested Fix
+Do not edit source using masked display text. Confirm the actual changed line with a safe, non-sensitive code view before applying a patch.
+
+### Metadata
+- Reproducible: yes
+- Related Files: services/projects-config/Agentweaver.Projects.Config/PrivilegedProjectSetupCommand.cs
+- Tags: source-view, patch-context
+
+### Resolution
+- **Resolved**: 2026-10-13T03:22:00-07:00
+- **Notes**: Re-read source and documentation ranges, confirmed no source edit was made, then applied the documentation change with exact context.
+
+---

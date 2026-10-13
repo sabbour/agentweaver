@@ -14,8 +14,31 @@ using WorkloadIdentityCredential = AzureIdentity::Azure.Identity.WorkloadIdentit
 var runMigrations = args.Length == 1 && args[0] == "--migrate";
 if (args.Contains("--migrate", StringComparer.Ordinal) && !runMigrations)
     throw new ArgumentException("The --migrate command must be used by itself.", nameof(args));
+var runPrivilegedProjectSetup = args.Length == 1 && args[0] == "--privileged-project-setup";
+if (args.Contains("--privileged-project-setup", StringComparer.Ordinal) && !runPrivilegedProjectSetup)
+    throw new ArgumentException(
+        "The --privileged-project-setup command must be used by itself.", nameof(args));
 
-var builder = WebApplication.CreateBuilder(runMigrations ? [] : args);
+var builder = WebApplication.CreateBuilder(runMigrations || runPrivilegedProjectSetup ? [] : args);
+if (runPrivilegedProjectSetup)
+{
+    try
+    {
+        await PrivilegedProjectSetupCommand.RunAsync(builder.Configuration);
+    }
+    catch (ProjectConfigException exception)
+    {
+        await Console.Error.WriteLineAsync($"Privileged project setup failed ({exception.Code}).");
+        Environment.ExitCode = 1;
+    }
+    catch (Exception)
+    {
+        await Console.Error.WriteLineAsync("Privileged project setup failed; no credential or exception detail was written.");
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
 if (runMigrations)
 {
     var migrationConnectionString = builder.Configuration.GetConnectionString("ProjectsConfigMigration")

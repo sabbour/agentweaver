@@ -484,8 +484,33 @@ its project, run, selection, and sessions. Public endpoints exist for project
 creation, run selection, root acceptance, and child-session spawn, but they
 require different authenticated scopes and current role grants. Project
 creation does not assign an Owner, and role grants are made only through a
-privileged source path. The current runner has no supported way to provision
-and verify those identities or prove complete same-invocation cleanup.
+privileged source path. Projects Config now provides the one-shot
+`--privileged-project-setup` command for same-invocation setup and cleanup. It
+creates a project, its default configuration, and one Orchestrator assignment
+for an active TenantAdmin. The command stores immutable setup and cleanup
+receipts under one invocation ID. It reads one JSON request from standard
+input and writes one typed receipt to standard output.
+
+Cleanup revokes that assignment and archives the project only when no accepted
+run selection exists. If a selection exists, cleanup returns
+`retainedPending` and keeps the project and assignment active. The command does
+not delete SQL, cloud, or Kubernetes resources.
+
+The command requires `ConnectionStrings:ProjectsConfigAuthority`,
+`ProjectsConfig:AuthorityDatabase:WorkloadIdentity`,
+`ProjectsConfig:PrivilegedSetup:ApprovedIssuer`,
+`ProjectsConfig:PrivilegedSetup:ApprovedSubject`, and
+`ProjectsConfig:PrivilegedSetup:ApprovedTenantId`. The approved issuer must
+match `ProjectsConfig:Authentication:Authority`. The command also uses the
+configured Projects authentication audience and a separate authority database
+identity. It does not fall back to the runtime or migration identity.
+
+The command authenticates the supplied access token with the existing issuer.
+It requires an unbound token, an active TenantAdmin grant, and the
+`api.read`, `projects.admin`, and `projects.orchestrator` scopes. The API, MCP,
+and UI runners do not call this command or consume its receipts. The harness
+remains blocked until it uses this producer and the run-selection, dispatch,
+and session routes are available.
 Orchestrator has a dispatch handler, but Gateway has no dispatch route for the
 admitted harness client. Caller receipts do not prove ownership.
 
@@ -508,13 +533,14 @@ npm run harness:p1 -- --surface ui --input <manifest.json> --output <evidence.js
 These commands currently return exit code `2` with a blocked result before
 reading `AGENTWEAVER_ENVIRONMENT_BEARER` or importing a UI page provider.
 
-The shared runner blocks every gate and message journey before API, MCP, or UI
-access until it has a trusted same-invocation setup and cleanup path. Caller
-receipts do not authorize writes. The journal journey is read-only. These are
-controlled checks, not a live P1 acceptance result, and message acceptance is
-not delivery. The CLI remains blocked until the same-invocation path is
-available. A complete surface pass would still report full P1 as blocked until
-every required native probe has actual receipts.
+The shared runner blocks gate and message journeys before API, MCP, or UI
+access. Caller receipts do not authorize writes. The journal journey is
+read-only. These controlled checks do not prove live acceptance. Message
+acceptance does not prove delivery.
+
+The CLI remains blocked until the same-invocation producer connects to the
+runner. A complete surface pass still requires actual receipts for every
+native probe.
 The Host replacement probe may use a fresh lease with the workspace retained;
 a same-lease restart API is not required.
 

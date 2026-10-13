@@ -214,14 +214,14 @@ public sealed partial class ProjectsConfigService
             ProjectAuthorityRole.TenantAdmin,
             cancellationToken).ConfigureAwait(false))
             throw ProjectConfigException.Forbidden();
-        ValidateProjectName(name);
+        name = NormalizeProjectName(name);
         var now = timeProvider.GetUtcNow();
         var project = new ProjectRecord
         {
             ProjectId = Guid.NewGuid().ToString("N"),
             TenantId = caller.TenantId,
             CreatedByActorId = caller.ActorId,
-            Name = name.Trim(),
+            Name = name,
             State = ProjectLifecycleState.Active,
             Revision = 1,
             ConfigurationRevision = 1,
@@ -1189,6 +1189,15 @@ public sealed partial class ProjectsConfigService
                 "Project name must be nonempty, contain no control characters, and be at most 160 characters.",
                 StatusCodes.Status400BadRequest);
     }
+
+    internal static string NormalizeProjectName(string name)
+    {
+        ValidateProjectName(name);
+        return name.Trim();
+    }
+
+    internal static string SerializeProjectConfiguration(ProjectConfiguration configuration) =>
+        Serialize(configuration);
 
     private static void ValidateIdentifier(string value, string name)
     {

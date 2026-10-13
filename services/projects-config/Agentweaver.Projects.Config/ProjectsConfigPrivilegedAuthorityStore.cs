@@ -1,7 +1,11 @@
 using System.Data;
+using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Providers;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Npgsql;
 
 namespace Agentweaver.Projects.Config;
@@ -13,6 +17,623 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
     TimeProvider timeProvider)
 {
     private const int MaxSerializationRetries = 3;
+    private const string ProjectSetupInvocationLockSql =
+        "SELECT pg_advisory_lock(hashtextextended(@invocation_id::text, 0))";
+    private const string ProjectSetupInvocationUnlockSql =
+        "SELECT pg_advisory_unlock(hashtextextended(@invocation_id::text, 0))";
+    private static readonly JsonSerializerOptions ProjectSetupJsonOptions = CreateProjectSetupJsonOptions();
+
+    public async Task<ProjectSetupCommandResult> ExecuteProjectSetupOperationAsync(
+        ProjectAuthorizationContext caller,
+        ProjectSetupOperationRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(caller);
+        ArgumentNullException.ThrowIfNull(request);
+        ValidateProjectSetupRequest(request);
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.ProjectAdminScope);
+        caller.RequireScope(ProjectAuthorizationOwner.OrchestratorScope);
+        caller.RequireUnboundRequest();
+        if (!string.Equals(caller.TenantId, request.TenantId, StringComparison.Ordinal))
+            throw ProjectConfigException.Forbidden();
+
+        var tenantAdminGrants = caller.Grants.Where(grant =>
+            grant.ResourceType == ProjectAuthorityResourceType.Tenant &&
+            string.Equals(grant.ResourceId, caller.TenantId, StringComparison.Ordinal) &&
+            grant.Role == ProjectAuthorityRole.TenantAdmin).ToArray();
+        if (tenantAdminGrants.Length != 1)
+            throw ProjectConfigException.Forbidden();
+
+        var requestHash = ComputeProjectSetupRequestHash(request, caller.Issuer, caller.ActorId);
+        var candidateProjectId = Guid.NewGuid().ToString("N");
+        await using var db = new ProjectsConfigDbContext(options);
+        await db.Database.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        var invocationLockAcquired = false;
+        try
+        {
+            await using (var invocationLock = new NpgsqlCommand(ProjectSetupInvocationLockSql, connection))
+            {
+                invocationLock.Parameters.AddWithValue("invocation_id", request.InvocationId);
+                await invocationLock.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+                invocationLockAcquired = true;
+            }
+
+            for (var attempt = 0; ; attempt++)
+            {
+                await using var transaction = await db.Database
+                    .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
+                    .ConfigureAwait(false);
+                try
+                {
+                    var authorityProjectId = await db.ProjectSetupOperations.AsNoTracking()
+                        .Where(operation =>
+                            operation.InvocationId == request.InvocationId &&
+                            operation.OperationKind == ProjectSetupOperationKind.Setup)
+                        .Select(operation => operation.ProjectId)
+                        .SingleOrDefaultAsync(cancellationToken)
+                        .ConfigureAwait(false) ?? candidateProjectId;
+                    await LockCurrentTenantAdminAsync(
+                        db,
+                        caller,
+                        tenantAdminGrants[0],
+                        authorityProjectId,
+                        cancellationToken).ConfigureAwait(false);
+                    var result = await ExecuteProjectSetupOperationInTransactionAsync(
+                        db, caller, request, requestHash, candidateProjectId, cancellationToken).ConfigureAwait(false);
+                    await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                    return result;
+                }
+                catch (Exception exception) when (
+                    IsSerializationFailure(exception) && attempt < MaxSerializationRetries - 1)
+                {
+                    await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+                    db.ChangeTracker.Clear();
+                }
+            }
+        }
+        finally
+        {
+            try
+            {
+                await using var invocationUnlock = new NpgsqlCommand(
+                    ProjectSetupInvocationUnlockSql, connection);
+                invocationUnlock.Parameters.AddWithValue("invocation_id", request.InvocationId);
+                var released = await invocationUnlock.ExecuteScalarAsync(CancellationToken.None)
+                    .ConfigureAwait(false) is true;
+                if (invocationLockAcquired && !released)
+                    throw new InvalidOperationException(
+                        "The project setup invocation lock was not held by this connection.");
+            }
+            catch
+            {
+                NpgsqlConnection.ClearPool(connection);
+                throw;
+            }
+        }
+    }
+
+    internal static string ComputeProjectSetupRequestHash(
+        ProjectSetupOperationRequest request,
+        string issuer,
+        string subject)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var canonical = new
+        {
+            version = request.Version,
+            operationKind = request.OperationKind.ToString().ToLowerInvariant(),
+            invocationId = request.InvocationId.ToString("D"),
+            tenantId = request.TenantId,
+            issuer,
+            subject,
+            name = ProjectSetupProjectName(request.InvocationId),
+            expectedProjectRevision = request.ExpectedProjectRevision,
+            expectedOrchestratorAssignmentRevision = request.ExpectedAssignmentRevision,
+        };
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(canonical, ProjectSetupJsonOptions);
+        return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
+    }
+
+    private async Task<ProjectSetupCommandResult> ExecuteProjectSetupOperationInTransactionAsync(
+        ProjectsConfigDbContext db,
+        ProjectAuthorizationContext caller,
+        ProjectSetupOperationRequest request,
+        string requestHash,
+        string candidateProjectId,
+        CancellationToken cancellationToken)
+    {
+        var operations = await db.ProjectSetupOperations.AsNoTracking()
+            .Where(operation => operation.InvocationId == request.InvocationId)
+            .ToArrayAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (operations.Any(operation =>
+            !SameOperationOwner(operation, caller) ||
+            operation.MembershipId != caller.MembershipId ||
+            operation.MembershipRevision != caller.MembershipRevision))
+            throw ProjectConfigException.Forbidden();
+
+        var setup = operations.SingleOrDefault(operation =>
+            operation.OperationKind == ProjectSetupOperationKind.Setup);
+        var cleanup = operations.SingleOrDefault(operation =>
+            operation.OperationKind == ProjectSetupOperationKind.Cleanup);
+
+        if (request.OperationKind == ProjectSetupOperationKind.Setup)
+        {
+            if (setup is not null)
+            {
+                if (!string.Equals(setup.RequestHash, requestHash, StringComparison.Ordinal))
+                    throw ProjectConfigException.Conflict(
+                        "setup_invocation_conflict",
+                        "The setup invocation was already used with different input.");
+                return await ReadSetupReplayAsync(db, setup, cancellationToken).ConfigureAwait(false);
+            }
+            if (cleanup is not null)
+                throw ProjectConfigException.Forbidden();
+
+            return await CreateProjectSetupAsync(
+                db, caller, request, requestHash, candidateProjectId, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (setup is null)
+            throw ProjectConfigException.Forbidden();
+        if (cleanup is not null)
+        {
+            if (!string.Equals(cleanup.RequestHash, requestHash, StringComparison.Ordinal))
+                throw ProjectConfigException.Conflict(
+                    "cleanup_invocation_conflict",
+                    "The cleanup invocation was already used with different input.");
+            return await ReadCleanupReplayAsync(db, cleanup, cancellationToken).ConfigureAwait(false);
+        }
+        if (request.ExpectedProjectRevision != setup.ProjectRevision ||
+            request.ExpectedAssignmentRevision != setup.AssignmentRevision)
+            throw ProjectConfigException.Conflict(
+                "cleanup_revision_conflict",
+                "Cleanup revisions do not match the immutable setup receipt.");
+
+        return await CleanupProjectSetupAsync(
+            db, caller, request, requestHash, setup, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<ProjectSetupCommandResult> CreateProjectSetupAsync(
+        ProjectsConfigDbContext db,
+        ProjectAuthorizationContext caller,
+        ProjectSetupOperationRequest request,
+        string requestHash,
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        var now = timeProvider.GetUtcNow();
+        var project = new ProjectRecord
+        {
+            ProjectId = projectId,
+            TenantId = caller.TenantId,
+            CreatedByActorId = caller.ActorId,
+            Name = ProjectSetupProjectName(request.InvocationId),
+            State = ProjectLifecycleState.Active,
+            Revision = 1,
+            ConfigurationRevision = 1,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        var configuration = new ProjectConfigurationRevisionRecord
+        {
+            ProjectId = projectId,
+            Revision = 1,
+            ConfigurationJson = ProjectsConfigService.SerializeProjectConfiguration(new ProjectConfiguration()),
+            UpdatedByActorId = caller.ActorId,
+            CreatedAt = now,
+        };
+        var assignment = new ProjectRoleAssignmentRecord
+        {
+            AssignmentId = Guid.NewGuid(),
+            MembershipId = caller.MembershipId,
+            ResourceType = ProjectAuthorityResourceType.Project,
+            ResourceId = projectId,
+            Role = ProjectAuthorityRole.Orchestrator,
+            State = ProjectAuthorityRecordState.Active,
+            Revision = 1,
+            GrantedBy = caller.ActorId,
+            GrantedAt = now,
+        };
+        var audit = ToAudit(
+            new ProjectTenantMembershipRecord
+            {
+                MembershipId = caller.MembershipId,
+                Issuer = caller.Issuer,
+                Subject = caller.ActorId,
+                TenantId = caller.TenantId,
+                State = ProjectAuthorityRecordState.Active,
+                Revision = caller.MembershipRevision,
+                GrantedBy = caller.ActorId,
+                GrantedAt = now,
+            },
+            assignment,
+            "role_assigned",
+            caller.ActorId);
+        var receipt = new ProjectSetupReceipt(
+            request.InvocationId,
+            caller.Issuer,
+            caller.ActorId,
+            caller.TenantId,
+            caller.MembershipId,
+            caller.MembershipRevision,
+            project.ProjectId,
+            project.CreatedByActorId,
+            project.Revision,
+            project.ConfigurationRevision,
+            assignment.AssignmentId,
+            assignment.Revision,
+            audit.EventId,
+            now);
+        var operation = new ProjectSetupOperationRecord
+        {
+            InvocationId = request.InvocationId,
+            OperationKind = ProjectSetupOperationKind.Setup,
+            RequestHash = requestHash,
+            Issuer = caller.Issuer,
+            Subject = caller.ActorId,
+            TenantId = caller.TenantId,
+            MembershipId = caller.MembershipId,
+            MembershipRevision = caller.MembershipRevision,
+            ProjectId = project.ProjectId,
+            ProjectRevision = project.Revision,
+            ProjectConfigurationRevision = project.ConfigurationRevision,
+            AssignmentId = assignment.AssignmentId,
+            AssignmentRevision = assignment.Revision,
+            AuthorityAuditEventId = audit.EventId,
+            ResultState = ProjectSetupOperationResultState.Created,
+            ResultJson = JsonSerializer.Serialize(receipt, ProjectSetupJsonOptions),
+            CreatedAt = now,
+        };
+
+        db.Projects.Add(project);
+        db.ProjectConfigurationRevisions.Add(configuration);
+        db.RoleAssignments.Add(assignment);
+        db.AuthorityAudit.Add(audit);
+        db.ProjectSetupOperations.Add(operation);
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        return new ProjectSetupCommandResult(
+            ProjectSetupOperationKind.Setup,
+            Replayed: false,
+            receipt,
+            new ProjectSetupReadback(
+                ProjectExists: true,
+                ProjectLifecycleState.Active,
+                project.Revision,
+                project.ConfigurationRevision,
+                InitialConfigurationExists: true,
+                AssignmentExists: true,
+                ProjectAuthorityRecordState.Active,
+                assignment.Revision,
+                AuthorityAuditExists: true),
+            Cleanup: null);
+    }
+
+    private async Task<ProjectSetupCommandResult> CleanupProjectSetupAsync(
+        ProjectsConfigDbContext db,
+        ProjectAuthorizationContext caller,
+        ProjectSetupOperationRequest request,
+        string requestHash,
+        ProjectSetupOperationRecord setup,
+        CancellationToken cancellationToken)
+    {
+        var project = await db.Projects
+            .FromSqlInterpolated($"""
+                SELECT *
+                FROM projects_config.projects
+                WHERE project_id = {setup.ProjectId}
+                  AND tenant_id = {setup.TenantId}
+                FOR UPDATE
+                """)
+            .SingleOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (project is null || project.CreatedByActorId != setup.Subject ||
+            project.ProjectId != setup.ProjectId ||
+            project.Revision != request.ExpectedProjectRevision ||
+            project.ConfigurationRevision != setup.ProjectConfigurationRevision ||
+            project.State != ProjectLifecycleState.Active)
+            throw new ProjectAuthorityConcurrencyException(
+                "The project no longer matches the immutable setup receipt.");
+
+        var assignment = await db.RoleAssignments
+            .FromSqlInterpolated($"""
+                SELECT *
+                FROM projects_config.project_role_assignments
+                WHERE assignment_id = {setup.AssignmentId}
+                  AND membership_id = {setup.MembershipId}
+                  AND resource_type = 'Project'
+                  AND resource_id = {setup.ProjectId}
+                  AND role = 'Orchestrator'
+                FOR UPDATE
+                """)
+            .SingleOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (assignment is null ||
+            assignment.State != ProjectAuthorityRecordState.Active ||
+            assignment.Revision != request.ExpectedAssignmentRevision)
+            throw new ProjectAuthorityConcurrencyException(
+                "The Orchestrator assignment no longer matches the immutable setup receipt.");
+
+        var hasAnySelection = await db.RunSelections.AsNoTracking()
+            .AnyAsync(selection => selection.ProjectId == setup.ProjectId, cancellationToken)
+            .ConfigureAwait(false);
+        var now = timeProvider.GetUtcNow();
+        var resultState = hasAnySelection
+            ? ProjectSetupOperationResultState.RetainedPending
+            : ProjectSetupOperationResultState.Cleaned;
+        ProjectAuthorityAuditRecord? audit = null;
+        if (!hasAnySelection)
+        {
+            assignment.State = ProjectAuthorityRecordState.Revoked;
+            assignment.Revision = checked(assignment.Revision + 1);
+            assignment.RevokedBy = caller.ActorId;
+            assignment.RevokedAt = now;
+            project.State = ProjectLifecycleState.Archived;
+            project.Revision = checked(project.Revision + 1);
+            project.UpdatedAt = now;
+            audit = ToAudit(
+                new ProjectTenantMembershipRecord
+                {
+                    MembershipId = setup.MembershipId,
+                    Issuer = setup.Issuer,
+                    Subject = setup.Subject,
+                    TenantId = setup.TenantId,
+                    State = ProjectAuthorityRecordState.Active,
+                    Revision = setup.MembershipRevision,
+                    GrantedBy = caller.ActorId,
+                    GrantedAt = now,
+                },
+                assignment,
+                "role_revoked",
+                caller.ActorId);
+            db.AuthorityAudit.Add(audit);
+        }
+
+        var receipt = new ProjectCleanupReceipt(
+            request.InvocationId,
+            setup.TenantId,
+            setup.ProjectId,
+            setup.AssignmentId,
+            resultState,
+            project.Revision,
+            project.ConfigurationRevision,
+            assignment.Revision,
+            audit?.EventId,
+            now);
+        var operation = new ProjectSetupOperationRecord
+        {
+            InvocationId = request.InvocationId,
+            OperationKind = ProjectSetupOperationKind.Cleanup,
+            RequestHash = requestHash,
+            Issuer = caller.Issuer,
+            Subject = caller.ActorId,
+            TenantId = caller.TenantId,
+            MembershipId = caller.MembershipId,
+            MembershipRevision = caller.MembershipRevision,
+            ProjectId = setup.ProjectId,
+            ProjectRevision = receipt.ProjectRevision,
+            ProjectConfigurationRevision = setup.ProjectConfigurationRevision,
+            AssignmentId = setup.AssignmentId,
+            AssignmentRevision = receipt.AssignmentRevision,
+            ExpectedProjectRevision = request.ExpectedProjectRevision,
+            ExpectedAssignmentRevision = request.ExpectedAssignmentRevision,
+            AuthorityAuditEventId = audit?.EventId,
+            ResultState = resultState,
+            ResultJson = JsonSerializer.Serialize(receipt, ProjectSetupJsonOptions),
+            CreatedAt = now,
+        };
+        db.ProjectSetupOperations.Add(operation);
+        await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        return new ProjectSetupCommandResult(
+            ProjectSetupOperationKind.Cleanup,
+            Replayed: false,
+            Setup: null,
+            SetupReadback: null,
+            receipt);
+    }
+
+    private async Task<ProjectSetupCommandResult> ReadSetupReplayAsync(
+        ProjectsConfigDbContext db,
+        ProjectSetupOperationRecord operation,
+        CancellationToken cancellationToken)
+    {
+        var receipt = DeserializeOperationResult<ProjectSetupReceipt>(operation.ResultJson);
+        if (receipt.InvocationId != operation.InvocationId ||
+            receipt.ProjectId != operation.ProjectId ||
+            receipt.AssignmentId != operation.AssignmentId ||
+            receipt.ProjectRevision != operation.ProjectRevision ||
+            receipt.ProjectConfigurationRevision != operation.ProjectConfigurationRevision ||
+            receipt.AssignmentRevision != operation.AssignmentRevision ||
+            receipt.AuthorityAuditEventId != operation.AuthorityAuditEventId ||
+            receipt.MembershipId != operation.MembershipId ||
+            receipt.MembershipRevision != operation.MembershipRevision ||
+            receipt.Issuer != operation.Issuer ||
+            receipt.Subject != operation.Subject ||
+            receipt.TenantId != operation.TenantId)
+            throw new InvalidOperationException("The project setup operation receipt does not match its immutable binding.");
+
+        var project = await db.Projects.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.ProjectId == operation.ProjectId, cancellationToken)
+            .ConfigureAwait(false);
+        var configurationExists = await db.ProjectConfigurationRevisions.AsNoTracking()
+            .AnyAsync(item =>
+                item.ProjectId == operation.ProjectId &&
+                item.Revision == operation.ProjectConfigurationRevision,
+                cancellationToken)
+            .ConfigureAwait(false);
+        var assignment = await db.RoleAssignments.AsNoTracking()
+            .SingleOrDefaultAsync(item => item.AssignmentId == operation.AssignmentId, cancellationToken)
+            .ConfigureAwait(false);
+        var auditExists = operation.AuthorityAuditEventId is { } auditId &&
+            await db.AuthorityAudit.AsNoTracking()
+                .AnyAsync(item =>
+                    item.EventId == auditId &&
+                    item.AssignmentId == operation.AssignmentId &&
+                    item.EventType == "role_assigned" &&
+                    item.Revision == operation.AssignmentRevision,
+                    cancellationToken)
+                .ConfigureAwait(false);
+        return new ProjectSetupCommandResult(
+            ProjectSetupOperationKind.Setup,
+            Replayed: true,
+            receipt,
+            new ProjectSetupReadback(
+                project is not null &&
+                    project.TenantId == operation.TenantId &&
+                    project.CreatedByActorId == operation.Subject,
+                project?.State,
+                project?.Revision,
+                project?.ConfigurationRevision,
+                configurationExists,
+                assignment is not null &&
+                    assignment.MembershipId == operation.MembershipId &&
+                    assignment.ResourceType == ProjectAuthorityResourceType.Project &&
+                    assignment.ResourceId == operation.ProjectId &&
+                    assignment.Role == ProjectAuthorityRole.Orchestrator,
+                assignment?.State,
+                assignment?.Revision,
+                auditExists),
+            Cleanup: null);
+    }
+
+    private async Task<ProjectSetupCommandResult> ReadCleanupReplayAsync(
+        ProjectsConfigDbContext db,
+        ProjectSetupOperationRecord operation,
+        CancellationToken cancellationToken)
+    {
+        var receipt = DeserializeOperationResult<ProjectCleanupReceipt>(operation.ResultJson);
+        if (receipt.InvocationId != operation.InvocationId ||
+            receipt.ProjectId != operation.ProjectId ||
+            receipt.AssignmentId != operation.AssignmentId ||
+            receipt.ProjectRevision != operation.ProjectRevision ||
+            receipt.ProjectConfigurationRevision != operation.ProjectConfigurationRevision ||
+            receipt.AssignmentRevision != operation.AssignmentRevision ||
+            receipt.AuthorityAuditEventId != operation.AuthorityAuditEventId ||
+            receipt.TenantId != operation.TenantId ||
+            receipt.State != operation.ResultState)
+            throw new InvalidOperationException("The project cleanup operation receipt does not match its immutable binding.");
+
+        _ = await db.Projects.AsNoTracking().SingleOrDefaultAsync(
+                item => item.ProjectId == operation.ProjectId &&
+                    item.TenantId == operation.TenantId,
+                cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The project referenced by the cleanup receipt is missing.");
+        _ = await db.RoleAssignments.AsNoTracking().SingleOrDefaultAsync(
+                item => item.AssignmentId == operation.AssignmentId &&
+                    item.MembershipId == operation.MembershipId &&
+                    item.ResourceId == operation.ProjectId,
+                cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new InvalidOperationException("The assignment referenced by the cleanup receipt is missing.");
+        return new ProjectSetupCommandResult(
+            ProjectSetupOperationKind.Cleanup,
+            Replayed: true,
+            Setup: null,
+            SetupReadback: null,
+            receipt);
+    }
+
+    private async Task LockCurrentTenantAdminAsync(
+        ProjectsConfigDbContext db,
+        ProjectAuthorizationContext caller,
+        ProjectAuthorizationGrant adminGrant,
+        string projectId,
+        CancellationToken cancellationToken)
+    {
+        var connection = (NpgsqlConnection)db.Database.GetDbConnection();
+        var transaction = (NpgsqlTransaction)db.Database.CurrentTransaction!.GetDbTransaction();
+        await using (var authorityLock = new NpgsqlCommand(
+            """
+            SELECT projects_config.lock_casting_authority(
+                @membership_id, @issuer, @subject, @tenant_id, @membership_revision, @project_id, true)
+            """,
+            connection,
+            transaction))
+        {
+            authorityLock.Parameters.AddWithValue("membership_id", caller.MembershipId);
+            authorityLock.Parameters.AddWithValue("issuer", caller.Issuer);
+            authorityLock.Parameters.AddWithValue("subject", caller.ActorId);
+            authorityLock.Parameters.AddWithValue("tenant_id", caller.TenantId);
+            authorityLock.Parameters.AddWithValue("membership_revision", caller.MembershipRevision);
+            authorityLock.Parameters.AddWithValue("project_id", projectId);
+            var result = await authorityLock.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(result as string, "authorized", StringComparison.Ordinal))
+                throw ProjectConfigException.Forbidden();
+        }
+
+        await using var exactAdmin = new NpgsqlCommand(
+            """
+            SELECT assignment_id, revision
+            FROM projects_config.project_role_assignments
+            WHERE assignment_id = @assignment_id
+              AND membership_id = @membership_id
+              AND resource_type = 'Tenant'
+              AND resource_id = @tenant_id
+              AND role = 'TenantAdmin'
+              AND state = 'Active'
+            FOR SHARE
+            """,
+            connection,
+            transaction);
+        exactAdmin.Parameters.AddWithValue("assignment_id", adminGrant.AssignmentId);
+        exactAdmin.Parameters.AddWithValue("membership_id", caller.MembershipId);
+        exactAdmin.Parameters.AddWithValue("tenant_id", caller.TenantId);
+        await using var reader = await exactAdmin.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
+            reader.GetGuid(0) != adminGrant.AssignmentId ||
+            reader.GetInt64(1) != adminGrant.Revision)
+            throw ProjectConfigException.Forbidden();
+    }
+
+    private static bool SameOperationOwner(
+        ProjectSetupOperationRecord operation,
+        ProjectAuthorizationContext caller) =>
+        string.Equals(operation.Issuer, caller.Issuer, StringComparison.Ordinal) &&
+        string.Equals(operation.Subject, caller.ActorId, StringComparison.Ordinal) &&
+        string.Equals(operation.TenantId, caller.TenantId, StringComparison.Ordinal);
+
+    private static void ValidateProjectSetupRequest(ProjectSetupOperationRequest request)
+    {
+        if (request.Version != 1 || request.InvocationId == Guid.Empty ||
+            !Enum.IsDefined(request.OperationKind) ||
+            string.IsNullOrWhiteSpace(request.TenantId) || request.TenantId.Length > 256 ||
+            !request.TenantId.All(character => char.IsAsciiLetterOrDigit(character) ||
+                character is '.' or '_' or '-' or ':'))
+            throw ProjectConfigException.Invalid(
+                "invalid_project_setup_request",
+                "The project setup request version, invocation ID, operation, or tenant ID is invalid.");
+
+        var setupRequest = request.OperationKind == ProjectSetupOperationKind.Setup;
+        if (setupRequest
+                ? request.ExpectedProjectRevision is not null || request.ExpectedAssignmentRevision is not null
+                : request.ExpectedProjectRevision is not > 0 ||
+                    request.ExpectedProjectRevision == long.MaxValue ||
+                    request.ExpectedAssignmentRevision is not > 0 ||
+                    request.ExpectedAssignmentRevision == long.MaxValue)
+            throw ProjectConfigException.Invalid(
+                "invalid_project_setup_request",
+                "Setup must omit cleanup revisions; cleanup must supply positive project and assignment revisions.");
+    }
+
+    private static string ProjectSetupProjectName(Guid invocationId) =>
+        ProjectsConfigService.NormalizeProjectName($"p1-{invocationId:D}");
+
+    private static T DeserializeOperationResult<T>(string json) =>
+        JsonSerializer.Deserialize<T>(json, ProjectSetupJsonOptions)
+        ?? throw new InvalidOperationException($"The stored project setup receipt is not valid {typeof(T).Name} JSON.");
+
+    private static JsonSerializerOptions CreateProjectSetupJsonOptions()
+    {
+        var json = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+        };
+        json.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
+        return json;
+    }
 
     public async Task<ProjectTenantMembershipRecord> GrantMembershipAsync(
         string issuer,

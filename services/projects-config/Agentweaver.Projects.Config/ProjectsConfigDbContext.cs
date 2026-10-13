@@ -15,6 +15,7 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
     public DbSet<PlatformRuntimeHeadRecord> PlatformRuntimeHeads => Set<PlatformRuntimeHeadRecord>();
     public DbSet<PlatformRuntimeRevisionRecord> PlatformRuntimeRevisions => Set<PlatformRuntimeRevisionRecord>();
     public DbSet<ProjectRunSelectionRecord> RunSelections => Set<ProjectRunSelectionRecord>();
+    public DbSet<ProjectSetupOperationRecord> ProjectSetupOperations => Set<ProjectSetupOperationRecord>();
     public DbSet<ProjectMarketplaceSourceRecord> MarketplaceSources => Set<ProjectMarketplaceSourceRecord>();
     public DbSet<ProjectCastingProposalRecord> CastingProposals => Set<ProjectCastingProposalRecord>();
     public DbSet<ProjectSkillContentRevisionRecord> SkillContentRevisions => Set<ProjectSkillContentRevisionRecord>();
@@ -216,6 +217,74 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
                 .HasForeignKey(selection => selection.ProjectId)
                 .OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(selection => new { selection.ProjectId, selection.RunId }).IsUnique();
+        });
+
+        modelBuilder.Entity<ProjectSetupOperationRecord>(entity =>
+        {
+            entity.ToTable("project_setup_operations", table =>
+            {
+                table.HasCheckConstraint(
+                    "ck_project_setup_operations_kind",
+                    "operation_kind IN ('Setup', 'Cleanup')");
+                table.HasCheckConstraint(
+                    "ck_project_setup_operations_state",
+                    "result_state IN ('Created', 'Cleaned', 'RetainedPending')");
+                table.HasCheckConstraint(
+                    "ck_project_setup_operations_revision",
+                    "membership_revision > 0 AND project_revision > 0 AND " +
+                    "project_configuration_revision > 0 AND assignment_revision > 0");
+                table.HasCheckConstraint(
+                    "ck_project_setup_operations_cleanup_revision",
+                    "(operation_kind = 'Setup' AND result_state = 'Created' AND " +
+                    "expected_project_revision IS NULL AND expected_assignment_revision IS NULL) OR " +
+                    "(operation_kind = 'Cleanup' AND result_state IN ('Cleaned', 'RetainedPending') AND " +
+                    "expected_project_revision IS NOT NULL AND expected_project_revision > 0 AND " +
+                    "expected_assignment_revision IS NOT NULL AND expected_assignment_revision > 0)");
+                table.HasCheckConstraint(
+                    "ck_project_setup_operations_hash",
+                    "request_hash ~ '^[0-9a-f]{64}$'");
+            });
+            entity.HasKey(operation => new { operation.InvocationId, operation.OperationKind });
+            entity.Property(operation => operation.InvocationId).HasColumnName("invocation_id");
+            entity.Property(operation => operation.OperationKind).HasColumnName("operation_kind")
+                .HasConversion<string>().HasMaxLength(16);
+            entity.Property(operation => operation.RequestHash).HasColumnName("request_hash")
+                .HasColumnType("character(64)").HasMaxLength(64).IsRequired();
+            entity.Property(operation => operation.Issuer).HasColumnName("issuer").HasMaxLength(512).IsRequired();
+            entity.Property(operation => operation.Subject).HasColumnName("subject").HasMaxLength(256).IsRequired();
+            entity.Property(operation => operation.TenantId).HasColumnName("tenant_id").HasMaxLength(256).IsRequired();
+            entity.Property(operation => operation.MembershipId).HasColumnName("membership_id");
+            entity.Property(operation => operation.MembershipRevision).HasColumnName("membership_revision");
+            entity.Property(operation => operation.ProjectId).HasColumnName("project_id").HasMaxLength(32).IsRequired();
+            entity.Property(operation => operation.ProjectRevision).HasColumnName("project_revision");
+            entity.Property(operation => operation.ProjectConfigurationRevision)
+                .HasColumnName("project_configuration_revision");
+            entity.Property(operation => operation.AssignmentId).HasColumnName("assignment_id");
+            entity.Property(operation => operation.AssignmentRevision).HasColumnName("assignment_revision");
+            entity.Property(operation => operation.ExpectedProjectRevision).HasColumnName("expected_project_revision");
+            entity.Property(operation => operation.ExpectedAssignmentRevision).HasColumnName("expected_assignment_revision");
+            entity.Property(operation => operation.AuthorityAuditEventId).HasColumnName("authority_audit_event_id");
+            entity.Property(operation => operation.ResultState).HasColumnName("result_state")
+                .HasConversion<string>().HasMaxLength(24);
+            entity.Property(operation => operation.ResultJson).HasColumnName("result")
+                .HasColumnType("jsonb").IsRequired();
+            entity.Property(operation => operation.CreatedAt).HasColumnName("created_at");
+            entity.HasOne<ProjectRecord>()
+                .WithMany()
+                .HasForeignKey(operation => operation.ProjectId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<ProjectTenantMembershipRecord>()
+                .WithMany()
+                .HasForeignKey(operation => operation.MembershipId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<ProjectRoleAssignmentRecord>()
+                .WithMany()
+                .HasForeignKey(operation => operation.AssignmentId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<ProjectAuthorityAuditRecord>()
+                .WithMany()
+                .HasForeignKey(operation => operation.AuthorityAuditEventId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<ProjectMarketplaceSourceRecord>(entity =>

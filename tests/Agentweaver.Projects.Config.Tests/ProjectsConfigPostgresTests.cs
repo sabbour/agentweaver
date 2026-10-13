@@ -1211,6 +1211,438 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
     }
 
     [Fact]
+    public async Task PrivilegedProjectSetupReplaysByInvocationAndCleanupArchivesOnlyItsOwnedProject()
+    {
+        await using var db = CreateDbContext();
+        var options = CreateDbContextOptions();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(options, TimeProvider.System);
+        var tenantId = $"project-setup-tenant-{Guid.NewGuid():N}";
+        var firstCaller = await SeedCallerAsync(
+            db,
+            authorityStore,
+            $"project-setup-admin-{Guid.NewGuid():N}",
+            tenantId,
+            ["api.read", "projects.admin", "projects.orchestrator"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var invocationId = Guid.NewGuid();
+        var setupRequest = new ProjectSetupOperationRequest(
+            1, invocationId, ProjectSetupOperationKind.Setup, tenantId, null, null);
+
+        var first = await authorityStore.ExecuteProjectSetupOperationAsync(firstCaller, setupRequest);
+        var receipt = Assert.IsType<ProjectSetupReceipt>(first.Setup);
+        Assert.False(first.Replayed);
+        Assert.Equal(firstCaller.ActorId, receipt.CreatedByActorId);
+        Assert.Equal(1, receipt.ProjectRevision);
+        Assert.Equal(1, receipt.ProjectConfigurationRevision);
+        Assert.Equal(1, receipt.AssignmentRevision);
+        Assert.True(first.SetupReadback!.ProjectExists);
+        Assert.True(first.SetupReadback.InitialConfigurationExists);
+        Assert.True(first.SetupReadback.AssignmentExists);
+        Assert.True(first.SetupReadback.AuthorityAuditExists);
+        Assert.Equal(ProjectLifecycleState.Active, first.SetupReadback.ProjectState);
+
+        var replay = await authorityStore.ExecuteProjectSetupOperationAsync(firstCaller, setupRequest);
+        Assert.True(replay.Replayed);
+        Assert.Equal(receipt, replay.Setup);
+        Assert.True(replay.SetupReadback!.AssignmentExists);
+        Assert.True(replay.SetupReadback.ProjectExists);
+        Assert.Equal(1, await db.ProjectSetupOperations.AsNoTracking()
+            .CountAsync(item => item.InvocationId == invocationId));
+        Assert.Equal(1, await db.Projects.AsNoTracking()
+            .CountAsync(item => item.ProjectId == receipt.ProjectId));
+        Assert.Equal(1, await db.RoleAssignments.AsNoTracking()
+            .CountAsync(item => item.AssignmentId == receipt.AssignmentId));
+
+        var secondCaller = await SeedCallerAsync(
+            db,
+            authorityStore,
+            $"project-setup-other-admin-{Guid.NewGuid():N}",
+            tenantId,
+            ["api.read", "projects.admin", "projects.orchestrator"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var crossActor = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            authorityStore.ExecuteProjectSetupOperationAsync(secondCaller, setupRequest));
+        Assert.Equal(StatusCodes.Status403Forbidden, crossActor.StatusCode);
+
+        var noSetupInvocation = Guid.NewGuid();
+        var missingSetup = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            authorityStore.ExecuteProjectSetupOperationAsync(
+                firstCaller,
+                new ProjectSetupOperationRequest(
+                    1,
+                    noSetupInvocation,
+                    ProjectSetupOperationKind.Cleanup,
+                    tenantId,
+                    1,
+                    1)));
+        Assert.Equal(StatusCodes.Status403Forbidden, missingSetup.StatusCode);
+        Assert.Empty(await db.ProjectSetupOperations.AsNoTracking()
+            .Where(item => item.InvocationId == noSetupInvocation)
+            .ToArrayAsync());
+        var setupAfterMissingCleanup = await authorityStore.ExecuteProjectSetupOperationAsync(
+            firstCaller,
+            new ProjectSetupOperationRequest(
+                1, noSetupInvocation, ProjectSetupOperationKind.Setup, tenantId, null, null));
+        Assert.NotNull(setupAfterMissingCleanup.Setup);
+
+        var cleanupRequest = new ProjectSetupOperationRequest(
+            1,
+            invocationId,
+            ProjectSetupOperationKind.Cleanup,
+            tenantId,
+            receipt.ProjectRevision,
+            receipt.AssignmentRevision);
+        var staleCleanup = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            authorityStore.ExecuteProjectSetupOperationAsync(
+                firstCaller,
+                cleanupRequest with { ExpectedProjectRevision = receipt.ProjectRevision + 1 }));
+        Assert.Equal("cleanup_revision_conflict", staleCleanup.Code);
+        Assert.Equal(1, await db.ProjectSetupOperations.AsNoTracking()
+            .CountAsync(item => item.InvocationId == invocationId));
+        var cleaned = await authorityStore.ExecuteProjectSetupOperationAsync(firstCaller, cleanupRequest);
+        var cleanupReceipt = Assert.IsType<ProjectCleanupReceipt>(cleaned.Cleanup);
+        Assert.Equal(ProjectSetupOperationResultState.Cleaned, cleanupReceipt.State);
+        Assert.Equal(2, cleanupReceipt.ProjectRevision);
+        Assert.Equal(2, cleanupReceipt.AssignmentRevision);
+        Assert.NotNull(cleanupReceipt.AuthorityAuditEventId);
+
+        var cleanupReplay = await authorityStore.ExecuteProjectSetupOperationAsync(firstCaller, cleanupRequest);
+        Assert.True(cleanupReplay.Replayed);
+        Assert.Equal(cleanupReceipt, cleanupReplay.Cleanup);
+        var setupAfterCleanup = await authorityStore.ExecuteProjectSetupOperationAsync(firstCaller, setupRequest);
+        Assert.True(setupAfterCleanup.Replayed);
+        Assert.Equal(ProjectLifecycleState.Archived, setupAfterCleanup.SetupReadback!.ProjectState);
+        Assert.Equal(ProjectAuthorityRecordState.Revoked, setupAfterCleanup.SetupReadback.AssignmentState);
+        Assert.True(setupAfterCleanup.SetupReadback.AssignmentExists);
+
+        await using var verify = CreateDbContext();
+        var storedProject = await verify.Projects.AsNoTracking()
+            .SingleAsync(item => item.ProjectId == receipt.ProjectId);
+        Assert.Equal(ProjectLifecycleState.Archived, storedProject.State);
+        Assert.Equal(cleanupReceipt.ProjectRevision, storedProject.Revision);
+        var assignment = await verify.RoleAssignments.AsNoTracking()
+            .SingleAsync(item => item.AssignmentId == receipt.AssignmentId);
+        Assert.Equal(ProjectAuthorityRecordState.Revoked, assignment.State);
+        Assert.Equal(cleanupReceipt.AssignmentRevision, assignment.Revision);
+        var cleanupOperation = await verify.ProjectSetupOperations.AsNoTracking()
+            .SingleAsync(item =>
+                item.InvocationId == invocationId &&
+                item.OperationKind == ProjectSetupOperationKind.Cleanup);
+        Assert.Equal(cleanupReceipt.ProjectRevision, cleanupOperation.ProjectRevision);
+        Assert.Equal(cleanupReceipt.AssignmentRevision, cleanupOperation.AssignmentRevision);
+        Assert.Equal(1, await verify.AuthorityAudit.AsNoTracking()
+            .CountAsync(item =>
+                item.AssignmentId == receipt.AssignmentId &&
+                item.EventType == "role_assigned" &&
+                item.Revision == 1));
+        Assert.Equal(1, await verify.AuthorityAudit.AsNoTracking()
+            .CountAsync(item =>
+                item.AssignmentId == receipt.AssignmentId &&
+                item.EventType == "role_revoked" &&
+                item.Revision == 2));
+        await AssertImmutableAsync(
+            "UPDATE projects_config.project_setup_operations SET subject = 'tampered' WHERE invocation_id = @invocation_id",
+            ("invocation_id", invocationId));
+        await AssertImmutableAsync(
+            "DELETE FROM projects_config.project_setup_operations WHERE invocation_id = @invocation_id",
+            ("invocation_id", invocationId));
+        await AssertImmutableAsync(
+            "TRUNCATE projects_config.project_setup_operations",
+            null);
+    }
+
+    [Fact]
+    public async Task ConcurrentProjectSetupRequestsAndCrossActorReuseCreateOnlyOneOwnedBinding()
+    {
+        await using var db = CreateDbContext();
+        var options = CreateDbContextOptions();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(options, TimeProvider.System);
+        var tenantId = $"project-setup-concurrent-tenant-{Guid.NewGuid():N}";
+        var firstCaller = await SeedCallerAsync(
+            db,
+            authorityStore,
+            $"project-setup-concurrent-admin-{Guid.NewGuid():N}",
+            tenantId,
+            ["api.read", "projects.admin", "projects.orchestrator"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var invocationId = Guid.NewGuid();
+        var request = new ProjectSetupOperationRequest(
+            1, invocationId, ProjectSetupOperationKind.Setup, tenantId, null, null);
+        var concurrent = await Task.WhenAll(
+            authorityStore.ExecuteProjectSetupOperationAsync(firstCaller, request),
+            authorityStore.ExecuteProjectSetupOperationAsync(firstCaller, request));
+        Assert.Single(concurrent, item => !item.Replayed);
+        Assert.Single(concurrent, item => item.Replayed);
+        Assert.Single(concurrent.Select(item => item.Setup!.ProjectId).Distinct());
+
+        var secondCaller = await SeedCallerAsync(
+            db,
+            authorityStore,
+            $"project-setup-concurrent-other-{Guid.NewGuid():N}",
+            tenantId,
+            ["api.read", "projects.admin", "projects.orchestrator"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var crossActor = await Assert.ThrowsAsync<ProjectConfigException>(() =>
+            authorityStore.ExecuteProjectSetupOperationAsync(secondCaller, request));
+        Assert.Equal(StatusCodes.Status403Forbidden, crossActor.StatusCode);
+
+        await using var verify = CreateDbContext();
+        Assert.Equal(1, await verify.ProjectSetupOperations.AsNoTracking()
+            .CountAsync(item => item.InvocationId == invocationId));
+        Assert.Equal(1, await verify.Projects.AsNoTracking()
+            .CountAsync(item => item.TenantId == tenantId &&
+                item.Name == $"p1-{invocationId:D}"));
+        Assert.Equal(1, await verify.RoleAssignments.AsNoTracking()
+            .CountAsync(item => item.ResourceId == concurrent[0].Setup!.ProjectId &&
+                item.Role == ProjectAuthorityRole.Orchestrator));
+    }
+
+    [Fact]
+    public async Task ProjectSetupGrantFailureRollsBackProjectConfigurationAuditAndOperation()
+    {
+        await using var db = CreateDbContext();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(
+            CreateDbContextOptions(), TimeProvider.System);
+        var tenantId = $"project-setup-failed-tenant-{Guid.NewGuid():N}";
+        var caller = await SeedCallerAsync(
+            db,
+            authorityStore,
+            $"project-setup-failed-admin-{Guid.NewGuid():N}",
+            tenantId,
+            ["api.read", "projects.admin", "projects.orchestrator"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var invocationId = Guid.NewGuid();
+        var suffix = Guid.NewGuid().ToString("N");
+        var function = $"projects_config.test_setup_assignment_failure_{suffix}";
+        var trigger = $"test_setup_assignment_failure_{suffix}";
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using (var create = new NpgsqlCommand($"""
+            CREATE FUNCTION {function}() RETURNS trigger
+            LANGUAGE plpgsql AS $body$
+            BEGIN
+                RAISE EXCEPTION 'forced setup assignment failure' USING ERRCODE = '23514';
+            END;
+            $body$;
+            CREATE TRIGGER {trigger}
+            BEFORE INSERT ON projects_config.project_role_assignments
+            FOR EACH ROW EXECUTE FUNCTION {function}();
+            """, connection))
+            await create.ExecuteNonQueryAsync();
+
+        try
+        {
+            var failure = await Assert.ThrowsAsync<DbUpdateException>(() =>
+                authorityStore.ExecuteProjectSetupOperationAsync(
+                    caller,
+                    new ProjectSetupOperationRequest(
+                        1, invocationId, ProjectSetupOperationKind.Setup, tenantId, null, null)));
+            Assert.Equal("23514", Assert.IsType<PostgresException>(failure.InnerException).SqlState);
+        }
+        finally
+        {
+            await using var drop = new NpgsqlCommand($"""
+                DROP TRIGGER IF EXISTS {trigger} ON projects_config.project_role_assignments;
+                DROP FUNCTION IF EXISTS {function}();
+                """, connection);
+            await drop.ExecuteNonQueryAsync();
+        }
+
+        await using var verify = CreateDbContext();
+        Assert.Empty(await verify.ProjectSetupOperations.AsNoTracking()
+            .Where(item => item.InvocationId == invocationId)
+            .ToArrayAsync());
+        Assert.Empty(await verify.Projects.AsNoTracking()
+            .Where(item => item.TenantId == tenantId && item.Name == $"p1-{invocationId:D}")
+            .ToArrayAsync());
+        Assert.Empty(await verify.ProjectConfigurationRevisions.AsNoTracking()
+            .Where(item => item.UpdatedByActorId == caller.ActorId)
+            .ToArrayAsync());
+        Assert.Empty(await verify.RoleAssignments.AsNoTracking()
+            .Where(item =>
+                item.MembershipId == caller.MembershipId &&
+                item.ResourceType == ProjectAuthorityResourceType.Project &&
+                item.Role == ProjectAuthorityRole.Orchestrator)
+            .ToArrayAsync());
+        Assert.Empty(await verify.AuthorityAudit.AsNoTracking()
+            .Where(item => item.MembershipId == caller.MembershipId &&
+                item.EventType == "role_assigned" &&
+                item.ResourceType == ProjectAuthorityResourceType.Project &&
+                item.Role == ProjectAuthorityRole.Orchestrator)
+            .ToArrayAsync());
+    }
+
+    [Fact]
+    public async Task CleanupSerializesWithRunAdmissionAndRetriesToRetainedPending()
+    {
+        await using var db = CreateDbContext();
+        var options = CreateDbContextOptions();
+        var authorityStore = new ProjectsConfigPrivilegedAuthorityStore(options, TimeProvider.System);
+        var service = new ProjectsConfigService(db, CreateProviderCatalog(), TimeProvider.System);
+        var suffix = Guid.NewGuid().ToString("N");
+        var tenantId = "project-setup-race-tenant-" + suffix;
+        var tenantAdmin = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "project-setup-race-admin-" + suffix,
+            tenantId,
+            ["api.read", "projects.admin", "projects.orchestrator"],
+            ProjectAuthorityResourceType.Tenant,
+            tenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var platformAdmin = await SeedCallerAsync(
+            db,
+            authorityStore,
+            "project-setup-race-platform-admin-" + suffix,
+            tenantId,
+            ["api.read", "projects.admin"],
+            ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+        var platformHead = await service.GetPlatformRuntimeDefaultsAsync(platformAdmin, CancellationToken.None);
+        var platform = await service.UpdatePlatformRuntimeDefaultsAsync(
+            platformAdmin,
+            platformHead.Revision,
+            PlatformDefaults(),
+            CancellationToken.None);
+
+        var invocationId = Guid.NewGuid();
+        var setup = await authorityStore.ExecuteProjectSetupOperationAsync(
+            tenantAdmin,
+            new ProjectSetupOperationRequest(
+                1, invocationId, ProjectSetupOperationKind.Setup, tenantId, null, null));
+        var setupReceipt = Assert.IsType<ProjectSetupReceipt>(setup.Setup);
+        var orchestrator = await ResolveCallerAsync(
+            db,
+            tenantAdmin.ActorId,
+            tenantId,
+            ["api.read", "projects.admin", "projects.orchestrator"]);
+        var runId = "project-setup-race-run-" + suffix;
+        var runRequest = RunRequest(setupReceipt.ProjectConfigurationRevision, platform.Revision);
+
+        var suffixHash = Guid.NewGuid().ToString("N");
+        var lockKey1 = unchecked((int)Convert.ToUInt32(suffixHash[..8], 16));
+        var lockKey2 = unchecked((int)Convert.ToUInt32(suffixHash[8..16], 16));
+        var triggerFunction = $"projects_config.test_setup_admission_barrier_{suffix}";
+        var triggerName = $"test_setup_admission_barrier_{suffix}";
+        await using var barrierConnection = await fixture.DataSource.OpenConnectionAsync();
+        await using (var lockCommand = new NpgsqlCommand(
+            "SELECT pg_advisory_lock(@key1, @key2)",
+            barrierConnection))
+        {
+            lockCommand.Parameters.AddWithValue("key1", lockKey1);
+            lockCommand.Parameters.AddWithValue("key2", lockKey2);
+            await lockCommand.ExecuteNonQueryAsync();
+        }
+
+        async Task ExecuteOwnerSqlAsync(string sql)
+        {
+            await using var connection = await fixture.DataSource.OpenConnectionAsync();
+            await using var command = new NpgsqlCommand(sql, connection);
+            await command.ExecuteNonQueryAsync();
+        }
+
+        try
+        {
+            await ExecuteOwnerSqlAsync($"""
+                CREATE FUNCTION {triggerFunction}() RETURNS trigger
+                LANGUAGE plpgsql AS $body$
+                BEGIN
+                    PERFORM pg_advisory_xact_lock({lockKey1}, {lockKey2});
+                    RETURN NEW;
+                END;
+                $body$;
+                CREATE TRIGGER {triggerName}
+                BEFORE INSERT ON projects_config.project_run_selections
+                FOR EACH ROW EXECUTE FUNCTION {triggerFunction}();
+                """);
+
+            var admission = service.AcceptRunSelectionAsync(
+                orchestrator, setupReceipt.ProjectId, runId, runRequest, CancellationToken.None);
+            await WaitForPostgresActivityAsync(
+                "wait_event = 'advisory' AND query ILIKE '%project_run_selections%'");
+
+            var cleanup = authorityStore.ExecuteProjectSetupOperationAsync(
+                tenantAdmin,
+                new ProjectSetupOperationRequest(
+                    1,
+                    invocationId,
+                    ProjectSetupOperationKind.Cleanup,
+                    tenantId,
+                    setupReceipt.ProjectRevision,
+                    setupReceipt.AssignmentRevision));
+            await WaitForPostgresActivityAsync(
+                "wait_event_type = 'Lock' AND query ILIKE '%FOR UPDATE%'");
+
+            await using (var unlockCommand = new NpgsqlCommand(
+                "SELECT pg_advisory_unlock(@key1, @key2)",
+                barrierConnection))
+            {
+                unlockCommand.Parameters.AddWithValue("key1", lockKey1);
+                unlockCommand.Parameters.AddWithValue("key2", lockKey2);
+                Assert.True((bool)(await unlockCommand.ExecuteScalarAsync()
+                    ?? throw new InvalidOperationException("Admission barrier lock returned no result.")));
+            }
+
+            await admission;
+            var cleanupResult = await cleanup;
+            var cleanupReceipt = Assert.IsType<ProjectCleanupReceipt>(cleanupResult.Cleanup);
+            Assert.Equal(ProjectSetupOperationResultState.RetainedPending, cleanupReceipt.State);
+            await using var verify = CreateDbContext();
+            Assert.True(await verify.RunSelections.AsNoTracking()
+                .AnyAsync(item => item.ProjectId == setupReceipt.ProjectId && item.RunId == runId));
+            Assert.Equal(ProjectLifecycleState.Active,
+                (await verify.Projects.AsNoTracking()
+                    .SingleAsync(item => item.ProjectId == setupReceipt.ProjectId)).State);
+            Assert.Equal(ProjectAuthorityRecordState.Active,
+                (await verify.RoleAssignments.AsNoTracking()
+                    .SingleAsync(item => item.AssignmentId == setupReceipt.AssignmentId)).State);
+            Assert.Null(cleanupReceipt.AuthorityAuditEventId);
+        }
+        finally
+        {
+            await using (var unlockCommand = new NpgsqlCommand(
+                "SELECT pg_advisory_unlock(@key1, @key2)",
+                barrierConnection))
+            {
+                unlockCommand.Parameters.AddWithValue("key1", lockKey1);
+                unlockCommand.Parameters.AddWithValue("key2", lockKey2);
+                _ = await unlockCommand.ExecuteScalarAsync();
+            }
+            await ExecuteOwnerSqlAsync(
+                $"DROP TRIGGER IF EXISTS {triggerName} ON projects_config.project_run_selections");
+            await ExecuteOwnerSqlAsync($"DROP FUNCTION IF EXISTS {triggerFunction}()");
+        }
+
+        async Task WaitForPostgresActivityAsync(string predicate)
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            while (!timeout.IsCancellationRequested)
+            {
+                await using var activityConnection = await fixture.DataSource.OpenConnectionAsync(timeout.Token);
+                await using var activityCommand = new NpgsqlCommand(
+                    $"SELECT EXISTS (SELECT 1 FROM pg_stat_activity " +
+                    $"WHERE pid <> pg_backend_pid() AND {predicate})",
+                    activityConnection);
+                if ((bool)(await activityCommand.ExecuteScalarAsync(timeout.Token)
+                    ?? throw new InvalidOperationException("PostgreSQL activity check returned no result.")))
+                    return;
+                await Task.Delay(TimeSpan.FromMilliseconds(20), timeout.Token);
+            }
+            throw new TimeoutException($"PostgreSQL did not reach the expected interleaving: {predicate}");
+        }
+    }
+
+    [Fact]
     public async Task AuthorityStoreRetriesSerializationFailuresWithFreshContexts()
     {
         var options = CreateDbContextOptions();
@@ -1947,6 +2379,11 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
                    AND NOT has_table_privilege(@role, 'projects_config.tenant_memberships', 'UPDATE')
                    AND has_table_privilege(@role, 'projects_config.project_role_assignments', 'SELECT')
                    AND NOT has_table_privilege(@role, 'projects_config.project_role_assignments', 'UPDATE')
+                   AND NOT has_table_privilege(@role, 'projects_config.project_setup_operations', 'SELECT')
+                   AND NOT has_table_privilege(@role, 'projects_config.project_setup_operations', 'INSERT')
+                   AND NOT has_table_privilege(@role, 'projects_config.project_setup_operations', 'UPDATE')
+                   AND NOT has_table_privilege(@role, 'projects_config.project_setup_operations', 'DELETE')
+                   AND NOT has_table_privilege(@role, 'projects_config.project_setup_operations', 'TRUNCATE')
                    AND has_function_privilege(
                        @role,
                        'projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean)',
