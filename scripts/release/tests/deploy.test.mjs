@@ -21,6 +21,7 @@ import {
 import { componentImageRepository } from '../pack.mjs';
 import { createRuntimeList } from '../runtime-list.mjs';
 import { run as runProcess } from '../../azure/lib/exec.mjs';
+import { projectIdentityRoutingReadback } from '../../azure/lib/identity-broker-routing.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const sourceSha = 'a'.repeat(40);
@@ -575,6 +576,113 @@ test('deployment preflight reads exact managed Gateway and application routing r
   ]);
   assert.ok(calls.every(args => args[0] === 'get' && args.includes('--output') &&
     args.at(-1) === 'json'));
+});
+
+test('routing readbacks project actual portal hostnames before output redaction', () => {
+  const gatewayNamespace = 'agentweaver-v1-gateway';
+  const hostnameDomain = '*.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
+  const brokerHostname = `agentweaver.${hostnameDomain.slice(2)}`;
+  const portalHostname = `portal.${hostnameDomain.slice(2)}`;
+  const controller = 'istio.aks.azure.com/gateway-controller';
+  const conditions = (...types) => types.map(type => ({ type, status: 'True', observedGeneration: 1 }));
+  const owned = (kind, name, namespace, service, spec, status) => ({
+    apiVersion: kind === 'DefaultDomainCertificate'
+      ? 'approuting.kubernetes.azure.com/v1alpha1' : 'gateway.networking.k8s.io/v1',
+    kind,
+    metadata: {
+      name, namespace, uid: `${kind}-${name}-uid`, generation: 1, resourceVersion: '1',
+      labels: { 'agentweaver.io/service': service },
+    },
+    spec,
+    status,
+  });
+  const route = (name, service, hostname, sectionName, paths, backend, port) => owned(
+    'HTTPRoute', name, target.namespace, service, {
+      hostnames: [hostname],
+      parentRefs: [{ name: 'identity-broker', namespace: gatewayNamespace, sectionName }],
+      rules: [{ matches: paths.map(({ type, value }) => ({ path: { type, value } })),
+        backendRefs: [{ name: backend, port }] }],
+    }, {
+      parents: [{ controllerName: controller, parentRef: {
+        name: 'identity-broker', namespace: gatewayNamespace, sectionName,
+      }, conditions: conditions('Accepted', 'ResolvedRefs') }],
+    });
+  const backendPolicy = (name, service, hostname) => owned(
+    'BackendTLSPolicy', name, target.namespace, service, {
+      targetRefs: [{ group: '', kind: 'Service', name: service, sectionName: 'https' }],
+      validation: hostname === brokerHostname
+        ? { hostname, wellKnownCACertificates: 'System' }
+        : { hostname, caCertificateRefs: [{ group: '', kind: 'ConfigMap', name: 'service-backend-ca' }] },
+    }, {
+      ancestors: [{ controllerName: controller, ancestorRef: { name: 'identity-broker', namespace: gatewayNamespace },
+        conditions: conditions('Accepted', 'ResolvedRefs') }],
+    });
+  const certificate = owned('DefaultDomainCertificate', 'identity-broker', target.namespace, 'identity-broker',
+    { target: { secret: 'identity-broker-tls' } },
+    { domain: hostnameDomain, conditions: conditions('Available') });
+  const gateway = owned('Gateway', 'identity-broker', gatewayNamespace, 'identity-broker', {
+    gatewayClassName: 'approuting-istio',
+    listeners: ['https', 'portal'].map((name, index) => ({
+      name, hostname: index === 0 ? brokerHostname : portalHostname, port: 443, protocol: 'HTTPS',
+      tls: { mode: 'Terminate', certificateRefs: [{ kind: 'Secret', name: 'identity-broker-tls' }] },
+      allowedRoutes: { namespaces: { from: 'Selector',
+        selector: { matchLabels: { 'kubernetes.io/metadata.name': target.namespace } } } },
+    })),
+  }, {
+    conditions: conditions('Accepted', 'Programmed'),
+    addresses: [{ type: 'IPAddress', value: '203.0.113.10' }],
+    listeners: ['https', 'portal'].map(name => ({
+      name, conditions: conditions('Accepted', 'Programmed', 'ResolvedRefs'),
+    })),
+  });
+  const parentPaths = [{ type: 'PathPrefix', value: '/' }];
+  const resources = {
+    defaultdomaincertificates: { 'identity-broker': certificate },
+    gateways: { 'identity-broker': gateway },
+    httproutes: {
+      'identity-broker': route('identity-broker', 'identity-broker', brokerHostname, 'https',
+        parentPaths, 'identity-broker', 443),
+      'web-application': route('web-application', 'web', portalHostname, 'portal',
+        parentPaths, 'web', 8080),
+      'gateway-api': route('gateway-api', 'gateway', portalHostname, 'portal', [
+        { type: 'PathPrefix', value: '/api/v1' },
+        { type: 'Exact', value: '/openapi/v1.json' },
+      ], 'gateway', 8443),
+      mcp: route('mcp', 'mcp', portalHostname, 'portal', [
+        { type: 'Exact', value: '/mcp' },
+        { type: 'Exact', value: '/.well-known/oauth-protected-resource/mcp' },
+      ], 'mcp', 8443),
+    },
+    backendtlspolicies: {
+      'identity-broker': backendPolicy('identity-broker', 'identity-broker', brokerHostname),
+      'gateway-api': backendPolicy('gateway-api', 'gateway', 'gateway.agentweaver-v1-p0.svc.cluster.local'),
+      mcp: backendPolicy('mcp', 'mcp', 'mcp.agentweaver-v1-p0.svc.cluster.local'),
+    },
+  };
+  const calls = [];
+  const run = (file, args, options) => {
+    const resource = args[1];
+    const name = args[args.indexOf('--field-selector') + 1].split('=')[1];
+    const object = resources[resource]?.[name];
+    assert.ok(object, `missing fixture for ${resource}/${name}`);
+    const result = runProcess(process.execPath, ['-e',
+      `process.stdout.write(${JSON.stringify(JSON.stringify({ items: [object] }))})`], options);
+    const output = result.stdout.trim();
+    calls.push({ file, args, options, output });
+    return output;
+  };
+
+  const observed = verifyExistingP0BrokerRouting(target, { root, run });
+
+  assert.equal(observed.hostname, brokerHostname);
+  assert.equal(observed.portalHostname, portalHostname);
+  assert.equal(observed.hostnameAligned, true);
+  assert.equal(observed.gatewayProgrammed, true);
+  assert.equal(calls.length, 9);
+  assert.ok(calls.every(({ file, options }) => file === 'kubectl' &&
+    options.projectJson === projectIdentityRoutingReadback && options.preserveProjectedJson === true));
+  assert.equal(JSON.parse(calls[5].output).spec.hostnames[0], portalHostname);
+  assert.equal(JSON.parse(calls[7].output).spec.hostnames[0], portalHostname);
 });
 
 test('Azure target readbacks preserve exact hostnames without exposing kubeconfig credentials', () => {

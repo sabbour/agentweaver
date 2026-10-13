@@ -652,10 +652,11 @@ function verifyBackendCertificates(target, { root, run }) {
 
 export function verifyExistingP0BrokerRouting(target, { root, run }) {
   function read(resource, name, namespace = target.namespace) {
-    const value = parseJson(run('kubectl', [
+    return parseJson(run('kubectl', [
       'get', resource, '--namespace', namespace, '--field-selector', `metadata.name=${name}`, '--output', 'json',
-    ], { cwd: root }), `${resource} ${name} routing`);
-    return projectIdentityRoutingReadback(value);
+    ], {
+      cwd: root, projectJson: projectIdentityRoutingReadback, preserveProjectedJson: true,
+    }), `${resource} ${name} routing`);
   }
   return observeExistingP0BrokerRouting({
     certificate: read('defaultdomaincertificates', 'identity-broker'),
