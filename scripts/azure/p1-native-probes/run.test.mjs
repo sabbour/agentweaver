@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { createP1NativeProcessProvider } from './process-provider.mjs';
-import { runP1NativeProbes } from './run.mjs';
+import { runP1NativeCreditDenialReaders, runP1NativeProbes } from './run.mjs';
 
 const invocationId = 'a6a04b52-34bd-4c58-8d95-537912dc8e55';
 const policyOperationId = 'b7b15cb2-45a3-4d69-9e06-648023ed9f66';
 const future = '2099-01-01T00:00:00.000Z';
+const hash = character => character.repeat(64);
+const sha256 = value => createHash('sha256').update(value, 'utf8').digest('hex');
 const phaseTimes = {
   scheduled: '2026-01-01T00:00:30.000Z',
   imageReady: '2026-01-01T00:02:30.000Z',
@@ -320,6 +322,233 @@ function environmentVolumeSnapshot(volume) {
     ...snapshot,
     specification: {
       owner: { kind: ownerKindValues[owner.kind], id: owner.id },
+    },
+  };
+}
+
+function createCreditReaderInput() {
+  const fixedZero = {
+    ownerId: 'owner-a',
+    actorId: 'actor-a',
+    tenantId: 'tenant-a',
+    projectId: 'project-a',
+    runId: 'run-a',
+    sessionId: 'session-a',
+    environmentId: 'environment-a',
+    runtimeInstanceId: '00000000-0000-4000-8000-000000000001',
+    registrationRevision: 12,
+    executionFence: 19,
+    registrationHash: hash('1'),
+    sourceHash: hash('2'),
+    sourceGrantId: '00000000-0000-4000-8000-000000000011',
+    sourceGrantRevision: 3,
+    expectedHardCreditLimit: 0,
+    stage: 'HostPreQueue',
+    requestId: '00000000-0000-4000-8000-000000000021',
+    requestHash: hash('3'),
+  };
+  const positive = {
+    ...fixedZero,
+    runtimeInstanceId: '00000000-0000-4000-8000-000000000002',
+    registrationRevision: 13,
+    executionFence: 20,
+    registrationHash: hash('4'),
+    sourceHash: hash('5'),
+    sourceGrantId: '00000000-0000-4000-8000-000000000012',
+    sourceGrantRevision: 4,
+    expectedHardCreditLimit: 5,
+    stage: 'nativeTurnBegin',
+    dispatchId: '00000000-0000-4000-8000-000000000022',
+  };
+  const input = { fixedZero, positive };
+  for (const [key, kind] of [['fixedZero', 'fixedZero'], ['positive', 'positive']]) {
+    const { registration, sourceGrant, sourceReceipt } =
+      createCurrentCreditReadback(input[key], kind);
+    input[key].current = { registration, sourceGrant, sourceReceipt };
+    input[key].proof = {
+      contractVersion: 1,
+      registration,
+      sourceGrantId: sourceGrant.grantId,
+      sourceGrantRevision: sourceGrant.revision,
+      purpose: 'Observe',
+    };
+    if (key === 'positive') {
+      registration.binding.maxPromptTokens = null;
+      sourceReceipt.source.maxPromptTokens = null;
+    }
+  }
+  return input;
+}
+
+function createCurrentCreditReadback(pin, kind) {
+  const observationEndpoint = 'https://runtime.example.test/internal/runtime/observations';
+  const registration = pin.current?.registration ?? {
+    runtimeInstanceId: pin.runtimeInstanceId,
+    revision: pin.registrationRevision,
+    state: 'active',
+    expiresAt: future,
+    binding: {
+      actorId: pin.actorId,
+      tenantId: pin.tenantId,
+      projectId: pin.projectId,
+      runId: pin.runId,
+      sessionId: pin.sessionId,
+      environmentId: pin.environmentId,
+      executionFence: pin.executionFence,
+      copilotHardCreditLimit: pin.expectedHardCreditLimit,
+      configureEndpoint: 'https://runtime.example.test/configure',
+      observationEndpoint,
+      actorIssuer: 'https://issuer.example.test',
+      agentId: 'agent-a',
+      turnId: 'turn-a',
+      placementUid: 'pod-a',
+      placementGeneration: 7,
+      profileId: 'agenthost-default',
+      acceptedSelectionHash: hash('a'),
+      modelSelectionReference: 'selection-a',
+      maxPromptTokens: 8192,
+    },
+  };
+  const sourceGrant = pin.current?.sourceGrant ?? {
+    grantId: pin.sourceGrantId,
+    runtimeInstanceId: pin.runtimeInstanceId,
+    registrationRevision: pin.registrationRevision,
+    revision: pin.sourceGrantRevision,
+    purpose: 'Observe',
+    state: 'active',
+    audience: observationEndpoint,
+    issuer: 'https://issuer.example.test',
+    configurationHash: hash('b'),
+    expiresAt: future,
+    recordedAt: '2026-01-01T00:04:00.000Z',
+  };
+  const sdkSessionId = 'sdk-session-a';
+  const sourceReceipt = pin.current?.sourceReceipt ?? {
+    runtimeInstanceId: pin.runtimeInstanceId,
+    registrationRevision: pin.registrationRevision,
+    sourceGrantId: pin.sourceGrantId,
+    canonicalPayloadHash: pin.sourceHash,
+    recordedAt: '2026-01-01T00:04:30.000Z',
+    source: {
+      runtimeInstanceId: pin.runtimeInstanceId,
+      registrationRevision: pin.registrationRevision,
+      sdkSessionId,
+      sdkVersion: '1.0',
+      runtimeVersion: '1.0',
+      sourceMode: 'hosted-copilot',
+      meterSource: 'copilot.nano_aiu',
+      byokProvider: null,
+      modelSelectionReference: registration.binding.modelSelectionReference,
+      acceptedSelectionHash: registration.binding.acceptedSelectionHash,
+      modelId: 'model-a',
+      catalogHash: hash('c'),
+      maxPromptTokens: 4096,
+    },
+  };
+  let result;
+  if (kind === 'fixedZero') {
+    const receipt = {
+      contractVersion: 1,
+      stage: 'HostPreQueue',
+      code: 'HardLimitZero',
+      registration,
+      registrationHash: pin.registrationHash,
+      requestId: pin.requestId,
+      requestHash: pin.requestHash,
+      sourceHash: pin.sourceHash,
+      sourceGrantId: pin.sourceGrantId,
+      sourceGrantRevision: pin.sourceGrantRevision,
+      recordedAt: '2026-01-01T00:05:00.000Z',
+      canonicalPayloadHash: hash('d'),
+    };
+    result = {
+      receipt,
+      evidence: {
+        contractVersion: 1,
+        runtimeInstanceId: pin.runtimeInstanceId,
+        registrationRevision: pin.registrationRevision,
+        executionFence: pin.executionFence,
+        requestId: pin.requestId,
+        stage: 'HostPreQueue',
+        guardReceiptHash: receipt.canonicalPayloadHash,
+        registrationHash: pin.registrationHash,
+        sourceHash: pin.sourceHash,
+        sourceGrantId: pin.sourceGrantId,
+        sourceGrantRevision: pin.sourceGrantRevision,
+        nativeSessionHash: sha256(sourceReceipt.source.sdkSessionId),
+        beforeCursorHash: hash('f'),
+        afterCursorHash: hash('f'),
+        observedEventCount: 0,
+        rangeComplete: true,
+        verifiedAt: '2026-01-01T00:05:30.000Z',
+        canonicalPayloadHash: hash('6'),
+      },
+    };
+  } else {
+    const receipt = {
+      contractVersion: 1,
+      runtimeInstanceId: pin.runtimeInstanceId,
+      registrationRevision: pin.registrationRevision,
+      executionFence: pin.executionFence,
+      sourceGrantId: pin.sourceGrantId,
+      dispatchId: pin.dispatchId,
+      stage: 'nativeTurnBegin',
+      code: 'hardLimitReached',
+      registrationHash: pin.registrationHash,
+      sourceHash: pin.sourceHash,
+      dispatchHash: hash('7'),
+      checkpointHash: hash('8'),
+      hardCreditLimit: pin.expectedHardCreditLimit,
+      observedCredits: pin.expectedHardCreditLimit,
+      ledgerEventCount: 1,
+      ledgerDigest: hash('9'),
+      costIdentity: hash('a'),
+      guardRevisionBefore: 1,
+      guardRevisionAfter: 2,
+      dispatchStateBefore: 'prepared',
+      dispatchRevisionBefore: 1,
+      dispatchStateAfter: 'prepared',
+      dispatchRevisionAfter: 1,
+      recordedAt: '2026-01-01T00:05:00.000Z',
+      canonicalPayloadHash: hash('b'),
+    };
+    result = {
+      receipt,
+      noSend: {
+        contractVersion: 1,
+        runtimeInstanceId: pin.runtimeInstanceId,
+        registrationRevision: pin.registrationRevision,
+        dispatchId: pin.dispatchId,
+        denialReceiptHash: receipt.canonicalPayloadHash,
+        registrationHash: pin.registrationHash,
+        sourceHash: pin.sourceHash,
+        nativeSessionHash: sha256(sourceReceipt.source.sdkSessionId),
+        beforeCursorHash: hash('d'),
+        afterCursorHash: hash('d'),
+        observedEventCount: 0,
+        rangeComplete: true,
+        verifiedAt: '2026-01-01T00:05:30.000Z',
+        canonicalPayloadHash: hash('e'),
+      },
+    };
+  }
+  return { registration, sourceGrant, sourceReceipt, result };
+}
+
+function createCreditHostCaller(input, corrupt = () => {}) {
+  return {
+    async postJson(path, body) {
+      const kind = path === '/runtime/v1/turns/fixed-credit-denials/read'
+        ? 'fixedZero'
+        : 'positive';
+      const pin = input[kind];
+      const expectedBody = kind === 'fixedZero'
+        ? { proof: pin.proof, requestId: pin.requestId, requestHash: pin.requestHash }
+        : { proof: pin.proof, dispatchId: pin.dispatchId, stage: pin.stage };
+      assert.deepEqual(body, expectedBody);
+      const result = createCurrentCreditReadback(pin, kind).result;
+      corrupt(kind, result, input);
+      return result;
     },
   };
 }
@@ -838,6 +1067,261 @@ test('a mismatching current runtime read blocks every probe before mutation', as
   assert.ok(harness.calls.every(call => call.method === 'GET'));
 });
 
+test('standalone reader accepts production-shaped enum values and returns safe summaries', async () => {
+  const input = createCreditReaderInput();
+  const calls = [];
+  const replies = {};
+  const result = await runP1NativeCreditDenialReaders(input, {
+    hostCaller: {
+      async postJson(path, body) {
+        calls.push({ path, body });
+        const kind = path.includes('fixed-credit-denials') ? 'fixedZero' : 'positive';
+        replies[kind] = createCurrentCreditReadback(input[kind], kind).result;
+        return replies[kind];
+      },
+    },
+  });
+
+  assert.equal(result.kind, 'p1-native-credit-denial-readers');
+  assert.equal(result.overallStatus, 'passed');
+  assert.deepEqual(calls.map(call => call.path), [
+    '/runtime/v1/turns/fixed-credit-denials/read',
+    '/runtime/v1/turns/denials/read',
+  ]);
+  assert.deepEqual(calls[0].body, {
+    proof: input.fixedZero.proof,
+    requestId: input.fixedZero.requestId,
+    requestHash: input.fixedZero.requestHash,
+  });
+  assert.deepEqual(calls[1].body, {
+    proof: input.positive.proof,
+    dispatchId: input.positive.dispatchId,
+    stage: input.positive.stage,
+  });
+  assert.equal(replies.fixedZero.receipt.stage, 'HostPreQueue');
+  assert.equal(replies.fixedZero.receipt.code, 'HardLimitZero');
+  assert.equal(replies.positive.receipt.stage, 'nativeTurnBegin');
+  assert.equal(replies.positive.receipt.code, 'hardLimitReached');
+  assert.deepEqual(Object.keys(result.cases), ['fixedZero', 'positive']);
+  assert.equal(result.cases.fixedZero.evidence.stage, 'HostPreQueue');
+  assert.equal(result.cases.positive.evidence.stage, 'nativeTurnBegin');
+  assert.equal(input.fixedZero.current.registration.binding.maxPromptTokens, 8192);
+  assert.equal(input.fixedZero.current.sourceReceipt.source.maxPromptTokens, 4096);
+  assert.equal(input.positive.current.registration.binding.maxPromptTokens, null);
+  assert.equal(input.positive.current.sourceReceipt.source.maxPromptTokens, null);
+  const serialized = JSON.stringify(result);
+  assert.equal(serialized.includes('observationEndpoint'), false);
+  assert.equal(serialized.includes('configureEndpoint'), false);
+  assert.equal(serialized.includes('modelSelectionReference'), false);
+});
+
+test('standalone credit readers reject stale current context and incomplete denial evidence', async () => {
+  const corruptions = [
+    ['stale fixed registration revision', 'fixedZero', (_result, input) => {
+      input.fixedZero.current.registration.revision += 1;
+    }, 'credit_reader_current_context_mismatch'],
+    ['stale positive registration revision', 'positive', result => {
+      result.receipt.registrationRevision += 1;
+    }, 'credit_reader_receipt_invalid'],
+    ['wrong source grant revision', 'fixedZero', (_result, input) => {
+      input.fixedZero.current.sourceGrant.revision += 1;
+    }, 'credit_reader_current_context_mismatch'],
+    ['wrong fixed request ID', 'fixedZero', result => {
+      result.receipt.requestId = 'stale-request-id';
+    }, 'credit_reader_receipt_invalid'],
+    ['wrong native dispatch stage', 'positive', result => {
+      result.receipt.stage = 'Preparation';
+    }, 'credit_reader_receipt_invalid'],
+    ['incomplete fixed no-send range', 'fixedZero', result => {
+      result.evidence.observedEventCount = 1;
+    }, 'credit_reader_receipt_invalid'],
+    ['wrong fixed native session hash', 'fixedZero', result => {
+      result.evidence.nativeSessionHash = hash('a');
+    }, 'credit_reader_receipt_invalid'],
+    ['incomplete native no-send range', 'positive', result => {
+      result.noSend.afterCursorHash = hash('f');
+    }, 'credit_reader_receipt_invalid'],
+    ['wrong native no-send session hash', 'positive', result => {
+      result.noSend.nativeSessionHash = hash('a');
+    }, 'credit_reader_receipt_invalid'],
+  ];
+
+  for (const [label, kind, corrupt, expectedCode] of corruptions) {
+    const input = createCreditReaderInput();
+    const result = await runP1NativeCreditDenialReaders(input, {
+      hostCaller: createCreditHostCaller(input, (caseKind, response, cases) => {
+        if (caseKind === kind) corrupt(response, cases);
+      }),
+    });
+    assert.equal(result.overallStatus, 'blocked', label);
+    assert.equal(result.cases[kind].code, expectedCode, label);
+    assert.equal(result.cases[kind === 'fixedZero' ? 'positive' : 'fixedZero'].status, 'passed', label);
+  }
+});
+
+test('standalone credit readers fail closed without an authorized Host caller or with stale pins', async () => {
+  const input = createCreditReaderInput();
+  const missing = await runP1NativeCreditDenialReaders(input, {});
+  assert.equal(missing.overallStatus, 'blocked');
+  assert.equal(missing.cases.fixedZero.code, 'credit_source_reader_unavailable');
+  assert.equal(missing.cases.positive.code, 'credit_source_reader_unavailable');
+
+  const sameRuntime = createCreditReaderInput();
+  sameRuntime.positive.runtimeInstanceId = sameRuntime.fixedZero.runtimeInstanceId;
+  const stale = await runP1NativeCreditDenialReaders(sameRuntime, {
+    hostCaller: {
+      async postJson() {
+        assert.fail('Host caller must not run for stale pins');
+      },
+    },
+  });
+  assert.equal(stale.overallStatus, 'blocked');
+  assert.equal(stale.cases.fixedZero.code, 'credit_reader_instances_not_distinct');
+});
+
+test('standalone credit readers require nonempty GUID runtime, grant, request, and dispatch IDs', async () => {
+  const invalidPins = [
+    ['empty runtime GUID', input => { input.fixedZero.runtimeInstanceId = '00000000-0000-0000-0000-000000000000'; }],
+    ['empty source grant GUID', input => { input.positive.sourceGrantId = '00000000-0000-0000-0000-000000000000'; }],
+    ['empty fixed request GUID', input => { input.fixedZero.requestId = '00000000-0000-0000-0000-000000000000'; }],
+    ['empty positive dispatch GUID', input => { input.positive.dispatchId = '00000000-0000-0000-0000-000000000000'; }],
+    ['invalid fixed request GUID', input => { input.fixedZero.requestId = 'fixed-request'; }],
+    ['invalid positive dispatch GUID', input => { input.positive.dispatchId = 'positive-dispatch'; }],
+  ];
+  for (const [label, corrupt] of invalidPins) {
+    const input = createCreditReaderInput();
+    corrupt(input);
+    const result = await runP1NativeCreditDenialReaders(input, {
+      hostCaller: {
+        async postJson() {
+          assert.fail(`Host caller must not run for ${label}`);
+        },
+      },
+    });
+    assert.equal(result.overallStatus, 'blocked', label);
+    assert.equal(result.cases.fixedZero.code, 'credit_reader_input_incomplete', label);
+  }
+});
+
+test('standalone credit reader permits typed prompt limits but rejects credential fields', async () => {
+  const input = createCreditReaderInput();
+  input.fixedZero.current.registration.binding.accessToken = 'must-not-be-forwarded';
+  const result = await runP1NativeCreditDenialReaders(input, {
+    hostCaller: {
+      async postJson() {
+        assert.fail('Host caller must not run with credential material in context');
+      },
+    },
+  });
+
+  assert.equal(result.overallStatus, 'blocked');
+  assert.equal(result.cases.fixedZero.code, 'credential_in_input');
+  assert.equal(JSON.stringify(result).includes('must-not-be-forwarded'), false);
+
+  const invalidPromptLimit = createCreditReaderInput();
+  invalidPromptLimit.fixedZero.current.sourceReceipt.source.maxPromptTokens = '4096';
+  const invalid = await runP1NativeCreditDenialReaders(invalidPromptLimit, {
+    hostCaller: {
+      async postJson() {
+        assert.fail('Host caller must not receive an invalid prompt limit');
+      },
+    },
+  });
+  assert.equal(invalid.overallStatus, 'blocked');
+  assert.equal(invalid.cases.fixedZero.code, 'credential_in_input');
+});
+
+test('standalone source-reader errors do not expose source proof details', async () => {
+  const input = createCreditReaderInput();
+  const proofSecret = 'current-source-proof-secret';
+  const result = await runP1NativeCreditDenialReaders(input, {
+    hostCaller: {
+      async postJson(path) {
+        if (path.includes('fixed-credit-denials')) {
+          throw new Error(`proof rejected: ${proofSecret}`);
+        }
+        return createCurrentCreditReadback(input.positive, 'positive').result;
+      },
+    },
+  });
+
+  assert.equal(result.overallStatus, 'blocked');
+  assert.equal(result.cases.fixedZero.code, 'credit_source_read_unavailable');
+  assert.equal(JSON.stringify(result).includes(proofSecret), false);
+});
+
+test('standalone credit readers recheck registration and grant expiry after each read', async () => {
+  const input = createCreditReaderInput();
+  const expiresAt = '2026-01-01T00:05:20.000Z';
+  for (const pin of [input.fixedZero, input.positive]) {
+    pin.current.registration.expiresAt = expiresAt;
+    pin.current.sourceGrant.expiresAt = expiresAt;
+  }
+  let clock = Date.parse('2026-01-01T00:05:10.000Z');
+  const result = await runP1NativeCreditDenialReaders(input, {
+    now: () => clock,
+    hostCaller: {
+      async postJson(path) {
+        clock = Date.parse('2026-01-01T00:05:21.000Z');
+        const kind = path.includes('fixed-credit-denials') ? 'fixedZero' : 'positive';
+        return createCurrentCreditReadback(input[kind], kind).result;
+      },
+    },
+  });
+
+  assert.equal(result.overallStatus, 'blocked');
+  assert.equal(result.cases.fixedZero.code, 'credit_reader_current_context_mismatch');
+  assert.equal(result.cases.positive.code, 'credit_reader_current_context_mismatch');
+});
+
+test('standalone credit reads block missing stored pairs without issuing record requests', async () => {
+  for (const missingKind of ['fixedZero', 'positive']) {
+    const input = createCreditReaderInput();
+    const paths = [];
+    const result = await runP1NativeCreditDenialReaders(input, {
+      hostCaller: {
+        async postJson(path) {
+          paths.push(path);
+          if ((missingKind === 'fixedZero' &&
+              path === '/runtime/v1/turns/fixed-credit-denials/read') ||
+              (missingKind === 'positive' &&
+              path === '/runtime/v1/turns/denials/read')) {
+            return missingKind === 'fixedZero'
+              ? { receipt: null, evidence: null }
+              : { receipt: null, noSend: null };
+          }
+          const kind = path.includes('fixed-credit-denials') ? 'fixedZero' : 'positive';
+          return createCurrentCreditReadback(input[kind], kind).result;
+        },
+      },
+    });
+
+    assert.equal(result.overallStatus, 'blocked', missingKind);
+    assert.equal(result.cases[missingKind].code, 'credit_reader_receipt_invalid', missingKind);
+    assert.equal(result.cases[missingKind === 'fixedZero' ? 'positive' : 'fixedZero'].status,
+      'passed', missingKind);
+    assert.deepEqual(paths, [
+      '/runtime/v1/turns/fixed-credit-denials/read',
+      '/runtime/v1/turns/denials/read',
+    ]);
+  }
+});
+
+test('standalone credit reads reject a proof that does not bind the pinned current grant', async () => {
+  const input = createCreditReaderInput();
+  input.fixedZero.proof.sourceGrantRevision += 1;
+  const result = await runP1NativeCreditDenialReaders(input, {
+    hostCaller: {
+      async postJson() {
+        assert.fail('Host caller must not receive a mismatched proof');
+      },
+    },
+  });
+
+  assert.equal(result.overallStatus, 'blocked');
+  assert.equal(result.cases.fixedZero.code, 'credit_reader_proof_mismatch');
+});
+
 test('fixture ownership mismatch blocks before auth or native execution', async () => {
   const input = createInput();
   input.pins.fixtureScope.ownershipReceipts[0].invocationId = 'another-invocation';
@@ -1118,7 +1602,6 @@ test('four native probes pass with injected production-shaped reads, mutations, 
   assert.ok(harness.authorizations.some(request => request.action === 'sandbox-abandon'));
   assert.ok(harness.authorizations.some(request => request.action === 'workspace-volume-release'));
   assert.ok(harness.authorizations.some(request => request.action === 'network-policy-revoke'));
-
   const storage = result.probes.find(probe => probe.name === 'storage-owner-isolation');
   const network = result.probes.find(probe => probe.name === 'network-policy-datapath');
   const lifecycle = result.probes.find(probe => probe.name === 'sandbox-owner-lifecycle');

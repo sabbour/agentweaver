@@ -24,7 +24,7 @@ The outer contract is:
   environment: { baseUrl, issuer, audience, actorId, tenantId },
   pins: {
     context: { kubeContext, clusterIdentity }, namespace, providerReceipt, runtimeReceipt, storageReceipt,
-    sourceReceipt, imageReceipt, ownerFences, fixtureScope
+    sourceReceipt: { acceptedOptions, startupBudget }, imageReceipt, ownerFences, fixtureScope
   }
 }
 ```
@@ -154,6 +154,9 @@ must be digest-pinned and match the readiness receipt's image digest.
   processProvider: {
     run({ recipeId, args })
   },
+  runtimeReadinessProvider: {
+    readCurrent({ owner, placement, expectedPodUid, expectedRuntimeInstanceId })
+  },
   now() // optional, milliseconds since epoch
 }
 ```
@@ -163,6 +166,58 @@ actorId, tenantId }`; the token is held only in memory and sent as Bearer auth
 with `X-Agentweaver-Tenant`. It must never be placed in `input`, evidence,
 logs, or result objects. `authorize` returns `{ allowed: true, journey }`,
 where `journey` must exactly match a supplied opaque fixture value.
+
+## Standalone credit-denial receipt reader
+
+`run.mjs` also exports
+`runP1NativeCreditDenialReaders({ fixedZero, positive }, dependencies)`. It
+validates two independently pinned cases, but it is not part of
+`runP1NativeProbes` or the four-probe overall status.
+
+Each input pin includes owner selectors (`ownerId`, `actorId`, `tenantId`,
+`projectId`, `runId`, `sessionId`, `environmentId`), runtime instance ID,
+registration revision, execution fence, registration and source hashes, source
+grant ID and revision, expected hard credit limit, and stage. The zero-limit
+pin also has the fixed request ID and hash. The positive-limit pin has a
+dispatch ID. The two pins must use different RuntimeHost instance IDs. Each
+pin also carries its actual current context as `current` (`registration`,
+`sourceGrant`, and `sourceReceipt`) and its matching nonsecret
+`RuntimeHostSessionProof` as `proof`. Do not create these contexts from
+readiness data or from the expected pin values. Runtime, grant, request, and
+dispatch IDs must be nonempty GUIDs. A typed `maxPromptTokens` value may be
+null or an integer from 1 through 200000; other credential-like fields block.
+
+The dependency is an already-authorized Host caller with `postJson(path, body)`.
+This module supplies only these fixed read requests:
+
+```js
+postJson('/runtime/v1/turns/fixed-credit-denials/read', {
+  proof, requestId, requestHash
+});
+postJson('/runtime/v1/turns/denials/read', {
+  proof, dispatchId, stage
+});
+```
+
+The caller uses the existing `RuntimeHostSessionProof` to authorize each
+request. No Environment bearer or caller-selected URL is accepted. The Host
+returns only its existing nullable `{ receipt, evidence }` or
+`{ receipt, noSend }` pair. The validator checks the current owner binding,
+active Observe grant, current source tuple, request or dispatch, denial stage
+and limit, and complete empty-event evidence. Fixed enum values retain
+`HostPreQueue` and `HardLimitZero`; native denial wire values are
+`nativeTurnBegin` and `hardLimitReached`. Both no-send records must bind their
+native-session hash to SHA-256 of the current SDK session ID's UTF-8 bytes.
+Registration and grant expiry are checked again after each read using the
+optional `now()` clock. The reader returns safe per-case summaries, not the
+raw receipts, proof, or endpoints. Read errors are blocked without including
+their messages. A missing stored pair remains blocked; the reader never
+creates a denial record.
+
+The Host bridge source is owned separately and its acceptance is pending.
+Fake-only tests prove the client request and validation behavior; they do not
+prove that the bridge is accepted, that actual current contexts were supplied,
+or that live P1 credit-denial acceptance has run.
 
 `processProvider.run` accepts only the runner's fixed recipe IDs:
 
@@ -246,7 +301,8 @@ utility instead of `nc`, which is not installed in the AgentHost image.
    binds the activation and registration fences to its exact Pod UID and
    placement generation, and verifies exact digest-pinned image reuse plus
    `scheduled`, `imageReady`, and `started` readiness against accepted options
-   and budgets.
+   and budgets. Credit-denial receipts are a separate check and are not included
+   in this probe or its overall status.
 
 Unique marker files are removed only when their exact current owner Pod UID
 and marker contents are still observed. Final Sandbox cleanup uses the
