@@ -1,310 +1,56 @@
 # Errors
 
-## [ERR-20261013-013] moved-authority-helper-reference
+## [ERR-20261013-015] shell-rg-unavailable
 
-**Logged**: 2026-10-13T04:21:00-07:00
+**Logged**: 2026-10-13T04:38:30-07:00
 **Priority**: low
 **Status**: resolved
 **Area**: tests
 
 ### Summary
-The Broker test build found one consent path still calling the moved authority helper.
+A PowerShell validation command called `rg`, which is available as a tool but not on the shell PATH.
 
 ### Error
 ```text
-IdentityBrokerEndpoints.cs(228,13): error CS0103: The name 'UsesProjectsAuthority' does not exist in the current context
+The term 'rg' is not recognized as a name of a cmdlet, function, script file, or executable program.
 ```
 
 ### Context
-- `UsesProjectsAuthority` moved from `IdentityBrokerEndpoints` to `BrokerRunBindingAuthority`.
-- The authorize path was updated, but the consent-resume path was not.
+- The command attempted to check whether task-generated log entries remained after cleanup.
 
 ### Suggested Fix
-Update all callers when moving a shared helper, then compile the full Broker test project.
+Use the dedicated repository search tool for content searches, or use an available PowerShell-native check.
 
 ### Metadata
 - Reproducible: yes
-- Related Files: services/identity/Agentweaver.Identity.Broker/IdentityBrokerEndpoints.cs
+- Related Files: .learnings/ERRORS.md
 
 ---
 
-## [ERR-20261013-012] fake-owner-response-uri
+## [ERR-20261013-014] incorrect-parent-diff-validation
 
-**Logged**: 2026-10-13T04:15:00-07:00
+**Logged**: 2026-10-13T04:38:00-07:00
 **Priority**: low
 **Status**: resolved
 **Area**: tests
 
 ### Summary
-The fake Projects owner response omitted its originating request URI.
+A validation compared two committed log versions instead of the working file against its intended baseline.
 
 ### Error
 ```text
-QueryUsesTypedShortLivedTicketAndAcceptsValidOwnerReceipt expected Authorized but received Unavailable.
+Original error-log content is not restored exactly.
 ```
 
 ### Context
-- The Broker correctly treats a response without the exact expected request URI as unavailable.
-- The fake HTTP handler did not set `HttpResponseMessage.RequestMessage`.
+- The new log cleanup was correct, but the check compared `faafbe45^` to `faafbe45`, which necessarily includes the original inserted entries.
 
 ### Suggested Fix
-Set the originating request message on fake owner responses so controlled tests preserve the real transport contract.
+Compare the working file to `faafbe45^` when verifying restoration.
 
 ### Metadata
 - Reproducible: yes
-- Related Files: tests/Agentweaver.Identity.Broker.Tests/BrokerRunBindingAuthorityTests.cs
-
----
-
-## [ERR-20261013-011] test-clock-mismatch
-
-**Logged**: 2026-10-13T04:10:00-07:00
-**Priority**: low
-**Status**: resolved
-**Area**: tests
-
-### Summary
-The validation event handled only JwtSecurityToken, but JwtBearer supplied JsonWebToken.
-
-### Error
-```text
-AcceptsPrivateQueryTokenWithBoundedTimeProfile expected OK but received Unauthorized.
-```
-
-### Context
-- JwtBearer failed the otherwise valid request inside the custom token-validated event.
-- Directly checking the fixed-time payload profile passed, isolating the failure to the middleware security-token type.
-
-### Suggested Fix
-Handle the JsonWebToken type used by the configured JwtBearer middleware and keep coverage through the middleware itself.
-
-### Metadata
-- Reproducible: yes
-- Related Files: tests/Agentweaver.Projects.Config.Tests/BrokerRunBindingTokenValidationTests.cs
-
----
-
-## [ERR-20261013-010] test-result-namespace-import
-
-**Logged**: 2026-10-13T04:08:00-07:00
-**Priority**: low
-**Status**: resolved
-**Area**: tests
-
-### Summary
-The middleware test's minimal endpoint lacked the ASP.NET Core HTTP namespace import.
-
-### Error
-```text
-CS0103: The name 'Results' does not exist in the current context.
-```
-
-### Context
-- The focused test uses `Results.Ok()` in a minimal route.
-- The test project does not provide the namespace as a global using.
-
-### Suggested Fix
-Import Microsoft.AspNetCore.Http in the test file.
-
-### Metadata
-- Reproducible: yes
-- Related Files: tests/Agentweaver.Projects.Config.Tests/BrokerRunBindingTokenValidationTests.cs
-
----
-
-## [ERR-20261013-009] test-middleware-import
-
-**Logged**: 2026-10-13T04:07:00-07:00
-**Priority**: low
-**Status**: resolved
-**Area**: tests
-
-### Summary
-The test host did not compile because the ASP.NET middleware extension namespace was missing.
-
-### Error
-```text
-CS1061: IApplicationBuilder has no UseRouting, UseAuthentication, UseAuthorization, or UseEndpoints method.
-```
-
-### Context
-- The focused middleware test uses a TestServer pipeline without WebApplication.
-- Its extension methods require the ASP.NET Core Builder namespace.
-
-### Suggested Fix
-Import Microsoft.AspNetCore.Builder in the TestServer test file.
-
-### Metadata
-- Reproducible: yes
-- Related Files: tests/Agentweaver.Projects.Config.Tests/BrokerRunBindingTokenValidationTests.cs
-
----
-
-## [ERR-20261013-008] test-namespace-imports
-
-**Logged**: 2026-10-13T04:06:00-07:00
-**Priority**: low
-**Status**: resolved
-**Area**: tests
-
-### Summary
-The new test file was missing xUnit and hosting namespace imports.
-
-### Error
-```text
-CS0246: IAsyncLifetime, IHost, Fact, and Theory could not be found.
-```
-
-### Context
-- The focused test compile identified missing explicit using directives in the new test file.
-- Existing projects do not enable global xUnit or hosting usings.
-
-### Suggested Fix
-Include the specific test and hosting namespace imports in each new test source file.
-
-### Metadata
-- Reproducible: yes
-- Related Files: tests/Agentweaver.Projects.Config.Tests/BrokerRunBindingTokenValidationTests.cs
-
----
-
-## [ERR-20261013-007] jwt-constructor-overload-mismatch
-
-**Logged**: 2026-10-13T04:04:00-07:00
-**Priority**: low
-**Status**: resolved
-**Area**: backend
-
-### Summary
-The installed JWT library does not provide the attempted constructor overload with an explicit issued-at argument.
-
-### Error
-```text
-CS1503: cannot convert from 'System.DateTime' to 'string'
-```
-
-### Context
-- The private token needs an explicit `iat` in addition to `nbf` and `exp`.
-- The constructor overload was not supported by the repository's installed IdentityModel version.
-
-### Suggested Fix
-Add the issued-at value as an integer64 JWT claim and keep the supported not-before/expiry constructor overload.
-
-### Metadata
-- Reproducible: yes
-- Related Files: services/identity/Agentweaver.Identity.Broker/BrokerRunBindingAuthority.cs
-
----
-
-## [ERR-20261013-006] missing-nuget-assets
-
-**Logged**: 2026-10-13T04:02:00-07:00
-**Priority**: low
-**Status**: resolved
-**Area**: tests
-
-### Summary
-The Broker source and test builds initially lacked NuGet assets files.
-
-### Error
-```text
-NETSDK1004: Assets file .../project.assets.json not found.
-```
-
-### Context
-- Focused `--no-restore` builds found absent assets for the Broker source and Broker test projects.
-- Projects & Config built successfully; restoring the affected projects allowed builds and tests.
-
-### Suggested Fix
-Restore each affected project after a build reports missing assets, then repeat the focused build or test.
-
-### Metadata
-- Reproducible: yes
-- Related Files: services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj
-
----
-
-## [ERR-20261013-005] patch-context-mismatch
-
-**Logged**: 2026-10-13T04:01:00-07:00
-**Priority**: low
-**Status**: resolved
-**Area**: backend
-
-### Summary
-A source patch did not apply because its context did not match the current file.
-
-### Error
-```text
-Failed to find expected lines in Program.cs.
-```
-
-### Context
-- The patch assumed a different ordering of existing using directives and URI configuration code.
-- A focused file read established the current source context before retrying.
-
-### Suggested Fix
-Read the exact target range before preparing a context-sensitive patch.
-
-### Metadata
-- Reproducible: yes
-- Related Files: services/projects-config/Agentweaver.Projects.Config/Program.cs
-
----
-
-## [ERR-20261013-004] helper-path-mismatch
-
-**Logged**: 2026-10-13T03:58:00-07:00
-**Priority**: low
-**Status**: resolved
-**Area**: tests
-
-### Summary
-A helper source file was inspected at an assumed location instead of being located first.
-
-### Error
-```text
-Path services/identity/Agentweaver.Identity.Broker/RuntimeOwnerHttpTransport.cs does not exist.
-```
-
-### Context
-- A direct file read assumed the shared transport helper was in the Broker project.
-- A repository search had already found callers but not the helper definition.
-
-### Suggested Fix
-Use repository-scoped symbol search to locate shared helper definitions before opening a guessed path.
-
-### Metadata
-- Reproducible: yes
-- Related Files: services/identity/Agentweaver.Identity.Broker/BrokerRunBindingAuthority.cs
-
----
-
-## [ERR-20261013-003] targeted-test-path-mismatch
-
-**Logged**: 2026-10-13T03:40:00-07:00
-**Priority**: low
-**Status**: resolved
-**Area**: tests
-
-### Summary
-An initial targeted test search used production-folder paths for test files.
-
-### Error
-```text
-Search paths do not exist: services\identity\Agentweaver.Identity.Broker.Tests\IdentityBrokerEndpointTests.cs, services\projects-config\Agentweaver.Projects.Config.Tests\ProjectsConfigBrokerAuthorizationTests.cs
-```
-
-### Context
-- The tests are under `tests\Agentweaver.Identity.Broker.Tests`.
-- A follow-up glob located the correct files.
-
-### Suggested Fix
-Locate test files with a repo-scoped glob before targeted searches when their project path is uncertain.
-
-### Metadata
-- Reproducible: yes
-- Related Files: tests/Agentweaver.Identity.Broker.Tests/IdentityBrokerEndpointTests.cs
+- Related Files: .learnings/ERRORS.md
 
 ---
 
