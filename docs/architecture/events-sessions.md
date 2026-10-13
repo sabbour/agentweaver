@@ -263,10 +263,14 @@ effective model from the current Orchestrator-owned SDK source snapshot. It uses
 the existing Cost provider quote path without recording usage or exposing the
 quote amount. An unavailable binding or quote remains `Unpriced` and prevents
 the runtime from becoming ready.
-The current SDK source also lacks proven usage-to-A2A affinity, so positive-hard-capped
-Hosted Copilot activation fails with `runtime_usage_affinity_unavailable` before readiness
-or cost-turn acquisition. Any already-started turn with unknown ownership remains held;
-its native receipt is retained and cannot release a cost turn without the exact message ID.
+The SDK source still does not prove per-turn usage-to-A2A affinity for arbitrary or
+legacy callbacks. Workflow-bound positive-hard-capped Hosted Copilot activation uses
+the prepared dispatch and begin path with current whole-run priced totals; it denies
+the next dispatch when observed totals reach the hard limit. This does not attribute a
+whole-run total to one turn or claim that accounting is final. An unbound positive-cap
+registration still fails with `runtime_usage_affinity_unavailable` before readiness.
+Any already-started turn with unknown ownership remains held; its native receipt is
+retained and cannot release a cost turn without the exact message ID.
 The transaction commits the price, rate card, ledger, source hash, receipt, and
 consumer inbox before it returns a no-store accounting acknowledgment.
 It repeats current Core authority after transaction waits, including duplicate requests.

@@ -280,10 +280,12 @@ internal sealed class RuntimeUsageSourceStore(
         long revision;
         bool warningEmitted;
         bool hardExhausted;
+        // The legacy column stores a ledger-event count, not an SDK journal cursor.
         await using (var read = new NpgsqlCommand($"""
             SELECT root_session_id, tenant_id, accepted_selection_hash, execution_fence,
                 copilot_soft_credit_limit, copilot_hard_credit_limit, cost_rate_scope_identity,
-                copilot_aic_floor, accounted_through_event_position, usage_witness_digest,
+                copilot_aic_floor, accounted_through_event_position AS accounted_through_ledger_event_count,
+                usage_witness_digest,
                 owner_revision, soft_warning_emitted, hard_cap_exhausted
             FROM {_guards} WHERE project_id = @project AND run_id = @run FOR UPDATE
             """, connection, transaction))
@@ -306,7 +308,7 @@ internal sealed class RuntimeUsageSourceStore(
         }
         await using (var update = new NpgsqlCommand($"""
             UPDATE {_guards}
-            SET copilot_aic_floor = @floor, accounted_through_event_position = @position,
+            SET copilot_aic_floor = @floor, accounted_through_event_position = @ledgerEventCount,
                 usage_witness_digest = @digest, soft_warning_emitted = @warning,
                 hard_cap_exhausted = @exhausted, owner_revision = owner_revision + 1,
                 updated_at = clock_timestamp()
@@ -315,7 +317,8 @@ internal sealed class RuntimeUsageSourceStore(
         {
             AddNativeScope(update, registration, Guid.Empty);
             update.Parameters.AddWithValue("floor", NpgsqlDbType.Numeric, observed);
-            update.Parameters.AddWithValue("position", NpgsqlDbType.Bigint, snapshot.CopilotTotals.Events);
+            update.Parameters.AddWithValue(
+                "ledgerEventCount", NpgsqlDbType.Bigint, snapshot.CopilotTotals.Events);
             update.Parameters.AddWithValue("digest", NpgsqlDbType.Char, digest);
             update.Parameters.AddWithValue("warning", NpgsqlDbType.Boolean, warningEmitted || limits.SoftReached);
             update.Parameters.AddWithValue("exhausted", NpgsqlDbType.Boolean, hardExhausted || limits.HardReached);
@@ -333,7 +336,7 @@ internal sealed class RuntimeUsageSourceStore(
                 {
                     notificationId, binding.ProjectId, binding.RunId, rootSessionId,
                     binding.ExecutionFence, binding.CopilotSoftCreditLimit, observedCredits = observed,
-                    accountingPosition = snapshot.CopilotTotals.Events, costIdentity
+                    ledgerEventCount = snapshot.CopilotTotals.Events, costIdentity
                 }), timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
         }
         return !hardExhausted && !limits.HardReached;

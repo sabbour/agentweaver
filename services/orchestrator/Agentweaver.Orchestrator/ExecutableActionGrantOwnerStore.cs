@@ -33,6 +33,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
     {
         RuntimeActionContract.Validate(request);
         var binding = registration.Binding;
+        RuntimeActionContract.RequireNativeDispatchAdmission(binding, request);
         if (request.RuntimeInstanceId != registration.RuntimeInstanceId ||
             request.RegistrationRevision != registration.Revision ||
             request.ExecutionFence != binding.ExecutionFence ||

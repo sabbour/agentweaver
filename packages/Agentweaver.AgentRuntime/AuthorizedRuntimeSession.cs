@@ -108,7 +108,8 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
     internal void RequireSupportedCostTurnAffinity()
     {
         if (Registration.Binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
-            Registration.Binding.CopilotHardCreditLimit is > 0)
+            Registration.Binding.CopilotHardCreditLimit is > 0 &&
+            Registration.Binding.WorkflowStepId is null)
             throw new RuntimeAuthorizationException("runtime_usage_affinity_unavailable");
     }
 

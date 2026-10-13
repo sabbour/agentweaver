@@ -25,7 +25,7 @@ export function runP1DispatchRecoveryProbes() {
   const probes = [
     blockedProbe(
       'numeric-copilot-dispatch-boundaries',
-      'AgentHost supports MaxModelTurns only for workflow-bound registrations; unbound MaxModelTurns, MaxToolCalls, and MaxPromptTokens remain unsupported. A positive HostedCopilot hard credit limit is also rejected without proven usage-to-turn affinity. No current owner observer binds an attempted message ID and request hash to the denial, unchanged send state, and native event evidence.',
+      'AgentHost supports MaxModelTurns and positive HostedCopilot hard credit limits only for workflow-bound registrations using owner-prepared dispatch and begin admission; unbound MaxModelTurns, MaxToolCalls, MaxPromptTokens, and positive hard credit limits remain unsupported. Existing whole-run priced usage denies the next dispatch at or above its observed floor, but late usage cannot revoke a turn already admitted; no all-usage-final claim is made. This runner has no accepted source-owned observer for the actual floor, guard revision, denial/send state, soft-limit warning, and bounded native cursor evidence.',
       sourceOnlyEvidence(
         [
           {
@@ -51,7 +51,10 @@ export function runP1DispatchRecoveryProbes() {
             receipt: 'priced-usage-and-credit-guard',
             requiredFacts: [
               'actual priced usage receipt and cost identity for prior admitted native turns',
-              'current observed credit floor, event position, exhaustion state and owner revision',
+              'whole-run priced Copilot total across children, observed ledger count/digest/rate identity, and current floor',
+              'current snapshot/guard revision and exhaustion state; reject partial or unpriced observations',
+              'one durable soft-limit warning at the first supported observed-cost boundary, without duplicates on replay or concurrent attempts',
+              'later priced totals advance the observed floor and ledger-event count',
             ],
           },
           {
@@ -77,7 +80,7 @@ export function runP1DispatchRecoveryProbes() {
           {
             path: 'services/orchestrator/Agentweaver.Orchestrator/RuntimeUsageSourceStore.cs',
             symbol: 'ReconcileNativeCreditLimitsAsync',
-            detail: 'Private owner operation; a pricing snapshot alone is not native no-send evidence.',
+            detail: 'The workflow-bound owner path uses conservative whole-run priced totals and a current snapshot under the native dispatch lock to deny the next turn at or above the observed floor. At the soft limit it queues one durable warning; replays and concurrent admissions do not duplicate it, while later priced totals advance the floor and ledger-event count. Late authenticated usage affects the next snapshot; an already admitted turn is not revoked and this is not an all-usage-final claim.',
           },
         ],
       ),
@@ -101,7 +104,8 @@ export function runP1DispatchRecoveryProbes() {
           requiredFacts: [
             'actual old lease/resource/Pod and new Sandbox resource/Pod identities from ordinary abandon, reconciliation and reprovision',
             'current Environment/provider fences, lease revisions and preserved Core execution fence; changed provider/lease fences stated explicitly',
-            'exact retained or restored workspace volume/resource/data generation and actual new Host native HTTPS endpoint evidence',
+            'exact retained or restored workspace volume/resource/data generation and actual new Host native HTTPS endpoint',
+            'verify the endpoint against the receiver expected audience and certificate DNS name; a missing or mismatched deployment prerequisite blocks acceptance even when registration/readiness succeeds',
             'current owner-approved bootstrap profile mapped to the exact replacement ProviderResourceRef',
           ],
         },
@@ -142,7 +146,7 @@ export function runP1DispatchRecoveryProbes() {
         {
           path: 'packages/Agentweaver.AgentRuntime/RuntimeAgentHost.cs',
           symbol: 'ReadinessAsyncCore',
-          detail: 'Ordinary readiness omits RuntimeSessionRecovery mode and cache receipt; ResumeCache is populated only by the excluded P2 manifest-resume flow.',
+          detail: 'Ordinary readiness omits RuntimeSessionRecovery mode and cache receipt; ResumeCache is populated only by the excluded P2 manifest-resume flow. Readiness/registration alone also cannot prove the exact endpoint matches the receiver expected audience and certificate DNS name.',
         },
       ]),
     ),

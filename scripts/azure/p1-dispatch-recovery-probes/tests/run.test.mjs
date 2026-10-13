@@ -39,6 +39,18 @@ test('source-only result keeps both required acceptance slots blocked without ru
     numeric.evidence.sourceGates.map(gate => gate.code).filter(Boolean),
     ['runtime_numeric_limits_unsupported', 'runtime_usage_affinity_unavailable'],
   );
+  const usageReceipt = numeric.evidence.requiredReceipts.find(receipt => receipt.owner === 'Events');
+  assert.ok(usageReceipt.requiredFacts.some(fact =>
+    fact.includes('whole-run priced Copilot total across children')));
+  assert.ok(usageReceipt.requiredFacts.some(fact =>
+    fact.includes('snapshot/guard revision')));
+  assert.ok(usageReceipt.requiredFacts.some(fact =>
+    fact.includes('one durable soft-limit warning')));
+  assert.ok(usageReceipt.requiredFacts.some(fact =>
+    fact.includes('later priced totals advance')));
+  assert.match(numeric.reason, /only for workflow-bound registrations/);
+  assert.match(numeric.evidence.sourceGates[2].detail, /one durable warning/);
+  assert.match(numeric.evidence.sourceGates[2].detail, /not an all-usage-final claim/);
   const restart = result.probes[1];
   assert.match(restart.reason, /P2 manifest suspend\/resume path is explicitly excluded/);
   assert.deepEqual(restart.evidence.sourceGates.map(gate => gate.path), [
@@ -52,6 +64,13 @@ test('source-only result keeps both required acceptance slots blocked without ru
     'ordinary-runtime-recovery-observation',
     'gate-join-result-and-no-duplicate',
   ]);
+  const placementReceipt = restart.evidence.requiredReceipts.find(
+    receipt => receipt.receipt === 'ordinary-replacement-placement',
+  );
+  assert.ok(placementReceipt.requiredFacts.some(fact =>
+    fact.includes('receiver expected audience and certificate DNS name')));
+  assert.ok(placementReceipt.requiredFacts.some(fact =>
+    fact.includes('even when registration/readiness succeeds')));
 });
 
 test('fixed command emits the same blocked contract and accepts no runtime input', () => {

@@ -34,8 +34,11 @@ Missing, ambiguous, expired, or changed registrations do not produce a current r
 Fixed-work sessions use their retained execution-checkpoint association instead of an open WorkPlan item.
 The association must match the parent, child, workflow, plan, agent, model, selection hash, fence, and decision version.
 Accepted numeric and credit limits propagate without changing legacy null configuration.
-Orchestrator reserves model sends and registered tool invocations through existing durable owner records.
-AgentHost narrows prompt capacity through the actual SDK configuration.
+Workflow-bound `MaxModelTurns` and positive Hosted Copilot hard credit limits use
+the owner-admitted native dispatch path. Unbound `MaxModelTurns`, `MaxToolCalls`,
+and `MaxPromptTokens` remain unsupported and fail before SDK setup.
+The SDK has prompt-capacity configuration, but that alone does not establish
+end-to-end limit enforcement.
 These boundaries do not count the SDK's internal model API calls.
 
 Before native session creation, AgentHost reads skills through the current runtime
@@ -84,7 +87,7 @@ sequenceDiagram
     participant O as Orchestrator
     participant I as Identity
     participant E as Environment
-    Note over H: Permit MaxModelTurns only for workflow-bound registrations; reject unsupported numeric limits before SDK configuration
+    Note over H: Permit MaxModelTurns and positive Hosted Copilot hard caps only for workflow-bound dispatches; reject other numeric limits before SDK configuration
     C->>H: GET /runtime/v1/readiness with Broker bearer
     H->>O: Revalidate current registration
     O-->>H: Current registration or denial
@@ -94,7 +97,7 @@ sequenceDiagram
     E-->>H: Current lease and startup observations
     H-->>C: RuntimeHostReadinessReceipt (no-store)
     Note over H: No SDK start or turn send
-    Note over C,H: Positive hard-capped Hosted activation is rejected before this readiness flow until usage-to-A2A affinity is supported
+    Note over C,H: Unbound positive hard-capped Hosted activation is rejected; workflow-bound dispatches use owner admission
 ```
 
 Runtime responses use `Cache-Control: no-store`.
@@ -111,9 +114,13 @@ Refresh tokens and OAuth client secrets stay inside Identity and its protected s
 BYOK uses the exact selected `SecretRef` and explicit native SDK Provider configuration without Copilot authentication or catalog lookup.
 Neither a cache nor a submitted connection ID grants permission.
 The pinned SDK does not prove which A2A send owns a native usage callback.
-Until that affinity is supported, Hosted Copilot with a positive hard credit limit fails activation with
-`runtime_usage_affinity_unavailable`; the prepared session is cleaned up and the host does not become ready.
-An omitted limit keeps legacy startup, zero still permits startup but blocks dispatch, and BYOK remains token-metered.
+Workflow-bound Hosted Copilot with a positive hard credit limit uses the
+owner-prepared dispatch and begin path, which checks current whole-run priced
+usage before each new native send. An unbound positive hard limit still fails
+activation with `runtime_usage_affinity_unavailable`; the prepared session is
+cleaned up and the host does not become ready. An omitted limit keeps legacy
+startup, zero still permits startup but blocks dispatch, and BYOK remains
+token-metered.
 
 The immutable Projects selection's `maxModelTurns`, `maxToolCalls`, and `maxPromptTokens` values are carried
 through `RuntimeOwnerContext` into the registered `RuntimeBinding`. `maxModelTurns` is supported only for
@@ -121,8 +128,11 @@ workflow-bound registrations, whose native sends require the prepared-dispatch, 
 admission path before SDK send. An unbound `maxModelTurns`, any `maxToolCalls`, or any `maxPromptTokens` still
 fails activation with `runtime_numeric_limits_unsupported`, before SDK session creation, readiness, or
 model/tool invocation. Absent values preserve the legacy path. The RuntimeAction owner also rejects unsupported
-numeric bindings before issuing an action grant. This wiring does not establish live boundary acceptance; the
-P1 dispatch check remains blocked until actual owner receipts prove the limit boundary and no-send result.
+numeric bindings before issuing an action grant. Positive workflow-bound Hosted Copilot hard limits use the same prepared
+dispatch and begin checks against observed whole-run priced usage. This wiring
+does not establish live boundary acceptance; the P1 dispatch check remains
+blocked until actual owner receipts prove the limit boundary, soft-warning
+deduplication, later floor advancement, and no-send result.
 
 AgentHost and the enabled Events native consumer load the same server-owned
 `AgentHost:ModelBindings` map and required `AgentHost:ModelBindingsRevision`.
@@ -172,7 +182,7 @@ Unsupported control characters, such as NUL, deny before dispatch.
 It does not interrupt an active native turn.
 
 Hosted Copilot runs with no hard credit limit retain legacy startup and do not require a price quote.
-A zero hard limit permits startup but blocks model-turn dispatch; a positive hard limit requires both a priceable source and proven usage-to-A2A affinity before readiness or cost admission.
+A zero hard limit permits startup but blocks model-turn dispatch. A positive hard limit requires a priceable source and workflow-bound dispatch admission against observed whole-run usage; an unbound positive hard limit is rejected before readiness.
 BYOK remains token-metered and does not use the Copilot nano-AIU price preflight.
 An exact message replay shares the original completion; changed content under the same ID denies.
 Completed responses remain available for the configured host lifetime, independent of the pending-turn limit.
@@ -180,7 +190,7 @@ The configured pending-turn limit rejects excess work explicitly.
 
 ### Numeric budget boundaries
 
-`MaxModelTurns` bounds owner-admitted native sends across the whole run.
+For workflow-bound registrations, `MaxModelTurns` bounds owner-admitted native sends across the whole run.
 Preparation reserves one slot in the existing immutable MAF dispatch table before a new send.
 The root owner lock serializes reservations across child runtimes.
 Exact prepared replay uses the same slot.
@@ -189,25 +199,16 @@ A sending or uncertain dispatch cannot be resent.
 The model action grant must match the prepared dispatch, current registration, and exact prompt hash.
 The SDK exposes no pre-model admission hook; this limit does not count internal model API calls.
 
-`MaxToolCalls` bounds registered pre-tool invocations across the whole run.
-Current AGT Policy must allow the invocation before the owner reserves its slot.
-The owner stores the invocation event ID and exact request hash in its existing outbox.
-A root-run advisory lock serializes these reservations across child runtimes.
-HTTP retry reuses that event ID; identical arguments on a new invocation receive a new ID.
-Permission checks revalidate authority but do not consume a second tool slot.
-The native pre-tool hook consumes the slot before the tool can execute.
-Changed requests, missing reservations, exhausted capacity, or unavailable authority deny the invocation.
+`MaxToolCalls` remains unsupported. A registration with this limit fails before
+SDK setup with `runtime_numeric_limits_unsupported`; no runtime tool-call limit
+is claimed.
 
-`MaxPromptTokens` is per-prompt/context capacity, not cumulative run usage.
-Hosted sessions use the actual catalog's prompt capacity, or its context-window capacity when prompt capacity is absent.
-An optional server-owned `PromptCapacityTokens` can narrow that capacity further.
-BYOK requires this server-owned concrete capacity when a prompt limit is configured.
-The effective capacity is the minimum of the accepted limit and those model capacities.
-AgentHost passes it through the actual SDK model capability override and BYOK provider configuration.
-Unknown capacity denies startup; the host does not estimate tokens or truncate prompt bytes.
-The effective capacity becomes an immutable SDK-source and session-material pin.
-Resume retains that pin if current capacity increases, and rejects a smaller current capacity before the SDK resume call.
-Capability metadata alone does not prove live token enforcement or a hard-truncation guarantee.
+`MaxPromptTokens` remains unsupported. A registration with this limit fails
+before SDK setup with `runtime_numeric_limits_unsupported`. The SDK can accept
+prompt-capacity configuration and the session factory can pin that value, but
+these facts do not prove whole-request admission or an N/N+1 no-send boundary.
+Do not rely on this setting until an approved increment demonstrates that
+boundary for hosted and BYOK requests, including create and resume.
 
 Each built-in tool approval checks current owner authority and Policy again.
 The pre-tool callback checks Policy without reserving a tool slot.
@@ -278,7 +279,12 @@ For configured hosted credit limits, begin reads the existing Events pricing sna
 It validates the pinned zero-work quote and fully priced observed Copilot totals.
 Missing or unpriced pricing cannot authorize capped native work.
 The root owner lock serializes admission and its durable observed-credit guard.
-At the soft limit, it queues one durable warning event through the existing outbox.
+When a valid whole-run pricing snapshot first reaches or exceeds the configured
+soft-credit limit, the guard queues one durable warning event through the existing
+outbox. Replays, concurrent admissions, and later snapshots do not duplicate that
+warning; later priced totals still advance the observed-credit floor and ledger-event
+count. These are admission-time observations, not immediate per-call settlement:
+costs not yet visible in Events may be priced later.
 At or above the hard limit, it records exhaustion and denies new dispatch.
 The currently executing turn can report usage above the limit; the next dispatch cannot start.
 Another sending or accounting-pending dispatch blocks hard-capped admission.

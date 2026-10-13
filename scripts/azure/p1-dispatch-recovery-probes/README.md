@@ -37,32 +37,40 @@ status; the full P1 result must remain incomplete while either slot is blocked.
 workflow-bound registrations, whose native sends use owner-prepared dispatch
 and begin admission. An unbound `MaxModelTurns`, any `MaxToolCalls`, or any
 `MaxPromptTokens` still fails before SDK setup with
-`runtime_numeric_limits_unsupported`. A positive HostedCopilot hard credit
-limit is separately denied with `runtime_usage_affinity_unavailable` until
-actual native usage can be bound to its platform turn. The Orchestrator's
-existing prepared-dispatch reservation and private credit reconciliation
-methods do not make the missing source-observed boundary receipts available.
+`runtime_numeric_limits_unsupported`. Positive HostedCopilot hard credit
+limits are supported for workflow-bound registrations through owner-prepared
+dispatch and begin admission. Unbound registrations still deny positive hard
+limits with `runtime_usage_affinity_unavailable`.
 
-The smallest safe production repair is conditional support, not removal of the
-guard. Orchestrator must expose a current-authorized owner observation for the
-accepted selection/fence, exact checkpoint ID/parent/revision, registration and
-source identity, dispatch ID/request hash/state/revision, and actual priced
-credit guard. For a denial, it must bind the exact attempt to a current owner
-denial and unchanged send state, with bounded native event/cursor evidence that
-distinguishes no-send from uncertainty. Positive HostedCopilot hard caps remain
-unsupported until real native usage is associated with its platform turn and
-joined through Events receipts. A price quote or zero-credit denial is not
-positive at/beyond hard-limit acceptance.
+The existing owner path already maintains conservative whole-run priced
+Copilot totals across child runs. Before admitting a native workflow turn, the
+Orchestrator reads the current credit floor under the common dispatch lock;
+pending or sending siblings block another admission, and a new turn at or
+above the observed floor is denied. Authenticated late usage changes the next
+snapshot but does not revoke a turn already admitted. This is post-paid
+next-dispatch protection, not a claim that all usage is final. A genuine
+acceptance receipt must identify the whole-run total, ledger count/digest/rate
+identity, current snapshot and guard revision, exact dispatch intent and
+checkpoint, the denial and unchanged send state, and bounded native cursor
+facts for the attempt. Copilot usage totals are not native journal positions,
+and a missing event alone is not proof of no send.
 
-AgentHost now permits `MaxModelTurns` only when every constrained send uses the
+The fixed command cannot exercise the current production guard or obtain these
+source-owned live receipts. The check must stay blocked until a fixed owner-facing
+observation path can report the actual run floor, guard revision, denial/send
+state, and native cursor evidence. It must also show one durable warning when a
+whole-run priced snapshot first reaches the soft limit, no duplicate warning on
+replay or concurrent attempts, and later priced totals advancing the floor and
+ledger-event count. Keep unbound and legacy dispatches denied; do not weaken
+pending/indeterminate sibling checks or claim that an already admitted turn can
+be recalled.
+
+AgentHost permits `MaxModelTurns` only when every constrained send uses the
 prepared-dispatch, action-grant and native-begin path. Other limits remain
 unsupported until their exact native hook or capacity enforcement is wired and
 tested. Existing no-resend, pending-accounting and sticky exhaustion rules must
-remain in force. The executable check still needs source-owned actual priced
-usage and native turn receipts for admitted boundary sends, plus a current owner
-denial and bounded event evidence for the attempted no-send boundary. Estimated
-counts, a failed dispatch response, a pricing snapshot, or a missing journal
-event is not proof of no send.
+remain in force. Estimated counts, a failed dispatch response, an old pricing
+snapshot, or a missing journal event is not proof of no send.
 
 ## Missing P1 replacement and recovery evidence
 
@@ -80,14 +88,18 @@ no owner-authorized ordinary producer for a new mapping. Even after a valid
 replacement mapping exists, ordinary Host readiness reports registration,
 fences, placement phases, image, and source grant, but not
 `RuntimeSessionRecovery` mode or the cache receipt; the optional `ResumeCache`
-is set only by the excluded P2 flow.
+is set only by the excluded P2 flow. Readiness or registration alone also
+cannot prove that the replacement's native endpoint matches the receiver's
+expected audience and certificate DNS name.
 
 The ordinary P1 path needs owner receipts for accepted run/actor scope and
 gate/join state; MAF checkpoint ID, parent, revision and dispatch result; old
 and replacement Sandbox identities and current Environment/provider fences; a
-verified replacement profile and native endpoint; fresh registration and
+verified replacement profile and native endpoint checked against the
+receiver's expected audience and certificate DNS name; fresh registration and
 bootstrap receipts with the current source grant; and the real recovery mode
-plus cache consumption or authenticated journal evidence.
+plus cache consumption or authenticated journal evidence. Registration must
+not conceal a missing or mismatched endpoint deployment prerequisite.
 
 The final before/after observation must show the same logical checkpoint,
 work plan and dispatch result, the preserved Core execution fence, and no

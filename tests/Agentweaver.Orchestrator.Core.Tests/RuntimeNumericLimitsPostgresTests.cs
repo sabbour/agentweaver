@@ -160,6 +160,221 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     }
 
     [Fact]
+    public async Task PositiveHardCreditGrantRequiresPreparedDispatchWithoutAModelTurnLimit()
+    {
+        await RegisterPositiveHardCreditAsync(0);
+        Assert.Null(_registrations[0].Binding.MaxModelTurns);
+        var request = ModelAction(0, dispatchId: null);
+
+        Assert.Equal("runtime_model_turn_admission_required",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => IssueAsync(0, request))).Code);
+        Assert.Equal(0, await CountRuntimeGrantsAsync());
+
+        Assert.True(await PrepareAsync(0, PricedSnapshot(0, 0m, 0)));
+        await IssueAsync(0, request with { DispatchId = _intents[0].MessageId });
+        Assert.Equal(1, await CountRuntimeGrantsAsync());
+        Assert.Equal("runtime_model_turn_admission_required",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                IssueAsync(0, request with { EventId = Guid.NewGuid(), DispatchId = Guid.NewGuid() }))).Code);
+        Assert.Equal(1, await CountRuntimeGrantsAsync());
+    }
+
+    [Theory]
+    [InlineData(5)]
+    [InlineData(6)]
+    public async Task ObservedWholeRunCreditFloorDeniesPrepareAtOrAboveHardLimit(int observedCredits)
+    {
+        await RegisterPositiveHardCreditAsync(0);
+
+        Assert.False(await PrepareAsync(0, PricedSnapshot(0, observedCredits, 1)));
+        Assert.Equal(0, await CountAsync("maf_execution_dispatches"));
+        var guard = await ReadCreditGuardAsync();
+        Assert.Equal(observedCredits, guard.Floor);
+        Assert.Equal(1, guard.LedgerEventCount);
+        Assert.True(guard.HardCapExhausted);
+        Assert.False(await PrepareAsync(0, PricedSnapshot(0, observedCredits, 1)));
+        Assert.Equal(0, await CountAsync("maf_execution_dispatches"));
+    }
+
+    [Fact]
+    public async Task ObservedSoftCreditBoundaryEmitsOneWarningAndLaterTotalsStillAdvanceTheFloor()
+    {
+        await RegisterPositiveHardCreditAsync(0, softLimit: 3m);
+        await RegisterPositiveHardCreditAsync(1, softLimit: 3m);
+
+        var atBoundary = PricedSnapshot(0, 3m, 1);
+        var prepared = await Task.WhenAll(
+            PrepareAsync(0, atBoundary),
+            PrepareAsync(1, PricedSnapshot(1, 3m, 1)));
+
+        Assert.All(prepared, Assert.True);
+        Assert.Equal(1, await CountSoftCreditWarningsAsync());
+        var boundaryGuard = await ReadCreditGuardAsync();
+        Assert.Equal(3m, boundaryGuard.Floor);
+        Assert.Equal(1, boundaryGuard.LedgerEventCount);
+        Assert.False(boundaryGuard.HardCapExhausted);
+
+        Assert.True(await PrepareAsync(0, atBoundary));
+        Assert.Equal(1, await CountSoftCreditWarningsAsync());
+
+        Assert.True(await PrepareAsync(1, PricedSnapshot(1, 4m, 2)));
+        var laterGuard = await ReadCreditGuardAsync();
+        Assert.Equal(4m, laterGuard.Floor);
+        Assert.Equal(2, laterGuard.LedgerEventCount);
+        Assert.False(laterGuard.HardCapExhausted);
+        Assert.True(laterGuard.OwnerRevision > boundaryGuard.OwnerRevision);
+        Assert.Equal(1, await CountSoftCreditWarningsAsync());
+    }
+
+    [Fact]
+    public async Task BeginRechecksCreditFloorAndLeavesDeniedIntentPrepared()
+    {
+        await RegisterPositiveHardCreditAsync(0);
+        Assert.True(await PrepareAsync(0, PricedSnapshot(0, 4m, 1)));
+
+        Assert.Null(await BeginAsync(0, PricedSnapshot(0, 5m, 2)));
+        Assert.Equal("prepared", await ReadDispatchStateAsync(_intents[0].MessageId));
+        Assert.Equal(0, await NativeDispatchCountAsync("sending"));
+        var guard = await ReadCreditGuardAsync();
+        Assert.Equal(5m, guard.Floor);
+        Assert.Equal(2, guard.LedgerEventCount);
+        Assert.True(guard.HardCapExhausted);
+    }
+
+    [Fact]
+    public async Task ConcurrentCreditBoundChildrenCannotBothBegin()
+    {
+        await RegisterPositiveHardCreditAsync(0);
+        await RegisterPositiveHardCreditAsync(1);
+        var belowLimit = PricedSnapshot(0, 0m, 0);
+        Assert.True(await PrepareAsync(0, belowLimit));
+        Assert.True(await PrepareAsync(1, PricedSnapshot(1, 0m, 0)));
+
+        var admissions = await Task.WhenAll(
+            TryReserveAsync(async () => await BeginAsync(0, belowLimit) is not null,
+                "runtime_native_accounting_pending"),
+            TryReserveAsync(async () => await BeginAsync(1, PricedSnapshot(1, 0m, 0)) is not null,
+                "runtime_native_accounting_pending"));
+
+        Assert.Single(admissions, admitted => admitted);
+        Assert.Single(admissions, admitted => !admitted);
+        Assert.Equal(1, await NativeDispatchCountAsync("sending"));
+    }
+
+    [Theory]
+    [InlineData("sending")]
+    [InlineData("terminal_pending_accounting")]
+    [InlineData("indeterminate")]
+    public async Task CreditBoundBeginBlocksWhenAnotherChildIsSendingOrUncertain(string siblingState)
+    {
+        await RegisterPositiveHardCreditAsync(0);
+        await RegisterPositiveHardCreditAsync(1);
+        Assert.True(await PrepareAsync(0, PricedSnapshot(0, 0m, 0)));
+        Assert.True(await PrepareAsync(1, PricedSnapshot(1, 0m, 0)));
+        var first = Assert.IsType<RuntimeNativeTurnAdmissionReceipt>(
+            await BeginAsync(0, PricedSnapshot(0, 0m, 0)));
+        if (siblingState != "sending")
+            await SetDispatchStateAsync(first.MessageId, siblingState);
+
+        Assert.Equal("runtime_native_accounting_pending",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                BeginAsync(1, PricedSnapshot(1, 0m, 0)))).Code);
+        Assert.Equal("prepared", await ReadDispatchStateAsync(_intents[1].MessageId));
+    }
+
+    [Fact]
+    public async Task LateWholeRunUsageBlocksTheNextPrepareWithoutRevokingAnAdmittedTurn()
+    {
+        await RegisterPositiveHardCreditAsync(0);
+        await RegisterPositiveHardCreditAsync(1);
+        Assert.True(await PrepareAsync(0, PricedSnapshot(0, 4m, 1)));
+        Assert.IsType<RuntimeNativeTurnAdmissionReceipt>(
+            await BeginAsync(0, PricedSnapshot(0, 4m, 1)));
+
+        Assert.False(await PrepareAsync(1, PricedSnapshot(1, 5m, 2)));
+        Assert.Equal("sending", await ReadDispatchStateAsync(_intents[0].MessageId));
+        Assert.Equal(1, await CountAsync("maf_execution_dispatches"));
+        var guard = await ReadCreditGuardAsync();
+        Assert.Equal(5m, guard.Floor);
+        Assert.Equal(2, guard.LedgerEventCount);
+        Assert.True(guard.HardCapExhausted);
+    }
+
+    [Fact]
+    public async Task PositiveCreditDispatchEvidenceStaysPartialAndUnserialized()
+    {
+        await RegisterPositiveHardCreditAsync(0);
+        Assert.True(await PrepareAsync(0, PricedSnapshot(0, 1m, 1)));
+        var admission = Assert.IsType<RuntimeNativeTurnAdmissionReceipt>(
+            await BeginAsync(0, PricedSnapshot(0, 1m, 1)));
+        var observation = NativeObservation(admission, Guid.NewGuid()) with { UsageEventIds = [] };
+        var recorded = await RecordNativeAsync(admission, observation);
+
+        var evidence = await ReadDispatchEvidenceAsync(admission.MessageId);
+        Assert.Equal("partial", evidence.ReportStatus);
+        Assert.False(evidence.HardCapSerialized);
+        Assert.Null(evidence.SourceCompletionManifestHash);
+        Assert.Equal(recorded.CanonicalPayloadHash, evidence.ReportHash);
+    }
+
+    [Theory]
+    [InlineData("partial")]
+    [InlineData("source")]
+    public async Task PartialOrForeignCostSnapshotCannotPrepareHardCappedDispatch(string fault)
+    {
+        await RegisterPositiveHardCreditAsync(0);
+        var snapshot = fault switch
+        {
+            "partial" => PricedSnapshot(0, 1m, 1, isFullyPriced: false),
+            "source" => PricedSnapshot(0, 1m, 1, sourceHash: new string('f', 64)),
+            _ => throw new ArgumentOutOfRangeException(nameof(fault))
+        };
+
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => PrepareAsync(0, snapshot));
+        Assert.Equal(0, await CountAsync("maf_execution_dispatches"));
+    }
+
+    [Fact]
+    public async Task ChangedCostRateOrRevokedSourceGrantCannotBeginHardCappedDispatch()
+    {
+        await RegisterPositiveHardCreditAsync(0);
+        Assert.True(await PrepareAsync(0, PricedSnapshot(0, 1m, 1)));
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            BeginAsync(0, PricedSnapshot(0, 1m, 1, rateVersion: "2")));
+        Assert.Equal("prepared", await ReadDispatchStateAsync(_intents[0].MessageId));
+
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            BeginAsync(0, PricedSnapshot(0, 1m, 1), _grants[0] with
+            {
+                State = RuntimeCredentialState.Revoked,
+                Revision = _grants[0].Revision + 1
+            }));
+        Assert.Equal("prepared", await ReadDispatchStateAsync(_intents[0].MessageId));
+    }
+
+    [Fact]
+    public async Task CreditFloorAndOccupiedDispatchSlotSurviveOwnerRestartAndReplay()
+    {
+        await RegisterPositiveHardCreditAsync(0);
+        await RegisterPositiveHardCreditAsync(1);
+        var belowLimit = PricedSnapshot(0, 4m, 1);
+        Assert.True(await PrepareAsync(0, belowLimit));
+        Assert.True(await PrepareAsync(1, PricedSnapshot(1, 4m, 1)));
+        Assert.IsType<RuntimeNativeTurnAdmissionReceipt>(await BeginAsync(0, belowLimit));
+        var beforeReplay = await ReadCreditGuardAsync();
+
+        Assert.Equal("runtime_native_turn_indeterminate",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                BeginAsync(0, belowLimit))).Code);
+        Assert.Equal("runtime_native_accounting_pending",
+            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+                BeginAsync(1, PricedSnapshot(1, 4m, 1)))).Code);
+        Assert.Equal(beforeReplay, await ReadCreditGuardAsync());
+        Assert.Equal("sending", await ReadDispatchStateAsync(_intents[0].MessageId));
+        Assert.Equal("prepared", await ReadDispatchStateAsync(_intents[1].MessageId));
+    }
+
+    [Fact]
     public async Task PermissionCheckDoesNotDebitAndExactToolRetrySurvivesRestartAtTheCap()
     {
         var permission = Action(0, toolInvocation: false);
@@ -492,6 +707,67 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         return (long)(await command.ExecuteScalarAsync())!;
     }
 
+    private async Task<string?> ReadDispatchStateAsync(Guid dispatchId)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT dispatch_state FROM "{_schema}".maf_execution_dispatches
+            WHERE project_id = @project AND run_id = @run AND dispatch_id = @dispatch
+            """, connection);
+        command.Parameters.AddWithValue("project", _root.ProjectId);
+        command.Parameters.AddWithValue("run", _root.RunId);
+        command.Parameters.AddWithValue("dispatch", dispatchId);
+        return await command.ExecuteScalarAsync() as string;
+    }
+
+    private async Task<(string ReportStatus, bool HardCapSerialized, string? SourceCompletionManifestHash, string ReportHash)>
+        ReadDispatchEvidenceAsync(Guid dispatchId)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT source_report_status, hard_cap_serialized, source_completion_manifest_hash, source_report_hash
+            FROM "{_schema}".maf_execution_dispatches
+            WHERE project_id = @project AND run_id = @run AND dispatch_id = @dispatch
+            """, connection);
+        command.Parameters.AddWithValue("project", _root.ProjectId);
+        command.Parameters.AddWithValue("run", _root.RunId);
+        command.Parameters.AddWithValue("dispatch", dispatchId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (reader.GetString(0), reader.GetBoolean(1),
+            reader.IsDBNull(2) ? null : reader.GetString(2), reader.GetString(3));
+    }
+
+    private async Task<(decimal Floor, long LedgerEventCount, bool HardCapExhausted, long OwnerRevision)>
+        ReadCreditGuardAsync()
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT copilot_aic_floor, accounted_through_event_position, hard_cap_exhausted, owner_revision
+            FROM "{_schema}".maf_execution_run_guards WHERE project_id = @project AND run_id = @run
+            """, connection);
+        command.Parameters.AddWithValue("project", _root.ProjectId);
+        command.Parameters.AddWithValue("run", _root.RunId);
+        await using var reader = await command.ExecuteReaderAsync();
+        Assert.True(await reader.ReadAsync());
+        return (reader.GetDecimal(0), reader.GetInt64(1), reader.GetBoolean(2), reader.GetInt64(3));
+    }
+
+    private async Task SetDispatchStateAsync(Guid dispatchId, string state)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            UPDATE "{_schema}".maf_execution_dispatches
+            SET dispatch_state = @state, owner_revision = owner_revision + 1
+            WHERE project_id = @project AND run_id = @run AND dispatch_id = @dispatch
+            """, connection);
+        command.Parameters.AddWithValue("state", state);
+        command.Parameters.AddWithValue("project", _root.ProjectId);
+        command.Parameters.AddWithValue("run", _root.RunId);
+        command.Parameters.AddWithValue("dispatch", dispatchId);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
+    }
+
     private async Task WriteCheckpointAsync(
         long fence, long decisionVersion, string checkpointId, MafExecutionDispatchIntent[] intents)
     {
@@ -529,33 +805,93 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             _registrations[index].Binding.ExecutionFence, Guid.NewGuid(), "tool.read",
             RuntimeContractValidation.Hash("same tool arguments"u8)) { IsToolInvocation = toolInvocation };
 
-    private Task<bool> PrepareAsync(int index)
+    private RuntimeActionRequest ModelAction(int index, Guid? dispatchId) =>
+        new(1, _registrations[index].RuntimeInstanceId, _registrations[index].Revision,
+            _registrations[index].Binding.ExecutionFence, Guid.NewGuid(), "model.turn",
+            _intents[index].PromptHash) { DispatchId = dispatchId };
+
+    private async Task RegisterPositiveHardCreditAsync(
+        int index, decimal hardLimit = 5m, decimal? softLimit = null)
+    {
+        await RegisterSourceAsync(index, _registrations[index].Binding with
+        {
+            MaxModelTurns = null,
+            MaxToolCalls = null,
+            MaxPromptTokens = null,
+            CopilotSoftCreditLimit = softLimit,
+            CopilotHardCreditLimit = hardLimit
+        });
+        await AdvanceNativeCheckpointAsync($"positive-credit-{Guid.NewGuid():N}", _checkpoint.State with
+        {
+            Revision = _checkpoint.State.Revision + 1,
+            PendingDispatches = _intents.ToImmutableDictionary(intent => intent.AssociationId)
+        });
+    }
+
+    private Func<SdkSessionFacts, CancellationToken, Task<RuntimeUsageCostSnapshotReceipt>> PricedSnapshot(
+        int index, decimal observedCredits, long ledgerEventCount, bool isFullyPriced = true,
+        string? sourceHash = null, string rateVersion = "1")
+    {
+        var registration = _registrations[index];
+        return (source, token) =>
+        {
+            token.ThrowIfCancellationRequested();
+            var card = new CostRateCard("numeric-rate-card", rateVersion, source.MeterSource, "AIC",
+                1_000_000_000m,
+                ImmutableDictionary<string, decimal>.Empty.WithComparers(StringComparer.Ordinal)
+                    .Add(source.ModelId, 1m));
+            var binding = new CostBinding(source.MeterSource, "copilot.usage-cost", "1.0.0", 1,
+                "numeric-cost-options", "numeric-cost-resource", 1,
+                ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal), card);
+            var scope = registration.Binding;
+            ImmutableArray<UsageAmountTotal> amounts = ledgerEventCount == 0
+                ? [] : [new(source.MeterSource, "AIC", observedCredits, ledgerEventCount, 0)];
+            ImmutableArray<UsageAgentTotals> agents = ledgerEventCount == 0
+                ? [] : [new(scope.AgentId, ledgerEventCount, null, null, null, null, null, null,
+                    isFullyPriced, amounts)];
+            var totals = new UsageRunTotals(scope.TenantId, scope.ProjectId, scope.RunId,
+                ledgerEventCount, isFullyPriced, agents, amounts);
+            return Task.FromResult(new RuntimeUsageCostSnapshotReceipt(1,
+                sourceHash ?? RuntimeUsageSourceReceiptContract.HashSource(registration, source),
+                binding, new(0m, "AIC", CostDisposition.Estimate, card, null), totals));
+        };
+    }
+
+    private Task<bool> PrepareAsync(
+        int index,
+        Func<SdkSessionFacts, CancellationToken, Task<RuntimeUsageCostSnapshotReceipt>>? readCostSnapshot = null)
     {
         var store = SourceStore();
+        var snapshot = readCostSnapshot ?? NoCreditSnapshot;
         return store.ExecuteLockedAsync(_registrations[index].RuntimeInstanceId,
             async (connection, transaction, token) =>
             {
                 var prepared = await store.PrepareNativeTurnWithinTransactionAsync(
                     connection, transaction, _root, _checkpoint, _intents[index], _registrations[index],
-                    _messages[index], NoCreditSnapshot, token);
+                    _messages[index], snapshot, token);
                 await transaction.CommitAsync(token);
                 return prepared;
             }, default);
     }
 
-    private Task<RuntimeNativeTurnAdmissionReceipt?> BeginAsync(int index)
+    private Task<RuntimeNativeTurnAdmissionReceipt?> BeginAsync(
+        int index,
+        Func<SdkSessionFacts, CancellationToken, Task<RuntimeUsageCostSnapshotReceipt>>? readCostSnapshot = null,
+        RuntimeGrantReceipt? grantOverride = null)
     {
         var store = SourceStore();
+        var grant = grantOverride ?? _grants[index];
+        var snapshot = readCostSnapshot ?? NoCreditSnapshot;
         return store.ExecuteLockedAsync(_registrations[index].RuntimeInstanceId,
             async (connection, transaction, token) =>
             {
                 var receipt = await store.BeginNativeTurnWithinTransactionAsync(
-                    connection, transaction, _registrations[index], _grants[index],
-                    new(new(_grants[index].GrantId, _registrations[index].RuntimeInstanceId,
-                        _grants[index].Revision, RuntimeCredentialPurpose.Observe,
-                        _grants[index].Audience, _grants[index].ConfigurationHash,
-                        "controlled-store-only", _grants[index].ExpiresAt, Guid.NewGuid()),
-                        _messages[index], _sources[index]), NoCreditSnapshot, token);
+                    connection, transaction, _registrations[index], grant,
+                    new(new(grant.GrantId, _registrations[index].RuntimeInstanceId,
+                        grant.Revision, RuntimeCredentialPurpose.Observe,
+                        grant.Audience, grant.ConfigurationHash,
+                        "controlled-store-only", grant.ExpiresAt, Guid.NewGuid()),
+                        _messages[index], _sources[index]), snapshot, token);
                 await transaction.CommitAsync(token);
                 return receipt;
             }, default);
@@ -591,6 +927,16 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         await using var command = new NpgsqlCommand($"""
             SELECT count(*) FROM "{_schema}".outbox_events
             WHERE event_type = 'orchestrator.runtime.tool_invocation_admitted'
+            """, connection);
+        return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private async Task<long> CountSoftCreditWarningsAsync()
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT count(*) FROM "{_schema}".outbox_events
+            WHERE event_type = 'orchestrator.run.copilot_soft_credit_limit_reached'
             """, connection);
         return (long)(await command.ExecuteScalarAsync())!;
     }

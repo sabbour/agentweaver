@@ -229,8 +229,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                         await new RuntimeUsageCostPreflightHttpClient(
                             _http, _options.EventsAddress, retained)
                             .EnsurePricedAsync(configuredSession, token).ConfigureAwait(false);
-                    configuredSession.RequireSupportedCostTurnAffinity();
                     await configuredSession.RequireCurrentAsync(token).ConfigureAwait(false);
+                    configuredSession.RequireSupportedCostTurnAffinity();
                 }
                 catch (Exception failure) when (failure is not OutOfMemoryException)
                 {

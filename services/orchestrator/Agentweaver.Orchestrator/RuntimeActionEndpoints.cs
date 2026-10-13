@@ -129,8 +129,7 @@ internal sealed class RuntimeActionOwner(
 
     private static void RequireCostTurnEnabled(RuntimeBinding binding, RuntimeActionRequest request)
     {
-        if (request.ActionId == "model.turn" && binding.MaxModelTurns is not null && request.DispatchId is null)
-            throw new RuntimeAuthorizationException("runtime_model_turn_admission_required");
+        RuntimeActionContract.RequireNativeDispatchAdmission(binding, request);
         if (request.ActionId == "model.turn" && binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
             binding.CopilotHardCreditLimit is 0)
             throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");

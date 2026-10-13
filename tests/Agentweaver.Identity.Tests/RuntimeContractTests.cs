@@ -42,6 +42,32 @@ public sealed class RuntimeContractTests
     }
 
     [Fact]
+    public void PositiveHostedCreditCapRequiresDispatchIdentityWithoutAModelTurnCount()
+    {
+        var binding = CreateRegistration().Binding with
+        {
+            WorkflowStepId = "implement",
+            MaxModelTurns = null,
+            ModelSourceMode = ModelSourceMode.HostedCopilot,
+            CopilotHardCreditLimit = 5m
+        };
+        var request = new RuntimeActionRequest(1, Guid.NewGuid(), 1, 1, Guid.NewGuid(),
+            "model.turn", new string('a', 64));
+
+        Assert.Equal("runtime_model_turn_admission_required",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeActionContract.RequireNativeDispatchAdmission(binding, request)).Code);
+        RuntimeActionContract.RequireNativeDispatchAdmission(
+            binding, request with { DispatchId = Guid.NewGuid() });
+        RuntimeActionContract.RequireNativeDispatchAdmission(
+            binding with { CopilotHardCreditLimit = null }, request);
+        Assert.Equal("runtime_model_turn_admission_required",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeActionContract.RequireNativeDispatchAdmission(
+                    binding with { MaxModelTurns = 1, CopilotHardCreditLimit = null }, request)).Code);
+    }
+
+    [Fact]
     public void NativeSessionIdentitySurvivesRuntimeReplacementButNotAChangeOfScope()
     {
         var registration = CreateRegistration();

@@ -1347,6 +1347,58 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Fact]
+    public async Task WorkflowBoundPositiveHardCreditLimitUsesPreparedDispatchBeforeContentAndSend()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 100m, workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        fixture.Sdk.BeforeTurnResponse = _ =>
+        {
+            fixture.NativePathEvents.Enqueue("sdk-send");
+            return Task.CompletedTask;
+        };
+        var message = fixture.Message(proof);
+
+        var response = await fixture.Host.SendAsync(message, fixture.Actor, timeout.Token);
+
+        Assert.Equal(fixture.Sdk.AssistantResponse, Assert.Single(response.Parts).Text);
+        Assert.Equal(1, fixture.CostPreflightRequests);
+        var action = Assert.Single(fixture.ModelTurnActions);
+        Assert.Equal(message.Message.MessageId, action.DispatchId);
+        Assert.Equal(message.Message.MessageId,
+            Assert.Single(fixture.NativeAdmissions).Message.Message.MessageId);
+        Assert.Equal(
+            ["preflight", "action-authorize", "action-verify", "begin", "user-content", "sdk-send"],
+            fixture.NativePathEvents.ToArray());
+        Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.send");
+    }
+
+    [Fact]
+    public async Task PositiveHardCreditLimitOwnerDenialDoesNotWriteContentOrSend()
+    {
+        await using var fixture = new HostFixture(hardCreditLimit: 100m, workflowBound: true)
+        {
+            NativeAdmissionFault = "denied"
+        };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var message = fixture.Message(proof);
+
+        await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            fixture.Host.SendAsync(message, fixture.Actor, timeout.Token));
+
+        Assert.Equal(1, fixture.CostPreflightRequests);
+        Assert.Equal(message.Message.MessageId, Assert.Single(fixture.ModelTurnActions).DispatchId);
+        Assert.Single(fixture.NativeAdmissions);
+        Assert.DoesNotContain(fixture.Material, material =>
+            material.Kind is SessionMaterialKind.TurnContent or SessionMaterialKind.SdkCache);
+        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.Equal(
+            ["preflight", "action-authorize", "action-verify", "begin"],
+            fixture.NativePathEvents.ToArray());
+    }
+
+    [Fact]
     public async Task UnbudgetedHostedCopilotKeepsLegacyStartupAndSelectionHash()
     {
         await using var fixture = new HostFixture();
@@ -1793,6 +1845,8 @@ public sealed class RuntimeAgentHostTests
         public string WorkingDirectory { get; }
         public string ConfigurationHash => _hash;
         public ConcurrentQueue<SessionMaterialWriteRequest> Material { get; } = new();
+        public ConcurrentQueue<RuntimeActionRequest> ModelTurnActions { get; } = new();
+        public ConcurrentQueue<string> NativePathEvents { get; } = new();
         public ImmutableArray<SessionEventEnvelope> SessionEvents { get; private set; } = [];
         public int PositionIncrement { get; set; } = 1;
         public int SessionEventPageSize { get; set; } = 100;
@@ -2156,11 +2210,18 @@ public sealed class RuntimeAgentHostTests
                 if (path.EndsWith("/authorize", StringComparison.Ordinal))
                 {
                     var action = await ReadAsync<RuntimeActionRequest>(request, token);
+                    if (action.ActionId == "model.turn")
+                    {
+                        ModelTurnActions.Enqueue(action);
+                        NativePathEvents.Enqueue("action-authorize");
+                    }
                     if (action.CostTurnId is { } costTurnId)
                         CostTurnRequests.Enqueue(costTurnId);
                     _admission = new(1, action, action.EventId.ToString("N"), "1", action.EventId,
                         PolicyEvaluationOutcome.Allow, PolicyEvaluationReasonCode.Allowed);
                 }
+                else if (_admission?.Request.ActionId == "model.turn")
+                    NativePathEvents.Enqueue("action-verify");
                 return Response(request, _admission!);
             }
             if (path.EndsWith("/cost-preflight", StringComparison.Ordinal))
@@ -2177,14 +2238,16 @@ public sealed class RuntimeAgentHostTests
                     _facts.MeterSource, "fixture.cost", "1.0.0", 1, "fixture-revision",
                     "fixture-resource", 1,
                     ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal), rateCard);
-                return Response(request, new RuntimeUsageCostPreflightReceipt(
+                var receipt = new RuntimeUsageCostPreflightReceipt(
                     1, Registration.RuntimeInstanceId, Registration.Revision,
                     Registration.Binding.ExecutionFence, _facts.ModelSelectionReference, _facts.ModelId,
                     _facts.MeterSource, _facts.AcceptedSelectionHash,
                     CostPreflightSourceHashMismatch
                         ? new string('f', 64)
                         : RuntimeUsageSourceReceiptContract.HashSource(Registration, _facts),
-                    costBinding, CostPreflightPriced, CostPreflightPriced ? null : "fixture-unpriced"));
+                    costBinding, CostPreflightPriced, CostPreflightPriced ? null : "fixture-unpriced");
+                NativePathEvents.Enqueue("preflight");
+                return Response(request, receipt);
             }
             if (path.StartsWith("/internal/runtime/sources/", StringComparison.Ordinal))
             {
@@ -2199,6 +2262,7 @@ public sealed class RuntimeAgentHostTests
                 Assert.Equal(NativeAdmissions.Count, Sdk.Requests.Count(request => request.Method == "session.send"));
                 var begin = await ReadAsync<RuntimeNativeTurnBeginRequest>(request, token);
                 NativeAdmissions.Enqueue(begin);
+                NativePathEvents.Enqueue("begin");
                 if (NativeAdmissionFault == "denied")
                     return Response(request, new { }, HttpStatusCode.Forbidden);
                 var admission = new RuntimeNativeTurnAdmissionReceipt(Configure.Registration, _facts!,
@@ -2357,6 +2421,8 @@ public sealed class RuntimeAgentHostTests
                     });
                 _material[material.EventId] = new(receipt, material.Bytes);
                 _materialWrites[material.EventId] = material;
+                if (material.Kind == SessionMaterialKind.TurnContent && material.Role == "user")
+                    NativePathEvents.Enqueue("user-content");
                 AfterMaterialWrite?.Invoke(material);
                 return Response(request, receipt);
             }
