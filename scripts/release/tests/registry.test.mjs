@@ -12,7 +12,7 @@ function digest(bytes) {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 }
 
-function serviceFixture({ duplicateAmd64 = false, mutateConfig = () => {}, tamper } = {}) {
+function serviceFixture({ duplicateAmd64 = false, mutateConfig = () => {}, tamper, missingToken = false } = {}) {
   const config = {
     os: 'linux',
     architecture: 'amd64',
@@ -61,7 +61,7 @@ function serviceFixture({ duplicateAmd64 = false, mutateConfig = () => {}, tampe
     const value = String(url);
     calls.push([value, options]);
     if (value.startsWith('https://ghcr.io/token?')) {
-      return { ok: true, status: 200, json: async () => ({ token: 'registry-pull-token' }) };
+      return { ok: true, status: 200, json: async () => missingToken ? {} : ({ token: 'registry-pull-token' }) };
     }
     if (value.endsWith(`/manifests/${topDigest}`)) {
       return response(tamper === 'top' ? Buffer.from('{"tampered":true}') : topBytes, topDigest);
@@ -74,67 +74,86 @@ function serviceFixture({ duplicateAmd64 = false, mutateConfig = () => {}, tampe
     }
     assert.fail(`unexpected registry request: ${value}`);
   };
-  return { calls, fetchImpl, childDigest, topDigest, configBytes, topReference };
+  return { calls, fetchImpl, childDigest, configDigest, topDigest, configBytes, topReference };
 }
 
-test('private service registry verification checks raw index, unique amd64 child, and source-bound config', async () => {
+test('service registry verification checks raw index, unique amd64 child, and source-bound config', async () => {
   const fixture = serviceFixture();
-  const result = await verifyServiceRegistryImage(`${fixture.topReference}${fixture.topDigest}`, {
-    sourceSha,
-    sourceTree,
-    version,
-    username: 'test-user',
-    token: 'test-token',
-    fetchImpl: fixture.fetchImpl,
-  });
+  const result = await verifyServiceRegistryImage(`${fixture.topReference}${fixture.topDigest}`, fixture.fetchImpl);
 
   assert.equal(result.image, `${fixture.topReference}${fixture.childDigest}`);
   assert.equal(result.digest, fixture.childDigest);
   assert.deepEqual([...result.acceptedDigests], [fixture.topDigest, fixture.childDigest]);
-  assert.equal(fixture.calls[0][1].headers.authorization,
-    `Basic ${Buffer.from('test-user:test-token').toString('base64')}`);
+  assert.equal(fixture.calls[0][1].headers.authorization, undefined);
   assert.ok(fixture.calls.slice(1).every(([, options]) =>
     options.headers.authorization === 'Bearer registry-pull-token'));
+  assert.deepEqual({
+    configDigest: result.configDigest,
+    sourceSha: result.sourceSha,
+    sourceTree: result.sourceTree,
+    version: result.version,
+  }, { configDigest: fixture.configDigest, sourceSha, sourceTree, version });
 });
 
-test('private service registry verification rejects duplicate amd64 children', async () => {
+test('service registry verification rejects duplicate amd64 children', async () => {
   const fixture = serviceFixture({ duplicateAmd64: true });
-  await assert.rejects(verifyServiceRegistryImage(`${fixture.topReference}${fixture.topDigest}`, {
-    sourceSha,
-    sourceTree,
-    version,
-    username: 'test-user',
-    token: 'test-token',
-    fetchImpl: fixture.fetchImpl,
-  }), /exactly one valid linux\/amd64 platform manifest/);
+  await assert.rejects(verifyServiceRegistryImage(`${fixture.topReference}${fixture.topDigest}`, fixture.fetchImpl),
+    /exactly one valid linux\/amd64 platform manifest/);
 });
 
-test('private service registry verification rejects mismatched source labels', async () => {
-  const fixture = serviceFixture({
-    mutateConfig(config) {
-      config.config.Labels['org.opencontainers.image.revision'] = 'b'.repeat(40);
-    },
-  });
-  await assert.rejects(verifyServiceRegistryImage(`${fixture.topReference}${fixture.topDigest}`, {
-    sourceSha,
-    sourceTree,
-    version,
-    username: 'test-user',
-    token: 'test-token',
-    fetchImpl: fixture.fetchImpl,
-  }), /does not match its source, tree, version, and linux\/amd64 provenance/);
+test('service registry verification rejects missing and malformed identity labels', async () => {
+  const invalidLabels = [
+    labels => { delete labels['org.opencontainers.image.revision']; },
+    labels => { labels['org.opencontainers.image.revision'] = 'not-a-sha'; },
+    labels => { delete labels['io.agentweaver.source-tree']; },
+    labels => { labels['io.agentweaver.source-tree'] = 'not-a-tree'; },
+    labels => { delete labels['org.opencontainers.image.version']; },
+    labels => { labels['org.opencontainers.image.version'] = ''; },
+  ];
+  for (const mutateLabels of invalidLabels) {
+    const fixture = serviceFixture({
+      mutateConfig: config => mutateLabels(config.config.Labels),
+    });
+    await assert.rejects(verifyServiceRegistryImage(`${fixture.topReference}${fixture.topDigest}`, fixture.fetchImpl),
+      /does not contain valid source, tree, version, and linux\/amd64 identity/);
+  }
 });
 
-test('private service registry verification rejects non-matching raw registry bytes', async () => {
+test('service registry verification rejects non-matching raw registry bytes', async () => {
   for (const tamper of ['top', 'child', 'config']) {
     const fixture = serviceFixture({ tamper });
-    await assert.rejects(verifyServiceRegistryImage(`${fixture.topReference}${fixture.topDigest}`, {
-      sourceSha,
-      sourceTree,
-      version,
-      username: 'test-user',
-      token: 'test-token',
-      fetchImpl: fixture.fetchImpl,
-    }), /bytes do not match the exact published digest|config bytes do not match their manifest descriptor/);
+    await assert.rejects(verifyServiceRegistryImage(`${fixture.topReference}${fixture.topDigest}`, fixture.fetchImpl),
+      /bytes do not match the exact published digest|config bytes do not match their manifest descriptor/);
   }
+});
+
+test('service registry verification reports authorization and token failures', async () => {
+  const unauthorized = async () => ({ ok: false, status: 401 });
+  await assert.rejects(verifyServiceRegistryImage(`${topReference}${`sha256:${'c'.repeat(64)}`}`, unauthorized),
+    /anonymous pull verification \(HTTP 401\)/);
+
+  const missingToken = serviceFixture({ missingToken: true });
+  await assert.rejects(verifyServiceRegistryImage(
+    `${missingToken.topReference}${missingToken.topDigest}`, missingToken.fetchImpl),
+  /GHCR returned no pull token/);
+});
+
+test('service registry verification returns the actual allowlisted config labels', async () => {
+  const actual = {
+    sourceSha: 'c'.repeat(40),
+    sourceTree: 'd'.repeat(40),
+    version: '1.2.3-preview.4',
+  };
+  const fixture = serviceFixture({
+    mutateConfig(config) {
+      config.config.Labels['org.opencontainers.image.revision'] = actual.sourceSha;
+      config.config.Labels['io.agentweaver.source-tree'] = actual.sourceTree;
+      config.config.Labels['org.opencontainers.image.version'] = actual.version;
+    },
+  });
+  const result = await verifyServiceRegistryImage(`${fixture.topReference}${fixture.topDigest}`, fixture.fetchImpl);
+  assert.deepEqual(
+    { sourceSha: result.sourceSha, sourceTree: result.sourceTree, version: result.version },
+    actual,
+  );
 });

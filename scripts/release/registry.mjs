@@ -49,19 +49,13 @@ function splitImageReference(image) {
   return { repository: repository.slice('ghcr.io/'.length), digest: imageDigest };
 }
 
-async function pullToken(repository, fetchImpl, credentials) {
+async function pullToken(repository, fetchImpl) {
   const tokenUrl = new URL('https://ghcr.io/token');
   tokenUrl.searchParams.set('service', 'ghcr.io');
   tokenUrl.searchParams.set('scope', `repository:${repository}:pull`);
-  const headers = { accept: 'application/json' };
-  if (credentials) {
-    headers.authorization = `Basic ${Buffer.from(`${credentials.username}:${credentials.token}`).toString('base64')}`;
-  }
-  const tokenResponse = await fetchImpl(tokenUrl, { headers });
+  const tokenResponse = await fetchImpl(tokenUrl, { headers: { accept: 'application/json' } });
   if (!tokenResponse.ok) {
-    fail(credentials
-      ? `GHCR denied authenticated pull access to ${repository} (HTTP ${tokenResponse.status})`
-      : `GHCR does not expose ${repository} for anonymous pull verification (HTTP ${tokenResponse.status})`);
+    fail(`GHCR does not expose ${repository} for anonymous pull verification (HTTP ${tokenResponse.status})`);
   }
   const tokenJson = await tokenResponse.json();
   const token = tokenJson.token ?? tokenJson.access_token;
@@ -69,8 +63,8 @@ async function pullToken(repository, fetchImpl, credentials) {
   return token;
 }
 
-async function registryReader(repository, fetchImpl, credentials) {
-  const token = await pullToken(repository, fetchImpl, credentials);
+async function registryReader(repository, fetchImpl) {
+  const token = await pullToken(repository, fetchImpl);
   return {
     async manifest(imageDigest, expectedSize) {
       const response = await fetchImpl(`https://ghcr.io/v2/${repository}/manifests/${imageDigest}`, {
@@ -124,24 +118,9 @@ export async function verifyRegistryImage(image, fetchImpl = globalThis.fetch) {
   return acceptedDigests;
 }
 
-export async function verifyServiceRegistryImage(image, {
-  sourceSha,
-  sourceTree,
-  version,
-  username,
-  token,
-  fetchImpl = globalThis.fetch,
-} = {}) {
+export async function verifyServiceRegistryImage(image, fetchImpl = globalThis.fetch) {
   const reference = splitImageReference(image);
-  if (!SHA.test(sourceSha ?? '') || !SHA.test(sourceTree ?? '') ||
-      typeof version !== 'string' || version.length === 0) {
-    fail('service image verification requires its exact source SHA, source tree, and component version');
-  }
-  if (typeof username !== 'string' || !username || typeof token !== 'string' || !token) {
-    fail('service image verification requires authenticated GHCR credentials');
-  }
-
-  const reader = await registryReader(reference.repository, fetchImpl, { username, token });
+  const reader = await registryReader(reference.repository, fetchImpl);
   const top = await reader.manifest(reference.digest);
   let childDigest = reference.digest;
   let child = top;
@@ -169,16 +148,23 @@ export async function verifyServiceRegistryImage(image, {
     (await reader.blob(manifest.config.digest, manifest.config.size)).toString('utf8'),
     'published service image config',
   );
+  const labels = config.config?.Labels;
+  const sourceSha = labels?.['org.opencontainers.image.revision'];
+  const sourceTree = labels?.['io.agentweaver.source-tree'];
+  const version = labels?.['org.opencontainers.image.version'];
   if (config.os !== 'linux' || config.architecture !== 'amd64' ||
-      config.config?.Labels?.['org.opencontainers.image.revision'] !== sourceSha ||
-      config.config?.Labels?.['io.agentweaver.source-tree'] !== sourceTree ||
-      config.config?.Labels?.['org.opencontainers.image.version'] !== version) {
-    fail('published service image config does not match its source, tree, version, and linux/amd64 provenance');
+      !SHA.test(sourceSha ?? '') || !SHA.test(sourceTree ?? '') ||
+      typeof version !== 'string' || version.trim() !== version || version.length === 0) {
+    fail('published service image config does not contain valid source, tree, version, and linux/amd64 identity');
   }
 
   return {
     image: `ghcr.io/${reference.repository}@${childDigest}`,
     digest: childDigest,
     acceptedDigests: new Set([reference.digest, childDigest]),
+    configDigest: manifest.config.digest,
+    sourceSha,
+    sourceTree,
+    version,
   };
 }
