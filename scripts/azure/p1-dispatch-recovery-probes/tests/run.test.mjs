@@ -1,0 +1,80 @@
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import { runP1DispatchRecoveryProbes } from '../run.mjs';
+
+const probeNames = [
+  'numeric-copilot-dispatch-boundaries',
+  'checkpoint-restart-duplicate-fence',
+];
+
+test('source-only result keeps both required acceptance slots blocked without runtime observations', () => {
+  const result = runP1DispatchRecoveryProbes();
+
+  assert.equal(result.kind, 'p1-dispatch-recovery-acceptance');
+  assert.equal(result.schemaVersion, 1);
+  assert.equal(result.overallStatus, 'blocked');
+  assert.deepEqual(result.probes.map(probe => probe.name), probeNames);
+  for (const probe of result.probes) {
+    assert.equal(probe.status, 'blocked');
+    assert.ok(probe.reason.length > 0);
+    assert.equal(probe.evidence.kind, 'source-prerequisite-blocker');
+    assert.equal(probe.evidence.observed, false);
+    assert.deepEqual(probe.evidence.observations, []);
+    assert.ok(probe.evidence.requiredReceipts.length > 0);
+    for (const receipt of probe.evidence.requiredReceipts) {
+      assert.ok(receipt.owner.length > 0);
+      assert.ok(receipt.receipt.length > 0);
+      assert.ok(receipt.requiredFacts.length > 0);
+    }
+    assert.deepEqual(probe.cleanup, {
+      status: 'not-started',
+      createdResourceIds: [],
+    });
+  }
+
+  const numeric = result.probes[0];
+  assert.deepEqual(
+    numeric.evidence.sourceGates.map(gate => gate.code).filter(Boolean),
+    ['runtime_numeric_limits_unsupported', 'runtime_usage_affinity_unavailable'],
+  );
+  const restart = result.probes[1];
+  assert.match(restart.reason, /P2 manifest suspend\/resume path is explicitly excluded/);
+  assert.deepEqual(restart.evidence.sourceGates.map(gate => gate.path), [
+    'services/environment/Agentweaver.Environment/EnvironmentRuntimeBootstrapProfiles.cs',
+    'packages/Agentweaver.AgentRuntime/RuntimeAgentHost.cs',
+  ]);
+  assert.deepEqual(restart.evidence.requiredReceipts.map(receipt => receipt.receipt), [
+    'invocation-owned-gate-join-and-checkpoint',
+    'ordinary-replacement-placement',
+    'ordinary-fresh-registration-and-bootstrap',
+    'ordinary-runtime-recovery-observation',
+    'gate-join-result-and-no-duplicate',
+  ]);
+});
+
+test('fixed command emits the same blocked contract and accepts no runtime input', () => {
+  const script = fileURLToPath(new URL('../run.mjs', import.meta.url));
+  const secretMarker = 'p1-probe-secret-sentinel';
+  const result = spawnSync(process.execPath, [script], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      AZURE_ACCESS_TOKEN: secretMarker,
+      COPILOT_SESSION_TOKEN: secretMarker,
+    },
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stderr, '');
+  assert.equal(result.stdout.includes(secretMarker), false);
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.probes.map(probe => probe.name), probeNames);
+  assert.ok(report.probes.every(probe => probe.status === 'blocked'));
+
+  const withInput = spawnSync(process.execPath, [script, '--accept'], { encoding: 'utf8' });
+  assert.equal(withInput.status, 2);
+  assert.equal(withInput.stdout, '');
+  assert.match(withInput.stderr, /^Usage:/);
+});

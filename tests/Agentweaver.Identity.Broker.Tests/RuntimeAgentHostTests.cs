@@ -1291,18 +1291,22 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Theory]
-    [InlineData(1, null, null)]
-    [InlineData(null, 1, null)]
-    [InlineData(null, null, 1024)]
+    [InlineData(1, null, null, false)]
+    [InlineData(null, 1, null, false)]
+    [InlineData(null, null, 1024, false)]
+    [InlineData(null, 1, null, true)]
+    [InlineData(null, null, 1024, true)]
     public async Task ConfiguredNumericRunPolicyFailsBeforeReadyOrNativeSessionCreation(
         int? maxModelTurns,
         int? maxToolCalls,
-        int? maxPromptTokens)
+        int? maxPromptTokens,
+        bool workflowBound)
     {
         await using var fixture = new HostFixture(
             maxModelTurns: maxModelTurns,
             maxToolCalls: maxToolCalls,
-            maxPromptTokens: maxPromptTokens);
+            maxPromptTokens: maxPromptTokens,
+            workflowBound: workflowBound);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         await fixture.DeliverAsync(timeout.Token);
 
@@ -1316,6 +1320,26 @@ public sealed class RuntimeAgentHostTests
         Assert.Equal("runtime_host_not_ready",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 fixture.Host.ReadinessAsync(timeout.Token))).Code);
+    }
+
+    [Fact]
+    public async Task WorkflowBoundMaxModelTurnsUsesOwnerAdmittedNativeDispatch()
+    {
+        await using var fixture = new HostFixture(maxModelTurns: 1, workflowBound: true);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var proof = fixture.Proof(await fixture.ConfigureAsync(timeout.Token));
+        var message = fixture.Message(proof);
+
+        var response = await fixture.Host.SendAsync(message, fixture.Actor, timeout.Token);
+
+        Assert.Equal(fixture.Sdk.AssistantResponse, Assert.Single(response.Parts).Text);
+        Assert.Equal(1, fixture.Registration.Binding.MaxModelTurns);
+        Assert.NotNull(fixture.Registration.Binding.WorkflowStepId);
+        Assert.Single(fixture.NativeAdmissions);
+        Assert.Single(fixture.NativeObservations);
+        Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.send");
+        Assert.Equal(0, fixture.CostPreflightRequests);
+        Assert.Empty(fixture.CostTurnRequests);
     }
 
     [Fact]

@@ -85,7 +85,7 @@ public sealed class RuntimeContractTests
     }
 
     [Fact]
-    public void NumericRunPoliciesAreBoundValidatedAndFailClosedWhenUnsupported()
+    public void NumericRunPoliciesAreBoundValidatedAndOnlyWorkflowModelTurnLimitsAreSupported()
     {
         var registration = CreateRegistration();
         RuntimeContractValidation.Validate(registration);
@@ -94,6 +94,11 @@ public sealed class RuntimeContractTests
             {
                 MaxModelTurns = 1
             }));
+        RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
+        {
+            WorkflowStepId = "implement",
+            MaxModelTurns = 1
+        });
         Assert.Throws<RuntimeAuthorizationException>(() =>
             RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
             {
@@ -102,6 +107,18 @@ public sealed class RuntimeContractTests
         Assert.Throws<RuntimeAuthorizationException>(() =>
             RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
             {
+                MaxPromptTokens = 1024
+            }));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
+            {
+                WorkflowStepId = "implement",
+                MaxToolCalls = 1
+            }));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
+            {
+                WorkflowStepId = "implement",
                 MaxPromptTokens = 1024
             }));
 

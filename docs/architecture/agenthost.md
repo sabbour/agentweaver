@@ -84,7 +84,7 @@ sequenceDiagram
     participant O as Orchestrator
     participant I as Identity
     participant E as Environment
-    Note over H: Reject configured MaxModelTurns, MaxToolCalls, or MaxPromptTokens before SDK configuration
+    Note over H: Permit MaxModelTurns only for workflow-bound registrations; reject unsupported numeric limits before SDK configuration
     C->>H: GET /runtime/v1/readiness with Broker bearer
     H->>O: Revalidate current registration
     O-->>H: Current registration or denial
@@ -116,11 +116,13 @@ Until that affinity is supported, Hosted Copilot with a positive hard credit lim
 An omitted limit keeps legacy startup, zero still permits startup but blocks dispatch, and BYOK remains token-metered.
 
 The immutable Projects selection's `maxModelTurns`, `maxToolCalls`, and `maxPromptTokens` values are carried
-through `RuntimeOwnerContext` into the registered `RuntimeBinding`. AgentHost does not yet have exact native
-turn/tool accounting or whole-prompt token enforcement, so any non-null value fails activation with
-`runtime_numeric_limits_unsupported`, before SDK session creation, readiness, or model/tool invocation.
-Absent values preserve the legacy path. The RuntimeAction owner also rejects these bindings before issuing an
-action grant. This is a fail-closed admission rule, not numeric enforcement.
+through `RuntimeOwnerContext` into the registered `RuntimeBinding`. `maxModelTurns` is supported only for
+workflow-bound registrations, whose native sends require the prepared-dispatch, action-grant, and native-begin
+admission path before SDK send. An unbound `maxModelTurns`, any `maxToolCalls`, or any `maxPromptTokens` still
+fails activation with `runtime_numeric_limits_unsupported`, before SDK session creation, readiness, or
+model/tool invocation. Absent values preserve the legacy path. The RuntimeAction owner also rejects unsupported
+numeric bindings before issuing an action grant. This wiring does not establish live boundary acceptance; the
+P1 dispatch check remains blocked until actual owner receipts prove the limit boundary and no-send result.
 
 AgentHost and the enabled Events native consumer load the same server-owned
 `AgentHost:ModelBindings` map and required `AgentHost:ModelBindingsRevision`.
