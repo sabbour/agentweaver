@@ -44,16 +44,134 @@ public sealed class RuntimeUsageSourceHttpClient(
         return receipt;
     }
 
-    internal async Task<RuntimeNativeTurnAdmissionReceipt> BeginNativeTurnAsync(
+    internal async Task<RuntimeNativeTurnBeginResult> BeginNativeTurnAsync(
         AuthorizedRuntimeSession session, RuntimeA2ASendRequest message, CancellationToken cancellationToken)
     {
         RequireAudience(session);
-        var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeNativeTurnAdmissionReceipt>(
+        var proof = session.Proof();
+        var sourceReceipt = new RuntimeSdkSourceReceipt(
+            session.Registration.RuntimeInstanceId, session.Registration.Revision, proof.GrantId,
+            session.Facts, RuntimeUsageSourceReceiptContract.HashSource(session.Registration, session.Facts),
+            DateTimeOffset.UtcNow);
+        var result = await RuntimeOwnerHttpTransport.SendAsync<RuntimeNativeTurnBeginResult>(
             client, _address, "/internal/runtime/turns/begin", actor,
-            new RuntimeNativeTurnBeginRequest(Request(session.Proof()), message, session.Facts), cancellationToken)
+            new RuntimeNativeTurnBeginRequest(Request(proof), message, session.Facts), cancellationToken)
             .ConfigureAwait(false);
-        RuntimeNativeTurnContract.ValidateAdmission(receipt, session.Registration, session.Facts, message);
+        RuntimeNativeDenialContract.ValidateBeginResult(result, session.Registration, sourceReceipt, message);
+        return result;
+    }
+
+    internal async Task<RuntimeNativeCreditDenialReadResult> ReadNativeCreditDenialAsync(
+        AuthorizedRuntimeSession session, Guid dispatchId, RuntimeCreditLimitDenialStage stage,
+        CancellationToken cancellationToken)
+    {
+        RequireAudience(session);
+        var proof = session.Proof();
+        var sourceReceipt = new RuntimeSdkSourceReceipt(
+            session.Registration.RuntimeInstanceId, session.Registration.Revision, proof.GrantId,
+            session.Facts, RuntimeUsageSourceReceiptContract.HashSource(session.Registration, session.Facts),
+            DateTimeOffset.UtcNow);
+        var readRequest = new RuntimeNativeCreditDenialReadRequest(
+            Request(proof), dispatchId, stage);
+        RuntimeNativeDenialContract.ValidateReadRequest(readRequest);
+        var response = await RuntimeOwnerHttpTransport.SendAsync<RuntimeNativeCreditDenialReadResult>(
+            client, _address, "/internal/runtime/turns/denials/read", actor,
+            readRequest, cancellationToken)
+            .ConfigureAwait(false);
+        RuntimeNativeDenialContract.ValidateReadResult(
+            response, session.Registration, sourceReceipt, dispatchId, stage);
+        return response;
+    }
+
+    internal async Task<RuntimeNativeTurnNoSendReceipt> RecordNativeTurnNoSendAsync(
+        AuthorizedRuntimeSession session, RuntimeNativeCreditDenialReceipt denial,
+        RuntimeNativeTurnNoSendReceipt evidence, CancellationToken cancellationToken)
+    {
+        RequireAudience(session);
+        var proof = session.Proof();
+        var sourceReceipt = new RuntimeSdkSourceReceipt(
+            session.Registration.RuntimeInstanceId, session.Registration.Revision, proof.GrantId,
+            session.Facts, RuntimeUsageSourceReceiptContract.HashSource(session.Registration, session.Facts),
+            DateTimeOffset.UtcNow);
+        RuntimeNativeDenialContract.ValidateNoSend(evidence, denial, session.Registration, sourceReceipt);
+        var receipt = await RuntimeOwnerHttpTransport.SendAsync<RuntimeNativeTurnNoSendReceipt>(
+            client, _address, "/internal/runtime/turns/no-send", actor,
+            new RuntimeNativeTurnNoSendEvidenceRequest(Request(proof), denial, evidence), cancellationToken)
+            .ConfigureAwait(false);
+        RuntimeNativeDenialContract.ValidateNoSend(receipt, denial, session.Registration, sourceReceipt);
         return receipt;
+    }
+
+    internal async Task<RuntimeFixedCreditGuardReceipt> RecordFixedCreditGuardAsync(
+        AuthorizedRuntimeSession session, RuntimeHostSessionProof expectedProof,
+        RuntimeFixedCreditGuardReceipt receipt, CancellationToken cancellationToken)
+    {
+        RequireAudience(session);
+        var proof = session.Proof();
+        var grant = session.SourceGrant;
+        RequireFixedSourceProof(session, expectedProof, proof, grant);
+        RuntimeFixedCreditGuardContract.ValidateReceipt(receipt);
+        var sourceReceipt = CurrentSourceReceipt(session, proof);
+        RuntimeFixedCreditGuardContract.ValidateSourceTuple(
+            receipt, session.Registration, grant, sourceReceipt);
+        var stored = await RuntimeOwnerHttpTransport.SendAsync<RuntimeFixedCreditGuardReceipt>(
+            client, _address, "/internal/runtime/turns/fixed-credit-denials/record", actor,
+            new RuntimeFixedCreditGuardRecordRequest(Request(proof), receipt), cancellationToken)
+            .ConfigureAwait(false);
+        RuntimeFixedCreditGuardContract.ValidateReceipt(stored);
+        if (stored.Registration != receipt.Registration || stored.Stage != receipt.Stage ||
+            stored.RequestId != receipt.RequestId || stored.RequestHash != receipt.RequestHash)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
+        RuntimeFixedCreditGuardContract.ValidateSourceTuple(
+            stored, session.Registration, grant, sourceReceipt);
+        return stored;
+    }
+
+    internal async Task<RuntimeFixedCreditNoSendReceipt> RecordFixedCreditNoSendAsync(
+        AuthorizedRuntimeSession session, RuntimeHostSessionProof expectedProof,
+        RuntimeFixedCreditGuardReceipt receipt, RuntimeFixedCreditNoSendReceipt evidence,
+        CancellationToken cancellationToken)
+    {
+        RequireAudience(session);
+        var proof = session.Proof();
+        var grant = session.SourceGrant;
+        RequireFixedSourceProof(session, expectedProof, proof, grant);
+        var sourceReceipt = CurrentSourceReceipt(session, proof);
+        RuntimeFixedCreditGuardContract.ValidateEvidence(
+            evidence, receipt, session.Registration, grant, sourceReceipt);
+        var stored = await RuntimeOwnerHttpTransport.SendAsync<RuntimeFixedCreditNoSendReceipt>(
+            client, _address, "/internal/runtime/turns/fixed-credit-denials/no-send", actor,
+            new RuntimeFixedCreditNoSendEvidenceRequest(Request(proof), receipt, evidence), cancellationToken)
+            .ConfigureAwait(false);
+        RuntimeFixedCreditGuardContract.ValidateEvidence(
+            stored, receipt, session.Registration, grant, sourceReceipt);
+        return stored;
+    }
+
+    internal async Task<RuntimeFixedCreditGuardReadResult> ReadFixedCreditGuardAsync(
+        AuthorizedRuntimeSession session, Guid requestId, string requestHash,
+        CancellationToken cancellationToken)
+    {
+        RequireAudience(session);
+        var proof = session.Proof();
+        var grant = session.SourceGrant;
+        if (grant.GrantId != proof.GrantId || grant.Revision != proof.Revision)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_source_invalid");
+        var sourceReceipt = CurrentSourceReceipt(session, proof);
+        var request = new RuntimeFixedCreditGuardReadRequest(
+            Request(proof), session.Registration.RuntimeInstanceId, session.Registration.Revision,
+            session.Registration.Binding.ExecutionFence, RuntimeFixedCreditGuardStage.HostPreQueue,
+            requestId, requestHash);
+        RuntimeFixedCreditGuardContract.ValidateReadRequest(request);
+        var result = await RuntimeOwnerHttpTransport.SendAsync<RuntimeFixedCreditGuardReadResult>(
+            client, _address, "/internal/runtime/turns/fixed-credit-denials/read", actor,
+            request, cancellationToken).ConfigureAwait(false);
+        RuntimeFixedCreditGuardContract.ValidateReadResult(
+            result, session.Registration, request, grant, sourceReceipt);
+        if (result.Receipt is { SourceGrantId: not null } receipt)
+            RuntimeFixedCreditGuardContract.ValidateSourceTuple(
+                receipt, session.Registration, grant, sourceReceipt);
+        return result;
     }
 
     internal async Task<RuntimeNativeTurnRecordedReceipt> RecordNativeTurnAsync(
@@ -100,6 +218,27 @@ public sealed class RuntimeUsageSourceHttpClient(
     private static RuntimeCredentialHttpRequest Request(RuntimeCredentialProof proof) =>
         new(proof.GrantId, proof.RuntimeInstanceId, proof.Revision, proof.Purpose, proof.Audience,
             proof.ConfigurationHash, proof.Credential.GetValue(), proof.Credential.ExpiresAt, Guid.Empty);
+
+    private static RuntimeSdkSourceReceipt CurrentSourceReceipt(
+        AuthorizedRuntimeSession session, RuntimeCredentialProof proof) =>
+        new(session.Registration.RuntimeInstanceId, session.Registration.Revision, proof.GrantId,
+            session.Facts, RuntimeUsageSourceReceiptContract.HashSource(session.Registration, session.Facts),
+            DateTimeOffset.UtcNow);
+
+    private static void RequireFixedSourceProof(
+        AuthorizedRuntimeSession session, RuntimeHostSessionProof expected,
+        RuntimeCredentialProof proof, RuntimeGrantReceipt grant)
+    {
+        if (expected.ContractVersion != 1 || expected.Registration != session.Registration ||
+            expected.Purpose != RuntimeCredentialPurpose.Observe ||
+            expected.SourceGrantId != proof.GrantId || expected.SourceGrantRevision != proof.Revision ||
+            proof.Purpose != RuntimeCredentialPurpose.Observe ||
+            grant.GrantId != proof.GrantId || grant.Revision != proof.Revision ||
+            grant.RuntimeInstanceId != session.Registration.RuntimeInstanceId ||
+            grant.RegistrationRevision != session.Registration.Revision ||
+            !proof.Credential.IsUsable())
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_source_invalid");
+    }
 }
 
 internal sealed class RuntimeUsageCostPreflightHttpClient(

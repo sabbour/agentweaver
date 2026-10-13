@@ -67,6 +67,37 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         }
     }
 
+    internal async Task<string> CaptureNativeEventCursorAsync(CancellationToken cancellationToken)
+    {
+        await _turnGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            RequireUsable();
+            return await RuntimeCopilotNativeTurnJournal.CaptureCursorAsync(_session, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            _turnGate.Release();
+        }
+    }
+
+    internal async Task<RuntimeNativeEmptyRangeEvidence> RequireNoNativeEventsSinceAsync(
+        string startCursor, CancellationToken cancellationToken)
+    {
+        await _turnGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            RequireUsable();
+            return await RuntimeCopilotNativeTurnJournal.RequireEmptyRangeAsync(
+                _session, startCursor, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _turnGate.Release();
+        }
+    }
+
     internal static bool HasUnsupportedPromptControls(string prompt) =>
         prompt.Any(character => char.IsControl(character) && character is not ('\r' or '\n' or '\t'));
 
@@ -100,12 +131,8 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
             RequireUsable();
             string? startCursor = null;
             if (captureNativeReceipt)
-            {
-#pragma warning disable GHCP001 // Capture the native durable cursor before this SDK send.
-                startCursor = (await _session.Rpc.EventLog.TailAsync(active.Token)
-                    .ConfigureAwait(false)).Cursor;
-#pragma warning restore GHCP001
-            }
+                startCursor = await RuntimeCopilotNativeTurnJournal.CaptureCursorAsync(_session, active.Token)
+                    .ConfigureAwait(false);
             var completion = _turns.Begin(active.Token, a2aMessageId);
             try
             {

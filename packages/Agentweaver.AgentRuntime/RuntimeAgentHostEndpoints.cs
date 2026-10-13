@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Microsoft.AspNetCore.Authentication;
@@ -9,6 +10,14 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.AgentRuntime;
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed record RuntimeHostFixedCreditGuardReadRequest(
+    RuntimeHostSessionProof? Proof, Guid RequestId, string RequestHash);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+internal sealed record RuntimeHostNativeCreditDenialReadRequest(
+    RuntimeHostSessionProof? Proof, Guid DispatchId, RuntimeCreditLimitDenialStage Stage);
 
 public static class RuntimeAgentHostEndpoints
 {
@@ -32,6 +41,14 @@ public static class RuntimeAgentHostEndpoints
             (HttpContext context, RuntimeHostRefreshRequest request, CancellationToken token) =>
                 ExecuteAsync(context, configure, timeProvider,
                     actor => host.RefreshAsync(request, actor, token))).RequireAuthorization();
+        endpoints.MapPost("/runtime/v1/turns/fixed-credit-denials/read",
+            (HttpContext context, RuntimeHostFixedCreditGuardReadRequest request, CancellationToken token) =>
+                ExecuteAsync(context, configure, timeProvider,
+                    actor => host.ReadFixedCreditGuardAsync(request, actor, token))).RequireAuthorization();
+        endpoints.MapPost("/runtime/v1/turns/denials/read",
+            (HttpContext context, RuntimeHostNativeCreditDenialReadRequest request, CancellationToken token) =>
+                ExecuteAsync(context, configure, timeProvider,
+                    actor => host.ReadNativeCreditDenialAsync(request, actor, token))).RequireAuthorization();
         endpoints.MapGet("/runtime/v1/readiness",
             (HttpContext context, CancellationToken token) =>
                 ExecuteAsync(context, configure, timeProvider,
@@ -88,7 +105,14 @@ public static class RuntimeAgentHostEndpoints
         }
         catch (RuntimeAuthorizationException failure)
         {
-            return Results.Json(new { code = failure.Code }, statusCode: StatusCodes.Status403Forbidden);
+            var statusCode = failure.Code is
+                "runtime_fixed_credit_guard_unavailable" or "runtime_fixed_credit_no_send_unavailable" or
+                "runtime_usage_source_unavailable"
+                ? StatusCodes.Status503ServiceUnavailable
+                : StatusCodes.Status403Forbidden;
+            return failure.FixedCreditGuard is { } fixedCreditGuard
+                ? Results.Json(new { code = failure.Code, fixedCreditGuard }, statusCode: statusCode)
+                : Results.Json(new { code = failure.Code }, statusCode: statusCode);
         }
         catch (RuntimeStartupException failure)
         {

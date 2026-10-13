@@ -60,19 +60,130 @@ internal sealed class RuntimeUsageSourceOwner(
                     connection, transaction, registration, grant, request.Observation, token), cancellationToken);
     }
 
-    internal async Task<RuntimeNativeTurnAdmissionReceipt> BeginNativeTurnAsync(
+    internal Task<RuntimeNativeTurnBeginResult> BeginNativeTurnAsync(
         HttpContext context, RuntimeNativeTurnBeginRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request.Authorization);
         ArgumentNullException.ThrowIfNull(request.Message);
         ArgumentNullException.ThrowIfNull(request.Source);
-        var receipt = await ExecuteWriteAsync(context, request.Authorization,
+        return ExecuteWriteAsync(context, request.Authorization,
             (connection, transaction, registration, grant, actor, token) =>
                 store.BeginNativeTurnWithinTransactionAsync(
                     connection, transaction, registration, grant, request,
                     (source, currentToken) => broker.ReadCostSnapshotAsync(actor, options.EventsOwnerBaseAddress,
-                        new(1, registration, source), currentToken), token), cancellationToken).ConfigureAwait(false);
-        return receipt ?? throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
+                        new(1, registration, source), currentToken), token), cancellationToken);
+    }
+
+    internal Task<RuntimeNativeCreditDenialReadResult> ReadNativeCreditDenialAsync(
+        HttpContext context, RuntimeNativeCreditDenialReadRequest request, CancellationToken cancellationToken)
+    {
+        RuntimeNativeDenialContract.ValidateReadRequest(request);
+        return ExecuteWriteAsync(context, request.Authorization,
+            async (connection, transaction, registration, grant, actor, token) =>
+            {
+                var source = await store.ReadCurrentSourceForGrantAsync(
+                    connection, transaction, registration, grant, token).ConfigureAwait(false);
+                var receipt = await store.ReadNativeCreditDenialWithinTransactionAsync(
+                    connection, transaction, registration, source, request.DispatchId, request.Stage, token)
+                    .ConfigureAwait(false);
+                var noSend = receipt?.Stage == RuntimeCreditLimitDenialStage.NativeTurnBegin
+                    ? await store.ReadNativeTurnNoSendWithinTransactionAsync(
+                        connection, transaction, registration, receipt.CanonicalPayloadHash, token)
+                        .ConfigureAwait(false)
+                    : null;
+                var result = new RuntimeNativeCreditDenialReadResult(receipt, noSend);
+                RuntimeNativeDenialContract.ValidateReadResult(
+                    result, registration, source, request.DispatchId, request.Stage);
+                return result;
+            }, cancellationToken);
+    }
+
+    internal Task<RuntimeFixedCreditGuardReceipt> RecordFixedCreditGuardAsync(
+        HttpContext context, RuntimeFixedCreditGuardRecordRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Authorization);
+        ArgumentNullException.ThrowIfNull(request.Receipt);
+        RuntimeFixedCreditGuardContract.ValidateReceipt(request.Receipt);
+        if (request.Receipt.Stage != RuntimeFixedCreditGuardStage.HostPreQueue ||
+            request.Authorization.RuntimeInstanceId != request.Receipt.Registration.RuntimeInstanceId)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_source_invalid");
+        return ExecuteWriteAsync(context, request.Authorization,
+            async (connection, transaction, registration, grant, actor, token) =>
+            {
+                if (request.Receipt.Registration != registration)
+                    throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
+                var source = await store.ReadCurrentSourceForGrantAsync(
+                    connection, transaction, registration, grant, token).ConfigureAwait(false);
+                RuntimeFixedCreditGuardContract.ValidateSourceTuple(
+                    request.Receipt, registration, grant, source);
+                return await store.RecordFixedCreditGuardWithinTransactionAsync(
+                    connection, transaction, registration, request.Receipt, grant, source, token)
+                    .ConfigureAwait(false);
+            }, cancellationToken);
+    }
+
+    internal Task<RuntimeFixedCreditNoSendReceipt> RecordFixedCreditNoSendAsync(
+        HttpContext context, RuntimeFixedCreditNoSendEvidenceRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Authorization);
+        ArgumentNullException.ThrowIfNull(request.Receipt);
+        ArgumentNullException.ThrowIfNull(request.Evidence);
+        if (request.Receipt.Stage != RuntimeFixedCreditGuardStage.HostPreQueue ||
+            request.Authorization.RuntimeInstanceId != request.Receipt.Registration.RuntimeInstanceId)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_source_invalid");
+        return ExecuteWriteAsync(context, request.Authorization,
+            async (connection, transaction, registration, grant, actor, token) =>
+            {
+                var source = await store.ReadCurrentSourceForGrantAsync(
+                    connection, transaction, registration, grant, token).ConfigureAwait(false);
+                return await store.RecordFixedCreditNoSendWithinTransactionAsync(
+                    connection, transaction, registration, grant, source, request, token)
+                    .ConfigureAwait(false);
+            }, cancellationToken);
+    }
+
+    internal Task<RuntimeFixedCreditGuardReadResult> ReadFixedCreditGuardAsync(
+        HttpContext context, RuntimeFixedCreditGuardReadRequest request,
+        CancellationToken cancellationToken)
+    {
+        RuntimeFixedCreditGuardContract.ValidateReadRequest(request);
+        var proof = request.Authorization
+            ?? throw new RuntimeAuthorizationException("runtime_source_proof_invalid");
+        if (request.Stage != RuntimeFixedCreditGuardStage.HostPreQueue ||
+            proof.RuntimeInstanceId != request.RuntimeInstanceId)
+            throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_request_invalid");
+        return ExecuteWriteAsync(context, proof,
+            async (connection, transaction, registration, grant, actor, token) =>
+            {
+                var source = await store.ReadCurrentSourceForGrantAsync(
+                    connection, transaction, registration, grant, token).ConfigureAwait(false);
+                var result = await store.ReadFixedCreditGuardResultWithinTransactionAsync(
+                    connection, transaction, registration, request, includeEvidence: true,
+                    grant, source, token).ConfigureAwait(false)
+                    ?? throw new CoordinationException(
+                        "runtime_fixed_credit_guard_unknown", StatusCodes.Status404NotFound);
+                RuntimeFixedCreditGuardContract.ValidateReadResult(
+                    result, registration, request, grant, source);
+                return result;
+            }, cancellationToken);
+    }
+
+    internal Task<RuntimeNativeTurnNoSendReceipt> RecordNativeTurnNoSendAsync(
+        HttpContext context, RuntimeNativeTurnNoSendEvidenceRequest request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Authorization);
+        ArgumentNullException.ThrowIfNull(request.Denial);
+        ArgumentNullException.ThrowIfNull(request.Evidence);
+        return ExecuteWriteAsync(context, request.Authorization,
+            (connection, transaction, registration, grant, actor, token) =>
+                store.RecordNativeTurnNoSendWithinTransactionAsync(
+                    connection, transaction, registration, grant, request, token), cancellationToken);
     }
 
     internal async Task PrepareNativeTurnAsync(
@@ -88,11 +199,11 @@ internal sealed class RuntimeUsageSourceOwner(
             throw new RuntimeAuthorizationException("runtime_actor_expired");
         var bearer = new SecretCredential(
             CoordinationIdentity.RequireBearer(context).Parameter!, expiry.Value, timeProvider);
-        bool prepared;
+        RuntimeNativeCreditDenialReceipt? denial;
         try
         {
             var actor = new RuntimeActorAuthorization(bearer, CoordinationIdentity.ReadTenantSelector(context));
-            prepared = await store.ExecuteLockedAsync(expected.RuntimeInstanceId,
+            denial = await store.ExecuteLockedAsync(expected.RuntimeInstanceId,
             (connection, transaction, token) => registrations.ExecuteCurrentAsync(
                 context, expected.RuntimeInstanceId, async (registration, currentToken) =>
                 {
@@ -116,7 +227,7 @@ internal sealed class RuntimeUsageSourceOwner(
         {
             bearer.Invalidate();
         }
-        if (!prepared)
+        if (denial is not null)
             throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
     }
 

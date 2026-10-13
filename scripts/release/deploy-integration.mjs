@@ -1,13 +1,19 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { componentImageRepository, selectIntegrationImageComponents } from './pack.mjs';
-import { createRuntimeList } from './runtime-list.mjs';
+import {
+  BROKER_RUN_BINDING_ANNOTATION, BROKER_RUN_BINDING_POLICY_LABEL,
+  brokerRunBindingFingerprint, createBrokerRunBindingPolicies, createRuntimeList,
+  validateBrokerRunBinding,
+} from './runtime-list.mjs';
 import { validateManifest } from './validate.mjs';
 import { verifyServiceRegistryImage } from './registry.mjs';
 import {
   SERVICE_NAMES, validateRuntimeManifest, validateTarget, verifyAgentHostRegistryImage,
+  verifyBrokerRunBindingConfiguration,
   verifyAzureTarget, verifyExistingP0BrokerRouting, verifyLiveDeployment, verifyRuntimePrerequisites,
 } from './deploy.mjs';
 import { run as runProcess } from '../azure/lib/exec.mjs';
@@ -44,6 +50,7 @@ export function parseIntegrationArgs(argv = []) {
     ['--provenance', 'provenancePath'],
     ['--publication', 'publicationPath'],
     ['--runtime-manifest', 'runtimeManifestPath'],
+    ['--broker-run-binding', 'brokerRunBindingPath'],
     ['--provider-catalog-configmap', 'providerCatalogConfigMapName'],
     ['--provider-catalog-source-commit', 'providerCatalogSourceCommit'],
     ['--subscription-id', 'subscriptionId'],
@@ -72,7 +79,7 @@ export function parseIntegrationArgs(argv = []) {
     'subscriptionId', 'tenantId', 'resourceGroup', 'clusterName', 'namespace', 'nodeMin', 'nodeMax']) {
     requiredString(values[key], key);
   }
-  if (!values.runtimeManifestPath) {
+  if (!values.runtimeManifestPath || values.brokerRunBindingPath) {
     requiredString(values.providerCatalogConfigMapName, '--provider-catalog-configmap');
     requiredString(values.providerCatalogSourceCommit, '--provider-catalog-source-commit');
   }
@@ -267,9 +274,126 @@ export async function verifyIntegrationPublicationRemote(receipt, sourceSha, { r
   return true;
 }
 
-function readbackResources(runtimeManifest, images, acceptedDigests, target, root, run) {
+const BROKER_RUN_BINDING_WORKLOADS = new Set(['identity-broker', 'projects-config']);
+
+function canonicalPodEnvironmentKey(name) {
+  return name.replaceAll('__', ':').toLowerCase();
+}
+
+function isPrivateRunBindingEnvironment(name, key) {
+  return key === 'identity-broker'
+    ? name.startsWith('identitybroker:runbinding:')
+    : name.startsWith('projectsconfig:tls:') ||
+      name === 'projectsconfig:authentication:brokerrunbindingaudience';
+}
+
+function runBindingPodSettingsMatch(name, expectedPod, actualPod, fingerprint, allowAdditionalEnv) {
+  if (actualPod?.metadata?.annotations?.[BROKER_RUN_BINDING_ANNOTATION] !== fingerprint) return false;
+  const expectedSpec = expectedPod?.spec;
+  const actualSpec = actualPod?.spec;
+  if (!Array.isArray(expectedSpec?.containers) || expectedSpec.containers.length !== 1 ||
+      !Array.isArray(actualSpec?.containers) || actualSpec.containers.length !== 1) return false;
+
+  const expectedContainer = expectedSpec.containers[0];
+  const actualContainer = actualSpec.containers[0];
+  const expectedEnv = expectedContainer.env ?? [];
+  const actualEnv = actualContainer.env ?? [];
+  if (!Array.isArray(expectedEnv) || !Array.isArray(actualEnv) ||
+      expectedEnv.some(entry => typeof entry?.name !== 'string') ||
+      actualEnv.some(entry => typeof entry?.name !== 'string')) return false;
+  const expectedEnvKeys = new Set(expectedEnv.map(entry => canonicalPodEnvironmentKey(entry.name)));
+  if (expectedEnvKeys.size !== expectedEnv.length) return false;
+  const envMatches = allowAdditionalEnv
+    ? expectedEnv.every(expected => {
+      const key = canonicalPodEnvironmentKey(expected.name);
+      const matches = actualEnv.filter(entry => canonicalPodEnvironmentKey(entry.name) === key);
+      return matches.length === 1 && isDeepStrictEqual(matches[0], expected);
+    }) && !actualEnv.some(entry => {
+      const key = canonicalPodEnvironmentKey(entry.name);
+      return !expectedEnvKeys.has(key) && isPrivateRunBindingEnvironment(key, name);
+    })
+    : isDeepStrictEqual(actualEnv, expectedEnv);
+  if (!envMatches ||
+      !isDeepStrictEqual(actualContainer.envFrom ?? [], expectedContainer.envFrom ?? [])) return false;
+
+  const volumeName = name === 'identity-broker' ? 'projects-ca' : 'tls';
+  const expectedMountPath = name === 'identity-broker'
+    ? '/var/run/service-backend-ca'
+    : '/var/run/projects-config-tls';
+  const expectedVolume = expectedSpec.volumes?.find(volume => volume.name === volumeName);
+  const actualVolumes = (actualSpec.volumes ?? []).filter(volume => name === 'identity-broker'
+    ? volume.configMap?.name === 'service-backend-ca'
+    : volume.secret?.secretName === 'projects-config-tls');
+  const actualVolume = actualVolumes[0];
+  const expectedMount = expectedContainer.volumeMounts?.find(mount => mount.name === volumeName);
+  const actualMounts = (actualContainer.volumeMounts ?? [])
+    .filter(mount => mount.mountPath === expectedMountPath);
+  const actualMount = actualMounts[0];
+  const volumeProjection = volume => ({
+    name: volume?.name,
+    ...(name === 'identity-broker'
+      ? {
+        configMap: {
+          name: volume?.configMap?.name,
+          optional: volume?.configMap?.optional,
+          defaultMode: volume?.configMap?.defaultMode,
+          items: volume?.configMap?.items,
+        },
+      }
+      : {
+        secret: {
+          secretName: volume?.secret?.secretName,
+          optional: volume?.secret?.optional,
+          defaultMode: volume?.secret?.defaultMode,
+          items: volume?.secret?.items,
+        },
+      }),
+  });
+  const mountProjection = mount => ({
+    name: mount?.name,
+    mountPath: mount?.mountPath,
+    readOnly: mount?.readOnly,
+    subPath: mount?.subPath,
+    subPathExpr: mount?.subPathExpr,
+  });
+  return actualVolumes.length === 1 && actualMounts.length === 1 &&
+    isDeepStrictEqual(volumeProjection(actualVolume), volumeProjection(expectedVolume)) &&
+    isDeepStrictEqual(mountProjection(actualMount), mountProjection(expectedMount));
+}
+
+function readRunBindingPodReplicaSet(pod, deployment, target, root, run, add) {
+  const owners = pod.metadata?.ownerReferences ?? [];
+  const controllers = owners.filter(owner => owner.controller === true);
+  if (controllers.length !== 1 || controllers[0].kind !== 'ReplicaSet' ||
+      typeof controllers[0].name !== 'string' || !controllers[0].name ||
+      typeof controllers[0].uid !== 'string' || !controllers[0].uid ||
+      typeof deployment.metadata?.uid !== 'string' || !deployment.metadata.uid) {
+    fail(`${pod.metadata?.name ?? 'run-binding Pod'} must have one controlling ReplicaSet and an exact Deployment UID`);
+  }
+  const podOwner = controllers[0];
+  const replicaSet = add('replicaset', podOwner.name, run('kubectl', [
+    'get', 'replicaset', podOwner.name, '--namespace', target.namespace, '--output', 'json',
+  ], { cwd: root }));
+  const deploymentOwners = (replicaSet.metadata?.ownerReferences ?? [])
+    .filter(owner => owner.controller === true);
+  if (replicaSet.metadata?.uid !== podOwner.uid || deploymentOwners.length !== 1 ||
+      deploymentOwners[0].kind !== 'Deployment' ||
+      deploymentOwners[0].name !== deployment.metadata.name ||
+      deploymentOwners[0].uid !== deployment.metadata.uid) {
+    fail(`${pod.metadata.name} ReplicaSet is not owned by the exact current ${deployment.metadata.name} Deployment`);
+  }
+  return replicaSet;
+}
+
+function readbackResources(runtimeManifest, images, acceptedDigests, target, root, run, brokerRunBinding) {
   const imageByName = new Map(images.map(image => [image.name, image]));
   const readbacks = [];
+  const services = new Map();
+  const readyPods = new Map();
+  const bindingWorkloads = new Map();
+  const bindingFingerprint = brokerRunBinding
+    ? brokerRunBindingFingerprint(brokerRunBinding)
+    : undefined;
   const add = (kind, name, raw) => {
     const resource = parseJson(raw, `${kind} ${name} readback`);
     if (resource.metadata?.name !== name || resource.metadata?.namespace !== target.namespace) {
@@ -281,6 +405,8 @@ function readbackResources(runtimeManifest, images, acceptedDigests, target, roo
   for (const item of runtimeManifest.items.filter(resource => resource.kind === 'Deployment')) {
     const name = item.metadata.name;
     const expected = imageByName.get(name);
+    const expectedDeployment = runtimeManifest.items.find(resource =>
+      resource.kind === 'Deployment' && resource.metadata.name === name);
     const deployment = add('deployment', name, run('kubectl', [
       'get', 'deployment', name, '--namespace', target.namespace, '--output', 'json',
     ], { cwd: root }));
@@ -288,9 +414,21 @@ function readbackResources(runtimeManifest, images, acceptedDigests, target, roo
         deployment.spec.template.spec.containers[0].image !== expected.image) {
       fail(`${name} deployment readback does not match the verified integration image`);
     }
+    const bindingWorkload = brokerRunBinding && BROKER_RUN_BINDING_WORKLOADS.has(name);
+    const bindingAnnotation = deployment.spec?.template?.metadata?.annotations?.[BROKER_RUN_BINDING_ANNOTATION];
+    if (bindingWorkload) {
+      if (!runBindingPodSettingsMatch(
+        name, expectedDeployment?.spec?.template, deployment.spec?.template, bindingFingerprint, false,
+      )) {
+        fail(`${name} live Deployment changed the exact Broker run-binding settings or TLS mount`);
+      }
+    } else if (bindingAnnotation !== undefined) {
+      fail(`${name} live Pod template does not preserve the exact Broker run-binding fingerprint`);
+    }
     const service = add('service', name, run('kubectl', [
       'get', 'service', name, '--namespace', target.namespace, '--output', 'json',
     ], { cwd: root }));
+    services.set(name, service);
     const expectedService = runtimeManifest.items.find(resource =>
       resource.kind === 'Service' && resource.metadata.name === name);
     const projectService = value => ({
@@ -320,12 +458,117 @@ function readbackResources(runtimeManifest, images, acceptedDigests, target, roo
       .has(liveDigest)) {
       fail(`${name} pod readback image ID is not one of the verified registry digests`);
     }
+    if (bindingWorkload) {
+      if (!runBindingPodSettingsMatch(
+        name, expectedDeployment?.spec?.template, ready[0], bindingFingerprint, true,
+      )) {
+        fail(`${name} ready Pod does not preserve the exact Broker run-binding fingerprint, settings, or TLS mount`);
+      }
+      const replicaSet = readRunBindingPodReplicaSet(ready[0], deployment, target, root, run, add);
+      bindingWorkloads.set(name, {
+        pod: ready[0].metadata.name,
+        podUid: ready[0].metadata.uid,
+        replicaSet: replicaSet.metadata.name,
+        replicaSetUid: replicaSet.metadata.uid,
+        deploymentUid: deployment.metadata.uid,
+      });
+    }
+    readyPods.set(name, ready[0]);
     readbacks.push({ kind: 'pods', name, sha256: hash(podsRaw) });
   }
+  let bindingReadback;
+  if (brokerRunBinding) {
+    if (bindingWorkloads.size !== BROKER_RUN_BINDING_WORKLOADS.size) {
+      fail('both Broker run-binding workloads must have verified ready Pods and current ReplicaSet owners');
+    }
+    const rawPolicies = run('kubectl', [
+      'get', 'ciliumnetworkpolicies.cilium.io', '--namespace', target.namespace,
+      '--selector', `${BROKER_RUN_BINDING_POLICY_LABEL}=projects`, '--output', 'json',
+    ], { cwd: root });
+    const policyList = parseJson(rawPolicies, 'Broker run-binding Cilium policy readback');
+    const expectedPolicies = createBrokerRunBindingPolicies(target.namespace);
+    const actualPolicies = Array.isArray(policyList.items) ? policyList.items : [];
+    const expectedNames = expectedPolicies.map(policy => policy.metadata.name).sort();
+    const actualNames = actualPolicies.map(policy => policy.metadata?.name).sort();
+    if (!Array.isArray(policyList.items) || actualNames.length !== expectedNames.length ||
+        !isDeepStrictEqual(actualNames, expectedNames)) {
+      fail('live Broker run-binding Cilium policies must contain exactly the two generated policies');
+    }
+    for (const expectedPolicy of expectedPolicies) {
+      const policy = actualPolicies.find(value => value.metadata?.name === expectedPolicy.metadata.name);
+      if (policy.kind !== expectedPolicy.kind || policy.apiVersion !== expectedPolicy.apiVersion ||
+          policy.metadata?.namespace !== target.namespace ||
+          policy.metadata?.labels?.['agentweaver.io/service'] !==
+            expectedPolicy.metadata.labels['agentweaver.io/service'] ||
+          policy.metadata?.labels?.[BROKER_RUN_BINDING_POLICY_LABEL] !== 'projects' ||
+          !isDeepStrictEqual(policy.spec, expectedPolicy.spec)) {
+        fail(`live ${expectedPolicy.metadata.name} Cilium policy differs from the exact approved policy`);
+      }
+    }
+    readbacks.push({ kind: 'ciliumnetworkpolicies', name: 'broker-run-binding', sha256: hash(rawPolicies) });
+
+    const projectsService = services.get('projects-config');
+    const projectsPod = readyPods.get('projects-config');
+    const slicesRaw = run('kubectl', [
+      'get', 'endpointslices.discovery.k8s.io', '--namespace', target.namespace,
+      '--selector', 'kubernetes.io/service-name=projects-config', '--output', 'json',
+    ], { cwd: root });
+    const slices = parseJson(slicesRaw, 'Projects Config EndpointSlice readback');
+    if (!Array.isArray(slices.items)) {
+      fail('Projects Config EndpointSlice readback must be a Kubernetes resource list');
+    }
+    const endpoints = (slices.items ?? []).flatMap(slice => {
+      const owners = slice.metadata?.ownerReferences ?? [];
+      const serviceOwned = owners.length === 1 && owners[0].kind === 'Service' &&
+        owners[0].name === 'projects-config' && owners[0].uid === projectsService?.metadata?.uid &&
+        owners[0].controller === true;
+      if (!serviceOwned || slice.metadata?.namespace !== target.namespace ||
+          slice.metadata?.labels?.['kubernetes.io/service-name'] !== 'projects-config' ||
+          slice.ports?.length !== 1 || slice.ports[0].name !== 'https' ||
+          slice.ports[0].port !== 8443 || slice.ports[0].protocol !== 'TCP') {
+        fail('Projects Config EndpointSlice must be owned by its exact Service and expose only HTTPS port 8443');
+      }
+      return (slice.endpoints ?? []).map(endpoint => ({ slice, endpoint }));
+    });
+    const readyEndpoints = endpoints.filter(({ endpoint }) => endpoint.conditions?.ready === true);
+    const endpoint = readyEndpoints[0]?.endpoint;
+    if (!projectsService?.metadata?.uid || !projectsPod?.metadata?.uid ||
+        slices.items?.length !== 1 || endpoints.length !== 1 || readyEndpoints.length !== 1 ||
+        !Array.isArray(endpoint?.addresses) || endpoint.addresses.length === 0 ||
+        endpoint.targetRef?.kind !== 'Pod' || endpoint.targetRef?.namespace !== target.namespace ||
+        endpoint.targetRef?.name !== projectsPod.metadata.name ||
+        endpoint.targetRef?.uid !== projectsPod.metadata.uid) {
+      fail('Projects Config Service must have one service-owned ready EndpointSlice endpoint to its ready Projects pod');
+    }
+    const projectsPodAddresses = new Set([
+      projectsPod.status?.podIP,
+      ...(Array.isArray(projectsPod.status?.podIPs)
+        ? projectsPod.status.podIPs.map(podIp => podIp?.ip)
+        : []),
+    ].filter(address => typeof address === 'string' && address.length > 0));
+    if (projectsPodAddresses.size === 0 ||
+        endpoint.addresses.some(address => !projectsPodAddresses.has(address))) {
+      fail('Projects Config EndpointSlice addresses must match the ready Projects pod IPs');
+    }
+    readbacks.push({ kind: 'endpointslices', name: 'projects-config', sha256: hash(slicesRaw) });
+    bindingReadback = {
+      fingerprint: bindingFingerprint,
+      workloads: Object.fromEntries(bindingWorkloads),
+      policiesSha256: hash(rawPolicies),
+      projectsEndpointSliceSha256: hash(slicesRaw),
+      projectsServiceUid: projectsService.metadata.uid,
+      projectsPod: projectsPod.metadata.name,
+      projectsPodUid: projectsPod.metadata.uid,
+    };
+  }
   readbacks.sort((left, right) => `${left.kind}/${left.name}`.localeCompare(`${right.kind}/${right.name}`));
-  return {
+  const readbackDocument = {
     resources: readbacks,
-    sha256: hash(JSON.stringify(readbacks)),
+    ...(bindingReadback ? { brokerRunBinding: bindingReadback } : {}),
+  };
+  return {
+    ...readbackDocument,
+    sha256: hash(JSON.stringify(brokerRunBinding ? readbackDocument : readbacks)),
   };
 }
 
@@ -335,6 +578,7 @@ export async function deployIntegration(options = {}, dependencies = {}) {
   validateTarget(parsed.target);
   const root = path.resolve(dependencies.root ?? repositoryRoot);
   const run = dependencies.run ?? ((file, args, opts) => runProcess(file, args, opts).stdout.trim());
+  const runRaw = dependencies.runRaw ?? ((file, args, opts) => runProcess(file, args, opts).stdout);
   const readFile = dependencies.readFile ?? readFileSync;
   const git = dependencies.git ?? ((...args) => run('git', args, { cwd: root }));
   const manifest = options.manifest ?? readInput(parsed.manifestPath, root, readFile, 'draft manifest');
@@ -347,6 +591,10 @@ export async function deployIntegration(options = {}, dependencies = {}) {
   const runtimeDocument = options.runtimeManifest ?? (parsed.runtimeManifestPath
     ? readInput(parsed.runtimeManifestPath, root, readFile, 'runtime manifest')
     : undefined);
+  const brokerRunBinding = options.brokerRunBinding ?? (parsed.brokerRunBindingPath
+    ? readInput(parsed.brokerRunBindingPath, root, readFile, 'Broker run-binding descriptor')
+    : undefined);
+  if (brokerRunBinding !== undefined) validateBrokerRunBinding(brokerRunBinding);
 
   if (git('rev-parse', 'HEAD') !== parsed.sourceSha ||
       git('status', '--porcelain') !== '') {
@@ -408,14 +656,29 @@ export async function deployIntegration(options = {}, dependencies = {}) {
     entry.runtimeImage = image;
   }
   const runtimeImages = images.map(entry => entry.runtimeImage);
-  const runtimeList = runtimeDocument ?? createRuntimeList(runtimeImages, parsed.target.namespace, {
+  const providerCatalog = {
     configMapName: parsed.providerCatalogConfigMapName,
     sourceCommit: parsed.providerCatalogSourceCommit,
-  });
-  const runtimeManifest = validateRuntimeManifest(runtimeList, runtimeImages, parsed.target.namespace);
+  };
+  const generatedRuntimeList = brokerRunBinding || !runtimeDocument
+    ? createRuntimeList(runtimeImages, parsed.target.namespace, providerCatalog, brokerRunBinding)
+    : undefined;
+  if (brokerRunBinding && runtimeDocument && !isDeepStrictEqual(runtimeDocument, generatedRuntimeList)) {
+    fail('an opted-in Broker run-binding requires the exact generated runtime manifest');
+  }
+  const runtimeList = runtimeDocument ?? generatedRuntimeList;
+  const runtimeManifest = validateRuntimeManifest(runtimeList, runtimeImages, parsed.target.namespace,
+    brokerRunBinding);
   const targetInfo = await (dependencies.verifyTarget ?? verifyAzureTarget)(parsed.target, { root, run });
-  (dependencies.verifyPrerequisites ?? verifyRuntimePrerequisites)(runtimeManifest, parsed.target, { root, run });
+  (dependencies.verifyPrerequisites ?? verifyRuntimePrerequisites)(runtimeManifest, parsed.target, {
+    root, run, brokerRunBinding,
+  });
   await (dependencies.verifyRouting ?? verifyExistingP0BrokerRouting)(parsed.target, { root, run });
+  const verifyRunBinding = dependencies.verifyBrokerRunBindingConfiguration ??
+    verifyBrokerRunBindingConfiguration;
+  const bindingConfiguration = brokerRunBinding
+    ? verifyRunBinding(brokerRunBinding, parsed.target, { root, run, runRaw })
+    : undefined;
   run('kubectl', ['apply', '--dry-run=client', '--filename', '-'], {
     cwd: root, input: `${JSON.stringify(runtimeManifest)}\n`,
   });
@@ -477,7 +740,21 @@ export async function deployIntegration(options = {}, dependencies = {}) {
   await (dependencies.verifyTarget ?? verifyAzureTarget)(parsed.target, { root, run });
   await (dependencies.verifyLive ?? ((refs, target, digests) =>
     verifyLiveDeployment(refs, target, digests, { root, run })))(runtimeImages, parsed.target, acceptedDigests);
-  const readbacks = readbackResources(runtimeManifest, runtimeImages, acceptedDigests, parsed.target, root, run);
+  const freshBindingConfiguration = brokerRunBinding
+    ? verifyRunBinding(brokerRunBinding, parsed.target, { root, run, runRaw })
+    : undefined;
+  if (brokerRunBinding && !isDeepStrictEqual(bindingConfiguration, freshBindingConfiguration)) {
+    fail('Broker run-binding ConfigMaps, TLS certificates, or shadow keys changed during apply');
+  }
+  const readbacks = readbackResources(runtimeManifest, runtimeImages, acceptedDigests, parsed.target, root, run,
+    brokerRunBinding);
+  if (brokerRunBinding) readbacks.brokerRunBinding.configuration = freshBindingConfiguration;
+  if (brokerRunBinding) {
+    readbacks.sha256 = hash(JSON.stringify({
+      resources: readbacks.resources,
+      brokerRunBinding: readbacks.brokerRunBinding,
+    }));
+  }
   const manifestSha256 = manifestHash(manifest);
   const provenanceSha256 = hash(provenanceBytes);
   const publicationSha256 = hash(JSON.stringify(publication));
@@ -517,7 +794,7 @@ export async function deployIntegration(options = {}, dependencies = {}) {
 }
 
 function helpText() {
-  return `release:deploy-integration -- validate and deploy source-bound integration images\n\nUsage:\n  npm run release:deploy-integration -- --source-sha <40-character-sha> --manifest <draft-manifest.json> --provenance <provenance.json> --publication <integration-publication.json> --subscription-id <id> --tenant-id <id> --resource-group <name> --cluster <name> --namespace <name> --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--runtime-manifest <runtime-list.json>] [--result <file>] [--execute]\n\nThe default is read-only. --execute is required to apply the nine shared P0 services. This command does not use a GitHub Release or final-release manifest.`;
+  return `release:deploy-integration -- validate and deploy source-bound integration images\n\nUsage:\n  npm run release:deploy-integration -- --source-sha <40-character-sha> --manifest <draft-manifest.json> --provenance <provenance.json> --publication <integration-publication.json> --subscription-id <id> --tenant-id <id> --resource-group <name> --cluster <name> --namespace <name> --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--runtime-manifest <runtime-list.json>] [--broker-run-binding <descriptor.json>] [--result <file>] [--execute]\n\nThe default is read-only. --execute is required to apply the nine shared P0 services. --broker-run-binding explicitly enables the Projects Config run-binding path and requires its exact descriptor. This command does not use a GitHub Release or final-release manifest.`;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

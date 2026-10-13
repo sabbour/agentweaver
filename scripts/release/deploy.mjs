@@ -4,9 +4,15 @@ import {
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { componentImageRepository } from './pack.mjs';
-import { createRuntimeList } from './runtime-list.mjs';
+import {
+  BROKER_RUN_BINDING_ANNOTATION,
+  PROJECTS_CONFIG_TLS_CERTIFICATE_PATH,
+  PROJECTS_CONFIG_TLS_KEY_PATH, brokerRunBindingFingerprint,
+  createBrokerRunBindingPolicies, createRuntimeList, validateBrokerRunBinding,
+} from './runtime-list.mjs';
 import { validateManifest } from './validate.mjs';
 import { verifyRegistryImage } from './registry.mjs';
 import { run as runProcess } from '../azure/lib/exec.mjs';
@@ -86,6 +92,8 @@ const BACKEND_TLS_HOSTNAMES = Object.freeze({
   gateway: 'gateway.agentweaver-v1-p0.svc.cluster.local',
   mcp: 'mcp.agentweaver-v1-p0.svc.cluster.local',
 });
+const PROJECTS_CONFIG_HOSTNAME = 'projects-config.agentweaver-v1-p0.svc.cluster.local';
+const SERVER_AUTH_EKU = '1.3.6.1.5.5.7.3.1';
 const BACKEND_TLS_CA_CONFIGMAP = 'service-backend-ca';
 export const SERVICE_NETWORK_POLICY_NAMES = Object.freeze({
   'identity-broker': 'identity-broker-egress',
@@ -376,7 +384,13 @@ export function validatePublicationReceipt(receipt, manifest, sourceSha) {
   });
 }
 
-export function validateRuntimeManifest(document, images, namespace) {
+export function validateRuntimeManifest(document, images, namespace, brokerRunBinding) {
+  const binding = brokerRunBinding === undefined
+    ? undefined
+    : validateBrokerRunBinding(brokerRunBinding);
+  const bindingFingerprint = binding ? brokerRunBindingFingerprint(binding) : undefined;
+  const expectedBindingPolicies = new Map((binding ? createBrokerRunBindingPolicies(namespace) : [])
+    .map((policy) => [policy.metadata.name, policy]));
   const items = document?.kind === 'List' ? document.items
     : Array.isArray(document) ? document : null;
   if (!Array.isArray(items) || items.length === 0) fail('runtime manifest must be a rendered Kubernetes List');
@@ -390,8 +404,23 @@ export function validateRuntimeManifest(document, images, namespace) {
     .map((image) => [image.name, image]));
   const deployments = new Map();
   const services = new Map();
+  const bindingPolicies = new Map();
   for (const item of items) {
-    if (!item || typeof item !== 'object' || !['Deployment', 'Service'].includes(item.kind)) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      fail('runtime manifest contains an invalid resource');
+    }
+    if (item.kind === 'CiliumNetworkPolicy') {
+      const expectedPolicy = expectedBindingPolicies.get(item.metadata?.name);
+      if (!expectedPolicy || !isDeepStrictEqual(item, expectedPolicy)) {
+        fail('runtime manifest may contain only the exact opt-in Broker-to-Projects Cilium policies');
+      }
+      if (bindingPolicies.has(item.metadata.name)) {
+        fail(`runtime manifest contains duplicate CiliumNetworkPolicy "${item.metadata.name}"`);
+      }
+      bindingPolicies.set(item.metadata.name, item);
+      continue;
+    }
+    if (!['Deployment', 'Service'].includes(item.kind)) {
       fail('runtime manifest may contain only Deployment and ClusterIP Service resources; held prerequisites are not managed here');
     }
     if (item.apiVersion !== (item.kind === 'Deployment' ? 'apps/v1' : 'v1') ||
@@ -403,6 +432,10 @@ export function validateRuntimeManifest(document, images, namespace) {
     const resourceMap = item.kind === 'Deployment' ? deployments : services;
     if (resourceMap.has(name)) fail(`runtime manifest contains duplicate ${item.kind} "${name}"`);
     resourceMap.set(name, item);
+  }
+  const expectedBindingPolicyCount = binding ? 2 : 0;
+  if (bindingPolicies.size !== expectedBindingPolicyCount) {
+    fail('runtime manifest must contain exactly two Broker-to-Projects Cilium policies when run binding is enabled');
   }
   if (deployments.size !== DEPLOYED_SERVICES.length || services.size !== DEPLOYED_SERVICES.length) {
     fail('runtime manifest must include exactly one Service and Deployment for each of the nine shared product services');
@@ -434,6 +467,12 @@ export function validateRuntimeManifest(document, images, namespace) {
       ? labels['azure.workload.identity/use'] !== 'true'
       : labels['azure.workload.identity/use'] !== undefined) {
       fail(`${name} Pod must preserve only its existing Azure Workload Identity injection setting`);
+    }
+    const bindingAnnotation = deployment.spec?.template?.metadata?.annotations?.[BROKER_RUN_BINDING_ANNOTATION];
+    if (binding && ['identity-broker', 'projects-config'].includes(name)
+      ? bindingAnnotation !== bindingFingerprint
+      : bindingAnnotation !== undefined) {
+      fail(`${name} Pod must preserve only its exact opt-in Broker run-binding fingerprint`);
     }
     if (podSpec.serviceAccountName !== name ||
         deployment.spec?.replicas !== 1 ||
@@ -519,23 +558,31 @@ export function validateRuntimeManifest(document, images, namespace) {
     const backendCaVolumeNames = new Set(backendCaVolumes.map((volume) => volume.name));
     const backendCaMounts = (container.volumeMounts ?? []).filter((mount) =>
       mount.name === 'backend-ca' || backendCaVolumeNames.has(mount.name));
-    if (name === 'mcp') {
+    const mountsBackendCa = name === 'mcp' || (name === 'identity-broker' && binding);
+    if (mountsBackendCa) {
       const backendCaVolume = backendCaVolumes[0];
       const backendCaMount = backendCaMounts[0];
+      const expectedVolumeName = name === 'mcp' ? 'backend-ca' : 'projects-ca';
       if (backendCaVolumes.length !== 1 ||
-          backendCaVolume.name !== 'backend-ca' ||
+          backendCaVolume.name !== expectedVolumeName ||
           backendCaVolume.configMap?.name !== BACKEND_TLS_CA_CONFIGMAP ||
           backendCaVolume.configMap.optional === true ||
           backendCaVolume.configMap.items?.length !== 1 ||
           backendCaVolume.configMap.items[0].key !== 'ca.crt' ||
           backendCaVolume.configMap.items[0].path !== 'ca.crt' ||
           backendCaMounts.length !== 1 ||
+          backendCaMount.name !== expectedVolumeName ||
           backendCaMount.mountPath !== '/var/run/service-backend-ca' ||
-          backendCaMount.readOnly !== true) {
-        fail('MCP must mount the exact public backend CA ConfigMap read-only');
+          backendCaMount.readOnly !== true ||
+          (name === 'identity-broker' &&
+            (backendCaVolume.configMap.optional !== false ||
+             backendCaVolume.configMap.defaultMode !== 0o440))) {
+        fail(`${name} must mount the exact public backend CA ConfigMap read-only`);
       }
     } else if (backendCaVolumes.length || backendCaMounts.length) {
-      fail('only MCP may mount the public backend CA ConfigMap');
+      fail(binding
+        ? 'only MCP and an opted-in Identity Broker may mount the public backend CA ConfigMap'
+        : 'only MCP may mount the public backend CA ConfigMap');
     }
     if (name === 'environment') {
       if (getEnvValue('Environment__Sandbox__AgentSandbox__ContainerImage') !== hostImage.sandboxImage ||
@@ -951,12 +998,22 @@ export function verifyAzureTarget(target, { root, run }) {
   return { cluster, contextName, server };
 }
 
-export function verifyRuntimePrerequisites(runtimeManifest, target, { root, run }) {
+export function verifyRuntimePrerequisites(runtimeManifest, target, { root, run, brokerRunBinding }) {
   for (const reference of resolvePodReferences(runtimeManifest)) {
     const plural = reference.kind === 'serviceaccount' ? 'serviceaccount'
       : reference.kind === 'configmap' ? 'configmap'
         : reference.kind === 'secret' ? 'secret'
           : 'persistentvolumeclaim';
+    if (reference.kind === 'secret' && brokerRunBinding) {
+      const output = run('kubectl', [
+        'get', plural, reference.name, '--namespace', target.namespace,
+        '--output=jsonpath={.metadata.name}:{.metadata.namespace}',
+      ], { cwd: root });
+      if (output !== `${reference.name}:${target.namespace}`) {
+        fail(`required existing ${reference.kind} ${reference.name} is not in the exact v1 P0 namespace`);
+      }
+      continue;
+    }
     const result = run('kubectl', ['get', plural, reference.name, '--namespace', target.namespace, '--output', 'json'], { cwd: root });
     const resource = parseJson(result, `${reference.kind} ${reference.name}`);
     if (resource.metadata?.name !== reference.name || resource.metadata?.namespace !== target.namespace) {
@@ -985,6 +1042,274 @@ export function verifyRuntimePrerequisites(runtimeManifest, target, { root, run 
   }
   verifyBackendCertificates(target, { root, run });
   verifyExistingP0BrokerRouting(target, { root, run });
+}
+
+function readRuntimeConfigMap(name, target, { root, run }) {
+  const resource = parseJson(run('kubectl', [
+    'get', 'configmap', name, '--namespace', target.namespace, '--output', 'json',
+  ], { cwd: root }), `${name} run-binding configuration`);
+  if (resource.metadata?.name !== name || resource.metadata?.namespace !== target.namespace ||
+      !resource.data || typeof resource.data !== 'object' || Array.isArray(resource.data)) {
+    fail(`${name} must be the exact existing run-binding ConfigMap in the P0 namespace`);
+  }
+  return resource.data;
+}
+
+function canonicalConfigKey(value) {
+  return value.replaceAll('__', ':').toLowerCase();
+}
+
+function audienceUrisMatch(left, right) {
+  if (left === right) return true;
+  try {
+    const leftUri = new URL(left);
+    const rightUri = new URL(right);
+    return leftUri.protocol === 'https:' && rightUri.protocol === 'https:' &&
+      leftUri.href === rightUri.href;
+  } catch {
+    return false;
+  }
+}
+
+function requireRuntimeConfigValue(data, key, expected, resourceName) {
+  const canonical = canonicalConfigKey(key);
+  const matches = Object.entries(data).filter(([candidate]) =>
+    canonicalConfigKey(candidate) === canonical);
+  if (matches.length !== 1 || matches[0][1] !== expected) {
+    fail(`${resourceName} must contain exactly the required ${key} setting`);
+  }
+}
+
+function hashRuntimeSettings(data, keys) {
+  const selected = Object.fromEntries(keys.map((key) => {
+    const canonical = canonicalConfigKey(key);
+    const [, value] = Object.entries(data).find(([candidate]) =>
+      canonicalConfigKey(candidate) === canonical);
+    return [canonical, value];
+  }).sort(([left], [right]) => left.localeCompare(right)));
+  return createHash('sha256').update(JSON.stringify(selected)).digest('hex');
+}
+
+function assertNoUnexpectedRunBindingSettings(data, prefix, allowedKeys, resourceName) {
+  const allowed = new Set(allowedKeys.map(canonicalConfigKey));
+  for (const key of Object.keys(data)) {
+    const canonical = canonicalConfigKey(key);
+    if (canonical.startsWith(prefix) && !allowed.has(canonical)) {
+      fail(`${resourceName} contains an unsupported run-binding setting`);
+    }
+  }
+}
+
+function certificateIsCurrent(certificate, now) {
+  const validFrom = Date.parse(certificate.validFrom);
+  const validTo = Date.parse(certificate.validTo);
+  return Number.isFinite(validFrom) && Number.isFinite(validTo) && validFrom <= now && validTo > now;
+}
+
+function parsePublicCertificateBundle(bytes, resourceName, fieldName) {
+  const text = Buffer.isBuffer(bytes) ? bytes.toString('utf8') : String(bytes);
+  const blocks = [...text.matchAll(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g)]
+    .map(([block]) => block);
+  if (blocks.length === 0 || text.replace(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g, '').trim()) {
+    fail(`${resourceName} ${fieldName} must contain only PEM certificates`);
+  }
+  return blocks.map((block) => {
+    try {
+      return new X509Certificate(block);
+    } catch {
+      fail(`${resourceName} ${fieldName} contains an invalid public certificate`);
+    }
+  });
+}
+
+function parseCaBundle(bytes, configMapName) {
+  const authorities = parsePublicCertificateBundle(bytes, configMapName, 'ca.crt');
+  const now = Date.now();
+  if (authorities.some((authority) => !authority.ca || !certificateIsCurrent(authority, now))) {
+    fail(`${configMapName} ca.crt must contain currently valid CA certificates`);
+  }
+  return authorities;
+}
+
+function certificateFingerprint(certificate) {
+  return createHash('sha256').update(certificate.raw).digest('hex');
+}
+
+const POWERSHELL_CERTIFICATE_CHAIN_VALIDATOR = [
+  "$ErrorActionPreference = 'Stop'",
+  '$payload = [Console]::In.ReadToEnd() | ConvertFrom-Json',
+  '$leaf = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new([Convert]::FromBase64String($payload.leaf))',
+  '$chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()',
+  '$chain.ChainPolicy.TrustMode = [System.Security.Cryptography.X509Certificates.X509ChainTrustMode]::CustomRootTrust',
+  '$chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck',
+  '$chain.ChainPolicy.DisableCertificateDownloads = $true',
+  "$null = $chain.ChainPolicy.ApplicationPolicy.Add([System.Security.Cryptography.Oid]::new('1.3.6.1.5.5.7.3.1'))",
+  'foreach ($encoded in @($payload.authorities)) {',
+  '  $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new([Convert]::FromBase64String($encoded))',
+  '  $null = $chain.ChainPolicy.CustomTrustStore.Add($certificate)',
+  '}',
+  'foreach ($encoded in @($payload.intermediates)) {',
+  '  $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new([Convert]::FromBase64String($encoded))',
+  '  $null = $chain.ChainPolicy.ExtraStore.Add($certificate)',
+  '}',
+  'if (-not $chain.Build($leaf)) { throw "X.509 server certificate chain validation failed" }',
+  "[Console]::Out.Write('valid')",
+].join('\n');
+
+function verifyServerCertificateChain(bytes, hostname, authorities, resourceName, { root, run }) {
+  const [leaf, ...chain] = parsePublicCertificateBundle(bytes, resourceName, 'tls.crt');
+  const now = Date.now();
+  if (chain.some((certificate) => !certificate.ca || !certificateIsCurrent(certificate, now)) ||
+      leaf.ca || leaf.checkHost(hostname, { subject: 'never' }) !== hostname ||
+      !certificateIsCurrent(leaf, now) || !leaf.keyUsage?.includes(SERVER_AUTH_EKU)) {
+    fail(`${resourceName} must have a current serverAuth certificate for ${hostname} that chains to the configured CA bundle`);
+  }
+  let chainValidation;
+  try {
+    chainValidation = run('pwsh', [
+      '-NoProfile', '-NonInteractive', '-Command', POWERSHELL_CERTIFICATE_CHAIN_VALIDATOR,
+    ], {
+      cwd: root,
+      input: JSON.stringify({
+        leaf: Buffer.from(leaf.raw).toString('base64'),
+        intermediates: chain.map(certificate => Buffer.from(certificate.raw).toString('base64')),
+        authorities: authorities.map(certificate => Buffer.from(certificate.raw).toString('base64')),
+      }),
+    });
+  } catch (error) {
+    if (error.message?.includes('Failed to start pwsh')) {
+      fail('PowerShell 7+ (pwsh) is required to validate Broker run-binding certificate chains');
+    }
+    throw error;
+  }
+  if (chainValidation !== 'valid') {
+    fail(`${resourceName} must have a current serverAuth certificate for ${hostname} that chains to the configured CA bundle`);
+  }
+  return leaf;
+}
+
+function readBrokerClientSecretKeys(target, { root, run }) {
+  const template = '{{range $key, $value := .data}}{{$key}}{{"\\n"}}{{end}}';
+  const output = run('kubectl', [
+    'get', 'secret', 'identity-broker-client-secrets', '--namespace', target.namespace,
+    '--ignore-not-found', `--output=go-template=${template}`,
+  ], { cwd: root });
+  return output.split(/\r?\n/).filter(Boolean);
+}
+
+export function verifyBrokerRunBindingConfiguration(binding, target, { root, run, runRaw = run }) {
+  const descriptor = validateBrokerRunBinding(binding);
+  const brokerConfig = readRuntimeConfigMap('identity-broker-runtime-config', target, { root, run });
+  const projectsConfig = readRuntimeConfigMap('projects-config-runtime-config', target, { root, run });
+  const brokerSettings = {
+    'IdentityBroker__RunBinding__ProjectsOwnerAddress': descriptor.projectsOwnerAddress,
+    'IdentityBroker__RunBinding__ProjectsAudience': descriptor.projectsAudience,
+    'IdentityBroker__RunBinding__ProjectsServerCertificateSha256': descriptor.projectsServerCertificateSha256,
+    'IdentityBroker__RunBinding__ProjectsTrustBundleSha256': descriptor.projectsTrustBundleSha256,
+  };
+  const projectsSettings = {
+    'ProjectsConfig__Tls__CertificatePath': PROJECTS_CONFIG_TLS_CERTIFICATE_PATH,
+    'ProjectsConfig__Tls__KeyPath': PROJECTS_CONFIG_TLS_KEY_PATH,
+    'ProjectsConfig__Tls__ServerCertificateSha256': descriptor.projectsServerCertificateSha256,
+    'ProjectsConfig__Authentication__BrokerRunBindingAudience': descriptor.projectsAudience,
+  };
+  assertNoUnexpectedRunBindingSettings(Object.fromEntries(
+    Object.keys(brokerConfig).map((key) => [canonicalConfigKey(key), brokerConfig[key]])),
+  'identitybroker:runbinding:', Object.keys(brokerSettings), 'identity-broker-runtime-config');
+  assertNoUnexpectedRunBindingSettings(Object.fromEntries(
+    Object.keys(projectsConfig).map((key) => [canonicalConfigKey(key), projectsConfig[key]])),
+  'projectsconfig:tls:', Object.keys(projectsSettings).slice(0, 3), 'projects-config-runtime-config');
+  assertNoUnexpectedRunBindingSettings(Object.fromEntries(
+    Object.keys(projectsConfig).map((key) => [canonicalConfigKey(key), projectsConfig[key]])),
+  'projectsconfig:authentication:brokerrunbinding', [Object.keys(projectsSettings)[3]],
+  'projects-config-runtime-config');
+  const redemptionAudiences = Object.entries(brokerConfig).filter(([key]) =>
+    canonicalConfigKey(key) === 'identitybroker:secretredemption:audience');
+  const brokerClientResources = Object.entries(brokerConfig).filter(([key]) =>
+    /^identitybroker:clients:\d+:resources:\d+$/.test(canonicalConfigKey(key)));
+  if (redemptionAudiences.length !== 1 || typeof redemptionAudiences[0][1] !== 'string' ||
+      !redemptionAudiences[0][1] || brokerClientResources.length === 0 ||
+      brokerClientResources.some(([, value]) => typeof value !== 'string' || !value)) {
+    fail('Identity Broker runtime config must contain its SecretRedemption audience and client resources');
+  }
+  const brokerPublicAudiences = [
+    ...brokerClientResources.map(([, value]) => value),
+  ];
+  const privateAudienceAbsoluteUri = new URL(descriptor.projectsAudience).href;
+  if (redemptionAudiences[0][1] === privateAudienceAbsoluteUri ||
+      brokerPublicAudiences.some(value => audienceUrisMatch(value, descriptor.projectsAudience))) {
+    fail('Projects Config run-binding audience must be distinct from all existing Identity Broker public audiences');
+  }
+  const ordinaryAudience = Object.entries(projectsConfig).filter(([key]) =>
+    canonicalConfigKey(key) === 'projectsconfig:authentication:audience');
+  if (ordinaryAudience.length !== 1 || typeof ordinaryAudience[0][1] !== 'string' ||
+      !ordinaryAudience[0][1] ||
+      audienceUrisMatch(ordinaryAudience[0][1], descriptor.projectsAudience)) {
+    fail('Projects Config run-binding audience must be distinct from its existing authentication audience');
+  }
+  for (const [key, value] of Object.entries(brokerSettings)) {
+    requireRuntimeConfigValue(brokerConfig, key, value, 'identity-broker-runtime-config');
+  }
+  for (const [key, value] of Object.entries(projectsSettings)) {
+    requireRuntimeConfigValue(projectsConfig, key, value, 'projects-config-runtime-config');
+  }
+
+  const bindingKeys = new Set(Object.keys(brokerSettings).map(canonicalConfigKey));
+  const clientSecretKeys = readBrokerClientSecretKeys(target, { root, run });
+  if (clientSecretKeys.some((key) => bindingKeys.has(canonicalConfigKey(key)))) {
+    fail('identity-broker-client-secrets must not shadow the explicit run-binding settings');
+  }
+
+  const caRaw = runRaw('kubectl', [
+    'get', 'configmap', BACKEND_TLS_CA_CONFIGMAP, '--namespace', target.namespace,
+    '--output=jsonpath={.data.ca\\.crt}',
+  ], { cwd: root });
+  const caBytes = Buffer.isBuffer(caRaw) ? caRaw : Buffer.from(caRaw, 'utf8');
+  const caSha256 = createHash('sha256').update(caBytes).digest('hex');
+  if (caSha256 !== descriptor.projectsTrustBundleSha256) {
+    fail(`${BACKEND_TLS_CA_CONFIGMAP} raw ca.crt bytes do not match the explicit run-binding fingerprint`);
+  }
+  const authorities = parseCaBundle(caBytes, BACKEND_TLS_CA_CONFIGMAP);
+
+  const secretStatus = run('kubectl', [
+    'get', 'secret', 'projects-config-tls', '--namespace', target.namespace,
+    '--output=go-template={{.type}}|{{if index .data "tls.crt"}}certificate{{end}}|{{if index .data "tls.key"}}key{{end}}',
+  ], { cwd: root });
+  if (secretStatus !== 'kubernetes.io/tls|certificate|key') {
+    fail('projects-config-tls must contain the public certificate and private key in an existing TLS Secret');
+  }
+  const certificateBase64 = run('kubectl', [
+    'get', 'secret', 'projects-config-tls', '--namespace', target.namespace,
+    '--output=jsonpath={.data.tls\\.crt}',
+  ], { cwd: root });
+  const certificateBytes = Buffer.from(certificateBase64, 'base64');
+  if (!certificateBase64 || certificateBytes.toString('base64') !== certificateBase64) {
+    fail('projects-config-tls must contain a valid public tls.crt');
+  }
+  const leaf = verifyServerCertificateChain(
+    certificateBytes, PROJECTS_CONFIG_HOSTNAME, authorities, 'projects-config-tls', { root, run },
+  );
+  const leafSha256 = createHash('sha256').update(leaf.raw).digest('hex');
+  if (leafSha256 !== descriptor.projectsServerCertificateSha256) {
+    fail(`projects-config-tls leaf fingerprint does not match the explicit run-binding descriptor`);
+  }
+
+  return {
+    configMaps: [
+      {
+        name: 'identity-broker-runtime-config',
+        sha256: hashRuntimeSettings(brokerConfig, Object.keys(brokerSettings)),
+      },
+      {
+        name: 'projects-config-runtime-config',
+        sha256: hashRuntimeSettings(projectsConfig, Object.keys(projectsSettings)),
+      },
+    ],
+    brokerClientSecretKeysSha256: createHash('sha256')
+      .update(JSON.stringify(clientSecretKeys.sort())).digest('hex'),
+    trustBundleSha256: caSha256,
+    projectsServerCertificateSha256: leafSha256,
+  };
 }
 
 function verifyImageIds(runtimeManifest, images) {

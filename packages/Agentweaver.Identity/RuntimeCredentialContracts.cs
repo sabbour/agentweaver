@@ -177,9 +177,20 @@ public sealed class RuntimeCredentialIssue(RuntimeGrantReceipt receipt, SecretCr
     public override string ToString() => nameof(RuntimeCredentialIssue) + " [REDACTED]";
 }
 
-public sealed class RuntimeAuthorizationException(string code) : Exception(code)
+public sealed class RuntimeAuthorizationException : Exception
 {
-    public string Code { get; } = code;
+    public RuntimeAuthorizationException(string code) : this(code, null, null) { }
+
+    public RuntimeAuthorizationException(
+        string code, RuntimeFixedCreditGuardReadResult? fixedCreditGuard, Exception? innerException)
+        : base(code, innerException)
+    {
+        Code = code;
+        FixedCreditGuard = fixedCreditGuard;
+    }
+
+    public string Code { get; }
+    public RuntimeFixedCreditGuardReadResult? FixedCreditGuard { get; }
 }
 
 public sealed class RuntimeCredentialExchange(

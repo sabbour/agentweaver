@@ -229,8 +229,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                         await new RuntimeUsageCostPreflightHttpClient(
                             _http, _options.EventsAddress, retained)
                             .EnsurePricedAsync(configuredSession, token).ConfigureAwait(false);
-                    configuredSession.RequireSupportedCostTurnAffinity();
                     await configuredSession.RequireCurrentAsync(token).ConfigureAwait(false);
+                    configuredSession.RequireSupportedCostTurnAffinity();
                 }
                 catch (Exception failure) when (failure is not OutOfMemoryException)
                 {
@@ -292,6 +292,54 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             .ConfigureAwait(false);
     }
 
+    internal async Task<RuntimeFixedCreditGuardReadResult> ReadFixedCreditGuardAsync(
+        RuntimeHostFixedCreditGuardReadRequest request, RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(actor);
+        var proof = request.Proof
+            ?? throw new RuntimeAuthorizationException("runtime_session_proof_invalid");
+        var session = await RequireSessionAsync(proof, actor, token).ConfigureAwait(false);
+        var source = _usageSource
+            ?? throw new RuntimeAuthorizationException("runtime_usage_source_unavailable");
+        RuntimeFixedCreditGuardReadResult result;
+        try
+        {
+            result = await source.ReadFixedCreditGuardAsync(
+                session, request.RequestId, request.RequestHash, token).ConfigureAwait(false);
+        }
+        catch (RuntimeAuthorizationException failure) when (failure.Code == "runtime_owner_unavailable")
+        {
+            throw new RuntimeAuthorizationException("runtime_usage_source_unavailable");
+        }
+        await RequireSessionAsync(proof, actor, token).ConfigureAwait(false);
+        return result;
+    }
+
+    internal async Task<RuntimeNativeCreditDenialReadResult> ReadNativeCreditDenialAsync(
+        RuntimeHostNativeCreditDenialReadRequest request, RuntimeActorAuthorization actor, CancellationToken token)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(actor);
+        var proof = request.Proof
+            ?? throw new RuntimeAuthorizationException("runtime_session_proof_invalid");
+        var session = await RequireSessionAsync(proof, actor, token).ConfigureAwait(false);
+        var source = _usageSource
+            ?? throw new RuntimeAuthorizationException("runtime_usage_source_unavailable");
+        RuntimeNativeCreditDenialReadResult result;
+        try
+        {
+            result = await source.ReadNativeCreditDenialAsync(
+                session, request.DispatchId, request.Stage, token).ConfigureAwait(false);
+        }
+        catch (RuntimeAuthorizationException failure) when (failure.Code == "runtime_owner_unavailable")
+        {
+            throw new RuntimeAuthorizationException("runtime_usage_source_unavailable");
+        }
+        await RequireSessionAsync(proof, actor, token).ConfigureAwait(false);
+        return result;
+    }
+
     public async Task<RuntimeA2AResponse> SendAsync(
         RuntimeA2ASendRequest request, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -306,20 +354,16 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         var session = await RequireSessionAsync(message.Metadata.Runtime, actor, token).ConfigureAwait(false);
         if (message.ContextId != session.Facts.SdkSessionId)
             throw new RuntimeAuthorizationException("runtime_a2a_context_invalid");
+        var fingerprint = RuntimeFixedCreditGuardContract.HashHostRequest(request);
         if (session.Registration.Binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
             session.Registration.Binding.CopilotHardCreditLimit is 0)
-            throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
-        var fingerprint = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(new
         {
-            message.Kind,
-            message.MessageId,
-            message.ContextId,
-            message.Role,
-            message.Parts,
-            message.Metadata.Runtime.Registration,
-            message.Metadata.Runtime.Purpose,
-            message.Metadata.DeliveryMode
-        }));
+            RuntimeFixedCreditGuardReadResult? fixedCreditGuard = null;
+            if (_usageSource is { } source)
+                fixedCreditGuard = await session.RecordFixedCreditNoSendAsync(
+                    request, message.Metadata.Runtime, source, token).ConfigureAwait(false);
+            throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted", fixedCreditGuard, null);
+        }
         PendingTurn pending;
         lock (_queueLock)
         {
