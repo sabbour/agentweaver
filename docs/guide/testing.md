@@ -114,6 +114,8 @@ These source results do not prove native TLS, mounted restore contents, Cilium t
 | Azure Files provider tests | Environment-scoped generation PVC identities, pinned Kubernetes API target, requested/configured StorageClass matching, effective reclaim-policy enforcement, claim/PV ownership checks, reclaim/delete UID preconditions, exact release receipts and retry outcomes, Azure Files mount options, Kubernetes quantity normalization, and credential-free request bodies through fake Kubernetes transports. | A live Kubernetes API/CSI driver, Azure Files durability or data erasure, Sandbox attachment, or durable flush. |
 | Environment workspace-volume tests | Real PostgreSQL owner CAS and replay, pinned provider binding, fresh Projects authorization, retry-safe no-effect rejections and HTTP status mapping, Release rejection while bound or attached, uncertain Release retry with the same idempotency key, Replace cleanup leases/retries, stale-fence rejection, and truthful blocked/pending cleanup outcomes through fake providers and Projects clients. | A deployed Environment service, live Kubernetes/CSI behavior, Azure Files data erasure, Sandbox mounting, or durable flush. |
 | Identity library tests | Exact actor, project, run, purpose, secret ID, and version grants. They cover revocation races, expiry, cancellation, and credential invalidation. | Network authentication or a deployed broker. |
+| Projects Broker run-binding TLS tests | Real local Kestrel handshakes for TLS 1.2 and 1.3, private-route native-TLS checks, certificate profile and leaf-pin checks, and rejection of forwarded HTTPS without a handshake. | Live certificate mounts, cloud identity, deployed routing, or deployed proof reads. |
+| Broker run-binding TLS tests | Real local Kestrel TLS 1.2/1.3 requests with custom trust-bundle bytes; wrong roots, leaf DER pins, hostnames, certificate purpose, expiry, malformed PEM bundles, and redirects are rejected. | Live certificate trust, deployed owner reachability, or cloud acceptance. |
 | Remote MCP credential recipient composition tests | Check the separate keyed Broker TLS profile, missing and incomplete configuration, service-role and listener validation, rejection of ordinary HTTPS, and denial before certificate resolution. | A mapped credential-use route, positive native mutual TLS, installed certificates or service identities, current exact-call or applied-network authority, credential delivery, or deployment. |
 | Remote MCP Identity credential binding helper tests | Pure row checks select the exact current access-token reference and fixed tools-call purpose. They reject changed owner/configuration bindings, non-authorized states, expiry, changed authority after waits, and altered call semantics. The retained disconnect regression compiles with the PostgreSQL suite; it is not part of these pure checks. | Caller authentication, a connected credential-use endpoint, secret reads or delivery, forced network proof, PostgreSQL execution, complete Identity suite acceptance, or deployment. |
 | Remote MCP trusted owner TLS tests | Check separate Environment and Events profiles, fixed owner clients and finite timeouts, current-runtime-owner requirements, wrong peer names, principal and certificate-pin conflicts, shared listener ports, and denial before proof-body or certificate reads. The default-off Environment reviewed-tool recipient reuses only its Orchestrator profile. Checks reject missing opt-in, wrong service or port, and ordinary HTTPS before certificate access. Current-call composition checks default-off behavior, required TLS and gateway options, scoped readers, and one shared active handler. | A mapped reviewed-tool route, positive native mutual TLS, complete original-actor authentication, real applied-network verification, credential use, remote dispatch, or deployment. |
@@ -482,18 +484,97 @@ npm run test:harness:ui
 npm run test:harness:mcp
 ```
 
-The combined command runs controlled adapter checks.
-API tests use actual loopback HTTP with controlled contracts.
-MCP tests use the pinned SDK with an actual loopback JSON-RPC server.
-UI tests use a controlled injected-page contract, not a browser.
-These checks do not prove a real cross-surface journey, native model execution, or deployment.
+These commands run controlled local tests. API tests use loopback HTTP with
+controlled contracts; MCP tests use the pinned SDK and a loopback JSON-RPC
+server; UI tests use injected page doubles, not a browser. The tests cover the
+shared runner creating same-invocation fixtures, reaching the selected API,
+MCP, or UI gate/message method, retaining cleanup outcomes, and refusing
+unverified caller ownership claims. They do not prove live owner behavior,
+native model execution, or deployment.
 
-For an approved journey, discover the live API and MCP menus first.
-Use `requireJourneyCapabilities` from `scripts/harness-shared/journey-capabilities.mjs` before dispatch.
-It checks only the selected gate action, message, or journal requirements.
-Missing required operations block the journey; they do not produce a skipped success.
-Helper and menu presence are not proof of current DOM controls or owner authority.
-Journal replay requires API SSE support, but MCP deliberately does not advertise an SSE tool.
+The P1 adapters contain five bounded journeys:
+`gate-answer`, `gate-approve`, `gate-reject`, `message`, and `journal`.
+The shared CLI verifies source and deployment evidence before reading
+credentials or creating surface clients. It requires an
+`executionIntent: "execute"` manifest with Environment identity metadata,
+provider/runtime/storage/source/image receipt pins, and `deploymentEvidence`
+paths named `publicationPath`, `manifestPath`, `agentHostArchivePath`, and
+`integrationDeploymentReceiptPath`. The deployment receipt must come from
+`release:deploy-integration` and match the source, tree, manifest, publication,
+target namespace, image identities, and service readbacks. `fixturePlan`
+requires a positive `expectedPlatformRuntimeRevision`, the exact selection
+context, a distinct denied actor, and only the gate or message details needed
+by the selected journey. The expected revision is sent through the existing
+run-selection request and checked by the owner compare-and-swap; it is not an
+authority or ownership receipt. The fixture does not read the PlatformAdmin-only
+global runtime-default endpoint. Do not include tokens,
+`ownerFences`, or `fixtureScope` in the manifest; caller-created ownership
+receipts cannot authorize writes.
+
+After source and deployment checks pass, set
+`AGENTWEAVER_P1_SETUP_TOKEN` in the process environment and supply
+`--identity-module <authorized-identity-provider.mjs>`. That module returns
+already-issued run-bound and denied-actor broker tokens. The runner does not
+sign in, refresh tokens, or request consent. For UI runs, also provide
+`--page-module <authorized-page-provider.mjs>`, which returns an already
+authorized Playwright-compatible page on the selected web origin. The runner
+does not start a browser or change its profile.
+
+The runner persists one invocation ID before setup. Projects Config's
+`--privileged-project-setup` command uses that ID to create the project, default
+configuration, and Owner and Orchestrator assignments for an active TenantAdmin, with
+typed setup and readback receipts. The command reads a JSON request from
+standard input and writes a typed receipt to standard output. The runner then
+reads current authorization and project configuration; accepts the selected
+run context using the plan's expected platform-runtime revision; creates the
+root (and message child) session;
+and reads the exact owner state back before running the selected surface
+journey.
+
+Cleanup revokes those invocation-owned assignments and archives the project only when no accepted
+run selection exists. If a selection exists, cleanup returns
+`retainedPending` and keeps the project and assignment active. The command does
+not delete SQL, cloud, or Kubernetes resources.
+
+The privileged command requires `ConnectionStrings:ProjectsConfigAuthority`,
+`ProjectsConfig:AuthorityDatabase:WorkloadIdentity`,
+`ProjectsConfig:PrivilegedSetup:ApprovedIssuer`,
+`ProjectsConfig:PrivilegedSetup:ApprovedSubject`, and
+`ProjectsConfig:PrivilegedSetup:ApprovedTenantId`. The approved issuer must
+match `ProjectsConfig:Authentication:Authority`. The command also uses the
+configured Projects authentication audience and a separate authority database
+identity. It does not fall back to the runtime or migration identity.
+
+The command authenticates the supplied access token with the existing issuer.
+It requires an unbound token, an active TenantAdmin grant, and the
+`api.read`, `projects.admin`, and `projects.orchestrator` scopes. The setup
+token is sent to the privileged command through standard input, not command
+arguments. The runner never invokes an Orchestrator dispatch operation.
+
+Before reading the setup token or importing a UI page provider, the runner
+checks the exact clean Git commit/tree, publication receipt, AgentHost archive,
+Kubernetes service observations, and public GHCR image identities. Use
+repository-relative artifact paths where possible. Credential fields and
+caller-supplied ownership receipts are rejected in the manifest.
+
+```powershell
+npm run harness:p1 -- --surface api --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs>
+npm run harness:p1 -- --surface mcp --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs>
+npm run harness:p1 -- --surface ui --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs> --page-module <authorized-page-provider.mjs>
+```
+
+The JSONL output keeps source evidence, owner receipts, surface results, and
+cleanup status. A surface can pass while `fullP1Status` remains `blocked`
+because the admitted clients cannot produce the required native receipts.
+If privileged setup may have completed without a verified receipt, the output
+reports an indeterminate state; reconcile the invocation before retrying.
+
+API and MCP retries reuse the persisted invocation ID and deterministic
+idempotency keys. A UI gate or message action uses an application-generated
+key that cannot be restored after a process crash. Before that action, the
+runner appends a `p1-ui-action-started` output record; a later invocation
+refuses to repeat it. Read the current owner state and reconcile before
+starting a new UI run. Read-only UI journal journeys do not use this marker.
 
 The UI adapter requires an already authorized page and exact Broker identity metadata.
 It neither starts a browser nor changes its profile or stored credentials.
@@ -515,9 +596,9 @@ The retained surfaces observe owner evidence; they do not create authority from 
 Use the shared redacted JSONL writer and the [P1 judge brief](https://github.com/sabbour/agentweaver/blob/v1/scripts/harness-judge/README.md).
 Record exact source, target, scenario, surface, and owner evidence references.
 Do not persist transient raw bodies or credential values.
-An expected source SHA does not observe a deployment.
-Client disposal does not clean up a project, run, session, or Environment.
-Product cleanup requires current authority, exact test-owned identities, and verified owner receipts.
+An expected source SHA does not observe a deployment. Closing a browser or
+client does not clean up a project, run, session, or Environment; only the
+invocation-owned Projects Config cleanup receipt records setup-resource cleanup.
 
 ## Validate the documentation site
 

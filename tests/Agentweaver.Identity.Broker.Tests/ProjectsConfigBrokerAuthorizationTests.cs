@@ -64,9 +64,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
     private const string OtherTenantId = "tenant-2";
     private const string TestIssuer = IdentityBrokerWebApplicationFactory.Issuer;
     private const string RunId = "run-authorized-1";
+    private const string BrokerRunBindingAudience = "https://projects-private.test";
 
     private FakeIdentityProvider _fakeIdp = null!;
     private IdentityBrokerWebApplicationFactory _brokerFactory = null!;
+    private ProjectsConfigResourceServer _runBindingProjects = null!;
+    private BrokerRunBindingTlsIdentityTests.TestCertificateAuthority _runBindingTlsAuthority = null!;
+    private BrokerRunBindingOptions _runBindingOptions = null!;
+    private X509Certificate2 _runBindingSigningCertificate = null!;
     private HttpClient _fakeIdpClient = null!;
     private string _connectionString = string.Empty;
     private NpgsqlDataSource _nativeDataSource = null!;
@@ -81,12 +86,26 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         _nativeDataSource = NpgsqlDataSource.Create(_connectionString);
         _fakeIdp = await FakeIdentityProvider.StartAsync();
         _signingCertificate = TestSigningCertificate.Create();
+        _runBindingTlsAuthority = BrokerRunBindingTlsIdentityTests.TestCertificateAuthority.Create();
+        _runBindingSigningCertificate = X509CertificateLoader.LoadPkcs12FromFile(
+            _signingCertificate.PfxPath,
+            _signingCertificate.Password,
+            X509KeyStorageFlags.EphemeralKeySet);
+        _runBindingOptions = _runBindingTlsAuthority.CreateOptions();
+        _runBindingOptions.ProjectsAudience = BrokerRunBindingAudience;
+        _runBindingProjects = await ProjectsConfigResourceServer.StartAsync(
+            _connectionString,
+            new X509SecurityKey(_runBindingSigningCertificate),
+            brokerRunBindingAudience: BrokerRunBindingAudience,
+            brokerRunBindingServerCertificate: _runBindingTlsAuthority.ServerCertificate);
+        _runBindingOptions.ProjectsOwnerAddress = _runBindingProjects.BaseAddress.AbsoluteUri;
         _brokerFactory = new IdentityBrokerWebApplicationFactory(
             _connectionString,
             _fakeIdp,
             signingCertificate: _signingCertificate,
             configure: settings =>
             {
+                ConfigureRunBindingSettings(settings);
                 settings["IdentityBroker__WebOrigin"] =
                     $"https://web.broker.test:{_browserPort}/";
                 settings["IdentityBroker__GitHubRepoApp__OAuthClientId"] = "repo-app-client";
@@ -103,6 +122,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
             },
             configureServices: services =>
             {
+                ConfigureRunBindingTlsIdentity(services);
                 services.RemoveAll<ISecretVersionWriter>();
                 services.AddSingleton<ISecretVersionWriter>(_ =>
                     new BrowserRepoAppSecretVersionWriter(
@@ -129,6 +149,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         var before = await PostgresContainerFixture.CountConnectionsAsync(_connectionString);
         _fakeIdpClient.Dispose();
         await _brokerFactory.DisposeAsync();
+        await _runBindingProjects.DisposeAsync();
+        _runBindingTlsAuthority.Dispose();
+        _runBindingSigningCertificate.Dispose();
         await _nativeDataSource.DisposeAsync();
         await _fakeIdp.DisposeAsync();
         if (File.Exists(_signingCertificate.PfxPath))
@@ -138,6 +161,284 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         var after = await PostgresContainerFixture.WaitForNoConnectionsAsync(_connectionString);
         Console.WriteLine($"Native fixture owned connections: before cleanup={before}, after cleanup={after}.");
         Assert.Equal(0, after);
+    }
+
+    private void ConfigureRunBindingSettings(IDictionary<string, string?> settings)
+    {
+        settings["IdentityBroker__RunBinding__ProjectsOwnerAddress"] =
+            _runBindingOptions.ProjectsOwnerAddress;
+        settings["IdentityBroker__RunBinding__ProjectsAudience"] =
+            _runBindingOptions.ProjectsAudience;
+        settings["IdentityBroker__RunBinding__ProjectsServerCertificateSha256"] =
+            _runBindingOptions.ProjectsServerCertificateSha256;
+        settings["IdentityBroker__RunBinding__ProjectsTrustBundleSha256"] =
+            _runBindingOptions.ProjectsTrustBundleSha256;
+    }
+
+    private void ConfigureRunBindingTlsIdentity(IServiceCollection services) =>
+        ConfigureRunBindingTlsIdentity(
+            services, _runBindingOptions, _runBindingTlsAuthority.TrustBundleBytes);
+
+    internal static void ConfigureRunBindingTlsIdentity(
+        IServiceCollection services, BrokerRunBindingOptions options, byte[] trustBundleBytes) =>
+        services.AddSingleton<BrokerRunBindingTlsIdentity>(_ =>
+            BrokerRunBindingTlsIdentity.Load(options, trustBundleBytes));
+
+    [Fact]
+    public async Task UnboundOrchestratorAcceptsFirstRunSelectionBeforeBrokerIssuesBoundTokens()
+    {
+        using var certificate = X509CertificateLoader.LoadPkcs12FromFile(
+            _signingCertificate.PfxPath, _signingCertificate.Password);
+        using var projectsTls = BrokerRunBindingTlsIdentityTests.TestCertificateAuthority.Create();
+        const string brokerRunBindingAudience = "https://projects-private.test";
+        await using var projects = await ProjectsConfigResourceServer.StartAsync(
+            _connectionString,
+            new X509SecurityKey(certificate),
+            brokerRunBindingAudience: brokerRunBindingAudience,
+            brokerRunBindingServerCertificate: projectsTls.ServerCertificate);
+        var brokerTlsOptions = projectsTls.CreateOptions();
+        await using var runBindingBrokerFactory = new IdentityBrokerWebApplicationFactory(
+            _connectionString,
+            _fakeIdp,
+            signingCertificate: _signingCertificate,
+            configure: settings =>
+            {
+                settings["IdentityBroker__RunBinding__ProjectsOwnerAddress"] =
+                    projects.BaseAddress.AbsoluteUri;
+                settings["IdentityBroker__RunBinding__ProjectsAudience"] = brokerRunBindingAudience;
+                settings["IdentityBroker__RunBinding__ProjectsServerCertificateSha256"] =
+                    brokerTlsOptions.ProjectsServerCertificateSha256;
+                settings["IdentityBroker__RunBinding__ProjectsTrustBundleSha256"] =
+                    brokerTlsOptions.ProjectsTrustBundleSha256;
+                for (var index = 0; index < ProjectScopes.Length; index++)
+                    settings[$"IdentityBroker__Clients__0__Scopes__{index + IdentityBrokerWebApplicationFactory.TestClientScopes.Length}"] =
+                        ProjectScopes[index];
+            },
+            configureServices: services =>
+                services.AddSingleton<BrokerRunBindingTlsIdentity>(_ =>
+                    BrokerRunBindingTlsIdentity.Load(
+                        brokerTlsOptions, projectsTls.TrustBundleBytes)));
+
+        var tenantAdminTokens = await IssueTokensAsync(
+            runBindingBrokerFactory,
+            "projects.admin",
+            [TenantId],
+            "first-selection-owner",
+            null,
+            null,
+            []);
+        var tenantAdminToken = tenantAdminTokens.GetProperty("access_token").GetString()
+            ?? throw new InvalidOperationException("Identity Broker returned no access token.");
+        var tenantAdminSubject = SingleClaim(
+            new JwtSecurityTokenHandler().ReadJwtToken(tenantAdminToken).Claims, "sub");
+        var tenantAdminMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, tenantAdminSubject, TenantId);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            tenantAdminMembership.MembershipId,
+            ProjectAuthorityResourceType.Tenant,
+            TenantId,
+            ProjectAuthorityRole.TenantAdmin);
+        var project = await CreateProjectsTestProjectAsync(
+            projects.Client, tenantAdminToken, TenantId, "First selection");
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            tenantAdminMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator);
+        await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            tenantAdminMembership.MembershipId,
+            ProjectAuthorityResourceType.Platform,
+            ProjectAuthorizationOwner.PlatformResourceId,
+            ProjectAuthorityRole.PlatformAdmin);
+
+        const string modelReference = "first-selection-model";
+        using var updateConfiguration = new HttpRequestMessage(
+            HttpMethod.Put, $"/api/projects/{project.ProjectId}/configuration")
+        {
+            Content = JsonContent.Create(new UpdateProjectConfigurationRequest
+            {
+                ExpectedRevision = project.ConfigurationRevision,
+                Configuration = new ProjectConfiguration
+                {
+                    ModelSelection = new ModelSelectionSettings(modelReference),
+                },
+            }),
+        };
+        AddBearerAndTenant(updateConfiguration, tenantAdminToken, TenantId);
+        using var updatedConfigurationResponse = await projects.Client.SendAsync(updateConfiguration);
+        Assert.Equal(HttpStatusCode.OK, updatedConfigurationResponse.StatusCode);
+        var configuration = await updatedConfigurationResponse.Content
+            .ReadFromJsonAsync<VersionedProjectConfiguration>(AuthorizationJsonOptions);
+        Assert.NotNull(configuration);
+
+        var defaults = new PlatformRuntimeDefaults
+        {
+            ModelSelection = new ModelSelectionSettings("first-selection-platform-model"),
+            EgressBaseline = [],
+            RunLimits = new CopilotRunLimits
+            {
+                MaxModelTurns = 12,
+                MaxToolCalls = 100,
+                MaxChildren = 4,
+                MaxConcurrentChildren = 2,
+                MaxWallTimeSeconds = 3600,
+                MaxPromptTokens = 20_000,
+            },
+        };
+        using var updateDefaults = new HttpRequestMessage(
+            HttpMethod.Put, "/api/platform/runtime-defaults/")
+        {
+            Content = JsonContent.Create(new UpdatePlatformRuntimeDefaultsRequest
+            {
+                ExpectedRevision = 0,
+                Defaults = defaults,
+            }),
+        };
+        AddBearerAndTenant(updateDefaults, tenantAdminToken, TenantId);
+        using var updatedDefaultsResponse = await projects.Client.SendAsync(updateDefaults);
+        Assert.Equal(HttpStatusCode.OK, updatedDefaultsResponse.StatusCode);
+
+        const string orchestratorUpstreamSubject = "first-selection-orchestrator";
+        var unboundOrchestratorTokens = await IssueTokensAsync(
+            runBindingBrokerFactory,
+            "projects.orchestrator",
+            [TenantId],
+            orchestratorUpstreamSubject,
+            null,
+            null,
+            []);
+        var unboundOrchestratorToken = unboundOrchestratorTokens.GetProperty("access_token").GetString()
+            ?? throw new InvalidOperationException("Identity Broker returned no access token.");
+        var orchestratorSubject = SingleClaim(
+            new JwtSecurityTokenHandler().ReadJwtToken(unboundOrchestratorToken).Claims, "sub");
+        var unboundClaims = new JwtSecurityTokenHandler().ReadJwtToken(unboundOrchestratorToken).Claims;
+        Assert.DoesNotContain(
+            unboundClaims,
+            claim => claim.Type is "project_id" or "run_id" ||
+                claim.Type.StartsWith("aw:run_binding_", StringComparison.Ordinal));
+        var orchestratorMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, orchestratorSubject, TenantId);
+        var orchestratorAssignment = await AssignRoleAsync(
+            projects.PrivilegedFixtureDataSource,
+            orchestratorMembership.MembershipId,
+            ProjectAuthorityResourceType.Project,
+            project.ProjectId,
+            ProjectAuthorityRole.Orchestrator);
+
+        var runId = "first-selection-" + Guid.NewGuid().ToString("N");
+        var boundRequestBeforeSelection = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            IssueTokensAsync(
+                runBindingBrokerFactory,
+                "projects.orchestrator",
+                [TenantId],
+                orchestratorUpstreamSubject,
+                project.ProjectId,
+                runId,
+                []));
+        Assert.Contains("BadRequest", boundRequestBeforeSelection.Message, StringComparison.Ordinal);
+        Assert.Contains("access_denied", boundRequestBeforeSelection.Message, StringComparison.Ordinal);
+        Assert.Contains(
+            "The project and run authorization is no longer active.",
+            boundRequestBeforeSelection.Message,
+            StringComparison.Ordinal);
+
+        var selectionRequest = new AcceptRunSelectionRequest
+        {
+            ExpectedProjectConfigRevision = configuration.Revision,
+            ExpectedPlatformRuntimeRevision = 1,
+            Context = new RunSelectionContext
+            {
+                Revision = "first-selection-context-v1",
+                AvailableModelSelectionReferences =
+                    ImmutableHashSet.Create(StringComparer.Ordinal, modelReference),
+            },
+        };
+        using var acceptSelection = new HttpRequestMessage(
+            HttpMethod.Put, $"/api/projects/{project.ProjectId}/runs/{runId}/selection")
+        {
+            Content = JsonContent.Create(selectionRequest),
+        };
+        AddBearerAndTenant(acceptSelection, unboundOrchestratorToken, TenantId);
+        using var acceptedSelectionResponse = await projects.Client.SendAsync(acceptSelection);
+        Assert.Equal(HttpStatusCode.OK, acceptedSelectionResponse.StatusCode);
+        var acceptedSelection = await acceptedSelectionResponse.Content
+            .ReadFromJsonAsync<EffectiveRunSelection>(AuthorizationJsonOptions);
+        Assert.NotNull(acceptedSelection);
+        Assert.Equal(project.ProjectId, acceptedSelection.ProjectId);
+        Assert.Equal(runId, acceptedSelection.RunId);
+        Assert.Equal(configuration.Revision, acceptedSelection.ProjectConfigurationRevision);
+
+        var runTokens = await IssueTokensAsync(
+            runBindingBrokerFactory,
+            "projects.orchestrator",
+            [TenantId],
+            orchestratorUpstreamSubject,
+            project.ProjectId,
+            runId,
+            []);
+        var runToken = runTokens.GetProperty("access_token").GetString()
+            ?? throw new InvalidOperationException("Identity Broker returned no access token.");
+        var runClaims = new JwtSecurityTokenHandler().ReadJwtToken(runToken).Claims;
+        Assert.Equal(
+            BrokerRunBindingAuthority.ProjectsAuthorityKind,
+            SingleClaim(runClaims, BrokerRunBindingAuthority.AuthorityKindClaim));
+        Assert.Equal(project.ProjectId, SingleClaim(runClaims, "project_id"));
+        Assert.Equal(runId, SingleClaim(runClaims, "run_id"));
+        var selectionHash = SingleClaim(runClaims, "aw:run_binding_selection_hash");
+        var identityToken = runTokens.GetProperty("id_token").GetString()
+            ?? throw new InvalidOperationException("Identity Broker returned no identity token.");
+        var identityClaims = new JwtSecurityTokenHandler().ReadJwtToken(identityToken).Claims;
+        Assert.DoesNotContain(
+            identityClaims,
+            claim => claim.Type is "project_id" or "run_id" ||
+                claim.Type.StartsWith("aw:run_binding_", StringComparison.Ordinal));
+
+        using var readSelection = await SendAsync(
+            projects.Client,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{runId}/selection",
+            runToken,
+            [TenantId]);
+        Assert.Equal(HttpStatusCode.OK, readSelection.StatusCode);
+        var persistedSelection = await readSelection.Content
+            .ReadFromJsonAsync<EffectiveRunSelection>(AuthorizationJsonOptions);
+        Assert.NotNull(persistedSelection);
+        Assert.Equal(acceptedSelection.ProjectId, persistedSelection.ProjectId);
+        Assert.Equal(acceptedSelection.RunId, persistedSelection.RunId);
+
+        var refreshToken = runTokens.GetProperty("refresh_token").GetString()
+            ?? throw new InvalidOperationException("Identity Broker returned no refresh token.");
+        using var broker = runBindingBrokerFactory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            BaseAddress = new Uri("https://broker.test.local"),
+        });
+        using var refreshedResponse = await BrokerFlowDriver.RefreshAsync(
+            broker, IdentityBrokerWebApplicationFactory.TestClientId, refreshToken);
+        Assert.Equal(HttpStatusCode.OK, refreshedResponse.StatusCode);
+        var refreshedTokens = await refreshedResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var refreshedAccessToken = refreshedTokens.GetProperty("access_token").GetString()
+            ?? throw new InvalidOperationException("Identity Broker returned no refreshed access token.");
+        var refreshedClaims = new JwtSecurityTokenHandler().ReadJwtToken(refreshedAccessToken).Claims;
+        Assert.Equal(project.ProjectId, SingleClaim(refreshedClaims, "project_id"));
+        Assert.Equal(runId, SingleClaim(refreshedClaims, "run_id"));
+        Assert.Equal(selectionHash, SingleClaim(refreshedClaims, "aw:run_binding_selection_hash"));
+        Assert.Equal(
+            BrokerRunBindingAuthority.ProjectsAuthorityKind,
+            SingleClaim(refreshedClaims, BrokerRunBindingAuthority.AuthorityKindClaim));
+
+        await RevokeRoleAsync(
+            projects.PrivilegedFixtureDataSource, orchestratorAssignment.AssignmentId, 1);
+        using var afterRevocation = await SendAsync(
+            projects.Client,
+            HttpMethod.Get,
+            $"/api/projects/{project.ProjectId}/runs/{runId}/selection",
+            runToken,
+            [TenantId]);
+        Assert.Equal(HttpStatusCode.Forbidden, afterRevocation.StatusCode);
     }
 
     [Fact]
@@ -474,9 +775,59 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
             ProjectAuthorityResourceType.Platform,
             ProjectAuthorizationOwner.PlatformResourceId,
             ProjectAuthorityRole.PlatformAdmin);
+
+        var runSelectionBootstrap = await IssueTokenAsync(
+            "projects.orchestrator", [TenantId],
+            "run-actor", null, null, ["platform_admin"]);
+        var defaults = new PlatformRuntimeDefaults
+        {
+            ModelSelection = new ModelSelectionSettings("platform-model"),
+            EgressBaseline = [],
+            RunLimits = new CopilotRunLimits
+            {
+                MaxModelTurns = 12,
+                MaxToolCalls = 100,
+                MaxChildren = 4,
+                MaxConcurrentChildren = 2,
+                MaxWallTimeSeconds = 3600,
+                MaxPromptTokens = 20000,
+            },
+        };
+        using var updateDefaults = new HttpRequestMessage(HttpMethod.Put, "/api/platform/runtime-defaults/")
+        {
+            Content = JsonContent.Create(new UpdatePlatformRuntimeDefaultsRequest
+            {
+                ExpectedRevision = 0,
+                Defaults = defaults,
+            }),
+        };
+        AddBearerAndTenant(updateDefaults, platformAdminToken, TenantId);
+        using var updatedDefaults = await projects.Client.SendAsync(updateDefaults);
+        Assert.Equal(HttpStatusCode.OK, updatedDefaults.StatusCode);
+
+        var selectionRequest = new AcceptRunSelectionRequest
+        {
+            ExpectedProjectConfigRevision = updatedConfiguration.Revision,
+            ExpectedPlatformRuntimeRevision = 1,
+            Context = new RunSelectionContext
+            {
+                Revision = "provider-catalog-v1",
+                AvailableModelSelectionReferences = ImmutableHashSet.Create(
+                    StringComparer.Ordinal, "owner-consumer-model"),
+            },
+        };
+        using var acceptSelection = new HttpRequestMessage(
+            HttpMethod.Put, $"/api/projects/{project.ProjectId}/runs/{RunId}/selection")
+        {
+            Content = JsonContent.Create(selectionRequest),
+        };
+        AddBearerAndTenant(acceptSelection, runSelectionBootstrap, TenantId);
+        using var acceptedSelection = await projects.Client.SendAsync(acceptSelection);
+        Assert.Equal(HttpStatusCode.OK, acceptedSelection.StatusCode);
+
         await CreateRunBindingGrantAsync(orchestratorSubject, project.ProjectId, RunId);
         var runToken = await IssueTokenAsync(
-            "projects.admin projects.orchestrator", [TenantId],
+            "projects.orchestrator", [TenantId],
             "run-actor", project.ProjectId, RunId, ["platform_admin"]);
         var runClaims = new JwtSecurityTokenHandler().ReadJwtToken(runToken).Claims;
         Assert.Contains(runClaims, claim => claim.Type == "project_id" && claim.Value == project.ProjectId);
@@ -537,52 +888,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
             projects.Client, HttpMethod.Get,
             $"/api/projects/{project.ProjectId}?runId={RunId}&runId={RunId}", runToken, [TenantId]);
         Assert.Equal(HttpStatusCode.Forbidden, duplicateRunViewerRead.StatusCode);
-
-        var defaults = new PlatformRuntimeDefaults
-        {
-            ModelSelection = new ModelSelectionSettings("platform-model"),
-            EgressBaseline = [],
-            RunLimits = new CopilotRunLimits
-            {
-                MaxModelTurns = 12,
-                MaxToolCalls = 100,
-                MaxChildren = 4,
-                MaxConcurrentChildren = 2,
-                MaxWallTimeSeconds = 3600,
-                MaxPromptTokens = 20000,
-            },
-        };
-        using var updateDefaults = new HttpRequestMessage(HttpMethod.Put, "/api/platform/runtime-defaults/")
-        {
-            Content = JsonContent.Create(new UpdatePlatformRuntimeDefaultsRequest
-            {
-                ExpectedRevision = 0,
-                Defaults = defaults,
-            }),
-        };
-        AddBearerAndTenant(updateDefaults, platformAdminToken, TenantId);
-        using var updatedDefaults = await projects.Client.SendAsync(updateDefaults);
-        Assert.Equal(HttpStatusCode.OK, updatedDefaults.StatusCode);
-
-        var selectionRequest = new AcceptRunSelectionRequest
-        {
-            ExpectedProjectConfigRevision = updatedConfiguration.Revision,
-            ExpectedPlatformRuntimeRevision = 1,
-            Context = new RunSelectionContext
-            {
-                Revision = "provider-catalog-v1",
-                AvailableModelSelectionReferences = ImmutableHashSet.Create(
-                    StringComparer.Ordinal, "owner-consumer-model"),
-            },
-        };
-        using var acceptSelection = new HttpRequestMessage(
-            HttpMethod.Put, $"/api/projects/{project.ProjectId}/runs/{RunId}/selection")
-        {
-            Content = JsonContent.Create(selectionRequest),
-        };
-        AddBearerAndTenant(acceptSelection, runToken, TenantId);
-        using var acceptedSelection = await projects.Client.SendAsync(acceptSelection);
-        Assert.Equal(HttpStatusCode.OK, acceptedSelection.StatusCode);
 
         var ownerConsumerSelection = await environmentProjects.GetRunSelectionAsync(
             ownerConsumer, project.ProjectId, RunId, CancellationToken.None);
@@ -1120,30 +1425,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
             project.ProjectId,
             runId,
             $"knowledge-browser:{runId}");
-        var boundOwnerToken = CreateSignedAccessToken(
-            browserOwnerSubject,
-            new Claim("project_id", project.ProjectId),
-            new Claim("run_id", runId));
-        using (var boundOwnerContextResponse = await SendAsync(
-                   projects.Client,
-                   HttpMethod.Get,
-                   "/api/authorization/context",
-                   boundOwnerToken,
-                   [TenantId]))
-        {
-            Assert.Equal(HttpStatusCode.OK, boundOwnerContextResponse.StatusCode);
-            var boundOwnerContext = await ReadAuthorizationContextAsync(boundOwnerContextResponse);
-            Assert.True(HasPermission(
-                boundOwnerContext,
-                ProjectAuthorityResourceType.Project,
-                project.ProjectId,
-                ProjectAuthorizationPermission.AccessPrivateKnowledge));
-            Assert.False(HasPermission(
-                boundOwnerContext,
-                ProjectAuthorityResourceType.Project,
-                project.ProjectId,
-                ProjectAuthorizationPermission.WriteProjects));
-        }
 
         var seededMemory = await database.Provider.CreateAsync(
             new KnowledgeRecordCreate(
@@ -1210,7 +1491,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         var browserRedirectUri = $"{webAuthority}/auth/callback";
         var scopes = string.Join(
             " ",
-            IdentityBrokerWebApplicationFactory.TestClientScopes.Concat(ProjectScopes));
+            IdentityBrokerWebApplicationFactory.TestClientScopes.Append("projects.orchestrator"));
         var webClient = await StartWebClientAsync(brokerAuthority, browserRedirectUri, scopes);
         try
         {
@@ -1304,10 +1585,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
                     await page.GetByRole(
                         AriaRole.Button,
                         new() { Name = "Continue with Identity Broker" }).ClickAsync();
-                    await page.GetByRole(
-                        AriaRole.Heading,
-                        new() { Name = "Review access" }).WaitForAsync();
-                    await page.GetByRole(AriaRole.Button, new() { Name = "Approve" }).ClickAsync();
+                    if (await WaitForConsentPromptOrTokenAsync(page, reverseProxy))
+                        await page.GetByRole(AriaRole.Button, new() { Name = "Approve" }).ClickAsync();
                     await runSignIn.WaitForAsync();
                 }
                 catch (Exception exception)
@@ -1752,13 +2031,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
             ProjectAuthorityResourceType.Project,
             project.ProjectId,
             ProjectAuthorityRole.Orchestrator);
-        await CreateRunBindingGrantAsync(orchestratorSubject, project.ProjectId, runId);
         var orchestratorToken = await IssueTokenAsync(
-            "projects.admin projects.orchestrator",
+            "projects.orchestrator",
             [TenantId],
             orchestratorUpstreamSubject,
-            project.ProjectId,
-            runId,
+            null,
+            null,
             ["platform_admin"]);
         var provider = database.Provider;
         var request = new AcceptRunSelectionRequest
@@ -1997,10 +2275,25 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
         string? runId,
         string[] roles)
     {
+        var tokens = await IssueTokensAsync(
+            _brokerFactory, additionalScope, tenantIds, upstreamSubject, projectId, runId, roles);
+        return tokens.GetProperty("access_token").GetString()
+            ?? throw new InvalidOperationException("The Identity broker did not return an access token.");
+    }
+
+    private async Task<JsonElement> IssueTokensAsync(
+        IdentityBrokerWebApplicationFactory brokerFactory,
+        string additionalScope,
+        IReadOnlyList<string> tenantIds,
+        string? upstreamSubject,
+        string? projectId,
+        string? runId,
+        string[] roles)
+    {
         _fakeIdp.Subject = upstreamSubject ?? $"external-subject-{Interlocked.Increment(ref _subjectSequence)}";
         _fakeIdp.TenantIds = tenantIds;
         _fakeIdp.Roles = roles;
-        using var broker = _brokerFactory.CreateClient(new WebApplicationFactoryClientOptions
+        using var broker = brokerFactory.CreateClient(new WebApplicationFactoryClientOptions
         {
             AllowAutoRedirect = false,
             BaseAddress = new Uri("https://broker.test.local"),
@@ -2021,8 +2314,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests(
             IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
             code,
             verifier);
-        return tokens.GetProperty("access_token").GetString()
-            ?? throw new InvalidOperationException("The Identity broker did not return an access token.");
+        return tokens;
     }
 
     private string CreateSignedAccessToken(string subject, params Claim[] additionalClaims)

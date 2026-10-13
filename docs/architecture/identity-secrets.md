@@ -18,6 +18,10 @@ sequenceDiagram
     User->>IdP: Authenticate
     IdP-->>Broker: Validated upstream identity
     Broker->>Broker: Replace upstream subject with local broker subject
+    opt Projects-owned project/run authorization
+        Broker->>Projects: Private TLS 1.2/1.3 signed proof request for actor and exact project/run
+        Projects-->>Broker: Current membership, Orchestrator assignment, and accepted-selection receipt
+    end
     Broker->>Broker: Apply registered scopes and resource audience
     Broker-->>API: Signed access token (sub, scope, audience, optional project/run binding)
     API->>API: Validate issuer, signature, lifetime, and audience
@@ -25,6 +29,7 @@ sequenceDiagram
     Projects-->>API: Effective permissions, contract v1, Cache-Control: no-store
     API->>API: Authorize this request; keep no membership or role cache
     Note over API,Projects: Each privileged request obtains fresh owner context; no authorization pins are issued.
+    Note over Broker,Projects: Broker verifies the Projects chain, hostname, server purpose, validity, and exact leaf pin; redirects are disabled
 ```
 
 <figure class="aw-diagram" tabindex="0">
@@ -35,7 +40,25 @@ sequenceDiagram
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-identity-redemption.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-identity-redemption.drawio'">Open editable draw.io source</a></p>
 
-The broker issues `project_id` and `run_id` claims only after it finds an active grant for the authenticated local user. Token exchange and refresh repeat that binding check. These claims constrain a request to the signed project/run; they do not grant a project role. Projects & Config owns its issuer-and-subject memberships, resource-role assignments, and immutable authorization audit in `projects_config`. Its runtime database principal can read but cannot insert, update, or delete those records; provisioning and revocation use a separate privileged source path.
+The broker issues `project_id` and `run_id` claims through one of two authorization paths. A secret-grant binding requires an active grant for the authenticated local user. A Projects-owned binding instead requires a private, no-store receipt for the active project, current actor membership, active Orchestrator assignment, and matching accepted run selection. The Projects proof is repeated when authorization resumes and during token exchange and refresh; the broker rejects a changed receipt. The secret-grant path separately rechecks its active run binding during token exchange and refresh. These paths are alternatives: a Projects-owned binding does not also require a secret grant. The short-lived service token uses a separate audience; its receipt does not become a role claim. Project/run claims constrain a request to the exact signed binding; they do not grant a project role. Projects & Config owns its issuer-and-subject memberships, resource-role assignments, and immutable authorization audit in `projects_config`. Its runtime database principal can read but cannot insert, update, or delete those records; provisioning and revocation use a separate privileged source path.
+
+The Broker owner call uses `IdentityBroker:RunBinding:ProjectsOwnerAddress` and
+`IdentityBroker:RunBinding:ProjectsAudience`. The corresponding
+`ProjectsConfig:Authentication:BrokerRunBindingAudience` is a separate HTTPS
+audience and enables only the private proof route; it does not replace the
+public Projects bearer audience.
+
+When run binding is configured, Broker requires
+`ProjectsTrustBundleSha256`, the SHA-256 of the exact raw UTF-8 PEM bytes at
+`/var/run/service-backend-ca/ca.crt`. This path is fixed; there is no
+configurable trust-bundle path. The bundle must contain CA certificates only.
+`ProjectsServerCertificateSha256` pins the SHA-256 of the Projects leaf
+certificate DER bytes. Broker checks the custom-root chain, HTTPS hostname,
+current validity, server authentication purpose, and exact leaf pin; it
+rejects redirects. Projects requires absolute certificate and key paths and
+`ProjectsConfig:Tls:ServerCertificateSha256` when its private audience is
+enabled. It accepts the private proof request only after a native TLS 1.2 or
+TLS 1.3 handshake. Forwarded HTTPS headers alone do not satisfy this check.
 
 `POST /secrets/redeem` accepts a `SecretRef` identifier and exact version, purpose, and run ID. The bearer token supplies actor, project, and run claims. The broker does not accept caller-supplied identity claims.
 

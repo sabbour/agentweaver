@@ -476,10 +476,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var project = await createdProject.Content.ReadFromJsonAsync<ProjectSummary>(AuthorizationJsonOptions);
         Assert.NotNull(project);
 
-        var bootstrapToken = await IssueTokenAsync(
-            "projects.bootstrap", [TenantId], "policy-admission-runner", null, null, ["orchestrator"]);
+        var selectionToken = await IssueTokenAsync(
+            "projects.orchestrator", [TenantId], "policy-admission-runner", null, null, ["orchestrator"]);
         var runnerSubject = SingleClaim(
-            new JwtSecurityTokenHandler().ReadJwtToken(bootstrapToken).Claims, "sub");
+            new JwtSecurityTokenHandler().ReadJwtToken(selectionToken).Claims, "sub");
         var runnerMembership = await AddMembershipAsync(
             projects.PrivilegedFixtureDataSource, runnerSubject, TenantId);
         var runnerRole = await AssignRoleAsync(
@@ -500,15 +500,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ProjectAuthorityResourceType.Platform,
             ProjectAuthorizationOwner.PlatformResourceId,
             ProjectAuthorityRole.PlatformAdmin);
-        await CreateRunBindingGrantAsync(runnerSubject, project.ProjectId, RunId);
-        var runToken = await IssueTokenAsync(
-            "projects.admin projects.orchestrator",
-            [TenantId],
-            "policy-admission-runner",
-            project.ProjectId,
-            RunId,
-            ["platform_admin"]);
-
         using var updateProjectConfiguration = new HttpRequestMessage(
             HttpMethod.Put, $"/api/projects/{project.ProjectId}/configuration")
         {
@@ -586,9 +577,17 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 }
             })
         };
-        AddBearerAndTenant(acceptSelection, runToken, TenantId);
+        AddBearerAndTenant(acceptSelection, selectionToken, TenantId);
         using var acceptedSelection = await projects.Client.SendAsync(acceptSelection);
         Assert.Equal(HttpStatusCode.OK, acceptedSelection.StatusCode);
+        await CreateRunBindingGrantAsync(runnerSubject, project.ProjectId, RunId);
+        var runToken = await IssueTokenAsync(
+            "projects.orchestrator",
+            [TenantId],
+            "policy-admission-runner",
+            project.ProjectId,
+            RunId,
+            ["platform_admin"]);
 
         var ownerSchema = "policy_admission_" + Guid.NewGuid().ToString("N");
         var eventsSchema = "policy_events_" + Guid.NewGuid().ToString("N");

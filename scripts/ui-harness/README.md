@@ -82,3 +82,52 @@ They do not undo a request that the browser already sent.
 It does not close the borrowed page, context, or browser.
 Run, session, Environment, and project cleanup require separate current owner authority and verified receipts.
 Closing the adapter is not product-resource cleanup.
+
+## Executable P1 journey
+
+The exported `runP1UiJourney` function opens the pinned run and reads the
+committed-event journal through this borrowed UI adapter. It checks the actual
+cursor pages and Activity view. It does not use MCP replay as UI evidence.
+
+Gate-answer, approval, rejection, and addressed-message journeys use the
+borrowed page and verify the actual owner response.
+
+The shared CLI creates and verifies an invocation-owned project, grants,
+selection, and sessions before it supplies those receipts to the selected
+surface. It rejects caller-supplied `ownerFences` and `fixtureScope` claims.
+Cleanup revokes setup grants and archives the project only when no run
+selection was accepted; otherwise it reports `retainedPending` and preserves
+the active grants.
+
+Use the same `executionIntent: "execute"` manifest and four
+`deploymentEvidence` paths documented by the API harness. Set
+`AGENTWEAVER_P1_SETUP_TOKEN` in the process environment and provide
+`--identity-module <authorized-identity-provider.mjs>` returning already-issued
+run-bound and denied-actor tokens. The required `--page-module` must return an
+already-authorized page on the selected Environment web origin. The runner
+does not start a browser, sign in, refresh credentials, or request consent.
+Credentials and the page provider are used only after source and deployment
+evidence passes.
+
+UI writes use an application-generated idempotency key that cannot be restored
+by the harness after a process crash. Before a UI gate or message action, the
+runner appends a `p1-ui-action-started` record to the evidence file. If it finds
+that marker on a later invocation, it refuses to replay the action; reconcile
+the current owner state before starting a new run. Read-only UI journal
+journeys do not use this marker.
+
+```powershell
+npm run harness:p1 -- --surface ui --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs> --page-module <authorized-page-provider.mjs>
+```
+
+Surface results are reported separately from full P1 acceptance. Full P1 stays
+blocked until required native probes have real evidence. Controlled UI and
+runner tests do not start a browser or prove a deployed Gateway, Broker, owner,
+native execution, or AKS acceptance.
+
+The required `fixturePlan.expectedPlatformRuntimeRevision` is a positive
+expected value passed through the existing run-selection request and verified
+against the accepted and observed owner selection. It is not authority or an
+ownership receipt; the owner compare-and-swap checks the current revision. The
+fixture keeps its project-configuration read and does not call the
+PlatformAdmin-only global runtime-default endpoint.

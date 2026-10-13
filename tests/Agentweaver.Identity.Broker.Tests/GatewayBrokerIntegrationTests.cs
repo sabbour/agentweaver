@@ -79,7 +79,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             projects.PrivilegedFixtureDataSource, project.ProjectId, runId, subject);
         await CreateRunBindingGrantAsync(subject, project.ProjectId, runId);
         var runToken = await IssueTokenAsync(
-            "projects.admin projects.orchestrator",
+            "api.read",
             [TenantId],
             runSubject,
             project.ProjectId,

@@ -214,14 +214,14 @@ public sealed partial class ProjectsConfigService
             ProjectAuthorityRole.TenantAdmin,
             cancellationToken).ConfigureAwait(false))
             throw ProjectConfigException.Forbidden();
-        ValidateProjectName(name);
+        name = NormalizeProjectName(name);
         var now = timeProvider.GetUtcNow();
         var project = new ProjectRecord
         {
             ProjectId = Guid.NewGuid().ToString("N"),
             TenantId = caller.TenantId,
             CreatedByActorId = caller.ActorId,
-            Name = name.Trim(),
+            Name = name,
             State = ProjectLifecycleState.Active,
             Revision = 1,
             ConfigurationRevision = 1,
@@ -645,6 +645,82 @@ public sealed partial class ProjectsConfigService
             .ConfigureAwait(false)
             ?? throw ProjectConfigException.NotFound();
         return DeserializeRunSelection(selection.SnapshotJson);
+    }
+
+    public async Task<BrokerRunBindingProofResponse> GetBrokerRunBindingProofAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
+        caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
+        caller.RequireScope(ProjectAuthorizationOwner.OrchestratorScope);
+        caller.RequireExactRunBinding(projectId, runId);
+        if (!await HasCurrentRoleAsync(
+            caller,
+            ProjectAuthorityResourceType.Project,
+            projectId,
+            ProjectAuthorityRole.Orchestrator,
+            cancellationToken).ConfigureAwait(false))
+            throw ProjectConfigException.Forbidden();
+
+        var project = await FindTenantProjectAsync(caller, projectId, runId, cancellationToken)
+            .ConfigureAwait(false);
+        if (project.State != ProjectLifecycleState.Active)
+            throw ProjectConfigException.NotFound();
+
+        var assignments = caller.Grants.Where(grant =>
+            grant.ResourceType == ProjectAuthorityResourceType.Project &&
+            grant.ResourceId == projectId &&
+            grant.Role == ProjectAuthorityRole.Orchestrator).Take(2).ToArray();
+        if (assignments.Length != 1 ||
+            assignments[0].AssignmentId == Guid.Empty ||
+            assignments[0].Revision <= 0 ||
+            caller.MembershipId == Guid.Empty ||
+            caller.MembershipRevision <= 0)
+            throw ProjectConfigException.Forbidden();
+        if (!await db.RoleAssignments.AsNoTracking().AnyAsync(
+            assignment =>
+                assignment.AssignmentId == assignments[0].AssignmentId &&
+                assignment.MembershipId == caller.MembershipId &&
+                assignment.ResourceType == ProjectAuthorityResourceType.Project &&
+                assignment.ResourceId == projectId &&
+                assignment.Role == ProjectAuthorityRole.Orchestrator &&
+                assignment.Revision == assignments[0].Revision &&
+                assignment.State == ProjectAuthorityRecordState.Active,
+            cancellationToken).ConfigureAwait(false))
+            throw ProjectConfigException.Forbidden();
+
+        var record = await db.RunSelections.AsNoTracking()
+            .SingleOrDefaultAsync(
+                item => item.ProjectId == projectId && item.RunId == runId,
+                cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw ProjectConfigException.NotFound();
+        var selection = DeserializeRunSelection(record.SnapshotJson);
+        if (selection.ProjectId != projectId ||
+            selection.RunId != runId ||
+            selection.ProjectRevision != record.ProjectRevision ||
+            selection.ProjectConfigurationRevision != record.ProjectConfigurationRevision ||
+            selection.PlatformRuntimeRevision != record.PlatformRuntimeRevision ||
+            selection.ContextRevision != record.ContextRevision)
+            throw new InvalidOperationException("The run-selection snapshot does not match its recorded binding.");
+
+        return new BrokerRunBindingProofResponse(
+            caller.Issuer,
+            caller.ActorId,
+            caller.TenantId,
+            caller.MembershipId,
+            caller.MembershipRevision,
+            projectId,
+            runId,
+            assignments[0].AssignmentId,
+            assignments[0].Revision,
+            record.ProjectRevision,
+            record.ProjectConfigurationRevision,
+            record.PlatformRuntimeRevision,
+            record.ContextRevision,
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(record.SnapshotJson))));
     }
 
     private async Task<ProjectRecord> FindProjectAsync(
@@ -1189,6 +1265,15 @@ public sealed partial class ProjectsConfigService
                 "Project name must be nonempty, contain no control characters, and be at most 160 characters.",
                 StatusCodes.Status400BadRequest);
     }
+
+    internal static string NormalizeProjectName(string name)
+    {
+        ValidateProjectName(name);
+        return name.Trim();
+    }
+
+    internal static string SerializeProjectConfiguration(ProjectConfiguration configuration) =>
+        Serialize(configuration);
 
     private static void ValidateIdentifier(string value, string name)
     {

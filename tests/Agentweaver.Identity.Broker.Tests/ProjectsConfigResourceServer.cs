@@ -1,6 +1,10 @@
 extern alias ProjectsConfig;
 
 using System.Security.Cryptography;
+using System.Security.Authentication;
+using System.Security.Cryptography.X509Certificates;
+using System.Net;
+using System.Net.Security;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Providers;
@@ -8,6 +12,9 @@ using ProjectsConfig::Agentweaver.Projects.Config;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Server.Kestrel.Https;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -30,17 +37,23 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         IHost host,
         NpgsqlDataSource dataSource,
         NpgsqlDataSource privilegedDataSource,
-        string runtimeRole)
+        string runtimeRole,
+        Uri baseAddress,
+        X509Certificate2? brokerRunBindingServerCertificate)
     {
         _host = host;
         _dataSource = dataSource;
         _privilegedDataSource = privilegedDataSource;
         _runtimeRole = runtimeRole;
-        _client = host.GetTestClient();
-        _client.BaseAddress = new Uri("https://projects.test");
+        _client = brokerRunBindingServerCertificate is null
+            ? host.GetTestClient()
+            : new HttpClient(CreatePinnedTestHandler(brokerRunBindingServerCertificate));
+        _client.BaseAddress = baseAddress;
     }
 
     public HttpClient Client => _client;
+    public Uri BaseAddress => _client.BaseAddress
+        ?? throw new InvalidOperationException("Projects Config test client has no base address.");
     public HttpMessageHandler CreateHandler() => _host.GetTestServer().CreateHandler();
     public NpgsqlDataSource RuntimeDataSource => _dataSource;
     public NpgsqlDataSource PrivilegedFixtureDataSource => _privilegedDataSource;
@@ -52,8 +65,23 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         ProviderCatalog? providerCatalog = null,
         IReadOnlyList<string>? additionalAudiences = null,
         IObjectStore? skillContentObjects = null,
-        bool usePublicWriterFixture = false)
+        bool usePublicWriterFixture = false,
+        string? brokerRunBindingAudience = null,
+        X509Certificate2? brokerRunBindingServerCertificate = null)
     {
+        if ((brokerRunBindingAudience is null) != (brokerRunBindingServerCertificate is null))
+            throw new ArgumentException(
+                "Projects run-binding HTTPS requires both a private audience and a server certificate.");
+        if (brokerRunBindingAudience is not null &&
+            (!Uri.TryCreate(brokerRunBindingAudience, UriKind.Absolute, out var privateAudience) ||
+                privateAudience.Scheme != Uri.UriSchemeHttps ||
+                string.Equals(
+                    privateAudience.AbsoluteUri,
+                    new Uri(audience).AbsoluteUri,
+                    StringComparison.Ordinal)))
+            throw new ArgumentException(
+                "Projects run-binding HTTPS requires a distinct absolute HTTPS audience.");
+
         var privilegedDataSource = NpgsqlDataSource.Create(connectionString);
         var privilegedDbOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
             .UseNpgsql(privilegedDataSource, npgsql => npgsql.MigrationsHistoryTable(
@@ -96,7 +124,16 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
 
         var host = await new HostBuilder().ConfigureWebHost(web =>
         {
-            web.UseTestServer();
+            if (brokerRunBindingServerCertificate is null)
+                web.UseTestServer();
+            else
+            {
+                web.UseKestrel();
+                web.ConfigureKestrel(server =>
+                    server.Listen(IPAddress.Loopback, 0, listen =>
+                        listen.UseHttps(brokerRunBindingServerCertificate, https =>
+                            https.SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13)));
+            }
             web.ConfigureServices(services =>
             {
                 services.AddRouting();
@@ -150,6 +187,37 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                         };
                     });
                 services.AddAuthorization();
+                if (brokerRunBindingAudience is not null)
+                {
+                    services.AddAuthentication().AddJwtBearer(
+                        ProjectAuthorizationOwner.BrokerRunBindingAuthenticationScheme,
+                        options =>
+                        {
+                            options.MapInboundClaims = false;
+                            options.TokenValidationParameters = new TokenValidationParameters
+                            {
+                                ValidateIssuer = true,
+                                ValidIssuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
+                                ValidateAudience = true,
+                                ValidAudience = brokerRunBindingAudience,
+                                ValidateIssuerSigningKey = true,
+                                IssuerSigningKey = signingKey,
+                                ValidateLifetime = true,
+                                RequireExpirationTime = true,
+                                RequireSignedTokens = true,
+                                ValidTypes = [ProjectAuthorizationOwner.BrokerRunBindingTokenType],
+                                ValidAlgorithms = [SecurityAlgorithms.RsaSha256],
+                                ClockSkew = TimeSpan.FromSeconds(5),
+                            };
+                        });
+                    services.AddAuthorization(options =>
+                        options.AddPolicy(
+                            ProjectAuthorizationOwner.BrokerRunBindingAuthorizationPolicy,
+                            policy => policy
+                                .AddAuthenticationSchemes(
+                                    ProjectAuthorizationOwner.BrokerRunBindingAuthenticationScheme)
+                                .RequireAuthenticatedUser()));
+                }
             });
             web.Configure(app =>
             {
@@ -158,13 +226,46 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                 app.UseAuthorization();
                 app.UseEndpoints(endpoints =>
                 {
-                    endpoints.MapProjectConfigEndpoints();
+                    endpoints.MapProjectConfigEndpoints(
+                        enableBrokerRunBinding: brokerRunBindingAudience is not null);
                     endpoints.MapSkillContentEndpoints();
                 });
             });
         }).StartAsync();
 
-        return new ProjectsConfigResourceServer(host, dataSource, privilegedDataSource, runtimeRole);
+        var baseAddress = brokerRunBindingServerCertificate is null
+            ? new Uri("https://projects.test")
+            : GetKestrelBaseAddress(host);
+        return new ProjectsConfigResourceServer(
+            host, dataSource, privilegedDataSource, runtimeRole, baseAddress,
+            brokerRunBindingServerCertificate);
+    }
+
+    private static Uri GetKestrelBaseAddress(IHost host)
+    {
+        var addresses = host.Services.GetRequiredService<IServer>()
+            .Features.Get<IServerAddressesFeature>()?.Addresses;
+        if (addresses is not { Count: 1 })
+            throw new InvalidOperationException("Projects Config HTTPS test host did not expose one address.");
+        return new Uri(addresses.Single().TrimEnd('/') + "/", UriKind.Absolute);
+    }
+
+    private static HttpClientHandler CreatePinnedTestHandler(X509Certificate2 expectedCertificate)
+    {
+        var pin = SHA256.HashData(expectedCertificate.RawData);
+        return new HttpClientHandler
+        {
+            ServerCertificateCustomValidationCallback = (_, certificate, _, errors) =>
+            {
+                var now = DateTimeOffset.UtcNow;
+                return certificate is not null &&
+                    (errors & ~SslPolicyErrors.RemoteCertificateChainErrors) == SslPolicyErrors.None &&
+                    now >= expectedCertificate.NotBefore.ToUniversalTime() &&
+                    now < expectedCertificate.NotAfter.ToUniversalTime() &&
+                    CryptographicOperations.FixedTimeEquals(
+                        SHA256.HashData(certificate.GetRawCertData()), pin);
+            },
+        };
     }
 
     public async ValueTask DisposeAsync()

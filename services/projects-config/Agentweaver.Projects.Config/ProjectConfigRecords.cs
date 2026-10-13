@@ -122,6 +122,140 @@ public sealed class ProjectRunSelectionRecord
     public DateTimeOffset CreatedAt { get; set; }
 }
 
+public sealed record BrokerRunBindingProofResponse(
+    string ActorIssuer,
+    string ActorSubject,
+    string TenantId,
+    Guid MembershipId,
+    long MembershipRevision,
+    string ProjectId,
+    string RunId,
+    Guid AssignmentId,
+    long AssignmentRevision,
+    long ProjectRevision,
+    long ProjectConfigurationRevision,
+    long PlatformRuntimeRevision,
+    string ContextRevision,
+    string SelectionHash);
+
+public enum ProjectSetupOperationKind
+{
+    Setup,
+    Cleanup
+}
+
+public enum ProjectSetupOperationResultState
+{
+    Created,
+    Cleaned,
+    RetainedPending
+}
+
+public sealed class ProjectSetupOperationRecord
+{
+    public Guid InvocationId { get; set; }
+    public ProjectSetupOperationKind OperationKind { get; set; }
+    public required string RequestHash { get; set; }
+    public required string Issuer { get; set; }
+    public required string Subject { get; set; }
+    public required string TenantId { get; set; }
+    public Guid MembershipId { get; set; }
+    public long MembershipRevision { get; set; }
+    public required string ProjectId { get; set; }
+    public long ProjectRevision { get; set; }
+    public long ProjectConfigurationRevision { get; set; }
+    public Guid AssignmentId { get; set; }
+    public long AssignmentRevision { get; set; }
+    public Guid? OwnerAssignmentId { get; set; }
+    public long? OwnerAssignmentRevision { get; set; }
+    public Guid? OwnerAuthorityAuditEventId { get; set; }
+    public Guid? OwnerRevocationAuditEventId { get; set; }
+    public long? ExpectedProjectRevision { get; set; }
+    public long? ExpectedAssignmentRevision { get; set; }
+    public Guid? AuthorityAuditEventId { get; set; }
+    public ProjectSetupOperationResultState ResultState { get; set; }
+    public required string ResultJson { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+public sealed record PrivilegedProjectSetupInput(
+    int Version,
+    string AccessToken,
+    Guid InvocationId,
+    ProjectSetupOperationKind OperationKind,
+    string TenantId,
+    long? ExpectedProjectRevision,
+    long? ExpectedAssignmentRevision);
+
+public sealed record ProjectSetupOperationRequest(
+    int Version,
+    Guid InvocationId,
+    ProjectSetupOperationKind OperationKind,
+    string TenantId,
+    long? ExpectedProjectRevision,
+    long? ExpectedAssignmentRevision);
+
+public sealed record ProjectSetupReceipt(
+    Guid InvocationId,
+    string Issuer,
+    string Subject,
+    string TenantId,
+    Guid MembershipId,
+    long MembershipRevision,
+    string ProjectId,
+    string CreatedByActorId,
+    long ProjectRevision,
+    long ProjectConfigurationRevision,
+    Guid AssignmentId,
+    long AssignmentRevision,
+    Guid AuthorityAuditEventId,
+    DateTimeOffset CreatedAt)
+{
+    public Guid? OwnerAssignmentId { get; init; }
+    public long? OwnerAssignmentRevision { get; init; }
+    public Guid? OwnerAuthorityAuditEventId { get; init; }
+}
+
+public sealed record ProjectSetupReadback(
+    bool ProjectExists,
+    ProjectLifecycleState? ProjectState,
+    long? ProjectRevision,
+    long? ProjectConfigurationRevision,
+    bool InitialConfigurationExists,
+    bool AssignmentExists,
+    ProjectAuthorityRecordState? AssignmentState,
+    long? AssignmentRevision,
+    bool AuthorityAuditExists,
+    Guid? OwnerAssignmentId = null,
+    bool OwnerAssignmentExists = false,
+    ProjectAuthorityRecordState? OwnerAssignmentState = null,
+    long? OwnerAssignmentRevision = null,
+    bool OwnerAuthorityAuditExists = false);
+
+public sealed record ProjectCleanupReceipt(
+    Guid InvocationId,
+    string TenantId,
+    string ProjectId,
+    Guid AssignmentId,
+    ProjectSetupOperationResultState State,
+    long ProjectRevision,
+    long ProjectConfigurationRevision,
+    long AssignmentRevision,
+    Guid? AuthorityAuditEventId,
+    DateTimeOffset CreatedAt)
+{
+    public Guid? OwnerAssignmentId { get; init; }
+    public long? OwnerAssignmentRevision { get; init; }
+    public Guid? OwnerRevocationAuditEventId { get; init; }
+}
+
+public sealed record ProjectSetupCommandResult(
+    ProjectSetupOperationKind OperationKind,
+    bool Replayed,
+    ProjectSetupReceipt? Setup,
+    ProjectSetupReadback? SetupReadback,
+    ProjectCleanupReceipt? Cleanup);
+
 public enum ProjectCastingProposalState
 {
     Pending,

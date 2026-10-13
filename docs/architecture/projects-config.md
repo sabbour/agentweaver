@@ -33,6 +33,15 @@ with `VerifyFull`, explicit authentication authority and audience, an immutable
 product image, reviewed image user/group, and an existing Projects-only TLS Secret.
 It exposes private HTTPS and leaves system certificate trust unchanged.
 
+The optional `ProjectsConfig:Authentication:BrokerRunBindingAudience` enables the
+private Broker proof route. When enabled, `ProjectsConfig:Tls:CertificatePath`,
+`KeyPath`, and `ServerCertificateSha256` are required. The absolute certificate/key
+paths must identify a current non-CA server certificate with the server
+authentication purpose, and the digest must match its exact leaf certificate.
+The private route also requires a native TLS 1.2 or TLS 1.3 handshake; proxy
+headers cannot stand in for TLS. The deployed TLS Secret and Kestrel default
+certificate must use the same leaf certificate.
+
 The provider catalog owner must supply an existing immutable, nonempty ConfigMap
 in the same namespace and its reviewed source commit.
 The ConfigMap uses relative catalog keys, such as `Registrations__0__Id`.
@@ -51,7 +60,7 @@ still require separate approval and evidence.
 
 ## API surface
 
-All routes require a validated bearer token with exactly one `sub`, the required OAuth scopes, and the service's audience. Projects & Config is the sole live owner of issuer-and-subject memberships and resource-role assignments. It resolves the current caller to one active tenant membership and current resource-role assignments in its own database. A tenant selector can choose among existing memberships but cannot create authority; any signed tenant assertion must agree with the selected membership. Project reads require an assigned Owner, Contributor, or Viewer role (or tenant administrator); project writes require Owner or tenant administrator; project creation requires an existing tenant administrator and does not auto-assign an Owner. Platform defaults require an assigned platform administrator. Run-selection reads and accepts require an assigned project Orchestrator role as well as matching signed project/run bindings when present. Every privileged request rechecks current membership and role state, so revocation takes effect without refreshing the broker token.
+Public routes require a validated bearer token with exactly one `sub`, the required OAuth scopes, and the service's public audience. The private Broker proof route uses its separately configured audience and a short-lived signed request token. Projects & Config is the sole live owner of issuer-and-subject memberships and resource-role assignments. It resolves the current caller to one active tenant membership and current resource-role assignments in its own database. A tenant selector can choose among existing memberships but cannot create authority; any signed tenant assertion must agree with the selected membership. Project reads require an assigned Owner, Contributor, or Viewer role (or tenant administrator); project writes require Owner or tenant administrator; project creation requires an existing tenant administrator and does not auto-assign an Owner. Platform defaults require an assigned platform administrator. Run-selection reads and accepts require an assigned project Orchestrator role as well as matching signed project/run bindings when present. Every privileged request rechecks current membership and role state, so revocation takes effect without refreshing the broker token.
 
 The Identity broker validates upstream identity but does not forward upstream tenant or role claims or assign application roles. OAuth scopes remain necessary route permissions, but they are not authority by themselves. Role claims and request headers never create authority; missing, ambiguous, stale, or foreign memberships fail closed.
 
@@ -80,6 +89,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `PUT /api/platform/runtime-defaults` | Append platform defaults using an expected revision. |
 | `PUT /api/projects/{projectId}/runs/{runId}/selection` | Accept or idempotently replay a run-selection request from the Orchestrator. |
 | `GET /api/projects/{projectId}/runs/{runId}/selection` | Read the immutable selection snapshot for the authorized Orchestrator. |
+| `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, mapped only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. Requires native TLS 1.2 or TLS 1.3, accepts no query or body, and returns a bounded `Cache-Control: no-store` receipt only for the exact signed project/run binding, active project, current actor membership, active Orchestrator assignment, and matching accepted run-selection snapshot. |
 | `GET /api/projects/{projectId}/skills?cursor={token}&pageSize={n}` | List bounded skill revision metadata and current assignments for project administrators; omit `cursor` for the first page. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` | Read exact imported skill revisions assigned to an active agent in the accepted run. |
 | `GET /api/authorization/context` | Return the validated caller's current effective permissions through versioned contract 1. |
@@ -123,6 +133,14 @@ Authorized project readers can list and read proposals; project writers can amen
 Charter/casting transfer is a separate explicit owner operation. Export identifies the source project and configuration revision and includes a format version and content digest. Import checks that format and digest, validates the proposed configuration through the ordinary owner-authorized configuration validator, preserves target settings outside charters/casting, and creates a pending proposal rather than applying it. Incompatible or tampered transfers return an actionable client error. The service does not mirror Squad files, reconcile them in pre-commit hooks, or export them after runs.
 
 The authorization-context route requires `api.read`, accepts the existing optional `X-Agentweaver-Tenant` selector, and resolves only the authenticated issuer and subject. It rejects query parameters, including caller-subject and role selectors, and purpose-bound tokens. It applies the validated service audience, OAuth scopes, and optional project/run bindings before returning grouped effective permissions with membership and role revisions; it does not return assignment rows or a transferable credential. Responses use `Cache-Control: no-store`. Resource services request this context for each privileged operation and do not maintain separate membership/role records, caches, or authorization pins. The contract-1 wire DTOs are shared in `Agentweaver.Abstractions`; this shares serialization types, not authority data or database access.
+
+The Broker proof route rejects query parameters, non-empty request bodies,
+`Transfer-Encoding`, and `Content-Type`. It resolves the actor only from the
+signed token's issuer and subject,
+then restricts membership lookup to the target project's tenant; it never picks
+among the actor's other tenant memberships. It reads the current assignment and
+the existing immutable run-selection snapshot. A stale or mismatched selection
+does not produce a receipt.
 
 ## Selection and persistence rules
 

@@ -37,25 +37,53 @@ public static class BrokerFlowDriver
     }
 
     /// <summary>
-    /// Runs the full authorize → external login → consent → authorize-again flow for a client
-    /// that does not yet have a permanent authorization, and returns the final authorization
-    /// code issued to <paramref name="redirectUri"/>.
+    /// Runs the full authorize flow, submitting consent when required, and returns the final
+    /// authorization code issued to <paramref name="redirectUri"/>.
     /// </summary>
     public static async Task<string> AuthorizeWithConsentAsync(
         HttpClient broker, HttpClient fakeIdp, string clientId, string redirectUri, string scope,
         string codeChallenge, string state = "state-1", string nonce = "nonce-1",
         string? projectId = null, string? runId = null)
     {
-        var consentBody = await BeginConsentAsync(broker, fakeIdp, clientId, redirectUri, scope,
-            codeChallenge, state, nonce, projectId, runId);
-        var consentResponse = await SubmitConsentAsync(broker, consentBody);
-        AssertRedirect(consentResponse, "consent");
-        var postConsentAuthorizeLocation = consentResponse.Headers.Location!;
+        var challengeResponse = await StartAuthorizeAsync(
+            broker, clientId, redirectUri, scope, codeChallenge, "S256", state, nonce, projectId, runId);
+        JsonElement? consentPrompt = null;
+        HttpResponseMessage authorizeResponse;
+        if (challengeResponse.StatusCode == System.Net.HttpStatusCode.OK)
+        {
+            consentPrompt = await challengeResponse.Content.ReadFromJsonAsync<JsonElement>();
+            authorizeResponse = challengeResponse;
+        }
+        else
+        {
+            AssertRedirect(challengeResponse, "authorize challenge");
+            var fakeIdpResponse = await fakeIdp.GetAsync(challengeResponse.Headers.Location!);
+            AssertRedirect(fakeIdpResponse, "fake IdP authorize");
 
-        var codeResponse = await broker.GetAsync(MakeAbsoluteIfNeeded(broker, postConsentAuthorizeLocation));
-        AssertRedirect(codeResponse, "final authorize (code issuance)");
-        var finalLocation = codeResponse.Headers.Location!;
+            var callbackResponse = await broker.GetAsync(
+                MakeAbsoluteIfNeeded(broker, fakeIdpResponse.Headers.Location!));
+            AssertRedirect(callbackResponse, "external login callback");
 
+            var resumeResponse = await broker.GetAsync(
+                MakeAbsoluteIfNeeded(broker, callbackResponse.Headers.Location!));
+            AssertRedirect(resumeResponse, "resume");
+
+            authorizeResponse = await broker.GetAsync(
+                MakeAbsoluteIfNeeded(broker, resumeResponse.Headers.Location!));
+            if (authorizeResponse.StatusCode == System.Net.HttpStatusCode.OK)
+                consentPrompt = await authorizeResponse.Content.ReadFromJsonAsync<JsonElement>();
+        }
+
+        if (consentPrompt is { } prompt)
+        {
+            var consentResponse = await SubmitConsentAsync(broker, prompt);
+            AssertRedirect(consentResponse, "consent");
+            authorizeResponse = await broker.GetAsync(
+                MakeAbsoluteIfNeeded(broker, consentResponse.Headers.Location!));
+        }
+
+        AssertRedirect(authorizeResponse, "final authorize (code issuance)");
+        var finalLocation = authorizeResponse.Headers.Location!;
         return ExtractQueryParameter(finalLocation, "code")
             ?? throw new InvalidOperationException($"No 'code' parameter in final redirect: {finalLocation}");
     }
@@ -89,6 +117,7 @@ public static class BrokerFlowDriver
         {
             throw new InvalidOperationException(
                 $"Expected a consent_required JSON response but got {consentPromptResponse.StatusCode}: " +
+                $"Location={consentPromptResponse.Headers.Location}; " +
                 await consentPromptResponse.Content.ReadAsStringAsync());
         }
 

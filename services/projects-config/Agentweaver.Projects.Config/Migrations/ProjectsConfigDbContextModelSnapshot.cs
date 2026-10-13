@@ -582,6 +582,148 @@ namespace Agentweaver.Projects.Config.Migrations
                     b.ToTable("project_run_selections", "projects_config");
                 });
 
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSetupOperationRecord", b =>
+                {
+                    b.Property<Guid>("InvocationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("invocation_id");
+
+                    b.Property<string>("OperationKind")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)")
+                        .HasColumnName("operation_kind");
+
+                    b.Property<Guid>("AssignmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("assignment_id");
+
+                    b.Property<long>("AssignmentRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("assignment_revision");
+
+                    b.Property<Guid?>("AuthorityAuditEventId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("authority_audit_event_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<long?>("ExpectedAssignmentRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("expected_assignment_revision");
+
+                    b.Property<long?>("ExpectedProjectRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("expected_project_revision");
+
+                    b.Property<string>("Issuer")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)")
+                        .HasColumnName("issuer");
+
+                    b.Property<Guid>("MembershipId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("membership_id");
+
+                    b.Property<long>("MembershipRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("membership_revision");
+
+                    b.Property<Guid?>("OwnerAssignmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("owner_assignment_id");
+
+                    b.Property<long?>("OwnerAssignmentRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("owner_assignment_revision");
+
+                    b.Property<Guid?>("OwnerAuthorityAuditEventId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("owner_authority_audit_event_id");
+
+                    b.Property<Guid?>("OwnerRevocationAuditEventId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("owner_revocation_audit_event_id");
+
+                    b.Property<long>("ProjectConfigurationRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("project_configuration_revision");
+
+                    b.Property<string>("ProjectId")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)")
+                        .HasColumnName("project_id");
+
+                    b.Property<long>("ProjectRevision")
+                        .HasColumnType("bigint")
+                        .HasColumnName("project_revision");
+
+                    b.Property<string>("RequestHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character(64)")
+                        .HasColumnName("request_hash");
+
+                    b.Property<string>("ResultJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("result");
+
+                    b.Property<string>("ResultState")
+                        .IsRequired()
+                        .HasMaxLength(24)
+                        .HasColumnType("character varying(24)")
+                        .HasColumnName("result_state");
+
+                    b.Property<string>("Subject")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("subject");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("tenant_id");
+
+                    b.HasKey("InvocationId", "OperationKind");
+
+                    b.HasIndex("AssignmentId");
+
+                    b.HasIndex("AuthorityAuditEventId");
+
+                    b.HasIndex("MembershipId");
+
+                    b.HasIndex("OwnerAssignmentId");
+
+                    b.HasIndex("OwnerAuthorityAuditEventId");
+
+                    b.HasIndex("OwnerRevocationAuditEventId");
+
+                    b.HasIndex("ProjectId");
+
+                    b.ToTable("project_setup_operations", "projects_config", t =>
+                        {
+                            t.HasCheckConstraint("ck_project_setup_operations_cleanup_revision", "(operation_kind = 'Setup' AND result_state = 'Created' AND expected_project_revision IS NULL AND expected_assignment_revision IS NULL) OR (operation_kind = 'Cleanup' AND result_state IN ('Cleaned', 'RetainedPending') AND expected_project_revision IS NOT NULL AND expected_project_revision > 0 AND expected_assignment_revision IS NOT NULL AND expected_assignment_revision > 0)");
+
+                            t.HasCheckConstraint("ck_project_setup_operations_hash", "request_hash ~ '^[0-9a-f]{64}$'");
+
+                            t.HasCheckConstraint("ck_project_setup_operations_kind", "operation_kind IN ('Setup', 'Cleanup')");
+
+                            t.HasCheckConstraint("ck_project_setup_operations_owner_binding", "(owner_assignment_id IS NULL AND owner_assignment_revision IS NULL AND owner_authority_audit_event_id IS NULL) OR (owner_assignment_id IS NOT NULL AND owner_assignment_id <> assignment_id AND owner_assignment_revision IS NOT NULL AND owner_authority_audit_event_id IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_project_setup_operations_owner_revocation_audit", "owner_revocation_audit_event_id IS NULL OR operation_kind = 'Cleanup'");
+
+                            t.HasCheckConstraint("ck_project_setup_operations_revision", "membership_revision > 0 AND project_revision > 0 AND project_configuration_revision > 0 AND assignment_revision > 0 AND (owner_assignment_revision IS NULL OR owner_assignment_revision > 0)");
+
+                            t.HasCheckConstraint("ck_project_setup_operations_state", "result_state IN ('Created', 'Cleaned', 'RetainedPending')");
+                        });
+                });
+
             modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSkillContentRevisionRecord", b =>
                 {
                     b.Property<string>("ProjectId")
@@ -887,6 +1029,47 @@ namespace Agentweaver.Projects.Config.Migrations
 
             modelBuilder.Entity("Agentweaver.Projects.Config.ProjectRunSelectionRecord", b =>
                 {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Agentweaver.Projects.Config.ProjectSetupOperationRecord", b =>
+                {
+                    b.HasOne("Agentweaver.Projects.Config.ProjectRoleAssignmentRecord", null)
+                        .WithMany()
+                        .HasForeignKey("AssignmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Agentweaver.Projects.Config.ProjectAuthorityAuditRecord", null)
+                        .WithMany()
+                        .HasForeignKey("AuthorityAuditEventId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Agentweaver.Projects.Config.ProjectTenantMembershipRecord", null)
+                        .WithMany()
+                        .HasForeignKey("MembershipId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Agentweaver.Projects.Config.ProjectRoleAssignmentRecord", null)
+                        .WithMany()
+                        .HasForeignKey("OwnerAssignmentId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Agentweaver.Projects.Config.ProjectAuthorityAuditRecord", null)
+                        .WithMany()
+                        .HasForeignKey("OwnerAuthorityAuditEventId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("Agentweaver.Projects.Config.ProjectAuthorityAuditRecord", null)
+                        .WithMany()
+                        .HasForeignKey("OwnerRevocationAuditEventId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("Agentweaver.Projects.Config.ProjectRecord", null)
                         .WithMany()
                         .HasForeignKey("ProjectId")

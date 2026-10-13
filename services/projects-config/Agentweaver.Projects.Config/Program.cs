@@ -8,14 +8,38 @@ using Azure.Core;
 using Azure.Storage.Blobs;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 using WorkloadIdentityCredential = AzureIdentity::Azure.Identity.WorkloadIdentityCredential;
 
 var runMigrations = args.Length == 1 && args[0] == "--migrate";
 if (args.Contains("--migrate", StringComparer.Ordinal) && !runMigrations)
     throw new ArgumentException("The --migrate command must be used by itself.", nameof(args));
+var runPrivilegedProjectSetup = args.Length == 1 && args[0] == "--privileged-project-setup";
+if (args.Contains("--privileged-project-setup", StringComparer.Ordinal) && !runPrivilegedProjectSetup)
+    throw new ArgumentException(
+        "The --privileged-project-setup command must be used by itself.", nameof(args));
 
-var builder = WebApplication.CreateBuilder(runMigrations ? [] : args);
+var builder = WebApplication.CreateBuilder(runMigrations || runPrivilegedProjectSetup ? [] : args);
+if (runPrivilegedProjectSetup)
+{
+    try
+    {
+        await PrivilegedProjectSetupCommand.RunAsync(builder.Configuration);
+    }
+    catch (ProjectConfigException exception)
+    {
+        await Console.Error.WriteLineAsync($"Privileged project setup failed ({exception.Code}).");
+        Environment.ExitCode = 1;
+    }
+    catch (Exception)
+    {
+        await Console.Error.WriteLineAsync("Privileged project setup failed; no credential or exception detail was written.");
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
 if (runMigrations)
 {
     var migrationConnectionString = builder.Configuration.GetConnectionString("ProjectsConfigMigration")
@@ -97,6 +121,29 @@ if (!Uri.TryCreate(authority, UriKind.Absolute, out var authorityUri) ||
     throw new InvalidOperationException(
         "Projects & Config authentication requires an HTTPS authority and an explicit audience.");
 
+var brokerRunBindingAudience = authentication["BrokerRunBindingAudience"];
+Uri? brokerRunBindingAudienceUri = null;
+if (brokerRunBindingAudience is not null)
+{
+    if (!Uri.TryCreate(brokerRunBindingAudience, UriKind.Absolute, out var parsedBrokerAudience) ||
+        parsedBrokerAudience is null ||
+        parsedBrokerAudience.Scheme != Uri.UriSchemeHttps ||
+        string.IsNullOrEmpty(parsedBrokerAudience.Host) ||
+        !string.IsNullOrEmpty(parsedBrokerAudience.UserInfo) ||
+        !string.IsNullOrEmpty(parsedBrokerAudience.Query) ||
+        !string.IsNullOrEmpty(parsedBrokerAudience.Fragment) ||
+        string.Equals(parsedBrokerAudience.AbsoluteUri, audience, StringComparison.Ordinal) ||
+        Uri.TryCreate(audience, UriKind.Absolute, out var publicAudience) &&
+        string.Equals(
+            parsedBrokerAudience.AbsoluteUri,
+            publicAudience.AbsoluteUri,
+            StringComparison.Ordinal))
+        throw new InvalidOperationException(
+            "The Broker run-binding audience must be a distinct, absolute HTTPS audience.");
+    brokerRunBindingAudienceUri = parsedBrokerAudience;
+}
+BrokerRunBindingTlsIdentity.Configure(builder, brokerRunBindingAudienceUri is not null);
+
 builder.Services.AddSingleton(new ProjectsConfigIdentityOptions(authorityUri.AbsoluteUri));
 builder.Services.AddScoped<ProjectAuthorizationOwner>();
 builder.Services
@@ -108,7 +155,42 @@ builder.Services
         options.RequireHttpsMetadata = true;
         options.MapInboundClaims = false;
     });
-builder.Services.AddAuthorization();
+if (brokerRunBindingAudienceUri is not null)
+{
+    builder.Services.AddAuthentication().AddJwtBearer(
+        ProjectAuthorizationOwner.BrokerRunBindingAuthenticationScheme,
+        options =>
+        {
+            options.Authority = authorityUri.AbsoluteUri;
+            options.Audience = brokerRunBindingAudienceUri.AbsoluteUri;
+            options.RequireHttpsMetadata = true;
+            options.MapInboundClaims = false;
+            options.TokenValidationParameters.ValidateIssuer = true;
+            options.TokenValidationParameters.ValidIssuer = authorityUri.AbsoluteUri;
+            options.TokenValidationParameters.ValidateAudience = true;
+            options.TokenValidationParameters.ValidAudience = brokerRunBindingAudienceUri.AbsoluteUri;
+            options.TokenValidationParameters.ValidateIssuerSigningKey = true;
+            options.TokenValidationParameters.ValidateLifetime = true;
+            options.TokenValidationParameters.RequireExpirationTime = true;
+            options.TokenValidationParameters.RequireSignedTokens = true;
+            options.TokenValidationParameters.ValidTypes =
+                [ProjectAuthorizationOwner.BrokerRunBindingTokenType];
+            options.TokenValidationParameters.ValidAlgorithms = [SecurityAlgorithms.RsaSha256];
+            options.TokenValidationParameters.ClockSkew = TimeSpan.FromSeconds(5);
+            options.Events = BrokerRunBindingTokenValidation.CreateEvents(TimeProvider.System);
+        });
+}
+builder.Services.AddAuthorization(options =>
+{
+    if (brokerRunBindingAudienceUri is not null)
+    {
+        options.AddPolicy(
+            ProjectAuthorizationOwner.BrokerRunBindingAuthorizationPolicy,
+            policy => policy
+                .AddAuthenticationSchemes(ProjectAuthorizationOwner.BrokerRunBindingAuthenticationScheme)
+                .RequireAuthenticatedUser());
+    }
+});
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow;
@@ -128,7 +210,7 @@ app.MapGet("/health/ready", async (ProjectsConfigDbContext db, CancellationToken
     await db.Database.CanConnectAsync(cancellationToken)
         ? Results.Ok(new { status = "ready" })
         : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
-app.MapProjectConfigEndpoints();
+app.MapProjectConfigEndpoints(enableBrokerRunBinding: brokerRunBindingAudienceUri is not null);
 app.MapSkillMarketplaceEndpoints();
 app.MapSkillContentEndpoints();
 app.Run();

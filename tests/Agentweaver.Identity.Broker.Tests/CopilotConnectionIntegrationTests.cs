@@ -48,8 +48,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     {
         await using var factory = new IdentityBrokerWebApplicationFactory(
             _connectionString, _fakeIdp, signingCertificate: _signingCertificate,
-            configure: transport.ConfigureSettings,
-            configureServices: services => transport.ConfigureServices(services, projects.CreateHandler));
+            configure: settings =>
+            {
+                ConfigureRunBindingSettings(settings);
+                transport.ConfigureSettings(settings);
+            },
+            configureServices: services =>
+            {
+                ConfigureRunBindingTlsIdentity(services);
+                transport.ConfigureServices(services, projects.CreateHandler);
+            });
         using var broker = factory.CreateClient(new()
         {
             BaseAddress = new Uri("https://broker.test/"), AllowAutoRedirect = false
@@ -106,8 +114,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     {
         await using var factory = new IdentityBrokerWebApplicationFactory(
             _connectionString, _fakeIdp, signingCertificate: _signingCertificate,
-            configure: transport.ConfigureSettings,
-            configureServices: services => transport.ConfigureServices(services, projects.CreateHandler));
+            configure: settings =>
+            {
+                ConfigureRunBindingSettings(settings);
+                transport.ConfigureSettings(settings);
+            },
+            configureServices: services =>
+            {
+                ConfigureRunBindingTlsIdentity(services);
+                transport.ConfigureServices(services, projects.CreateHandler);
+            });
         using var broker = factory.CreateClient(new() { BaseAddress = new Uri("https://broker.test/") });
         using var response = await SendJsonAsync(
             broker, HttpMethod.Post, "/internal/connections/copilot-user/refresh", ownerToken,
@@ -164,8 +180,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var rotated = await RefreshRuntimeCopilotConnectionAsync(projects, ownerToken, transport, linked);
         await using var factory = new IdentityBrokerWebApplicationFactory(
             _connectionString, _fakeIdp, signingCertificate: _signingCertificate,
-            configure: transport.ConfigureSettings,
-            configureServices: services => transport.ConfigureServices(services, projects.CreateHandler));
+            configure: settings =>
+            {
+                ConfigureRunBindingSettings(settings);
+                transport.ConfigureSettings(settings);
+            },
+            configureServices: services =>
+            {
+                ConfigureRunBindingTlsIdentity(services);
+                transport.ConfigureServices(services, projects.CreateHandler);
+            });
         using var broker = factory.CreateClient(new() { BaseAddress = new Uri("https://broker.test/") });
         using var platformDenied = await SendJsonAsync(broker, HttpMethod.Post,
             "/internal/connections/copilot-user/begin", ownerToken,
@@ -216,8 +240,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var transport = new ControlledCopilotConnection();
         await using var factory = new IdentityBrokerWebApplicationFactory(
             _connectionString, _fakeIdp, signingCertificate: _signingCertificate,
-            configure: transport.ConfigureSettings,
-            configureServices: services => transport.ConfigureServices(services, projects.CreateHandler));
+            configure: settings =>
+            {
+                ConfigureRunBindingSettings(settings);
+                transport.ConfigureSettings(settings);
+            },
+            configureServices: services =>
+            {
+                ConfigureRunBindingTlsIdentity(services);
+                transport.ConfigureServices(services, projects.CreateHandler);
+            });
         using var broker = factory.CreateClient(new()
         {
             BaseAddress = new Uri("https://broker.test/"), HandleCookies = false, AllowAutoRedirect = false
@@ -370,8 +402,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
         await using var factory = new IdentityBrokerWebApplicationFactory(
             _connectionString, _fakeIdp, signingCertificate: _signingCertificate,
-            configure: transport.ConfigureSettings,
-            configureServices: services => transport.ConfigureServices(services, projects.CreateHandler));
+            configure: settings =>
+            {
+                ConfigureRunBindingSettings(settings);
+                transport.ConfigureSettings(settings);
+            },
+            configureServices: services =>
+            {
+                ConfigureRunBindingTlsIdentity(services);
+                transport.ConfigureServices(services, projects.CreateHandler);
+            });
         using var broker = factory.CreateClient(new() { BaseAddress = new Uri("https://broker.test/") });
         using var failed = await SendJsonAsync(broker, HttpMethod.Post,
             "/internal/connections/copilot-user/refresh", ownerToken,
@@ -459,8 +499,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var linked = await LinkRuntimeCopilotConnectionAsync(projects, ownerToken, transport);
         await using var factory = new IdentityBrokerWebApplicationFactory(
             _connectionString, _fakeIdp, signingCertificate: _signingCertificate,
-            configure: transport.ConfigureSettings,
-            configureServices: services => transport.ConfigureServices(services, projects.CreateHandler));
+            configure: settings =>
+            {
+                ConfigureRunBindingSettings(settings);
+                transport.ConfigureSettings(settings);
+            },
+            configureServices: services =>
+            {
+                ConfigureRunBindingTlsIdentity(services);
+                transport.ConfigureServices(services, projects.CreateHandler);
+            });
         using var broker = factory.CreateClient(new() { BaseAddress = new Uri("https://broker.test/") });
         var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);

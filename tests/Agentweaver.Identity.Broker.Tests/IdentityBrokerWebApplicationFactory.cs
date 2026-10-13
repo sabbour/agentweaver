@@ -147,6 +147,7 @@ public sealed class IdentityBrokerWebApplicationFactory : WebApplicationFactory<
                     BaseAddress = new Uri(_fakeIdp.AuthorityUri),
                 };
             });
+
             _configureServices?.Invoke(services);
         });
     }

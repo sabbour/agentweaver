@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json.Serialization;
@@ -43,13 +44,19 @@ public static class IdentityBrokerEndpoints
     private static async Task<IResult> AuthorizeAsync(
         HttpContext context, IdentityBrokerDbContext db, IOpenIddictScopeManager scopes,
         IOpenIddictAuthorizationManager authorizations, IOpenIddictApplicationManager applications,
-        IdentityGrantAuthority grantAuthority, TimeProvider timeProvider, IAntiforgery antiforgery,
+        IdentityGrantAuthority grantAuthority, BrokerRunBindingAuthority runBindingAuthority,
+        TimeProvider timeProvider, IAntiforgery antiforgery,
         CancellationToken ct)
     {
         var request = context.GetOpenIddictServerRequest()
             ?? throw new InvalidOperationException("The OpenIddict request cannot be retrieved.");
         if (!TryGetRequestedRunBinding(context.Request.Query, out var runBinding))
             return Forbid(Errors.InvalidRequest, "The project and run selectors are invalid.");
+        var requestedScopes = request.GetScopes().ToImmutableArray();
+        var usesProjectsAuthority = runBinding is not null &&
+            BrokerRunBindingAuthority.UsesProjectsAuthority(requestedScopes);
+        if (usesProjectsAuthority && !HasSupportedProjectsScopes(requestedScopes))
+            return Forbid(Errors.AccessDenied, "The requested project and run scopes are not supported.");
 
         var local = await context.AuthenticateAsync(LocalCookieScheme);
         if (!local.Succeeded || local.Principal?.FindFirst(Claims.Subject) is not { } subjectClaim)
@@ -78,11 +85,32 @@ public static class IdentityBrokerEndpoints
                 new AuthenticationProperties { RedirectUri = resumeUri }, [ExternalScheme]);
         }
 
-        var userId = Guid.Parse(subjectClaim.Value);
-        var requestedScopes = request.GetScopes();
-        if (runBinding is not null && !await grantAuthority.HasActiveRunBindingAsync(
+        if (!Guid.TryParseExact(subjectClaim.Value, "D", out var userId) || userId == Guid.Empty)
+            return Forbid(Errors.AccessDenied, "The local account is invalid.");
+        var authorityKind = runBinding is null
+            ? null
+            : usesProjectsAuthority
+                ? BrokerRunBindingAuthority.ProjectsAuthorityKind
+                : BrokerRunBindingAuthority.SecretGrantAuthorityKind;
+        BrokerRunBindingReceipt? bindingReceipt = null;
+        if (runBinding is not null && usesProjectsAuthority)
+        {
+            var user = await db.Users.AsNoTracking()
+                .SingleOrDefaultAsync(item => item.Id == userId, ct);
+            if (user is null || user.Disabled)
+                return Forbid(Errors.AccessDenied, "The account is disabled.");
+
+            var check = await runBindingAuthority.CheckAsync(
+                userId, runBinding.ProjectId, runBinding.RunId, expectedReceipt: null, ct);
+            if (check.Status != BrokerRunBindingStatus.Authorized)
+                return RunBindingFailure(check, Errors.AccessDenied);
+            bindingReceipt = check.Receipt;
+        }
+        else if (runBinding is not null && !await grantAuthority.HasActiveRunBindingAsync(
             subjectClaim.Value, runBinding.ProjectId, runBinding.RunId, ct))
+        {
             return Forbid(Errors.AccessDenied, "No active grant authorizes the requested project and run.");
+        }
 
         var application = await applications.FindByClientIdAsync(request.ClientId!, ct)
             ?? throw new InvalidOperationException("The client was removed after its request was validated.");
@@ -93,7 +121,7 @@ public static class IdentityBrokerEndpoints
             type: AuthorizationTypes.Permanent, scopes: requestedScopes).ToListAsync(ct);
         if (existing.Count > 0)
             return await SignInAsync(db, scopes, authorizations, existing[0], userId, requestedScopes,
-                runBinding, grantAuthority, ct);
+                runBinding, authorityKind, bindingReceipt, grantAuthority, runBindingAuthority, ct);
 
         var consentHandle = OpaqueHandle.NewHandle();
         db.PendingAuthorizations.Add(new PendingAuthorization
@@ -196,6 +224,14 @@ public static class IdentityBrokerEndpoints
                 error_description = "Approved scopes must be a subset of the originally requested scopes.",
             });
         }
+        if (pending.ProjectId is not null && pending.RunId is not null &&
+            BrokerRunBindingAuthority.UsesProjectsAuthority(requestedScopes) &&
+            !HasSupportedProjectsScopes(approvedScopes))
+        {
+            await transaction.CommitAsync(ct);
+            return Results.Redirect(QueryHelpers.AddQueryString(pending.RedirectUri,
+                new Dictionary<string, string?> { ["error"] = Errors.AccessDenied, ["state"] = pending.State }));
+        }
 
         var application = await applications.FindByClientIdAsync(pending.ClientId, ct)
             ?? throw new InvalidOperationException("The client was removed while awaiting consent.");
@@ -214,6 +250,7 @@ public static class IdentityBrokerEndpoints
 
     private static async Task<IResult> TokenAsync(
         HttpContext context, IdentityBrokerDbContext db, IdentityGrantAuthority grantAuthority,
+        BrokerRunBindingAuthority runBindingAuthority, IdentityBrokerOptions brokerOptions,
         CancellationToken ct)
     {
         var request = context.GetOpenIddictServerRequest()
@@ -225,8 +262,10 @@ public static class IdentityBrokerEndpoints
         if (!result.Succeeded || result.Principal is null)
             return Forbid(Errors.InvalidGrant, "The authorization grant is invalid.");
 
-        var subjectClaim = result.Principal.FindFirst(Claims.Subject);
-        if (subjectClaim is null || !Guid.TryParse(subjectClaim.Value, out var userId))
+        var subjectClaims = result.Principal.FindAll(Claims.Subject).Take(2).ToArray();
+        if (subjectClaims.Length != 1 ||
+            !Guid.TryParseExact(subjectClaims[0].Value, "D", out var userId) ||
+            userId == Guid.Empty)
             return Forbid(Errors.InvalidGrant, "The authorization grant is invalid.");
 
         var user = await db.Users.AsNoTracking().SingleOrDefaultAsync(u => u.Id == userId, ct);
@@ -234,9 +273,47 @@ public static class IdentityBrokerEndpoints
             return Forbid(Errors.InvalidGrant, "The account is disabled.");
 
         if (!TryGetPrincipalRunBinding(result.Principal, out var runBinding) ||
-            (runBinding is not null && !await grantAuthority.HasActiveRunBindingAsync(
-                subjectClaim.Value, runBinding.ProjectId, runBinding.RunId, ct)))
+            !BrokerRunBindingAuthority.TryReadTicket(
+                result.Principal, runBinding, out var authorityKind, out var receipt))
             return Forbid(Errors.InvalidGrant, "The run authorization is no longer active.");
+
+        if (runBinding is null)
+        {
+            if (authorityKind is not null || receipt is not null)
+                return Forbid(Errors.InvalidGrant, "The run authorization is no longer active.");
+        }
+        else
+        {
+            var tokenScopes = result.Principal.GetScopes().ToImmutableArray();
+            if (!BrokerRunBindingAuthority.IsAuthorityKindConsistentWithScopes(
+                    authorityKind, tokenScopes) ||
+                authorityKind == BrokerRunBindingAuthority.ProjectsAuthorityKind &&
+                !HasSupportedProjectsScopes(tokenScopes))
+                return Forbid(Errors.InvalidGrant, "The run authorization is no longer active.");
+
+            if (!await RequestRunBindingMatchesAsync(context.Request, runBinding, ct))
+                return Forbid(Errors.InvalidGrant, "The authorization grant is bound to another project and run.");
+
+            if (authorityKind == BrokerRunBindingAuthority.ProjectsAuthorityKind)
+            {
+                if (receipt is null ||
+                    receipt.ActorIssuer != new Uri(brokerOptions.Issuer).AbsoluteUri ||
+                    receipt.ActorSubject != userId.ToString("D") ||
+                    receipt.ProjectId != runBinding.ProjectId ||
+                    receipt.RunId != runBinding.RunId)
+                    return Forbid(Errors.InvalidGrant, "The run authorization is no longer active.");
+                var check = await runBindingAuthority.CheckAsync(
+                    userId, runBinding.ProjectId, runBinding.RunId, receipt, ct);
+                if (check.Status != BrokerRunBindingStatus.Authorized)
+                    return RunBindingFailure(check, Errors.InvalidGrant);
+            }
+            else if (receipt is not null ||
+                !await grantAuthority.HasActiveRunBindingAsync(
+                    userId.ToString("D"), runBinding.ProjectId, runBinding.RunId, ct))
+            {
+                return Forbid(Errors.InvalidGrant, "The run authorization is no longer active.");
+            }
+        }
 
         return Results.SignIn(result.Principal, authenticationScheme: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
@@ -245,24 +322,53 @@ public static class IdentityBrokerEndpoints
         IdentityBrokerDbContext db, IOpenIddictScopeManager scopes,
         IOpenIddictAuthorizationManager authorizations, object authorization,
         Guid userId, ImmutableArray<string> requestedScopes, RequestedRunBinding? runBinding,
-        IdentityGrantAuthority grantAuthority, CancellationToken ct)
+        string? authorityKind, BrokerRunBindingReceipt? bindingReceipt,
+        IdentityGrantAuthority grantAuthority, BrokerRunBindingAuthority runBindingAuthority,
+        CancellationToken ct)
     {
         var user = await db.Users.AsNoTracking().SingleAsync(u => u.Id == userId, ct);
         if (user.Disabled)
             return Forbid(Errors.AccessDenied, "The account is disabled.");
 
-        if (runBinding is not null && !await grantAuthority.HasActiveRunBindingAsync(
-            userId.ToString(), runBinding.ProjectId, runBinding.RunId, ct))
-            return Forbid(Errors.AccessDenied, "No active grant authorizes the requested project and run.");
+        if (runBinding is not null)
+        {
+            if (authorityKind == BrokerRunBindingAuthority.ProjectsAuthorityKind)
+            {
+                if (bindingReceipt is null ||
+                    bindingReceipt.ProjectId != runBinding.ProjectId ||
+                    bindingReceipt.RunId != runBinding.RunId)
+                    return Forbid(Errors.AccessDenied, "The project and run authorization is invalid.");
+                var check = await runBindingAuthority.CheckAsync(
+                    userId, runBinding.ProjectId, runBinding.RunId, bindingReceipt, ct);
+                if (check.Status != BrokerRunBindingStatus.Authorized)
+                    return RunBindingFailure(check, Errors.AccessDenied);
+            }
+            else if (authorityKind != BrokerRunBindingAuthority.SecretGrantAuthorityKind ||
+                bindingReceipt is not null ||
+                !await grantAuthority.HasActiveRunBindingAsync(
+                    userId.ToString("D"), runBinding.ProjectId, runBinding.RunId, ct))
+            {
+                return Forbid(Errors.AccessDenied, "No active grant authorizes the requested project and run.");
+            }
+        }
+        else if (authorityKind is not null || bindingReceipt is not null)
+        {
+            return Forbid(Errors.AccessDenied, "The project and run authorization is invalid.");
+        }
 
-        var principal = BuildMinimalPrincipal(userId, requestedScopes, runBinding);
+        var principal = BuildMinimalPrincipal(
+            userId, requestedScopes, runBinding, authorityKind, bindingReceipt);
         principal.SetResources(await scopes.ListResourcesAsync(requestedScopes, ct).ToListAsync(ct));
         principal.SetAuthorizationId(await authorizations.GetIdAsync(authorization, ct));
         return Results.SignIn(principal, authenticationScheme: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
 
     private static ClaimsPrincipal BuildMinimalPrincipal(
-        Guid userId, IEnumerable<string> scopes, RequestedRunBinding? runBinding = null)
+        Guid userId,
+        IEnumerable<string> scopes,
+        RequestedRunBinding? runBinding = null,
+        string? authorityKind = null,
+        BrokerRunBindingReceipt? bindingReceipt = null)
     {
         var identity = new ClaimsIdentity(
             OpenIddictServerAspNetCoreDefaults.AuthenticationScheme, Claims.Name, Claims.Role);
@@ -273,10 +379,74 @@ public static class IdentityBrokerEndpoints
                 .SetDestinations(Destinations.AccessToken));
             identity.AddClaim(new Claim(SecretRedemptionEndpoints.RunIdClaim, runBinding.RunId)
                 .SetDestinations(Destinations.AccessToken));
+            if (authorityKind == BrokerRunBindingAuthority.ProjectsAuthorityKind && bindingReceipt is not null)
+                BrokerRunBindingAuthority.AddReceiptClaims(identity, bindingReceipt);
+            else if (authorityKind == BrokerRunBindingAuthority.SecretGrantAuthorityKind && bindingReceipt is null)
+                BrokerRunBindingAuthority.AddAuthorityClaim(identity, authorityKind);
+            else
+                throw new InvalidOperationException("A run-bound authorization requires one valid authority receipt.");
         }
+        else if (authorityKind is not null || bindingReceipt is not null)
+            throw new InvalidOperationException("An unbound authorization cannot contain run authority.");
         var principal = new ClaimsPrincipal(identity);
         principal.SetScopes(scopes.ToImmutableArray());
         return principal;
+    }
+
+    private static bool HasSupportedProjectsScopes(IEnumerable<string> scopes)
+    {
+        var requested = scopes.ToHashSet(StringComparer.Ordinal);
+        return requested.Contains("api.read") &&
+            requested.Contains("projects.orchestrator") &&
+            requested.All(scope => scope is "api.read" or "projects.orchestrator" or
+                "openid" or "profile" or "email" or "offline_access");
+    }
+
+    private static IResult RunBindingFailure(BrokerRunBindingCheck check, string deniedError) =>
+        check.Status == BrokerRunBindingStatus.Unavailable
+            ? Results.Json(
+                new { error = "temporarily_unavailable", error_description = "The project authorization owner is unavailable." },
+                statusCode: StatusCodes.Status503ServiceUnavailable)
+            : Forbid(deniedError, "The project and run authorization is no longer active.");
+
+    private static async Task<bool> RequestRunBindingMatchesAsync(
+        HttpRequest request,
+        RequestedRunBinding binding,
+        CancellationToken cancellationToken)
+    {
+        var projectValues = request.Query[SecretRedemptionEndpoints.ProjectIdClaim]
+            .Select(value => (string?)value).ToList();
+        var runValues = request.Query[SecretRedemptionEndpoints.RunIdClaim]
+            .Select(value => (string?)value).ToList();
+        if (request.HasFormContentType)
+        {
+            try
+            {
+                var form = await request.ReadFormAsync(cancellationToken).ConfigureAwait(false);
+                projectValues.AddRange(form[SecretRedemptionEndpoints.ProjectIdClaim]
+                    .Select(value => (string?)value));
+                runValues.AddRange(form[SecretRedemptionEndpoints.RunIdClaim]
+                    .Select(value => (string?)value));
+            }
+            catch (InvalidDataException)
+            {
+                return false;
+            }
+            catch (BadHttpRequestException)
+            {
+                return false;
+            }
+        }
+
+        if (projectValues.Count == 0 && runValues.Count == 0)
+            return true;
+        return projectValues.Count == 1 && runValues.Count == 1 &&
+            projectValues[0] is { } projectId &&
+            runValues[0] is { } runId &&
+            IsValidBindingIdentifier(projectId) &&
+            IsValidBindingIdentifier(runId) &&
+            string.Equals(projectId, binding.ProjectId, StringComparison.Ordinal) &&
+            string.Equals(runId, binding.RunId, StringComparison.Ordinal);
     }
 
     private static string BuildAuthorizeQuery(PendingAuthorization pending, string? scopeOverride = null)
