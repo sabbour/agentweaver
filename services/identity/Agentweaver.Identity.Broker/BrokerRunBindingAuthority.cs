@@ -8,6 +8,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Identity;
 using Microsoft.IdentityModel.Tokens;
+using OpenIddict.Abstractions;
+using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace Agentweaver.Identity.Broker;
 
@@ -72,7 +74,7 @@ internal sealed class BrokerRunBindingAuthority(
         if (userId == Guid.Empty ||
             !IsValidIdentifier(projectId) ||
             !IsValidIdentifier(runId) ||
-            !TryGetSettings(out var ownerAddress, out var privateAudience))
+            !TryGetSettings(brokerOptions, out var ownerAddress, out var privateAudience))
             return BrokerRunBindingCheck.Denied;
 
         var endpoint = new Uri(ownerAddress, $"/internal/projects/{Uri.EscapeDataString(projectId)}/runs/{Uri.EscapeDataString(runId)}/broker-run-binding");
@@ -141,7 +143,7 @@ internal sealed class BrokerRunBindingAuthority(
     }
 
     internal static void AddAuthorityClaim(ClaimsIdentity identity, string authorityKind) =>
-        identity.AddClaim(new Claim(AuthorityKindClaim, authorityKind));
+        AddAccessTokenClaim(identity, AuthorityKindClaim, authorityKind);
 
     internal static bool UsesProjectsAuthority(IEnumerable<string> scopes) =>
         scopes.Contains(ProjectsOrchestratorScope, StringComparer.Ordinal);
@@ -154,19 +156,22 @@ internal sealed class BrokerRunBindingAuthority(
     internal static void AddReceiptClaims(ClaimsIdentity identity, BrokerRunBindingReceipt receipt)
     {
         AddAuthorityClaim(identity, ProjectsAuthorityKind);
-        identity.AddClaim(new Claim(ActorIssuerClaim, receipt.ActorIssuer));
-        identity.AddClaim(new Claim(ActorSubjectClaim, receipt.ActorSubject));
-        identity.AddClaim(new Claim(TenantIdClaim, receipt.TenantId));
-        identity.AddClaim(new Claim(MembershipIdClaim, receipt.MembershipId.ToString("D")));
-        identity.AddClaim(new Claim(MembershipRevisionClaim, receipt.MembershipRevision.ToString(CultureInfo.InvariantCulture)));
-        identity.AddClaim(new Claim(AssignmentIdClaim, receipt.AssignmentId.ToString("D")));
-        identity.AddClaim(new Claim(AssignmentRevisionClaim, receipt.AssignmentRevision.ToString(CultureInfo.InvariantCulture)));
-        identity.AddClaim(new Claim(ProjectRevisionClaim, receipt.ProjectRevision.ToString(CultureInfo.InvariantCulture)));
-        identity.AddClaim(new Claim(ProjectConfigurationRevisionClaim, receipt.ProjectConfigurationRevision.ToString(CultureInfo.InvariantCulture)));
-        identity.AddClaim(new Claim(PlatformRuntimeRevisionClaim, receipt.PlatformRuntimeRevision.ToString(CultureInfo.InvariantCulture)));
-        identity.AddClaim(new Claim(ContextRevisionClaim, receipt.ContextRevision));
-        identity.AddClaim(new Claim(SelectionHashClaim, receipt.SelectionHash));
+        AddAccessTokenClaim(identity, ActorIssuerClaim, receipt.ActorIssuer);
+        AddAccessTokenClaim(identity, ActorSubjectClaim, receipt.ActorSubject);
+        AddAccessTokenClaim(identity, TenantIdClaim, receipt.TenantId);
+        AddAccessTokenClaim(identity, MembershipIdClaim, receipt.MembershipId.ToString("D"));
+        AddAccessTokenClaim(identity, MembershipRevisionClaim, receipt.MembershipRevision.ToString(CultureInfo.InvariantCulture));
+        AddAccessTokenClaim(identity, AssignmentIdClaim, receipt.AssignmentId.ToString("D"));
+        AddAccessTokenClaim(identity, AssignmentRevisionClaim, receipt.AssignmentRevision.ToString(CultureInfo.InvariantCulture));
+        AddAccessTokenClaim(identity, ProjectRevisionClaim, receipt.ProjectRevision.ToString(CultureInfo.InvariantCulture));
+        AddAccessTokenClaim(identity, ProjectConfigurationRevisionClaim, receipt.ProjectConfigurationRevision.ToString(CultureInfo.InvariantCulture));
+        AddAccessTokenClaim(identity, PlatformRuntimeRevisionClaim, receipt.PlatformRuntimeRevision.ToString(CultureInfo.InvariantCulture));
+        AddAccessTokenClaim(identity, ContextRevisionClaim, receipt.ContextRevision);
+        AddAccessTokenClaim(identity, SelectionHashClaim, receipt.SelectionHash);
     }
+
+    private static void AddAccessTokenClaim(ClaimsIdentity identity, string claimType, string value) =>
+        identity.AddClaim(new Claim(claimType, value).SetDestinations(Destinations.AccessToken));
 
     internal static bool TryReadTicket(
         ClaimsPrincipal principal,
@@ -253,7 +258,23 @@ internal sealed class BrokerRunBindingAuthority(
         }
     }
 
-    private bool TryGetSettings(out Uri ownerAddress, out string privateAudience)
+    internal static BrokerRunBindingTlsIdentity? LoadTlsConfiguration(IdentityBrokerOptions options)
+    {
+        var runBindingOptions = options.RunBinding;
+        if (runBindingOptions is null)
+            return null;
+        ValidateTlsConfiguration(options);
+        return BrokerRunBindingTlsIdentity.Load(runBindingOptions);
+    }
+
+    internal static void ValidateTlsConfiguration(IdentityBrokerOptions options)
+    {
+        if (options.RunBinding is not null && !TryGetSettings(options, out _, out _))
+            throw new InvalidOperationException("IdentityBroker run-binding settings are incomplete or invalid.");
+    }
+
+    private static bool TryGetSettings(
+        IdentityBrokerOptions brokerOptions, out Uri ownerAddress, out string privateAudience)
     {
         ownerAddress = null!;
         privateAudience = string.Empty;
@@ -264,9 +285,11 @@ internal sealed class BrokerRunBindingAuthority(
             parsedAddress.AbsolutePath != "/" ||
             !string.IsNullOrEmpty(parsedAddress.Query) ||
             !string.IsNullOrEmpty(parsedAddress.Fragment) ||
+            !IsSha256(options.ProjectsTrustBundleSha256) ||
+            !IsSha256(options.ProjectsServerCertificateSha256) ||
             !Uri.TryCreate(options.ProjectsAudience, UriKind.Absolute, out var parsedAudience) ||
             !RuntimeContractValidation.IsHttpsEndpoint(parsedAudience) ||
-            !IsDistinctFromPublicResources(parsedAudience))
+            !IsDistinctFromPublicResources(brokerOptions, parsedAudience))
             return false;
 
         ownerAddress = RuntimeOwnerHttpTransport.RequireOwnerAddress(parsedAddress);
@@ -274,7 +297,8 @@ internal sealed class BrokerRunBindingAuthority(
         return true;
     }
 
-    private bool IsDistinctFromPublicResources(Uri privateAudience)
+    private static bool IsDistinctFromPublicResources(
+        IdentityBrokerOptions brokerOptions, Uri privateAudience)
     {
         var canonicalAudience = privateAudience.AbsoluteUri;
         foreach (var resource in brokerOptions.Clients.SelectMany(client => client.Resources))
@@ -290,6 +314,9 @@ internal sealed class BrokerRunBindingAuthority(
             canonicalAudience,
             StringComparison.Ordinal);
     }
+
+    private static bool IsSha256(string? value) =>
+        value is { Length: 64 } && value.All(char.IsAsciiHexDigit);
 
     private string CreateQueryToken(string audience, Guid userId, string projectId, string runId)
     {

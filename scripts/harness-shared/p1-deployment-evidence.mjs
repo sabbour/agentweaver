@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { createReadStream, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { redact } from './redaction.mjs';
+import { pullToken } from '../release/registry.mjs';
 import { measureAgentHostArchiveSync } from '../release/measure-agenthost-image.mjs';
 import { validateManifest } from '../release/validate.mjs';
 
@@ -97,19 +98,19 @@ function sha256(bytes) {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 }
 
-async function registryJson(url, expectedDigest, fetchImpl) {
+async function registryJson(url, expectedDigest, fetchImpl, token) {
   let response;
   try {
     response = await fetchImpl(url, {
-      headers: { Accept: IMAGE_ACCEPT },
+      headers: { Accept: IMAGE_ACCEPT, Authorization: `Bearer ${token}` },
       redirect: 'error',
       signal: AbortSignal.timeout(15000),
     });
   } catch (error) {
-    throw new Error(`Unauthenticated public registry read failed: ${redact(error).message}`);
+    throw new Error(`Authenticated public registry read failed: ${redact(error).message}`);
   }
   if (response.status !== 200) {
-    throw new Error(`Unauthenticated public registry read returned HTTP ${response.status}.`);
+    throw new Error(`Authenticated public registry read returned HTTP ${response.status}.`);
   }
   const bytes = Buffer.from(await response.arrayBuffer());
   if (sha256(bytes) !== expectedDigest
@@ -129,7 +130,8 @@ async function registryJson(url, expectedDigest, fetchImpl) {
 async function verifyRegistryImage(reference, imageId, sourceSha, sourceTree, fetchImpl, { allowMissingSourceTree = false } = {}) {
   const { repository, digest } = imageParts(reference);
   const base = `https://ghcr.io/v2/${repository}`;
-  const first = await registryJson(`${base}/manifests/${digest}`, digest, fetchImpl);
+  const token = await pullToken(repository, fetchImpl);
+  const first = await registryJson(`${base}/manifests/${digest}`, digest, fetchImpl, token);
   let manifest = first.value;
   let manifestDigest = digest;
   let platformDigest = digest;
@@ -142,7 +144,7 @@ async function verifyRegistryImage(reference, imageId, sourceSha, sourceTree, fe
       throw new Error('The immutable image index does not contain one linux/amd64 manifest.');
     }
     platformDigest = matches[0].digest;
-    manifest = (await registryJson(`${base}/manifests/${platformDigest}`, platformDigest, fetchImpl)).value;
+    manifest = (await registryJson(`${base}/manifests/${platformDigest}`, platformDigest, fetchImpl, token)).value;
   }
   const imageIdDigest = imageId?.slice(imageId.lastIndexOf('@') + 1);
   if (imageIdDigest !== manifestDigest && imageIdDigest !== platformDigest) {
@@ -150,7 +152,7 @@ async function verifyRegistryImage(reference, imageId, sourceSha, sourceTree, fe
   }
   const configDigest = manifest.config?.digest;
   if (!DIGEST.test(configDigest ?? '')) throw new Error('The registry manifest has no immutable config digest.');
-  const config = (await registryJson(`${base}/blobs/${configDigest}`, configDigest, fetchImpl)).value;
+  const config = (await registryJson(`${base}/blobs/${configDigest}`, configDigest, fetchImpl, token)).value;
   const labels = config.config?.Labels ?? config.config?.labels;
   if (config.os !== 'linux' || config.architecture !== 'amd64'
     || labels?.['org.opencontainers.image.revision'] !== sourceSha
@@ -187,6 +189,12 @@ function hasExactProviderCatalogBinding(envFrom, configMapName) {
     && bindings[0].prefix === PROVIDER_CATALOG_PREFIX
     && bindings[0].configMapRef?.name === configMapName
     && bindings[0].configMapRef?.optional === false;
+}
+
+function hasProviderCatalogEnvironmentOverride(env) {
+  return Array.isArray(env) && env.some(variable =>
+    typeof variable?.name === 'string'
+    && variable.name.toLowerCase().startsWith(PROVIDER_CATALOG_PREFIX.toLowerCase()));
 }
 
 function selectRuntimeObjects(items, kind, namespace) {
@@ -306,7 +314,8 @@ export async function observeP1ServiceDeployments({
       const catalogAnnotations = template?.metadata?.annotations ?? {};
       const templateContainer = deploymentContainers(deployment, image.image)[0];
       if (catalogAnnotations[SOURCE_ANNOTATION] !== providerCatalog.sourceCommit
-        || !hasExactProviderCatalogBinding(templateContainer.envFrom, providerCatalog.configMapName)) {
+        || !hasExactProviderCatalogBinding(templateContainer.envFrom, providerCatalog.configMapName)
+        || hasProviderCatalogEnvironmentOverride(templateContainer.env)) {
         throw new Error('Projects does not bind the exact observed provider catalog source and ConfigMap.');
       }
     }
@@ -343,7 +352,8 @@ export async function observeP1ServiceDeployments({
         || pod.metadata?.labels?.['agentweaver.io/service'] !== image.name
         || pod.metadata?.labels?.['agentweaver.io/workload'] !== image.name
         || image.name === 'projects-config'
-          && !hasExactProviderCatalogBinding(applicationContainer?.envFrom, providerCatalog.configMapName)) {
+          && (!hasExactProviderCatalogBinding(applicationContainer?.envFrom, providerCatalog.configMapName)
+            || hasProviderCatalogEnvironmentOverride(applicationContainer?.env))) {
         throw new Error(`Pod ${pod.metadata?.name ?? '[unknown]'} is not a ready owner of ${image.name}.`);
       }
       if (IDENTITY_SERVICES.has(image.name)

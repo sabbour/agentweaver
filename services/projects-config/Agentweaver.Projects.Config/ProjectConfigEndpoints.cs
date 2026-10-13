@@ -564,7 +564,8 @@ public static class ProjectConfigEndpoints
                     context.Response.Headers.CacheControl = "no-store";
                     try
                     {
-                        if (context.Request.Query.Count != 0 ||
+                        if (!BrokerRunBindingTlsIdentity.IsNativeHttps(context) ||
+                            context.Request.Query.Count != 0 ||
                             context.Request.ContentLength is > 0 ||
                             context.Request.Headers.ContainsKey("Transfer-Encoding") ||
                             context.Request.ContentType is not null)

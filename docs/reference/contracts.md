@@ -914,9 +914,22 @@ This route belongs to the unpublished Projects & Config candidate. It resolves o
 | --- | --- |
 | `GET /api/authorization/context` | Versioned current effective permission context, filtered by the validated audience, `api.read` scope, purpose, optional tenant selector, and project/run bindings. Returns `Cache-Control: no-store`. |
 | `GET /api/projects/{projectId}?runId={runId}` | Read project metadata for an exactly matching run-bound token after fresh current `ReadProjects` authorization. Purpose-bound, unbound, or mismatched tokens and duplicate/unknown query parameters are denied; the response is `Cache-Control: no-store`. |
-| `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, enabled only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. It accepts no query or body and returns a bounded `Cache-Control: no-store` receipt only for the active project, current actor membership, active Orchestrator assignment, exact project/run token binding, and an existing matching run selection. The receipt carries actor, tenant, membership/assignment IDs and revisions, project/configuration/platform-runtime/context revisions, and the SHA-256 selection hash. |
+| `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, enabled only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. It requires native TLS 1.2 or TLS 1.3, accepts no query or body, and returns a bounded `Cache-Control: no-store` receipt only for the active project, current actor membership, active Orchestrator assignment, exact project/run token binding, and matching run selection. |
 
 Contract version 1 contains the caller and selected tenant, current membership revision, optional project/run binding, and grouped effective permissions with their current role revisions. It omits assignment IDs and raw role rows. Purpose-bound tokens are denied; resource services must request fresh context for each privileged operation and must not cache or pin it.
+
+## Projects & Config host configuration
+
+| Key | Requirement |
+| --- | --- |
+| `ProjectsConfig:Authentication:BrokerRunBindingAudience` | Optional, distinct HTTPS audience for the private Broker proof route. When configured, the TLS settings below are required. |
+| `ProjectsConfig:Tls:CertificatePath` / `KeyPath` | Absolute paths to the existing Projects server certificate and private key. The certificate must be current, non-CA, and valid for server authentication. |
+| `ProjectsConfig:Tls:ServerCertificateSha256` | SHA-256 hex digest of the exact leaf certificate DER used by Kestrel. |
+
+The deployment profile also configures Kestrel's default certificate paths.
+Those paths and the Projects TLS settings must identify the same certificate.
+The service accepts the private proof request only after native TLS 1.2 or TLS
+1.3; forwarded HTTPS headers are not proof.
 
 ## Knowledge and Memory
 
@@ -1011,6 +1024,8 @@ current event-delivery boundaries.
 | `IdentityBroker:SecretRedemption:WorkloadIdentityClientId` | Explicit Entra client ID. |
 | `IdentityBroker:SecretRedemption:WorkloadIdentityTokenFilePath` | Absolute projected token-file path. |
 | `IdentityBroker:RunBinding:ProjectsOwnerAddress` / `ProjectsAudience` | Fixed absolute HTTPS Projects & Config owner root and the distinct private audience used for short-lived Broker-to-Projects run-binding proof requests. |
+| `IdentityBroker:RunBinding:ProjectsTrustBundleSha256` | SHA-256 of the exact raw UTF-8 PEM bytes at the fixed `/var/run/service-backend-ca/ca.crt` path. The bundle must contain CA certificates only and is used as the custom trust root for Projects. |
+| `IdentityBroker:RunBinding:ProjectsServerCertificateSha256` | SHA-256 hex pin of the Projects leaf certificate DER bytes. Broker also checks hostname, validity, server authentication purpose, and the custom-root chain; redirects are disabled. |
 | `IdentityBroker:RemoteMcpOAuth:ProjectsOwnerAddress` | Fixed absolute HTTPS root for current Projects authorization and project status. |
 | `IdentityBroker:RemoteMcpOAuth:EnvironmentOwnerAddress` | Fixed absolute HTTPS root for Environment connection configuration reads and identity-binding updates. Both Remote MCP owner addresses are required when this section is configured. |
 | `IdentityBroker:RemoteMcpOAuth:Providers[n]` | Each fixed provider has exact `IssuerUri`, `ClientId`, `RedirectUri`, and nonempty `ApprovedResources`, `ApprovedOAuthEndpoints`, and `ApprovedScopes`. Consent metadata reads use only the exact approved resource and issuer URLs, reject redirects, and accept discovered authorization/token endpoints only when they exactly match `ApprovedOAuthEndpoints`. |

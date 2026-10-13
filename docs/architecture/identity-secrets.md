@@ -19,7 +19,7 @@ sequenceDiagram
     IdP-->>Broker: Validated upstream identity
     Broker->>Broker: Replace upstream subject with local broker subject
     opt Projects-owned project/run authorization
-        Broker->>Projects: Private signed proof request for actor and exact project/run
+        Broker->>Projects: Private TLS 1.2/1.3 signed proof request for actor and exact project/run
         Projects-->>Broker: Current membership, Orchestrator assignment, and accepted-selection receipt
     end
     Broker->>Broker: Apply registered scopes and resource audience
@@ -29,6 +29,7 @@ sequenceDiagram
     Projects-->>API: Effective permissions, contract v1, Cache-Control: no-store
     API->>API: Authorize this request; keep no membership or role cache
     Note over API,Projects: Each privileged request obtains fresh owner context; no authorization pins are issued.
+    Note over Broker,Projects: Broker verifies the Projects chain, hostname, server purpose, validity, and exact leaf pin; redirects are disabled
 ```
 
 <figure class="aw-diagram" tabindex="0">
@@ -46,6 +47,18 @@ The Broker owner call uses `IdentityBroker:RunBinding:ProjectsOwnerAddress` and
 `ProjectsConfig:Authentication:BrokerRunBindingAudience` is a separate HTTPS
 audience and enables only the private proof route; it does not replace the
 public Projects bearer audience.
+
+When run binding is configured, Broker requires
+`ProjectsTrustBundleSha256`, the SHA-256 of the exact raw UTF-8 PEM bytes at
+`/var/run/service-backend-ca/ca.crt`. This path is fixed; there is no
+configurable trust-bundle path. The bundle must contain CA certificates only.
+`ProjectsServerCertificateSha256` pins the SHA-256 of the Projects leaf
+certificate DER bytes. Broker checks the custom-root chain, HTTPS hostname,
+current validity, server authentication purpose, and exact leaf pin; it
+rejects redirects. Projects requires absolute certificate and key paths and
+`ProjectsConfig:Tls:ServerCertificateSha256` when its private audience is
+enabled. It accepts the private proof request only after a native TLS 1.2 or
+TLS 1.3 handshake. Forwarded HTTPS headers alone do not satisfy this check.
 
 `POST /secrets/redeem` accepts a `SecretRef` identifier and exact version, purpose, and run ID. The bearer token supplies actor, project, and run claims. The broker does not accept caller-supplied identity claims.
 

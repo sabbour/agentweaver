@@ -59,7 +59,7 @@ function validInput() {
         invocationId,
         fixtureId: 'controlled-fixture',
         ...fences,
-        expiresAt: '2026-10-14T00:00:00.000Z',
+        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
         allowedJourneys: ['journal'],
         ownershipReceipts: [fences.projectId, fences.runId, fences.rootSessionId, fences.sessionId]
           .map(resourceId => ({

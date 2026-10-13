@@ -303,10 +303,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var linkedConnection = azureByok ? null : await LinkRuntimeCopilotConnectionAsync(
             projects, platformAdminToken, copilotConnection);
 
-        var bootstrapToken = await IssueTokenAsync(
-            "projects.bootstrap", [TenantId], "coordination-runner", null, null, ["orchestrator"]);
+        var selectionToken = await IssueTokenAsync(
+            "projects.orchestrator", [TenantId], "coordination-runner", null, null, ["orchestrator"]);
         var runnerSubject = SingleClaim(
-            new JwtSecurityTokenHandler().ReadJwtToken(bootstrapToken).Claims, "sub");
+            new JwtSecurityTokenHandler().ReadJwtToken(selectionToken).Claims, "sub");
         var runnerMembership = await AddMembershipAsync(
             projects.PrivilegedFixtureDataSource, runnerSubject, TenantId);
         var runnerRole = await AssignRoleAsync(
@@ -321,36 +321,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ProjectAuthorityResourceType.Platform,
             ProjectAuthorizationOwner.PlatformResourceId,
             ProjectAuthorityRole.PlatformAdmin);
-        await CreateRunBindingGrantAsync(runnerSubject, project.ProjectId, RunId);
-        var runToken = await IssueTokenAsync(
-            "projects.admin projects.orchestrator",
-            [TenantId],
-            "coordination-runner",
-            project.ProjectId,
-            RunId,
-            ["platform_admin"]);
-        var claims = new JwtSecurityTokenHandler().ReadJwtToken(runToken).Claims.ToArray();
-        var currentRunnerSubject = SingleClaim(claims, "sub");
-        Assert.Contains(claims, claim => claim.Type == "aud" && claim.Value == "https://api.test");
-        Assert.Contains(
-            claims,
-            claim => claim.Type == "aud" && claim.Value == "https://broker-redemption.test");
-        Assert.Contains(claims, claim => claim.Type == "project_id" && claim.Value == project.ProjectId);
-        Assert.Contains(claims, claim => claim.Type == "run_id" && claim.Value == RunId);
         await CreateSourceControlSecretGrantAsync(
-            currentRunnerSubject,
-            project.ProjectId,
-            RunId,
-            new SecretRef("github-api", "api-v1"),
-            SourceControlSecretPurposes.Api);
-        await CreateSourceControlSecretGrantAsync(
-            currentRunnerSubject,
+            runnerSubject,
             project.ProjectId,
             RunId,
             new SecretRef("github-checkout", "checkout-v1"),
             SourceControlSecretPurposes.Checkout);
         await CreateSourceControlSecretGrantAsync(
-            currentRunnerSubject,
+            runnerSubject,
             project.ProjectId,
             RunId,
             new SecretRef("github-webhook", "webhook-v1"),
@@ -485,9 +463,31 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         {
             Content = JsonContent.Create(acceptedSelectionRequest)
         };
-        AddBearerAndTenant(acceptSelection, runToken, TenantId);
+        AddBearerAndTenant(acceptSelection, selectionToken, TenantId);
         using var acceptedSelection = await projects.Client.SendAsync(acceptSelection);
         Assert.Equal(HttpStatusCode.OK, acceptedSelection.StatusCode);
+        await CreateRunBindingGrantAsync(runnerSubject, project.ProjectId, RunId);
+        var runToken = await IssueTokenAsync(
+            "projects.orchestrator",
+            [TenantId],
+            "coordination-runner",
+            project.ProjectId,
+            RunId,
+            ["platform_admin"]);
+        var claims = new JwtSecurityTokenHandler().ReadJwtToken(runToken).Claims.ToArray();
+        var currentRunnerSubject = SingleClaim(claims, "sub");
+        Assert.Contains(claims, claim => claim.Type == "aud" && claim.Value == "https://api.test");
+        Assert.Contains(
+            claims,
+            claim => claim.Type == "aud" && claim.Value == "https://broker-redemption.test");
+        Assert.Contains(claims, claim => claim.Type == "project_id" && claim.Value == project.ProjectId);
+        Assert.Contains(claims, claim => claim.Type == "run_id" && claim.Value == RunId);
+        await CreateSourceControlSecretGrantAsync(
+            currentRunnerSubject,
+            project.ProjectId,
+            RunId,
+            new SecretRef("github-api", "api-v1"),
+            SourceControlSecretPurposes.Api);
         var acceptedProjectsSelection = await acceptedSelection.Content.ReadAsStringAsync();
         var acceptedProjectsSelectionHash = Convert.ToHexString(SHA256.HashData(
             Encoding.UTF8.GetBytes(acceptedProjectsSelection)));
@@ -5570,6 +5570,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             signingCertificate: _signingCertificate,
             configure: settings =>
             {
+                ConfigureRunBindingSettings(settings);
                 settings["IdentityBroker__SecretRedemption__Audience"] =
                     "https://broker-redemption.test";
                 settings["IdentityBroker__Clients__0__Resources__1"] =
@@ -5580,6 +5581,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             },
             configureServices: services =>
             {
+                services.AddSingleton<BrokerRunBindingTlsIdentity>(_ =>
+                    BrokerRunBindingTlsIdentity.Load(
+                        _runBindingOptions, _runBindingTlsAuthority.TrustBundleBytes));
                 services.RemoveAll<ISecretRedemption>();
                 services.AddSingleton<ISecretRedemption>(backend);
             });

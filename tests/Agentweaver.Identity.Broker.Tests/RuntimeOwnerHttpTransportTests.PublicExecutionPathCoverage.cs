@@ -80,18 +80,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var copilotConnection = new ControlledCopilotConnection();
         var linkedConnection = await LinkRuntimeCopilotConnectionAsync(projects, adminToken, copilotConnection);
 
-        var bootstrapToken = await IssueTokenAsync(
-            "projects.bootstrap", [TenantId], "public-build-test-runner", null, null, ["orchestrator"]);
-        var runnerSubject = SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(bootstrapToken).Claims, "sub");
+        var selectionToken = await IssueTokenAsync(
+            "projects.orchestrator", [TenantId], "public-build-test-runner", null, null, ["orchestrator"]);
+        var runnerSubject = SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(selectionToken).Claims, "sub");
         var runnerMembership = await AddMembershipAsync(
             projects.PrivilegedFixtureDataSource, runnerSubject, TenantId);
         var runnerRole = await AssignRoleAsync(projects.PrivilegedFixtureDataSource, runnerMembership.MembershipId,
             ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Orchestrator);
-        await CreateRunBindingGrantAsync(runnerSubject, project.ProjectId, RunId);
-        var runToken = await IssueTokenAsync(
-            "projects.admin projects.orchestrator", [TenantId], "public-build-test-runner",
-            project.ProjectId, RunId, ["orchestrator"]);
-        Assert.Equal(runnerSubject, SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(runToken).Claims, "sub"));
         await CreateSourceControlSecretGrantAsync(runnerSubject, project.ProjectId, RunId,
             new SecretRef("github-api", "api-v1"), SourceControlSecretPurposes.Api);
         await CreateSourceControlSecretGrantAsync(runnerSubject, project.ProjectId, RunId,
@@ -137,7 +132,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             });
         await AssertStatusAsync(updateDefaults, HttpStatusCode.OK);
         using var acceptSelection = await SendJsonAsync(
-            projects.Client, HttpMethod.Put, $"/api/projects/{project.ProjectId}/runs/{RunId}/selection", runToken,
+            projects.Client, HttpMethod.Put, $"/api/projects/{project.ProjectId}/runs/{RunId}/selection", selectionToken,
             new AcceptRunSelectionRequest
             {
                 ExpectedProjectConfigRevision = projectConfiguration.Revision,
@@ -164,6 +159,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             });
         await AssertStatusAsync(acceptSelection, HttpStatusCode.OK);
         var acceptedSelection = await acceptSelection.Content.ReadAsStringAsync();
+        await CreateRunBindingGrantAsync(runnerSubject, project.ProjectId, RunId);
+        var runToken = await IssueTokenAsync(
+            "projects.orchestrator", [TenantId], "public-build-test-runner",
+            project.ProjectId, RunId, ["orchestrator"]);
+        Assert.Equal(runnerSubject, SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(runToken).Claims, "sub"));
 
         var ownerSchema = "public_build_test_" + Guid.NewGuid().ToString("N");
         var eventsSchema = "public_build_events_" + Guid.NewGuid().ToString("N");

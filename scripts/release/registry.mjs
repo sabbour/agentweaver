@@ -49,7 +49,7 @@ function splitImageReference(image) {
   return { repository: repository.slice('ghcr.io/'.length), digest: imageDigest };
 }
 
-async function pullToken(repository, fetchImpl) {
+export async function pullToken(repository, fetchImpl) {
   const tokenUrl = new URL('https://ghcr.io/token');
   tokenUrl.searchParams.set('service', 'ghcr.io');
   tokenUrl.searchParams.set('scope', `repository:${repository}:pull`);

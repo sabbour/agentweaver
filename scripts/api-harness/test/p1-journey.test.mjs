@@ -645,88 +645,92 @@ test('a denied-actor 401 is not mistaken for a valid forbidden result', async ()
       sourceEvidence: SOURCE_EVIDENCE,
       clock: CLOCK,
     });
-
-    test('the MCP runner allows read-only discovery but blocks gate writes when ownership receipts are caller-supplied', async () => {
-      const fixture = await host();
-      try {
-        let discoveryCalls = 0;
-        fixture.mcp.discoverTools = async () => { discoveryCalls++; };
-        const result = await runP1McpJourney(input(fixture.baseUrl, 'gate-answer'), {
-          ...fixture,
-          sourceEvidence: SOURCE_EVIDENCE,
-          clock: CLOCK,
-        });
-        assert.equal(result.surfaceStatus, 'blocked');
-        assert.match(result.failure.message, /supported authenticated setup path proves same-invocation creation and readback/);
-        assert.equal(discoveryCalls, 1);
-        assert.equal(fixture.mcp.protocol.length, 0);
-        assert.equal(fixture.mcp.protocol.some(item =>
-          ['agentweaver_answerGate', 'agentweaver_approveGate', 'agentweaver_rejectGate', 'agentweaver_sendMessage']
-            .includes(item.message?.params?.name)), false);
-      } finally {
-        await fixture.close();
-      }
-    });
-
-    test('the UI runner can inspect the pinned run but blocks gate writes with caller-supplied ownership receipts', async () => {
-      const fixture = await host();
-      try {
-        const result = await runP1UiJourney(input(fixture.baseUrl, 'gate-answer'), {
-          ...fixture,
-          mcp: undefined,
-          sourceEvidence: SOURCE_EVIDENCE,
-          clock: CLOCK,
-        });
-        assert.equal(result.surfaceStatus, 'blocked');
-        assert.match(result.failure.message, /supported authenticated setup path proves same-invocation creation and readback/);
-        assert.equal(fixture.requests.some(request => request.method === 'POST'), false);
-        assert.equal(fixture.uiReplayCount(), 0);
-        assert.deepEqual(fixture.uiState(), { opened: true, closed: true });
-      } finally {
-        await fixture.close();
-      }
-    });
-
-    test('the UI runner opens only the pinned run, checks the journal, and closes only its borrowed adapter', async () => {
-      const fixture = await host();
-      try {
-        const result = await runP1UiJourney(input(fixture.baseUrl), {
-          ...fixture,
-          mcp: undefined,
-          sourceEvidence: SOURCE_EVIDENCE,
-          clock: CLOCK,
-        });
-        assert.equal(result.surfaceStatus, 'passed');
-        assert.equal(result.observations.uiJournalEventCount, 1);
-        assert.deepEqual(result.observations.journal, { eventCount: 1, pageCount: 1 });
-        assert.equal(fixture.uiReplayCount(), 1);
-        assert.equal(fixture.mcp.protocol.some(item =>
-          item.message?.params?.name === 'agentweaver_replayRunEvents'), false);
-        assert.deepEqual(fixture.uiState(), { opened: true, closed: true });
-        assert.equal(result.observations.adapterCleanup.ui, 'closed');
-      } finally {
-        await fixture.close();
-      }
-    });
-
-    test('a shared app actor remains valid for a distinct denied tenant scope when the owner returns 403', async () => {
-      const fixture = await host();
-      try {
-        fixture.deniedApi.authProvider.actorId = 'allowed-actor';
-        const config = input(fixture.baseUrl);
-        config.pins.fixtureScope.deniedActor.actorId = 'allowed-actor';
-        const result = await runP1ApiJourney(config, {
-          ...fixture,
-          sourceEvidence: SOURCE_EVIDENCE,
-          clock: CLOCK,
-        });
-        assert.equal(result.surfaceStatus, 'passed');
-      } finally {
-        await fixture.close();
-      }
-    });
     assert.equal(result.surfaceStatus, 'failed');
     assert.match(result.failure.message, /HTTP 403 was required/);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('the MCP runner allows read-only discovery but blocks gate writes when ownership receipts are caller-supplied', async () => {
+  const fixture = await host();
+  try {
+    let discoveryCalls = 0;
+    fixture.mcp.discoverTools = async () => { discoveryCalls++; };
+    const result = await runP1McpJourney(input(fixture.baseUrl, 'gate-answer'), {
+      ...fixture,
+      sourceEvidence: SOURCE_EVIDENCE,
+      clock: CLOCK,
+    });
+    assert.equal(result.surface, 'mcp');
+    assert.equal(result.surfaceStatus, 'blocked');
+    assert.match(result.failure.message, /supported authenticated setup path proves same-invocation creation and readback/);
+    assert.equal(discoveryCalls, 1);
+    assert.equal(fixture.mcp.protocol.length, 0);
+    assert.equal(fixture.mcp.protocol.some(item =>
+      ['agentweaver_answerGate', 'agentweaver_approveGate', 'agentweaver_rejectGate', 'agentweaver_sendMessage']
+        .includes(item.message?.params?.name)), false);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('the UI runner can inspect the pinned run but blocks gate writes with caller-supplied ownership receipts', async () => {
+  const fixture = await host();
+  try {
+    const result = await runP1UiJourney(input(fixture.baseUrl, 'gate-answer'), {
+      ...fixture,
+      mcp: undefined,
+      sourceEvidence: SOURCE_EVIDENCE,
+      clock: CLOCK,
+    });
+    assert.equal(result.surface, 'ui');
+    assert.equal(result.surfaceStatus, 'blocked');
+    assert.match(result.failure.message, /supported authenticated setup path proves same-invocation creation and readback/);
+    assert.equal(fixture.requests.some(request => request.method === 'POST'), false);
+    assert.equal(fixture.uiReplayCount(), 0);
+    assert.deepEqual(fixture.uiState(), { opened: true, closed: true });
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('the UI runner opens only the pinned run, checks the journal, and closes only its borrowed adapter', async () => {
+  const fixture = await host();
+  try {
+    const result = await runP1UiJourney(input(fixture.baseUrl), {
+      ...fixture,
+      mcp: undefined,
+      sourceEvidence: SOURCE_EVIDENCE,
+      clock: CLOCK,
+    });
+    assert.equal(result.surface, 'ui');
+    assert.equal(result.surfaceStatus, 'passed');
+    assert.equal(result.observations.uiJournalEventCount, 1);
+    assert.deepEqual(result.observations.journal, { eventCount: 1, pageCount: 1 });
+    assert.equal(fixture.uiReplayCount(), 1);
+    assert.equal(fixture.mcp.protocol.some(item =>
+      item.message?.params?.name === 'agentweaver_replayRunEvents'), false);
+    assert.deepEqual(fixture.uiState(), { opened: true, closed: true });
+    assert.equal(result.observations.adapterCleanup.ui, 'closed');
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('a shared app actor remains valid for a distinct denied tenant scope when the owner returns 403', async () => {
+  const fixture = await host();
+  try {
+    fixture.deniedApi.authProvider.actorId = 'allowed-actor';
+    const config = input(fixture.baseUrl);
+    config.pins.fixtureScope.deniedActor.actorId = 'allowed-actor';
+    const result = await runP1ApiJourney(config, {
+      ...fixture,
+      sourceEvidence: SOURCE_EVIDENCE,
+      clock: CLOCK,
+    });
+    assert.equal(result.surface, 'api');
+    assert.equal(result.surfaceStatus, 'passed');
   } finally {
     await fixture.close();
   }
@@ -754,32 +758,49 @@ test('P1 MCP journal uses the discovered replay tool instead of the Gateway API 
   }
 });
 
-test('empty or repeated MCP journal cursors fail instead of producing P1 evidence', async () => {
-  for (const eventPages of [
-    [eventPage([], { nextCursor: null, hasMore: false })],
-    [
-      eventPage(undefined, { nextCursor: 'cursor-1', hasMore: true }),
-      eventPage([{
-        ...eventPage().events[0],
-        eventId: '00000000-0000-4000-8000-000000000002',
-        position: 2,
-      }], {
-        nextCursor: 'cursor-1',
-        hasMore: false,
-      }),
-    ],
-  ]) {
+const invalidJournalPages = [
+  [eventPage([], { nextCursor: null, hasMore: false })],
+  [
+    eventPage(undefined, { nextCursor: 'cursor-1', hasMore: true }),
+    eventPage([{
+      ...eventPage().events[0],
+      eventId: '00000000-0000-4000-8000-000000000002',
+      position: 2,
+    }], {
+      nextCursor: 'cursor-1',
+      hasMore: false,
+    }),
+  ],
+];
+
+async function assertInvalidJournalPages(runJourney, expectedSurface, assertMcp) {
+  for (const eventPages of invalidJournalPages) {
     const fixture = await host({ eventPages });
     try {
-      const result = await runP1ApiJourney(input(fixture.baseUrl), {
+      const result = await runJourney(input(fixture.baseUrl), {
         ...fixture,
         sourceEvidence: SOURCE_EVIDENCE,
         clock: CLOCK,
       });
+      assert.equal(result.surface, expectedSurface);
       assert.equal(result.surfaceStatus, 'failed');
       assert.match(result.failure.message, /journal is empty|cursor did not advance/);
+      if (assertMcp) {
+        assert.ok(fixture.mcp.protocol.some(item =>
+          item.message?.params?.name === 'agentweaver_replayRunEvents'));
+        assert.equal(fixture.requests.some(request =>
+          new URL(request.url, fixture.baseUrl).pathname.endsWith('/runs/controlled-run/events')), false);
+      }
     } finally {
       await fixture.close();
     }
   }
+}
+
+test('empty or repeated API journal cursors fail instead of producing P1 evidence', async () => {
+  await assertInvalidJournalPages(runP1ApiJourney, 'api', false);
+});
+
+test('empty or repeated MCP journal cursors fail instead of producing P1 evidence', async () => {
+  await assertInvalidJournalPages(runP1McpJourney, 'mcp', true);
 });

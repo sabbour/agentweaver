@@ -33,6 +33,15 @@ with `VerifyFull`, explicit authentication authority and audience, an immutable
 product image, reviewed image user/group, and an existing Projects-only TLS Secret.
 It exposes private HTTPS and leaves system certificate trust unchanged.
 
+The optional `ProjectsConfig:Authentication:BrokerRunBindingAudience` enables the
+private Broker proof route. When enabled, `ProjectsConfig:Tls:CertificatePath`,
+`KeyPath`, and `ServerCertificateSha256` are required. The absolute certificate/key
+paths must identify a current non-CA server certificate with the server
+authentication purpose, and the digest must match its exact leaf certificate.
+The private route also requires a native TLS 1.2 or TLS 1.3 handshake; proxy
+headers cannot stand in for TLS. The deployed TLS Secret and Kestrel default
+certificate must use the same leaf certificate.
+
 The provider catalog owner must supply an existing immutable, nonempty ConfigMap
 in the same namespace and its reviewed source commit.
 The ConfigMap uses relative catalog keys, such as `Registrations__0__Id`.
@@ -80,7 +89,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `PUT /api/platform/runtime-defaults` | Append platform defaults using an expected revision. |
 | `PUT /api/projects/{projectId}/runs/{runId}/selection` | Accept or idempotently replay a run-selection request from the Orchestrator. |
 | `GET /api/projects/{projectId}/runs/{runId}/selection` | Read the immutable selection snapshot for the authorized Orchestrator. |
-| `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, mapped only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. Accepts no query or body. Requires the exact signed project/run binding, active project, actor's current active membership in that project's tenant, one current active Orchestrator assignment, and a matching accepted run-selection snapshot. Returns a bounded `Cache-Control: no-store` receipt with the actor, tenant, membership/assignment IDs and revisions, project/configuration/platform-runtime/context revisions, and selection hash. |
+| `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, mapped only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. Requires native TLS 1.2 or TLS 1.3, accepts no query or body, and returns a bounded `Cache-Control: no-store` receipt only for the exact signed project/run binding, active project, current actor membership, active Orchestrator assignment, and matching accepted run-selection snapshot. |
 | `GET /api/projects/{projectId}/skills?cursor={token}&pageSize={n}` | List bounded skill revision metadata and current assignments for project administrators; omit `cursor` for the first page. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` | Read exact imported skill revisions assigned to an active agent in the accepted run. |
 | `GET /api/authorization/context` | Return the validated caller's current effective permissions through versioned contract 1. |

@@ -119,7 +119,42 @@ public sealed class BrokerRunBindingAuthorityTests
             BrokerRunBindingAuthority.IsAuthorityKindConsistentWithScopes(authorityKind, [scope]));
     }
 
-    private static IdentityBrokerOptions CreateOptions() => new()
+    [Fact]
+    public void MissingRunBindingKeepsTheOptionalCompositionDisabled()
+    {
+        var options = CreateOptions();
+        options.RunBinding = null;
+
+        Assert.Null(BrokerRunBindingAuthority.LoadTlsConfiguration(options));
+    }
+
+    [Fact]
+    public void PartialRunBindingSettingsFailStartupValidation()
+    {
+        var options = CreateOptions();
+        options.RunBinding!.ProjectsServerCertificateSha256 = null;
+
+        Assert.Throws<InvalidOperationException>(
+            () => BrokerRunBindingAuthority.ValidateTlsConfiguration(options));
+    }
+
+    [Fact]
+    public void CompleteRunBindingSettingsLoadThePinnedCaBundle()
+    {
+        using var testAuthority = BrokerRunBindingTlsIdentityTests.TestCertificateAuthority.Create();
+        var runBinding = testAuthority.CreateOptions();
+        runBinding.ProjectsOwnerAddress = "https://projects.test/";
+        runBinding.ProjectsAudience = Audience;
+        var options = CreateOptions();
+        options.RunBinding = runBinding;
+
+        using var tlsIdentity = BrokerRunBindingTlsIdentity.Load(
+            runBinding, testAuthority.TrustBundleBytes);
+
+        Assert.NotNull(tlsIdentity);
+    }
+
+    internal static IdentityBrokerOptions CreateOptions() => new()
     {
         Issuer = Issuer,
         Signing = new SigningCredentialOptions { PfxPath = "unused", PfxPassword = "unused" },
@@ -140,6 +175,8 @@ public sealed class BrokerRunBindingAuthorityTests
         {
             ProjectsOwnerAddress = "https://projects.test/",
             ProjectsAudience = Audience,
+            ProjectsServerCertificateSha256 = new string('B', 64),
+            ProjectsTrustBundleSha256 = new string('A', 64),
         },
         DataProtectionKeyPath = "unused",
         Clients =

@@ -49,6 +49,10 @@ public sealed class BrokerRunBindingOptions
     public string? ProjectsOwnerAddress { get; set; }
 
     public string? ProjectsAudience { get; set; }
+
+    public string? ProjectsServerCertificateSha256 { get; set; }
+
+    public string? ProjectsTrustBundleSha256 { get; set; }
 }
 
 public sealed class RemoteMcpOAuthOptions

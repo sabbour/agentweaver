@@ -19,8 +19,11 @@ public sealed class BrokerRunBindingTokenValidationTests : IAsyncLifetime
 {
     private const string Scheme = "BrokerRunBinding";
     private const string Policy = "BrokerRunBinding";
+    private const string PublicScheme = "Public";
+    private const string PublicPolicy = "Public";
     private const string Issuer = "https://identity.test/";
     private const string Audience = "https://projects-private.test/";
+    private const string PublicAudience = "https://projects.test/";
     private static readonly DateTimeOffset Now = DateTimeOffset.UtcNow;
     private readonly RSA rsa = RSA.Create(2048);
     private readonly RsaSecurityKey signingKey;
@@ -70,9 +73,32 @@ public sealed class BrokerRunBindingTokenValidationTests : IAsyncLifetime
                             };
                             options.Events = events;
                         });
-                    services.AddAuthorization(options => options.AddPolicy(
-                        Policy,
-                        policy => policy.AddAuthenticationSchemes(Scheme).RequireAuthenticatedUser()));
+                    services.AddAuthentication()
+                        .AddJwtBearer(PublicScheme, options =>
+                        {
+                            options.MapInboundClaims = false;
+                            options.TokenValidationParameters = new TokenValidationParameters
+                            {
+                                ValidateIssuer = true,
+                                ValidIssuer = Issuer,
+                                ValidateAudience = true,
+                                ValidAudience = PublicAudience,
+                                ValidateIssuerSigningKey = true,
+                                IssuerSigningKey = signingKey,
+                                ValidateLifetime = true,
+                                RequireExpirationTime = true,
+                                RequireSignedTokens = true,
+                                ValidAlgorithms = [SecurityAlgorithms.RsaSha256],
+                                ClockSkew = TimeSpan.FromSeconds(5),
+                            };
+                        });
+                    services.AddAuthorization(options =>
+                    {
+                        options.AddPolicy(Policy, policy =>
+                            policy.AddAuthenticationSchemes(Scheme).RequireAuthenticatedUser());
+                        options.AddPolicy(PublicPolicy, policy =>
+                            policy.AddAuthenticationSchemes(PublicScheme).RequireAuthenticatedUser());
+                    });
                 });
                 web.Configure(app =>
                 {
@@ -80,7 +106,10 @@ public sealed class BrokerRunBindingTokenValidationTests : IAsyncLifetime
                     app.UseAuthentication();
                     app.UseAuthorization();
                     app.UseEndpoints(endpoints =>
-                        endpoints.MapGet("/proof", () => Results.Ok()).RequireAuthorization(Policy));
+                    {
+                        endpoints.MapGet("/proof", () => Results.Ok()).RequireAuthorization(Policy);
+                        endpoints.MapGet("/public", () => Results.Ok()).RequireAuthorization(PublicPolicy);
+                    });
                 });
             })
             .StartAsync();
@@ -112,6 +141,20 @@ public sealed class BrokerRunBindingTokenValidationTests : IAsyncLifetime
             Volatile.Read(ref authenticationFailure) ?? response.StatusCode.ToString());
     }
 
+    [Fact]
+    public async Task PublicAndPrivateAudiencesAuthorizeOnlyTheirOwnRoutes()
+    {
+        using var validPrivate = await SendAsync(CreateToken());
+        using var publicTokenOnPrivateRoute = await SendAsync(CreateToken(audience: PublicAudience));
+        using var validPublic = await SendAsync(CreateToken(audience: PublicAudience), "/public");
+        using var privateTokenOnPublicRoute = await SendAsync(CreateToken(), "/public");
+
+        Assert.Equal(HttpStatusCode.OK, validPrivate.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, publicTokenOnPrivateRoute.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, validPublic.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, privateTokenOnPublicRoute.StatusCode);
+    }
+
     [Theory]
     [InlineData("missing-iat")]
     [InlineData("malformed-iat")]
@@ -130,14 +173,14 @@ public sealed class BrokerRunBindingTokenValidationTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
-    private async Task<HttpResponseMessage> SendAsync(string token)
+    private async Task<HttpResponseMessage> SendAsync(string token, string path = "/proof")
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, "/proof");
+        using var request = new HttpRequestMessage(HttpMethod.Get, path);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         return await client.SendAsync(request);
     }
 
-    private string CreateToken(string profile = "valid")
+    private string CreateToken(string profile = "valid", string audience = Audience)
     {
         var now = Now.ToUnixTimeSeconds();
         object? issuedAt = now;
@@ -187,7 +230,7 @@ public sealed class BrokerRunBindingTokenValidationTests : IAsyncLifetime
         var payload = new JwtPayload
         {
             ["iss"] = Issuer,
-            ["aud"] = Audience,
+            ["aud"] = audience,
             ["sub"] = ProjectAuthorizationOwner.BrokerRunBindingServiceSubject,
             ["actor_iss"] = Issuer,
             ["actor_sub"] = "7fc0a64d-a91e-4f71-88c2-32f7f8dc8531",

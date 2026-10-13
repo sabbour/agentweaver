@@ -142,6 +142,7 @@ if (brokerRunBindingAudience is not null)
             "The Broker run-binding audience must be a distinct, absolute HTTPS audience.");
     brokerRunBindingAudienceUri = parsedBrokerAudience;
 }
+BrokerRunBindingTlsIdentity.Configure(builder, brokerRunBindingAudienceUri is not null);
 
 builder.Services.AddSingleton(new ProjectsConfigIdentityOptions(authorityUri.AbsoluteUri));
 builder.Services.AddScoped<ProjectAuthorizationOwner>();

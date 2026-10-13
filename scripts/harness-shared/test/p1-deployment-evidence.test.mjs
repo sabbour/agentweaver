@@ -46,6 +46,7 @@ const p1ServiceComponents = [
   ['Agentweaver.Projects.Config', 'projects-config'],
   ['Agentweaver.AgentHost', 'agenthost'],
 ];
+const registryToken = 'controlled-registry-pull-token';
 
 function digest(bytes) {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
@@ -202,6 +203,57 @@ function fixture({ webTreeLabel, gatewayIndex = false, gatewayRuntimeDigest } = 
   return { items, images, registryBodies, gatewayChildDigest };
 }
 
+function createRegistryFetch(registryBodies, calls = [], {
+  tokenEndpointStatus = 200,
+  missingToken = false,
+  tokenRepository = repository => repository,
+} = {}) {
+  let tokenRepositoryForRead;
+  return async (url, options = {}) => {
+    const requestUrl = new URL(String(url));
+    calls.push({ url: requestUrl.href, options });
+    if (requestUrl.origin === 'https://ghcr.io' && requestUrl.pathname === '/token') {
+      assert.equal(requestUrl.searchParams.get('service'), 'ghcr.io');
+      const scopeMatch = /^repository:(sabbour\/agentweaver\/[a-z-]+):pull$/
+        .exec(requestUrl.searchParams.get('scope') ?? '');
+      assert.ok(scopeMatch, 'token request must be scoped to one service repository');
+      assert.equal(new Headers(options.headers).has('authorization'), false);
+      if (tokenEndpointStatus !== 200) {
+        return new Response('token exchange failed', { status: tokenEndpointStatus });
+      }
+      tokenRepositoryForRead = tokenRepository(scopeMatch[1]);
+      return new Response(JSON.stringify(missingToken ? {} : { token: registryToken }), {
+        status: tokenEndpointStatus,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+
+    assert.equal(options.redirect, 'error');
+    assert.equal(
+      new Headers(options.headers).get('authorization') === `Bearer ${registryToken}`,
+      true,
+    );
+    const repositoryMatch = /^\/v2\/(.+)\/(?:manifests|blobs)\/[^/]+$/
+      .exec(requestUrl.pathname);
+    assert.ok(repositoryMatch, 'registry read must identify its repository');
+    if (tokenRepositoryForRead !== repositoryMatch[1]) {
+      return new Response('repository-scoped token required', { status: 401 });
+    }
+    const body = registryBodies.get(requestUrl.href);
+    if (!body) return new Response('missing', { status: 404 });
+    const expectedDigest = requestUrl.pathname.split('/').at(-1);
+    return new Response(body, {
+      status: 200,
+      headers: {
+        'content-type': requestUrl.pathname.includes('/manifests/')
+          ? 'application/vnd.oci.image.manifest.v1+json'
+          : 'application/vnd.oci.image.config.v1+json',
+        'docker-content-digest': expectedDigest,
+      },
+    });
+  };
+}
+
 test('validates exact source-bound publication products before treating images as receipts', async () => {
   const source = fixture();
   let calls = 0;
@@ -336,23 +388,7 @@ test('records native service UIDs and verifies pod imageIDs plus registry source
       assert.deepEqual(target, { context, namespace });
       return data.items;
     },
-    async fetchImpl(url, options) {
-      calls.push({ url: String(url), options });
-      assert.equal(options.redirect, 'error');
-      assert.equal(new Headers(options.headers).has('authorization'), false);
-      const body = data.registryBodies.get(String(url));
-      if (!body) return new Response('missing', { status: 404 });
-      const expectedDigest = String(url).split('/').at(-1);
-      return new Response(body, {
-        status: 200,
-        headers: {
-          'content-type': String(url).includes('/manifests/')
-            ? 'application/vnd.oci.image.manifest.v1+json'
-            : 'application/vnd.oci.image.config.v1+json',
-          'docker-content-digest': expectedDigest,
-        },
-      });
-    },
+    fetchImpl: createRegistryFetch(data.registryBodies, calls),
     now: () => '2026-10-13T00:00:00.000Z',
   });
 
@@ -367,8 +403,88 @@ test('records native service UIDs and verifies pod imageIDs plus registry source
   const web = result.services.find(item => item.componentId === 'Agentweaver.web');
   assert.equal(web?.pods[0].registry.sourceTree, sourceTree);
   assert.equal(result.agentHostRuntime.status, 'blocked');
-  assert.ok(calls.length >= 18);
-  assert.ok(calls.every(call => !new Headers(call.options.headers).has('authorization')));
+  const tokenRequests = calls.filter(call => new URL(call.url).pathname === '/token');
+  const imageRequests = calls.filter(call => new URL(call.url).pathname.startsWith('/v2/'));
+  assert.equal(tokenRequests.length, serviceNames.length);
+  assert.ok(tokenRequests.every(call => !new Headers(call.options.headers).has('authorization')));
+  assert.deepEqual(
+    tokenRequests.map(call => new URL(call.url).searchParams.get('scope')).sort(),
+    serviceNames.map(name => `repository:sabbour/agentweaver/${name}:pull`).sort(),
+  );
+  assert.ok(imageRequests.length >= 18);
+  assert.ok(imageRequests.every(call =>
+    new Headers(call.options.headers).get('authorization') === `Bearer ${registryToken}`));
+});
+
+test('fails explicitly when anonymous GHCR token exchange fails or omits its token', async () => {
+  const data = fixture();
+  const observe = fetchImpl => observeP1ServiceDeployments({
+    context,
+    namespace,
+    sourceSha,
+    sourceTree,
+    images: data.images,
+    providerCatalog,
+    readObjects: async () => data.items,
+    fetchImpl,
+  });
+
+  await assert.rejects(
+    observe(createRegistryFetch(data.registryBodies, [], { tokenEndpointStatus: 503 })),
+    /GHCR does not expose sabbour\/agentweaver\/identity-broker for anonymous pull verification \(HTTP 503\)/,
+  );
+  await assert.rejects(
+    observe(createRegistryFetch(data.registryBodies, [], { missingToken: true })),
+    /GHCR returned no pull token for sabbour\/agentweaver\/identity-broker/,
+  );
+});
+
+test('rejects a pull token that is associated with a different repository', async () => {
+  const data = fixture();
+  const fetchImpl = createRegistryFetch(data.registryBodies, [], {
+    tokenRepository: repository => repository === 'sabbour/agentweaver/identity-broker'
+      ? 'sabbour/agentweaver/gateway'
+      : repository,
+  });
+
+  await assert.rejects(
+    observeP1ServiceDeployments({
+      context,
+      namespace,
+      sourceSha,
+      sourceTree,
+      images: data.images,
+      providerCatalog,
+      readObjects: async () => data.items,
+      fetchImpl,
+    }),
+    /Authenticated public registry read returned HTTP 401/,
+  );
+});
+
+test('rejects registry manifest bytes that do not match the immutable descriptor digest', async () => {
+  const data = fixture();
+  const registryBodies = new Map(data.registryBodies);
+  const manifestUrl = `https://ghcr.io/v2/sabbour/agentweaver/identity-broker/manifests/${
+    data.images[0].image.split('@')[1]
+  }`;
+  const manifest = registryBodies.get(manifestUrl);
+  assert.ok(manifest);
+  registryBodies.set(manifestUrl, Buffer.concat([manifest, Buffer.from(' ')]));
+
+  await assert.rejects(
+    observeP1ServiceDeployments({
+      context,
+      namespace,
+      sourceSha,
+      sourceTree,
+      images: data.images,
+      providerCatalog,
+      readObjects: async () => data.items,
+      fetchImpl: createRegistryFetch(registryBodies),
+    }),
+    /Registry response bytes do not match the immutable image descriptor/,
+  );
 });
 
 test('requires the exact provider catalog binding on the Deployment template and ready owner Pod', async () => {
@@ -381,12 +497,7 @@ test('requires the exact provider catalog binding on the Deployment template and
     images: data.images,
     providerCatalog,
     readObjects: async () => items,
-    fetchImpl: async url => {
-      const body = data.registryBodies.get(String(url));
-      if (!body) return new Response('missing', { status: 404 });
-      const expectedDigest = String(url).split('/').at(-1);
-      return new Response(body, { status: 200, headers: { 'docker-content-digest': expectedDigest } });
-    },
+    fetchImpl: createRegistryFetch(data.registryBodies),
   });
   const mutateProjectsContainer = (items, kind, mutate) => {
     const resource = items.find(item => item.kind === kind
@@ -438,6 +549,53 @@ test('requires the exact provider catalog binding on the Deployment template and
   await assert.rejects(observe(missingPodBinding), /ready owner of projects-config/);
 });
 
+test('rejects case-insensitive direct provider catalog overrides on the Deployment and Pod', async () => {
+  const data = fixture();
+  const observe = items => observeP1ServiceDeployments({
+    context,
+    namespace,
+    sourceSha,
+    sourceTree,
+    images: data.images,
+    providerCatalog,
+    readObjects: async () => items,
+    fetchImpl: createRegistryFetch(data.registryBodies),
+  });
+  const mutateProjectsContainer = (items, kind, mutate) => {
+    const resource = items.find(item => item.kind === kind
+      && item.metadata.name === (kind === 'Deployment' ? 'projects-config' : 'projects-config-pod'));
+    const spec = kind === 'Deployment' ? resource.spec.template.spec : resource.spec;
+    mutate(spec.containers[0]);
+  };
+  const overrides = [
+    { name: 'ProjectsConfig__ProviderCatalog__Registrations__0__Id', value: 'override' },
+    {
+      name: 'pRoJeCtScOnFiG__pRoViDeRcAtAlOg__Registrations__0__Id',
+      valueFrom: { configMapKeyRef: { name: 'other-config', key: 'value' } },
+    },
+    { name: 'projectsconfig__providercatalog__Registrations__0__Id', value: '' },
+  ];
+
+  for (const kind of ['Deployment', 'Pod']) {
+    for (const override of overrides) {
+      const items = structuredClone(data.items);
+      mutateProjectsContainer(items, kind, container => { container.env = [override]; });
+      await assert.rejects(
+        observe(items),
+        kind === 'Deployment'
+          ? /exact observed provider catalog source and ConfigMap/
+          : /ready owner of projects-config/);
+    }
+
+    const unrelatedEnvironment = structuredClone(data.items);
+    mutateProjectsContainer(unrelatedEnvironment, kind, container => {
+      container.env = [{ name: 'ASPNETCORE_ENVIRONMENT', value: 'Production' }];
+    });
+    const result = await observe(unrelatedEnvironment);
+    assert.equal(result.status, 'passed');
+  }
+});
+
 test('accepts only the reviewed index or its verified linux/amd64 child as a runtime imageID', async () => {
   const data = fixture({ gatewayIndex: true, gatewayRuntimeDigest: undefined });
   const observe = (items) => observeP1ServiceDeployments({
@@ -448,12 +606,7 @@ test('accepts only the reviewed index or its verified linux/amd64 child as a run
     images: data.images,
     providerCatalog,
     readObjects: async () => items,
-    fetchImpl: async url => {
-      const body = data.registryBodies.get(String(url));
-      if (!body) return new Response('missing', { status: 404 });
-      const expectedDigest = String(url).split('/').at(-1);
-      return new Response(body, { status: 200, headers: { 'docker-content-digest': expectedDigest } });
-    },
+    fetchImpl: createRegistryFetch(data.registryBodies),
   });
 
   const valid = structuredClone(data.items);
@@ -479,12 +632,7 @@ test('blocks stale, incomplete, foreign, or unverifiable deployment evidence', a
     images: data.images,
     providerCatalog,
     readObjects: async () => data.items,
-    fetchImpl: async url => {
-      const body = data.registryBodies.get(String(url));
-      if (!body) return new Response('missing', { status: 404 });
-      const expectedDigest = String(url).split('/').at(-1);
-      return new Response(body, { status: 200, headers: { 'docker-content-digest': expectedDigest } });
-    },
+    fetchImpl: createRegistryFetch(data.registryBodies),
     ...overrides,
   });
   await assert.rejects(observe({ namespace: 'default' }), /restricted to agentweaver-v1-p0/);
@@ -526,12 +674,7 @@ test('blocks stale, incomplete, foreign, or unverifiable deployment evidence', a
       images: conflictingWebLabel.images,
       providerCatalog,
       readObjects: async () => conflictingWebLabel.items,
-      fetchImpl: async url => {
-        const body = conflictingWebLabel.registryBodies.get(String(url));
-        if (!body) return new Response('missing', { status: 404 });
-        const expectedDigest = String(url).split('/').at(-1);
-        return new Response(body, { status: 200, headers: { 'docker-content-digest': expectedDigest } });
-      },
+      fetchImpl: createRegistryFetch(conflictingWebLabel.registryBodies),
     }),
     /not bound to the reviewed source/,
   );
