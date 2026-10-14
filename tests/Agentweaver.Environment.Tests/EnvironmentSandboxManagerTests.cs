@@ -211,6 +211,125 @@ public sealed class EnvironmentSandboxManagerTests
         Assert.Equal(0, provider.ProvisionCalls);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProviderAttemptReadRechecksAuthorityAfterStoreRead(bool changeAuthorityDuringRead)
+    {
+        var (manager, projects, leaseStore, fence, operationId) = CreateAuthorityReadManager();
+        if (changeAuthorityDuringRead)
+            leaseStore.DuringProviderAttemptRead = () => projects.ChangeMembershipRevision();
+
+        if (changeAuthorityDuringRead)
+        {
+            var exception = await Assert.ThrowsAsync<ProjectsConfigApiException>(() =>
+                manager.GetProviderAttemptsAsync(
+                    Caller(), "project-a", "run-a", "environment-a", operationId, CancellationToken.None));
+
+            Assert.Equal("authorization_changed", exception.Code);
+        }
+        else
+        {
+            var response = await manager.GetProviderAttemptsAsync(
+                Caller(), "project-a", "run-a", "environment-a", operationId, CancellationToken.None);
+
+            Assert.Equal(1, response.ContractVersion);
+            Assert.Equal(fence, response.CurrentFence);
+            Assert.Equal(operationId, response.OperationId);
+            Assert.Empty(response.Attempts);
+        }
+
+        Assert.Equal(1, leaseStore.ProviderAttemptReadCalls);
+        Assert.Equal(5, projects.AuthorizationReads);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LateCleanupReadRechecksAuthorityAfterStoreRead(bool changeAuthorityDuringRead)
+    {
+        var (manager, projects, leaseStore, fence, _) = CreateAuthorityReadManager();
+        if (changeAuthorityDuringRead)
+            leaseStore.DuringLateCleanupRead = () => projects.ChangeMembershipRevision();
+
+        if (changeAuthorityDuringRead)
+        {
+            var exception = await Assert.ThrowsAsync<ProjectsConfigApiException>(() =>
+                manager.GetLateResourceCleanupsAsync(
+                    Caller(), "project-a", "run-a", "environment-a", CancellationToken.None));
+
+            Assert.Equal("authorization_changed", exception.Code);
+        }
+        else
+        {
+            var response = await manager.GetLateResourceCleanupsAsync(
+                Caller(), "project-a", "run-a", "environment-a", CancellationToken.None);
+
+            Assert.Equal(1, response.ContractVersion);
+            Assert.Equal(fence, response.CurrentFence);
+            Assert.Empty(response.Items);
+            Assert.False(response.HasMore);
+        }
+
+        Assert.Equal(1, leaseStore.LateCleanupReadCalls);
+        Assert.Equal(5, projects.AuthorizationReads);
+    }
+
+    private static (
+        EnvironmentSandboxManager Manager,
+        MutableProjectsConfigClient Projects,
+        AuthorityReadLeaseStore LeaseStore,
+        EnvironmentGenerationFence Fence,
+        Guid OperationId) CreateAuthorityReadManager()
+    {
+        var owner = new EnvironmentOwnerIdentity("tenant-a", "project-a", "run-a", "environment-a");
+        var fence = new EnvironmentGenerationFence(owner, 1);
+        var projects = new MutableProjectsConfigClient(
+            CreateReadAuthorization(),
+            EnvironmentEgressManagerTests.Selection());
+        var lifecycleStore = new EnvironmentEgressManagerTests.FakeEnvironmentLifecycleStore(fence);
+        var leaseStore = new AuthorityReadLeaseStore(
+            CreateCurrentLease(fence, DateTimeOffset.Parse("2026-10-06T12:00:00Z"), "sandbox-uid"));
+        var egressManager = new EnvironmentEgressManager(
+            projects,
+            cilium: null!,
+            providerOptions: null!,
+            lifecycleStore: lifecycleStore);
+        var manager = new EnvironmentSandboxManager(
+            projects,
+            lifecycleStore,
+            leaseStore,
+            sandboxProvider: null!,
+            sandboxOptions: null!,
+            kubernetesClient: null!,
+            ciliumOptions: null!,
+            egressManager: egressManager);
+
+        return (manager, projects, leaseStore, fence, Guid.NewGuid());
+    }
+
+    private static ProjectAuthorizationContextResponse CreateReadAuthorization() =>
+        new(
+            ProjectAuthorizationContextContract.CurrentVersion,
+            "https://projects.example",
+            "actor-a",
+            "tenant-a",
+            3,
+            "project-a",
+            "run-a",
+            [
+                new EffectiveProjectAuthorization(
+                    ProjectAuthorityResourceType.Project,
+                    "project-a",
+                    [
+                        new(ProjectAuthorizationPermission.WriteProjects, 1),
+                        new(ProjectAuthorizationPermission.ReadProjects, 1),
+                        new(ProjectAuthorizationPermission.ReadRunSelection, 1)
+                    ])
+            ]);
+
+    private static CurrentCallerRequest Caller() => new("validated.jwt.token", "tenant-a");
+
     private static SandboxLeaseSnapshot CreateCurrentLease(
         EnvironmentGenerationFence fence,
         DateTimeOffset now,
@@ -260,6 +379,71 @@ public sealed class EnvironmentSandboxManagerTests
             LeaseExpiresAt = now.AddMinutes(1),
             CreatedAt = now.AddMinutes(-1)
         };
+    }
+
+    private sealed class MutableProjectsConfigClient(
+        ProjectAuthorizationContextResponse authorization,
+        EffectiveNetworkPolicySelection selection) : IProjectsConfigClient
+    {
+        public ProjectAuthorizationContextResponse CurrentAuthorization { get; private set; } = authorization;
+        public int AuthorizationReads { get; private set; }
+
+        public void ChangeMembershipRevision() =>
+            CurrentAuthorization = CurrentAuthorization with
+            {
+                MembershipRevision = CurrentAuthorization.MembershipRevision + 1
+            };
+
+        public Task<ProjectAuthorizationContextResponse> GetAuthorizationContextAsync(
+            CurrentCallerRequest caller,
+            CancellationToken cancellationToken)
+        {
+            AuthorizationReads++;
+            return Task.FromResult(CurrentAuthorization);
+        }
+
+        public Task<EffectiveNetworkPolicySelection> GetRunSelectionAsync(
+            CurrentCallerRequest caller,
+            string projectId,
+            string runId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(selection);
+    }
+
+    private sealed class AuthorityReadLeaseStore : RuntimeResumeBootstrapTests.SourceLeases
+    {
+        private readonly EnvironmentGenerationFence _fence;
+
+        public AuthorityReadLeaseStore(SandboxLeaseSnapshot lease) : base(lease) =>
+            _fence = lease.Fence;
+
+        public int ProviderAttemptReadCalls { get; private set; }
+        public int LateCleanupReadCalls { get; private set; }
+        public Action? DuringProviderAttemptRead { get; set; }
+        public Action? DuringLateCleanupRead { get; set; }
+
+        public override Task<ImmutableArray<SandboxProviderAttemptSnapshot>> GetProviderAttemptsAsync(
+            EnvironmentGenerationFence currentFence,
+            Guid operationId,
+            CancellationToken cancellationToken)
+        {
+            Assert.Equal(_fence, currentFence);
+            Assert.NotEqual(Guid.Empty, operationId);
+            ProviderAttemptReadCalls++;
+            DuringProviderAttemptRead?.Invoke();
+            return Task.FromResult(ImmutableArray<SandboxProviderAttemptSnapshot>.Empty);
+        }
+
+        public override Task<(ImmutableArray<SandboxLateResourceCleanupRecord> Items, bool HasMore)>
+            GetLateResourceCleanupRecordsAsync(
+                EnvironmentGenerationFence currentFence,
+                CancellationToken cancellationToken)
+        {
+            Assert.Equal(_fence, currentFence);
+            LateCleanupReadCalls++;
+            DuringLateCleanupRead?.Invoke();
+            return Task.FromResult((ImmutableArray<SandboxLateResourceCleanupRecord>.Empty, false));
+        }
     }
 
     private sealed class FakeProjectsConfigClient : IProjectsConfigClient
