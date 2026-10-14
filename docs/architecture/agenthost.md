@@ -57,9 +57,12 @@ registration. Orchestrator checks the accepted run selection and current read
 permission; Projects returns only imported revisions assigned to the active agent.
 AgentHost checks the registration binding and content digests, exposes those
 instructions through the SDK skill provider, and places the exact resource bytes
-in the native session filesystem. It repeats the content read during current
-authority checks. Missing, changed, revoked, unassigned, or legacy unpinned content
-denies session creation or continued use.
+in the native session filesystem. The configured working directory maps only to
+the virtual `/workspace` root; it is not read from the host filesystem. AgentHost
+initializes that root for fresh and restored sessions while other missing virtual
+paths remain absent. It repeats the content read during current authority checks.
+Missing, changed, revoked, unassigned, or legacy unpinned content denies session
+creation or continued use.
 
 ```mermaid
 sequenceDiagram

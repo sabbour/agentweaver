@@ -243,6 +243,29 @@ public sealed class RuntimeSessionRecoveryTests
                 session.CaptureNativeCacheAsync(timeout.Token))).Code);
     }
 
+    [Fact]
+    public async Task FreshNativeSessionMapsOnlyItsConfiguredWorkingDirectory()
+    {
+        var registration = RuntimeCopilotSessionTests.Registration();
+        var workingDirectory = Path.Combine(Path.GetTempPath(), "agentweaver-native-workspace",
+            Guid.NewGuid().ToString("N"), "workspace");
+        var nativeWorkingDirectory = workingDirectory.Replace('\\', '/').TrimStart('/');
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var external = new ControlledCopilotRuntime();
+        await using var session = await RuntimeCopilotSessionTests.Factory(
+                external, workingDirectory: workingDirectory).CreateAsync(
+                registration, registration.Binding.ModelSelectionReference!,
+                RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token);
+
+        var stat = await external.InvokeNativeFilesAsync(
+            "sessionFs.stat", nativeWorkingDirectory, null, timeout.Token);
+
+        Assert.True(stat.GetProperty("isDirectory").GetBoolean());
+        var missingDirectory = await external.InvokeNativeFilesAsync(
+            "sessionFs.stat", $"{nativeWorkingDirectory}/missing", null, timeout.Token);
+        Assert.False(missingDirectory.GetProperty("isDirectory").GetBoolean(), missingDirectory.GetRawText());
+    }
+
     [Theory]
     [InlineData("../outside")]
     [InlineData("/absolute")]
@@ -254,6 +277,35 @@ public sealed class RuntimeSessionRecoveryTests
         Assert.Equal("runtime_sdk_cache_invalid",
             Assert.Throws<RuntimeAuthorizationException>(() =>
                 files.Restore(NativeArchive(path, "content"))).Code);
+    }
+
+    [Fact]
+    public void NativeSessionFilesMapOnlyTheConfiguredWorkingDirectory()
+    {
+        var workingDirectory = Path.Combine(Path.GetTempPath(), "agentweaver-native-workspace", "workspace");
+        var files = new RuntimeNativeSessionFiles(["protected-credential"], workingDirectory);
+
+        Assert.Equal("workspace", files.MapWorkingDirectoryPath(workingDirectory));
+        Assert.Equal("workspace/subdir/file.txt",
+            files.MapWorkingDirectoryPath(Path.Combine(workingDirectory, "subdir", "file.txt")));
+        Assert.Equal("tmp/unrelated/path",
+            files.MapWorkingDirectoryPath("/tmp/unrelated/path"));
+        Assert.Throws<IOException>(() =>
+            files.MapWorkingDirectoryPath(Path.Combine(workingDirectory, "..", "outside")));
+    }
+
+    [Fact]
+    public void NativeSessionFilesKeepWorkingDirectoryMappingAfterCacheRestore()
+    {
+        var workingDirectory = Path.Combine(Path.GetTempPath(), "agentweaver-native-workspace", "workspace");
+        var files = new RuntimeNativeSessionFiles(["protected-credential"], workingDirectory);
+        files.Restore(NativeArchive("workspace/state/cache.json", "opaque cache content"));
+
+        Assert.Equal("workspace", files.MapWorkingDirectoryPath(workingDirectory));
+        Assert.Equal("workspace/state/cache.json",
+            files.MapWorkingDirectoryPath(Path.Combine(workingDirectory, "state", "cache.json")));
+        using var archive = new ZipArchive(new MemoryStream(files.Capture()), ZipArchiveMode.Read);
+        Assert.Contains(archive.Entries, entry => entry.FullName == "workspace/");
     }
 
     private static RuntimeSessionRecovery Recovery(

@@ -498,14 +498,14 @@ public sealed class RuntimeCopilotSessionTests
 
     internal static RuntimeCopilotSessionFactory Factory(
         ControlledCopilotRuntime external, ModelSourceMode mode = ModelSourceMode.HostedCopilot,
-        TimeSpan? abortDrainTimeout = null) =>
+        TimeSpan? abortDrainTimeout = null, string? workingDirectory = null) =>
         new(external.Connection, Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))),
             new Dictionary<string, RuntimeModelBinding>
             {
                 ["accepted-model-reference"] = new("controlled-model", mode,
                     mode == ModelSourceMode.Byok ? new RuntimeByokProvider(
                         "openai", new Uri("https://byok.test/v1"), "responses") : null)
-            }, abortDrainTimeout);
+            }, abortDrainTimeout, workingDirectory);
 
     [Theory]
     [InlineData("openai", "responses", null, "https://byok.test/v1")]

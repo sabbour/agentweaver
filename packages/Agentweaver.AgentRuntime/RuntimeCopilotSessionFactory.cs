@@ -129,7 +129,7 @@ public sealed class RuntimeCopilotSessionFactory
         var promptCapacityObserver = new RuntimeNativePromptCapacityObserver();
         var turns = new RuntimeCopilotTurnObserver();
         var nativeFiles = new RuntimeNativeSessionFiles(
-            token, (_connection as UriRuntimeConnection)?.ConnectionToken ?? "");
+            [token, (_connection as UriRuntimeConnection)?.ConnectionToken ?? ""], _workingDirectory);
         RuntimeCopilotToolCallAuthorization? toolAuthorization = null;
         var skillProvider = new RuntimeAcceptedSkillProvider(acceptedSkills);
         var recoveryMode = RuntimeSessionRecoveryMode.Fresh;
