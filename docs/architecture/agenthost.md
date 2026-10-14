@@ -37,9 +37,12 @@ Accepted numeric and credit limits propagate without changing legacy null config
 Workflow-bound `MaxModelTurns`, `MaxToolCalls`, and positive Hosted Copilot hard
 credit limits use owner-controlled admission. The Orchestrator preserves an
 accepted `MaxPromptTokens` value in `RuntimeOwnerContext` and the runtime
-binding, then fails activation before SDK setup because it cannot prove every
-model and compaction request stays within the configured token limit.
-These boundaries do not count the SDK's internal model API calls.
+binding. AgentHost resolves the effective per-prompt/context capacity against
+the concrete model and any narrower server limit, then passes it to the native
+SDK. The SDK compacts removable conversation history and fails the turn if
+system context, tool definitions, and the latest input still cannot fit; it
+does not silently truncate input. This is not a cumulative token budget or a
+count of the SDK's internal model API calls.
 For a zero Hosted Copilot hard limit, startup remains allowed, but the host
 denies model-turn dispatch and never calls the SDK's native Send. Before it
 returns the budget error, it reads the native event log and requires a complete
@@ -95,7 +98,7 @@ sequenceDiagram
     participant O as Orchestrator
     participant I as Identity
     participant E as Environment
-    Note over H: Permit workflow-bound MaxModelTurns and MaxToolCalls; preserve MaxPromptTokens and fail activation before SDK setup
+    Note over H: Permit workflow-bound MaxModelTurns and MaxToolCalls; apply the effective MaxPromptTokens context limit
     C->>H: GET /runtime/v1/readiness with Broker bearer
     H->>O: Revalidate current registration
     O-->>H: Current registration or denial
@@ -145,9 +148,12 @@ through `RuntimeOwnerContext` into the registered `RuntimeBinding`. `maxModelTur
 supported only for workflow-bound registrations. Native sends require the prepared-dispatch, action-grant, and
 native-begin admission path before SDK send. Each native tool invocation reserves one owner-side slot before
 approval; exact retries reuse the reservation and attempts beyond the run limit are denied. An unbound
-`maxModelTurns` or `maxToolCalls`, and any configured `maxPromptTokens`, fail activation with
-`runtime_numeric_limits_unsupported`, before SDK session creation, readiness, or model/tool invocation. Absent
-values preserve the legacy path. The RuntimeAction owner also rejects unsupported numeric bindings before issuing
+`maxModelTurns` or `maxToolCalls` fails activation with `runtime_numeric_limits_unsupported`,
+before SDK session creation, readiness, or model/tool invocation. A configured `maxPromptTokens` is supported
+when its concrete capacity can be resolved; otherwise activation fails with
+`runtime_model_prompt_capacity_unavailable`. The resolved value is passed to the
+native SDK as a per-prompt/context limit.
+Absent values preserve the legacy path. The RuntimeAction owner also rejects unsupported numeric bindings before issuing
 an action grant. Positive workflow-bound Hosted Copilot hard limits use the same prepared
 dispatch and begin checks against observed whole-run priced usage. The source
 path can record durable hard-limit denial and bounded no-send receipts, but it
@@ -227,10 +233,14 @@ limit is denied. Unbound registrations with this limit fail before SDK setup.
 
 When configured, `MaxPromptTokens` is preserved in `RuntimeOwnerContext` and the
 runtime binding; it is not silently discarded or reclassified as a Knowledge
-retrieval budget. Activation still fails with `runtime_numeric_limits_unsupported`
-before SDK setup. The SDK setting compacts context before sending, but does not
-establish an owner-side N/N+1 no-send boundary for hosted and BYOK requests,
-including compaction. Issue [#1855](https://github.com/sabbour/agentweaver/issues/1855)
+retrieval budget. The effective cap is the narrowest of the accepted limit, the
+actual hosted model capacity, and any lower server limit; BYOK uses its
+server-owned capacity. The native SDK compacts removable conversation history.
+If irreducible system context, tool definitions, and the latest input cannot fit,
+the native turn fails explicitly instead of silently truncating input. This is
+per-prompt/context behavior, not an owner-side raw-request token counter or a
+cumulative token budget. Native and hosted deployment evidence is still
+required; issue [#1855](https://github.com/sabbour/agentweaver/issues/1855)
 remains open.
 
 Each built-in tool approval checks current owner authority and Policy again.

@@ -51,10 +51,12 @@ It resolves an exact accepted reference to an enabled concrete model and source 
 Its pin includes the configuration revision and canonical map hash.
 An optional positive `PromptCapacityTokens` is part of that canonical map.
 Omitted capacity preserves the historical null hash.
-Hosted prompt limits also require actual native catalog capacity.
+Hosted prompt limits require the concrete native catalog capacity; an optional lower server limit can narrow it.
 BYOK prompt limits require the concrete server-owned capacity and explicit SDK provider configuration.
-AgentHost narrows the accepted limit to those capacities and pins the effective value for resume.
-These are per-prompt/context capacities, not cumulative token budgets or internal model-call counters.
+AgentHost uses the narrowest accepted and available capacity, then pins the effective value for resume.
+The native runtime compacts removable conversation history to fit this per-prompt/context limit.
+If the latest input, system context, and tool definitions still cannot fit, the native turn fails explicitly;
+the runtime does not silently truncate input. These are not cumulative token budgets or internal model-call counters.
 For configured hosted credit limits, Events prices that concrete model before root
 acceptance or backlog claim, without creating SDK or usage facts.
 The Host later checks the accepted pin before SDK startup and verifies actual native model policy.

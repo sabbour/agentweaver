@@ -126,6 +126,7 @@ public sealed class RuntimeCopilotSessionFactory
                 SingleWriter = false,
                 FullMode = BoundedChannelFullMode.Wait
             });
+        var promptCapacityObserver = new RuntimeNativePromptCapacityObserver();
         var turns = new RuntimeCopilotTurnObserver();
         var nativeFiles = new RuntimeNativeSessionFiles(
             token, (_connection as UriRuntimeConnection)?.ConnectionToken ?? "");
@@ -263,6 +264,7 @@ public sealed class RuntimeCopilotSessionFactory
                         !usage.Writer.TryWrite(new(nativeUsage, null, null)))
                         usage.Writer.TryComplete(new RuntimeAuthorizationException(
                             "runtime_usage_pending_capacity_exceeded"));
+                    promptCapacityObserver.Observe(sessionEvent);
                     turns.Observe(sessionEvent);
                     if (sessionEvent is SessionIdleEvent or SessionErrorEvent)
                         toolAuthorization?.Clear();
@@ -322,7 +324,7 @@ public sealed class RuntimeCopilotSessionFactory
             var journalEvidence = recoveryMode == RuntimeSessionRecoveryMode.JournalRebuild
                 ? recovery?.JournalEvidence
                 : null;
-            return new RuntimeCopilotSession(client, session, facts, usage, turns,
+            return new RuntimeCopilotSession(client, session, facts, usage, promptCapacityObserver, turns,
                 nativeFiles, recoveryMode, recoveryReason, recovery?.JournalRebuild,
                 consumedNativeCacheAcknowledgment, journalEvidence, _abortDrainTimeout);
         }
