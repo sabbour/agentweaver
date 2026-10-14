@@ -247,11 +247,12 @@ It checks the current registration, Core permission, accepted selection, active
 session and turn, Environment lease, and Identity grant after database waits.
 The actual SDK session supplies the effective model, catalog hash, SDK versions,
 event identity, and nullable measurements. The pinned SDK does not provide a proven
-binding from usage events to an A2A send, so the runtime leaves `A2AMessageId` null
-rather than infer ownership from the active turn or event timestamps. Events accepts
-cost-turn evidence only when a source receipt's A2A ID exactly matches `CostTurnId`;
-unbound callbacks therefore cannot release the cost turn, including a callback from an
-earlier send that arrives during a later send. Null correlation is omitted from legacy
+binding from usage events to an A2A send. As a result, the runtime leaves
+`A2AMessageId` null. It does not infer ownership from the active turn or event
+timestamps. Events accepts cost-turn evidence only when a source receipt's A2A ID
+exactly matches `CostTurnId`. A callback without that ID cannot release the cost
+turn. This includes a callback from an earlier send that arrives during a later
+send. Null correlation is omitted from legacy
 source payloads, preserving their canonical hashes. The receipt validator rejects
 changed owner, SDK, model, catalog, event, and selection pins.
 
@@ -336,8 +337,8 @@ checks. Observation does not retry or schedule runtime work.
 
 At an explicit owner turn-boundary request, the Orchestrator asks Events to claim and
 present the next addressed message. Events re-reads the current owner session binding
-for every operation and permits claim or presentation only while the owner reports
-`presenting`; acknowledgment remains available after that boundary under the current
+for every operation. It permits claim or presentation only while the owner reports
+`presenting`. Acknowledgment remains available after that boundary under the current
 execution and claim fences. The owner records delivery and exposes parent notifications.
 The completed boundary result is stored with its request state version, so retrying the
 same request returns the same result without claiming another message. A blocked session
@@ -350,10 +351,11 @@ gate or complete child work.
 Needs-input and error messages can set a pending wake. The owner drives these calls
 synchronously; no background relay or automatic AgentHost scheduler is included.
 
-The Broker-backed HTTP integration test exercises this path with a real Broker-issued
-run token, disposable PostgreSQL, accepted Projects selection, root/child registration,
-owner-outbox validation, delivery and journal mapping, turn-boundary presentation,
-fenced acknowledgment, parent notification, and permission revocation. It is an
+The Broker-backed HTTP integration test uses a real Broker-issued run token,
+disposable PostgreSQL, and an accepted Projects selection. It tests root/child
+registration, owner-outbox validation, delivery and journal mapping,
+turn-boundary presentation, fenced acknowledgment, parent notification, and
+permission revocation. It is an
 integration test of the source hosts, not evidence of a deployed service.
 
 ## Provider pin and session creation
@@ -413,8 +415,8 @@ content in other event kinds is represented by opaque `ObjectKey` references wit
 purpose, optional byte length, and retention metadata; the service does not store
 referenced bytes or credentials.
 
-Append serializes access to the project/run stream position in PostgreSQL, admits a
-run-scoped stable event identity through the inbox, and writes the event,
+Append serializes access to the project/run stream position in PostgreSQL and admits a
+run-scoped stable event identity through the inbox. It writes the event,
 object-reference metadata, position, and outbox record in the same transaction. Events
 from different sessions in one run share a single contiguous sequence while retaining
 their originating session identity. It commits before returning the event. A retry
@@ -423,12 +425,12 @@ identity with different content in the same run is a conflict. PostgreSQL, not a
 in-process counter or channel, assigns the authoritative ordered position.
 
 The Orchestrator receipt writer rechecks the actual request actor, current Projects
-`acceptRunSelection` authority, and accepted selection after owner-row lock waits and
-immediately before committing the owner receipt, after its grant-row lock and insert.
-This also applies when a receipt ID already exists. An Allow also requires the exact
-current grant, expiry, fence, and selection; Deny/Error may refer to an issued inactive
-grant but still require current Core write authority and active owner session/run
-authority. The Core action guard
+`acceptRunSelection` authority, and accepted selection after owner-row lock waits. It
+rechecks them immediately before committing the owner receipt, after its grant-row
+lock and insert. This also applies when a receipt ID already exists. An Allow requires
+the exact current grant, expiry, fence, and selection. Deny/Error can refer to an
+issued inactive grant, but still require current Core write authority and active owner
+session/run authority. The Core action guard
 then awaits the durable Events acknowledgment and rechecks current authority, grant
 state, and fence after that await. Any failed owner check, journal append, or
 post-ack recheck prevents the protected effect; evidence alone cannot grant

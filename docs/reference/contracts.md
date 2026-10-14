@@ -310,9 +310,9 @@ callback. The Orchestrator receipt writer rechecks the authenticated actor and c
 `acceptRunSelection` authority/selection immediately before committing the owner receipt.
 Allow receipts also require the exact current grant, expiry, and fence; Deny/Error need
 only an issued grant and do not grant authority. For an Allow, the guard waits for the
-durable Events & Sessions receipt acknowledgment before the protected callback; Events
-accepts only the immutable receipt reference, revalidates current owner admission inside
-the journal transaction, and returns a no-store acknowledgment. Downstream
+durable Events & Sessions receipt acknowledgment before the protected callback. Events
+accepts only the immutable receipt reference. It revalidates current owner admission
+inside the journal transaction and returns a no-store acknowledgment. Downstream
 protected-effect call sites are not claimed.
 Caller bindings require one authenticated identity whose `sub`, `project_id`, and `run_id` claims share one
 validated HTTPS issuer. The current grant descriptor must match that issuer and subject; a missing, duplicate,
@@ -484,10 +484,10 @@ matching actor/tenant, and the current owner session/run writer and fence. The o
 rechecks Core authority and accepted selection after SQL row-lock waits and before
 returning admission success. Allow receipts additionally require an exact, active
 grant/fence match; Deny/Error receipts may reference an issued inactive grant but remain
-same-actor immutable evidence, not an allowance. The envelope binds project/run/session; the payload contains
-bounded actor/tenant/step, grant reference/revision, purpose/action/fence,
-outcome/reason, and provider/options identity metadata, with no arbitrary message or
-credential fields. Other large payload content is represented by opaque
+same-actor immutable evidence, not an allowance. The envelope binds project/run/session. The payload contains bounded
+actor/tenant/step, grant reference/revision, purpose/action/fence,
+outcome/reason, and provider/options identity metadata. It has no arbitrary
+message or credential fields. Other large payload content is represented by opaque
 `ObjectKey` references; the journal does not store referenced bytes.
 
 The run-level provider pin records provider ID, adapter version, options schema version
@@ -580,11 +580,12 @@ or consistency-manifest workflow. See the
 [Events & Sessions journal reference](../architecture/events-sessions).
 
 For Knowledge promotion, the caller's existing bearer is forwarded when it is
-audience-correct for both owners. If separate audience-correct tokens for the same
-caller are already available, the caller may provide the Events token in
-`X-Agentweaver-Events-Authorization`; Knowledge forwards its original bearer to
-Events in a redacted request-only header so Events can fetch the receipt. Neither
-token is acquired or persisted. The runtime does not provision these audiences.
+audience-correct for both owners. If separate audience-correct tokens for the
+same caller are already available, the caller can provide the Events token in
+`X-Agentweaver-Events-Authorization`. Knowledge forwards its original bearer to
+Events in a redacted request-only header. Events uses that bearer to fetch the
+receipt. Neither token is acquired or persisted. The runtime does not provision
+these audiences.
 
 ## Identity broker endpoints
 
@@ -646,7 +647,7 @@ The Repo App routes are mapped only when the optional `IdentityBroker:GitHubRepo
 configuration is present. The local-cookie routes do not constitute a settings UI;
 the token-mint route is an internal source boundary, not a public GitHub endpoint.
 
-Broker access tokens contain the local broker `sub`, registered OAuth scopes, and resource audience. They do not forward upstream tenant or role claims and do not assign Projects roles. Projects & Config is the sole live owner of issuer-and-subject project memberships and resource-role assignments. Downstream resource services obtain current effective permissions through its versioned owner contract rather than maintain duplicate membership or role records or caches; OAuth scopes and signed project/run bindings constrain requests but do not create authority.
+Broker access tokens contain the local broker `sub`, registered OAuth scopes, and resource audience. They do not forward upstream tenant or role claims and do not assign Projects roles. Projects & Config is the sole live owner of issuer-and-subject project memberships and resource-role assignments. Downstream resource services obtain current effective permissions from the versioned owner contract. They do not maintain duplicate membership or role records or caches. OAuth scopes and signed project/run bindings constrain requests but do not create authority.
 
 ### Runtime credential source candidate
 
@@ -820,7 +821,9 @@ The current Host source facts do not need to match the old cache's SDK or Runtim
 The shared digest covers the ordered authenticated session-visible prefix, including valid run-wide position gaps.
 The producer must verify saved-boundary pagination, material bytes, current authority, and the saved source configuration and cache references.
 Each TURN must match its own journal payload and single stored object reference, and its material read must match that same reference and event position.
-The recorded runtime, registration revision, fence, selection, SDK, model, and capacity facts belong to that TURN; they need not match the latest cache or current Runtime.
+The recorded runtime, registration revision, fence, selection, SDK, model, and
+capacity facts belong to that TURN. They need not match the latest cache or
+current Runtime.
 The source-session replay response supplies the saved fork visibility. A direct material read does not make another session visible.
 A receipt hash alone is not independent proof of those reads.
 Missing required journal evidence blocks readiness; owner, transport, configuration, hash, and fence failures cannot trigger another-source fallback.
@@ -882,9 +885,9 @@ or truncation guarantee.
 requires the authenticated current run owner and returns `Cache-Control: no-store`.
 The response contains the active child turn, accepted revisions and hash, and
 agent/model reference from its confirmed WorkPlan item.
-For a Fixed workflow step, the agent, model reference, and step instead come from
-the running association in the root's owner-created `coordinator-execution`
-checkpoint; that association must match the active child and current accepted
+For a Fixed workflow step, the agent, model reference, and step come from the
+running association in the root's owner-created `coordinator-execution`
+checkpoint. The association must match the active child and current accepted
 selection, execution fence, and decision version.
 The accepted platform or project selection also supplies `ModelSourceMode`.
 Runtime registration and model-grant receipts retain that mode.
@@ -1090,9 +1093,11 @@ Run a non-mutating summary with `node scripts/azure/deploy.mjs` and reviewed tar
 
 ## External acceptance evidence
 
-The Foundation Probe Job reports its resource-operation results, but it does not attest to its own pod identity, pulled image, or exit status. The separate read-only consumer observes the completed Job and pod, checks their ownership and workload-identity projection, and verifies that both the Job image and observed pulled image match the expected registry manifest.
+The Foundation Probe Job reports its resource-operation results, but it does not attest to its own pod identity, pulled image, or exit status. The separate read-only consumer observes the completed Job and pod. It checks
+their ownership and workload-identity projection. It also verifies that the Job
+image and observed pulled image match the expected registry manifest.
 
-The consumer validates the native probe receipt against the admitted source SHA, Git tree, deployment, identity, and target. It then queries Azure Monitor only after Job completion and requires fresh `AppDependencies` or `AppRequests` evidence correlated by source SHA, Git tree, nonce, trace, and span. Configuration checks do not substitute for this runtime proof; incomplete or mismatched evidence remains blocked. Local fixtures validate the consumer contract but do not prove a live deployment.
+The consumer validates the native probe receipt against the admitted source SHA, Git tree, deployment, identity, and target. It then queries Azure Monitor only after Job completion. It requires fresh `AppDependencies` or `AppRequests` evidence correlated by source SHA, Git tree, nonce, trace, and span. Configuration checks do not substitute for this runtime proof. Incomplete or mismatched evidence remains blocked. Local fixtures validate the consumer contract but do not prove a live deployment.
 
 ## Project skill content
 
@@ -1121,15 +1126,15 @@ aliases:
 
 These requests contain no file bytes and accept no query parameters. Projects &
 Config fetches selected files at the supplied resolved commit, checks current
-actor and project authority, and rechecks the source revision. Gateway forwards
+actor and project authority, then rechecks the source revision. Gateway forwards
 the validated bearer and optional tenant selector and preserves owner statuses
 and response bodies. Gateway limits these request bodies to 3 MiB, matching the
-inline preview and import routes. Owner Problem Details report invalid requests
-or content as `400`, missing projects or sources as `404`, stale source/skill
-revisions, digest changes, or idempotency conflicts as `409`, oversized source
-data as `422`, content-store integrity errors as `500`, malformed upstream data
-as `502`, unavailable source/content storage as `503`, and upstream timeouts as
-`504`. Runtime-loaded status is not part of these contracts.
+inline preview and import routes. Owner Problem Details report invalid requests or content as `400`. They report
+missing projects or sources as `404`. They report stale source/skill revisions,
+digest changes, or idempotency conflicts as `409`. They report oversized source
+data as `422`, content-store integrity errors as `500`, and malformed upstream
+data as `502`. They report unavailable source/content storage as `503` and
+upstream timeouts as `504`. Runtime-loaded status is not part of these contracts.
 
 `GET /api/projects/{projectId}/skills?cursor={token}&pageSize={n}` lists stored skill
 revision metadata and exact current assignments. It includes unassigned and

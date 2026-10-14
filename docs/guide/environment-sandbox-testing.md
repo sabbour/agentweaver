@@ -233,10 +233,10 @@ and the no-effect abandon path. Docker must be available for those tests.
 
 The Agent Sandbox provider test uses an in-memory `HttpMessageHandler`, not a
 Kubernetes cluster. It checks the actual v1beta1 template, warm-pool and claim
-requests, `warmPoolRef` and `DeleteForeground`, deterministic duplicate
-provisioning, RuntimeClass and PVC reads, Pod/PVC attachment evidence, withheld
-readiness without a verified network generation, and foreground deletes with
-UID preconditions.
+requests, `warmPoolRef` and `DeleteForeground`, and deterministic duplicate
+provisioning. It checks RuntimeClass and PVC reads, Pod/PVC attachment
+evidence, readiness withholding without a verified network generation, and
+foreground deletes with UID preconditions.
 
 The manager tests confirm that missing target-project `WriteProjects`
 authority is rejected before run selection or Sandbox provider access. They

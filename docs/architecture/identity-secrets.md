@@ -72,15 +72,16 @@ No secret-redemption grant-management HTTP endpoint exists. Read [contracts and 
 
 ## Remote MCP OAuth source boundary
 
-The Broker source candidate defines an Identity-owned connection binding for the
-authenticated human, tenant, project, stable connection ID, Environment
-configuration revision and digest, opaque Identity binding reference, canonical
-HTTPS endpoint and resource, issuer, client ID, redirect URI, installed MCP
-transport profile, and canonical scopes. Each provider configuration also names
+The Broker source candidate defines an Identity-owned connection binding. The
+binding includes the authenticated human, tenant, project, stable connection ID,
+Environment configuration revision and digest, and opaque Identity binding
+reference. It also includes the canonical HTTPS endpoint and resource, issuer,
+client ID, redirect URI, installed MCP transport profile, and canonical scopes.
+Each provider configuration also names
 the exact approved resource URIs, OAuth endpoints, and scopes. Consent state binds that snapshot and its
 connection revision to a short-lived correlation ID. It stores only a hash of
 the random state, the S256 challenge, and a protected verifier `SecretRef`
-identifier/version; it does not persist the raw state, verifier, access token,
+identifier/version. It does not persist the raw state, verifier, access token,
 or refresh token. Connection credentials are represented only by protected
 secret references and provider expiry metadata.
 
@@ -97,7 +98,7 @@ re-reads that pin, then fetches metadata only for the exact configured resource
 and issuer. It rejects redirects, bounds metadata responses, and validates the
 resource, issuer, scopes, S256/code profile, and exact operator-approved OAuth
 endpoints. It returns a constructed authorization URI and stores only a
-protected verifier reference and correlation state; the web application uses a
+protected verifier reference and correlation state. The web application uses a
 same-origin popup callback page to relay either the code or the bounded
 `access_denied` result to its opener. The Gateway forwards only that callback
 shape with the current user's bearer to Identity. Identity rechecks the current
@@ -387,9 +388,9 @@ This evidence does not prove cloud deployment or paid model execution. See the
 ## Credential-less sandbox proposal
 
 **Status: proposed design, not implemented or deployed.** Credential-less means
-that untrusted sandbox code cannot obtain real upstream credentials, including
-model keys, Copilot access tokens, Git credentials, Azure bearer tokens, refresh
-tokens, private keys, or equivalent exchangeable cloud assertions. A `SecretRef`
+that untrusted sandbox code cannot obtain real upstream credentials. Examples
+include model keys, Copilot access tokens, Git credentials, Azure bearer tokens,
+refresh tokens, private keys, and equivalent exchangeable cloud assertions. A `SecretRef`
 that the guest can redeem is not credential-less. Neither is federation that
 lets the guest obtain an upstream bearer token without a stored secret.
 
@@ -422,9 +423,10 @@ Container names, different UIDs, private `HOME`, or read-only mounts alone do no
 prove that credentials are inaccessible.
 
 Environment admission must prove that the guest cannot read trusted host/gateway
-process memory, private `HOME`, token caches, credentials, signing or TLS private
-keys, service sockets, host paths, shared private volumes, or snapshots of that
-state. Do not expose workload-identity projected assertions, Kubernetes service
+state. This includes process memory, private `HOME`, token caches, credentials,
+signing or TLS private keys, service sockets, host paths, shared private volumes,
+and snapshots of that state. Do not expose workload-identity projected
+assertions, Kubernetes service
 account tokens/API access, IMDS/metadata endpoints, or cloud token exchange to the
 guest. A workspace shared for authorized file operations carries data only,
 never host state or credential helpers. Treat its contents as hostile on the
@@ -551,13 +553,14 @@ no credential-delivery downgrade.
 
 Preserve native session/model identity, SDK/runtime versions, abort/idle
 behavior, typed tool results, usage events, and the existing receipt identities.
-Cancellation uses the native abort/idle contract; failed abort prohibits another
-turn or cache capture. Events remains the sole financial ledger. Forward actual
-Copilot AI credits and SDK 1.0.18 `TotalNanoAiu` through Orchestrator source
-receipts and existing Events acknowledgment; do not multiply weighted nano-AIU
-again, infer cost from gateway bytes, or add a gateway ledger. Keep existing
-deny-new-dispatch behavior at the observed turn boundary and current delivery
-semantics. No all-future-source accounting-completeness gate is added here.
+Cancellation uses the native abort/idle contract. A failed abort prohibits
+another turn or cache capture. Events remains the sole financial ledger.
+Forward actual Copilot AI credits and SDK 1.0.18 `TotalNanoAiu` through
+Orchestrator source receipts and the existing Events acknowledgment. Do not
+multiply weighted nano-AIU again or infer cost from Gateway bytes. Do not add a
+Gateway ledger. Keep existing deny-new-dispatch behavior at the observed turn
+boundary and current delivery semantics. No all-future-source
+accounting-completeness gate is added here.
 
 ### Network, TLS and hostile input
 
@@ -593,11 +596,11 @@ reconnects. Reject redirects by default. Any profile that admits a redirect
 requires independent destination, audience and action validation, with fresh
 authentication for that target; never forward the old credential automatically.
 
-Validate upstream certificates, hostname and approved trust roots. Never disable
+Validate upstream certificates, hostname, and approved trust roots. Never disable
 TLS verification. Prefer structured endpoints to TLS interception. If a reviewed
 SDK/protocol profile requires interception, terminate only that profile's allowed
-hosts/protocols, with a narrowly scoped trusted CA certificate installed in the
-guest; its CA signing key and per-host private keys stay outside the guest. The
+hosts/protocols with a narrowly scoped trusted CA certificate installed in the
+guest. Keep its CA signing key and per-host private keys outside the guest. The
 guest authenticates the gateway separately, and the gateway independently
 validates upstream TLS. A broad trust root does not make arbitrary interception
 authorized. A pinned client must use a supported explicit endpoint/adapter or
@@ -716,4 +719,12 @@ Runtime PostgreSQL connections use the explicit `WorkloadIdentityCredential`, no
 
 Ordinary host startup verifies that the `identity_broker` schema exists and that all migrations are applied; it never applies migrations or creates database roles. Only the explicit `--migrate` command runs migrations, in a separate one-shot Job with its own ServiceAccount, workload identity, connection-string key, token settings, and schema-owner role. See [PostgreSQL configuration and roles](../reference/contracts#identity-postgresql-access).
 
-The Kubernetes source defines an HTTPS Deployment behind an HTTPS `ClusterIP` Service. It defines no Ingress, Gateway, or ingress controller. The source has not been deployed. Operators must supply the real issuer and external OIDC authority/domain, client registrations and credentials, approved immutable image, TLS certificate/key, signing PFX/password, durable key-ring storage, approved PostgreSQL administrator and roles, and the exact read-only Key Vault fixture. These inputs are placeholders or external responsibilities; this page makes no deployed-readiness claim.
+The Kubernetes source defines an HTTPS Deployment behind an HTTPS `ClusterIP`
+Service. It defines no Ingress, Gateway, or ingress controller. The source has
+not been deployed. Operators must supply the real issuer and external OIDC
+authority/domain, client registrations, and credentials. They must also supply
+the approved immutable image, TLS certificate/key, signing PFX/password, and
+durable key-ring storage. Required database inputs include the approved
+PostgreSQL administrator and roles. Operators must also provide the exact
+read-only Key Vault fixture. These inputs are placeholders or external
+responsibilities. This page makes no deployed-readiness claim.

@@ -1,18 +1,18 @@
 # Agentweaver 1.0
 
-This branch (`v1`) is where Agentweaver 1.0 is built. It starts from an empty history on
-purpose: 1.0 is a rebuild, not a refactor of 0.x.
+This branch (`v1`) contains the Agentweaver 1.0 rebuild. It starts from an empty
+history by design. Version 1.0 rebuilds the product. It does not refactor 0.x.
 
-- **0.x keeps shipping** on [`dev`](https://github.com/sabbour/agentweaver/tree/dev).
-  It is the behavior reference and a source of compatible, reviewed code for
+- **0.x continues to ship** on [`dev`](https://github.com/sabbour/agentweaver/tree/dev).
+  It remains the behavior reference and a source of compatible, reviewed code for
   selective reuse.
-- **1.0 preserves behavior behind new contracts.** Each 0.x capability is tracked
-  in a parity map; compatible, reviewed code may be reused selectively.
+- **1.0 preserves behavior behind new contracts.** The parity map tracks each 0.x
+  capability. Teams can selectively reuse compatible, reviewed code.
 - **Retain the existing UI.** Future P1 frontend work keeps most of the existing
   Agentweaver UI and adapts its API wiring to the new services. Redesign requires
   an explicit user request; no UI work is included in P0.
 - **Status:** P0 foundations are accepted. The source also contains an unpublished
-  Projects & Config service candidate; the architecture remains Proposed and the
+  Projects & Config service candidate. The architecture remains Proposed, and the
   repository does not yet represent a deployed platform. [Phase progress](docs/architecture/decisions/0001-platform-architecture.md#phases)
   distinguishes accepted foundations, in-progress candidates, and remaining work.
 
@@ -40,7 +40,7 @@ purpose: 1.0 is a rebuild, not a refactor of 0.x.
   services**.
 - Agent memory, decisions, and inbox move from repository files into the **session tree
   and messages**.
-- The coordinator prompt stays **thin**; workflow rules live in code.
+- The coordinator prompt stays **thin**. Workflow rules live in code.
 - Previews and published applications become **one application model**, shown in
   Agentweaver's own UI next to a **surface panel**.
 - 1.0 runs **in the cloud only** (AKS and Azure first). There is no local runtime mode.
@@ -49,15 +49,15 @@ purpose: 1.0 is a rebuild, not a refactor of 0.x.
 
 The initial P0 delivery contains provider descriptor and binding contracts, a pure
 catalog/resolver, conformance-focused tests, and build/release validation. The v1 source
-also includes unpublished Events & Sessions and Orchestrator service candidates. The
-Orchestrator source now covers typed coordinator decisions and gates, durable MAF
+also includes unpublished Events & Sessions and Orchestrator service candidates.
+The Orchestrator source covers typed coordinator decisions and gates, durable MAF
 checkpoints, immutable accepted-run Sandbox binding metadata, and owner-issued
 grant/receipt records. Non-empty or fixed-work plans require a server-registered
-Sandbox resource adapter; without one, the host fails closed with `503`. This source
-does not include a production Sandbox provisioner or the full dispatch engine, and
-the positive Events receipt consumer remains separate work. These services can be
+Sandbox resource adapter. Without one, the host fails closed with `503`. This source
+does not include a production Sandbox provisioner or the full dispatch engine.
+The positive Events receipt consumer remains separate work. These services can be
 built and tested, but are not deployed or published. The repository also contains
-the versioned Gateway/BFF and v1 browser client source; neither is deployed. The
+the versioned Gateway/BFF and v1 browser client source. Neither is deployed. The
 unpublished [AgentHost candidate](docs/architecture/agenthost.md) adds authenticated
 runtime execution, not automatic scheduling or a deployed platform. The source does
 not provision Azure resources or include the AgentHost scheduler or product MCP server.
@@ -123,15 +123,16 @@ deployed relay or published Source Control service is included.
 The release manifest describes independently versioned libraries (including Orchestrator Core) and unpublished service candidates such as Identity Broker and Projects & Config.
 It is a draft composition, not evidence of deployment or a released platform.
 
-The [P0 Azure infrastructure story](docs/specs/1777-azure-p0-infrastructure.md) adds
-a dedicated-environment layout: native Bicep modules under `infra/bicep/`
-(public AKS API with OIDC/workload identity, Entra-only PostgreSQL, RBAC-only Key
-Vault, Blob storage, Azure Monitor, least-privilege per-service identities), a
-Kustomize base under `deploy/k8s/base/`, and dependency-free Node CLI tooling
-under `scripts/azure/` for read-only plan, confirmed exact-SHA deployment, and
-optional acceptance evidence collection. The full foundation template is for
-an approved initial deployment; an AKS-only path updates an existing cluster
-and its workload-identity federation without redeploying external P0 resources.
+The [P0 Azure infrastructure story](docs/specs/1777-azure-p0-infrastructure.md)
+defines a dedicated-environment layout. Native Bicep modules in `infra/bicep/`
+define a public AKS API with OIDC/workload identity, Entra-only PostgreSQL,
+RBAC-only Key Vault, Blob storage, Azure Monitor, and least-privilege per-service
+identities. The story also adds a Kustomize base under `deploy/k8s/base/`.
+Dependency-free Node CLI tools under `scripts/azure/` support a read-only plan,
+confirmed exact-SHA deployment, and optional acceptance evidence collection.
+The full foundation template supports an approved initial deployment. An AKS-only
+path updates an existing cluster and its workload-identity federation without
+redeploying external P0 resources.
 Source definitions are not deployment or runtime proof; the approved target's
 deployment and smoke acceptance are tracked separately in
 [#1812](https://github.com/sabbour/agentweaver/issues/1812) and
@@ -324,11 +325,12 @@ rehearsal remain unchanged. An explicitly selected `mode: "correct"` in the
 source branch and PR. Pass the original issue's task, labels and milestone, plus
 a `source` object with `runId`, original published `headSha` and `treeSha`,
 `branch`, `prNumber`, `publicationCommentId`, `denialCommentId`, and selected
-`paths` equal to the actual staged correction paths. Paths absent from the old
-PR diff also require `scopeCommentId`: an exact-tree coordinator scope
-confirmation on the same PR after the denial, naming the native run, PR, issue,
-old head/tree, denial comment, staged tree, and every staged path as a separate
-``- `relative/path` `` line. It is **not** admission authorization. Set
+`paths` equal to the actual staged correction paths. If a path is absent from
+the old PR diff, include `scopeCommentId`. It identifies an exact-tree
+coordinator scope confirmation on the same PR after the denial. The confirmation
+names the native run, PR, issue, old head/tree, denial comment, and staged tree.
+It lists every staged path on a separate ``- `relative/path` `` line. It is
+**not** admission authorization. Set
 `reviewedTreeSha` only if the original pair reviewed a different tree and a
 native correction stage produced the published tree. The route reads the
 originating session's **terminal native run snapshot and run detail** to verify
@@ -336,23 +338,23 @@ the actual review pair, any corrective transition, publication, and issue
 scope. A GitHub timeline claim by itself is never sufficient; missing or
 ambiguous native evidence blocks. The owning workflow verifies this SDK
 receipt before delegating affected validation; a subagent's separate session
-cannot independently read the originating run. The same owner-verified source
-receipt is forwarded to the corrected publisher, which must still check live
-Git and GitHub state before committing or pushing; a child-session SDK lookup
-failure is not a reason to discard the owner's native proof.
+cannot independently read the originating run. The workflow forwards the same
+owner-verified source receipt to the corrected publisher. The publisher must
+still check live Git and GitHub state before committing or pushing. A child-session
+SDK lookup failure does not invalidate the owner's native proof.
 
-If a corrected publication itself stops **after** publishing (for example, a
-publication-receipt format check rejects an otherwise valid comment), do not
-alter the native journal, edit its timeline comment, or reuse the original
+If a corrected publication stops **after** publishing (for example, a
+publication-receipt format check rejects a valid comment), do not alter the
+native journal. Do not edit its timeline comment. Do not reuse the original
 source arguments for a different staged tree. In the same originating session,
-`mode: "correct"` also accepts `sourceChain` **instead of** `source`, with only
-`runId` (the stopped corrective run), `parentRunId` (its original normal
-delivery run), and `denialCommentId` (a fresh coordinator denial of the
+`mode: "correct"` also accepts `sourceChain` **instead of** `source`. The object
+contains only `runId` (the stopped corrective run), `parentRunId` (its original
+normal delivery run), and `denialCommentId` (a fresh coordinator denial of the
 corrective run's exact published head/tree). The owning workflow derives the
-PR, head, tree, comment and allowed paths from both runs' terminal SDK
-receipts, their typed agents, Git, and live GitHub; it accepts only a single
-normal parent followed by a single failed post-publication correction, not an
-arbitrary chain. The corrected publication must directly follow the original
+PR, head, tree, comment, and allowed paths from both runs' terminal SDK
+receipts, their typed agents, Git, and live GitHub. It accepts only one normal
+parent followed by one failed post-publication correction, not an arbitrary
+chain. The corrected publication must directly follow the original
 published commit; an already-rebased correction blocks rather than claiming
 unverified lineage. An additional `scopeCommentId` is required if newly staged
 paths extend beyond the prior owned correction and PR diff. The old review
@@ -361,10 +363,10 @@ reuses the same PR and still requires fresh CI and a new exclusive exact-head
 coordinator grant before admission.
 
 The original remote PR/head/tree and denial remain bound to that stopped run.
-If `v1` advanced, the route commits only the staged owned corrections, rebases
-the owned branch without stashing or discarding changes, and verifies the
-original feature and correction deltas with zero-context verbatim patch IDs
-before validating the resulting current-base tree. This permits unrelated
+If `v1` advanced, the route commits only the staged owned corrections. It
+rebases the owned branch without stashing or discarding changes. Before
+validating the current-base tree, it verifies the original feature and
+correction deltas with zero-context verbatim patch IDs. This permits unrelated
 upstream context changes without accepting changes to the owned patches.
 A conflict leaves work in place and blocks for resolution.
 Otherwise it validates the staged tree directly. Historical pair results are
@@ -382,7 +384,7 @@ pins the candidate, and publication cannot be silently replaced. If the target
 tip advances after the coordinator grant, admission blocks and requires a fresh
 grant on retry.
 The admission owner may use a live, coordinator-authored top-level comment on
-the same PR as the actual coordinator response when a child-session reply is
+the same PR as the coordinator response when a child-session reply is
 unavailable. Its comment ID/URL is the stable response ID, not a fabricated
 message ID. Approval must be explicit on the first line, nonwithdrawn, and
 bound to the coordinator session and decision ID, exact PR/head/tree/current

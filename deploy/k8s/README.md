@@ -258,10 +258,10 @@ operator may instead supply a complete rendered list with `--runtime-manifest`.
 The tool verifies the GitHub
 annotated tag and Release, source SHA, all ten public GHCR manifests, the exact
 Azure/kubectl target, and referenced prerequisites before it can render or apply.
-The measured AgentHost image is not deployed as a shared workload: anonymous
-GHCR verification resolves the exact published `linux/amd64` child manifest,
-checks its config against the prepared source labels, and measures the published
-manifest, config, and compressed layers. The Environment Deployment pins that
+The measured AgentHost image is not deployed as a shared workload. Anonymous
+GHCR verification resolves the exact published `linux/amd64` child manifest.
+It checks the image config against the prepared source labels and measures the
+published manifest, config, and compressed layers. The Environment Deployment pins that
 child digest, platform, and byte total for the per-Sandbox provider. Resume also
 checks the live Environment pin and liveness/readiness probes. The Foundation
 Probe is excluded.
@@ -289,10 +289,9 @@ The checked-in source defines required Cilium policy names for Identity Broker,
 Events & Sessions, Projects & Config, AgentHost, Environment, Gateway, MCP,
 Orchestrator, Knowledge, and Web. The optional routing overlay defines Web
 ingress only from node health probes and the exact `identity-broker` Gateway
-pods in the explicitly selected Gateway namespace, on HTTP port 8080. The source also
-defines the Web root route, Gateway API routes for `/api/v1` and exact
-`/openapi/v1.json`, and exact `/mcp` plus the protected-resource metadata path to MCP; the release tool does not create
-or manage these routes.
+pods in the explicitly selected Gateway namespace, on HTTP port 8080. The source also defines the Web root route and Gateway API routes for `/api/v1`
+and exact `/openapi/v1.json`. It defines exact `/mcp` and the protected-resource
+metadata path to MCP. The release tool does not create or manage these routes.
 The other owner policies cover source-verified internal service edges; they do
 not supply missing external endpoints or prove live traffic.
 

@@ -1,6 +1,7 @@
 # Testing
 
-The v1 tests use in-memory providers, fake Azure SDK transports, and disposable PostgreSQL. They do not require an Azure subscription.
+The v1 tests use in-memory providers, fake Azure SDK transports, and disposable
+PostgreSQL. They do not require an Azure subscription.
 
 Pure release checks verify the applied P1 source versions for 23 product components
 at `1.0.0`: 13 packages and 10 service images.
@@ -10,9 +11,10 @@ They check exact dependency compatibility and confirm that version application c
 only version fields and release records, not runtime code or external package pins.
 These checks do not publish artifacts, apply SQL, or prove deployed behavior.
 The local deployment-tool tests validate the exact v1 P0 target, release-stage
-manifest, source-bound publication result, ten digest-pinned GHCR service images,
-nine shared Deployment/Service pairs, and the receipt-measured AgentHost image,
-platform, and byte-count pin supplied to Environment. Fake
+manifest, source-bound publication result, ten digest-pinned GHCR service
+images, and nine shared Deployment/Service pairs. They also validate the
+receipt-measured AgentHost image, platform, and byte-count pin supplied to
+Environment. Fake
 transports prove that the default dry-run issues no write command, GHCR
 verification uses the registry HTTP API without Docker/Podman, and resume still
 repeats target, provenance, and live health checks. These are local contract
@@ -308,9 +310,9 @@ Provider/model mismatch and missing-measurement tests reject invalid source fact
 These checks do not call a paid model or prove Azure deployment.
 
 Provider tests cover independent enabled selections, duplicate/disabled/wrong-seam
-catalog rejection, absent sources, exact adapter/options schema requirements and
+catalog rejection, absent sources, exact adapter/options schema requirements, and
 required capabilities. The Projects disposable-PostgreSQL tests use the production
-catalog loader and run-selection service to persist and replay multiple source
+catalog loader and run-selection service. They persist and replay multiple source
 keys, read the immutable selection, reject invalid requirements, and deny a project
 Owner access without current Orchestrator authority. Existing non-Cost selection
 and tenant-authorization coverage remains in the same suites. A legacy-format
@@ -392,8 +394,12 @@ Response, log, and SDK-wire checks exclude refresh tokens and OAuth client secre
 The native SDK session store and ambient configuration discovery remain disabled.
 The custom filesystem captures opaque native cache bytes and restores the same logical session through the actual SDK resume call.
 Missing, incompatible, or corrupt caches rebuild context from journal content without a model-turn replay.
-Resume producer tests reject Events authorization/transport failures, repeated or empty pages with a next cursor, and TURN bytes, reference, hash, or per-event provenance mismatches before readiness or native session creation.
-Full Host Configure tests accept prior-runtime TURNs and visible-parent TURNs through the saved source-session replay, and do not read same-run events that are absent from that replay.
+Resume producer tests reject Events authorization or transport failures, repeated
+or empty pages with a next cursor, and TURN bytes, references, hashes, or per-event
+provenance mismatches. These checks run before readiness or native session creation.
+Full Host Configure tests accept prior-runtime TURNs and visible-parent TURNs
+through saved source-session replay. They do not read same-run events that are
+absent from that replay.
 Full Host Configure tests also prove that a compatible cache uses native resume and an authenticated incompatible cache falls back to the saved journal.
 The guarded positive scenario records the actual user and assistant content, the Policy receipt, and the native cache reference.
 Separate controlled Host tests require Core's exact current-operation echo before stopping turns and around native cache writes.
@@ -526,11 +532,10 @@ The runner persists one invocation ID before setup. Projects Config's
 configuration, and Owner and Orchestrator assignments for an active TenantAdmin, with
 typed setup and readback receipts. The command reads a JSON request from
 standard input and writes a typed receipt to standard output. The runner then
-reads current authorization and project configuration; accepts the selected
-run context using the plan's expected platform-runtime revision; creates the
-root (and message child) session;
-and reads the exact owner state back before running the selected surface
-journey.
+reads current authorization and project configuration. It accepts the selected
+run context using the plan's expected platform-runtime revision. It creates
+the root session and, for a message journey, a child session. Before it runs
+the selected surface journey, it reads the exact owner state back.
 
 Cleanup revokes those invocation-owned assignments and archives the project only when no accepted
 run selection exists. If a selection exists, cleanup returns

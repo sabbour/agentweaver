@@ -69,13 +69,14 @@ Orchestrator adds the lineage to its session tree only after its final owner-sta
 recheck, so an unregistered target is not a usable child. Session tree and status
 routes report durable owner state; they do not imply a running AgentHost.
 
-Event version 2 defines a typed PolicyEvaluation payload. The native journal advertises
-`sessions.policy.evaluations` for new run pins, but generic run-scoped callers cannot append
-these events because actor equality does not prove Orchestrator Core writer provenance.
-Each run keeps its exact persisted capability set across provider upgrades: older pins
-remain usable for ordinary append, replay, subscribe, and additional session registration,
-but the new receipt route returns `409` for a pin without this capability and does not
-advance the journal. New runs negotiate the expanded set.
+Event version 2 defines a typed PolicyEvaluation payload. The native journal
+advertises `sessions.policy.evaluations` for new run pins. Generic run-scoped
+callers cannot append these events because actor equality does not prove
+Orchestrator Core writer provenance. Each run keeps its exact persisted
+capability set across provider upgrades. Older pins remain usable for ordinary
+append, replay, subscribe, and additional session registration. The new receipt
+route returns `409` for a pin without this capability and does not advance the
+journal. New runs negotiate the expanded set.
 
 The receipt route accepts only an immutable Orchestrator receipt ID. Owner writes and
 Events admission require current Core writer authority, accepted selection, and a matching
@@ -89,11 +90,12 @@ requires every document in the platform and project sets to allow. It uses the e
 platform-singleton catalog/resolver/pinning path; this adapter does not authorize a
 protected action or imply that runtime call sites are wired.
 
-Knowledge uses the same exclusive Memory seam. Its run-selection request must contain
-exactly one Memory candidate; the service resolves that candidate through
-`ProviderCatalog` and `ProviderResolver`, negotiates the live database identity, then
-persists an immutable project/run binding with the project, configuration, and context
-revisions. A missing adapter, capability mismatch, or different later binding fails
+Knowledge uses the same exclusive Memory seam. Its run-selection request must
+contain exactly one Memory candidate. The service resolves that candidate
+through `ProviderCatalog` and `ProviderResolver`. It negotiates the live
+database identity, then persists an immutable project/run binding with the
+project, configuration, and context revisions. A missing adapter, capability
+mismatch, or different later binding fails
 closed without falling back to another provider. The current `postgres.native-memory` adapter implements the read, write, search,
 revision, proposal-promotion, and context-composition capabilities. The optional
 `cosmos.memory` source candidate implements those operations and accepted-effect

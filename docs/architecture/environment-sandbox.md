@@ -90,12 +90,11 @@ source does not claim end-to-end suspend, relocation, or resume.
 Both v1 placement routes use the owner-scoped `ISandboxLeaseStore.GetCurrentAsync`
 callback overload under the exact active Environment owner fence. The public
 callback rechecks fresh `WriteProjects`; the internal callback rechecks fresh
-`ReadRunSelection` and the same exact project/run binding. The store retains the
-same transaction and owner advisory lock while the callback runs, then rereads
-the current lease and compares its owner fence, resource generation, operation,
-lease revision, provider/current fences, state, current flag, expiry, and update
-stamp before commit and return. A mismatch fails closed; a callback exception
-rolls back and returns no projection. The manager also compares the retained
+`ReadRunSelection` and the same exact project/run binding. The store retains the same transaction and owner advisory lock while the
+callback runs. It then rereads the current lease and compares its owner fence,
+resource generation, operation, lease revision, provider/current fences, state,
+current flag, expiry, and update stamp before commit and return. A mismatch
+fails closed. A callback exception rolls back and returns no projection. The manager also compares the retained
 snapshot with its first read before making the final authorization request.
 The projection returns the tenant/project/run/Environment tuple, lifecycle and
 provider fences, lease revision/expiry/current state, and the exact resource,

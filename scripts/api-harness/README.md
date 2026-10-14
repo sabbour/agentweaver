@@ -112,9 +112,10 @@ does not count as API evidence. Gate-answer, approval, rejection, and addressed
 message journeys use the matching discovered API operation.
 
 The shared CLI creates a new invocation-owned project through the privileged
-Projects Config setup command, reads back the current Owner and Orchestrator
-grants, accepts the selected run configuration, and creates and reads back the
-root session (and a child session for a message journey). Caller-supplied
+Projects Config setup command. It reads back the current Owner and Orchestrator
+grants, then accepts the selected run configuration. It creates and reads back
+the root session. A message journey also creates and reads back a child session.
+Caller-supplied
 `ownerFences` or `fixtureScope` are rejected; only receipts produced and checked
 during this invocation can authorize a write. Cleanup revokes the setup grants
 and archives the project only if no run selection was accepted. An accepted

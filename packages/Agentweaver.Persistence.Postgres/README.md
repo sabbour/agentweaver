@@ -60,10 +60,11 @@ transport's publish operation and construct `new OutboxRelay(outbox, publisher)`
 Call `RelayOnceAsync(workerId, batchSize, leaseDuration, cancellationToken)` at
 the cadence owned by your host. It claims a bounded batch, publishes each claimed
 event, and only then acknowledges it using the claim's lease token. It returns
-one `RelayOutcome` per attempted delivery: `Acknowledged` means publish and
-fenced acknowledgment succeeded; `AcknowledgmentFenced` means publish succeeded
-but the lease expired, was replaced, or was already settled before acknowledgment;
-`PublishFailed` carries a non-relay-cancellation publisher exception and leaves
+one `RelayOutcome` per attempted delivery. `Acknowledged` means publish and
+fenced acknowledgment succeeded. `AcknowledgmentFenced` means publish
+succeeded, but the lease expired, was replaced, or was already settled before
+acknowledgment. `PublishFailed` carries a non-relay-cancellation publisher
+exception and leaves
 the event unacknowledged. A failure on one stream does not prevent attempts for
 other streams already claimed in that batch. Cancellation before or during
 publish, or after publish but before acknowledgment, never acknowledges an

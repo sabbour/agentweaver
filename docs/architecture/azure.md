@@ -45,7 +45,11 @@ The root Bicep parameters bind that placement and the Entra administrator:
 
 Supply real administrator values only through reviewed operator parameters; documentation and checked-in examples keep placeholders.
 
-Provider metadata advertises AKS, including API version `2026-07-02-preview`, Key Vault, Storage, VNets, Private Endpoints, and PostgreSQL `Standard_B2s` in `eastus2euap`. East US 2 EUAP has no Retail Prices API meters, so this page makes no EUAP cost quote; standard `eastus2` rates are only a planning proxy. This region map is not deployment evidence and adds no 0.x product scope.
+Provider metadata advertises AKS, including API version `2026-07-02-preview`,
+Key Vault, Storage, VNets, Private Endpoints, and PostgreSQL `Standard_B2s` in
+`eastus2euap`. East US 2 EUAP has no Retail Prices API meters, so this page
+makes no EUAP cost quote. Standard `eastus2` rates are only a planning proxy.
+This region map is not deployment evidence and adds no 0.x product scope.
 
 ## AKS and Application Routing preview
 
@@ -84,7 +88,11 @@ When `appRoutingDnsZoneResourceIds` is empty, the template requests AKS's manage
 
 When the array contains custom zone IDs, the template disables the managed default domain. It accepts one to five unique existing public or private DNS zone IDs in the exact authorized subscription. The guard rejects malformed, cross-subscription, and PrivateLink zone IDs. Public zones can be in one resource group and private zones in another; all zones of each kind must share one resource group.
 
-AKS supplies a separate `appRoutingIdentity` with `resourceId`, `clientId`, and `objectId`. Bicep scopes Key Vault Certificate User to the existing vault and grants each configured DNS zone only its matching public or private DNS Zone Contributor role at that exact zone. These are definitions, not live role grants. The routing identity is separate from the Foundation Probe identity.
+AKS supplies a separate `appRoutingIdentity` with `resourceId`, `clientId`, and
+`objectId`. Bicep scopes Key Vault Certificate User to the existing vault.
+It grants each configured DNS zone only its matching public or private DNS
+Zone Contributor role at that exact zone. These are definitions, not live role
+grants. The routing identity is separate from the Foundation Probe identity.
 
 AKS also enables the Key Vault CSI provider and secret rotation with `enableSecretRotation: 'true'` and `rotationPollInterval: '2m'`. These values are template settings; the addon has not been activated in Azure.
 
@@ -105,8 +113,8 @@ Identity creation and federation do not prove database access or service readine
 The [operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#limited-p1-runtime-identities)
 describes the separate approval boundary.
 
-The P1 PostgreSQL initializer remains source-only; no database initialization
-has been run. Its pre-write checks reject incompatible existing privileges
+The P1 PostgreSQL initializer remains source-only. No database initialization
+has run. Its pre-write checks reject incompatible existing privileges
 without changing them. Before grants commit, it validates planned row-lock
 mutation guards and reads back each installed trigger/function against the
 exact table, trigger type, function source/owner, and runtime EXECUTE restriction.
@@ -140,6 +148,11 @@ AKS exposes a public API endpoint protected by managed Entra authentication and 
 
 The base NetworkPolicy denies traffic by default. The Foundation Probe overlay grants its own egress. The base does not provide telemetry exporter egress.
 
-The Foundation Probe Job has a dedicated workload identity. It exercises Key Vault, Blob, PostgreSQL, and telemetry without redeeming through the Identity broker. A separate read-only consumer checks the completed Job and pod, verifies the exact registry image, validates the native receipt, and queries Azure Monitor after completion for matching stored telemetry. Configuration observations remain separate from runtime evidence.
+The Foundation Probe Job has a dedicated workload identity. It exercises Key
+Vault, Blob, PostgreSQL, and telemetry without redeeming through the Identity
+broker. A separate read-only consumer checks the completed Job and pod. It
+verifies the exact registry image and validates the native receipt. After the
+Job completes, the consumer queries Azure Monitor for matching stored
+telemetry. Configuration observations remain separate from runtime evidence.
 
 These definitions and diagrams are not deployment evidence. Live role grants, addon activation, DNS zones, certificates, controllers, routes, and HTTPS serving are not verified by this page. The consumer has only been validated with local fixtures; it has not run against Azure or AKS. See [Azure acceptance](../guide/azure-acceptance) for the evidence boundary and deployment approval requirements.

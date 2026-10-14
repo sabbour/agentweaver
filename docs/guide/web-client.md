@@ -111,10 +111,11 @@ the exact request ID and decision version from the current owner snapshot.
 Owner acceptance is not represented as delivery, completion, or a state
 transition; the refreshed snapshot supplies the resulting state.
 Knowledge search exposes owner-reported result pages rather than hiding records
-after the first page. The Knowledge page can inspect immutable revision history,
-restore a historical revision as a new Active+Pending revision, explicitly
-approve an Active Pending or Legacy Decision, and supersede an Active Decision
-with another Active Decision from the exact project/agent results. Correction and
+after the first page. The Knowledge page shows immutable revision history. You
+can restore a historical revision as a new Active+Pending revision. You can
+explicitly approve an Active Pending or Legacy Decision. You can supersede an
+Active Decision with another Active Decision from the exact project/agent
+results. Correction and
 archive controls are limited to Memory and SessionContext records supported by
 the current owner. Decision approval and supersession use the selected record's
 current revision; the owner validates the replacement link and refreshed owner
@@ -185,9 +186,9 @@ skill. Runtime-loaded status is unavailable from the current public API. The
 selected-source and Gateway routes are present in v1. Their deployment and
 live availability are not established by this client.
 
-When the accepted run configuration selects GitHub App mode, and its owner
-routes have been admitted and configured, the run Selection view reads safe
-repository metadata from the Broker and creates a short-lived selection code
+When the accepted run configuration selects GitHub App mode and its owner
+routes are admitted and configured, the run Selection view reads safe
+repository metadata from the Broker. It creates a short-lived selection code
 there. Run-bound App installation and repository pin remain Gateway operations
 bound to the exact project, run, and tenant; the code is sent only with that
 run-bound `/pin` request. The accepted run owner validates the selected

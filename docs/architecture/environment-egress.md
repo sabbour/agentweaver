@@ -107,9 +107,9 @@ destinations as ordinary L3/L4 egress.
 
 The selected layered Network Policy binding must include exactly one L3/L4
 provider. Cilium options are accepted only when provider ID, adapter version,
-schema version, and options revision match the immutable selection, and the
-provider advertises all capabilities required by the compiled intent before
-any Kubernetes mutation. Cilium
+schema version, and options revision match the immutable selection. The
+provider must advertise all capabilities required by the compiled intent
+before any Kubernetes mutation. Cilium
 supports the compiled L3/L4/FQDN constraints here; it does not supply L7
 mediation for `PublicHttps` or `RemoteMcp`, so those requirements fail rather
 than becoming a blanket HTTPS rule. This slice contains no L7 adapter; if the
@@ -234,9 +234,9 @@ no probe or deployment is performed by these tests.
 
 The focused compiler and fake-Kubernetes tests cover FQDN wildcard and CIDR
 intersection, ports/protocols, widening rejection, exact selector isolation,
-generation races, apply/readback failures, positive and negative `WriteProjects`
-and `ReadRunSelection` checks, unbound project authority narrowing, stale
-authorization callbacks, Cilium option and capability negotiation, absent-policy
-revocation fences, and the explicit L7 limitation. The
+generation races, and apply/readback failures. They cover positive and negative
+`WriteProjects` and `ReadRunSelection` checks, unbound project authority
+narrowing, stale authorization callbacks, Cilium option and capability
+negotiation, absent-policy revocation fences, and the explicit L7 limitation. The
 [testing guide](../guide/testing.md) lists the command and what the tests cannot
 prove.
