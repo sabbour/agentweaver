@@ -7,13 +7,15 @@ public interface IEnvironmentLifecycleProducer
     Task<EnvironmentLifecycleTransitionResult> RegisterAsync(
         EnvironmentOwnerIdentity owner,
         string idempotencyKey,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null);
 
     Task<EnvironmentLifecycleTransitionResult> TransitionAsync(
         EnvironmentGenerationFence expectedFence,
         EnvironmentLifecycleState targetState,
         string idempotencyKey,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null);
 }
 
 public sealed class EnvironmentLifecycleProducer(IEnvironmentLifecycleStore store)
@@ -22,7 +24,8 @@ public sealed class EnvironmentLifecycleProducer(IEnvironmentLifecycleStore stor
     public Task<EnvironmentLifecycleTransitionResult> RegisterAsync(
         EnvironmentOwnerIdentity owner,
         string idempotencyKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null)
     {
         ArgumentNullException.ThrowIfNull(owner);
         return store.TransitionAsync(
@@ -31,14 +34,16 @@ public sealed class EnvironmentLifecycleProducer(IEnvironmentLifecycleStore stor
                 expectedLifecycleGeneration: 0,
                 EnvironmentLifecycleState.Active,
                 idempotencyKey),
-            cancellationToken);
+            cancellationToken,
+            beforeCommitCheck);
     }
 
     public Task<EnvironmentLifecycleTransitionResult> TransitionAsync(
         EnvironmentGenerationFence expectedFence,
         EnvironmentLifecycleState targetState,
         string idempotencyKey,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<CancellationToken, Task>? beforeCommitCheck = null)
     {
         ArgumentNullException.ThrowIfNull(expectedFence);
         if (expectedFence.LifecycleGeneration <= 0)
@@ -51,6 +56,7 @@ public sealed class EnvironmentLifecycleProducer(IEnvironmentLifecycleStore stor
                 expectedFence.LifecycleGeneration,
                 targetState,
                 idempotencyKey),
-            cancellationToken);
+            cancellationToken,
+            beforeCommitCheck);
     }
 }

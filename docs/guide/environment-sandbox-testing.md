@@ -225,11 +225,30 @@ Its directory and no-follow flags match the executing Linux architecture.
 Local arm64 execution proves managed collector behavior only; the production profile still requires a Linux amd64 image.
 These checks do not prove command-Pod execution, deployed PVC isolation, or Cilium enforcement.
 
-The lease tests use the test project's disposable PostgreSQL 16 container. They
-cover per-Environment capacity, idempotent reservation, owner lifecycle fencing,
-explicit abandonment, supported terminal evidence, exact release receipts,
-monotonic generations, immutable provider requests, late provision callbacks,
-and the no-effect abandon path. Docker must be available for those tests.
+The lease tests use disposable PostgreSQL 16 containers through Testcontainers.
+They cover per-Environment capacity, idempotent reservation, owner lifecycle
+fencing, explicit abandonment, supported terminal evidence, exact release
+receipts, monotonic generations, immutable provider requests, durable
+per-call provider attempts, late callbacks, and no-effect abandonment.
+
+Run the lifecycle and provider-attempt PostgreSQL regression selection:
+
+```powershell
+$env:DOCKER_HOST = 'npipe://./pipe/podman-machine-default'
+$env:TESTCONTAINERS_HOST_OVERRIDE = 'localhost'
+dotnet test tests\Agentweaver.Environment.Tests\Agentweaver.Environment.Tests.csproj `
+  --no-restore `
+  --filter 'FullyQualifiedName~EnvironmentLifecyclePostgresTests|FullyQualifiedName~EnvironmentSandboxLeasePostgresTests' `
+  --logger 'console;verbosity=minimal'
+```
+
+The command above targets the named Windows Podman machine; use the matching
+Docker-compatible endpoint for another local container engine. These tests
+cover migration rollback/reapply, lifecycle replay and fencing, unresolved
+attempt barriers, exact late-success cleanup, and cleanup after an attempt
+expires. Container tests require a disposable local PostgreSQL engine; do not
+point them at a shared database. They do not prove live Kubernetes provider
+behavior, Cilium enforcement, or deployed role grants.
 
 The Agent Sandbox provider test uses an in-memory `HttpMessageHandler`, not a
 Kubernetes cluster. It checks the actual v1beta1 template, warm-pool and claim

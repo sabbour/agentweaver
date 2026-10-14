@@ -47,6 +47,7 @@ public sealed class EnvironmentWorkspaceVolumeApiTests
     {
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddAuthorization();
+        builder.Services.AddScoped<EnvironmentLifecycleManager>(_ => throw new NotSupportedException());
         builder.Services.AddScoped<EnvironmentEgressManager>();
         builder.Services.AddScoped<EnvironmentSandboxManager>();
         builder.Services.AddScoped<EnvironmentWorkspaceVolumeManager>();

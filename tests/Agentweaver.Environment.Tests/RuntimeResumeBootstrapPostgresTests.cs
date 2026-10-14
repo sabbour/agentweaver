@@ -33,8 +33,8 @@ public sealed class RuntimeResumeBootstrapPostgresTests(EnvironmentPostgresFixtu
             [new(SandboxStartupPhase.Started, 1, DateTimeOffset.UtcNow)],
             new("agent-sandbox", "1.0.0", 1, "options-1", intent.OptionsSnapshot,
                 JsonSerializer.SerializeToElement(new { @namespace = "sandbox-system", claimName = "claim" })));
-        var lease = await leases.CompleteProvisionAsync(
-            reservation.Lease.OperationId, resumed.Snapshot.Fence, provisioned, true, CancellationToken.None);
+        var lease = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+            leases, reservation.Lease.OperationId, resumed.Snapshot.Fence, provisioned, true, CancellationToken.None);
         var placement = context.Placement with
         {
             Resource = resource, LeaseRevision = lease.LeaseRevision, LeaseExpiresAt = lease.LeaseExpiresAt!.Value,

@@ -33,7 +33,7 @@ const GROUPS = {
   },
   environment: {
     SELECT: '__ef_migrations_history',
-    'SELECT,INSERT,UPDATE': 'owners owner_effects workspace_volume_cleanup sandbox_leases sandbox_late_resource_cleanups remote_mcp_connections',
+    'SELECT,INSERT,UPDATE': 'owners owner_effects workspace_volume_cleanup sandbox_leases sandbox_provider_attempts sandbox_late_resource_cleanups remote_mcp_connections',
     'SELECT,INSERT': 'lifecycle_operations remote_mcp_connection_configurations remote_mcp_catalog_snapshots remote_mcp_connection_idempotency provider_lifecycle_reports runtime_bootstrap_profile_replacements',
   },
   knowledge: {

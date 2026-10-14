@@ -824,8 +824,8 @@ public sealed class EnvironmentSandboxBuildTestCommandPostgresTests(EnvironmentP
                 egressSelectorLabels = selector.MatchLabels,
                 workspaceAttachmentTransitionRevision = attached.TargetTransitionRevision
             }, json), CancellationToken.None);
-        var active = await leases.CompleteProvisionAsync(
-            reservation.Lease.OperationId, fence, sandbox, true, CancellationToken.None);
+        var active = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+            leases, reservation.Lease.OperationId, fence, sandbox, true, CancellationToken.None);
         var expected = new SandboxBuildTestExpectedBinding(
             fence, active.OperationId, sandbox.Resource, active.ProviderFencingGeneration,
             new(owner.ProjectId, volumeId, storage.Generation), 0, 1)
@@ -1179,8 +1179,8 @@ public sealed class EnvironmentSandboxBuildTestCommandPostgresTests(EnvironmentP
             ImmutableHashSet.Create(StringComparer.Ordinal, SandboxCapabilities.WorkspacePersistentVolumeClaim),
             [new(SandboxStartupPhase.Started, 1, DateTimeOffset.UtcNow)],
             providerBinding);
-        var active = await leaseStore.CompleteProvisionAsync(
-            lease.Lease.OperationId, fence, sandbox, true, CancellationToken.None);
+        var active = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+            leaseStore, lease.Lease.OperationId, fence, sandbox, true, CancellationToken.None);
         var expected = template with
         {
             Fence = fence,
