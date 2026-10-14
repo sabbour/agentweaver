@@ -123,6 +123,14 @@ public static partial class CoordinationEndpoints
         return app;
     }
 
+    public static IEndpointRouteBuilder MapRuntimeObservationV1Endpoint(this IEndpointRouteBuilder app)
+    {
+        app.MapGet(
+            "/api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-observation/v1",
+            ReadRuntimeObservationV1Async).RequireAuthorization();
+        return app;
+    }
+
     private static Task<IResult> ReadCoordinatorDecisionStateAsync(
         string projectId,
         string runId,

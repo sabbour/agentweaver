@@ -9,12 +9,13 @@ const probeNames = [
   'checkpoint-restart-duplicate-fence',
 ];
 
-test('source-only result keeps both required acceptance slots blocked without runtime observations', () => {
-  const result = runP1DispatchRecoveryProbes();
+test('source-only result keeps both required acceptance slots blocked without runtime observations', async () => {
+  const result = await runP1DispatchRecoveryProbes();
 
   assert.equal(result.kind, 'p1-dispatch-recovery-acceptance');
   assert.equal(result.schemaVersion, 1);
   assert.equal(result.overallStatus, 'blocked');
+  assert.deepEqual(result.ownerObservation, { status: 'not-requested' });
   assert.deepEqual(result.probes.map(probe => probe.name), probeNames);
   for (const probe of result.probes) {
     assert.equal(probe.status, 'blocked');
@@ -84,6 +85,77 @@ test('source-only result keeps both required acceptance slots blocked without ru
     fact.includes('receiver expected audience and certificate DNS name')));
   assert.ok(placementReceipt.requiredFacts.some(fact =>
     fact.includes('even when registration/readiness succeeds')));
+});
+
+test('read-only owner observations are recorded but cannot claim dispatch or cleanup acceptance', async () => {
+  const calls = [];
+  const runtime = {
+    registration: { state: 'Available', value: { runtimeInstanceId: 'runtime-a', revision: 2, state: 'Active' } },
+    execution: {
+      state: 'Available',
+      value: {
+        observation: { status: 'Succeeded', checkpointId: 'checkpoint-a' },
+        checkpointParent: { hasParentMetadata: true, parentCheckpointId: null },
+      },
+    },
+    creditGuard: { state: 'Unknown', value: null },
+    dispatches: { state: 'Available', value: { items: [], truncated: false } },
+    toolReservations: { state: 'Available', value: { items: [], truncated: false } },
+  };
+  const environment = {
+    environmentId: 'environment-a',
+    fence: { lifecycleGeneration: 3 },
+    providerAttempts: { attempts: [{ state: 'InProgress' }] },
+    lateResourceCleanups: { items: [{ operationId: 'operation-a' }], hasMore: false },
+  };
+  const result = await runP1DispatchRecoveryProbes({
+    observationClient: {
+      async readRuntimeObservationV1(owner) {
+        calls.push(['runtime', owner]);
+        return runtime;
+      },
+      async readEnvironmentEvidence(context) {
+        calls.push(['environment', context]);
+        return environment;
+      },
+    },
+    observationContext: {
+      owner: { projectId: 'project-a', runId: 'run-a', sessionId: 'session-a' },
+      environmentCreation: { snapshot: { fence: { owner: { environmentId: 'environment-a' } } } },
+      operationId: 'operation-a',
+    },
+  });
+
+  assert.equal(calls.length, 2);
+  assert.equal(result.overallStatus, 'blocked');
+  assert.equal(result.ownerObservation.status, 'observed');
+  assert.equal(result.ownerObservation.value.acceptanceEvidence, false);
+  assert.equal(result.ownerObservation.value.raceObserved, false);
+  assert.equal(result.ownerObservation.value.cleanupVerified, false);
+  assert.equal(result.ownerObservation.value.runtime.creditGuard.state, 'Unknown');
+  assert.equal(result.ownerObservation.value.environment.providerAttempts.count, 1);
+  assert.ok(result.probes.every(probe => probe.status === 'blocked'));
+});
+
+test('failed owner observations are explicit and do not become successful evidence', async () => {
+  const result = await runP1DispatchRecoveryProbes({
+    observationClient: {
+      async readRuntimeObservationV1() { throw new Error('runtime observation owner unavailable'); },
+      async readEnvironmentEvidence() { throw new Error('should not be called'); },
+    },
+    observationContext: {
+      owner: { projectId: 'project-a', runId: 'run-a', sessionId: 'session-a' },
+      environmentCreation: {},
+      operationId: 'operation-a',
+    },
+  });
+
+  assert.deepEqual(result.ownerObservation, {
+    status: 'unavailable',
+    reason: 'runtime observation owner unavailable',
+  });
+  assert.equal(result.overallStatus, 'blocked');
+  assert.ok(result.probes.every(probe => probe.status === 'blocked'));
 });
 
 test('fixed command emits the same blocked contract and accepts no runtime input', () => {

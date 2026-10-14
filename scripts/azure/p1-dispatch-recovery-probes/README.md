@@ -28,9 +28,13 @@ exact required slots:
 Each slot has a blocked status, structured owner/receipt/required-fact entries,
 and cleanup marked `not-started`. These entries describe facts a future
 owner-issued receipt must contain; they are not accepted DTOs or endpoints.
-There is no input, adapter override, or caller-supplied receipt that can turn
-either result into a pass. The four existing native probes retain their own
-status; the full P1 result must remain incomplete while either slot is blocked.
+The command-line entry point accepts no input. A programmatic caller may supply
+an already-authorized `RuntimeObservationClient` with a current owner context
+and a real Environment create response; the runner then attaches read-only
+owner observations or an explicit read failure. These observations never turn a
+probe into a pass or create caller-supplied acceptance receipts. The four
+existing native probes retain their own status; the full P1 result must remain
+incomplete while either slot is blocked.
 
 ## Missing numeric-dispatch contract
 

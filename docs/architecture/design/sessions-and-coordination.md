@@ -173,6 +173,39 @@ identifies a verified root; false/null means lineage is unknown. Contradictory o
 saved parent data returns a conflict. It does not infer lineage from checkpoint IDs or
 revisions, and it leaves the v1 route unchanged.
 
+The authenticated `readRuntimeObservationV1` Gateway GET combines that execution evidence
+with the current session registration, the stored credit-guard snapshot, bounded dispatch
+rows, and bounded tool-reservation rows. It returns only the current registration ID,
+revision, state, and expiry; it never returns registration credentials, a raw prompt, or
+result text. A missing credit-guard snapshot is `Unknown`, not a zero balance or a pass.
+The Orchestrator checks the accepted selection, current child and decision, checkpoint,
+registration, and owner fence again before returning the no-store response.
+
+The API harness validates this response before using it. Its Environment reader takes
+`environmentId` from the real create response at
+`snapshot.fence.owner.environmentId`; it then reads the current lifecycle, provider
+attempts for the exact operation, and the bounded late-resource cleanup list. It compares
+the returned current fences with the lifecycle fence and re-reads lifecycle afterward.
+These reads show stored owner state only: they do not exercise a callback race, prove
+that a dispatch was denied, or prove that a resource was released.
+
+```mermaid
+sequenceDiagram
+    participant H as Authorized harness
+    participant G as Gateway
+    participant O as Orchestrator
+    participant E as Environment
+    H->>G: GET runtime-observation/v1 (project, run, session)
+    G->>O: Forward actor and exact owner route
+    O->>O: Recheck selection, child, decision, checkpoint, registration, fence
+    O-->>H: No-store identity, execution, credit, dispatch, and reservation sections
+    H->>E: GET current lifecycle using returned environment ID
+    H->>E: GET provider attempts for exact operation
+    H->>E: GET bounded late-resource cleanup list
+    H->>E: Re-read current lifecycle
+    H->>H: Keep stored reads separate from race and cleanup acceptance
+```
+
 The authenticated session-scoped runtime-registration `GET` resolves that current child context.
 It pages registration IDs for the exact project, run, and session, with a maximum of 64 candidates.
 Each candidate must match the current owner and Environment placement.

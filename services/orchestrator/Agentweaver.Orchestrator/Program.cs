@@ -252,6 +252,7 @@ app.MapSuspendResumeEndpoints();
 app.MapSourceControlEndpoints();
 if (runtimeRegistrationEnabled)
 {
+    app.MapRuntimeObservationV1Endpoint();
     app.MapRuntimeRegistrationEndpoints();
     app.MapReviewedRemoteToolResultEndpoints();
     app.MapRuntimeSuspendResumeEndpoints();

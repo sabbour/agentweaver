@@ -258,7 +258,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await VerifyCurrentRuntimeDeliveryAndNativeSessionAsync(
             registration, signingKey, runToken, routes, failures, projects, events.Schema, ownerSchema,
             revokeSourceBeforeSdk, sourceLoss, environment, copilotConnection,
-            connectionOwnerToken, setHistoricalReadAuthority, factory.Services, byokSecrets,
+            connectionOwnerToken, setHistoricalReadAuthority, factory.Services, client, byokSecrets,
             expectedAcceptedSkill, skillWriter);
         TraceNativeStage(failures, "Runtime exercise and explicit cleanup completed.");
     }
@@ -290,7 +290,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         ProjectsConfigResourceServer projects, string eventsSchema, string ownerSchema, bool revokeSourceBeforeSdk,
         string? sourceLoss, RuntimePlacementTestServer environment, ControlledCopilotConnection copilotConnection,
         string connectionOwnerToken, Func<bool, Task> setHistoricalReadAuthority,
-        IServiceProvider orchestratorServices, RecordingSecretRedemption? byokSecrets = null,
+        IServiceProvider orchestratorServices, HttpClient orchestratorClient,
+        RecordingSecretRedemption? byokSecrets = null,
         SkillRuntimeContentV1? expectedAcceptedSkill = null,
         ProjectsConfigResourceServer? skillWriter = null)
     {
@@ -779,7 +780,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                                 currentOwner.ReadCurrentAsync(registration.RuntimeInstanceId, actor, timeout.Token));
                         }, setHistoricalReadAuthority, sourceClient, orchestratorServices, ownerSchema,
-                        materialClient, objects, timeout.Token, sdk.Byok ? async recorded =>
+                        materialClient, orchestratorClient, objects, timeout.Token, sdk.Byok ? async recorded =>
                         {
                             Assert.True(await usage.MoveNextAsync());
                             var nativeReceipt = usage.Current;
@@ -834,13 +835,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         ProjectsConfigResourceServer projects, ConcurrentQueue<string> failures, ControlledCopilotRuntime sdk,
         Func<Task> endRuntimeAuthority, Func<bool, Task> setHistoricalReadAuthority,
         RuntimeUsageSourceHttpClient sourceClient, IServiceProvider orchestratorServices, string ownerSchema,
-        HttpClient client, RuntimeMaterialObjects objects,
+        HttpClient materialClient, HttpClient orchestratorClient, RuntimeMaterialObjects objects,
         CancellationToken cancellationToken,
         Func<RuntimeNativeTurnRecordedReceipt, Task<ImmutableArray<RuntimeUsageCostReceiptReference>>>?
             accountNativeUsage = null, HttpClient? ownerClient = null)
     {
         var sourceCredentialValue = session.Proof().Credential.GetValue();
-        var material = new RuntimeSessionMaterialHttpClient(client, client.BaseAddress!, actor);
+        var material = new RuntimeSessionMaterialHttpClient(
+            materialClient, materialClient.BaseAddress!, actor);
         var eventId = Guid.NewGuid();
         const string userContent = "Run the accepted bounded turn.";
         var receipt = await session.CommitTurnContentAsync(
@@ -861,9 +863,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var input = new SessionMaterialWriteRequest(1, Guid.NewGuid(), session.Registration.RuntimeInstanceId,
             session.Registration.Revision, session.Registration.Binding.ExecutionFence + 1,
             SessionMaterialKind.TurnContent, read.Bytes, "user", session.Facts.SdkVersion, session.Facts.ModelId);
-        using var staleFence = await SendJsonAsync(client, HttpMethod.Post, path, runToken, input);
+        using var staleFence = await SendJsonAsync(materialClient, HttpMethod.Post, path, runToken, input);
         await AssertStatusAsync(staleFence, HttpStatusCode.Forbidden);
-        using var observeOnly = await SendJsonAsync(client, HttpMethod.Post, path,
+        using var observeOnly = await SendJsonAsync(materialClient, HttpMethod.Post, path,
             session.Proof().Credential.GetValue(), input with
             {
                 ExecutionFence = session.Registration.Binding.ExecutionFence
@@ -975,6 +977,22 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(Assert.Single(references), Assert.Single(accounted.Snapshot.RepresentedReceipts));
         await nativeOwner.RequireNativeTurnAccountedAsync(context, session.Registration, message, answer,
             RequireCurrentOwner, cancellationToken);
+        Assert.Equal(
+            MafExecutionPlanner.CreateChildSessionId(rootIdentity, plan.Plan.Id, associationId),
+            binding.SessionId);
+        using (var runtimeObservation = await SendAsync(
+                   orchestratorClient,
+                   HttpMethod.Get,
+                   $"/api/projects/{binding.ProjectId}/runs/{binding.RunId}" +
+                   $"/coordination/sessions/{binding.SessionId}/runtime-observation/v1",
+                   runToken,
+                   [binding.TenantId]))
+        {
+            await AssertStatusAsync(runtimeObservation, HttpStatusCode.Conflict);
+            Assert.True(runtimeObservation.Headers.CacheControl?.NoStore);
+            Assert.Contains("runtime_owner_context_stale",
+                await runtimeObservation.Content.ReadAsStringAsync());
+        }
         Assert.Equal(sendCount + 1, sdk.Requests.Count(request => request.Method == "session.send"));
         Assert.Equal(4, objects.Writes);
         var recovery = await material.ReadRecoveryAsync(session.Registration, cancellationToken);
@@ -996,18 +1014,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             receipt.Identity, eventId, SessionMaterialKind.TurnContent, cancellationToken);
         Assert.Equal(receipt, historical.Material);
         Assert.Equal(read.Bytes, historical.Bytes);
-        using var camelCase = await SendAsync(client, HttpMethod.Get,
+        using var camelCase = await SendAsync(materialClient, HttpMethod.Get,
             $"{path}/{eventId:D}/turnContent", runToken, [session.Registration.Binding.TenantId]);
         await AssertStatusAsync(camelCase, HttpStatusCode.OK);
         foreach (var invalidKind in new[] { "unknown", "0", "1" })
         {
-            using var invalid = await SendAsync(client, HttpMethod.Get,
+            using var invalid = await SendAsync(materialClient, HttpMethod.Get,
                 $"{path}/{eventId:D}/{invalidKind}", runToken, [session.Registration.Binding.TenantId]);
             await AssertStatusAsync(invalid, HttpStatusCode.BadRequest);
         }
 
         var pinPath = $"/internal/projects/{receipt.Identity.ProjectId}/runs/{receipt.Identity.RunId}/sessions-provider-binding";
-        using var pinResponse = await SendAsync(client, HttpMethod.Get, pinPath,
+        using var pinResponse = await SendAsync(materialClient, HttpMethod.Get, pinPath,
             runToken, [session.Registration.Binding.TenantId]);
         await AssertStatusAsync(pinResponse, HttpStatusCode.OK);
         Assert.True(pinResponse.Headers.CacheControl?.NoStore);
@@ -1032,11 +1050,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 $"/api/projects/{receipt.Identity.ProjectId}?runId={receipt.Identity.RunId}",
                 runToken, [session.Registration.Binding.TenantId]);
             await AssertStatusAsync(summary, HttpStatusCode.OK);
-            using var deniedCache = await SendAsync(client, HttpMethod.Get,
+            using var deniedCache = await SendAsync(materialClient, HttpMethod.Get,
                 $"{path}/{recovery.Cache.Material.EventId:D}/sdkCache",
                 runToken, [session.Registration.Binding.TenantId]);
             await AssertStatusAsync(deniedCache, HttpStatusCode.Forbidden);
-            using var deniedPin = await SendAsync(client, HttpMethod.Get, pinPath,
+            using var deniedPin = await SendAsync(materialClient, HttpMethod.Get, pinPath,
                 runToken, [session.Registration.Binding.TenantId]);
             await AssertStatusAsync(deniedPin, HttpStatusCode.Forbidden);
         }

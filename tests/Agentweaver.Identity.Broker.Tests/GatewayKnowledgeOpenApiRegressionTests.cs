@@ -369,6 +369,116 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
     }
 
     [Fact]
+    public async Task RuntimeObservationV1IsExposedWithStrictSanitizedSchemas()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa),
+            () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException(
+                "The OpenAPI endpoint must not call an owner."));
+
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = document.RootElement;
+        var operation = root.GetProperty("paths").GetProperty(
+                "/api/v1/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-observation/v1")
+            .GetProperty("get");
+
+        Assert.Equal("readRuntimeObservationV1", operation.GetProperty("operationId").GetString());
+        Assert.Equal("Orchestrator", operation.GetProperty("x-agentweaver-owner").GetString());
+        Assert.Equal(
+            "#/components/schemas/RuntimeObservationV1",
+            operation.GetProperty("responses").GetProperty("200").GetProperty("content")
+                .GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString());
+        var cacheControl = operation.GetProperty("responses").GetProperty("200")
+            .GetProperty("headers").GetProperty("Cache-Control");
+        Assert.Equal("string", cacheControl.GetProperty("schema").GetProperty("type").GetString());
+        Assert.Equal("no-store", cacheControl.GetProperty("schema").GetProperty("example").GetString());
+        Assert.True(operation.GetProperty("responses").TryGetProperty("409", out _));
+        Assert.True(operation.GetProperty("responses").TryGetProperty("503", out _));
+
+        var schemas = root.GetProperty("components").GetProperty("schemas");
+        var observation = schemas.GetProperty("RuntimeObservationV1");
+        Assert.False(observation.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            new[] { "contractVersion", "registration", "execution", "creditGuard", "dispatches", "toolReservations" },
+            observation.GetProperty("required").EnumerateArray()
+                .Select(property => property.GetString()).ToArray());
+        var section = schemas.GetProperty("RuntimeObservationCreditGuardSection");
+        Assert.Equal(
+            new[] { "Available", "Unknown", "Unavailable" },
+            section.GetProperty("properties").GetProperty("state").GetProperty("enum")
+                .EnumerateArray().Select(value => value.GetString()).ToArray());
+        var dispatch = schemas.GetProperty("RuntimeObservationDispatch");
+        foreach (var forbiddenField in new[]
+        {
+            "promptHash", "requestHash", "sourceReportJson", "acceptedByokDescriptor",
+            "costBindingIdentity", "selectedModelId",
+        })
+            Assert.False(dispatch.GetProperty("properties").TryGetProperty(forbiddenField, out _));
+        var pendingDispatch = schemas.GetProperty("RuntimeObservationPendingDispatch");
+        Assert.Equal(new[] { "messageId" },
+            pendingDispatch.GetProperty("required").EnumerateArray()
+                .Select(property => property.GetString()).ToArray());
+        Assert.False(pendingDispatch.GetProperty("properties").TryGetProperty("promptSha256", out _));
+        Assert.Equal(100, schemas.GetProperty("RuntimeObservationDispatchCollection")
+            .GetProperty("properties").GetProperty("items").GetProperty("maxItems").GetInt32());
+    }
+
+    [Fact]
+    public async Task RuntimeObservationV1ForwardsTheAuthenticatedRunOwnerRead()
+    {
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        var now = DateTime.UtcNow;
+        var token = new System.IdentityModel.Tokens.Jwt.JwtSecurityToken(
+            new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
+            "https://api.test",
+            [new Claim("sub", "runtime-observation-test-actor"), new Claim("scope", "api.read")],
+            now.AddMinutes(-1),
+            now.AddMinutes(5),
+            new SigningCredentials(signingKey, SecurityAlgorithms.RsaSha256));
+        token.Header["typ"] = "at+jwt";
+        var bearer = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().WriteToken(token);
+        var forwarded = new List<(string Owner, string Method, string PathAndQuery, string? Authorization, string? Tenant)>();
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            signingKey,
+            () => new HttpClientHandler(),
+            (owner, request, _) =>
+            {
+                request.Headers.TryGetValues("X-Agentweaver-Tenant", out var tenants);
+                forwarded.Add((owner.ToString(), request.Method.Method, request.RequestUri!.PathAndQuery,
+                    request.Headers.Authorization?.ToString(), tenants?.SingleOrDefault()));
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"contractVersion\":1}", Encoding.UTF8, "application/json"),
+                });
+            });
+
+        using var ownerRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/v1/projects/project-1/runs/run-1/coordination/sessions/session-1/runtime-observation/v1");
+        ownerRequest.Headers.Authorization =
+            new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", bearer);
+        ownerRequest.Headers.TryAddWithoutValidation("X-Agentweaver-Tenant", "tenant-1");
+        using var response = await gateway.Client.SendAsync(ownerRequest);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        Assert.Equal("{\"contractVersion\":1}", await response.Content.ReadAsStringAsync());
+        var call = Assert.Single(forwarded);
+        Assert.Equal("Orchestrator", call.Owner);
+        Assert.Equal("GET", call.Method);
+        Assert.Equal(
+            "/api/projects/project-1/runs/run-1/coordination/sessions/session-1/runtime-observation/v1",
+            call.PathAndQuery);
+        Assert.Equal("Bearer " + bearer, call.Authorization);
+        Assert.Equal("tenant-1", call.Tenant);
+    }
+
+    [Fact]
     public async Task SkillsMarketplaceRoutesForwardExactOwnerPathsBodiesBearerAndTenant()
     {
         using var rsa = RSA.Create(2048);

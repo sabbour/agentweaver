@@ -81,6 +81,18 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
         Assert.DoesNotContain(
             tools.EnumerateArray(),
             tool => tool.GetProperty("name").GetString() == "agentweaver_streamRunEvents");
+        var runtimeObservationTool = Assert.Single(
+            tools.EnumerateArray(),
+            tool => tool.GetProperty("name").GetString() == "agentweaver_readRuntimeObservationV1");
+        var runtimeObservationRequired = runtimeObservationTool.GetProperty("inputSchema")
+            .GetProperty("required")
+            .EnumerateArray()
+            .Select(value => value.GetString())
+            .ToArray();
+        foreach (var requiredParameter in new[] { "projectId", "runId", "sessionId" })
+            Assert.Contains(requiredParameter, runtimeObservationRequired);
+        Assert.False(runtimeObservationTool.GetProperty("inputSchema")
+            .GetProperty("properties").TryGetProperty("body", out _));
 
         var inputSchema = knowledgeTool.GetProperty("inputSchema");
         var required = inputSchema.GetProperty("required")

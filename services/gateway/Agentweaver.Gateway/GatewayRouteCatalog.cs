@@ -235,6 +235,8 @@ public static class GatewayRouteCatalog
             "readSessionTree", "Read the session tree");
         Coordination("GET", "/sessions/{sessionId}/status",
             "readSessionStatus", "Read session status");
+        Coordination("GET", "/sessions/{sessionId}/runtime-observation/v1",
+            "readRuntimeObservationV1", "Read current runtime evidence");
         Coordination("POST", "/sessions/{sessionId}/turn-failure",
             "reportTurnFailure", "Report a turn failure", body: true);
         Coordination("POST", "/sessions/{sessionId}/decisions/gates/{requestId}/answer",

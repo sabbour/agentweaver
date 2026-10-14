@@ -53,6 +53,7 @@ export class AgentweaverClient {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       record.status = response.status;
+      record.cacheControl = response.headers.get('cache-control');
       record.traceId = redact(CORRELATION_HEADERS.map(name => response.headers.get(name)).find(Boolean) ?? null);
       const text = await response.text();
       let rawBody = text;

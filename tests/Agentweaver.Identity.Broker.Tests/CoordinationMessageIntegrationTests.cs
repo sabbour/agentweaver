@@ -3131,12 +3131,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                    runToken, new RegisterChildRequest("unconfirmed-child", "foreign-item")))
             await AssertStatusAsync(unconfirmedItem, HttpStatusCode.Conflict);
 
+        var childSessionId = MafExecutionPlanner.CreateChildSessionId(
+            new SessionIdentity(project.ProjectId, RunId, root.RootSessionId),
+            acceptedPlan.Id,
+            "implement-1");
         using var childResponse = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
             $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
             runToken,
-            new RegisterChildRequest("child", "implement-1"));
+            new RegisterChildRequest(childSessionId, "implement-1"));
         await AssertStatusAsync(childResponse, HttpStatusCode.Created);
         var child = await ReadJsonAsync<RegisteredChild>(childResponse);
 
@@ -3145,7 +3149,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             HttpMethod.Post,
             $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
             runToken,
-            new RegisterChildRequest("child", "implement-1"));
+            new RegisterChildRequest(childSessionId, "implement-1"));
         await AssertStatusAsync(childReplay, HttpStatusCode.Created);
         Assert.Equal(child, await ReadJsonAsync<RegisteredChild>(childReplay));
 
@@ -3207,7 +3211,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var childBindingResponse = await SendAsync(
             orchestrator,
             HttpMethod.Get,
-            $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child/owner-binding",
+            $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{Uri.EscapeDataString(childSessionId)}/owner-binding",
             runToken,
             [TenantId]);
         await AssertStatusAsync(childBindingResponse, HttpStatusCode.OK);
@@ -3218,14 +3222,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var boundaryResponse = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child/turn-boundary",
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{Uri.EscapeDataString(childSessionId)}/turn-boundary",
             runToken,
             new TurnBoundaryRequest(child.ExecutionFence, childBinding.StateVersion));
         await AssertStatusAsync(boundaryResponse, HttpStatusCode.OK);
         var boundary = await ReadJsonAsync<TurnBoundaryResult>(boundaryResponse);
         var presented = Assert.IsType<AddressedMessageEnvelope>(boundary.PresentedMessage);
         Assert.NotEqual(Guid.Empty, sentQuestion.OwnerMessageId);
-        Assert.Equal("child", presented.Recipient.SessionId);
+        Assert.Equal(childSessionId, presented.Recipient.SessionId);
         Assert.Equal(AddressedMessageStatus.Delivered, presented.Status);
         Assert.Equal("active", boundary.ExecutionState);
 
@@ -3235,7 +3239,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var currentDecisionForRuntimeOwner =
             await ReadJsonAsync<CoordinatorDecisionStateView>(currentDecisionForRuntimeOwnerResponse);
         var runtimeOwnerPath =
-            $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child/runtime-owner-context";
+            $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{Uri.EscapeDataString(childSessionId)}/runtime-owner-context";
         using (var runtimeOwnerResponse = await SendAsync(
                    orchestrator, HttpMethod.Get, runtimeOwnerPath, runToken, [TenantId]))
         {
@@ -3247,7 +3251,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(TenantId, runtimeOwner.TenantId);
             Assert.Equal(project.ProjectId, runtimeOwner.ProjectId);
             Assert.Equal(RunId, runtimeOwner.RunId);
-            Assert.Equal("child", runtimeOwner.SessionId);
+            Assert.Equal(childSessionId, runtimeOwner.SessionId);
             Assert.Equal("test-agent", runtimeOwner.AgentId);
             Assert.Equal("platform-model", runtimeOwner.ModelSelectionReference);
             Assert.Equal(azureByok ? new SecretRef("model-api", "model-v1") : null,
@@ -3270,7 +3274,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 Contract = "agentweaver.runtime-turn.v1",
                 ProjectId = project.ProjectId,
                 RunId,
-                SessionId = "child",
+                SessionId = childSessionId,
                 ExecutionFence = child.ExecutionFence,
                 LogicalTurnOrdinal = boundary.LogicalTurnOrdinal
             });
@@ -3818,7 +3822,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var boundaryRetryResponse = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child/turn-boundary",
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{Uri.EscapeDataString(childSessionId)}/turn-boundary",
             runToken,
             new TurnBoundaryRequest(child.ExecutionFence, childBinding.StateVersion));
         await AssertStatusAsync(boundaryRetryResponse, HttpStatusCode.OK);
@@ -3829,7 +3833,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var acknowledgmentResponse = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child/messages/{presented.MessageId:D}/acknowledge",
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{Uri.EscapeDataString(childSessionId)}/messages/{presented.MessageId:D}/acknowledge",
             runToken,
             new AddressedMessageClaimFenceRequest(presented.ClaimFence));
         await AssertStatusAsync(acknowledgmentResponse, HttpStatusCode.OK);
@@ -3882,7 +3886,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var sendReply = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child/messages",
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{Uri.EscapeDataString(childSessionId)}/messages",
             runToken,
             new CoordinationMessageRequest(
                 "root",
@@ -3920,7 +3924,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var replyPresented = Assert.IsType<AddressedMessageEnvelope>(rootBoundary.PresentedMessage);
         Assert.Equal(AddressedMessageStatus.Delivered, replyPresented.Status);
         var notification = Assert.Single(rootBoundary.ParentNotifications);
-        Assert.Equal("child", notification.ChildSessionId);
+        Assert.Equal(childSessionId, notification.ChildSessionId);
         Assert.Equal(AddressedMessagePurpose.NeedsInput, notification.Purpose);
         Assert.True(notification.WakesParent);
 
@@ -3950,7 +3954,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var replyJournalResponse = await SendAsync(
             events,
             HttpMethod.Get,
-            "/internal/sessions/child/events",
+            $"/internal/sessions/{Uri.EscapeDataString(childSessionId)}/events",
             runToken,
             [TenantId]);
         await AssertStatusAsync(replyJournalResponse, HttpStatusCode.OK);

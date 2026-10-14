@@ -499,6 +499,19 @@ MCP, or UI gate/message method, retaining cleanup outcomes, and refusing
 unverified caller ownership claims. They do not prove live owner behavior,
 native model execution, or deployment.
 
+The API adapter also tests the read-only `readRuntimeObservationV1` Gateway
+operation and the Environment lifecycle, provider-attempt, and late-resource
+cleanup reads. It requires no-store responses, checks the current run and
+Environment fences, and treats an unknown credit guard as unknown. The
+dispatch/recovery report can include these reads when given an already
+authorized client and a real Environment creation receipt. It stays blocked:
+stored rows do not prove an actual dispatch boundary, a late provider callback,
+or verified release. The focused local check is:
+
+```powershell
+node --test scripts/api-harness/test/runtime-observation.test.mjs scripts/azure/p1-dispatch-recovery-probes/tests/run.test.mjs
+```
+
 The P1 adapters contain five bounded journeys:
 `gate-answer`, `gate-approve`, `gate-reject`, `message`, and `journal`.
 The shared CLI verifies source and deployment evidence before reading

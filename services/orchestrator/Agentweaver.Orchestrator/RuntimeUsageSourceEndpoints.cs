@@ -8,6 +8,7 @@ public static class RuntimeUsageSourceEndpoints
     public static bool AddRuntimeUsageSource(
         this IServiceCollection services, IConfiguration configuration)
     {
+        services.AddSingleton<RuntimeUsageSourceStore>();
         var address = configuration["Orchestrator:RuntimeUsage:BrokerOwnerAddress"];
         if (address is null)
             return false;
@@ -15,7 +16,6 @@ public static class RuntimeUsageSourceEndpoints
             !Uri.TryCreate(address, UriKind.Absolute, out var uri))
             throw new InvalidOperationException("Native usage requires the current runtime registration and HTTPS Broker owners.");
         services.AddSingleton(new RuntimeUsageSourceOptions(RuntimeOwnerHttpTransport.RequireOwnerAddress(uri)));
-        services.AddSingleton<RuntimeUsageSourceStore>();
         services.AddScoped<RuntimeUsageSourceOwner>();
         services.AddHttpClient<RuntimeUsageBrokerClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
             .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
