@@ -265,6 +265,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             throw new ArgumentException(
                 "Hosted Copilot run admission requires a hosted model and an explicit hard credit limit.",
                 nameof(enableHostedCopilotRunAdmission));
+        var sourceControlPolicyOptions = reserveObservedToolInvocation
+            ? SourceControlMergeToolReadPolicyOptions()
+            : SourceControlMergePolicyOptions();
         var sourceControlSecretBackend = new RecordingSecretRedemption();
         await RestartBrokerForSourceControlAsync(sourceControlSecretBackend);
         using var signingCertificate = X509CertificateLoader.LoadPkcs12FromFile(
@@ -276,13 +279,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await using var projects = await ProjectsConfigResourceServer.StartAsync(
             _connectionString,
             signingKey,
-            providerCatalog: CreateSourceControlProviderCatalog(),
+            providerCatalog: CreateSourceControlProviderCatalog(sourceControlPolicyOptions),
             skillContentObjects: skillContentObjects);
         await using var skillWriter = acceptedSkillJourney
             ? await ProjectsConfigResourceServer.StartAsync(
                 _connectionString,
                 signingKey,
-                providerCatalog: CreateSourceControlProviderCatalog(),
+                providerCatalog: CreateSourceControlProviderCatalog(sourceControlPolicyOptions),
                 skillContentObjects: skillContentObjects,
                 usePublicWriterFixture: true)
             : null;
@@ -507,6 +510,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var acceptedSelectionSnapshot = JsonSerializer.Deserialize<ProjectRunSelectionResponse>(
             acceptedProjectsSelection, CoordinationJsonOptions);
         Assert.NotNull(acceptedSelectionSnapshot);
+        var acceptedPolicyCandidate = Assert.Single(
+            Assert.Single(
+                acceptedSelectionSnapshot.Providers,
+                provider => provider.Seam == ProviderSeam.Policy).Candidates);
+        Assert.Equal(AgtPolicyProvider.AdapterVersion.ToString(), acceptedPolicyCandidate.AdapterVersion);
+        Assert.Equal(sourceControlPolicyOptions.OptionsSchemaVersion, acceptedPolicyCandidate.OptionsSchemaVersion);
+        Assert.Equal(sourceControlPolicyOptions.OptionsRevision, acceptedPolicyCandidate.OptionsRevision);
+        Assert.True(PolicyProviderCapabilities.All
+            .ToHashSet(StringComparer.Ordinal)
+            .SetEquals(acceptedPolicyCandidate.AdvertisedCapabilities));
         var acceptedNetworkCandidate = Assert.Single(
             Assert.Single(acceptedSelectionSnapshot.Providers,
                 provider => provider.Seam == ProviderSeam.NetworkPolicy).Candidates,
@@ -664,7 +677,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var gitWorkspaceManager = new GitWorkspaceManager(
             Path.Combine(workspaceFiles.Path, "owned-workspaces"),
             new LocalGitRepositoryRemote(new Uri(checkoutRepositoryPath)));
-        var sourceControlPolicyOptions = SourceControlMergePolicyOptions();
         await using var orchestratorFactory = new OrchestratorIntegrationFactory(
             _connectionString,
             ownerSchema,
@@ -6581,6 +6593,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.ProjectsRunSelectionClient>()
                     .ConfigurePrimaryHttpMessageHandler(projectsHandler);
                 services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.EventsAddressedMessageClient>()
+                    .ConfigurePrimaryHttpMessageHandler(eventsHandler);
+                services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.RuntimeRunAdmissionClient>()
                     .ConfigurePrimaryHttpMessageHandler(eventsHandler);
                 if (brokerHandler is not null)
                     services.AddHttpClient<
