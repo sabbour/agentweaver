@@ -51,13 +51,19 @@ It resolves an exact accepted reference to an enabled concrete model and source 
 Its pin includes the configuration revision and canonical map hash.
 An optional positive `PromptCapacityTokens` is part of that canonical map.
 Omitted capacity preserves the historical null hash.
-Hosted prompt limits also require actual native catalog capacity.
+Hosted prompt limits require the concrete native catalog capacity; an optional lower server limit can narrow it.
 BYOK prompt limits require the concrete server-owned capacity and explicit SDK provider configuration.
-AgentHost narrows the accepted limit to those capacities and pins the effective value for resume.
-These are per-prompt/context capacities, not cumulative token budgets or internal model-call counters.
+AgentHost uses the narrowest accepted and available capacity, then pins the effective value for resume.
+The pinned native SDK uses this setting as a prompt-compaction threshold. It compacts removable
+conversation history; an irreducible latest turn can still be sent to the provider during that
+compaction attempt and then end with the SDK's capacity-attributed `query` error. This is not a
+hard admission check for every internal provider request or a guarantee that no request occurs.
+The runtime does not silently truncate input. These are not cumulative token budgets or internal
+model-call counters.
 For configured hosted credit limits, Events prices that concrete model before root
 acceptance or backlog claim, without creating SDK or usage facts.
 The Host later checks the accepted pin before SDK startup and verifies actual native model policy.
+The model ID must match the accepted model. Any provider ID returned by the SDK or context metadata must match the accepted BYOK provider; when the SDK omits provider attribution, it remains unknown rather than being treated as a mismatch.
 BYOK token pricing cannot substitute for hosted Copilot credit admission.
 
 Explicit-event forks require the pinned provider's `sessions.events.fork` capability

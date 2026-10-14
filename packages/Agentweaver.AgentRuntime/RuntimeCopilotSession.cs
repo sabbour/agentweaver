@@ -7,11 +7,173 @@ using GitHub.Copilot;
 
 namespace Agentweaver.AgentRuntime;
 
+internal sealed record RuntimeNativePromptCompactionStart(
+    long? CurrentTokens,
+    long? ConversationTokens,
+    long? SystemTokens,
+    long? ToolDefinitionsTokens,
+    long? TokenLimit,
+    string? Model,
+    string? Trigger);
+
+internal sealed record RuntimeNativePromptCompactionComplete(
+    bool Success,
+    string? Error,
+    long? PreCompactionTokens,
+    long? PostCompactionTokens,
+    long? SystemTokens,
+    long? ToolDefinitionsTokens,
+    long? TokenLimit,
+    string? Trigger);
+
+internal sealed record RuntimeNativePromptCompactionObservation(
+    long Generation,
+    RuntimeNativePromptCompactionStart? Start,
+    RuntimeNativePromptCompactionComplete Complete);
+
+internal sealed record RuntimeNativeSessionErrorObservation(
+    long Generation, string? ErrorType, string? ErrorCode, string Cause);
+
+internal sealed class RuntimeNativePromptCapacityObserver
+{
+    private readonly object _gate = new();
+    private RuntimeNativePromptCompactionStart? _pendingStart;
+    private RuntimeNativePromptCompactionObservation? _latest;
+    private RuntimeNativeSessionErrorObservation? _latestError;
+    private TaskCompletionSource _changed = CreateSignal();
+    private long _generation;
+    private long _errorGeneration;
+    private bool _unpairedStart;
+
+    public RuntimeNativePromptCompactionObservation? Latest
+    {
+        get
+        {
+            lock (_gate)
+                return _latest;
+        }
+    }
+
+    public RuntimeNativeSessionErrorObservation? LatestError
+    {
+        get
+        {
+            lock (_gate)
+                return _latestError;
+        }
+    }
+
+    public void Observe(SessionEvent sessionEvent)
+    {
+        TaskCompletionSource? changed = null;
+        lock (_gate)
+        {
+            if (sessionEvent is SessionCompactionStartEvent start)
+            {
+                _unpairedStart |= _pendingStart is not null;
+                _pendingStart = new(
+                    start.Data.CurrentTokens,
+                    start.Data.ConversationTokens,
+                    start.Data.SystemTokens,
+                    start.Data.ToolDefinitionsTokens,
+                    start.Data.TokenLimit,
+                    start.Data.Model,
+                    start.Data.Trigger?.ToString());
+            }
+            else if (sessionEvent is SessionCompactionCompleteEvent complete)
+            {
+                _latest = new(++_generation,
+                    _unpairedStart ? null : _pendingStart,
+                    new(
+                        complete.Data.Success,
+                        complete.Data.Error,
+                        complete.Data.PreCompactionTokens,
+                        complete.Data.PostCompactionTokens,
+                        complete.Data.SystemTokens,
+                        complete.Data.ToolDefinitionsTokens,
+                        complete.Data.TokenLimit,
+                        complete.Data.Trigger?.ToString()));
+                _pendingStart = null;
+                _unpairedStart = false;
+                changed = _changed;
+                _changed = CreateSignal();
+            }
+            else if (sessionEvent is SessionErrorEvent error)
+            {
+                _latestError = new(++_errorGeneration,
+                    SafeDiagnosticIdentifier(error.Data.ErrorType),
+                    SafeDiagnosticIdentifier(error.Data.ErrorCode),
+                    ClassifyErrorCause(error.Data.ErrorType, error.Data.ErrorCode, error.Data.Message));
+            }
+        }
+
+        changed?.TrySetResult();
+    }
+
+    private static string? SafeDiagnosticIdentifier(string? value) =>
+        string.IsNullOrEmpty(value) ? null :
+        value.Length <= 64 && value.All(character =>
+            char.IsAsciiLetterOrDigit(character) || character is '_' or '-' or '.')
+                ? value
+                : "redacted";
+
+    private static string ClassifyErrorCause(string? errorType, string? errorCode, string? message)
+    {
+        if (string.Equals(errorType, "context_limit", StringComparison.OrdinalIgnoreCase))
+            return "context-limit";
+        if (HasPromptCapacitySignal(errorCode))
+            return "provider-code-prompt-capacity";
+        if (HasPromptCapacitySignal(message))
+            return "error-message-prompt-capacity";
+        return "unclassified";
+    }
+
+    private static bool HasPromptCapacitySignal(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        var sample = value.Length > 1024 ? value[..1024] : value;
+        var normalized = sample.Replace('_', ' ').Replace('-', ' ');
+        var hasLimit = normalized.Contains("limit", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("exceed", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("maximum", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("too large", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("overflow", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("length", StringComparison.OrdinalIgnoreCase);
+        var hasCapacity = normalized.Contains("context", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("window", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("prompt", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("token", StringComparison.OrdinalIgnoreCase);
+        return hasLimit && hasCapacity;
+    }
+
+    public async Task<RuntimeNativePromptCompactionObservation> WaitForNextAsync(
+        long afterGeneration, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            Task wait;
+            lock (_gate)
+            {
+                if (_latest is { } latest && latest.Generation > afterGeneration)
+                    return latest;
+                wait = _changed.Task;
+            }
+
+            await wait.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static TaskCompletionSource CreateSignal() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+}
+
 public sealed class RuntimeCopilotSession : IAsyncDisposable
 {
     private readonly CopilotClient _client;
     private readonly CopilotSession _session;
     private readonly Channel<RuntimeCopilotUsageItem> _usage;
+    private readonly RuntimeNativePromptCapacityObserver _promptCapacityObserver;
     private readonly RuntimeCopilotTurnObserver _turns;
     private readonly RuntimeNativeSessionFiles _nativeFiles;
     private readonly SemaphoreSlim _turnGate = new(1, 1);
@@ -27,6 +189,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         CopilotSession session,
         SdkSessionFacts facts,
         Channel<RuntimeCopilotUsageItem> usage,
+        RuntimeNativePromptCapacityObserver promptCapacityObserver,
         RuntimeCopilotTurnObserver turns,
         RuntimeNativeSessionFiles nativeFiles,
         RuntimeSessionRecoveryMode recoveryMode,
@@ -40,6 +203,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         _session = session;
         Facts = facts;
         _usage = usage;
+        _promptCapacityObserver = promptCapacityObserver;
         _turns = turns;
         _nativeFiles = nativeFiles;
         RecoveryMode = recoveryMode;
@@ -57,6 +221,81 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
     public RuntimeResumeJournalRebuildReceipt? JournalRebuildReceipt { get; }
     internal SessionMaterialAcknowledgment? ConsumedNativeCacheAcknowledgment { get; }
     internal RuntimeSessionJournalEvidence? JournalEvidence { get; }
+
+    internal async Task<GitHub.Copilot.Rpc.MetadataContextInfoResultContextInfo?> ReadPromptContextInfoAsync(
+        CancellationToken cancellationToken)
+    {
+        await _turnGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            RequireUsable();
+#pragma warning disable GHCP001 // Context evidence is pinned to SDK 1.0.18.
+            var model = await _session.Rpc.Model.GetCurrentAsync(cancellationToken).ConfigureAwait(false);
+            var expectedProviderId = Facts.ByokProvider?.Type;
+            if (model.ModelId != Facts.ModelId ||
+                HasProviderIdentityMismatch(expectedProviderId, model.ProviderId))
+                throw CreateEffectiveModelMismatch(model.ModelId, model.ProviderId);
+
+            string? providerId = expectedProviderId is not null && string.IsNullOrEmpty(model.ProviderId)
+                ? null
+                : model.ProviderId;
+            var result = await _session.Rpc.Metadata.ContextInfoAsync(
+                0, 0, model.ModelId, providerId, cancellationToken).ConfigureAwait(false);
+            var context = result?.ContextInfo;
+            var contextProviderId = context?.Provider?.Id;
+            if (HasProviderIdentityMismatch(expectedProviderId, contextProviderId))
+                throw CreateEffectiveModelMismatch(
+                    model.ModelId, model.ProviderId, contextProviderId);
+
+#pragma warning restore GHCP001
+            return context;
+        }
+        finally
+        {
+            _turnGate.Release();
+        }
+    }
+
+#pragma warning disable GHCP001 // Context evidence is pinned to SDK 1.0.18.
+    internal async Task<IReadOnlyList<GitHub.Copilot.Rpc.ContextHeaviestMessage>>
+        ReadContextHeaviestMessagesAsync(CancellationToken cancellationToken)
+    {
+        await _turnGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            RequireUsable();
+            var model = await _session.Rpc.Model.GetCurrentAsync(cancellationToken).ConfigureAwait(false);
+            var expectedProviderId = Facts.ByokProvider?.Type;
+            if (model.ModelId != Facts.ModelId ||
+                HasProviderIdentityMismatch(expectedProviderId, model.ProviderId))
+                throw CreateEffectiveModelMismatch(model.ModelId, model.ProviderId);
+
+            var result = await _session.Rpc.Metadata.GetContextHeaviestMessagesAsync(
+                100, cancellationToken).ConfigureAwait(false);
+            return result.Messages?.ToArray()
+                ?? throw new RuntimeAuthorizationException("runtime_context_messages_unavailable");
+        }
+        finally
+        {
+            _turnGate.Release();
+        }
+    }
+#pragma warning restore GHCP001
+
+    internal static bool HasProviderIdentityMismatch(string? expectedProviderId, string? actualProviderId) =>
+        expectedProviderId is not null &&
+        !string.IsNullOrEmpty(actualProviderId) &&
+        actualProviderId != expectedProviderId;
+
+    internal RuntimeNativePromptCompactionObservation? LatestPromptCapacityCompaction =>
+        _promptCapacityObserver.Latest;
+
+    internal RuntimeNativeSessionErrorObservation? LatestNativeSessionError =>
+        _promptCapacityObserver.LatestError;
+
+    internal Task<RuntimeNativePromptCompactionObservation> WaitForPromptCapacityCompactionAsync(
+        long afterGeneration, CancellationToken cancellationToken) =>
+        _promptCapacityObserver.WaitForNextAsync(afterGeneration, cancellationToken);
 
     internal async Task<byte[]> CaptureNativeCacheAsync(CancellationToken cancellationToken)
     {
@@ -86,6 +325,43 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         {
             _turnGate.Release();
         }
+    }
+
+    private RuntimeAuthorizationException CreateEffectiveModelMismatch(
+        string? actualModelId, string? actualProviderId, string? contextProviderId = null)
+    {
+        var expectedProvider = Facts.ByokProvider is { } provider
+            ? SafeSdkIdentity(provider.Type)
+            : "<not-applicable>";
+        var contextProvider = contextProviderId is null
+            ? "<not-checked>"
+            : SafeSdkIdentity(contextProviderId);
+        return new RuntimeAuthorizationException(
+            "runtime_sdk_effective_model_mismatch",
+            $"expected_model={SafeSdkIdentity(Facts.ModelId)}; " +
+            $"actual_model={SafeSdkIdentity(actualModelId)}; " +
+            $"expected_provider={expectedProvider}; " +
+            $"actual_provider={SafeSdkIdentity(actualProviderId)}; " +
+            $"context_provider={contextProvider}");
+    }
+
+    private static string SafeSdkIdentity(string? identity)
+    {
+        if (string.IsNullOrEmpty(identity))
+            return "<empty>";
+
+        const int maximumLength = 64;
+        var length = Math.Min(identity.Length, maximumLength);
+        var characters = new char[length];
+        for (var index = 0; index < length; index++)
+        {
+            var character = identity[index];
+            characters[index] = char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-'
+                ? character
+                : '_';
+        }
+
+        return new string(characters) + (identity.Length > length ? "..." : string.Empty);
     }
 
     internal async Task<RuntimeNativeEmptyRangeEvidence> RequireNoNativeEventsSinceAsync(

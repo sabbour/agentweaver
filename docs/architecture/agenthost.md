@@ -1,7 +1,7 @@
 # AgentHost source candidate
 
 The unpublished AgentHost executable runs the sole model harness inside the selected Sandbox.
-It uses `GitHub.Copilot.SDK` 1.0.18 and the compatible native runtime 1.0.79.
+It uses `GitHub.Copilot.SDK` 1.0.18 and the compatible native runtime 1.0.97.
 Microsoft Agent Framework remains an Orchestrator dependency, not an AgentHost runtime.
 This source does not provide an automatic scheduler, deployment, live OAuth acceptance, or paid model evidence.
 
@@ -37,9 +37,12 @@ Accepted numeric and credit limits propagate without changing legacy null config
 Workflow-bound `MaxModelTurns`, `MaxToolCalls`, and positive Hosted Copilot hard
 credit limits use owner-controlled admission. The Orchestrator preserves an
 accepted `MaxPromptTokens` value in `RuntimeOwnerContext` and the runtime
-binding, then fails activation before SDK setup because it cannot prove every
-model and compaction request stays within the configured token limit.
-These boundaries do not count the SDK's internal model API calls.
+binding. AgentHost resolves the effective per-prompt/context capacity against
+the concrete model and any narrower server limit, then passes it to the native
+SDK. The SDK compacts removable conversation history and fails the turn if
+system context, tool definitions, and the latest input still cannot fit; it
+does not silently truncate input. This is not a cumulative token budget or a
+count of the SDK's internal model API calls.
 For a zero Hosted Copilot hard limit, startup remains allowed, but the host
 denies model-turn dispatch and never calls the SDK's native Send. Before it
 returns the budget error, it reads the native event log and requires a complete
@@ -54,9 +57,12 @@ registration. Orchestrator checks the accepted run selection and current read
 permission; Projects returns only imported revisions assigned to the active agent.
 AgentHost checks the registration binding and content digests, exposes those
 instructions through the SDK skill provider, and places the exact resource bytes
-in the native session filesystem. It repeats the content read during current
-authority checks. Missing, changed, revoked, unassigned, or legacy unpinned content
-denies session creation or continued use.
+in the native session filesystem. The configured working directory maps only to
+the virtual `/workspace` root; it is not read from the host filesystem. AgentHost
+initializes that root for fresh and restored sessions while other missing virtual
+paths remain absent. It repeats the content read during current authority checks.
+Missing, changed, revoked, unassigned, or legacy unpinned content denies session
+creation or continued use.
 
 ```mermaid
 sequenceDiagram
@@ -95,7 +101,7 @@ sequenceDiagram
     participant O as Orchestrator
     participant I as Identity
     participant E as Environment
-    Note over H: Permit workflow-bound MaxModelTurns and MaxToolCalls; preserve MaxPromptTokens and fail activation before SDK setup
+    Note over H: Permit workflow-bound MaxModelTurns and MaxToolCalls; configure the native SDK MaxPromptTokens compaction threshold
     C->>H: GET /runtime/v1/readiness with Broker bearer
     H->>O: Revalidate current registration
     O-->>H: Current registration or denial
@@ -145,9 +151,12 @@ through `RuntimeOwnerContext` into the registered `RuntimeBinding`. `maxModelTur
 supported only for workflow-bound registrations. Native sends require the prepared-dispatch, action-grant, and
 native-begin admission path before SDK send. Each native tool invocation reserves one owner-side slot before
 approval; exact retries reuse the reservation and attempts beyond the run limit are denied. An unbound
-`maxModelTurns` or `maxToolCalls`, and any configured `maxPromptTokens`, fail activation with
-`runtime_numeric_limits_unsupported`, before SDK session creation, readiness, or model/tool invocation. Absent
-values preserve the legacy path. The RuntimeAction owner also rejects unsupported numeric bindings before issuing
+`maxModelTurns` or `maxToolCalls` fails activation with `runtime_numeric_limits_unsupported`,
+before SDK session creation, readiness, or model/tool invocation. A configured `maxPromptTokens` is supported
+when its concrete capacity can be resolved; otherwise activation fails with
+`runtime_model_prompt_capacity_unavailable`. The resolved value is passed to the
+native SDK as its prompt-compaction threshold.
+Absent values preserve the legacy path. The RuntimeAction owner also rejects unsupported numeric bindings before issuing
 an action grant. Positive workflow-bound Hosted Copilot hard limits use the same prepared
 dispatch and begin checks against observed whole-run priced usage. The source
 path can record durable hard-limit denial and bounded no-send receipts, but it
@@ -227,10 +236,16 @@ limit is denied. Unbound registrations with this limit fail before SDK setup.
 
 When configured, `MaxPromptTokens` is preserved in `RuntimeOwnerContext` and the
 runtime binding; it is not silently discarded or reclassified as a Knowledge
-retrieval budget. Activation still fails with `runtime_numeric_limits_unsupported`
-before SDK setup. The SDK setting compacts context before sending, but does not
-establish an owner-side N/N+1 no-send boundary for hosted and BYOK requests,
-including compaction. Issue [#1855](https://github.com/sabbour/agentweaver/issues/1855)
+retrieval budget. The effective value is the narrowest of the accepted limit, the
+actual hosted model capacity, and any lower server limit; BYOK uses its
+server-owned capacity. The pinned native SDK uses this value as a prompt-compaction
+threshold and compacts removable conversation history. For an irreducible latest
+turn, the SDK may send a provider request during compaction and then report a
+capacity-attributed `query` error. This is not a hard admission check for every
+internal provider request or a no-send guarantee, and input is not silently
+truncated. This is not an owner-side raw-request token counter or a cumulative
+token budget. Native and hosted deployment evidence is still
+required; issue [#1855](https://github.com/sabbour/agentweaver/issues/1855)
 remains open.
 
 Each built-in tool approval checks current owner authority and Policy again.
@@ -386,7 +401,7 @@ The retained SDK source supplies the actual meter mode, including for an empty r
 An absent or unproven manifest returns `404` with `Cache-Control: no-store`.
 The host exposes no caller-facing manifest writer.
 The current native observation path writes only `partial` reports, so it cannot supply this proof.
-SDK 1.0.18 and runtime 1.0.79 expose no supported accounting-source finality guarantee.
+SDK 1.0.18 and runtime 1.0.97 expose no supported accounting-source finality guarantee.
 Their output completion receipt, usage status, idle event, and watermarks do not prove
 that every accounting source is final or that no late usage remains.
 That missing guarantee does not block ordinary answer acknowledgment.
@@ -470,10 +485,14 @@ The Dockerfile pins the build and runtime base digests and verifies the native a
 The final image runs as UID/GID `1654:1654` on `linux/amd64`.
 It uses explicit HTTPS certificate configuration and a read-only root filesystem.
 Private state and temporary files are separate from the attached workspace.
-The pinned CLI loads its complete distribution from the image-owned `/app/native` directory.
-The host sets `COPILOT_CLI_DIST_DIR` to the verified executable's directory, never a caller-selected path.
-Startup rejects a missing distribution index, application module, or native runtime addon.
-The CLI does not extract executable packages into private session state.
+The image verifies the pinned CLI executable, then runs its non-authenticated
+`--version` command during the build to materialize the matching distribution under
+image-owned `/app/native`. It includes the launcher, application modules, and native
+addon; it does not extract executable packages into private session state at runtime.
+The host starts that image-owned executable through the SDK's stdio connection and
+sets `COPILOT_CLI_DIST_DIR` to `/app/native`, never a caller-selected path.
+Startup checks the Linux x86-64 ELF header, executable checksum, required distribution
+files, SDK/runtime versions, and pinned archive digest.
 Private state and temporary mounts need no executable permission.
 Opaque SDK session caches remain private and use the existing authenticated recovery path.
 No registry credential or runtime model credential enters the image.
@@ -505,7 +524,7 @@ It is not an uncompressed filesystem estimate or a hard image-size ceiling.
 
 CI then compares the loaded image config digest with the receipt.
 It runs `--verify-native-runtime` without network access, writes, credentials, or a model turn.
-The native SDK status must report runtime 1.0.79, protocol 3, and the image-owned distribution path.
+The native SDK status must report runtime 1.0.97, protocol 3, and the image-owned distribution path.
 Both image checks use explicit `noexec,nosuid,nodev` state and temporary mounts.
 They reject any extracted native package cache in private state.
 CI separately runs the same image as UID/GID 1000 with an owner-writable `0755` workspace and private `0700` mounts.

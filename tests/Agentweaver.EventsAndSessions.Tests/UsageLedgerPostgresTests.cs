@@ -670,7 +670,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     [InlineData(true)]
     public async Task HostedPricedUsageIsFullyPricedWithMissingOrPartialOptionalAccounting(bool hasMetadata)
     {
-        var source = new SdkSessionFacts(Guid.NewGuid(), "native-session", "1.0.18", "1.0.79",
+        var source = new SdkSessionFacts(Guid.NewGuid(), "native-session", "1.0.18", "1.0.97",
             "model/ref", "model-1", new string('a', 64), 1m, "hosted-copilot",
             SdkMeterSources.CopilotNanoAiu, new string('b', 64), 1);
         var card = UsageContractTests.Card() with { MeterSource = source.MeterSource };

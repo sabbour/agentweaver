@@ -693,7 +693,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             1, _actor.Issuer, RuntimeCredentialPurpose.Observe, binding.ObservationEndpoint,
             RuntimeCredentialState.Active, new string('a', 64), registration.ExpiresAt, DateTimeOffset.UtcNow);
         var source = new SdkSessionFacts(registration.RuntimeInstanceId,
-            RuntimeContractValidation.NativeSessionId(binding), "1.0.18", "1.0.79", "model:selected",
+            RuntimeContractValidation.NativeSessionId(binding), "1.0.18", "1.0.97", "model:selected",
             "controlled-model", new string('c', 64), 1, "hosted-copilot", SdkMeterSources.CopilotNanoAiu,
             binding.AcceptedSelectionHash, registration.Revision);
         await RegisterCurrentSourceAsync(index, registration, grant, source);
@@ -713,7 +713,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             1, _actor.Issuer, RuntimeCredentialPurpose.Observe, binding.ObservationEndpoint,
             RuntimeCredentialState.Active, new string('a', 64), registration.ExpiresAt, DateTimeOffset.UtcNow);
         var source = new SdkSessionFacts(registration.RuntimeInstanceId,
-            RuntimeContractValidation.NativeSessionId(binding), "1.0.18", "1.0.79", "model:selected",
+            RuntimeContractValidation.NativeSessionId(binding), "1.0.18", "1.0.97", "model:selected",
             "controlled-model", new string('c', 64), 1, "hosted-copilot", SdkMeterSources.CopilotNanoAiu,
             binding.AcceptedSelectionHash, registration.Revision);
         await RegisterCurrentSourceAsync(index, registration, grant, source);

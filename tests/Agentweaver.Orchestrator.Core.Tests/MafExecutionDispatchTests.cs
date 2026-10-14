@@ -803,7 +803,7 @@ public sealed class MafExecutionDispatchTests
                     .Add(intent.AssociationId, intent)
             });
         var source = new SdkSessionFacts(registration.RuntimeInstanceId, RuntimeContractValidation.NativeSessionId(binding),
-            "1.0.18", "1.0.79", binding.ModelSelectionReference!, "controlled-model", new string('c', 64), 1,
+            "1.0.18", "1.0.97", binding.ModelSelectionReference!, "controlled-model", new string('c', 64), 1,
             "hosted-copilot", SdkMeterSources.CopilotNanoAiu, binding.AcceptedSelectionHash, registration.Revision);
         var message = new RuntimeA2ASendRequest(new("message", intent.MessageId, source.SdkSessionId, "user",
             [new("text", prompt)], new(new(1, registration, Guid.NewGuid(), 1, RuntimeCredentialPurpose.Observe),
