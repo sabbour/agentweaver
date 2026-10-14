@@ -609,7 +609,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var captureObjectStore = new InMemoryObjectStore();
         var captureAckBarrier = new ControlledRequestBarrier();
         var loseNextCaptureAck = 0;
-        var sandboxProvider = new ControlledSandboxResourceProvider();
+        var sandboxProvider = new ControlledSandboxResourceProvider(AgentSandboxProviderMetadata.ProviderId);
         var sourceControlGitHub = new ControlledGitHubApi(sourceControlSecretBackend.Value);
         var sourceControlRequestBarrier = new ControlledRequestBarrier();
         var mergeStartedSelectionBarrier = new ControlledRequestBarrier();
@@ -2328,7 +2328,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await AssertAcceptedSandboxBindingAsync(
             _connectionString, ownerSchema, project.ProjectId, sandboxProvider.ResourceId);
 
-        var restoringSandboxProvider = new ControlledSandboxResourceProvider();
+        var restoringSandboxProvider =
+            new ControlledSandboxResourceProvider(AgentSandboxProviderMetadata.ProviderId);
         await using (var restoringFactory = new OrchestratorIntegrationFactory(
                          _connectionString,
                          ownerSchema,
@@ -6638,11 +6639,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
     }
 
-    private sealed class ControlledSandboxResourceProvider : ICoordinatorSandboxResourceProvider
+    internal sealed class ControlledSandboxResourceProvider(string providerId) : ICoordinatorSandboxResourceProvider
     {
         private int _negotiationCount;
 
-        public string ProviderId => AgentSandboxProviderMetadata.ProviderId;
+        public string ProviderId { get; } = providerId;
         public string ResourceId => "controlled-sandbox-resource";
         public int NegotiationCount => Volatile.Read(ref _negotiationCount);
         public ImmutableArray<string> IsolationChoices { get; } = ["isolated-worktree"];
@@ -6747,6 +6748,77 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
 public sealed class SourceControlProviderCatalogFixtureTests
 {
+    [Fact]
+    public async Task RuntimePlacementUsesSandboxDefaultAndControlledProvidersMatchCatalogIds()
+    {
+        var sandboxOptions = ProjectsConfigBrokerAuthorizationTests.CreateRuntimePlacementSandboxOptions(
+            AgentSandboxOptions.CurrentOptionsSchemaVersion, "runtime-sandbox-options-v2");
+        var sandboxRegistration = AgentSandboxProviderMetadata.CreateRegistration(sandboxOptions);
+        var sandboxCapabilities = sandboxRegistration.Descriptor.AdvertisedCapabilities
+            .OrderBy(capability => capability, StringComparer.Ordinal)
+            .ToImmutableArray();
+        var acceptedSandboxCandidate = new EffectiveProviderCandidate(
+            ProviderSeam.Sandbox,
+            sandboxRegistration.Descriptor.Id,
+            sandboxRegistration.Descriptor.AdapterVersion.ToString(),
+            sandboxRegistration.OptionsSchemaVersion,
+            sandboxRegistration.OptionsRevision,
+            sandboxRegistration.Descriptor.Hosting,
+            sandboxCapabilities,
+            sandboxCapabilities);
+        Assert.Throws<InvalidOperationException>(() =>
+            ProjectsConfigBrokerAuthorizationTests.ResolveRuntimePlacementSandboxCandidate(
+                acceptedSandboxCandidate with { ProviderId = "sandbox-platform" }, sandboxOptions));
+
+        var runtimeCandidate = ProjectsConfigBrokerAuthorizationTests.ResolveRuntimePlacementSandboxCandidate(
+            acceptedSandboxCandidate, sandboxOptions);
+        Assert.Equal(sandboxRegistration.Descriptor.Id, runtimeCandidate.ProviderId);
+        Assert.Equal(sandboxRegistration.Descriptor.AdapterVersion, runtimeCandidate.AdapterVersion);
+        Assert.Equal(sandboxRegistration.OptionsSchemaVersion, runtimeCandidate.OptionsSchemaVersion);
+        Assert.Equal(sandboxRegistration.OptionsRevision, runtimeCandidate.OptionsRevision);
+        Assert.Equal(
+            sandboxCapabilities.OrderBy(capability => capability, StringComparer.Ordinal),
+            runtimeCandidate.RequiredCapabilities.OrderBy(capability => capability, StringComparer.Ordinal));
+
+        using var snapshot = JsonDocument.Parse("{}");
+        var selection = new OrchestratorHost::Agentweaver.Orchestrator.EffectiveRunSelection(
+            "project-a", "run-authorized-1", 1, 1, 1, "context-v1", snapshot.RootElement.Clone());
+        var runtimeProvider = new ProjectsConfigBrokerAuthorizationTests.ControlledSandboxResourceProvider(
+            sandboxRegistration.Descriptor.Id);
+        var runtimeNegotiation = await runtimeProvider.NegotiateAsync(
+            runtimeCandidate, selection, CancellationToken.None);
+        Assert.True(runtimeNegotiation.IsSuccess, runtimeNegotiation.Error?.Message);
+
+        var legacyRegistration = new ProviderRegistration(
+            new ProviderDescriptor(
+                ProviderSeam.Sandbox,
+                "sandbox-platform",
+                new Version(1, 0, 0),
+                1,
+                ProviderHostingPattern.KubernetesController,
+                ImmutableHashSet.Create(StringComparer.Ordinal, SandboxCapabilities.BuildTestCommandPod)),
+            true,
+            "options-v1",
+            1);
+        var legacyCatalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
+            [legacyRegistration],
+            [new ProviderSelection(ProviderSeam.Sandbox, legacyRegistration.Descriptor.Id)],
+            []).Value);
+        var legacyResolution = new ProviderResolver(legacyCatalog).Resolve(new(
+            ProviderSeam.Sandbox,
+            null,
+            legacyRegistration.Descriptor.AdapterVersion,
+            legacyRegistration.OptionsSchemaVersion,
+            ImmutableHashSet.Create(StringComparer.Ordinal, SandboxCapabilities.BuildTestCommandPod)));
+        Assert.True(legacyResolution.IsSuccess, legacyResolution.Error?.Message);
+        var legacyCandidate = Assert.IsType<ProviderCandidate>(legacyResolution.Value?.Candidate);
+        var legacyProvider = new ProjectsConfigBrokerAuthorizationTests.ControlledSandboxResourceProvider(
+            legacyRegistration.Descriptor.Id);
+        var legacyNegotiation = await legacyProvider.NegotiateAsync(
+            legacyCandidate, selection, CancellationToken.None);
+        Assert.True(legacyNegotiation.IsSuccess, legacyNegotiation.Error?.Message);
+    }
+
     [Fact]
     public void SharedCatalogResolvesValidatedSandboxOptionsAndTheAcceptedL3L4NetworkRequirement()
     {

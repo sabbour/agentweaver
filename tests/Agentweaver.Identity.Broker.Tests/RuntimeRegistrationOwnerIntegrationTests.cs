@@ -1454,6 +1454,36 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     private const string RuntimeReceiverConfigureEndpoint =
         "https://runtime-receiver.agentweaver.svc.cluster.local:8443/runtime/v1/configure";
 
+    internal static ProviderCandidate ResolveRuntimePlacementSandboxCandidate(
+        EffectiveProviderCandidate candidate, AgentSandboxOptions sandboxOptions)
+    {
+        var sandboxRegistration = AgentSandboxProviderMetadata.CreateRegistration(sandboxOptions);
+        var defaultProviderId = sandboxRegistration.Descriptor.Id;
+        if (candidate.Seam != ProviderSeam.Sandbox ||
+            !StringComparer.Ordinal.Equals(candidate.ProviderId, defaultProviderId))
+            throw new InvalidOperationException(
+                "The selected Sandbox provider does not match the runtime catalog default.");
+
+        var sandboxCatalog = ProviderCatalog.Create(
+            [sandboxRegistration],
+            [new(ProviderSeam.Sandbox, defaultProviderId)],
+            []);
+        if (!sandboxCatalog.IsSuccess)
+            throw new InvalidOperationException(
+                sandboxCatalog.Error?.Message ?? "The controlled Sandbox provider catalog is invalid.");
+        var sandboxResolution = new ProviderResolver(sandboxCatalog.Value!).Resolve(
+            new(
+                ProviderSeam.Sandbox,
+                null,
+                Version.Parse(candidate.AdapterVersion),
+                candidate.OptionsSchemaVersion,
+                candidate.RequiredCapabilities.ToImmutableHashSet(StringComparer.Ordinal)));
+        if (!sandboxResolution.IsSuccess || sandboxResolution.Value?.Candidate is not { } sandboxCandidate)
+            throw new InvalidOperationException(
+                sandboxResolution.Error?.Message ?? "The controlled Sandbox provider is unavailable.");
+        return sandboxCandidate;
+    }
+
     private sealed class RuntimePlacementTestServer(IHost host, NpgsqlDataSource dataSource,
         HttpClient sandboxHttpClient, SandboxLeaseSnapshot lease, RuntimePlacementReadTimeProvider readTime) : IAsyncDisposable
     {
@@ -1529,24 +1559,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 await lifecycleStore.CompleteNetworkEffectAsync(
                     networkEffect.OperationId, lifecycle.Snapshot.Fence, true, true, default);
 
-                var sandboxRegistration = AgentSandboxProviderMetadata.CreateRegistration(sandboxOptions);
-                var sandboxCatalog = ProviderCatalog.Create(
-                    [sandboxRegistration],
-                    [new(ProviderSeam.Sandbox, sandboxRegistration.Descriptor.Id)],
-                    []);
-                if (!sandboxCatalog.IsSuccess)
-                    throw new InvalidOperationException(
-                        sandboxCatalog.Error?.Message ?? "The controlled Sandbox provider catalog is invalid.");
-                var sandboxResolution = new ProviderResolver(sandboxCatalog.Value!).Resolve(
-                    new(
-                        ProviderSeam.Sandbox,
-                        candidate.ProviderId,
-                        Version.Parse(candidate.AdapterVersion),
-                        candidate.OptionsSchemaVersion,
-                        candidate.RequiredCapabilities.ToImmutableHashSet(StringComparer.Ordinal)));
-                if (!sandboxResolution.IsSuccess || sandboxResolution.Value?.Candidate is not { } sandboxCandidate)
-                    throw new InvalidOperationException(
-                        sandboxResolution.Error?.Message ?? "The controlled Sandbox provider is unavailable.");
+                var sandboxCandidate =
+                    ResolveRuntimePlacementSandboxCandidate(candidate, sandboxOptions);
                 Assert.Equal(candidate.Seam, sandboxCandidate.Seam);
                 Assert.Equal(candidate.ProviderId, sandboxCandidate.ProviderId);
                 Assert.Equal(candidate.AdapterVersion, sandboxCandidate.AdapterVersion.ToString());
