@@ -463,7 +463,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             }
             Assert.Equal(RuntimeBootstrapReceiverState.Pending, receiver.State);
             var modelBindings = sdk.Byok ? AzureByokModelBindings() :
-                new RuntimeModelBindingsResolver("legacy-unversioned", new Dictionary<string, RuntimeModelBinding>
+                new RuntimeModelBindingsResolver("native-run-admission-v1", new Dictionary<string, RuntimeModelBinding>
                 {
                     [registration.Binding.ModelSelectionReference!] =
                         new(sdk.ModelId, ModelSourceMode.HostedCopilot)
@@ -1049,6 +1049,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(RuntimeExecutionTaskStatus.Running, observedExecutionValue.Status);
         Assert.Equal(intent.MessageId, observedExecutionValue.PendingDispatch?.MessageId);
         Assert.Null(observedExecutionValue.ResultDigest);
+        RuntimeObservationCreditGuard? expectedCreditGuard = null;
         if (binding.ModelSourceMode == ModelSourceMode.Byok)
         {
             Assert.Equal(0, observationStateBefore.CreditGuards);
@@ -1068,6 +1069,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(1, observationStateBefore.CreditGuards);
             var storedCreditGuard = Assert.IsType<RuntimeObservationCreditGuard>(
                 observationStateBefore.CreditGuard);
+            expectedCreditGuard = storedCreditGuard;
             Assert.Equal(RuntimeObservationSectionState.Available, currentObservation.CreditGuard.State);
             Assert.Equal(storedCreditGuard, currentObservation.CreditGuard.Value);
         }
@@ -1085,7 +1087,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal("prepared", observedDispatch.State);
         Assert.Equal(1, observedDispatch.OwnerRevision);
         Assert.Equal("unknown", observedDispatch.ReportState);
-        Assert.Null(observedDispatch.AccountingState);
+        Assert.Equal("unknown", observedDispatch.AccountingState);
         Assert.Null(observedDispatch.WitnessWatermark);
         Assert.Null(observedDispatch.WitnessDigest);
         Assert.Equal(RuntimeObservationSectionState.Available, currentObservation.ToolReservations.State);
@@ -1153,10 +1155,77 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                    runToken,
                    [binding.TenantId]))
         {
-            await AssertStatusAsync(runtimeObservation, HttpStatusCode.Conflict);
+            await AssertStatusAsync(runtimeObservation, HttpStatusCode.OK);
             Assert.True(runtimeObservation.Headers.CacheControl?.NoStore);
-            Assert.Contains("runtime_owner_context_stale",
-                await runtimeObservation.Content.ReadAsStringAsync());
+            var finalObservation = Assert.IsType<RuntimeObservationV1>(
+                JsonSerializer.Deserialize<RuntimeObservationV1>(
+                    await runtimeObservation.Content.ReadAsStringAsync(cancellationToken),
+                    CoordinationJsonOptions));
+            _ = finalObservation.Validate();
+            Assert.Equal(RuntimeObservationSectionState.Available, finalObservation.Registration.State);
+            var finalRegistration = Assert.IsType<RuntimeObservationRegistration>(
+                finalObservation.Registration.Value);
+            Assert.Equal(observedRegistration.RuntimeInstanceId, finalRegistration.RuntimeInstanceId);
+            Assert.Equal(observedRegistration.Revision, finalRegistration.Revision);
+            Assert.Equal(observedRegistration.State, finalRegistration.State);
+            Assert.Equal(observedRegistration.ExpiresAt, finalRegistration.ExpiresAt);
+            Assert.Equal(RuntimeObservationSectionState.Available, finalObservation.Execution.State);
+            var finalExecution = Assert.IsType<RuntimeObservationExecutionV2>(
+                finalObservation.Execution.Value).Observation;
+            Assert.Equal(rootSessionId, finalExecution.RootSessionId);
+            Assert.Equal(binding.SessionId, finalExecution.SessionId);
+            Assert.Equal(binding.ExecutionFence, finalExecution.ExecutionFence);
+            Assert.Equal(plan.Plan.Id, finalExecution.WorkPlanId);
+            Assert.Equal(associationId, finalExecution.AssociationId);
+            Assert.Equal(checkpoint.Info.CheckpointId, finalExecution.CheckpointId);
+            Assert.Equal(checkpoint.State.Revision, finalExecution.CheckpointRevision);
+            Assert.Equal(checkpoint.State.DecisionStateVersion, finalExecution.CheckpointDecisionStateVersion);
+            Assert.Equal(decision.StateVersion, finalExecution.CurrentDecisionStateVersion);
+            Assert.Equal(RuntimeExecutionTaskStatus.Running, finalExecution.Status);
+            Assert.Equal(intent.MessageId, finalExecution.PendingDispatch?.MessageId);
+            Assert.Equal(RuntimeObservationSectionState.Available, finalObservation.Dispatches.State);
+            var finalDispatch = Assert.Single(
+                Assert.IsType<RuntimeObservationDispatchCollection>(finalObservation.Dispatches.Value).Items);
+            Assert.Equal(observedDispatch.DispatchId, finalDispatch.DispatchId);
+            Assert.Equal(rootSessionId, finalDispatch.RootSessionId);
+            Assert.Equal(binding.SessionId, finalDispatch.ChildSessionId);
+            Assert.Equal(plan.Plan.Id, finalDispatch.WorkPlanId);
+            Assert.Equal(associationId, finalDispatch.AssociationId);
+            Assert.Equal(checkpoint.Info.CheckpointId, finalDispatch.CheckpointId);
+            Assert.Equal(checkpoint.State.Revision, finalDispatch.CheckpointRevision);
+            Assert.Equal(binding.ExecutionFence, finalDispatch.ExecutionFence);
+            Assert.True(finalDispatch.OwnerRevision > observedDispatch.OwnerRevision);
+            Assert.Equal("completed", finalDispatch.State);
+            Assert.Equal(binding.ModelSourceMode == ModelSourceMode.Byok ? "unpriced" : "priced",
+                finalDispatch.AccountingState);
+
+            var persistedObservationState = await ReadRuntimeObservationPersistenceStateAsync(
+                ownerSchema, binding.ProjectId, binding.RunId, cancellationToken);
+            Assert.Equal(observationStateBefore.Dispatches, persistedObservationState.Dispatches);
+            if (binding.ModelSourceMode == ModelSourceMode.Byok ||
+                binding.CopilotSoftCreditLimit is null && binding.CopilotHardCreditLimit is null)
+            {
+                Assert.Equal(observationStateBefore.CreditGuards, persistedObservationState.CreditGuards);
+                Assert.Null(persistedObservationState.CreditGuard);
+                Assert.Equal(RuntimeObservationSectionState.Unknown, finalObservation.CreditGuard.State);
+                Assert.Null(finalObservation.CreditGuard.Value);
+            }
+            else
+            {
+                Assert.Equal(RuntimeObservationSectionState.Available, finalObservation.CreditGuard.State);
+                var observedCreditGuard = Assert.IsType<RuntimeObservationCreditGuard>(
+                    finalObservation.CreditGuard.Value);
+                var persistedCreditGuard = Assert.IsType<RuntimeObservationCreditGuard>(
+                    persistedObservationState.CreditGuard);
+                var initialCreditGuard = Assert.IsType<RuntimeObservationCreditGuard>(expectedCreditGuard);
+                Assert.Equal(0.00123456725m, persistedCreditGuard.CopilotAicFloor);
+                Assert.Equal(1L, persistedCreditGuard.AccountedThroughLedgerEventCount);
+                Assert.Equal(initialCreditGuard.LedgerDigest, persistedCreditGuard.LedgerDigest);
+                Assert.True(persistedCreditGuard.GuardRevision > initialCreditGuard.GuardRevision);
+                Assert.True(persistedCreditGuard.UpdatedAt > initialCreditGuard.UpdatedAt);
+                Assert.False(persistedCreditGuard.HardCapExhausted);
+                Assert.Equal(persistedCreditGuard, observedCreditGuard);
+            }
         }
         Assert.Equal(sendCount + 1, sdk.Requests.Count(request => request.Method == "session.send"));
         Assert.Equal(4, objects.Writes);

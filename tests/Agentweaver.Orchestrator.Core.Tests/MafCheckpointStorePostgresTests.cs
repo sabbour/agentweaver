@@ -7,6 +7,7 @@ using Agentweaver.SourceControl;
 using Microsoft.Agents.AI.Workflows;
 using Microsoft.Agents.AI.Workflows.Checkpointing;
 using Npgsql;
+using NpgsqlTypes;
 using Xunit;
 
 namespace Agentweaver.Orchestrator.Core.Tests;
@@ -190,10 +191,14 @@ public sealed partial class MafCheckpointStorePostgresTests : IAsyncLifetime
             "execution-2", first.Info, running, CancellationToken.None);
         AssertCheckpointEqual(second, secondReplay);
 
-        await SetParentMetadataAsync(second.Info.CheckpointId, hasParentMetadata: false);
+        var legacyState = running with { Revision = 3 };
+        await SeedLegacyExecutionCheckpointAsync(second.Info, "execution-3", legacyState);
         var legacyReplay = await _executionStore.AppendAsync(
-            "execution-2", first.Info, running, CancellationToken.None);
-        AssertCheckpointEqual(second with { HasParentMetadata = false }, legacyReplay);
+            "execution-3", second.Info, legacyState, CancellationToken.None);
+        Assert.Equal(legacyState, legacyReplay.State);
+        Assert.Equal(second.Info.CheckpointId, legacyReplay.ParentCheckpointId);
+        Assert.False(legacyReplay.HasParentMetadata);
+        AssertCheckpointEqual(legacyReplay, await _executionStore.ReadLatestAsync(CancellationToken.None));
 
         var historicalReplay = await Assert.ThrowsAsync<CoordinationException>(() =>
             _executionStore.AppendAsync("execution-1", null, initial, CancellationToken.None));
@@ -435,21 +440,32 @@ public sealed partial class MafCheckpointStorePostgresTests : IAsyncLifetime
         Assert.Equal(expected.HasParentMetadata, actual.HasParentMetadata);
     }
 
-    private async Task SetParentMetadataAsync(string checkpointId, bool hasParentMetadata)
+    private async Task SeedLegacyExecutionCheckpointAsync(
+        CheckpointInfo parent,
+        string checkpointId,
+        MafExecutionCheckpoint state)
     {
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var command = new NpgsqlCommand($"""
-            UPDATE "{_schema}".maf_workflow_checkpoints
-            SET has_parent_metadata = @hasParentMetadata
+            INSERT INTO "{_schema}".maf_workflow_checkpoints
+                (project_id, run_id, session_id, store_name, checkpoint_id, parent_checkpoint_id,
+                 has_parent_metadata, payload, cache_object_key, cache_sdk_version,
+                 pinned_model_reference, accepted_selection_hash, execution_fence, created_at)
+            SELECT project_id, run_id, session_id, store_name, @checkpoint, @parent, false, @payload,
+                   cache_object_key, cache_sdk_version, pinned_model_reference, accepted_selection_hash,
+                   execution_fence, clock_timestamp()
+            FROM "{_schema}".maf_workflow_checkpoints
             WHERE project_id = @project AND run_id = @run AND session_id = @session
-                AND store_name = @store AND checkpoint_id = @checkpoint
+                AND store_name = @store AND checkpoint_id = @parent
             """, connection);
-        command.Parameters.AddWithValue("hasParentMetadata", hasParentMetadata);
         command.Parameters.AddWithValue("project", _binding.Identity.ProjectId);
         command.Parameters.AddWithValue("run", _binding.Identity.RunId);
         command.Parameters.AddWithValue("session", _binding.Identity.SessionId);
-        command.Parameters.AddWithValue("store", MafExecutionCheckpointContract.StoreName);
-        command.Parameters.AddWithValue("checkpoint", checkpointId);
+        command.Parameters.AddWithValue("store", NpgsqlDbType.Varchar, MafExecutionCheckpointContract.StoreName);
+        command.Parameters.AddWithValue("checkpoint", NpgsqlDbType.Varchar, checkpointId);
+        command.Parameters.AddWithValue("parent", NpgsqlDbType.Varchar, parent.CheckpointId);
+        command.Parameters.AddWithValue(
+            "payload", NpgsqlDbType.Jsonb, MafExecutionCheckpointContract.Serialize(state));
         Assert.Equal(1, await command.ExecuteNonQueryAsync());
     }
 

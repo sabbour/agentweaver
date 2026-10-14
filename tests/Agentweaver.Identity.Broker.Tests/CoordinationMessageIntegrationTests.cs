@@ -611,6 +611,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ["EventsAndSessions__Authorization__Audience"] = "https://api.test",
             ["EventsAndSessions__OrchestratorOwner__OwnerBaseAddress"] = "https://orchestrator.test/",
             ["EventsAndSessions__OrchestratorOwner__Audience"] = "https://api.test",
+            ["EventsAndSessions__RuntimeUsage__Enabled"] =
+                enableHostedCopilotRunAdmission ? "true" : "false",
             ["AgentHost__ModelBindingsRevision"] =
                 enableHostedCopilotRunAdmission ? "native-run-admission-v1" : null,
             ["AgentHost__ModelBindings__platform-model__ModelId"] =
@@ -734,7 +736,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 ForwardOwnerRequestAsync(request, projects.Client, cancellationToken),
             orchestratorOwner: (request, cancellationToken) =>
                 ForwardOwnerRequestAsync(request, orchestrator, cancellationToken),
+            ownerRequestTimeoutSeconds: 120,
             identityAudience: "https://api.test");
+        Assert.Equal(TimeSpan.FromSeconds(120), gateway.OwnerRequestTimeout);
 
         using var rootResponse = await SendJsonAsync(
             orchestrator,
@@ -936,8 +940,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                        checkoutBaseSha,
                        sourceControlWorkspaceBranch)))
         {
-            Assert.Equal(HttpStatusCode.Accepted, prepareWorkspace.StatusCode);
             var workspaceBody = await prepareWorkspace.Content.ReadAsStringAsync();
+            Assert.Equal(HttpStatusCode.Accepted, prepareWorkspace.StatusCode);
             Assert.DoesNotContain(sourceControlSecretBackend.Value, workspaceBody, StringComparison.Ordinal);
             using var workspaceDocument = JsonDocument.Parse(workspaceBody);
             var workspace = workspaceDocument.RootElement;
@@ -3977,9 +3981,28 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 ReplyToId: sentQuestion.OwnerMessageId,
                 RequestId: child.PendingRequestId,
                 ReplyCorrelationId: child.PendingRequestId));
-        await AssertStatusAsync(sendReply, HttpStatusCode.OK);
-        Assert.Equal("input_available",
-            await ReadGateStateAsync(_connectionString, ownerSchema, child.PendingRequestId));
+        if (sendReply.StatusCode == HttpStatusCode.Accepted)
+        {
+            var pendingReply = await ReadJsonAsync<CoordinationMessageResult>(sendReply);
+            Assert.Equal("root", pendingReply.RecipientSessionId);
+            Assert.Equal("pending", pendingReply.Status);
+            Assert.Equal(child.PendingRequestId, pendingReply.RequestId);
+            var gateState = await ReadGateStateAsync(_connectionString, ownerSchema, child.PendingRequestId);
+            for (var attempt = 0; gateState != "input_available" && attempt < 150; attempt++)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(100));
+                gateState = await ReadGateStateAsync(_connectionString, ownerSchema, child.PendingRequestId);
+            }
+            Assert.Equal("input_available", gateState);
+        }
+        else
+        {
+            await AssertStatusAsync(sendReply, HttpStatusCode.OK);
+            var admittedReply = await ReadJsonAsync<CoordinationMessageResult>(sendReply);
+            Assert.Equal("root", admittedReply.RecipientSessionId);
+            Assert.Equal("admitted", admittedReply.Status);
+            Assert.Equal(child.PendingRequestId, admittedReply.RequestId);
+        }
 
         using var rootBindingResponse = await SendAsync(
             orchestrator,
@@ -4001,6 +4024,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var rootBoundary = await ReadJsonAsync<TurnBoundaryResult>(rootBoundaryResponse);
         var replyPresented = Assert.IsType<AddressedMessageEnvelope>(rootBoundary.PresentedMessage);
         Assert.Equal(AddressedMessageStatus.Delivered, replyPresented.Status);
+        Assert.Equal("input_available",
+            await ReadGateStateAsync(_connectionString, ownerSchema, child.PendingRequestId));
         var notification = Assert.Single(rootBoundary.ParentNotifications);
         Assert.Equal(childSessionId, notification.ChildSessionId);
         Assert.Equal(AddressedMessagePurpose.NeedsInput, notification.Purpose);
@@ -6117,7 +6142,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     response.Headers.CacheControl?.NoStore == true,
                     Encoding.UTF8.GetString(bytes));
             }
-
             if (afterResponse is not null)
             {
                 try
@@ -6846,8 +6870,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         EventsHost::Agentweaver.EventsAndSessions.CoordinationOwnerClient>()
                     .ConfigurePrimaryHttpMessageHandler(orchestratorHandler);
                 if (nativeUsageHandler is not null)
+                {
+                    services.AddHttpClient("RuntimeRunAdmissionService")
+                        .ConfigurePrimaryHttpMessageHandler(projectsHandler);
                     services.AddHttpClient("NativeUsageReceiptClient")
                         .ConfigurePrimaryHttpMessageHandler(nativeUsageHandler);
+                }
                 if (sessionMaterialObjects is not null)
                 {
                     services.RemoveAll<IObjectStore>();
