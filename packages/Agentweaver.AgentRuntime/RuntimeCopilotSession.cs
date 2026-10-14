@@ -190,23 +190,23 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
             RequireUsable();
 #pragma warning disable GHCP001 // Context evidence is pinned to SDK 1.0.18.
             var model = await _session.Rpc.Model.GetCurrentAsync(cancellationToken).ConfigureAwait(false);
+            var expectedProviderId = Facts.ByokProvider?.Type;
             if (model.ModelId != Facts.ModelId ||
-                Facts.ByokProvider is { } byokProvider && model.ProviderId != byokProvider.Type)
-            {
-                var expectedProvider = Facts.ByokProvider is { } provider
-                    ? SafeSdkIdentity(provider.Type)
-                    : "<not-applicable>";
-                throw new RuntimeAuthorizationException(
-                    "runtime_sdk_effective_model_mismatch",
-                    $"expected_model={SafeSdkIdentity(Facts.ModelId)}; " +
-                    $"actual_model={SafeSdkIdentity(model.ModelId)}; " +
-                    $"expected_provider={expectedProvider}; " +
-                    $"actual_provider={SafeSdkIdentity(model.ProviderId)}");
-            }
+                expectedProviderId is not null &&
+                !string.IsNullOrEmpty(model.ProviderId) && model.ProviderId != expectedProviderId)
+                throw CreateEffectiveModelMismatch(model.ModelId, model.ProviderId);
+
+            var providerId = expectedProviderId ?? model.ProviderId;
             var result = await _session.Rpc.Metadata.ContextInfoAsync(
-                0, 0, model.ModelId, model.ProviderId, cancellationToken).ConfigureAwait(false);
+                0, 0, model.ModelId, providerId, cancellationToken).ConfigureAwait(false);
+            var context = result?.ContextInfo;
+            if (expectedProviderId is not null && context is not null &&
+                context.Provider?.Id != expectedProviderId)
+                throw CreateEffectiveModelMismatch(
+                    model.ModelId, model.ProviderId, context.Provider?.Id ?? string.Empty);
+
 #pragma warning restore GHCP001
-            return result?.ContextInfo;
+            return context;
         }
         finally
         {
@@ -252,6 +252,24 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         {
             _turnGate.Release();
         }
+    }
+
+    private RuntimeAuthorizationException CreateEffectiveModelMismatch(
+        string? actualModelId, string? actualProviderId, string? contextProviderId = null)
+    {
+        var expectedProvider = Facts.ByokProvider is { } provider
+            ? SafeSdkIdentity(provider.Type)
+            : "<not-applicable>";
+        var contextProvider = contextProviderId is null
+            ? "<not-checked>"
+            : SafeSdkIdentity(contextProviderId);
+        return new RuntimeAuthorizationException(
+            "runtime_sdk_effective_model_mismatch",
+            $"expected_model={SafeSdkIdentity(Facts.ModelId)}; " +
+            $"actual_model={SafeSdkIdentity(actualModelId)}; " +
+            $"expected_provider={expectedProvider}; " +
+            $"actual_provider={SafeSdkIdentity(actualProviderId)}; " +
+            $"context_provider={contextProvider}");
     }
 
     private static string SafeSdkIdentity(string? identity)
