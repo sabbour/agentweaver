@@ -87,7 +87,7 @@ An acknowledgment binds the full call proof, runtime identity, source, length, a
 Private reads require the same current authority and committed journal reference.
 Events verifies the recorded proof, source, byte length, and digest before returning bytes.
 The Orchestrator checks for a saved result after native action admission and before external dispatch.
-It accepts only the exact recorded call proof; only the previously unknown result content class may differ from the read template.
+It accepts only the exact recorded call proof; only the previously unknown result content class can differ from the read template.
 It rechecks current authority before returning saved or newly acknowledged bytes.
 The ordinary AgentHost material client cannot use these private routes.
 Public event pages and streams continue to omit private result references and bytes.
@@ -207,7 +207,7 @@ Orchestrator persists the typed admission receipt with root acceptance through i
 Backlog claim uses the same acceptance transaction.
 An identical accepted-root replay uses that immutable receipt without repricing earlier admission.
 Configured Copilot credit limits cannot use BYOK token pricing or an unbound hosted connection.
-These are source paths; live PostgreSQL, native availability, and deployment still require separate acceptance.
+The source paths do not prove live PostgreSQL, native availability, or deployment; each still requires separate acceptance.
 
 A transaction commits the rate card and usage entry before returning.
 The accounting receipt binds the canonical SHA-256 hash, attribution, immutable
@@ -251,7 +251,7 @@ binding from usage events to an A2A send. As a result, the runtime leaves
 `A2AMessageId` null. It does not infer ownership from the active turn or event
 timestamps. Events accepts cost-turn evidence only when a source receipt's A2A ID
 exactly matches `CostTurnId`. A callback without that ID cannot release the cost
-turn. This includes a callback from an earlier send that arrives during a later
+turn. A callback from an earlier send can arrive during a later
 send. Null correlation is omitted from legacy
 source payloads, preserving their canonical hashes. The receipt validator rejects
 changed owner, SDK, model, catalog, event, and selection pins.
@@ -267,8 +267,8 @@ the runtime from becoming ready.
 The SDK source still does not prove per-turn usage-to-A2A affinity for arbitrary or
 legacy callbacks. Workflow-bound positive-hard-capped Hosted Copilot activation uses
 the prepared dispatch and begin path with current whole-run priced totals; it denies
-the next dispatch when observed totals reach the hard limit. This does not attribute a
-whole-run total to one turn or claim that accounting is final. An unbound positive-cap
+the next dispatch when observed totals reach the hard limit. A whole-run total does not
+identify one turn or establish accounting finality. An unbound positive-cap
 registration still fails with `runtime_usage_affinity_unavailable` before readiness.
 Any already-started turn with unknown ownership remains held; its native receipt is
 retained and cannot release a cost turn without the exact message ID.
@@ -360,7 +360,7 @@ issued for the configured HTTPS identity issuer and audience. The authenticated
 principal must have a GUID `sub` and exactly one `project_id`/`run_id` pair; the
 Identity Broker adds that owner pair only for an active core grant. The host does not
 require tenant or platform-role claims. The session ID is checked as a bounded
-identity. The host resolves the exclusive Sessions provider using the catalog and
+identity. The host resolves the exclusive Sessions provider through the catalog and
 permitted project override, negotiates the live PostgreSQL database and migrated
 schema, and pins only after successful negotiation.
 
@@ -392,7 +392,7 @@ write authority and accepted selection, plus a matching actor/tenant and active 
 session/run with the same writer and execution fence. After the owner-row check can wait
 on PostgreSQL locks, the owner reads current Core authority and selection again before
 admission succeeds. For Allow, it also rechecks grant scope/revision, expiry, and fence.
-Deny and Error receipts may reference an issued inactive grant, but remain immutable
+Deny and Error receipts can reference an issued inactive grant, but remain immutable
 owner facts and cannot authorize an effect.
 
 Events repeats the owner admission check from inside the PostgreSQL transaction
@@ -465,7 +465,7 @@ native fact ID, project, and sequence. No fact or inbox receipt is committed alo
 These facts do not enter `session_events`, require or modify a Sessions provider pin,
 or claim a run/session transition. Knowledge uses a caller-driven relay and marks its
 outbox event delivered only after validating this durable acknowledgment. Failures
-leave delivery pending for a fresh authorized caller retry; there is no unattended
+leave delivery pending for a fresh authorized caller retry. The service has no unattended
 relay worker.
 
 ## Schema and validation boundary
@@ -481,8 +481,8 @@ Both connections require an explicit `WorkloadIdentityCredential` configuration.
 Npgsql obtains a PostgreSQL-scoped token through its async password callback for each
 new physical connection; Azure Identity manages token caching and refresh. The
 connection strings must include their Entra PostgreSQL role and must not contain a
-password. TLS uses `VerifyFull`. There is no developer-credential or password
-fallback. The service does not create Azure resources, run a background relay, or
+password. TLS uses `VerifyFull`. The service has no developer-credential or password
+fallback. It does not create Azure resources, run a background relay, or
 publish an image.
 
 Use these separate settings:
@@ -502,7 +502,7 @@ The migration job and its database grants are not provisioned by this source can
 
 `deploy/k8s/profiles/events-and-sessions/render.mjs` renders a separate Events profile.
 The ordinary Broker and Foundation Probe compositions do not include it.
-The profile uses existing configuration keys and enables the existing typed session material store.
+The profile configures the existing typed session material store with existing keys.
 It does not add another content API or change ordinary service startup.
 
 The input fixes the approved 1.x target, Events tenant/client identity, database role,
@@ -544,5 +544,5 @@ This profile alone does not complete the five-owner deployment or full P1 accept
 
 The [contract reference](../reference/contracts.md) lists routes and configuration.
 The [testing guide](../guide/testing.md) describes the disposable-PostgreSQL tests and
-their limits. There was no earlier v1 Sessions event envelope, so no N-1 event-schema
+their limits. No earlier v1 Sessions event envelope exists, so no N-1 event-schema
 compatibility claim applies to this initial version-1 contract.

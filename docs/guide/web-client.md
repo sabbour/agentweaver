@@ -54,7 +54,7 @@ Gateway and Broker browser CORS are separate boundaries. Configure
 policies are route-specific and non-credentialed except for the Copilot
 connection BFF, which narrowly allows credentials for its callback cookie.
 Direct Repo App browser requests use the Broker's independent credentialed
-endpoint allowlist; the Gateway origin setting does not configure Broker CORS.
+endpoint allow list; the Gateway origin setting does not configure Broker CORS.
 
 The optional managed portal routes send `/` to Web on port 8080, the `/api/v1`
 prefix plus exact `/openapi/v1.json` to Gateway, and exact `/mcp` plus the
@@ -80,9 +80,9 @@ These checks cover the host and its built page, not Broker access or live API be
 
 The client requests fresh tenant and effective-permission context from
 `GET /api/v1/authorization/context`. It does not infer a tenant from project,
-run, token, or usage data. A tenant selector is attached only to the allow-listed
-Projects/configuration, run Coordination, Knowledge, run Selection/Usage, and
-finite journal replay calls that consume it. The live event SSE connection,
+run, token, or usage data. A tenant selector is attached only to routes included
+in the allow list: Projects/configuration, run Coordination, Knowledge, run
+Selection/Usage, and finite journal replay calls that consume it. The live event SSE connection,
 GitHub Repo App account calls, PKCE/session calls, and unrelated APIs remain
 selector-free. Repo App status, repository discovery, selection, and disconnect
 go directly to the Identity Broker with cookie credentials; JSON mutations
@@ -91,9 +91,8 @@ user authorization uses a native form post with the token field
 `__RequestVerificationToken` targeted at the tracked popup, never fetch through
 an OAuth redirect. Run-bound GitHub App installation remains a Gateway call
 with the exact project, run, and tenant binding. The GitHub Copilot
-user-connection BFF is a separate
-allow-listed case: its lifecycle calls forward the optional explicit selector
-to the Broker, which remains authoritative. Gateway validates the context response against the
+user-connection BFF is also on the allow list. Its lifecycle calls forward the
+optional explicit selector to the Broker, which remains authoritative. Gateway validates the context response against the
 authenticated actor, signed project/run binding, and explicitly selected tenant.
 Owners revalidate the selector and current authority for every operation;
 context is not cached as permission. The client clears it when the bearer
@@ -111,10 +110,10 @@ the exact request ID and decision version from the current owner snapshot.
 Owner acceptance is not represented as delivery, completion, or a state
 transition; the refreshed snapshot supplies the resulting state.
 Knowledge search exposes owner-reported result pages rather than hiding records
-after the first page. The Knowledge page shows immutable revision history. You
-can restore a historical revision as a new Active+Pending revision. You can
-explicitly approve an Active Pending or Legacy Decision. You can supersede an
-Active Decision with another Active Decision from the exact project/agent
+after the first page. The Knowledge page shows immutable revision history and
+includes controls to restore a historical revision as a new Active+Pending
+revision, explicitly approve an Active Pending or Legacy Decision, and supersede
+an Active Decision with another Active Decision from the exact project/agent
 results. Correction and
 archive controls are limited to Memory and SessionContext records supported by
 the current owner. Decision approval and supersession use the selected record's
@@ -238,7 +237,7 @@ npm --prefix apps/web run build
 The Gateway exposes owner routes for accepting a supplied run-root identity,
 proposing typed outcome/workflow/work-plan decisions, asking a coordinator
 question, requesting approval, and registering, spawning, or forking child
-sessions. These are owner-authoritative state operations; root or spawn
+sessions. These owner-authoritative operations update state; root or spawn
 acceptance is not proof that a model run was scheduled or completed. The browser
 client currently opens existing run IDs and does not expose root-acceptance,
 proposal, or child registration/spawn/fork controls. It can message existing
@@ -260,5 +259,5 @@ configuration or usage. Usage totals distinguish priced and unpriced events
 and do not replace missing measurements with zero.
 
 This documentation describes the v1 source client only. The source and Gateway
-routes are present in v1; this does not establish that the web image, Gateway,
+routes are present in v1; their presence does not establish that the web image, Gateway,
 Broker, or owner services are deployed or live.

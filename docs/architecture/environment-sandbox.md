@@ -33,16 +33,16 @@ idempotency key, and provider recovery request before provider dispatch.
 
 The store admits one current Sandbox lease per Environment. A lease in
 `Provisioning`, `Active`, `Releasing`, or `ReconciliationRequired` consumes that
-slot. This is owner-level duplicate prevention; it is not a cluster-wide CPU or
-memory quota. An unresolved or ambiguous provider effect remains current and
+slot. The lease prevents duplicate provisioning for one owner; it does not enforce a
+cluster-wide CPU or memory quota. An unresolved or ambiguous provider effect remains current and
 blocks Environment lifecycle advancement. Old resource generations remain
 stored after release.
 
 A different valid provider resource returned after a lease is terminal is
 stored in a separate cleanup record. The original terminal state, resource, and
 partial-release receipt remain unchanged. Reconciliation can discover pending
-cleanup under current owner authorization across lifecycle generations while
-using the original provider fence and binding for exact release. A durable,
+cleanup under current owner authorization across lifecycle generations. It uses
+the original provider fence and binding for the exact release. A durable,
 expiring claim prevents concurrent reconcilers from racing the same delete;
 the validated release receipt is saved with a current-fence compare-and-swap.
 
@@ -73,7 +73,7 @@ continues to enforce the configured Environment audience for both routes.
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/placement` | Return the versioned owner-local projection of the exact current, active, unexpired lease and its placement references. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/internal/placement` | Return the same projection to a run-bound caller with exact project/run bindings and `ReadRunSelection`; no run selection is fetched and no provider effect occurs. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/abandon` | Explicitly abandon one current resource generation and provider fence. The request is not itself proof of ownership; fresh Projects authorization and the durable owner CAS are required. |
-| `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/reconcile` | Recover an interrupted operation by its recorded owner, operation ID, resource generation, and provider fence. It also claims and releases at most one pending late resource. A network-policy generation may be supplied to verify readiness. |
+| `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/reconcile` | Recover an interrupted operation by its recorded owner, operation ID, resource generation, and provider fence. It also claims and releases at most one pending late resource. A network-policy generation can be supplied to verify readiness. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/binding-preparation?sessionId={sessionId}&executionProfileReference={profile}` | Validate the current Sandbox profile binding for a session without starting a command. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands` | Resolve the accepted Core checkpoint, reserve its immutable command intent, and execute the stable BuildTest operation. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands/{operationId}` | Read the exact persisted operation under the current owner and Sandbox binding. |
@@ -202,7 +202,7 @@ Environment reapplies the same accepted Network rules with the source policy gen
 The recorded previous policy generation must equal the manifest's source generation.
 It provisions a new Sandbox with the retained Storage resource and data generation, then verifies the actual mount.
 The response contains the exact new lease, Workspace attachment, and transition revision.
-This is placement evidence, not verified Workspace content or permission to dispatch.
+Placement evidence does not verify Workspace content or authorize dispatch.
 Core saves that complete response before requesting the second step.
 
 `POST /internal/runtime/resume/verify` requires that saved `RestoredWorkspace`.
@@ -241,7 +241,7 @@ A saved receipt alone cannot authorize dispatch.
 
 Recovery distinguishes `native-cache` from `journal-rebuild`.
 The native path validates the exact compatible saved cache.
-If the cache is missing or incompatible, the Host may rebuild history from the authenticated saved session journal.
+If the cache is missing or incompatible, the Host can rebuild history from the authenticated saved session journal.
 It requests pages for the manifest's saved source session, keeps the exact checkpoint and flushed position, and checks every page.
 Events uses saved fork lineage and immutable source-position bounds to include only that session's visible ancestors.
 Run-wide positions can have valid gaps in a session-visible page.
@@ -256,7 +256,7 @@ Authorization, transport, configuration, hash, and fence failures do not permit 
 `JournalRebuild` keeps the original source cache acknowledgment separate from the current Host facts.
 It records the saved checkpoint, upper position, ordered journal digest, and current resume attempt.
 The native cache state is `PendingUntilAuthorizedTurn`.
-This means that a new native cache was not captured or proved during resume.
+The `PendingUntilAuthorizedTurn` state means that resume did not capture or prove a new native cache.
 The pinned SDK does not establish a supported client-filesystem checkpoint before a real turn.
 The next real authorized turn uses the existing native cache capture and Events write path.
 Suspend before genuine native files exist fails explicitly as `runtime_sdk_cache_unavailable`.
@@ -285,8 +285,8 @@ Workspace record, its current Storage selection and pinned provider/options,
 and the PVC namespace, UID, and owner-generation annotations. It reserves the
 exact volume generation as Attached through the Workspace owner CAS before
 provider dispatch. Replace and release remain blocked until the exact Sandbox
-placement is retired and Environment detaches that generation. This does not
-change Workspace retention or reclaim state.
+placement is retired and Environment detaches that generation. The
+Sandbox/Workspace binding does not change Workspace retention or reclaim state.
 
 The manager verifies the requested Cilium policy generation and object before
 Sandbox dispatch, then rechecks it after provider observation. The provider
@@ -324,7 +324,7 @@ cloud assertions. The existing `ISandboxProvider` negotiated capability and
 lease/profile surfaces carry placement evidence; the selected L3/L4 and L7
 providers must supply current forced-mediation evidence. Two containers in one
 Kata guest, a VM-isolation descriptor, or policy readback alone do not prove this
-boundary. These are proposed readiness additions, not current Sandbox capability
+boundary. These readiness additions are proposed, not current Sandbox capability
 or deployment evidence; legacy placement must not be relabeled credential-less.
 
 ## Agent Sandbox resources and recovery
@@ -395,7 +395,7 @@ Reconcile requests retain the same complete checkpoint and expected binding as t
 Core validates a read result before it reconciles; invalid owner response shapes cannot start another command.
 
 Configure `Environment:Sandbox:AgentSandbox:AcceptedBuildTestProfile` to enable the BuildTest capability.
-The profile pins the executable allowlist, image digests, resource limits, offline egress, and trusted collector command.
+The profile pins the executable allow list, image digests, resource limits, offline egress, and trusted collector command.
 An absent profile does not advertise the capability.
 An invalid profile fails configuration validation; the provider does not use a default profile.
 The active lease retains its accepted profile even if current server defaults change.
@@ -490,7 +490,7 @@ It rejects missing baseline files, changed undeclared files, and outputs that di
 It uses a private Git index and disables hooks, filters, external diff commands, and network protocols.
 The shared prepared-repository path retains the existing owner-scoped hash.
 The same Source Control package constructs the native output document.
-This does not create another output store or a second model runtime.
+The capture does not create another output store or a second model runtime.
 
 The Kubernetes client adds a bounded native WebSocket exchange for fixed preparation and collector containers.
 It retains the existing service-account handler and trusted server certificate.
@@ -562,8 +562,8 @@ remain errors.
 
 Retiring Sandbox placement does not transition the Environment to `Released`
 and does not release, delete, or erase its Workspace volume. Storage retention
-and cleanup continue through the independent Workspace lifecycle. There is no
-background abandoned-run reaper in this source slice; Core run-terminal and
+and cleanup continue through the independent Workspace lifecycle. This source slice has no
+background abandoned-run reaper; Core run-terminal and
 supersede evidence must be added by its owning contract before automatic
 run-status reclamation is enabled.
 
@@ -583,7 +583,7 @@ double-underscore names, for example
 | `ContainerImage` | Exact digest-pinned AgentHost image reference used by the Sandbox template. |
 | `ContainerImagePlatform` | Must be `linux/amd64` for the measured AgentHost image. |
 | `ContainerImageCompressedPullBytes` | Positive compressed-pull-byte measurement for that exact image. |
-| `AgentHost` | Optional typed launch profile naming the existing configuration ConfigMap and TLS Secret; enables the controller Service and native HTTPS listener. |
+| `AgentHost` | Optional typed launch profile naming the existing configuration ConfigMap and TLS Secret; configures the controller Service and native HTTPS listener. |
 | `RuntimeClassName` | Kubernetes RuntimeClass selected for the Pod. |
 | `ExpectedRuntimeHandler` | Handler value that must be read back from that RuntimeClass. |
 | `CpuRequest`, `MemoryRequest` | Bounded Kubernetes resource quantities used as both requests and limits. |

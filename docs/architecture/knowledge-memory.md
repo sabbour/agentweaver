@@ -3,9 +3,9 @@
 `Agentweaver.Knowledge` is an unpublished .NET 10 service candidate. It owns the
 project memory API, context compiler, and immutable run-provider bindings in its
 PostgreSQL `knowledge` schema. Memory records, revisions, idempotency, and accepted-effect
-delivery state belong to the selected Memory provider. Source presence does not mean the
-service is deployed or that a caller's accepted outcome has reached the native Events
-project-fact stream. Project facts are separate from the Sessions run journal.
+delivery state belong to the selected Memory provider. Source presence doesn't establish
+deployment or delivery of a caller's accepted outcome to the native Events project-fact
+stream. Project facts are separate from the Sessions run journal.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.png'">
@@ -46,7 +46,7 @@ Visibility is project-admin scoped, not agent-owned: a current project Owner rec
 `AccessPrivateKnowledge` for that project, including on an exact run-bound token;
 generic `WriteProjects` remains unbound-only. A TenantAdmin receives
 `AccessPrivateKnowledge` and `WriteProjects` at the tenant or project resource scope
-when the token is not run-bound. These admins may inspect any agent's records in an
+when the token is not run-bound. These admins can inspect any agent's records in an
 authorized project by explicitly selecting that agent. The route's
 `agentId` selects rows; it does not prove the caller is that agent, and an admin
 grant does not extend to another project or tenant. Before provider resolution,
@@ -143,7 +143,7 @@ the PostgreSQL state owned by other services.
 
 Record content is project/agent scoped. Each successful update appends a full immutable
 revision with a previous-revision link while compare-and-swap updates the current
-record using its expected revision. Records cannot be physically deleted. Writes
+record with its expected revision. Records cannot be physically deleted. Writes
 require an `Idempotency-Key` scoped by project and validated actor: identical retries
 return the original result; a reused key with different request content conflicts.
 Not-found, stale-revision, invalid-state, provider, storage, and budget conditions do
@@ -203,7 +203,7 @@ unscoped route.
 After the commit, a caller-driven relay sends the receipt ID, contract versions,
 and paired project/run scope to the fixed HTTPS Events endpoint. It forwards the existing Knowledge
 bearer when one token covers both owners. If separate tokens are already available,
-the request may provide the same caller's Events-audience bearer in
+the request can provide the same caller's Events-audience bearer in
 `X-Agentweaver-Events-Authorization`; both tokens stay in request memory and are
 never stored in the outbox. No token is minted or fetched, and there is no background
 relay.
@@ -215,7 +215,7 @@ sequence, and inbox receipt in one Events PostgreSQL transaction. Knowledge mark
 delivered only after validating the persisted Events acknowledgment. A transport,
 authorization, or persistence failure leaves the accepted decision and receipt
 committed and reports delivery as `PENDING`; for example, a caller with only
-`AccessPrivateKnowledge` can promote but Events may reject delivery without
+`AccessPrivateKnowledge` can promote, but Events can reject delivery without
 `WriteProjects`. A fresh authorized caller can retry the same receipt. For Cosmos
 Memory, the accepted-effect receipt and delivery intent are
 committed with the promoted records in the selected project's partition, and the
@@ -229,7 +229,7 @@ Context lookup first enforces project, agent, and run scope and a configured max
 candidate count. The compiler includes active approved project decisions of type
 `architectural` or `scope`, active memories for the requested agent plus approved
 `cross-team` memories, and only the requested agent's approved SessionContext for the
-current run. Pending memories may be included as historical data; they are not
+current run. Pending memories can be included as historical data; they are not
 promoted to trusted decisions.
 
 The compiler optionally scores and orders memories by token overlap, importance, and

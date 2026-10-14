@@ -45,12 +45,12 @@ The broker issues `project_id` and `run_id` claims through one of two authorizat
 The Broker owner call uses `IdentityBroker:RunBinding:ProjectsOwnerAddress` and
 `IdentityBroker:RunBinding:ProjectsAudience`. The corresponding
 `ProjectsConfig:Authentication:BrokerRunBindingAudience` is a separate HTTPS
-audience and enables only the private proof route; it does not replace the
-public Projects bearer audience.
+audience. Configuring it maps only the private proof route; it does not replace
+the public Projects bearer audience.
 
 When run binding is configured, Broker requires
 `ProjectsTrustBundleSha256`, the SHA-256 of the exact raw UTF-8 PEM bytes at
-`/var/run/service-backend-ca/ca.crt`. This path is fixed; there is no
+`/var/run/service-backend-ca/ca.crt`. This path is fixed; the host accepts no
 configurable trust-bundle path. The bundle must contain CA certificates only.
 `ProjectsServerCertificateSha256` pins the SHA-256 of the Projects leaf
 certificate DER bytes. Broker checks the custom-root chain, HTTPS hostname,
@@ -89,8 +89,8 @@ The lifecycle state transitions cover single-use callback claiming and
 completion, binding and expiry checks, refresh-attempt and credential-revision
 compare-and-swap outcomes, and disconnect/revocation state. The Broker source
 implements these transitions through its bearer-authenticated, no-store
-status, consent-preparation, callback, refresh, and disconnect paths; this does
-not establish deployment or a project-settings consent-start flow. These paths
+status, consent-preparation, callback, refresh, and disconnect paths; the source
+does not establish deployment or a project-settings consent-start flow. These paths
 recheck the owner's current Projects authorization and the current Environment
 configuration. Consent preparation
 links Identity's opaque reference to the exact Environment revision and digest,
@@ -125,8 +125,8 @@ version. It rechecks Projects authority and the Environment binding after each
 provider or secret-store wait, then commits new SecretRefs with a revision
 compare-and-swap. Provider rejection clears local credentials and marks the
 connection revoked. A timeout, store failure after provider exchange, or stale
-lease after restart marks the connection indeterminate; Identity does not retry
-a refresh token that the provider may have consumed.
+lease after restart marks the connection indeterminate. The provider's refresh
+token consumption status is unknown, so Identity does not retry the token.
 
 The Identity package also validates supplied protected-resource and
 authorization-server metadata against the bound resource, issuer, requested
@@ -268,9 +268,9 @@ short-lived HttpOnly callback cookie. Installation setup uses its own owner-boun
 single-use callback. Identity discovers only installations and repositories visible to
 the connected user. A returned selection code is short-lived and is submitted only in
 the initial run-scoped Orchestrator `/pin` request, never in accepted Project/Run
-configuration or the durable pin. Identity stores only its hash, binds its first
-run-bound use to one owner and project, and permits later minting only for that same
-project using the hash.
+configuration or the durable pin. Identity stores only its hash and binds its
+first run-bound use to one owner and project. Later minting is limited to that
+project and uses the stored hash.
 
 The Copilot source flow is not deployed login, writer permission, or paid-execution authority.
 The separate GitHub App and browser integrations retain their own delivery and acceptance boundaries.
@@ -305,8 +305,8 @@ GitHub callback URI stays on the Broker origin, and successful completion redire
 to the fixed Web settings path. The Gateway uses the same explicit Web origin but
 remains bearer-only and does not accept cookie credentials.
 
-These source routes and tests do not mean that the Broker, settings surface, GitHub
-App, Key Vault writer permissions, or any cloud service have been deployed. The
+These source routes and tests do not establish deployment of the Broker, settings
+surface, GitHub App, Key Vault writer permissions, or any cloud service. The
 connection does not create a Projects role, broaden OAuth authority, or enable paid
 execution. Automatic public webhook delivery and workflow triggers still require a
 separate service-identity scope decision; the current human-authenticated relay does
@@ -334,7 +334,7 @@ deny or require legitimate current refresh; caches cannot supply authority. A ch
 of owner, kind, scope, or GitHub identity requires an authorized new binding or selection.
 Legacy stored selections remain unchanged, and unsupported hosted selections require
 an explicit migration-required or unavailable result until a new selection is authorized.
-There is no automatic migration or hash rewrite. Exact `CredentialReference` remains BYOK-only.
+No automatic migration or hash rewrite occurs. Exact `CredentialReference` remains BYOK-only.
 
 The owner claims refresh before upstream rotation. After writing a new secret version,
 it rechecks current authority and publishes the reference through its PostgreSQL revision
@@ -372,7 +372,7 @@ owner authority after SDK awaits. The registration candidate also pins the exact
 Environment provider, lifecycle generation, lease revision, and lease-bounded expiry.
 After SDK preparation, the hook compares the current registration, verifies the
 observe grant, and checks lifetimes and cancellation immediately before `session.create`.
-There is no asynchronous owner lookup after that final grant verification.
+The hook performs no asynchronous owner lookup after that final grant verification.
 These pins do not give a run-bound token public project-write authority.
 
 The combined local harness uses actual Broker OAuth, current Core membership and roles,
@@ -392,13 +392,13 @@ that untrusted sandbox code cannot obtain real upstream credentials. Examples
 include model keys, Copilot access tokens, Git credentials, Azure bearer tokens,
 refresh tokens, private keys, and equivalent exchangeable cloud assertions. A `SecretRef`
 that the guest can redeem is not credential-less. Neither is federation that
-lets the guest obtain an upstream bearer token without a stored secret.
+gives the guest an upstream bearer token without a stored secret.
 
 The current [AgentHost](agenthost.md) consumes a model credential in the native
 SDK inside the Sandbox. That source remains a separate legacy credential-delivery
 path; its guarded tools, private state, and credential-free process environment
-do not establish this stronger boundary. The diagrams above describe existing
-Identity source, not the proposed guest boundary below.
+do not establish this stronger boundary. The existing diagrams describe the
+Identity source, not the proposed guest boundary.
 
 ### Trust boundary and placement
 
@@ -487,7 +487,7 @@ credentials. Resolve and validate the upstream TLS connection; any connection,
 DNS, credential, policy, or owner wait requires fresh binding/authority checks
 before authentication insertion and dispatch. Identity's post-acquisition grant
 check does not replace the gateway's action and placement postcheck. No saved
-allowlist, admission receipt, or token cache is fresh authorization by itself.
+allow list, admission receipt, or token cache is fresh authorization by itself.
 
 Freeze the validated method, route, resource, body hash, operation ID, and binding
 for dispatch. Do not accept new bytes or follow a new destination after the
@@ -541,7 +541,7 @@ One header-injection proxy cannot safely support every authentication protocol.
 | Git SSH, mTLS, pinned TLS, non-HTTP signing or authentication | Require a trusted protocol adapter holding keys and signing material outside the guest, with equivalent resource/action checks, or return explicit unsupported capability. A generic HTTP proxy cannot promise SSH signing, mTLS client-key isolation, TLS-pin compatibility, or safe credential injection into opaque encrypted traffic. |
 
 For an incompatible SDK mode, admit a **trusted model-runtime adapter outside
-the guest** using the existing AgentHost library and the same Copilot harness,
+the guest** through the existing AgentHost library and the same Copilot harness,
 registration, action checks and observation contracts. It consumes credentials
 there and returns only authorized native responses, tool requests and result
 data. Guest file/shell operations cross a narrow guarded bridge; the trusted SDK
@@ -607,7 +607,7 @@ authorized. A pinned client must use a supported explicit endpoint/adapter or
 fail admission; mTLS client certificates and keys stay on the trusted upstream
 leg. This proposal does not select Nginx or any new proxy product.
 
-Responses expose approved data, not upstream authentication state. Allowlist
+Responses expose approved data, not upstream authentication state. Allow list
 response headers and operation schemas; do not return bearer challenges with
 secrets, auth cookies, signed credential URLs, token exchange results, or
 credential-minting responses. Reject known injected credential reflection in
@@ -629,8 +629,8 @@ results; reject an unsafe response explicitly.
 ### Lifetime, revocation and trusted-host limits
 
 Credential expiry is bounded by provider expiry and the current grant, connection
-and lease limits, using the existing lifetime-narrowing behavior. A static API
-key may have a longer upstream lifetime: limiting its wrapper's use window does
+and lease limits by relying on the existing lifetime-narrowing behavior. A static API
+key can remain valid beyond its wrapper's use window. Limiting that window does
 not shorten the real key's validity. Keep that value only in the protected store
 and trusted operation memory; use the narrowest provider credential available.
 Where a provider cannot downscope a key per operation, state that resource/action
@@ -691,7 +691,9 @@ and project-compatible profile and newly accepted binding; no automatic secret
 movement, selection-hash migration or change to old accounting receipts.
 The follow-on slice is bounded: first one trusted L7 operation profile, forced
 placement/network admission, guest proof, and supported model-runtime integration;
-then separately admit Git/Azure/other profiles with the cases below. Unknown SDK
+then separately admit Git/Azure/other profiles after each profile passes the
+planned acceptance matrix.
+Unknown SDK
 compatibility is a validation item for its profile, not a broad release blocker.
 This proposal is separate from the current P1 critical path and does not reopen
 accepted native accounting or add a new P1 acceptance prerequisite.
@@ -704,7 +706,7 @@ SDK compatibility, token-free deployment or permission for live testing.
 | Case | Positive evidence | Negative evidence |
 | --- | --- | --- |
 | Boundary and proof | Exact provider/placement proof reaches only the admitted gateway operation; upstream sees only the trusted-side credential. | Guest environment/files/process memory/caches/mounts/sockets/snapshots contain no upstream token or projected assertion; copied proof from another placement/session, raw redemption, IMDS, Kubernetes and token exchange all deny. |
-| Current authorization | Exact user/app mode, connection, audience/scopes, resource/action and current registration/selection/lease/network generations pass before and after waits. | Change or revoke each binding during acquisition, DNS/TLS or owner waits; no authenticated upstream request follows a failed postcheck. Cache hits, allowlists, shell grants and forged owner headers cannot bypass action guards. |
+| Current authorization | Exact user/app mode, connection, audience/scopes, resource/action and current registration/selection/lease/network generations pass before and after waits. | Change or revoke each binding during acquisition, DNS/TLS or owner waits; no authenticated upstream request follows a failed postcheck. Cache hits, allow lists, shell grants and forged owner headers cannot bypass action guards. |
 | Forced mediation | Approved request succeeds via the selected L3/L4 and L7 providers with current enforcement evidence. | Direct IP/FQDN/IPv6, alternate ports, UDP/QUIC, CONNECT, proxy chains, guest DNS/NO_PROXY and gateway loss never reach protected upstreams directly. |
 | HTTP/TLS safety | Approved route resolves to a validated peer, with exact Host/SNI, trusted TLS and outside-guest auth insertion. | DNS rebinding, private/metadata targets, redirects, forged auth/Host/SNI, malformed framing and invalid certificates deny; pins/mTLS do not trigger TLS-verification disablement or a guest key fallback. |
 | Model/native behavior | Supported exact SDK/native/profile preserves model/session IDs, streaming, tool results, cancellation/abort-idle, actual AIUC/TotalNanoAiu and existing Orchestrator/Events receipts. | Unsupported SDK authentication or WebSocket operations deny admission; no raw token in guest RPC or cache, no new turn after failed abort, no duplicate pricing or proxy-byte ledger. |
@@ -715,7 +717,11 @@ SDK compatibility, token-free deployment or permission for live testing.
 
 ## PostgreSQL authentication and workload boundary
 
-Runtime PostgreSQL connections use the explicit `WorkloadIdentityCredential`, no password, and `SslMode.VerifyFull`. Npgsql acquires an Entra token asynchronously through `UsePasswordProvider` for each new physical connection, using the fixed scope `https://ossrdbms-aad.database.windows.net/.default`. The runtime username is the separately bootstrapped Entra runtime role.
+Runtime PostgreSQL connections use the explicit `WorkloadIdentityCredential`,
+no password, and `SslMode.VerifyFull`. Npgsql acquires an Entra token
+asynchronously through `UsePasswordProvider` from the fixed scope
+`https://ossrdbms-aad.database.windows.net/.default` for each new physical
+connection. The runtime username is the separately bootstrapped Entra runtime role.
 
 Ordinary host startup verifies that the `identity_broker` schema exists and that all migrations are applied; it never applies migrations or creates database roles. Only the explicit `--migrate` command runs migrations, in a separate one-shot Job with its own ServiceAccount, workload identity, connection-string key, token settings, and schema-owner role. See [PostgreSQL configuration and roles](../reference/contracts#identity-postgresql-access).
 

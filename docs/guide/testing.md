@@ -9,7 +9,7 @@ They keep the acceptance-only Probe's prepared `0.0.1` source version separate.
 They verify the canonical receipt and archived source notes.
 They check exact dependency compatibility and confirm that version application changes
 only version fields and release records, not runtime code or external package pins.
-These checks do not publish artifacts, apply SQL, or prove deployed behavior.
+The local checks do not publish artifacts, apply SQL, or prove deployed behavior.
 The local deployment-tool tests validate the exact v1 P0 target, release-stage
 manifest, source-bound publication result, ten digest-pinned GHCR service
 images, and nine shared Deployment/Service pairs. They also validate the
@@ -17,8 +17,8 @@ receipt-measured AgentHost image, platform, and byte-count pin supplied to
 Environment. Fake
 transports prove that the default dry-run issues no write command, GHCR
 verification uses the registry HTTP API without Docker/Podman, and resume still
-repeats target, provenance, and live health checks. These are local contract
-tests; they do not contact GitHub, GHCR, Azure, or Kubernetes and do not prove
+repeats target, provenance, and live health checks. These local contract tests
+do not contact GitHub, GHCR, Azure, or Kubernetes or prove
 that a published release or complete runtime manifest currently exists.
 Workflow source checks verify job-local package permission, the approved GitHub
 Packages feed, and the exact `ghcr.io/sabbour` destination guard. They execute
@@ -52,7 +52,7 @@ These 30 PostgreSQL cases compile but have not run for this source change.
 Checkpoint corruption and size-limit cases insert malformed fixtures directly.
 Decision-version cases append new decisions instead of changing saved rows.
 
-Each restricted-role case grants `SELECT`, `INSERT`, and `UPDATE` on only the column below.
+Each restricted-role case grants `SELECT`, `INSERT`, and `UPDATE` on only the column in the table.
 The column grant permits row locks; the trigger rejects all updates, including an unchanged value.
 
 | Owner migration | Table | Test role's only `UPDATE` column |
@@ -264,7 +264,7 @@ including AOF-always, healthy AOF, standalone-primary, and `noeviction` checks. 
 helper verifies the container ID, image, loopback binding, AOF path, and volume labels
 before any write. The restart case rechecks ownership immediately before restarting
 only that container, then reconnects to the same ID and pinned image. Every test uses a
-fresh key prefix; there is no `FLUSHALL` or namespace-wide cleanup.
+fresh key prefix; the tests never run `FLUSHALL` or perform namespace-wide cleanup.
 
 After the controlled test-owned instance is allocated, run only the native filter:
 
@@ -333,7 +333,7 @@ missing measurements, immutable rate cards, and redacted binding diagnostics.
 `AzureCostProviderTests` cover model-scoped standard token arithmetic, explicit
 rate-card source/currency/version, missing or unsupported token measurements,
 changed pins, overflow, unsupported BYOK quotes, and provisioned-throughput
-`Unpriced` behavior. These are pure local provider tests; they do not prove
+`Unpriced` behavior. These local provider tests are pure; they do not prove
 trusted BYOK receipt pricing, PostgreSQL integration, or Azure price retrieval.
 Hosted usage contract tests accept priced nano-AIU without optional SDK accounting metadata.
 They still reject wrong source identities, meter shapes, and unpriced entries.
@@ -532,7 +532,7 @@ configuration, and Owner and Orchestrator assignments for an active TenantAdmin,
 typed setup and readback receipts. The command reads a JSON request from
 standard input and writes a typed receipt to standard output. The runner then
 reads current authorization and project configuration. It accepts the selected
-run context using the plan's expected platform-runtime revision. It creates
+run context against the plan's expected platform-runtime revision. It creates
 the root session and, for a message journey, a child session. Before it runs
 the selected surface journey, it reads the exact owner state back.
 
@@ -571,8 +571,8 @@ npm run harness:p1 -- --surface ui --input <manifest.json> --output <evidence.js
 The JSONL output keeps source evidence, owner receipts, surface results, and
 cleanup status. A surface can pass while `fullP1Status` remains `blocked`
 because the admitted clients cannot produce the required native receipts.
-If privileged setup may have completed without a verified receipt, the output
-reports an indeterminate state; reconcile the invocation before retrying.
+If the output cannot verify whether privileged setup finished, it reports an
+indeterminate state; reconcile the invocation before retrying.
 
 API and MCP retries reuse the persisted invocation ID and deterministic
 idempotency keys. A UI gate or message action uses an application-generated
@@ -585,7 +585,7 @@ The UI adapter requires an already authorized page and exact Broker identity met
 It neither starts a browser nor changes its profile or stored credentials.
 Gate actions require current owner snapshots and exact request, actor, fence, state version, and answer contracts.
 Decision receipts must match that fence and the next state version, including owner denials.
-After awaited work, the adapter rechecks the exact page scope before final action clicks and replay proof.
+After awaited work, the adapter rechecks the exact page scope before each final action click and replay proof.
 Actual denials remain denials.
 Message acceptance and local browser echoes cannot prove delivery or gate completion.
 
@@ -652,7 +652,7 @@ See the [Projects profile boundary](../architecture/projects-config.md#selected-
 
 ## Planned GitHub Canvas adapter acceptance
 
-These are **unexecuted requirements**, not a passing suite or current adapter support.
+The cases are **unexecuted requirements**, not a passing suite or current adapter support.
 Research [#1901](https://github.com/sabbour/agentweaver/issues/1901) inspected public
 declarations and fake/example scenarios; it did not run interoperability, rendering,
 or restart tests. Separate implementation

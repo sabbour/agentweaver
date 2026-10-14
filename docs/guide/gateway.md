@@ -66,13 +66,13 @@ Set the required `Gateway:WebOrigin` to the Web application's exact HTTPS origin
 for example `https://web.example.com`. It must be a service root, not a wildcard,
 path, or URI containing credentials, query, or fragment. The Gateway processes
 preflight requests before authentication and applies exact-origin, route-specific
-method and header allowlists; it does not use a global permissive CORS policy.
+method and header allow lists; it does not use a global permissive CORS policy.
 Versioned API, OpenAPI, and run-bound GitHub App installation policies do not allow
 credentials. The Copilot connection BFF is the sole Gateway exception: its exact
 origin policy allows credentials for its callback cookie and only `GET`/`POST`
 with `Authorization`, `Accept`, `Content-Type`, and `X-Agentweaver-Tenant`.
 The direct Identity Broker Repo App browser endpoints have their own separate,
-credentialed CORS boundary and allowlist.
+credentialed CORS boundary and allow list.
 
 The `createKnowledgeRecord`, `updateKnowledgeRecord`, `restoreKnowledgeRecord`,
 `approveKnowledgeDecision`, `importKnowledgeRecords`, `promoteKnowledgeProposal`,
@@ -83,7 +83,7 @@ idempotency; it does not establish identity or approve an operation. Knowledge
 rejects missing, duplicate, blank, and invalid values. Reads, including
 `exportKnowledgeRecords`, and other Gateway operations do not require this header.
 Gateway request bodies are limited to 64 KiB by default; the Knowledge import
-endpoint alone allows up to 1 MiB. MCP allows an additional 64 KiB for the
+endpoint alone accepts up to 1 MiB. MCP accepts an additional 64 KiB for the
 JSON-RPC envelope.
 
 Responses preserve the owner's status and body. In particular, `202 Accepted` means
@@ -107,8 +107,9 @@ The result reports the current actor, selected tenant and membership revision,
 optional project/run bindings, and effective authority. It is advisory context for
 the client, not a permission grant or a cacheable authorization decision.
 
-The Web client supplies that selector only on the allow-listed Projects/configuration,
-run Coordination, Knowledge, run Selection/Usage, and finite journal replay calls.
+The Web client supplies that selector only on routes included in the allow list:
+Projects/configuration, run Coordination, Knowledge, run Selection/Usage, and
+finite journal replay calls.
 The live event SSE route and unrelated APIs do not receive it. Context and selector
 forwarding do not replace the owning service's authorization check.
 
@@ -178,7 +179,7 @@ only `installation_id`, `setup_action`, and `state`. Each callback forwards only
 its exact `__Host-agentweaver-repo-app-auth` or
 `__Host-agentweaver-repo-app-install-auth` cookie. It preserves the owner's
 `Location` and every `Set-Cookie` value. The owner consumes its
-persisted single-use state and redirects only to a configured allow-listed route.
+persisted single-use state and redirects only to a route on the configured allow list.
 
 Installation setup is a cookie-and-CSRF-protected browser POST to the
 Identity Broker's `/auth/github/repo-app/install` endpoint. The Broker owns
@@ -215,7 +216,7 @@ User-level consent, repository discovery/selection, and browser callbacks are
 not in that OpenAPI document and cannot be called through MCP.
 
 The MCP host validates the Identity Broker issuer, signature, lifetime, and its
-configured audience using OpenIddict. It publishes RFC 9728 protected-resource
+configured audience through OpenIddict. It publishes RFC 9728 protected-resource
 metadata with `resource` set to `Identity:Audience` and
 `authorization_servers` set to `Identity:Issuer`. For an audience such as
 `https://api.example/mcp`, the metadata URL is
@@ -247,7 +248,7 @@ root. The Gateway URL is not selected by MCP tool arguments.
 `GET /api/v1/projects/{projectId}/runs/{runId}/events/live` reads one event at a time
 from the Events owner's committed run journal. It checks current Projects & Config
 read authority for the exact signed project/run before loading the first page and
-again after each page has loaded but before writing an event. It repeats that
+again after it loads each page but before it writes an event. It repeats that
 check before every later event. Immediately before each write, it also checks that
 the validated bearer token has not expired while an owner request was in progress.
 A revoked or expired caller therefore receives no subsequent event; if an SSE
@@ -269,7 +270,7 @@ response is `Cache-Control: no-store`. This adds no role or write permission.
 The OpenAPI document uses concrete component schemas for the delegated owner
 contracts. It preserves owner-defined response status codes and bodies; it does not
 replace owner validation or error handling. An Events transport failure before the
-SSE response starts returns a structured `502` problem. If the response has started,
+SSE response starts returns a structured `502` problem. After the SSE response starts,
 the Gateway aborts the stream instead of appending a JSON problem to event data.
 
 ## Configuration and local checks

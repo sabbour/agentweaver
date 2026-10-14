@@ -8,8 +8,8 @@ around the provider-neutral `ISecretRedemption` contract from
 `Agentweaver.Secrets.AzureKeyVault`. It denies a request unless a
 host-authenticated actor and a server-owned grant permit the *exact* request.
 The grant must match the actor, project, run, purpose, and SecretRef identifier
-and version. Workload identity (see the Key Vault adapter) lets the
-platform authenticate to Azure; it does not authorize an Agentweaver caller.
+and version. The platform uses workload identity (see the Key Vault adapter)
+to authenticate to Azure; it does not authorize an Agentweaver caller.
 This library is that separate authorization layer.
 
 ```csharp
@@ -25,8 +25,8 @@ var credential = await redemption.RedeemAsync(request, cancellationToken);
   comes from caller-supplied request data.
 - `SecretRedemptionGrant` is an immutable, server-owned record binding exactly
   one actor, project, run, purpose, and SecretRef identifier/version, with an
-  `Active`/`Revoked` state and a strictly future expiry. There is no
-  wildcard or admin-scope grant shape. Changing what a grant authorizes
+  `Active`/`Revoked` state and a strictly future expiry. A grant cannot use a
+  wildcard or an admin scope. Changing what a grant authorizes
   requires a new `GrantId` or a changed immutable `Revision`; this type exposes
   no setters. The optional constructor `revision` follows `timeProvider` and
   defaults to `"1"` for a new grant. The authority must advance it on every
@@ -147,5 +147,5 @@ authorize network destinations, or trigger browser redirects. See the
 Run its tests with
 `dotnet test tests\Agentweaver.Identity.Tests\Agentweaver.Identity.Tests.csproj --no-build --no-restore --configuration Release`
 after the root README's locked restore and Release build. They use fake
-in-memory `IGrantAuthority` and `ISecretRedemption` implementations; there is
+in-memory `IGrantAuthority` and `ISecretRedemption` implementations and require
 no network, Azure account, or deployed dependency.

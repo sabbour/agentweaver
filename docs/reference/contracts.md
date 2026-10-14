@@ -73,10 +73,11 @@ The owner requires `api.read` and a non-purpose token. The response identifies
 the actor, current tenant and membership revision, optional project/run bindings,
 and effective authority; the Gateway validates the exact versioned JSON response
 and marks it `Cache-Control: no-store`. This context does not authorize later
-operations. The retained Web client forwards the selector only on its explicitly
-allow-listed Projects/configuration, run Coordination, Knowledge, run
-Selection/Usage, and finite journal replay routes; live SSE and unrelated calls
-remain selector-free. GitHub Repo App and ordinary Identity Broker browser
+operations. The retained Web client forwards the selector only on routes
+included in the allow list: Projects/configuration, run Coordination,
+Knowledge, run Selection/Usage, and finite journal replay. Live SSE and
+unrelated calls remain selector-free.
+GitHub Repo App and ordinary Identity Broker browser
 calls remain selector-free; Copilot user-connection BFF lifecycle calls forward
 only the optional explicit tenant selector to their owning Broker.
 
@@ -102,7 +103,7 @@ single-use `{ "selectionCode", "expiresAt" }`.
 
 | Method and path | Contract |
 | --- | --- |
-| `POST /api/auth/github/repo-app/authorizations` | Begin user OAuth with optional allow-listed `returnRouteKey`; returns `authorizationUrl`, `transactionId`, and `expiresAt`. |
+| `POST /api/auth/github/repo-app/authorizations` | Begin user OAuth with optional `returnRouteKey` for a route on the allow list; returns `authorizationUrl`, `transactionId`, and `expiresAt`. |
 | `GET /api/auth/github/repo-app/authorization/status` | Read `{ connected, githubLogin, connectionId }`. |
 | `GET /api/auth/github/repo-app/authorizations/{transactionId}` | Read the transaction's `{ status }`. |
 | `POST /api/auth/github/repo-app/authorization/refresh` / `DELETE /api/auth/github/repo-app/authorization` | Refresh or revoke owner-held user authorization; no token payload. |
@@ -332,7 +333,7 @@ Reviewed remote tool contracts retain immutable snapshot data, exact call identi
 canonical arguments, and matching result metadata. The internal snapshot store checks
 the full stored snapshot digest and rejects conflicting reuse of an ID. Its embedded
 018 SQL resource is tested directly but is not registered in the normal migration path.
-The accepted Projects configuration may carry exact `reviewedRemoteToolSnapshots`
+The accepted Projects configuration can include exact `reviewedRemoteToolSnapshots`
 references. Orchestrator resolves these references against the immutable store and
 checks the stored digest, project, and exact reference. It refreshes Projects authority
 after resolution and rejects missing, changed, duplicate, or foreign references.
@@ -382,7 +383,7 @@ caller cannot submit a resource pin or override the durable binding.
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/recovery` | Recover a failed/indeterminate run using its current fence/state version plus an idempotency key and recovery cause/reference. The owner advances the fence again, resets only failed/indeterminate logical turns to idle, and commits a recovery outbox event; it does not replay or compensate physical effects. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/suspend` | Accept `{ "idempotencyKey": "..." }`. Until a real authenticated AgentHost drain/checkpoint path can produce the required cache, journal, workspace, and network evidence, persist an `interrupted` operation/manifest and return `503`; do not claim suspension or a new Core fence. An exact retry replays the recorded outcome. If the 019 schema extension is not active, return an explicit schema-unavailable `503` without claiming a persisted operation. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/resume` | Accept `{ "idempotencyKey": "...", "manifestId": "..." }`. Validate the manifest's run/session scope, canonical hash, and fence, then fail closed with a persisted `interrupted` operation/manifest and `503` until a real restore, current egress verification, and fenced dispatch path exists. If the 019 schema extension is not active, return an explicit schema-unavailable `503` without claiming a persisted operation. |
-| `POST /internal/runtime/suspend/require-current` | Authenticated host control path. Accept the exact `RuntimeHostSuspendRequest` and return that same request only when its proof's current registration binding and Projects authority match the persisted suspend operation, reserved manifest ID, fence, `fenced` phase, and positive phase version. The check does not require or create a terminal manifest before capture. Workspace data generation may be zero, but a completed suspended manifest still requires an exact tree hash or provider checkpoint. |
+| `POST /internal/runtime/suspend/require-current` | Authenticated host control path. Accept the exact `RuntimeHostSuspendRequest` and return that same request only when its proof's current registration binding and Projects authority match the persisted suspend operation, reserved manifest ID, fence, `fenced` phase, and positive phase version. The check does not require or create a terminal manifest before capture. Workspace data generation can be zero, but a completed suspended manifest still requires an exact tree hash or provider checkpoint. |
 | `GET /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/notifications?limit={limit}` | Read unacknowledged parent notifications; the limit defaults to 50 and is bounded to 100. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/notifications/{notificationId}/acknowledge` | Acknowledge a notification belonging to this parent session. |
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/messages/{messageId}/acknowledge` | Acknowledge a delivered message using its claim fence; receipt is not gate approval or work completion. |
@@ -406,7 +407,7 @@ support a retained UI without making a UI part of this contract.
 | `POST /api/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/build-test/commands/{checkpointId}/{stepId}/workspace-capture/verify` | Checks the exact native capture reference, collector Pod, and journal acknowledgment against the current accepted command, original seed, and canonical admitted Source Control row. Requires a matching object reference and positive journal position. Rechecks current command and source-owner authority after reads. Returns the verified `ProducedRunCaptureJournalEntry` with no-store. A caller-supplied acknowledgment alone is not admission. |
 | `POST /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/fork-admission` | Events-only owner callback. Requires the forwarded authenticated actor and exact target/event/cursor/idempotency request to match a durable pending fork reservation, and revalidates the current accepted selection and execution fence. Returns a typed `SessionForkAdmissionReceipt` with `Cache-Control: no-store`; an absent, changed, stale, or terminal reservation returns `409`. |
 | `GET /api/projects/{projectId}/runs/{runId}/coordination/policy-evaluations/{receiptId}` | Events-only read of the immutable Orchestrator-owned PolicyEvaluation receipt. |
-| `GET /api/projects/{projectId}/runs/{runId}/coordination/policy-evaluations/{receiptId}/admission` | Events-only current admission check for that exact owner receipt. Every outcome requires current Core write authority and accepted selection, plus the matching actor/tenant and active owner session/run writer/fence. The owner rechecks authority after SQL row-lock waits, including duplicate receipt paths. Allow also requires the exact unexpired grant/fence; Deny/Error may reference an issued inactive grant but remain non-authorizing immutable facts. Returns no-store. |
+| `GET /api/projects/{projectId}/runs/{runId}/coordination/policy-evaluations/{receiptId}/admission` | Events-only current admission check for that exact owner receipt. Every outcome requires current Core write authority and accepted selection, plus the matching actor/tenant and active owner session/run writer/fence. The owner rechecks authority after SQL row-lock waits, including duplicate receipt paths. Allow also requires the exact unexpired grant/fence; Deny/Error can reference an issued inactive grant but remain non-authorizing immutable facts. Returns no-store. |
 
 Configuration:
 
@@ -457,7 +458,7 @@ role claims are not required.
 | `GET /internal/projects/{projectId}/runs/{runId}/usage` | Optional native usage totals route. Requires current `ReadRunSelection` for the exact signed project/run and returns exact run and agent totals. |
 | `POST /internal/projects/{projectId}/runs/{runId}/usage/copilot-run-admission` | Optional run-start pricing route. Accepts contract version 1 and only the accepted-selection hash. Requires current `ReadRunSelection` and `AcceptRunSelection`, rereads the trusted Projects selection, and resolves the shared versioned AgentHost model map. Returns a no-store receipt with the concrete model/connection, real Cost pin, zero-work quote, and Copilot-only totals. Missing or unpriced pricing rejects before capped root acceptance; no SDK or usage evidence is invented. |
 | `POST /internal/projects/{projectId}/runs/{runId}/usage/copilot-cost-snapshot` | Optional observed pricing route. Requires current run authority and exact immutable source and ledger references. Native references require matching authenticated Core proof reads before and after the Cost transaction. Returns no-store; unavailable or changed evidence fails. |
-| `GET /internal/sessions/{sessionId}/events?cursor={cursor}&limit={limit}` | Read an ordered page for one session after an optional opaque cursor. Positions are run-wide and may have gaps in a session-only page. |
+| `GET /internal/sessions/{sessionId}/events?cursor={cursor}&limit={limit}` | Read an ordered page for one session after an optional opaque cursor. Positions are run-wide and can have gaps in a session-only page. |
 | `GET /internal/sessions/{sessionId}/events/live?cursor={cursor}&maximumEvents={count}&maximumDurationSeconds={seconds}` | Poll durable journal state and stream NDJSON `SessionEventDelivery` records, each containing the event and a reconnectable `nextCursor`. |
 | `GET /internal/projects/{projectId}/runs/{runId}/events?cursor={cursor}&limit={limit}` | Read a bounded, run-ordered page across all sessions in the authorized project/run. |
 | `GET /internal/projects/{projectId}/runs/{runId}/events/live?cursor={cursor}&maximumEvents={count}&maximumDurationSeconds={seconds}` | Poll and stream run-ordered NDJSON deliveries across sessions; each delivery includes a reconnectable `nextCursor`. |
@@ -482,7 +483,7 @@ transaction. Every outcome requires fresh current Core authority, accepted selec
 matching actor/tenant, and the current owner session/run writer and fence. The owner
 rechecks Core authority and accepted selection after SQL row-lock waits and before
 returning admission success. Allow receipts additionally require an exact, active
-grant/fence match; Deny/Error receipts may reference an issued inactive grant but remain
+grant/fence match; Deny/Error receipts can reference an issued inactive grant but remain
 same-actor immutable evidence, not an allowance. The envelope binds project/run/session. The payload contains bounded
 actor/tenant/step, grant reference/revision, purpose/action/fence,
 outcome/reason, and provider/options identity metadata. It has no arbitrary
@@ -515,7 +516,7 @@ All handled responses use `no-store`.
 Generic material routes and public event routes do not grant private result access.
 The shared receipt validator requires exact event, identity, runtime binding, proof,
 source, length, and SHA-256.
-A read template may adopt only the recorded content class; all other proof fields remain exact.
+A read template can adopt only the recorded content class; all other proof fields remain exact.
 See the [TLS configuration and unproven acceptance boundary](../architecture/events-sessions#private-result-tls-configuration).
 
 The service also exposes protected internal addressed-message routes:
@@ -701,7 +702,8 @@ Unknown request members deny.
 The callback requires `__Host-agentweaver-copilot-link`.
 Identity sets `Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, and a five-minute lifetime without a `Domain`.
 The frontend callback requires the current bearer and forwards only this nonce through its authenticated BFF completion request.
-There is no anonymous callback exchange, bearer in state, or credential persistence in PostgreSQL.
+The callback does not exchange codes anonymously, store bearer values in state,
+or persist credentials in PostgreSQL.
 Gateway routing and browser surfaces remain separate source slices.
 
 Malformed successful OAuth or user responses return an explicit contract error and leave the connection in `refreshIndeterminate`.
@@ -739,7 +741,7 @@ All runtime responses are no-store.
 | Method and path | Contract |
 | --- | --- |
 | `POST /runtime/v1/configure` | `RuntimeBootstrapDeliveryRequest`. Delivers the pending configure nonce without activating a model session. |
-| `POST /runtime/v1/configure/activate` | `RuntimeHostConfigureRequest`: version 1, exact registration, consume/exchange operation IDs, and delivered configuration. Exact replay returns the existing immutable session. Workflow-bound Hosted Copilot may use a hard credit limit through prepared-dispatch and native-begin admission. An unbound positive hard limit still fails with `runtime_usage_affinity_unavailable`; the prepared session is cleaned up and readiness is withheld. |
+| `POST /runtime/v1/configure/activate` | `RuntimeHostConfigureRequest`: version 1, exact registration, consume/exchange operation IDs, and delivered configuration. Exact replay returns the existing immutable session. Workflow-bound Hosted Copilot supports a hard credit limit through prepared-dispatch and native-begin admission. An unbound positive hard limit still fails with `runtime_usage_affinity_unavailable`; the prepared session is cleaned up and readiness is withheld. |
 | `POST /runtime/v1/refresh` | `RuntimeHostRefreshRequest`: exact `RuntimeHostSessionProof` and operation ID. Current Identity and owner authority control rotation and replay. |
 | `GET /runtime/v1/readiness` | Returns the existing noncredential `RuntimeHostReadinessReceipt` after it revalidates the caller, current registration, session, Observe grant, and readiness evidence. It does not start an SDK session or send a turn. |
 | `POST /runtime/v1/a2a/message:send` | `RuntimeA2ASendRequest`: one user text message, GUID message ID, native context ID, exact runtime proof, and delivery mode. `immediate` precedes pending `enqueue` work only at the next native idle boundary. A hard-cap denial returns only after the Host records the complete empty native range as source-owned no-send evidence. |
@@ -925,7 +927,7 @@ Contract version 1 contains the caller and selected tenant, current membership r
 
 | Key | Requirement |
 | --- | --- |
-| `ProjectsConfig:Authentication:BrokerRunBindingAudience` | Optional, distinct HTTPS audience for the private Broker proof route. When configured, the TLS settings below are required. |
+| `ProjectsConfig:Authentication:BrokerRunBindingAudience` | Optional, distinct HTTPS audience for the private Broker proof route. When configured, the route requires its TLS certificate, private key, and server-certificate digest. |
 | `ProjectsConfig:Tls:CertificatePath` / `KeyPath` | Absolute paths to the existing Projects server certificate and private key. The certificate must be current, non-CA, and valid for server authentication. |
 | `ProjectsConfig:Tls:ServerCertificateSha256` | SHA-256 hex digest of the exact leaf certificate DER used by Kestrel. |
 
@@ -958,7 +960,7 @@ route and the authority response.
 | `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records` | Create a Memory, SessionContext, or Proposal record. Requires one `Idempotency-Key`; a new write returns `201`, an identical retry returns `200`, and reuse with different request content returns `409`. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records?kind={kind}&q={text}&includeInactive={bool}&page={n}&pageSize={n}` | Search only the requested project and agent, with bounded pages; requires current `AccessPrivateKnowledge` for private content. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}` | Read one record in the requested project/agent scope; requires current `AccessPrivateKnowledge` for private content. |
-| `PUT /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}` | Append a revision using `expectedRevision` compare-and-swap and an `Idempotency-Key`; stale revisions return `409`. Memory and Decision records may be archived; only Decisions may be superseded, and the replacement link must identify a Decision. |
+| `PUT /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}` | Append a revision using `expectedRevision` compare-and-swap and an `Idempotency-Key`; stale revisions return `409`. You can archive Memory and Decision records, but you can supersede only Decisions; the replacement link must identify a Decision. |
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}/revisions?page={n}&pageSize={n}` | Read bounded immutable revision history; requires current `AccessPrivateKnowledge` for private content. |
 | `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}/restore` | Body selects a historical `revision` and supplies current `expectedRevision` plus optional `reason`; with an `Idempotency-Key`, appends a new head rather than rewinding history. The restored record is Active+Pending; a Decision requires explicit approval before it is trusted again. |
 | `POST /api/projects/{projectId}/runs/{runId}/agents/{agentId}/records/{recordId}/approve` | Explicitly approve an Active Pending or Legacy Decision using `expectedRevision`, optional `reason`, and an `Idempotency-Key`; appends an approval revision. This does not promote a proposal or deliver an accepted project fact. |
@@ -1044,9 +1046,9 @@ current event-delivery boundaries.
 The host does not use ambient credentials or a development-certificate fallback.
 
 `ProjectsConfig:Authentication:BrokerRunBindingAudience` is an optional, distinct
-absolute HTTPS audience. When configured, Projects & Config enables the private
-run-binding route and validates its short-lived signed Broker request tokens
-separately from public bearer tokens.
+absolute HTTPS audience. Configuring this audience activates the private
+run-binding route. Projects & Config validates its short-lived signed Broker
+request tokens separately from public bearer tokens.
 
 ## Identity PostgreSQL access
 

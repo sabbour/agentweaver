@@ -79,12 +79,12 @@ Verify also requires the owner's latest verified policy generation to match
 the requested generation, with no reserved or unresolved network effect. A
 provider readback alone cannot make an untracked generation ready. Failed or
 stale operations that never started a provider call do not block release;
-operations that may have changed provider state remain unresolved until exact
+operations with possible provider-state changes remain unresolved until exact
 reconciliation.
 
 The owner producer is registered in the host, but the existing run/environment
-registration producer has not yet been bound to it. There is deliberately no
-public lifecycle-registration endpoint: Apply and Bind cannot create or default
+registration producer is not yet bound to it. No public lifecycle-registration
+endpoint exists: Apply and Bind cannot create or default
 an Environment owner, so unknown Environments remain denied until the producer
 integration is supplied.
 
@@ -99,7 +99,7 @@ destinations—is rejected; agent credentials must not be sent directly to those
 services.
 
 Previously persisted egress rules with only `host`, `port`, and `protocol` are
-read as `PublicHttps` FQDN rules. Their old effective allowlist is retained as
+read as `PublicHttps` FQDN rules. Their old effective allow list is retained as
 the baseline, narrowing, and run needs, so this compatibility path cannot widen
 access. `PublicHttps` requires L7 mediation; this Cilium-only slice therefore
 fails closed for those legacy selections instead of treating unclassified
@@ -121,8 +121,8 @@ mediation or prove a remote MCP request.
 
 The Cilium adapter assigns a hashed environment/owner selector and derives its
 resource name from the full owner tuple. It applies a positive policy generation
-against the explicit expected predecessor using the observed Kubernetes
-resource version, and verifies the
+against the explicit expected predecessor and observed Kubernetes resource
+version, then verifies the
 exact policy object, selector, spec, intent hash, and generation on readback.
 It pins through the existing `ProviderResolver.PinNetworkPolicy` only after
 that verification. Revoke advances the generation to a verified empty-egress
@@ -139,7 +139,7 @@ remains false because an API readback is not datapath evidence.
 BuildTest uses separate Cilium policies for command and output-collector Pods.
 Each policy binds the stable operation ID, role, owner, and current Sandbox/Workspace fences; neither policy permits egress.
 Environment persists the policy binding and checks its UID and specification before it releases the corresponding Pod scheduling gate.
-This is policy-object evidence, not proof that a deployed Cilium datapath enforced the policy.
+The policy-object readback is evidence, not proof that a deployed Cilium datapath enforced the policy.
 
 The [credential-less sandbox proposal](identity-secrets.md#network-tls-and-hostile-input)
 extends this layered design with a required trusted L7 gateway for that mode,
@@ -147,7 +147,7 @@ not a new credential-sourcing provider. L3/L4 enforcement must force protected
 traffic through it and deny guest credential acquisition and direct bypass.
 The gateway independently validates current action/resource authority before
 trusted-side credential injection. Proxy environment variables and static
-allowlists are insufficient. The current Cilium-only candidate has no L7
+allow lists are insufficient. The current Cilium-only candidate has no L7
 adapter and cannot report credential-less readiness; existing generation,
 owner fences, and explicit unsupported behavior remain unchanged.
 

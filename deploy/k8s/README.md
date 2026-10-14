@@ -38,8 +38,8 @@ and `agentweaver.io/identity-client: "true"` labels to the actual controller-own
 The latter selects the existing Identity Broker network rule; it grants no application
 identity or authorization. The profile asks the Sandbox controller to create a private
 ClusterIP Service. The provider accepts only HTTPS on TCP 8443 and verifies that the
-Service selector resolves to the actual AgentHost Pod. This is not a shared AgentHost
-Deployment or Service.
+Service selector resolves to the actual AgentHost Pod. The profile does not create a
+shared AgentHost Deployment or Service.
 
 ## Selected Projects runtime profile
 
@@ -91,7 +91,7 @@ signed by the public CA in the operator-owned `service-backend-ca` ConfigMap.
 MCP mounts that ConfigMap read-only to validate Gateway certificates. Private
 keys stay in the service TLS Secrets.
 BackendTLSPolicies validate the exact service DNS name against that CA.
-These are source-defined routes, not proof that the managed Gateway is accepting traffic.
+The source routes do not prove that the managed Gateway accepts traffic.
 `CHANGEME-MANAGED-HOST` requires the `agentweaver` prefix within the certificate's
 reported wildcard domain.
 The zone root is not a service hostname.
@@ -170,8 +170,9 @@ outputs and the selected tenant. Do not use the `foundation-probe` identity.
 The image reference uses a non-deployable `registry.invalid`/zero-digest
 sentinel. Replace it with the approved immutable registry image digest in an
 environment overlay. Replace each `CHANGEME-*` egress host with the exact
-approved endpoint; do not add wildcard or public egress rules. The upstream
-OIDC authority and metadata/JWKS endpoints may require separate exact hosts.
+approved endpoint; do not add wildcard or public egress rules. Add separate
+exact hosts for the upstream OIDC authority and metadata/JWKS endpoints when
+their hostnames differ.
 
 The ordinary base never runs migrations. After separate approval, apply the
 Identity bootstrap SQL as the PostgreSQL Entra administrator, then explicitly
@@ -184,8 +185,8 @@ fails startup.
 
 The Broker executable provides an explicit
 `--bootstrap-identity-postgres` maintenance command. It uses the operator's
-Azure CLI login only on the operator host, then connects with Npgsql using
-`VerifyFull` TLS and the configured PostgreSQL FQDN. It creates the configured
+Azure CLI login only on the operator host, then uses Npgsql with
+`VerifyFull` TLS to connect to the configured PostgreSQL FQDN. It creates the configured
 database, two exact Entra workload roles, and the `identity_broker` schema
 only when no unexpected user database or partial bootstrap exists. It does
 not run migrations or run as part of ordinary startup. Supply
@@ -200,8 +201,8 @@ path and AKS-only redeployment to the verified existing P0 target; the
 full-foundation empty-resource-group guard remains unchanged. For the approved
 private PostgreSQL endpoint, the installer creates a temporary TCP-only proxy
 pod and loopback-only port-forward. The operator host keeps the password-free
-Azure CLI Entra token and connects through that tunnel using `VerifyFull` TLS
-with the PostgreSQL FQDN as the certificate target. It removes only the exact
+Azure CLI Entra token and connects through that tunnel with `VerifyFull` TLS
+and the PostgreSQL FQDN as the certificate target. It removes only the exact
 run-owned pod and ConfigMap, stops its exact port-forward process, and removes
 temporary local files. It does not create a public route, app registration,
 secret, or Azure role assignment. An interrupted database creation requires
@@ -254,7 +255,7 @@ default, the checked-in `scripts/release/runtime-list.mjs` source renders a
 Kubernetes `List` containing one restricted Deployment and private ClusterIP
 Service for each of the nine shared product services. It takes the Projects
 provider-catalog ConfigMap name and reviewed source commit explicitly. An
-operator may instead supply a complete rendered list with `--runtime-manifest`.
+operator can instead supply a complete rendered list with `--runtime-manifest`.
 The tool verifies the GitHub
 annotated tag and Release, source SHA, all ten public GHCR manifests, the exact
 Azure/kubectl target, and referenced prerequisites before it can render or apply.
@@ -274,8 +275,8 @@ uses the existing Azure CLI and kubectl contexts only after verifying them
 against those values. It does not login, fetch AKS credentials, switch contexts,
 or consult any 0.x target.
 
-Only nine pairs of `Deployment` and `Service` objects may appear in the supplied
-runtime List. AgentHost must not appear there. All referenced ServiceAccounts,
+The supplied runtime List can contain only nine pairs of `Deployment` and
+`Service` objects. AgentHost must not appear there. All referenced ServiceAccounts,
 runtime ConfigMaps, Secrets, PVCs, and service-specific Cilium policies must
 already exist in this namespace.
 Deployments must pin the exact GHCR digest, use the existing per-service
@@ -299,7 +300,7 @@ No current source release is deployable: `releases/foundation.json` remains
 `draft`, no product publication receipt exists, and the nine-service runtime
 List is generated from checked-in source but has not been deployed. The source
 now supports a run-scoped AgentHost
-Sandbox profile, but this does not prove production scheduling, a live
+Sandbox profile, but the profile does not prove production scheduling, a live
 controller-created Service, or complete runtime delivery. Existing
 service-specific runtime configuration, including service ConfigMaps, TLS
 Secrets, the Projects provider catalog, and database/access/TLS prerequisites
@@ -307,7 +308,7 @@ also remain operator-owned. The renderer only references those existing objects;
 it does not supply values, create them, or guess database mappings.
 
 An explicit `--execute` applies only those nine shared-workload Deployments and
-ClusterIP Services. `--resume` may skip an already-applied stage only when its
+ClusterIP Services. `--resume` can skip an already-applied stage only when its
 checkpoint binds the exact tag, source SHA, release manifest, publication
 receipt, runtime List, and target. It always repeats live target, image
 provenance, rollout, pod-readiness, and running-image-ID checks. A successful

@@ -41,12 +41,13 @@ The SDK has prompt-capacity configuration, but that alone does not establish
 end-to-end limit enforcement.
 These boundaries do not count the SDK's internal model API calls.
 For a zero Hosted Copilot hard limit, startup remains allowed, but the host
-blocks a message before it enters the turn queue. It reads the native event log
-and requires a complete empty range before the owner stores a guard receipt and
-linked no-send evidence. The receipt binds the message hash and current Observe
-grant, not the prompt text. An incomplete range or failed owner write fails
-closed. Orchestrator also stores a stage-specific receipt before denying a
-model-turn action at its authorization or verification boundary.
+denies model-turn dispatch and never calls the SDK's native Send. Before it
+returns the budget error, it reads the native event log and requires a complete
+empty range, then the owner stores a guard receipt and linked no-send evidence.
+The receipt binds the message hash and current Observe grant, not the prompt
+text. An incomplete range or failed owner write fails closed. Orchestrator also
+stores a stage-specific receipt before denying a model-turn action at its
+authorization or verification boundary.
 
 Before native session creation, AgentHost reads skills through the current runtime
 registration. Orchestrator checks the accepted run selection and current read
@@ -196,7 +197,7 @@ Unsupported control characters, such as NUL, deny before dispatch.
 It does not interrupt an active native turn.
 
 Hosted Copilot runs with no hard credit limit retain legacy startup and do not require a price quote.
-A zero hard limit permits startup but blocks model-turn dispatch after the host records the complete-empty-range proof described above. A positive hard limit requires a priceable source and workflow-bound dispatch admission against observed whole-run usage; an unbound positive hard limit is rejected before readiness.
+A zero hard limit permits startup but denies model-turn dispatch. Before returning the budget error, the host must record a complete-empty-range no-send proof; it never calls the SDK's native Send. A positive hard limit requires a priceable source and workflow-bound dispatch admission against observed whole-run usage; an unbound positive hard limit is rejected before readiness.
 BYOK remains token-metered and does not use the Copilot nano-AIU price preflight.
 An exact message replay shares the original completion; changed content under the same ID denies.
 Completed responses remain available for the configured host lifetime, independent of the pending-turn limit.
@@ -299,8 +300,8 @@ When a valid whole-run pricing snapshot first reaches or exceeds the configured
 soft-credit limit, the guard queues one durable warning event through the existing
 outbox. Replays, concurrent admissions, and later snapshots do not duplicate that
 warning; later priced totals still advance the observed-credit floor and ledger-event
-count. These are admission-time observations, not immediate per-call settlement:
-costs not yet visible in Events may be priced later.
+count. These admission-time observations are not immediate per-call settlement:
+Events can price those costs after they become visible.
 At or above the hard limit, it records exhaustion and denies new dispatch.
 The currently executing turn can report usage above the limit; the next dispatch cannot start.
 Another sending or accounting-pending dispatch blocks hard-capped admission.
@@ -312,7 +313,7 @@ event-log range with zero events and the same before/after cursor, then stores a
 source-owned no-send receipt through `POST /internal/runtime/turns/no-send`.
 The Host returns the budget error only after that receipt is stored. An event,
 incomplete range, or changed cursor fails closed, and native Send is not called.
-This proves only the bounded no-send interval, not later accounting finality.
+The no-send receipt proves only the bounded no-send interval, not later accounting finality.
 AgentHost exposes authenticated read routes at
 `POST /runtime/v1/turns/fixed-credit-denials/read` and
 `POST /runtime/v1/turns/denials/read`. Each request contains the current session
@@ -367,7 +368,7 @@ The source owner also exposes an authenticated, read-only completion-proof route
 It reads only an owner-persisted hosted-Copilot source-completion manifest with matching dispatch scope and digest.
 The retained SDK source supplies the actual meter mode, including for an empty receipt set.
 An absent or unproven manifest returns `404` with `Cache-Control: no-store`.
-There is no caller-facing manifest writer.
+The host exposes no caller-facing manifest writer.
 The current native observation path writes only `partial` reports, so it cannot supply this proof.
 SDK 1.0.18 and runtime 1.0.79 expose no supported accounting-source finality guarantee.
 Their output completion receipt, usage status, idle event, and watermarks do not prove
@@ -487,7 +488,7 @@ They reject any extracted native package cache in private state.
 CI separately runs the same image as UID/GID 1000 with an owner-writable `0755` workspace and private `0700` mounts.
 It checks actual create, write, rename, read, and delete operations without network or a model call.
 Fixture configuration and TLS files use mode `0440`.
-This is simulated POSIX access proof, not a live Azure Files receipt or deployed TLS acceptance.
+The check provides simulated POSIX access proof, not a live Azure Files receipt or deployed TLS acceptance.
 The receipt and native status remain exact-candidate CI artifacts, not publication or live Sandbox acceptance.
 
 Release preparation now uses this same Dockerfile with only committed inputs.
