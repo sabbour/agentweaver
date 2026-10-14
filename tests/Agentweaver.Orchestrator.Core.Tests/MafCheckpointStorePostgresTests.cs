@@ -448,7 +448,7 @@ public sealed partial class MafCheckpointStorePostgresTests : IAsyncLifetime
         command.Parameters.AddWithValue("project", _binding.Identity.ProjectId);
         command.Parameters.AddWithValue("run", _binding.Identity.RunId);
         command.Parameters.AddWithValue("session", _binding.Identity.SessionId);
-        command.Parameters.AddWithValue("store", _binding.StoreName);
+        command.Parameters.AddWithValue("store", MafExecutionCheckpointContract.StoreName);
         command.Parameters.AddWithValue("checkpoint", checkpointId);
         Assert.Equal(1, await command.ExecuteNonQueryAsync());
     }

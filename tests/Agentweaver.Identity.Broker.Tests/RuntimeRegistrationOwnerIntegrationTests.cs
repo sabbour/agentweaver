@@ -1084,7 +1084,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(binding.ExecutionFence, observedDispatch.ExecutionFence);
         Assert.Equal("prepared", observedDispatch.State);
         Assert.Equal(1, observedDispatch.OwnerRevision);
-        Assert.Null(observedDispatch.ReportState);
+        Assert.Equal("unknown", observedDispatch.ReportState);
         Assert.Null(observedDispatch.AccountingState);
         Assert.Null(observedDispatch.WitnessWatermark);
         Assert.Null(observedDispatch.WitnessDigest);
