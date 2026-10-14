@@ -21,6 +21,8 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class RuntimeNativePromptCapacityTests
 {
+    private const string LatestOverflowMarker = "LATEST_OVERFLOW_INPUT";
+
     [Theory]
     [InlineData(true, true, false, true)]
     [InlineData(true, false, false, false)]
@@ -97,10 +99,10 @@ public sealed class RuntimeNativePromptCapacityTests
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         const int acceptedCapacity = 4096;
-        var prompt = "LATEST_OVERFLOW_INPUT " + string.Join(' ',
+        var prompt = LatestOverflowMarker + " " + string.Join(' ',
             Enumerable.Repeat("x", 6000));
 
-        await using (var calibrationHarness = await NativePromptHarness.StartAsync(timeout.Token))
+        await using (var calibrationHarness = await NativePromptHarness.StartAsync(timeout.Token, prompt))
         {
             await using var calibrationSession = await calibrationHarness.CreateSessionAsync(
                 200000, 200000, timeout.Token);
@@ -129,7 +131,7 @@ public sealed class RuntimeNativePromptCapacityTests
             Assert.Equal(0, calibrationHarness.InferenceEndpoint.FailedRequests);
         }
 
-        await using var harness = await NativePromptHarness.StartAsync(timeout.Token);
+        await using var harness = await NativePromptHarness.StartAsync(timeout.Token, prompt);
         await using var session = await harness.CreateSessionAsync(acceptedCapacity, 8192, timeout.Token);
         await AssertAuthenticatedNativeByokRouteAsync(harness, session, timeout.Token);
 
@@ -138,21 +140,72 @@ public sealed class RuntimeNativePromptCapacityTests
         Assert.True(before.PromptTokenLimit > 0);
         Assert.Equal(acceptedCapacity, session.Facts.MaxPromptTokens);
         var inferenceRequestsBefore = harness.InferenceEndpoint.RequestCount;
+        var inferenceReceiptsBefore = harness.InferenceEndpoint.Receipts.Count;
+        var failedRequestsBefore = harness.InferenceEndpoint.FailedRequests;
+        var compactionGenerationBefore =
+            session.LatestPromptCapacityCompaction?.Generation ?? 0;
 
         var previousErrorGeneration = session.LatestNativeSessionError?.Generation ?? 0;
         var failure = await Record.ExceptionAsync(() => session.SendTurnAsync(prompt, timeout.Token));
 
-        Assert.NotNull(failure);
-        Assert.False(failure is OperationCanceledException or TimeoutException);
-        var nativeError = Assert.IsType<RuntimeNativeSessionErrorObservation>(
-            session.LatestNativeSessionError);
-        Assert.True(nativeError.Generation > previousErrorGeneration);
-        Assert.Equal(inferenceRequestsBefore, harness.InferenceEndpoint.RequestCount);
-        Assert.Equal(0, harness.InferenceEndpoint.FailedRequests);
-        Assert.True(nativeError.ErrorType == "context_limit",
-            $"Expected a native context-limit event but received type={nativeError.ErrorType ?? "(missing)"}; " +
-            $"code={nativeError.ErrorCode ?? "(missing)"}; message={nativeError.Message ?? "(missing)"}; " +
-            $"promptTokenLimit={before.PromptTokenLimit}.");
+        var nativeError = session.LatestNativeSessionError;
+        var compaction = session.LatestPromptCapacityCompaction;
+        compaction = compaction is { } observed &&
+            observed.Generation > compactionGenerationBefore ? observed : null;
+        var inferenceRequestsAfter = harness.InferenceEndpoint.RequestCount;
+        var newRequests = harness.InferenceEndpoint.Receipts.Skip(inferenceReceiptsBefore).ToArray();
+        var requestDelta = inferenceRequestsAfter - inferenceRequestsBefore;
+        var failedRequestDelta = harness.InferenceEndpoint.FailedRequests - failedRequestsBefore;
+        var compactionReducedHistory = compaction is
+        {
+            Start: not null,
+            Complete.Success: true,
+            Complete.PreCompactionTokens: { } preCompactionTokens,
+            Complete.PostCompactionTokens: { } postCompactionTokens
+        } && postCompactionTokens < preCompactionTokens;
+        var onlySuccessfulCompactionRequestsObserved = requestDelta == 0 ||
+            requestDelta == newRequests.Length &&
+            compactionReducedHistory &&
+            !newRequests.Any(request => request.ContainsCompleteOverflowPrompt);
+        var nativeErrorProvesCapacity =
+            nativeError?.ErrorType == "context_limit" ||
+            nativeError?.Cause is "provider-code-prompt-capacity" or "error-message-prompt-capacity";
+        var requestsSummary = newRequests.Length == 0
+            ? "none"
+            : string.Join("; ", newRequests.Select(request =>
+                $"{request.Method} {request.Path} roles(system={request.SystemMessages}," +
+                $"developer={request.DeveloperMessages},user={request.UserMessages}," +
+                $"assistant={request.AssistantMessages},tool={request.ToolMessages}," +
+                $"other={request.OtherMessages}) latestOverflowMarker={request.ContainsLatestOverflowMarker}" +
+                $" completeOverflowPrompt={request.ContainsCompleteOverflowPrompt}"));
+        var compactionSummary = compaction is null
+            ? "none"
+            : $"generation={compaction.Generation}; " +
+                $"trigger={compaction.Start?.Trigger ?? compaction.Complete.Trigger ?? "(missing)"}; " +
+                $"startTokens={compaction.Start?.ConversationTokens?.ToString() ?? "(missing)"}; " +
+                $"preTokens={compaction.Complete.PreCompactionTokens?.ToString() ?? "(missing)"}; " +
+                $"postTokens={compaction.Complete.PostCompactionTokens?.ToString() ?? "(missing)"}; " +
+                $"success={compaction.Complete.Success}";
+        var diagnostics =
+            $"before[promptLimit={before.PromptTokenLimit},total={before.TotalTokens}," +
+            $"system={before.SystemTokens},conversation={before.ConversationTokens}," +
+            $"tools={before.ToolDefinitionsTokens}]; " +
+            $"error[generation={nativeError?.Generation.ToString() ?? "(missing)"}," +
+            $"type={nativeError?.ErrorType ?? "(missing)"}," +
+            $"code={nativeError?.ErrorCode ?? "(missing)"}," +
+            $"cause={nativeError?.Cause ?? "(missing)"}]; " +
+            $"compaction[{compactionSummary}]; " +
+            $"endpoint[requestDelta={requestDelta},receiptDelta={newRequests.Length}," +
+            $"failedDelta={failedRequestDelta},requests={requestsSummary}].";
+
+        Assert.True(failure is not null and not OperationCanceledException and not TimeoutException,
+            diagnostics);
+        Assert.True(nativeError is not null && nativeError.Generation > previousErrorGeneration,
+            diagnostics);
+        Assert.True(requestDelta == newRequests.Length, diagnostics);
+        Assert.True(failedRequestDelta == 0, diagnostics);
+        Assert.True(onlySuccessfulCompactionRequestsObserved, diagnostics);
+        Assert.True(nativeErrorProvesCapacity, diagnostics);
     }
 
     private static async Task AssertAuthenticatedNativeByokRouteAsync(
@@ -253,7 +306,8 @@ public sealed class RuntimeNativePromptCapacityTests
         private string ExecutablePath { get; }
         private string RuntimeVersion { get; }
 
-        public static async Task<NativePromptHarness> StartAsync(CancellationToken cancellationToken)
+        public static async Task<NativePromptHarness> StartAsync(
+            CancellationToken cancellationToken, string? expectedOverflowPrompt = null)
         {
             var runtimeRoot = Environment.GetEnvironmentVariable("AGENTWEAVER_NATIVE_RUNTIME_ROOT")
                 ?? throw new InvalidOperationException("The pinned native runtime root is not configured.");
@@ -276,7 +330,7 @@ public sealed class RuntimeNativePromptCapacityTests
             {
                 await File.WriteAllTextAsync(certificatePath, certificate.ExportCertificatePem(), cancellationToken);
                 inferenceEndpoint = await LoopbackInferenceEndpoint.StartAsync(
-                    certificate, providerCredential, cancellationToken);
+                    certificate, providerCredential, expectedOverflowPrompt, cancellationToken);
                 return new NativePromptHarness(runtimeRoot, testRoot, certificatePath, providerCredential, certificate,
                     inferenceEndpoint, executablePath, runtimeVersion);
             }
@@ -360,16 +414,19 @@ public sealed class RuntimeNativePromptCapacityTests
     {
         private readonly WebApplication _application;
         private readonly string _providerCredential;
+        private readonly string? _expectedOverflowPrompt;
         private readonly ConcurrentQueue<InferenceRequestReceipt> _receipts = [];
         private string? _expectedSessionId;
         private int _initialSessionCorrelationProven;
         private int _requestCount;
         private int _failedRequests;
 
-        private LoopbackInferenceEndpoint(WebApplication application, int port, string providerCredential)
+        private LoopbackInferenceEndpoint(
+            WebApplication application, int port, string providerCredential, string? expectedOverflowPrompt)
         {
             _application = application;
             _providerCredential = providerCredential;
+            _expectedOverflowPrompt = expectedOverflowPrompt;
             BaseUrl = new Uri($"https://127.0.0.1:{port}/v1");
         }
 
@@ -386,7 +443,8 @@ public sealed class RuntimeNativePromptCapacityTests
         }
 
         public static async Task<LoopbackInferenceEndpoint> StartAsync(
-            X509Certificate2 certificate, string providerCredential, CancellationToken cancellationToken)
+            X509Certificate2 certificate, string providerCredential, string? expectedOverflowPrompt,
+            CancellationToken cancellationToken)
         {
             var port = ReserveLoopbackPort();
             var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions { Args = [] });
@@ -394,7 +452,8 @@ public sealed class RuntimeNativePromptCapacityTests
             builder.WebHost.ConfigureKestrel(options =>
                 options.Listen(IPAddress.Loopback, port, listen => listen.UseHttps(certificate)));
             var application = builder.Build();
-            var endpoint = new LoopbackInferenceEndpoint(application, port, providerCredential);
+            var endpoint = new LoopbackInferenceEndpoint(
+                application, port, providerCredential, expectedOverflowPrompt);
             application.MapPost("/{**path}", endpoint.HandleInferenceAsync);
             try
             {
@@ -420,11 +479,10 @@ public sealed class RuntimeNativePromptCapacityTests
                     modelValue.ValueKind == JsonValueKind.String ? modelValue.GetString() : null;
                 var sessionId = Volatile.Read(ref _expectedSessionId);
                 var correlationMarker = sessionId is null ? null : $"agentweaver-native-session:{sessionId}";
-                var requestContent = root.GetRawText();
-                var containsSessionMarker = requestContent.Contains(
-                    "agentweaver-native-session:", StringComparison.Ordinal);
+                var containsSessionMarker = ContainsMessageText(root, "agentweaver-native-session:");
+                var roleCounts = CountMessageRoles(root);
                 var markerMatchesBoundSession = correlationMarker is not null &&
-                    requestContent.Contains(correlationMarker, StringComparison.Ordinal);
+                    ContainsMessageText(root, correlationMarker);
                 var correlatedSessionId = markerMatchesBoundSession ? sessionId : null;
                 var initialProofAccepted = Volatile.Read(ref _initialSessionCorrelationProven) != 0;
                 var sessionCorrelationIsValid = IsSessionCorrelationValid(
@@ -443,7 +501,16 @@ public sealed class RuntimeNativePromptCapacityTests
                     modelId,
                     credentialMatched,
                     correlatedSessionId,
-                    responseId));
+                    responseId,
+                    roleCounts.System,
+                    roleCounts.Developer,
+                    roleCounts.User,
+                    roleCounts.Assistant,
+                    roleCounts.Tool,
+                    roleCounts.Other,
+                    ContainsMessageText(root, LatestOverflowMarker),
+                    _expectedOverflowPrompt is { Length: > 0 } expectedPrompt &&
+                        ContainsMessageText(root, expectedPrompt)));
 
                 var requestIsValid = credentialMatched &&
                     sessionCorrelationIsValid &&
@@ -508,6 +575,69 @@ public sealed class RuntimeNativePromptCapacityTests
                 ? markerMatchesBoundSession
                 : initialProofAccepted;
 
+        private static MessageRoleCounts CountMessageRoles(JsonElement request)
+        {
+            if (!request.TryGetProperty("messages", out var messages) ||
+                messages.ValueKind != JsonValueKind.Array)
+                return default;
+
+            var system = 0;
+            var developer = 0;
+            var user = 0;
+            var assistant = 0;
+            var tool = 0;
+            var other = 0;
+            foreach (var message in messages.EnumerateArray())
+            {
+                var role = message.ValueKind == JsonValueKind.Object &&
+                    message.TryGetProperty("role", out var roleValue) &&
+                    roleValue.ValueKind == JsonValueKind.String
+                        ? roleValue.GetString()
+                        : null;
+                switch (role)
+                {
+                    case "system": system++; break;
+                    case "developer": developer++; break;
+                    case "user": user++; break;
+                    case "assistant": assistant++; break;
+                    case "tool": tool++; break;
+                    default: other++; break;
+                }
+            }
+            return new(system, developer, user, assistant, tool, other);
+        }
+
+        private static bool ContainsMessageText(JsonElement request, string expectedText)
+        {
+            if (!request.TryGetProperty("messages", out var messages) ||
+                messages.ValueKind != JsonValueKind.Array)
+                return false;
+            foreach (var message in messages.EnumerateArray())
+            {
+                if (message.ValueKind != JsonValueKind.Object ||
+                    !message.TryGetProperty("content", out var content))
+                    continue;
+                if (content.ValueKind == JsonValueKind.String &&
+                    content.GetString()?.Contains(expectedText, StringComparison.Ordinal) == true)
+                    return true;
+                if (content.ValueKind != JsonValueKind.Array)
+                    continue;
+                foreach (var part in content.EnumerateArray())
+                {
+                    var text = part.ValueKind == JsonValueKind.String
+                        ? part.GetString()
+                        : part.ValueKind == JsonValueKind.Object &&
+                            part.TryGetProperty("text", out var textValue) &&
+                            textValue.ValueKind == JsonValueKind.String
+                                ? textValue.GetString()
+                                : null;
+                    if (text?.Contains(expectedText, StringComparison.Ordinal) == true)
+                        return true;
+                }
+            }
+            return false;
+        }
+
         private static async Task WriteStreamChunkAsync(
             HttpContext context, string content, string? finishReason, string responseId)
         {
@@ -566,7 +696,18 @@ public sealed class RuntimeNativePromptCapacityTests
             string? ModelId,
             bool CredentialMatched,
             string? CorrelatedSessionId,
-            string ResponseId);
+            string ResponseId,
+            int SystemMessages,
+            int DeveloperMessages,
+            int UserMessages,
+            int AssistantMessages,
+            int ToolMessages,
+            int OtherMessages,
+            bool ContainsLatestOverflowMarker,
+            bool ContainsCompleteOverflowPrompt);
+
+        private readonly record struct MessageRoleCounts(
+            int System, int Developer, int User, int Assistant, int Tool, int Other);
     }
 }
 

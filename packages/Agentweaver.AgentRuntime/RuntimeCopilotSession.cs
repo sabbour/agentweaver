@@ -32,7 +32,7 @@ internal sealed record RuntimeNativePromptCompactionObservation(
     RuntimeNativePromptCompactionComplete Complete);
 
 internal sealed record RuntimeNativeSessionErrorObservation(
-    long Generation, string? ErrorType, string? ErrorCode, string? Message);
+    long Generation, string? ErrorType, string? ErrorCode, string Cause);
 
 internal sealed class RuntimeNativePromptCapacityObserver
 {
@@ -101,11 +101,50 @@ internal sealed class RuntimeNativePromptCapacityObserver
             else if (sessionEvent is SessionErrorEvent error)
             {
                 _latestError = new(++_errorGeneration,
-                    error.Data.ErrorType, error.Data.ErrorCode, error.Data.Message);
+                    SafeDiagnosticIdentifier(error.Data.ErrorType),
+                    SafeDiagnosticIdentifier(error.Data.ErrorCode),
+                    ClassifyErrorCause(error.Data.ErrorType, error.Data.ErrorCode, error.Data.Message));
             }
         }
 
         changed?.TrySetResult();
+    }
+
+    private static string? SafeDiagnosticIdentifier(string? value) =>
+        string.IsNullOrEmpty(value) ? null :
+        value.Length <= 64 && value.All(character =>
+            char.IsAsciiLetterOrDigit(character) || character is '_' or '-' or '.')
+                ? value
+                : "redacted";
+
+    private static string ClassifyErrorCause(string? errorType, string? errorCode, string? message)
+    {
+        if (string.Equals(errorType, "context_limit", StringComparison.OrdinalIgnoreCase))
+            return "context-limit";
+        if (HasPromptCapacitySignal(errorCode))
+            return "provider-code-prompt-capacity";
+        if (HasPromptCapacitySignal(message))
+            return "error-message-prompt-capacity";
+        return "unclassified";
+    }
+
+    private static bool HasPromptCapacitySignal(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+        var sample = value.Length > 1024 ? value[..1024] : value;
+        var normalized = sample.Replace('_', ' ').Replace('-', ' ');
+        var hasLimit = normalized.Contains("limit", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("exceed", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("maximum", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("too large", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("overflow", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("length", StringComparison.OrdinalIgnoreCase);
+        var hasCapacity = normalized.Contains("context", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("window", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("prompt", StringComparison.OrdinalIgnoreCase) ||
+            normalized.Contains("token", StringComparison.OrdinalIgnoreCase);
+        return hasLimit && hasCapacity;
     }
 
     public async Task<RuntimeNativePromptCompactionObservation> WaitForNextAsync(
