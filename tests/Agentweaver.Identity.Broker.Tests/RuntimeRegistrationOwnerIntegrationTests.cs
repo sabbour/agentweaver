@@ -76,7 +76,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     [Fact]
     public Task HostedCopilotNativeUsageObservationReturnsPersistedCreditGuard() =>
         RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
-            false, null, false, OwnerRunFailureState.Indeterminate, copilotHardCreditLimit: 5m);
+            false, null, false, OwnerRunFailureState.Indeterminate, copilotHardCreditLimit: 5m,
+            enableHostedCopilotRunAdmission: true);
 
     [Theory]
     [InlineData("sdk-preparation-grant")]
@@ -152,13 +153,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             runToken, [owner.TenantId]);
         await AssertStatusAsync(internalPlacement, HttpStatusCode.OK);
         Assert.True(internalPlacement.Headers.CacheControl?.NoStore);
+        var policyOptions = reserveObservedToolInvocation
+            ? SourceControlMergeToolReadPolicyOptions()
+            : SourceControlMergePolicyOptions();
         await using var factory = new OrchestratorIntegrationFactory(
             _connectionString, ownerSchema, signingKey, projects.CreateHandler,
             () => events.Server.CreateHandler(), sandboxProvider: sandboxProvider,
-            providerCatalog: CreateSourceControlProviderCatalog(),
-            policyOptions: reserveObservedToolInvocation
-                ? SourceControlMergeToolReadPolicyOptions()
-                : SourceControlMergePolicyOptions(),
+            providerCatalog: CreateSourceControlProviderCatalog(policyOptions),
+            policyOptions: policyOptions,
             environmentHandler: () => new RuntimeServiceRouter(routes, failures),
             runtimeUsageHandler: () => new RuntimeServiceRouter(routes, failures));
         using var client = factory.CreateClient(new()

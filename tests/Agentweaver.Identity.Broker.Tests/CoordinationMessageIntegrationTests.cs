@@ -258,8 +258,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         bool acceptedSkillJourney = false,
         int? configuredMaxPromptTokens = null,
         decimal? copilotHardCreditLimit = null,
+        bool enableHostedCopilotRunAdmission = false,
         bool reserveObservedToolInvocation = false)
     {
+        if (enableHostedCopilotRunAdmission && (azureByok || copilotHardCreditLimit is null))
+            throw new ArgumentException(
+                "Hosted Copilot run admission requires a hosted model and an explicit hard credit limit.",
+                nameof(enableHostedCopilotRunAdmission));
         var sourceControlSecretBackend = new RecordingSecretRedemption();
         await RestartBrokerForSourceControlAsync(sourceControlSecretBackend);
         using var signingCertificate = X509CertificateLoader.LoadPkcs12FromFile(
@@ -593,6 +598,32 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ["EventsAndSessions__Authorization__Audience"] = "https://api.test",
             ["EventsAndSessions__OrchestratorOwner__OwnerBaseAddress"] = "https://orchestrator.test/",
             ["EventsAndSessions__OrchestratorOwner__Audience"] = "https://api.test",
+            ["AgentHost__ModelBindingsRevision"] =
+                enableHostedCopilotRunAdmission ? "native-run-admission-v1" : null,
+            ["AgentHost__ModelBindings__platform-model__ModelId"] =
+                enableHostedCopilotRunAdmission ? "controlled-model" : null,
+            ["AgentHost__ModelBindings__platform-model__SourceMode"] =
+                enableHostedCopilotRunAdmission ? "HostedCopilot" : null,
+            ["EventsAndSessions__Cost__Copilot__ResourceId"] =
+                enableHostedCopilotRunAdmission ? "native-copilot-cost" : null,
+            ["EventsAndSessions__Cost__Copilot__ResourceGeneration"] =
+                enableHostedCopilotRunAdmission ? "1" : null,
+            ["EventsAndSessions__Cost__Copilot__OptionsRevision"] =
+                enableHostedCopilotRunAdmission ? "native-cost-v1" : null,
+            ["EventsAndSessions__Cost__Copilot__OptionsSchemaVersion"] =
+                enableHostedCopilotRunAdmission ? "1" : null,
+            ["EventsAndSessions__Cost__Copilot__RateCard__Id"] =
+                enableHostedCopilotRunAdmission ? "native-sdk-card" : null,
+            ["EventsAndSessions__Cost__Copilot__RateCard__Version"] =
+                enableHostedCopilotRunAdmission ? "1" : null,
+            ["EventsAndSessions__Cost__Copilot__RateCard__MeterSource"] =
+                enableHostedCopilotRunAdmission ? SdkMeterSources.CopilotNanoAiu : null,
+            ["EventsAndSessions__Cost__Copilot__RateCard__Unit"] =
+                enableHostedCopilotRunAdmission ? "AIC" : null,
+            ["EventsAndSessions__Cost__Copilot__RateCard__NanoUnitsPerUnit"] =
+                enableHostedCopilotRunAdmission ? "1000000000" : null,
+            ["EventsAndSessions__Cost__Copilot__RateCard__ModelMultipliers__controlled-model"] =
+                enableHostedCopilotRunAdmission ? "2.5" : null,
             ["Identity__Issuer"] = IdentityBrokerWebApplicationFactory.Issuer,
             ["Identity__Audience"] = "https://api.test",
             ["Identity__SecretRedemption__Audience"] = "https://broker-redemption.test",
@@ -633,6 +664,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var gitWorkspaceManager = new GitWorkspaceManager(
             Path.Combine(workspaceFiles.Path, "owned-workspaces"),
             new LocalGitRepositoryRemote(new Uri(checkoutRepositoryPath)));
+        var sourceControlPolicyOptions = SourceControlMergePolicyOptions();
         await using var orchestratorFactory = new OrchestratorIntegrationFactory(
             _connectionString,
             ownerSchema,
@@ -660,8 +692,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             sandboxProvider,
             () => _brokerFactory.Server.CreateHandler(),
             sourceControlGitHub.CreateHandler,
-            CreateSourceControlProviderCatalog(),
-            policyOptions: SourceControlMergePolicyOptions(),
+            CreateSourceControlProviderCatalog(sourceControlPolicyOptions),
+            policyOptions: sourceControlPolicyOptions,
             gitWorkspaceManager: gitWorkspaceManager);
         await using var eventsFactory = new EventsIntegrationFactory(
             _connectionString,
@@ -670,6 +702,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             projects.CreateHandler,
             () => new ForkAdmissionBarrierHandler(
                 orchestratorFactory.Server.CreateHandler(), forkAdmissionGate),
+            nativeUsageHandler: enableHostedCopilotRunAdmission
+                ? () => orchestratorFactory.Server.CreateHandler()
+                : null,
             sessionMaterialObjects: captureObjectStore);
         eventsFactoryReference = eventsFactory;
 
@@ -3050,8 +3085,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                          sandboxProvider,
                          () => _brokerFactory.Server.CreateHandler(),
                          sourceControlGitHub.CreateHandler,
-                         CreateSourceControlProviderCatalog(),
-                         policyOptions: SourceControlMergePolicyOptions()))
+                         CreateSourceControlProviderCatalog(sourceControlPolicyOptions),
+                         policyOptions: sourceControlPolicyOptions))
         using (var restartedOrchestrator = restartedOrchestratorFactory.CreateClient(
                    new WebApplicationFactoryClientOptions
                    {
@@ -5321,9 +5356,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         };
     }
 
-    internal static ProviderCatalog CreateSourceControlProviderCatalog()
+    internal static ProviderCatalog CreateSourceControlProviderCatalog(
+        AgtPolicyProviderOptions? policyOptions = null)
     {
-        var policyOptions = SourceControlMergePolicyOptions();
+        policyOptions ??= SourceControlMergePolicyOptions();
         var policyProvider = new AgtPolicyProvider();
         var networkOptions = CreateSourceControlNetworkPolicyOptions();
         var sandboxRegistration = CreateSourceControlSandboxRegistration();
