@@ -313,7 +313,7 @@ jobs:
               : > "$result_probe"
               rm "$result_probe"
               dotnet vstest /tests/Agentweaver.Identity.Broker.Tests.dll \
-                --TestCaseFilter:"FullyQualifiedName~ByokNativeRuntimeCompactsRemovableHistoryWithinTheAcceptedCapacity|FullyQualifiedName~ByokNativeRuntimeFailsAnIrreducibleLatestPromptInsteadOfTheAcceptingFakeEndpoint" \
+                --TestCaseFilter:"FullyQualifiedName~ByokNativeRuntimeCompactsRemovableHistoryWithinTheAcceptedCapacity|FullyQualifiedName~ByokNativeRuntimeReportsCapacityAttributedQueryErrorForIrreduciblePrompt" \
                 --ResultsDirectory:/results \
                 --Logger:"trx;LogFileName=RuntimeNativePromptCapacityTests.trx"
             ')"; then

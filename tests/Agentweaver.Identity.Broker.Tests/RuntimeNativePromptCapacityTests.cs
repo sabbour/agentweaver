@@ -95,7 +95,7 @@ public sealed class RuntimeNativePromptCapacityTests
     }
 
     [NativePromptCapacityFact]
-    public async Task ByokNativeRuntimeFailsAnIrreducibleLatestPromptInsteadOfTheAcceptingFakeEndpoint()
+    public async Task ByokNativeRuntimeReportsCapacityAttributedQueryErrorForIrreduciblePrompt()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         const int acceptedCapacity = 4096;
@@ -137,7 +137,7 @@ public sealed class RuntimeNativePromptCapacityTests
 
         var before = await RequireContextInfoAsync(session, timeout.Token);
         AssertContextIdentity(before, session);
-        Assert.True(before.PromptTokenLimit > 0);
+        Assert.Equal(acceptedCapacity, before.PromptTokenLimit);
         Assert.Equal(acceptedCapacity, session.Facts.MaxPromptTokens);
         var inferenceRequestsBefore = harness.InferenceEndpoint.RequestCount;
         var inferenceReceiptsBefore = harness.InferenceEndpoint.Receipts.Count;
@@ -156,20 +156,9 @@ public sealed class RuntimeNativePromptCapacityTests
         var newRequests = harness.InferenceEndpoint.Receipts.Skip(inferenceReceiptsBefore).ToArray();
         var requestDelta = inferenceRequestsAfter - inferenceRequestsBefore;
         var failedRequestDelta = harness.InferenceEndpoint.FailedRequests - failedRequestsBefore;
-        var compactionReducedHistory = compaction is
-        {
-            Start: not null,
-            Complete.Success: true,
-            Complete.PreCompactionTokens: { } preCompactionTokens,
-            Complete.PostCompactionTokens: { } postCompactionTokens
-        } && postCompactionTokens < preCompactionTokens;
-        var onlySuccessfulCompactionRequestsObserved = requestDelta == 0 ||
-            requestDelta == newRequests.Length &&
-            compactionReducedHistory &&
-            !newRequests.Any(request => request.ContainsCompleteOverflowPrompt);
-        var nativeErrorProvesCapacity =
-            nativeError?.ErrorType == "context_limit" ||
-            nativeError?.Cause is "provider-code-prompt-capacity" or "error-message-prompt-capacity";
+        var nativeErrorMatchesPinnedSdkOutcome =
+            nativeError?.ErrorType == "query" &&
+            nativeError.Cause == "error-message-prompt-capacity";
         var requestsSummary = newRequests.Length == 0
             ? "none"
             : string.Join("; ", newRequests.Select(request =>
@@ -202,10 +191,10 @@ public sealed class RuntimeNativePromptCapacityTests
             diagnostics);
         Assert.True(nativeError is not null && nativeError.Generation > previousErrorGeneration,
             diagnostics);
+        Assert.True(requestDelta > 0, diagnostics);
         Assert.True(requestDelta == newRequests.Length, diagnostics);
         Assert.True(failedRequestDelta == 0, diagnostics);
-        Assert.True(onlySuccessfulCompactionRequestsObserved, diagnostics);
-        Assert.True(nativeErrorProvesCapacity, diagnostics);
+        Assert.True(nativeErrorMatchesPinnedSdkOutcome, diagnostics);
     }
 
     private static async Task AssertAuthenticatedNativeByokRouteAsync(

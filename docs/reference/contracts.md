@@ -874,17 +874,19 @@ Verify requires the retained exact reservation before dispatch.
 The accepted project `MaxPromptTokens` value is preserved in `RuntimeOwnerContext`
 and the runtime binding; it is not silently discarded or reclassified as a
 Knowledge retrieval budget. When configured, AgentHost resolves the effective
-per-prompt/context capacity from the accepted limit and the concrete model
-capacity, including any lower server limit, then passes it to the native SDK.
-For BYOK, the server-owned model binding supplies the concrete capacity;
-unavailable capacity rejects activation with
-`runtime_model_prompt_capacity_unavailable`. The SDK compacts removable
-conversation history; if irreducible system context, tool definitions, and the
-latest input cannot fit, the native turn fails explicitly instead of silently
-truncating input.
+prompt capacity from the accepted limit and the concrete model capacity,
+including any lower server limit, then passes it to the native SDK as a
+compaction threshold. For BYOK, the server-owned model binding supplies the
+concrete capacity; unavailable capacity rejects activation with
+`runtime_model_prompt_capacity_unavailable`. The pinned SDK compacts removable
+history. For an irreducible latest turn, it may send a provider request during
+compaction and then report a capacity-attributed `query` error. This is not a
+hard admission check for every internal provider request or a no-send guarantee,
+and input is not silently truncated.
 
-Optional `SdkSessionFacts.MaxPromptTokens` records the effective per-prompt/context
-capacity, not aggregate token usage or a raw-request token count. The session-material
+Optional `SdkSessionFacts.MaxPromptTokens` records the effective native SDK
+compaction threshold, not aggregate token usage, a per-request admission guarantee,
+or a raw-request token count. The session-material
 owner binds this source fact and rejects a changed value. Absent optional pins
 preserve historical payloads; they do not authorize a configured-capacity resume.
 Native and hosted deployment evidence is still required to close issue

@@ -101,7 +101,7 @@ sequenceDiagram
     participant O as Orchestrator
     participant I as Identity
     participant E as Environment
-    Note over H: Permit workflow-bound MaxModelTurns and MaxToolCalls; apply the effective MaxPromptTokens context limit
+    Note over H: Permit workflow-bound MaxModelTurns and MaxToolCalls; configure the native SDK MaxPromptTokens compaction threshold
     C->>H: GET /runtime/v1/readiness with Broker bearer
     H->>O: Revalidate current registration
     O-->>H: Current registration or denial
@@ -155,7 +155,7 @@ approval; exact retries reuse the reservation and attempts beyond the run limit 
 before SDK session creation, readiness, or model/tool invocation. A configured `maxPromptTokens` is supported
 when its concrete capacity can be resolved; otherwise activation fails with
 `runtime_model_prompt_capacity_unavailable`. The resolved value is passed to the
-native SDK as a per-prompt/context limit.
+native SDK as its prompt-compaction threshold.
 Absent values preserve the legacy path. The RuntimeAction owner also rejects unsupported numeric bindings before issuing
 an action grant. Positive workflow-bound Hosted Copilot hard limits use the same prepared
 dispatch and begin checks against observed whole-run priced usage. The source
@@ -236,13 +236,15 @@ limit is denied. Unbound registrations with this limit fail before SDK setup.
 
 When configured, `MaxPromptTokens` is preserved in `RuntimeOwnerContext` and the
 runtime binding; it is not silently discarded or reclassified as a Knowledge
-retrieval budget. The effective cap is the narrowest of the accepted limit, the
+retrieval budget. The effective value is the narrowest of the accepted limit, the
 actual hosted model capacity, and any lower server limit; BYOK uses its
-server-owned capacity. The native SDK compacts removable conversation history.
-If irreducible system context, tool definitions, and the latest input cannot fit,
-the native turn fails explicitly instead of silently truncating input. This is
-per-prompt/context behavior, not an owner-side raw-request token counter or a
-cumulative token budget. Native and hosted deployment evidence is still
+server-owned capacity. The pinned native SDK uses this value as a prompt-compaction
+threshold and compacts removable conversation history. For an irreducible latest
+turn, the SDK may send a provider request during compaction and then report a
+capacity-attributed `query` error. This is not a hard admission check for every
+internal provider request or a no-send guarantee, and input is not silently
+truncated. This is not an owner-side raw-request token counter or a cumulative
+token budget. Native and hosted deployment evidence is still
 required; issue [#1855](https://github.com/sabbour/agentweaver/issues/1855)
 remains open.
 

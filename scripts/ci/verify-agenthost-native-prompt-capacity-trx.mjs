@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 
 const expectedTests = [
   'ByokNativeRuntimeCompactsRemovableHistoryWithinTheAcceptedCapacity',
-  'ByokNativeRuntimeFailsAnIrreducibleLatestPromptInsteadOfTheAcceptingFakeEndpoint',
+  'ByokNativeRuntimeReportsCapacityAttributedQueryErrorForIrreduciblePrompt',
 ];
 
 export function verifyPromptCapacityResults(xml, runnerExitCode) {

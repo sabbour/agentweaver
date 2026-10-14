@@ -4,7 +4,7 @@ import { verifyPromptCapacityResults } from '../verify-agenthost-native-prompt-c
 
 const expected = [
   'ByokNativeRuntimeCompactsRemovableHistoryWithinTheAcceptedCapacity',
-  'ByokNativeRuntimeFailsAnIrreducibleLatestPromptInsteadOfTheAcceptingFakeEndpoint',
+  'ByokNativeRuntimeReportsCapacityAttributedQueryErrorForIrreduciblePrompt',
 ];
 
 function result(name, outcome) {

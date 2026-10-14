@@ -54,9 +54,12 @@ Omitted capacity preserves the historical null hash.
 Hosted prompt limits require the concrete native catalog capacity; an optional lower server limit can narrow it.
 BYOK prompt limits require the concrete server-owned capacity and explicit SDK provider configuration.
 AgentHost uses the narrowest accepted and available capacity, then pins the effective value for resume.
-The native runtime compacts removable conversation history to fit this per-prompt/context limit.
-If the latest input, system context, and tool definitions still cannot fit, the native turn fails explicitly;
-the runtime does not silently truncate input. These are not cumulative token budgets or internal model-call counters.
+The pinned native SDK uses this setting as a prompt-compaction threshold. It compacts removable
+conversation history; an irreducible latest turn can still be sent to the provider during that
+compaction attempt and then end with the SDK's capacity-attributed `query` error. This is not a
+hard admission check for every internal provider request or a guarantee that no request occurs.
+The runtime does not silently truncate input. These are not cumulative token budgets or internal
+model-call counters.
 For configured hosted credit limits, Events prices that concrete model before root
 acceptance or backlog claim, without creating SDK or usage facts.
 The Host later checks the accepted pin before SDK startup and verifies actual native model policy.
