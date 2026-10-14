@@ -54,10 +54,11 @@ Source checks do not prove live provider effects or complete native accounting.
 
 The figure is a structural component view, not runtime request order or deployment topology.
 `Agentweaver.EventsAndSessions` references the shared contracts, provider catalog/resolver,
-PostgreSQL outbox/inbox library, and telemetry helper. `Agentweaver.Environment` references the shared
-contracts, provider catalog/resolver, Azure Files Storage provider, and Agent Sandbox provider; its egress flow and evidence boundary
-are described in [Environment egress](./environment-egress.md), and the Sandbox lease contract is described in
-[Environment Sandbox](./environment-sandbox.md).
+PostgreSQL outbox/inbox library, and telemetry helper. `Agentweaver.Environment` references the shared contracts, provider
+catalog/resolver, Azure Files Storage provider, and Agent Sandbox provider. Its
+egress flow and evidence boundary are described in
+[Environment egress](./environment-egress.md). Its Sandbox lease contract is
+described in [Environment Sandbox](./environment-sandbox.md).
 `AzureFilesCsiWorkspaceVolumeProvider` implements `IWorkspaceVolumeProvider` and calls the Kubernetes API;
 it does not itself mount the volume into a Sandbox or prove data erasure. Environment reserves and releases
 the exact Workspace generation around Sandbox provider use. `AzureBlobObjectStore` implements

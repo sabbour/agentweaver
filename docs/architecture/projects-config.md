@@ -60,7 +60,22 @@ still require separate approval and evidence.
 
 ## API surface
 
-Public routes require a validated bearer token with exactly one `sub`, the required OAuth scopes, and the service's public audience. The private Broker proof route uses its separately configured audience and a short-lived signed request token. Projects & Config is the sole live owner of issuer-and-subject memberships and resource-role assignments. It resolves the current caller to one active tenant membership and current resource-role assignments in its own database. A tenant selector can choose among existing memberships but cannot create authority; any signed tenant assertion must agree with the selected membership. Project reads require an assigned Owner, Contributor, or Viewer role (or tenant administrator); project writes require Owner or tenant administrator; project creation requires an existing tenant administrator and does not auto-assign an Owner. Platform defaults require an assigned platform administrator. Run-selection reads and accepts require an assigned project Orchestrator role as well as matching signed project/run bindings when present. Every privileged request rechecks current membership and role state, so revocation takes effect without refreshing the broker token.
+Public routes require a validated bearer token with exactly one `sub`, the
+required OAuth scopes, and the service's public audience. The private Broker
+proof route uses a separately configured audience and a short-lived signed
+request token. Projects & Config is the sole live owner of issuer-and-subject
+memberships and resource-role assignments. It resolves the current caller to
+one active tenant membership and current resource-role assignments in its own
+database. A tenant selector can choose among existing memberships but cannot
+create authority. Any signed tenant assertion must agree with the selected
+membership. Project reads require an assigned Owner, Contributor, or Viewer
+role (or tenant administrator). Project writes require Owner or tenant
+administrator. Project creation requires an existing tenant administrator and
+does not auto-assign an Owner. Platform defaults require an assigned platform
+administrator. Run-selection reads and accepts require an assigned project
+Orchestrator role and matching signed project/run bindings when present. Every
+privileged request rechecks current membership and role state. Revocation takes
+effect without refreshing the broker token.
 
 The Identity broker validates upstream identity but does not forward upstream tenant or role claims or assign application roles. OAuth scopes remain necessary route permissions, but they are not authority by themselves. Role claims and request headers never create authority; missing, ambiguous, stale, or foreign memberships fail closed.
 
@@ -128,11 +143,37 @@ resource bytes, or object keys.
 
 Casting templates and role definitions are authenticated catalog reads. Scenario proposal creation accepts an `expectedConfigurationRevision` and a `templateId`; manual creation accepts the expected revision and a non-empty list of catalog `roleIds`. Both create a pending proposal from the configuration at that revision, replacing only the proposed `AgentCharters` and `Casting` while retaining unrelated project settings. Manual inputs reject unknown, repeated, and reserved orchestration roles. The original full-draft proposal route remains available for callers that already compose a complete `ProjectConfiguration`.
 
-Authorized project readers can list and read proposals; project writers can amend a draft using its expected draft revision and explicitly confirm or reject it. Confirmation rechecks current project authority and the base configuration revision while holding the project lock, then appends the configuration revision and marks the proposal confirmed in the same transaction. A changed project revision conflicts rather than silently replacing a newer roster. Rejection records only the proposal transition; it does not write configuration or run state. Accepted run selections continue to refer to their immutable configuration revision.
+Authorized project readers can list and read proposals. Project writers can
+amend a draft using its expected draft revision and explicitly confirm or reject
+it. Confirmation rechecks current project authority and the base configuration
+revision while holding the project lock. It then appends the configuration
+revision and marks the proposal confirmed in the same transaction. A changed
+project revision conflicts rather than silently replacing a newer roster.
+Rejection records only the proposal transition. It does not write configuration
+or run state. Accepted run selections continue to refer to their immutable
+configuration revision.
 
-Charter/casting transfer is a separate explicit owner operation. Export identifies the source project and configuration revision and includes a format version and content digest. Import checks that format and digest, validates the proposed configuration through the ordinary owner-authorized configuration validator, preserves target settings outside charters/casting, and creates a pending proposal rather than applying it. Incompatible or tampered transfers return an actionable client error. The service does not mirror Squad files, reconcile them in pre-commit hooks, or export them after runs.
+Charter/casting transfer is a separate explicit owner operation. Export
+identifies the source project and configuration revision. It includes a format
+version and content digest. Import checks that format and digest. It validates
+the proposed configuration through the ordinary owner-authorized configuration
+validator. It preserves target settings outside charters/casting and creates a
+pending proposal rather than applying it. Incompatible or tampered transfers
+return an actionable client error. The service does not mirror Squad files,
+reconcile them in pre-commit hooks, or export them after runs.
 
-The authorization-context route requires `api.read`, accepts the existing optional `X-Agentweaver-Tenant` selector, and resolves only the authenticated issuer and subject. It rejects query parameters, including caller-subject and role selectors, and purpose-bound tokens. It applies the validated service audience, OAuth scopes, and optional project/run bindings before returning grouped effective permissions with membership and role revisions; it does not return assignment rows or a transferable credential. Responses use `Cache-Control: no-store`. Resource services request this context for each privileged operation and do not maintain separate membership/role records, caches, or authorization pins. The contract-1 wire DTOs are shared in `Agentweaver.Abstractions`; this shares serialization types, not authority data or database access.
+The authorization-context route requires `api.read` and accepts the optional
+`X-Agentweaver-Tenant` selector. It resolves only the authenticated issuer and
+subject. It rejects query parameters, including caller-subject and role
+selectors, and purpose-bound tokens. It applies the validated service audience,
+OAuth scopes, and optional project/run bindings. The response contains grouped
+effective permissions with membership and role revisions. It does not return
+assignment rows or a transferable credential. Responses use
+`Cache-Control: no-store`. Resource services request this context for each
+privileged operation. They do not maintain separate membership/role records,
+caches, or authorization pins. The contract-1 wire DTOs are shared in
+`Agentweaver.Abstractions`. This shares serialization types, not authority data
+or database access.
 
 The Broker proof route rejects query parameters, non-empty request bodies,
 `Transfer-Encoding`, and `Content-Type`. It resolves the actor only from the
@@ -144,7 +185,10 @@ does not produce a receipt.
 
 ## Selection and persistence rules
 
-- A project model-selection reference takes precedence over the platform reference. If the explicit project reference is absent from the supplied immutable selection context, run selection fails closed; it does not fall back to the platform model.
+- A project model-selection reference takes precedence over the platform
+  reference. If the explicit project reference is absent from the supplied
+  immutable selection context, run selection fails closed. It does not fall
+  back to the platform model.
 - Project configuration may name an optional `defaultWorkflowId`. Orchestrator accepts it only when it resolves to a server-registered workflow in the accepted selection's authorized catalog; project workflow references narrow that catalog when present. An unknown or unauthorized default falls back to the validated built-in workflow. The field is an identifier, not a workflow definition or an authority grant.
 - `SecretRef` values may be persisted as references. Credential values are not part of configuration or run-selection snapshots.
 - Optional `reviewedRemoteToolSnapshots` contains exact project-scoped snapshot references. Null omission preserves older configuration bytes. Duplicate references and references to another project are rejected. The accepted run retains these references, not mutable current project settings.
@@ -152,16 +196,52 @@ does not produce a receipt.
 - Hosted selection requires a stable `ConnectionId` and prohibits `CredentialReference`. Identity owns the current connection revision, GitHub user identity, freshness, revocation, and exact protected secret version. Rotation does not change the accepted selection bytes or hash. A different account, owner, or scope requires a new connection and selection.
 - BYOK selection requires an exact `CredentialReference` and prohibits `ConnectionId`. Orchestrator exposes that reference only when the confirmed WorkPlan model matches the accepted selection. The reference is not grant authority and contains no credential value.
 - Legacy records retain their original omitted or null fields and hashes. Hosted records with a pinned secret require migration to a connection before runtime use. Missing or incompatible source modes fail closed.
-- Optional `ProjectConfiguration.SourceControl` contains one repository identity and either exact API/checkout SecretRefs or `authMode: "githubApp"` with an Identity connection ID. A short-lived Identity selection code is supplied only in the initial run-scoped Orchestrator `/pin` request, never accepted project/run configuration or the durable pin. Identity stores only its hash, binds its first run-bound use to one project, and permits later token minting only for that project using the hash; the durable pin retains the hash and exact repository/permission metadata. App mode rejects API/checkout SecretRefs; an optional webhook SecretRef remains independent. The run-selection's complete `projectConfiguration` snapshot is the only source for these values; consumers never substitute mutable current settings for an older accepted run. Null omission preserves legacy configuration shape. Project configuration contains no OAuth, selection-code, or installation-token values; Identity stores only OAuth SecretRefs and returns installation tokens transiently.
+- Optional `ProjectConfiguration.SourceControl` contains one repository identity
+  and either exact API/checkout SecretRefs or `authMode: "githubApp"` with an
+  Identity connection ID. A short-lived Identity selection code appears only in
+  the initial run-scoped Orchestrator `/pin` request. It does not appear in
+  accepted project/run configuration or the durable pin. Identity stores only
+  its hash. Its first run-bound use binds the hash to one project. Later token
+  minting is limited to that project. The durable pin retains the hash and exact
+  repository/permission metadata. App mode rejects API/checkout SecretRefs. An
+  optional webhook SecretRef remains independent. The run-selection's complete
+  `projectConfiguration` snapshot is the only source for these values.
+  Consumers never substitute mutable current settings for an older accepted
+  run. Null omission preserves legacy configuration shape. Project
+  configuration contains no OAuth, selection-code, or installation-token
+  values. Identity stores only OAuth SecretRefs and returns installation
+  tokens transiently.
 - Project provider overrides only select provider IDs permitted by the platform catalog. Exclusive, ordered-composite, platform-singleton, layered and meter-keyed Cost seams use the existing `ProviderResolver`; Application Hosting remains unsupported. Cost requirements name a source explicitly, and multiple distinct meter sources may appear in one selection. The snapshot preserves source keys, adapter/options versions and advertised/required capabilities.
 - The service requires project egress rules to be a subset of the platform baseline and checks each run's required destinations. Project run limits may only reduce configured platform limits.
-- The immutable run-selection snapshot carries typed platform egress baseline, optional project narrowing, admitted run needs, the effective allowlist, and each layered Network Policy provider's layer, options revision, and required/advertised capabilities. The Environment consumer rechecks the current authorization context before reading this snapshot and compiles the final intent.
+- The immutable run-selection snapshot carries the typed platform egress
+  baseline, optional project narrowing, admitted run needs, and the effective
+  allowlist. It also carries each layered Network Policy provider's layer,
+  options revision, and required/advertised capabilities. The Environment consumer rechecks the current authorization context before reading this snapshot and compiles the final intent.
 - Project configuration revisions, platform runtime revisions, and run-selection snapshots are append-only at the database boundary. Project metadata and revision heads remain mutable under optimistic revision checks.
-- Memberships and role assignments live in this service's schema and are provisioned or revoked only through a privileged source path; public APIs cannot self-grant roles. Revocation uses expected revisions, records an immutable audit event, and cannot remove the last explicit project Owner. Runtime database credentials have SELECT-only access to membership, assignment, and audit tables; casting row locks use the fixed security-definer authority function, whose exact EXECUTE grant is checked at startup.
+- Memberships and role assignments live in this service's schema. A privileged
+  source path provisions or revokes them. Public APIs cannot self-grant roles.
+  Revocation uses expected revisions and records an immutable audit event. It
+  cannot remove the last explicit project Owner. Runtime database credentials
+  have SELECT-only access to membership, assignment, and audit tables. Casting
+  row locks use the fixed security-definer authority function. Startup checks
+  its exact EXECUTE grant.
 - Run-selection acceptance serializes a run ID and rechecks the current Orchestrator assignment before committing. Replays return the originally stored snapshot, but still require current authorization; snapshots never pin membership or roles.
 - Provider resolution returns candidates, not resource bindings. Resource identity, generation, negotiated capabilities, and final pins are owned by the consumer after provisioning.
 
-The service does not own provider catalog registrations, Git or workflow materialization, remote MCP, UI state, run journals, or secret redemption. The catalog owner supplies its snapshot through the required `ProjectsConfig:ProviderCatalog` startup configuration section, containing `Registrations`, `Defaults`, `PermittedOverrides`, `OrderedSelections`, `LayerSelections`, and optional `MeterSourceSelections` entries (`MeterSource`, `ProviderId`); provider registrations include adapter version, options schema/revision, hosting pattern, enabled state, and advertised capabilities. The service validates the supplied catalog through `ProviderCatalog.Create` and fails startup if it is missing or invalid rather than using an empty catalog. The snapshot is fixed for the service process lifetime, and run requests carry their own immutable context revision. Database migrations run through the separate `--migrate` operation; normal startup verifies that migrations have already been applied.
+The service does not own provider catalog registrations, Git or workflow
+materialization, remote MCP, UI state, run journals, or secret redemption. The
+catalog owner supplies its snapshot through the required
+`ProjectsConfig:ProviderCatalog` startup configuration section. The section
+contains `Registrations`, `Defaults`, `PermittedOverrides`,
+`OrderedSelections`, `LayerSelections`, and optional
+`MeterSourceSelections` entries (`MeterSource`, `ProviderId`). Provider
+registrations include adapter version, options schema/revision, hosting
+pattern, enabled state, and advertised capabilities. The service validates the
+catalog through `ProviderCatalog.Create`. Startup fails if the catalog is
+missing or invalid. The service does not use an empty catalog. The snapshot is
+fixed for the service process lifetime. Run requests carry their own immutable
+context revision. Database migrations run through the separate `--migrate`
+operation. Normal startup verifies that migrations have already been applied.
 
 Projects & Config and Knowledge use the shared loader from `Agentweaver.Providers`.
 Both validate the supplied catalog through `ProviderCatalog.Create` and fail startup
@@ -182,7 +262,7 @@ authorization-context GET also uses `no-store`; it returns grouped permissions
 and membership/role revisions, not assignment rows or transferable credentials.
 The run-bound project-summary GET requires exactly one `runId` query parameter,
 an exact signed project/run binding, and a current project Owner, Contributor, or
-Viewer role (or tenant administrator); it returns `no-store` so consumers can
+Viewer role (or tenant administrator). It returns `no-store` so consumers can
 recheck authorization before forwarding run-scoped data.
 See [Environment egress](./environment-egress.md) for how a privileged consumer
 uses both current authorization and the immutable selection without a separate
@@ -214,7 +294,10 @@ Run the pure validator tests and the PostgreSQL integration test from the reposi
 dotnet test tests/Agentweaver.Projects.Config.Tests/Agentweaver.Projects.Config.Tests.csproj --configuration Release
 ```
 
-The PostgreSQL tests use Testcontainers. They verify tenant-scoped run selection, revision and idempotency behavior, model fail-closed semantics, provider candidate metadata, SELECT-only runtime authority grants, CAS revocation and audit retention, the last-Owner invariant, and database append-only triggers.
+The PostgreSQL tests use Testcontainers. They verify tenant-scoped run selection, revision and idempotency behavior,
+model fail-closed semantics, and provider candidate metadata. They also verify
+SELECT-only runtime authority grants, CAS revocation and audit retention, the
+last-Owner invariant, and database append-only triggers.
 
 ## Skill content and assignment
 

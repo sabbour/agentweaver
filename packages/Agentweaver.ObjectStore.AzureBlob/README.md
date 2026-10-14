@@ -1,10 +1,10 @@
 # Azure Blob Object Store foundation
 
-`AzureBlobObjectStore` implements `IObjectStore` for large opaque platform objects,
-not sandbox/workspace files. Construct it with a platform-owned
-`BlobContainerClient` created by the composition root using a service endpoint
-and an injected `TokenCredential` (for example workload identity); the adapter
-does not accept a connection string, create a container, or fall back to disk.
+`AzureBlobObjectStore` implements `IObjectStore` for large opaque platform
+objects, not sandbox/workspace files. The composition root creates a
+platform-owned `BlobContainerClient` with a service endpoint and an injected
+`TokenCredential` (for example workload identity). The adapter does not accept
+a connection string, create a container, or fall back to disk.
 The container must already exist and be authorized for the service identity.
 
 Keys are case-sensitive relative slash-separated opaque identities; they are

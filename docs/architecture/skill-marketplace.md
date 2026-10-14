@@ -123,10 +123,10 @@ the revision and retains a tombstone instead of deleting the source row.
 
 ## Bounded browse
 
-Browse resolves the configured ref to a full Git commit SHA, reads the recursive
-tree at that immutable commit, discovers `SKILL.md` paths beneath the optional
-source subpath, sorts candidate locations ordinally, filters by candidate name
-or location, and only then applies pagination. Page size is limited to 50.
+Browse resolves the configured ref to a full Git commit SHA and reads the
+recursive tree at that immutable commit. It discovers `SKILL.md` paths beneath
+the optional source subpath and sorts candidate locations ordinally. It filters
+by candidate name or location before it applies pagination. Page size is limited to 50.
 Search text is limited to 128 characters. The tree response is limited to 8 MiB
 and 100,000 entries; the index is limited to 5,000 skill manifests. An
 over-limit or GitHub-truncated tree fails explicitly instead of returning an
@@ -140,13 +140,13 @@ downloaded during browse. Each response includes `sourceId`, `sourceRevision`,
 are canonical repository-relative directory paths; an empty location represents
 a skill at the repository root.
 
-Browse and selected-content reads are bounded by a 15-second upstream timeout.
-Each rechecks the caller's current project authority and exact source row after
-upstream I/O; an authority change denies the operation and a source
-update/removal returns `409` instead of returning results for a stale source
-revision. Missing/removed sources return `404`; invalid requests return `400`; malformed upstream
-metadata/paths return `502`; upstream unavailability returns `503`; timeout
-returns `504`; a truncated or oversized catalog returns `422`.
+Browse and selected-content reads have a 15-second upstream timeout. Each
+rechecks the caller's current project authority and exact source row after
+upstream I/O. An authority change denies the operation. A source update or
+removal returns `409` instead of returning stale results. Missing or removed sources
+return `404`. Invalid requests return `400`. Malformed upstream metadata or
+paths return `502`. Upstream unavailability returns `503`. A timeout returns
+`504`. A truncated or oversized catalog returns `422`.
 
 ## Import boundary
 

@@ -4,11 +4,11 @@
 
 `Agentweaver.Identity` implements the trusted Identity authorization boundary
 around the provider-neutral `ISecretRedemption` contract from
-`Agentweaver.Abstractions`. It composes an existing redemption backend (for
-example `Agentweaver.Secrets.AzureKeyVault`) and denies a request unless a
-host-authenticated actor and an authoritative, server-owned grant permit the
-*exact* request: the same actor, project, run, purpose, and SecretRef
-identifier and version. Workload identity (see the Key Vault adapter) lets the
+`Agentweaver.Abstractions`. It composes an existing redemption backend, such as
+`Agentweaver.Secrets.AzureKeyVault`. It denies a request unless a
+host-authenticated actor and a server-owned grant permit the *exact* request.
+The grant must match the actor, project, run, purpose, and SecretRef identifier
+and version. Workload identity (see the Key Vault adapter) lets the
 platform authenticate to Azure; it does not authorize an Agentweaver caller.
 This library is that separate authorization layer.
 
@@ -56,12 +56,12 @@ var credential = await redemption.RedeemAsync(request, cancellationToken);
    A null, invalidated or expired backend result fails explicitly.
 
 Every denial throws `SecretAuthorizationDeniedException` with a
-`SecretAuthorizationDenialReason` and no other detail; its message never
+`SecretAuthorizationDenialReason` and no other detail. Its message never
 contains a secret value, grant identifier, or request payload. Cancellation
 is honored before the first authority read, between the authority read and
-the backend call, and after the backend call returns (invalidating an already
-acquired credential); a cancelled backend call propagates without authorizing
-again. Every failure after a credential is acquired, including lifetime limiting,
+the backend call, and after the backend call returns. After that call,
+cancellation invalidates an acquired credential. A cancelled backend call
+propagates without another authorization check. Every failure after a credential is acquired, including lifetime limiting,
 authority errors and cancellation after the second await or final expiry check,
 invalidates it before propagating. Backend/authority operational
 failures (for example a Key Vault service error) propagate unchanged; they
