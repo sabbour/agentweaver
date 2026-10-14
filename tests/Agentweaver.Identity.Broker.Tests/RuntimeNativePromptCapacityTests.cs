@@ -21,6 +21,22 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed class RuntimeNativePromptCapacityTests
 {
+    [Theory]
+    [InlineData(true, true, false, true)]
+    [InlineData(true, false, false, false)]
+    [InlineData(false, false, false, false)]
+    [InlineData(false, false, true, true)]
+    [InlineData(true, false, true, false)]
+    public void NativeInferenceCorrelationRequiresInitialProofAndRejectsMismatches(
+        bool containsSessionMarker,
+        bool markerMatchesBoundSession,
+        bool initialProofAccepted,
+        bool expected)
+    {
+        Assert.Equal(expected, LoopbackInferenceEndpoint.IsSessionCorrelationValid(
+            containsSessionMarker, markerMatchesBoundSession, initialProofAccepted));
+    }
+
     [NativePromptCapacityFact]
     public async Task ByokNativeRuntimeCompactsRemovableHistoryWithinTheAcceptedCapacity()
     {
@@ -70,6 +86,12 @@ public sealed class RuntimeNativePromptCapacityTests
         Assert.True(after.PromptTokenLimit <= session.Facts.MaxPromptTokens);
         Assert.Equal(after.SystemTokens + after.ConversationTokens + after.ToolDefinitionsTokens,
             after.TotalTokens);
+
+        var followUp = await session.SendTurnAsync(
+            "Continue after native history compaction.", timeout.Token);
+        Assert.Contains(harness.InferenceEndpoint.Receipts, item =>
+            followUp == $"native-route-response:{session.Facts.SdkSessionId}:{item.ResponseId}");
+        Assert.Equal(0, harness.InferenceEndpoint.FailedRequests);
     }
 
     [NativePromptCapacityFact]
@@ -298,6 +320,7 @@ public sealed class RuntimeNativePromptCapacityTests
         private readonly string _providerCredential;
         private readonly ConcurrentQueue<InferenceRequestReceipt> _receipts = [];
         private string? _expectedSessionId;
+        private int _initialSessionCorrelationProven;
         private int _requestCount;
         private int _failedRequests;
 
@@ -355,9 +378,15 @@ public sealed class RuntimeNativePromptCapacityTests
                     modelValue.ValueKind == JsonValueKind.String ? modelValue.GetString() : null;
                 var sessionId = Volatile.Read(ref _expectedSessionId);
                 var correlationMarker = sessionId is null ? null : $"agentweaver-native-session:{sessionId}";
-                var correlatedSessionId = correlationMarker is not null &&
-                    root.GetRawText().Contains(correlationMarker, StringComparison.Ordinal)
-                    ? sessionId : null;
+                var requestContent = root.GetRawText();
+                var containsSessionMarker = requestContent.Contains(
+                    "agentweaver-native-session:", StringComparison.Ordinal);
+                var markerMatchesBoundSession = correlationMarker is not null &&
+                    requestContent.Contains(correlationMarker, StringComparison.Ordinal);
+                var correlatedSessionId = markerMatchesBoundSession ? sessionId : null;
+                var initialProofAccepted = Volatile.Read(ref _initialSessionCorrelationProven) != 0;
+                var sessionCorrelationIsValid = IsSessionCorrelationValid(
+                    containsSessionMarker, markerMatchesBoundSession, initialProofAccepted);
                 var credentialMatched = string.Equals(
                     context.Request.Headers.Authorization.ToString(),
                     $"Bearer {_providerCredential}", StringComparison.Ordinal);
@@ -375,7 +404,7 @@ public sealed class RuntimeNativePromptCapacityTests
                     responseId));
 
                 var requestIsValid = credentialMatched &&
-                    correlatedSessionId is not null &&
+                    sessionCorrelationIsValid &&
                     modelId == "prompt-test-model" &&
                     requestPath.EndsWith("/chat/completions", StringComparison.Ordinal);
                 if (!requestIsValid)
@@ -386,6 +415,9 @@ public sealed class RuntimeNativePromptCapacityTests
                         : StatusCodes.Status401Unauthorized;
                     return;
                 }
+
+                if (correlatedSessionId is not null)
+                    Interlocked.Exchange(ref _initialSessionCorrelationProven, 1);
 
                 var responseContent = $"native-route-response:{sessionId}:{responseId}";
                 var stream = request.RootElement.TryGetProperty("stream", out var streamValue) &&
@@ -425,6 +457,14 @@ public sealed class RuntimeNativePromptCapacityTests
                 throw;
             }
         }
+
+        internal static bool IsSessionCorrelationValid(
+            bool containsSessionMarker,
+            bool markerMatchesBoundSession,
+            bool initialProofAccepted) =>
+            containsSessionMarker
+                ? markerMatchesBoundSession
+                : initialProofAccepted;
 
         private static async Task WriteStreamChunkAsync(
             HttpContext context, string content, string? finishReason, string responseId)
