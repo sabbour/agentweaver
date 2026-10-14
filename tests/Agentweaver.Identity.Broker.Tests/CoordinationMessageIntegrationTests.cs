@@ -6820,6 +6820,78 @@ public sealed class SourceControlProviderCatalogFixtureTests
     }
 
     [Fact]
+    public void RuntimePlacementServiceGraphConstructsActualManagersWithSharedSandboxClient()
+    {
+        var sandboxOptions = ProjectsConfigBrokerAuthorizationTests.CreateRuntimePlacementSandboxOptions(
+            AgentSandboxOptions.CurrentOptionsSchemaVersion, "runtime-sandbox-options-v2");
+        using var sandboxHttpClient = new HttpClient(new NoNetworkHttpMessageHandler())
+        {
+            BaseAddress = new Uri("https://kubernetes.test/")
+        };
+        var sandboxKubernetesClient = new KubernetesAgentSandboxClient(sandboxHttpClient);
+        var sandboxProvider = new AgentSandboxProvider(sandboxOptions, sandboxKubernetesClient);
+        var networkOptions = new CiliumEgressProviderOptions(
+            "agentweaver",
+            new Version(1, 0, 0),
+            1,
+            "cilium-options-1",
+            ImmutableDictionary<string, ImmutableDictionary<string, string>>.Empty
+                .WithComparers(StringComparer.Ordinal));
+
+        using var projectsHttpClient = new HttpClient(new NoNetworkHttpMessageHandler())
+        {
+            BaseAddress = new Uri("https://projects.test/")
+        };
+        using var runtimeOwnerHttpClient = new HttpClient(new NoNetworkHttpMessageHandler());
+        var services = new ServiceCollection();
+        services.AddSingleton<IProjectsConfigClient>(
+            new EnvironmentService::Agentweaver.Environment.ProjectsConfigHttpClient(projectsHttpClient));
+        services.AddScoped<IEnvironmentLifecycleStore>(_ => NoIoDependency<IEnvironmentLifecycleStore>());
+        services.AddScoped<ISandboxLeaseStore>(_ => NoIoDependency<ISandboxLeaseStore>());
+        services.AddSingleton<TimeProvider>(TimeProvider.System);
+        services.AddSingleton(new EnvironmentRuntimeOwnerContextClient(runtimeOwnerHttpClient));
+        ProjectsConfigBrokerAuthorizationTests.AddRuntimePlacementManagerServices(
+            services, sandboxOptions, sandboxKubernetesClient, sandboxProvider,
+            networkOptions, NoIoDependency<ICiliumPolicyResourceStore>());
+
+        using var serviceProvider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true
+        });
+        using var scope = serviceProvider.CreateScope();
+        Assert.IsType<EnvironmentSandboxManager>(
+            scope.ServiceProvider.GetRequiredService<EnvironmentSandboxManager>());
+        Assert.IsType<EnvironmentEgressManager>(
+            scope.ServiceProvider.GetRequiredService<EnvironmentEgressManager>());
+        Assert.IsType<EnvironmentRuntimePlacementReader>(
+            scope.ServiceProvider.GetRequiredService<EnvironmentRuntimePlacementReader>());
+        Assert.Same(
+            sandboxKubernetesClient,
+            scope.ServiceProvider.GetRequiredService<KubernetesAgentSandboxClient>());
+        Assert.Same(sandboxProvider, scope.ServiceProvider.GetRequiredService<ISandboxProvider>());
+    }
+
+    private static T NoIoDependency<T>() where T : class =>
+        System.Reflection.DispatchProxy.Create<T, NoIoDependencyProxy>();
+
+    public class NoIoDependencyProxy : System.Reflection.DispatchProxy
+    {
+        protected override object? Invoke(
+            System.Reflection.MethodInfo? targetMethod, object?[]? args) =>
+            throw new InvalidOperationException(
+                $"Unexpected '{targetMethod?.Name}' call during service construction.");
+    }
+
+    private sealed class NoNetworkHttpMessageHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException(
+                $"Unexpected HTTP request during service construction: {request.Method} {request.RequestUri}.");
+    }
+
+    [Fact]
     public void SharedCatalogResolvesValidatedSandboxOptionsAndTheAcceptedL3L4NetworkRequirement()
     {
         var catalog = ProjectsConfigBrokerAuthorizationTests.CreateSourceControlProviderCatalog();

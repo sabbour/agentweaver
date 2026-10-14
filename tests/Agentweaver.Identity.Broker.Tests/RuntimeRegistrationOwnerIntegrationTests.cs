@@ -1484,6 +1484,25 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         return sandboxCandidate;
     }
 
+    internal static void AddRuntimePlacementManagerServices(
+        IServiceCollection services,
+        AgentSandboxOptions sandboxOptions,
+        KubernetesAgentSandboxClient sandboxKubernetesClient,
+        ISandboxProvider sandboxProvider,
+        CiliumEgressProviderOptions networkOptions,
+        ICiliumPolicyResourceStore networkStore)
+    {
+        services.AddSingleton(sandboxOptions);
+        services.AddSingleton(sandboxKubernetesClient);
+        services.AddSingleton<ISandboxProvider>(sandboxProvider);
+        services.AddSingleton(networkOptions);
+        services.AddSingleton<ICiliumPolicyResourceStore>(networkStore);
+        services.AddScoped<CiliumEgressPolicyAdapter>();
+        services.AddScoped<EnvironmentEgressManager>();
+        services.AddScoped<EnvironmentSandboxManager>();
+        services.AddScoped<EnvironmentRuntimePlacementReader>();
+    }
+
     private sealed class RuntimePlacementTestServer(IHost host, NpgsqlDataSource dataSource,
         HttpClient sandboxHttpClient, SandboxLeaseSnapshot lease, RuntimePlacementReadTimeProvider readTime) : IAsyncDisposable
     {
@@ -1662,8 +1681,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 {
                     BaseAddress = new Uri("https://kubernetes.test/")
                 };
-                var sandboxProvider = new AgentSandboxProvider(
-                    sandboxOptions, new KubernetesAgentSandboxClient(sandboxHttpClient));
+                var sandboxKubernetesClient = new KubernetesAgentSandboxClient(sandboxHttpClient);
+                var sandboxProvider = new AgentSandboxProvider(sandboxOptions, sandboxKubernetesClient);
                 var provisioned = await sandboxProvider.ProvisionAsync(sandboxProvisionRequest);
                 kubernetesTransport.AddReadySandbox(
                     provisioned,
@@ -1684,15 +1703,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         services.AddSingleton<TimeProvider>(readTimeProvider);
                         services.AddScoped<IEnvironmentLifecycleStore, EnvironmentLifecycleStore>();
                         services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
-                        services.AddScoped<EnvironmentRuntimePlacementReader>();
-                        services.AddScoped<EnvironmentSandboxManager>();
-                        services.AddSingleton(sandboxOptions);
-                        services.AddSingleton<ISandboxProvider>(sandboxProvider);
-                        services.AddScoped<EnvironmentEgressManager>();
+                        AddRuntimePlacementManagerServices(
+                            services, sandboxOptions, sandboxKubernetesClient, sandboxProvider,
+                            networkOptions, networkStore);
                         services.AddScoped<EnvironmentWorkspaceVolumeManager>();
-                        services.AddSingleton(networkOptions);
-                        services.AddSingleton<ICiliumPolicyResourceStore>(networkStore);
-                        services.AddScoped<CiliumEgressPolicyAdapter>();
                         services.AddScoped<IEnvironmentRuntimeBootstrapProfileReplacementStore,
                             EnvironmentRuntimeBootstrapProfileReplacementStore>();
                         services.AddHttpClient<EnvironmentRuntimeEndpointVerifier>()
