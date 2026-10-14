@@ -31,17 +31,17 @@ message identity (such as the outbox event ID or documented idempotency key)
 and a stable logical consumer identity across process restarts. A receipt is
 unique per `(consumerId, messageId)` within the service-owned schema, not across
 services/schemas. The database unique constraint makes competing transactions
-wait: a committed receipt produces `Duplicate`, while rollback allows a waiting
-retry to admit. Rollback also discards domain effects and outbox events in that
-transaction. Do not acknowledge delivery before commit; on exception or
+wait: a committed receipt produces `Duplicate`, while a rollback lets a waiting
+retry receive `InboxAdmission.Admitted`. Rollback also discards domain effects
+and outbox events in that transaction. Do not acknowledge delivery before commit; on exception or
 cancellation roll back and retry the delivery. The caller remains responsible
 for transaction and transport acknowledgment policy.
 
 Startup migration 2 adds receipts to existing version-1 schemas without
 replacing outbox rows; the existing migration lock and unknown-version refusal
 remain in effect. A canceled admission or missing/blank identity is rejected
-without a receipt. Receipt retention/cleanup is not provided: deleting receipts
-while messages may be retried would permit repeated effects.
+without a receipt. Receipt retention/cleanup is not provided: deleting a receipt
+while its message remains eligible for retry would permit repeated effects.
 
 `ClaimAsync` leases at most one earliest undelivered event per stream per batch,
 with a persisted fresh token and server-clock expiration. Workers publish then
@@ -59,7 +59,7 @@ For a caller-driven batch, implement `IOutboxPublisher.PublishAsync` with the
 transport's publish operation and construct `new OutboxRelay(outbox, publisher)`.
 Call `RelayOnceAsync(workerId, batchSize, leaseDuration, cancellationToken)` at
 the cadence owned by your host. It claims a bounded batch, publishes each claimed
-event, and only then acknowledges it using the claim's lease token. It returns
+event, and only then acknowledges it with the claim's lease token. It returns
 one `RelayOutcome` per attempted delivery. `Acknowledged` means publish and
 fenced acknowledgment succeeded. `AcknowledgmentFenced` means publish
 succeeded, but the lease expired, was replaced, or was already settled before
@@ -69,12 +69,12 @@ the event unacknowledged. A failure on one stream does not prevent attempts for
 other streams already claimed in that batch. Cancellation before or during
 publish, or after publish but before acknowledgment, never acknowledges an
 unconfirmed event; cancellation propagates rather than returning a partial
-outcome list, although earlier items in the batch may have completed.
-Cancellation stops waiting even when a publisher ignores its token; it cannot
-stop that transport's external work, which may still complete later, but this
-relay will not acknowledge it. Cancellation also takes precedence over a
-concurrent publisher failure. A late transport completion may deliver a duplicate
-after another worker reclaims the lease; consumers still need stable-identity
+outcome list. Earlier items in the batch can already have completed.
+Cancellation stops waiting even when a publisher ignores its token; the
+transport can still complete its external work later, but this relay will not
+acknowledge it. Cancellation also takes precedence over a
+concurrent publisher failure. If the transport completes after another worker
+reclaims the lease, it can deliver a duplicate; consumers still need stable-identity
 deduplication and sequence handling. A fenced event remains eligible for redelivery
 after lease expiration only if another worker has not already acknowledged it.
 

@@ -47,7 +47,7 @@ Digest validation alone does not prove authenticated page completion or material
 Host Configure tests accept a TURN with its original prior-runtime binding and a TURN from a visible parent session.
 They verify each TURN against its own event payload, single stored object reference, and material read acknowledgment.
 An unrelated same-run session is absent from the source-session replay and is not read as a fallback.
-Host producer tests must separately reject page, cursor, owner, transport, mismatched-reference, and byte-hash failures without using later journal records.
+Host producer tests must separately reject page, cursor, owner, transport, mismatched-reference, and byte-hash failures without reading later journal records.
 Pending cache means no new native cache is claimed until a real authorized turn captures and persists genuine SDK files.
 Suspend before such files exist must fail explicitly, not manufacture cache evidence.
 Missing owner composition cannot reach Broker delivery.
@@ -273,7 +273,7 @@ fresh Core checks. The placement callback test pauses immediately before its
 final Core authorization request while the store holds the Environment owner
 transaction and advisory lock. It starts a competing retirement CAS, verifies
 the wait with PostgreSQL lock metadata and `pg_blocking_pids`, revokes the real
-Core role, and then allows the authorization request to run. The response must
+Core role, and then resumes the authorization request. The response must
 be a typed 403 with no placement projection or provider effect; the retirement
 must proceed only after the denied callback rolls back. A subsequent provider
 request against the retired lease must still fail its own current-lease check.
@@ -335,7 +335,7 @@ revocation after a blocked owner-outbox sequence update, and fresh authority
 checks after registered-duplicate command-row waits. They assert rollback of
 the reservation or registration and the explicit unregistered result. They use
 real PostgreSQL lock waits with a test authority callback; use the Broker
-integration below for Projects-role revocation through the actual HTTP path.
+integration test for Projects-role revocation through the actual HTTP path.
 
 ```powershell
 dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj `

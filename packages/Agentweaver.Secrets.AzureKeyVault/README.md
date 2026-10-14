@@ -23,8 +23,8 @@ using var redemption = AzureKeyVaultSecretRedemption.CreateWithWorkloadIdentity(
     new AzureKeyVaultConfiguration(vaultUri), options);
 ```
 
-There is no `DefaultAzureCredential`, developer/CLI identity, client secret or
-fallback in this composition. Construction validates configuration but does not
+This composition does not use `DefaultAzureCredential`, a developer/CLI identity,
+or a client secret; it provides no fallback. Construction validates configuration but does not
 acquire a token. The Azure SDK handles acquisition, caching and projected-file
 refresh when a credential is needed; it does not guarantee immediate refresh at
 file replacement or authorize the caller. An unavailable file or rejected
@@ -83,7 +83,8 @@ Cleanup requires separate authorization.
 The deployed principal requires secret SET and exact-version GET rights at the configured vault scope.
 The existing P0 Key Vault Secrets User role remains read-only.
 This library change grants no Azure permission and changes no P0 role assignment.
-There is no default Secrets Officer role or assumed secret-name prefix scope.
+The adapter defines no default Secrets Officer role and assumes no secret-name
+prefix scope.
 A host must handle unavailable writer configuration or denied permission before SDK session creation.
 
 Run its no-account transport tests with

@@ -18,7 +18,7 @@ The following sequence shows the verifier's time-ordered, read-only checks after
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'">
     <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'" alt="After a Foundation Probe Job completes, the read-only verifier checks the source-bound registry manifest against the Job image, pod image, and pulled imageID before reading and validating the native receipt. It then queries Azure Monitor for fresh correlated evidence. Missing or mismatched evidence remains blocked." />
   </a>
-  <figcaption>Ordered acceptance evidence checks, not a deployment sequence. Only complete source-, target-, image-, identity-, receipt-, and telemetry-bound evidence sets <code>deployedAcceptance</code>; this does not claim broader P0 readiness.</figcaption>
+  <figcaption>Ordered acceptance evidence checks, not a deployment sequence. Only complete source-, target-, image-, identity-, receipt-, and telemetry-bound evidence sets <code>deployedAcceptance</code>; the result does not claim broader P0 readiness.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.drawio'">Open editable draw.io source</a></p>
 
@@ -53,9 +53,9 @@ This region map is not deployment evidence and adds no 0.x product scope.
 
 ## AKS and Application Routing preview
 
-The Bicep source uses `Microsoft.ContainerService/managedClusters@2026-07-02-preview`. It enables native `webAppRouting` and sets `nginx.defaultIngressControllerType` to `'None'`. This source does not select an NGINX controller or create an application route.
+The Bicep source uses `Microsoft.ContainerService/managedClusters@2026-07-02-preview`. It configures AKS with native `webAppRouting` and sets `nginx.defaultIngressControllerType` to `'None'`. This source does not select an NGINX controller or create an application route.
 
-The template enables the native managed Gateway API installation and
+The template configures the native managed Gateway API installation and
 Application Routing implementation. Its Gateway class is `approuting-istio`.
 The class name describes Azure's internal implementation, not a service-mesh
 addon or an Istio API requirement.
@@ -91,14 +91,14 @@ When the array contains custom zone IDs, the template disables the managed defau
 AKS supplies a separate `appRoutingIdentity` with `resourceId`, `clientId`, and
 `objectId`. Bicep scopes Key Vault Certificate User to the existing vault.
 It grants each configured DNS zone only its matching public or private DNS
-Zone Contributor role at that exact zone. These are definitions, not live role
-grants. The routing identity is separate from the Foundation Probe identity.
+Zone Contributor role at that exact zone. The Bicep source defines these role assignments; they are not live role grants.
+The routing identity is separate from the Foundation Probe identity.
 
-AKS also enables the Key Vault CSI provider and secret rotation with `enableSecretRotation: 'true'` and `rotationPollInterval: '2m'`. These values are template settings; the addon has not been activated in Azure.
+The template configures the Key Vault CSI provider and secret rotation with `enableSecretRotation: 'true'` and `rotationPollInterval: '2m'`. These values are template settings; the addon is not active in Azure.
 
 ## Limited P1 runtime identity setup
 
-`infra/bicep/p1-runtime-identities.bicep` is separate from the P0 foundation shown above.
+`infra/bicep/p1-runtime-identities.bicep` is separate from the P0 foundation topology.
 It uses the existing resource group location and the existing AKS OIDC issuer.
 The resource group and cluster locations must match before deployment.
 Its fixed service list is Projects & Config, Environment, Knowledge,
@@ -126,7 +126,7 @@ It retains 93 tables, eight row-lock columns, and 28 exact function signatures.
 Only casting authority can receive direct runtime EXECUTE.
 Restricted-role behavior and actual PostgreSQL catalog behavior still require
 separate database proof; source tests do not execute the initializer.
-These source changes do not change the Azure topology shown above.
+These source changes do not change the P0 Azure topology.
 See the [initializer source limits](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal)
 and the [source-test boundary](../guide/testing).
 
@@ -137,9 +137,8 @@ grant tables. The existing runtime role can read and insert audit rows and can
 update grant heads through CAS. It cannot delete these records, update audit
 rows, write migration history, or create schema objects. The verifier checks
 all 14 exact tables and their migration-role ownership.
-This is a source definition tested with disposable restricted PostgreSQL
-principals. It creates no new Azure identity or live role grant and does not
-run the operator bootstrap.
+Tests use disposable restricted PostgreSQL principals for this source definition.
+It creates no new Azure identity or live role grant and does not run the operator bootstrap.
 
 AKS exposes a public API endpoint protected by managed Entra authentication and Azure RBAC; local accounts are disabled. The cluster keeps Azure Linux nodes, Cilium networking, OIDC/workload identity, and ACNS security with observability disabled. The source leaves `kubernetesVersion` empty. Runtime acceptance requires Kubernetes 1.29 or later.
 

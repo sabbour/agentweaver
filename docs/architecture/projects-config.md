@@ -33,10 +33,11 @@ with `VerifyFull`, explicit authentication authority and audience, an immutable
 product image, reviewed image user/group, and an existing Projects-only TLS Secret.
 It exposes private HTTPS and leaves system certificate trust unchanged.
 
-The optional `ProjectsConfig:Authentication:BrokerRunBindingAudience` enables the
-private Broker proof route. When enabled, `ProjectsConfig:Tls:CertificatePath`,
-`KeyPath`, and `ServerCertificateSha256` are required. The absolute certificate/key
-paths must identify a current non-CA server certificate with the server
+When configured, `ProjectsConfig:Authentication:BrokerRunBindingAudience` maps only
+the private Broker proof route. This route requires
+`ProjectsConfig:Tls:CertificatePath`, `ProjectsConfig:Tls:KeyPath`, and
+`ProjectsConfig:Tls:ServerCertificateSha256`. The absolute certificate/key paths
+must identify a current non-CA server certificate with the server
 authentication purpose, and the digest must match its exact leaf certificate.
 The private route also requires a native TLS 1.2 or TLS 1.3 handshake; proxy
 headers cannot stand in for TLS. The deployed TLS Secret and Kestrel default
@@ -85,9 +86,9 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `GET /api/projects` | List projects visible through current project roles; a tenant administrator sees all projects in that tenant. |
 | `GET /api/projects/{projectId}` | Read an authorized project summary. |
 | `GET /api/projects/{projectId}?runId={runId}` | Read the project summary for an exact bound run after rechecking the caller's current project read role. |
-| `PATCH /api/projects/{projectId}` | Change project name or lifecycle state using an expected project revision. Archive rather than physically delete. |
+| `PATCH /api/projects/{projectId}` | Change project name or lifecycle state with an expected project revision. Archive rather than physically delete. |
 | `GET /api/projects/{projectId}/configuration?revision={n}` | Read the current or a retained configuration revision. |
-| `PUT /api/projects/{projectId}/configuration` | Append a configuration revision using an expected configuration revision. |
+| `PUT /api/projects/{projectId}/configuration` | Append a configuration revision with an expected configuration revision. |
 | `GET /api/casting/templates` | List the built-in scenario templates available to seed a reviewed team proposal. |
 | `GET /api/catalog/roles` | List the role definitions available to scenario and manual team proposals. |
 | `POST /api/projects/{projectId}/casting/proposals` | Create a reviewed proposal from a complete project configuration draft. |
@@ -101,7 +102,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `GET /api/projects/{projectId}/casting/export?revision={n}` | Export charter/casting configuration from the current or a retained revision. |
 | `POST /api/projects/{projectId}/casting/import` | Stage an explicit owner-authorized charter/casting import for review. |
 | `GET /api/platform/runtime-defaults` | Read the platform administrator's current defaults. |
-| `PUT /api/platform/runtime-defaults` | Append platform defaults using an expected revision. |
+| `PUT /api/platform/runtime-defaults` | Append platform defaults with an expected revision. |
 | `PUT /api/projects/{projectId}/runs/{runId}/selection` | Accept or idempotently replay a run-selection request from the Orchestrator. |
 | `GET /api/projects/{projectId}/runs/{runId}/selection` | Read the immutable selection snapshot for the authorized Orchestrator. |
 | `POST /internal/projects/{projectId}/runs/{runId}/broker-run-binding` | Private Broker-only proof read, mapped only when `ProjectsConfig:Authentication:BrokerRunBindingAudience` is configured. Requires native TLS 1.2 or TLS 1.3, accepts no query or body, and returns a bounded `Cache-Control: no-store` receipt only for the exact signed project/run binding, active project, current actor membership, active Orchestrator assignment, and matching accepted run-selection snapshot. |
@@ -109,7 +110,7 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `GET /api/projects/{projectId}/runs/{runId}/agents/{agentId}/skills` | Read exact imported skill revisions assigned to an active agent in the accepted run. |
 | `GET /api/authorization/context` | Return the validated caller's current effective permissions through versioned contract 1. |
 | `GET, POST /api/projects/{projectId}/skill-marketplaces/sources` | List or add revisioned project skill sources. |
-| `PUT, DELETE /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}` | Update or tombstone a source using its expected revision. |
+| `PUT, DELETE /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}` | Update or tombstone a source with its expected revision. |
 | `GET /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/browse` | Resolve a source ref to a commit and return a bounded, filtered, paged manifest index. |
 | `POST /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/preview` | Validate selected source bytes from an exact source revision, commit SHA, and path, then return the Skills preview and digest. |
 | `POST /api/projects/{projectId}/skill-marketplaces/sources/{sourceId}/import` | Import selected bytes with the expected content digest and idempotency key into the existing Skills content store. |
@@ -144,7 +145,7 @@ resource bytes, or object keys.
 Casting templates and role definitions are authenticated catalog reads. Scenario proposal creation accepts an `expectedConfigurationRevision` and a `templateId`; manual creation accepts the expected revision and a non-empty list of catalog `roleIds`. Both create a pending proposal from the configuration at that revision, replacing only the proposed `AgentCharters` and `Casting` while retaining unrelated project settings. Manual inputs reject unknown, repeated, and reserved orchestration roles. The original full-draft proposal route remains available for callers that already compose a complete `ProjectConfiguration`.
 
 Authorized project readers can list and read proposals. Project writers can
-amend a draft using its expected draft revision and explicitly confirm or reject
+amend a draft with its expected draft revision and explicitly confirm or reject
 it. Confirmation rechecks current project authority and the base configuration
 revision while holding the project lock. It then appends the configuration
 revision and marks the proposal confirmed in the same transaction. A changed
@@ -189,10 +190,10 @@ does not produce a receipt.
   reference. If the explicit project reference is absent from the supplied
   immutable selection context, run selection fails closed. It does not fall
   back to the platform model.
-- Project configuration may name an optional `defaultWorkflowId`. Orchestrator accepts it only when it resolves to a server-registered workflow in the accepted selection's authorized catalog; project workflow references narrow that catalog when present. An unknown or unauthorized default falls back to the validated built-in workflow. The field is an identifier, not a workflow definition or an authority grant.
-- `SecretRef` values may be persisted as references. Credential values are not part of configuration or run-selection snapshots.
+- Project configuration can name an optional `defaultWorkflowId`. Orchestrator accepts it only when it resolves to a server-registered workflow in the accepted selection's authorized catalog; project workflow references narrow that catalog when present. An unknown or unauthorized default falls back to the validated built-in workflow. The field is an identifier, not a workflow definition or an authority grant.
+- `SecretRef` values can be persisted as references. Credential values are not part of configuration or run-selection snapshots.
 - Optional `reviewedRemoteToolSnapshots` contains exact project-scoped snapshot references. Null omission preserves older configuration bytes. Duplicate references and references to another project are rejected. The accepted run retains these references, not mutable current project settings.
-- `ModelSelectionSettings.SourceMode` selects `hostedCopilot` or `byok` in the platform or project configuration. Runtime owner bindings retain that accepted mode. There is no personal model-provider precedence or fallback.
+- `ModelSelectionSettings.SourceMode` selects `hostedCopilot` or `byok` in the platform or project configuration. Runtime owner bindings retain that accepted mode. The runtime has no personal model-provider precedence or fallback.
 - Hosted selection requires a stable `ConnectionId` and prohibits `CredentialReference`. Identity owns the current connection revision, GitHub user identity, freshness, revocation, and exact protected secret version. Rotation does not change the accepted selection bytes or hash. A different account, owner, or scope requires a new connection and selection.
 - BYOK selection requires an exact `CredentialReference` and prohibits `ConnectionId`. Orchestrator exposes that reference only when the confirmed WorkPlan model matches the accepted selection. The reference is not grant authority and contains no credential value.
 - Legacy records retain their original omitted or null fields and hashes. Hosted records with a pinned secret require migration to a connection before runtime use. Missing or incompatible source modes fail closed.
@@ -211,11 +212,11 @@ does not produce a receipt.
   configuration contains no OAuth, selection-code, or installation-token
   values. Identity stores only OAuth SecretRefs and returns installation
   tokens transiently.
-- Project provider overrides only select provider IDs permitted by the platform catalog. Exclusive, ordered-composite, platform-singleton, layered and meter-keyed Cost seams use the existing `ProviderResolver`; Application Hosting remains unsupported. Cost requirements name a source explicitly, and multiple distinct meter sources may appear in one selection. The snapshot preserves source keys, adapter/options versions and advertised/required capabilities.
-- The service requires project egress rules to be a subset of the platform baseline and checks each run's required destinations. Project run limits may only reduce configured platform limits.
+- Project provider overrides only select provider IDs permitted by the platform catalog. Exclusive, ordered-composite, platform-singleton, layered and meter-keyed Cost seams use the existing `ProviderResolver`; Application Hosting remains unsupported. Cost requirements name a source explicitly, and multiple distinct meter sources can appear in one selection. The snapshot preserves source keys, adapter/options versions and advertised/required capabilities.
+- The service requires project egress rules to be a subset of the platform baseline and checks each run's required destinations. Project run limits can only reduce configured platform limits.
 - The immutable run-selection snapshot carries the typed platform egress
   baseline, optional project narrowing, admitted run needs, and the effective
-  allowlist. It also carries each layered Network Policy provider's layer,
+  allow list. It also carries each layered Network Policy provider's layer,
   options revision, and required/advertised capabilities. The Environment consumer rechecks the current authorization context before reading this snapshot and compiles the final intent.
 - Project configuration revisions, platform runtime revisions, and run-selection snapshots are append-only at the database boundary. Project metadata and revision heads remain mutable under optimistic revision checks.
 - Memberships and role assignments live in this service's schema. A privileged
@@ -245,7 +246,7 @@ operation. Normal startup verifies that migrations have already been applied.
 
 Projects & Config and Knowledge use the shared loader from `Agentweaver.Providers`.
 Both validate the supplied catalog through `ProviderCatalog.Create` and fail startup
-if it is missing or invalid rather than using an empty catalog. The snapshot is fixed
+if it is missing or invalid rather than substituting an empty catalog. The snapshot is fixed
 for each service process lifetime; run requests carry an immutable context revision,
 and consumers fail closed if a selected candidate differs from the supplied catalog.
 Database migrations run through the separate `--migrate` operation; normal startup
