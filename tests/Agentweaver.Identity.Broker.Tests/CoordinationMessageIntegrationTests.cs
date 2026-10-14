@@ -2745,7 +2745,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var mergeStartedRoleRevoked = false;
         async Task WaitForMergeBarrierAsync(Task barrier, string barrierName)
         {
-            if (await Task.WhenAny(barrier, mergeStartedMerge).ConfigureAwait(false) == mergeStartedMerge)
+            var completed = await Task.WhenAny(barrier, mergeStartedMerge)
+                .WaitAsync(TimeSpan.FromSeconds(30))
+                .ConfigureAwait(false);
+            if (completed == mergeStartedMerge)
             {
                 using var earlyResponse = await mergeStartedMerge.ConfigureAwait(false);
                 var body = await earlyResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
