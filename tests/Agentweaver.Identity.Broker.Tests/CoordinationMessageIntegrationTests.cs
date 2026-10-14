@@ -5944,11 +5944,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
     private static async Task AssertStatusAsync(
         HttpResponseMessage response,
-        HttpStatusCode expected)
+        HttpStatusCode expected,
+        string? diagnostic = null)
     {
         var body = await response.Content.ReadAsStringAsync();
+        var failureMessage = $"Expected {(int)expected}, got {(int)response.StatusCode}: {body}";
+        if (response.StatusCode != expected && diagnostic is not null)
+            failureMessage += $"\n{diagnostic}";
         Assert.True(response.StatusCode == expected,
-            $"Expected {(int)expected}, got {(int)response.StatusCode}: {body}");
+            failureMessage);
     }
 
     private static async Task<T> ReadJsonAsync<T>(HttpResponseMessage response) =>

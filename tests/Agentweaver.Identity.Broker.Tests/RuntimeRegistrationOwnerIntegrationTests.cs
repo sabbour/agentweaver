@@ -146,7 +146,22 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var response = await SendJsonAsync(client, HttpMethod.Post, enrollmentPath,
             runToken, new RegisterRuntimeRequest(environmentOwner.EnvironmentId, "runtime-profile"));
         TraceNativeStage(failures, $"Runtime registration returned {(int)response.StatusCode}.");
-        await AssertStatusAsync(response, HttpStatusCode.OK);
+        const string environmentRoutePrefix = "environment.test/internal/projects/";
+        const string conflictMarker = ": 409 ";
+        var profileResolveConflict = failures.LastOrDefault(failure =>
+        {
+            if (!failure.StartsWith(environmentRoutePrefix, StringComparison.Ordinal))
+                return false;
+            var statusIndex = failure.IndexOf(
+                conflictMarker, environmentRoutePrefix.Length, StringComparison.Ordinal);
+            if (statusIndex < 0)
+                return false;
+            var route = failure[..statusIndex];
+            return route.Contains("/coordination/sessions/", StringComparison.Ordinal) &&
+                route.Contains("/runtime-bootstrap/profiles/", StringComparison.Ordinal) &&
+                route.EndsWith("/resolve", StringComparison.Ordinal);
+        });
+        await AssertStatusAsync(response, HttpStatusCode.OK, profileResolveConflict);
         Assert.True(response.Headers.CacheControl?.NoStore);
         var registration = await response.Content.ReadFromJsonAsync<RuntimeRegistration>(CoordinationJsonOptions);
         Assert.NotNull(registration);
