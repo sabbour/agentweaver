@@ -78,6 +78,7 @@ public sealed class RuntimeNativePromptCapacityTests
         var after = await RequireContextInfoAsync(session, timeout.Token);
         AssertContextIdentity(after, session);
         Assert.True(after.TotalTokens <= after.PromptTokenLimit);
+        Assert.True(after.TotalTokens <= session.Facts.MaxPromptTokens);
         Assert.True(after.ConversationTokens < tokensAtCompactionStart,
             $"Native conversation tokens did not decrease across compaction generation {compaction.Generation}: " +
             $"start={tokensAtCompactionStart}, after={after.ConversationTokens}.");
