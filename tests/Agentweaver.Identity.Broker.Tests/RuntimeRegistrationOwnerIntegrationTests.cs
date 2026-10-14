@@ -1700,12 +1700,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 var sandboxProvider = new AgentSandboxProvider(
                     sandboxOptions, sandboxKubernetesClient, leaseTimeProvider);
                 var provisioned = await sandboxProvider.ProvisionAsync(sandboxProvisionRequest);
+                var leaseCreatedAt = lease.CreatedAt ?? throw new InvalidOperationException(
+                    "The controlled Sandbox lease has no creation timestamp.");
                 kubernetesTransport.AddReadySandbox(
-                    provisioned,
-                    lease.CreatedAt ?? throw new InvalidOperationException(
-                        "The controlled Sandbox lease has no creation timestamp."));
+                    provisioned, leaseCreatedAt);
                 lease = await leaseStore.CompleteProvisionAsync(
                     lease.OperationId, lease.Fence, provisioned, true, default);
+                leaseTimeProvider.AdvanceTo(leaseCreatedAt.AddSeconds(2));
                 var profile = new EnvironmentRuntimeBootstrapProfile(
                     "runtime-profile", new(RuntimeReceiverConfigureEndpoint),
                     new("https://orchestrator.test/internal/runtime/observations"));
@@ -1795,8 +1796,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
     private sealed class RuntimeLeaseTestTimeProvider : TimeProvider
     {
+        private DateTimeOffset? _current;
+
+        public void AdvanceTo(DateTimeOffset utcNow)
+        {
+            if (GetUtcNow() < utcNow)
+                _current = utcNow;
+        }
+
         public override DateTimeOffset GetUtcNow() =>
-            TimeProvider.System.GetUtcNow().AddMinutes(5);
+            _current ?? TimeProvider.System.GetUtcNow().AddMinutes(5);
     }
 
     private sealed class RuntimePlacementNetworkTransport : ICiliumPolicyResourceStore

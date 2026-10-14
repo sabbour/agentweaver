@@ -45,27 +45,6 @@ public sealed partial class AgentSandboxProviderTests
     }
 
     [Fact]
-    public void StartupEvidenceUsesTheLeaseStoreClock()
-    {
-        var hostTimeProvider = new FixedTimeProvider(DateTimeOffset.Parse("2026-10-06T12:00:10Z"));
-        var leaseTimeProvider = new FixedTimeProvider(DateTimeOffset.Parse("2026-10-06T12:05:10Z"));
-        var leaseCreatedAt = DateTimeOffset.Parse("2026-10-06T12:05:00Z");
-        var phases = ImmutableArray.Create(
-            new SandboxStartupPhaseObservation(
-                SandboxStartupPhase.Scheduled, 1, leaseCreatedAt.AddMilliseconds(500)),
-            new SandboxStartupPhaseObservation(
-                SandboxStartupPhase.ImageReady, 1, leaseCreatedAt.AddSeconds(1),
-                "sha256:" + new string('a', 64), 1),
-            new SandboxStartupPhaseObservation(
-                SandboxStartupPhase.Started, 1, leaseCreatedAt.AddSeconds(2)));
-        var budgets = new SandboxStartupTimeBudgets(30, 90, 30, 30, 30, 180);
-
-        Assert.Throws<ArgumentException>(() =>
-            budgets.Evaluate(leaseCreatedAt, phases, hostTimeProvider.GetUtcNow()));
-        Assert.Null(budgets.Evaluate(leaseCreatedAt, phases, leaseTimeProvider.GetUtcNow()));
-    }
-
-    [Fact]
     public async Task ListOwnedUsesPinnedOptionsNamespaceInsteadOfCurrentDefaults()
     {
         var currentOptions = new AgentSandboxOptions(
@@ -122,7 +101,7 @@ public sealed partial class AgentSandboxProviderTests
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
-    public async Task ProvisionIsIdempotentDescribeWithholdsReadyWithoutNetworkGenerationAndReleaseUsesUidPreconditions(
+    public async Task ProvisionIsIdempotentDescribeValidatesLeaseRelativeStartupEvidenceAndReleaseUsesUidPreconditions(
         bool agentHostProfile, bool cachedImage)
     {
         var options = new AgentSandboxOptions(
@@ -271,7 +250,7 @@ public sealed partial class AgentSandboxProviderTests
         var provider = new AgentSandboxProvider(
             options,
             kubernetesClient,
-            new FixedTimeProvider(DateTimeOffset.Parse("2026-10-06T12:00:10Z")));
+            new FixedTimeProvider(leaseCreatedAt.AddSeconds(2)));
 
         var provisioned = await provider.ProvisionAsync(request);
         var duplicate = await provider.ProvisionAsync(request);
@@ -330,13 +309,22 @@ public sealed partial class AgentSandboxProviderTests
         Assert.False(string.IsNullOrWhiteSpace(
             claimBody["metadata"]!["labels"]!["agentweaver.dev/sandbox-operation"]!.GetValue<string>()));
 
-        handler.AddReadySandbox(provisioned.Resource.ResourceId);
-        var observation = await provider.DescribeAsync(new SandboxDescribeRequest(
+        handler.AddReadySandbox(provisioned.Resource.ResourceId, leaseCreatedAt);
+        var describeRequest = new SandboxDescribeRequest(
             fence,
             provisioned.Resource,
             1,
             provisioned.ProviderBinding,
-            leaseCreatedAt));
+            leaseCreatedAt);
+        var beforeStartedAtProvider = new AgentSandboxProvider(
+            options,
+            kubernetesClient,
+            new FixedTimeProvider(leaseCreatedAt.AddMilliseconds(1500)));
+        var startupEvidenceFailure = await Assert.ThrowsAsync<SandboxProviderException>(
+            () => beforeStartedAtProvider.DescribeAsync(describeRequest));
+        Assert.Equal("sandbox_startup_evidence_invalid", startupEvidenceFailure.Code);
+
+        var observation = await provider.DescribeAsync(describeRequest);
 
         Assert.Equal(SandboxObservedState.Pending, observation.State);
         Assert.True(observation.VmIsolationVerified);
@@ -346,7 +334,7 @@ public sealed partial class AgentSandboxProviderTests
             phase => phase.Phase == SandboxStartupPhase.ImageReady);
         Assert.Equal("sha256:" + new string('a', 64), imageReady.ImageDigest);
         Assert.Equal(1, imageReady.CompressedPullBytes);
-        Assert.Equal(DateTimeOffset.Parse("2026-10-06T12:00:00Z"), imageReady.ObservedAt);
+        Assert.Equal(leaseCreatedAt.AddSeconds(1), imageReady.ObservedAt);
         Assert.DoesNotContain(
             observation.StartupPhases,
             phase => phase.Phase is SandboxStartupPhase.Configured or SandboxStartupPhase.Ready);
@@ -538,6 +526,7 @@ public sealed partial class AgentSandboxProviderTests
     {
         private readonly Dictionary<string, JsonNode> _resources = new(StringComparer.Ordinal);
         private JsonNode? _podList;
+        private DateTimeOffset? _imageEventTime;
         public Dictionary<string, string> Logs { get; } = new(StringComparer.Ordinal);
 
         public int CreateCount { get; private set; }
@@ -594,8 +583,9 @@ public sealed partial class AgentSandboxProviderTests
         public bool ImageAlreadyPresent { get; init; }
         public string ImageEventPodUid { get; set; } = "pod-uid";
 
-        public void AddReadySandbox(string claimUid)
+        public void AddReadySandbox(string claimUid, DateTimeOffset leaseCreatedAt)
         {
+            _imageEventTime = leaseCreatedAt.AddSeconds(1);
             var claimPath = _resources.Keys.Single(path =>
                 path.Contains("/sandboxclaims/", StringComparison.Ordinal));
             var claim = _resources[claimPath];
@@ -607,8 +597,7 @@ public sealed partial class AgentSandboxProviderTests
             var labels = claimMetadata["labels"]!.DeepClone().AsObject();
             labels["agents.x-k8s.io/claim-uid"] = claimUid;
             labels["egress.example/selector"] = "environment-a";
-            _resources["apis/agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxes/sandbox-a"] =
-                JsonNode.Parse(
+            var sandbox = JsonNode.Parse(
                     """
                     {"apiVersion":"agents.x-k8s.io/v1beta1","kind":"Sandbox",
                      "metadata":{"name":"sandbox-a","namespace":"agentweaver","uid":"sandbox-uid","generation":1,
@@ -616,6 +605,9 @@ public sealed partial class AgentSandboxProviderTests
                      "status":{"conditions":[{"type":"Ready","status":"True",
                       "lastTransitionTime":"2026-10-06T12:00:00Z"}]}}
                     """)!;
+            sandbox["status"]!["conditions"]![0]!["lastTransitionTime"] =
+                leaseCreatedAt.AddSeconds(2).ToString("O");
+            _resources["apis/agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxes/sandbox-a"] = sandbox;
             _resources["apis/agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxes/sandbox-a"]!
                 ["metadata"]!["ownerReferences"]![0]!["uid"] = claimUid;
             _podList = JsonSerializer.SerializeToNode(new
@@ -678,7 +670,7 @@ public sealed partial class AgentSandboxProviderTests
                                 {
                                     type = "PodScheduled",
                                     status = "True",
-                                    lastTransitionTime = "2026-10-06T11:59:00Z"
+                                    lastTransitionTime = leaseCreatedAt.AddMilliseconds(500).ToString("O")
                                 }
                             },
                             containerStatuses = new[]
@@ -690,7 +682,7 @@ public sealed partial class AgentSandboxProviderTests
                                     ready = true,
                                     state = new
                                     {
-                                        running = new { startedAt = "2026-10-06T12:00:00Z" }
+                                        running = new { startedAt = leaseCreatedAt.AddSeconds(2).ToString("O") }
                                     }
                                 }
                             }
@@ -828,6 +820,9 @@ public sealed partial class AgentSandboxProviderTests
                 if (path == "apis/agents.x-k8s.io/v1beta1/namespaces/agentweaver/sandboxes")
                     return JsonResponse(HttpStatusCode.OK, new JsonObject { ["items"] = new JsonArray() });
                 if (path == "api/v1/namespaces/agentweaver/events")
+                {
+                    var imageEventTime = _imageEventTime
+                        ?? throw new InvalidOperationException("The ready Sandbox has no image event time.");
                     return JsonResponse(HttpStatusCode.OK, new JsonObject
                     {
                         ["items"] = new JsonArray
@@ -838,11 +833,12 @@ public sealed partial class AgentSandboxProviderTests
                                 ["message"] = ImageAlreadyPresent
                                     ? "Container image ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa already present on machine"
                                     : "Successfully pulled image ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                                ["eventTime"] = "2026-10-06T12:00:00Z",
+                                ["eventTime"] = imageEventTime.ToString("O"),
                                 ["involvedObject"] = new JsonObject { ["uid"] = ImageEventPodUid }
                             }
                         }
                     });
+                }
                 return _resources.TryGetValue(path, out var resource)
                     ? JsonResponse(HttpStatusCode.OK, resource)
                     : new HttpResponseMessage(HttpStatusCode.NotFound);
