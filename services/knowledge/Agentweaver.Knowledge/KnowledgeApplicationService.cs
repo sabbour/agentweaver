@@ -469,7 +469,9 @@ public sealed class KnowledgeApplicationService(
         var context = await ResolveProviderAsync(
             projectId, runId, ProjectAuthorizationPermission.AccessPrivateKnowledge, cancellationToken)
             .ConfigureAwait(false);
-        var allowedTokens = Math.Min(options.DefaultContextTokens, context.Selection.RunLimits.MaxPromptTokens);
+        var allowedTokens = Math.Min(
+            options.DefaultContextTokens,
+            context.Selection.RunLimits.MaxPromptTokens ?? options.DefaultContextTokens);
         var itemLimit = maximumItems ?? options.DefaultContextItems;
         var tokenLimit = maximumTokens ?? allowedTokens;
         if (itemLimit < 1 || itemLimit > options.DefaultContextItems ||

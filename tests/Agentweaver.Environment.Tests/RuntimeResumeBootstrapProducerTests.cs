@@ -235,6 +235,10 @@ public sealed partial class RuntimeResumeBootstrapTests
             }
             else if (path == "/runtime/v1/configure/resume-state")
             {
+                Assert.Equal(
+                    bootstrap.Resume.RestoredWorkspace!.Placement.RuntimeEndpoint!.ReceiverConfigureEndpoint!
+                        .GetLeftPart(UriPartial.Authority),
+                    request.RequestUri.GetLeftPart(UriPartial.Authority));
                 Assert.Contains(request.Options, option =>
                     option.Value is SandboxRuntimeHttpsEndpoint endpoint &&
                     endpoint == bootstrap.Resume.RestoredWorkspace!.Placement.RuntimeEndpoint);
@@ -248,6 +252,10 @@ public sealed partial class RuntimeResumeBootstrapTests
             else if (path == "/runtime/v1/configure/activate")
             {
                 ActivateCalls++;
+                Assert.Equal(
+                    bootstrap.Resume.RestoredWorkspace!.Placement.RuntimeEndpoint!.ReceiverConfigureEndpoint!
+                        .GetLeftPart(UriPartial.Authority),
+                    request.RequestUri.GetLeftPart(UriPartial.Authority));
                 Assert.Contains(request.Options, option =>
                     option.Value is SandboxRuntimeHttpsEndpoint endpoint &&
                     endpoint == bootstrap.Resume.RestoredWorkspace!.Placement.RuntimeEndpoint);

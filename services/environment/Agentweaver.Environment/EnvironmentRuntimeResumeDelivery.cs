@@ -12,15 +12,27 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
         object request,
         CancellationToken cancellationToken) where TResponse : class
     {
-        var owner = new Uri(placement.ConfigureEndpoint.GetLeftPart(UriPartial.Authority) + "/");
         if (placement.RuntimeEndpoint is not { } endpoint)
+        {
+            var legacyOwner = new Uri(placement.ConfigureEndpoint.GetLeftPart(UriPartial.Authority) + "/");
             return await RuntimeOwnerHttpTransport.SendAsync<TResponse>(
-                client, owner, path, actor, request, cancellationToken).ConfigureAwait(false);
-        endpoint.Validate();
-        if (owner != endpoint.Address)
+                client, legacyOwner, path, actor, request, cancellationToken).ConfigureAwait(false);
+        }
+        var configureEndpoint = endpoint.ReceiverConfigureEndpoint
+            ?? throw new RuntimeAuthorizationException("runtime_sandbox_endpoint_invalid");
+        try
+        {
+            endpoint.ValidateForConfigureEndpoint(configureEndpoint);
+        }
+        catch (ArgumentException)
+        {
             throw new RuntimeAuthorizationException("runtime_sandbox_endpoint_invalid");
+        }
+        if (placement.ConfigureEndpoint != configureEndpoint)
+            throw new RuntimeAuthorizationException("runtime_sandbox_endpoint_invalid");
+        var receiverOwner = new Uri(configureEndpoint.GetLeftPart(UriPartial.Authority) + "/");
         return await RuntimeOwnerHttpTransport.SendBoundedAsync<TResponse>(
-            client, owner, path, actor, request, SessionMaterialValidation.MaximumBytes,
+            client, receiverOwner, path, actor, request, SessionMaterialValidation.MaximumBytes,
             false, cancellationToken, endpoint).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_host_unavailable");
     }
@@ -50,11 +62,22 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
             ?? throw new RuntimeAuthorizationException("runtime_resume_workspace_required");
         var endpoint = workspace.Placement.RuntimeEndpoint?.Validate()
             ?? throw new RuntimeAuthorizationException("runtime_resume_endpoint_unavailable");
-        if (workspace.Placement.ConfigureEndpoint != new Uri(endpoint.Address, "runtime/v1/configure"))
+        var configureEndpoint = endpoint.ReceiverConfigureEndpoint
+            ?? throw new RuntimeAuthorizationException("runtime_resume_endpoint_changed");
+        try
+        {
+            _ = endpoint.ValidateForConfigureEndpoint(configureEndpoint);
+        }
+        catch (ArgumentException)
+        {
+            throw new RuntimeAuthorizationException("runtime_resume_endpoint_changed");
+        }
+        if (workspace.Placement.ConfigureEndpoint != configureEndpoint)
             throw new RuntimeAuthorizationException("runtime_resume_endpoint_changed");
         await RequireCurrentResumeAsync(request, actor, cancellationToken).ConfigureAwait(false);
+        var receiverOwner = new Uri(configureEndpoint.GetLeftPart(UriPartial.Authority) + "/");
         var receipt = await RuntimeOwnerHttpTransport.SendBoundedAsync<RuntimeHostWorkspaceResumeReceipt>(
-            client, endpoint.Address, "/runtime/v1/workspace/resume", actor, request,
+            client, receiverOwner, "/runtime/v1/workspace/resume", actor, request,
             SessionMaterialValidation.MaximumBytes, false, cancellationToken, endpoint).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_resume_content_unavailable");
         receipt.ValidateFor(request);

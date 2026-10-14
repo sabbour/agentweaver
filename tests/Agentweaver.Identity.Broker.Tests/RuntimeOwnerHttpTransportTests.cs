@@ -114,25 +114,32 @@ public sealed class RuntimeOwnerHttpTransportTests
     [Fact]
     public async Task BoundedRequestCarriesTheExactValidatedSandboxEndpoint()
     {
+        var configureEndpoint =
+            new Uri("https://runtime-receiver.project.test:8443/runtime/v1/configure");
         var endpoint = new SandboxRuntimeHttpsEndpoint(
-            new Uri("https://runtime.project.test:8443/"), "10.42.1.8", "pod-uid", "service-uid").Validate();
+            new Uri("https://runtime.project.test:8443/"), "10.42.1.8", "pod-uid", "service-uid")
+        {
+            ReceiverConfigureEndpoint = configureEndpoint
+        }.Validate();
+        var receiverOwner = new Uri(configureEndpoint.GetLeftPart(UriPartial.Authority) + "/");
         var expected = new RuntimeBootstrapRequest(Guid.NewGuid(), Guid.NewGuid(), new string('a', 64));
         var handler = new RecordingHandler(request =>
         {
             Assert.Equal(
-                new Uri(endpoint.Address, "/internal/runtime/bootstrap/configure"),
+                new Uri(receiverOwner, "/internal/runtime/bootstrap/configure"),
                 request.RequestUri);
             Assert.True(request.Options.TryGetValue(
                 new HttpRequestOptionsKey<SandboxRuntimeHttpsEndpoint>("Agentweaver.SandboxRuntimeEndpoint"),
                 out var actualEndpoint));
             Assert.Equal(endpoint, actualEndpoint);
+            Assert.Equal(endpoint.PodAddress, actualEndpoint.PodAddress);
             return Task.FromResult(Response(request, expected));
         });
         using var client = new HttpClient(handler);
 
         var result = await RuntimeOwnerHttpTransport.SendBoundedAsync<RuntimeBootstrapRequest>(
             client,
-            endpoint.Address,
+            receiverOwner,
             "/internal/runtime/bootstrap/configure",
             new(new SecretCredential("actor", DateTimeOffset.UtcNow.AddMinutes(1)), null),
             expected,
@@ -143,6 +150,47 @@ public sealed class RuntimeOwnerHttpTransportTests
 
         Assert.Equal(expected, result);
         Assert.Single(handler.Requests);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("owned-service")]
+    [InlineData("foreign-owner")]
+    [InlineData("invalid-receiver")]
+    public async Task BoundedSandboxRequestRejectsMissingOrMismatchedReceiverBeforeHandler(string fault)
+    {
+        var configureEndpoint = new Uri("https://runtime-receiver.project.test:8443/runtime/v1/configure");
+        var baseEndpoint = new SandboxRuntimeHttpsEndpoint(
+            new Uri("https://runtime.project.test:8443/"), "10.42.1.8", "pod-uid", "service-uid");
+        var endpoint = fault switch
+        {
+            "missing" => baseEndpoint,
+            "invalid-receiver" => baseEndpoint with
+            {
+                ReceiverConfigureEndpoint = new Uri("https://runtime-receiver.project.test:8443/not-configure")
+            },
+            _ => baseEndpoint with { ReceiverConfigureEndpoint = configureEndpoint }
+        };
+        var owner = fault switch
+        {
+            "foreign-owner" => new Uri("https://foreign.test/"),
+            "owned-service" or "missing" => baseEndpoint.Address,
+            _ => new Uri(configureEndpoint.GetLeftPart(UriPartial.Authority) + "/")
+        };
+        var handler = new RecordingHandler(request =>
+            Task.FromResult(Response(request,
+                new RuntimeBootstrapRequest(Guid.NewGuid(), Guid.NewGuid(), new string('a', 64)))));
+        using var client = new HttpClient(handler);
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            RuntimeOwnerHttpTransport.SendBoundedAsync<RuntimeBootstrapRequest>(
+                client, owner, "/internal/runtime/bootstrap/configure",
+                new(new SecretCredential("actor", DateTimeOffset.UtcNow.AddMinutes(1)), null),
+                new RuntimeBootstrapRequest(Guid.NewGuid(), Guid.NewGuid(), new string('a', 64)),
+                1024, false, default, endpoint));
+
+        Assert.Equal("runtime_sandbox_endpoint_invalid", failure.Code);
+        Assert.Empty(handler.Requests);
     }
 
     [Fact]

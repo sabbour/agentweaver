@@ -340,6 +340,37 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             new SecretRef("github-webhook", "webhook-v1"),
             SourceControlSecretPurposes.Webhook);
 
+        using var updateDefaults = new HttpRequestMessage(HttpMethod.Put, "/api/platform/runtime-defaults/")
+        {
+            Content = JsonContent.Create(new UpdatePlatformRuntimeDefaultsRequest
+            {
+                ExpectedRevision = 0,
+                Defaults = new PlatformRuntimeDefaults
+                {
+                    ModelSelection = azureByok ? new ModelSelectionSettings(
+                        "platform-model", new SecretRef("model-api", "model-v1"), ModelSourceMode.Byok)
+                    {
+                        ModelBindingPin = AzureByokModelBindings().Pin("platform-model", ModelSourceMode.Byok)
+                    } : new ModelSelectionSettings(
+                        "platform-model", SourceMode: ModelSourceMode.HostedCopilot,
+                        ConnectionId: linkedConnection!.ConnectionId),
+                    EgressBaseline = [],
+                    RunLimits = new CopilotRunLimits
+                    {
+                        MaxModelTurns = 12,
+                        MaxToolCalls = 100,
+                        MaxChildren = 7,
+                        MaxConcurrentChildren = 2,
+                        MaxWallTimeSeconds = 3600,
+                        MaxPromptTokens = configuredMaxPromptTokens is null ? null : 30000,
+                    }
+                }
+            })
+        };
+        AddBearerAndTenant(updateDefaults, platformAdminToken, TenantId);
+        using var updatedDefaults = await projects.Client.SendAsync(updateDefaults);
+        Assert.Equal(HttpStatusCode.OK, updatedDefaults.StatusCode);
+
         using var updateProjectConfiguration = new HttpRequestMessage(
             HttpMethod.Put, $"/api/projects/{project.ProjectId}/configuration")
         {
@@ -392,36 +423,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             acceptedSkill = imported.Skill;
             projectConfiguration = imported.Configuration;
         }
-
-        using var updateDefaults = new HttpRequestMessage(HttpMethod.Put, "/api/platform/runtime-defaults/")
-        {
-            Content = JsonContent.Create(new UpdatePlatformRuntimeDefaultsRequest
-            {
-                ExpectedRevision = 0,
-                Defaults = new PlatformRuntimeDefaults
-                {
-                    ModelSelection = azureByok ? new ModelSelectionSettings(
-                        "platform-model", new SecretRef("model-api", "model-v1"), ModelSourceMode.Byok)
-                    {
-                        ModelBindingPin = AzureByokModelBindings().Pin("platform-model", ModelSourceMode.Byok)
-                    } : new ModelSelectionSettings(
-                        "platform-model", SourceMode: ModelSourceMode.HostedCopilot,
-                        ConnectionId: linkedConnection!.ConnectionId),
-                    EgressBaseline = [],
-                    RunLimits = new CopilotRunLimits
-                    {
-                        MaxModelTurns = 12,
-                        MaxToolCalls = 100,
-                        MaxChildren = 7,
-                        MaxConcurrentChildren = 2,
-                        MaxWallTimeSeconds = 3600,
-                    }
-                }
-            })
-        };
-        AddBearerAndTenant(updateDefaults, platformAdminToken, TenantId);
-        using var updatedDefaults = await projects.Client.SendAsync(updateDefaults);
-        Assert.Equal(HttpStatusCode.OK, updatedDefaults.StatusCode);
 
         var acceptedSelectionRequest = new AcceptRunSelectionRequest
         {
@@ -497,6 +498,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             new SecretRef("github-api", "api-v1"),
             SourceControlSecretPurposes.Api);
         var acceptedProjectsSelection = await acceptedSelection.Content.ReadAsStringAsync();
+        using (var selectionDocument = JsonDocument.Parse(acceptedProjectsSelection))
+        {
+            var runLimits = selectionDocument.RootElement.GetProperty("runLimits");
+            if (configuredMaxPromptTokens is { } acceptedPromptTokenLimit)
+                Assert.Equal(acceptedPromptTokenLimit, runLimits.GetProperty("maxPromptTokens").GetInt32());
+            else
+                Assert.False(runLimits.TryGetProperty("maxPromptTokens", out _));
+        }
         var acceptedProjectsSelectionHash = Convert.ToHexString(SHA256.HashData(
             Encoding.UTF8.GetBytes(acceptedProjectsSelection)));
         using (var changedSelectionPut = await SendJsonAsync(

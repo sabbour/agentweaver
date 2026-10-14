@@ -2,7 +2,7 @@ using System.Collections.Immutable;
 
 namespace Agentweaver.Abstractions;
 
-public sealed record ProjectRunLimitSnapshot(int MaxPromptTokens);
+public sealed record ProjectRunLimitSnapshot(int? MaxPromptTokens);
 
 public sealed record ProjectRunSelectionResponse(
     string ProjectId,

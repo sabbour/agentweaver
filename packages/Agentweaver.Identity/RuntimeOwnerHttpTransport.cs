@@ -47,6 +47,24 @@ public static class RuntimeOwnerHttpTransport
         if (maximumBytes is < 1 or > 4 * SessionMaterialValidation.MaximumBytes)
             throw new ArgumentOutOfRangeException(nameof(maximumBytes));
         var owner = RequireOwnerAddress(ownerAddress);
+        if (sandboxEndpoint is not null)
+        {
+            var configureEndpoint = sandboxEndpoint.ReceiverConfigureEndpoint
+                ?? throw new RuntimeAuthorizationException("runtime_sandbox_endpoint_invalid");
+            try
+            {
+                sandboxEndpoint.ValidateForConfigureEndpoint(configureEndpoint);
+            }
+            catch (ArgumentException)
+            {
+                throw new RuntimeAuthorizationException("runtime_sandbox_endpoint_invalid");
+            }
+            var receiverOwner = RequireOwnerAddress(new Uri(
+                configureEndpoint.GetLeftPart(UriPartial.Authority) + "/"));
+            if (owner != receiverOwner)
+                throw new RuntimeAuthorizationException("runtime_sandbox_endpoint_invalid");
+            owner = receiverOwner;
+        }
         var endpoint = new Uri(owner, path);
         if (!path.StartsWith("/", StringComparison.Ordinal) ||
             path.StartsWith("//", StringComparison.Ordinal) ||
@@ -63,9 +81,6 @@ public static class RuntimeOwnerHttpTransport
         using var request = new HttpRequestMessage(body is null ? HttpMethod.Get : HttpMethod.Post, endpoint);
         if (sandboxEndpoint is not null)
         {
-            sandboxEndpoint.Validate();
-            if (sandboxEndpoint.Address != owner)
-                throw new RuntimeAuthorizationException("runtime_sandbox_endpoint_invalid");
             request.Options.Set(RuntimeSandboxHttpTransport.EndpointOption, sandboxEndpoint);
         }
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", actor.Bearer.GetValue());

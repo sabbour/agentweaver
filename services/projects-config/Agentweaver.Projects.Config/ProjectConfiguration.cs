@@ -71,7 +71,8 @@ public sealed record CopilotRunLimits
     public int MaxChildren { get; init; }
     public int MaxConcurrentChildren { get; init; }
     public int MaxWallTimeSeconds { get; init; }
-    public int MaxPromptTokens { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MaxPromptTokens { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? MaxRevisionAttempts { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -430,7 +431,8 @@ public static class ProjectConfigurationValidator
             MaxChildren = ResolveLimit(project.MaxChildren, platform.RunLimits.MaxChildren, nameof(project.MaxChildren), allowZero: true),
             MaxConcurrentChildren = ResolveLimit(project.MaxConcurrentChildren, platform.RunLimits.MaxConcurrentChildren, nameof(project.MaxConcurrentChildren)),
             MaxWallTimeSeconds = ResolveLimit(project.MaxWallTimeSeconds, platform.RunLimits.MaxWallTimeSeconds, nameof(project.MaxWallTimeSeconds)),
-            MaxPromptTokens = ResolveLimit(project.MaxPromptTokens, platform.RunLimits.MaxPromptTokens, nameof(project.MaxPromptTokens)),
+            MaxPromptTokens = ResolveOptionalPromptTokenLimit(
+                project.MaxPromptTokens, platform.RunLimits.MaxPromptTokens, nameof(project.MaxPromptTokens)),
             MaxRevisionAttempts = ResolveOptionalLimit(
                 project.MaxRevisionAttempts, platform.RunLimits.MaxRevisionAttempts, nameof(project.MaxRevisionAttempts)),
             CopilotSoftCreditLimit = ResolveOptionalCreditLimit(
@@ -499,6 +501,16 @@ public static class ProjectConfigurationValidator
         return value;
     }
 
+    private static int? ResolveOptionalPromptTokenLimit(int? value, int? platformValue, string name)
+    {
+        if (value is null)
+            return platformValue;
+        ValidateOptionalRange(value, 1024, 200000, name);
+        if (platformValue is { } platformLimit && value > platformLimit)
+            throw Invalid($"Project run limit '{name}' cannot exceed the platform limit.");
+        return value;
+    }
+
     private static decimal? ResolveOptionalCreditLimit(decimal? value, decimal? platformValue, string name)
     {
         if (value is null)
@@ -516,7 +528,7 @@ public static class ProjectConfigurationValidator
         ValidateRange(limits.MaxChildren, 0, 100, "runLimits.maxChildren");
         ValidateRange(limits.MaxConcurrentChildren, 1, 32, "runLimits.maxConcurrentChildren");
         ValidateRange(limits.MaxWallTimeSeconds, 60, 86400, "runLimits.maxWallTimeSeconds");
-        ValidateRange(limits.MaxPromptTokens, 1024, 200000, "runLimits.maxPromptTokens");
+        ValidateOptionalRange(limits.MaxPromptTokens, 1024, 200000, "runLimits.maxPromptTokens");
         ValidateOptionalRange(limits.MaxRevisionAttempts, 0, int.MaxValue, "runLimits.maxRevisionAttempts");
         ValidateCreditLimit(limits.CopilotSoftCreditLimit, "runLimits.copilotSoftCreditLimit");
         ValidateCreditLimit(limits.CopilotHardCreditLimit, "runLimits.copilotHardCreditLimit");

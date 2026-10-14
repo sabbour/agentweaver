@@ -192,6 +192,58 @@ public sealed class ProjectConfigurationValidatorTests
     }
 
     [Fact]
+    public void PromptTokenLimitCanBeAbsentButConfiguredValuesRemainBoundedAndNarrowed()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        var uncappedPlatform = ProjectConfigurationValidator.Validate(PlatformDefaults() with
+        {
+            RunLimits = PlatformDefaults().RunLimits with { MaxPromptTokens = null }
+        });
+        var uncappedSelection = ProjectConfigurationValidator.ResolveLimits(uncappedPlatform, new());
+        Assert.Null(uncappedSelection.MaxPromptTokens);
+        Assert.DoesNotContain("maxPromptTokens", JsonSerializer.Serialize(uncappedPlatform.RunLimits, options));
+        Assert.DoesNotContain("maxPromptTokens", JsonSerializer.Serialize(uncappedSelection, options));
+        Assert.Null(JsonSerializer.Deserialize<CopilotRunLimits>(
+            JsonSerializer.Serialize(uncappedPlatform.RunLimits, options), options)!.MaxPromptTokens);
+        Assert.Null(JsonSerializer.Deserialize<CopilotRunLimits>(
+            JsonSerializer.Serialize(uncappedSelection, options), options)!.MaxPromptTokens);
+
+        var addedByProject = ProjectConfigurationValidator.ResolveLimits(
+            uncappedPlatform, new() { MaxPromptTokens = 16000 });
+        Assert.Equal(16000, addedByProject.MaxPromptTokens);
+
+        var cappedPlatform = ProjectConfigurationValidator.Validate(PlatformDefaults());
+        var inheritedLimits = ProjectConfigurationValidator.ResolveLimits(cappedPlatform, new());
+        Assert.Equal(20000, inheritedLimits.MaxPromptTokens);
+        Assert.Equal(20000, JsonSerializer.Deserialize<CopilotRunLimits>(
+            JsonSerializer.Serialize(inheritedLimits, options), options)!.MaxPromptTokens);
+        Assert.Equal(16000,
+            ProjectConfigurationValidator.ResolveLimits(cappedPlatform, new()
+            {
+                MaxPromptTokens = 16000
+            }).MaxPromptTokens);
+        Assert.Throws<ProjectConfigException>(() =>
+            ProjectConfigurationValidator.ResolveLimits(cappedPlatform, new()
+            {
+                MaxPromptTokens = 20001
+            }));
+
+        foreach (var invalid in new[] { 0, 1023, 200001 })
+        {
+            Assert.Throws<ProjectConfigException>(() =>
+                ProjectConfigurationValidator.Validate(PlatformDefaults() with
+                {
+                    RunLimits = PlatformDefaults().RunLimits with { MaxPromptTokens = invalid }
+                }));
+            Assert.Throws<ProjectConfigException>(() =>
+                ProjectConfigurationValidator.ResolveLimits(uncappedPlatform, new()
+                {
+                    MaxPromptTokens = invalid
+                }));
+        }
+    }
+
+    [Fact]
     public void OptionalCreditAndRevisionLimitsInheritAndCanOnlyNarrowIncludingZero()
     {
         var platform = PlatformDefaults() with

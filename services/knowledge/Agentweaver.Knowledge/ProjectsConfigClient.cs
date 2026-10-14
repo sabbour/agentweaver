@@ -95,7 +95,7 @@ public sealed class ProjectsConfigClient(
             string.IsNullOrWhiteSpace(selection.ContextRevision) ||
             selection.Providers.IsDefault ||
             selection.RunLimits is null ||
-            selection.RunLimits.MaxPromptTokens < 1)
+            selection.RunLimits.MaxPromptTokens is < 1)
             throw new KnowledgeApiException(
                 "invalid_run_selection",
                 "Projects & Config returned a mismatched or incomplete run-selection contract.",

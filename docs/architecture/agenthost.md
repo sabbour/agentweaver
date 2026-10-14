@@ -139,12 +139,12 @@ cleaned up and the host does not become ready. An omitted limit keeps legacy
 startup, zero still permits startup but blocks dispatch, and BYOK remains
 token-metered.
 
-The immutable Projects selection's `maxModelTurns`, `maxToolCalls`, and `maxPromptTokens` values are carried
+The immutable Projects selection's `maxModelTurns`, `maxToolCalls`, and optional `maxPromptTokens` values are carried
 through `RuntimeOwnerContext` into the registered `RuntimeBinding`. `maxModelTurns` and `maxToolCalls` are
 supported only for workflow-bound registrations. Native sends require the prepared-dispatch, action-grant, and
 native-begin admission path before SDK send. Each native tool invocation reserves one owner-side slot before
 approval; exact retries reuse the reservation and attempts beyond the run limit are denied. An unbound
-`maxModelTurns` or `maxToolCalls`, and any `maxPromptTokens`, fail activation with
+`maxModelTurns` or `maxToolCalls`, and any configured `maxPromptTokens`, fail activation with
 `runtime_numeric_limits_unsupported`, before SDK session creation, readiness, or model/tool invocation. Absent
 values preserve the legacy path. The RuntimeAction owner also rejects unsupported numeric bindings before issuing
 an action grant. Positive workflow-bound Hosted Copilot hard limits use the same prepared
@@ -224,12 +224,13 @@ reserves a run-wide invocation slot before approving a native tool call, with
 replays reusing the original reservation. The next invocation after the configured
 limit is denied. Unbound registrations with this limit fail before SDK setup.
 
-`MaxPromptTokens` remains unsupported as an enforceable model-request bound.
-The Orchestrator preserves the accepted value in `RuntimeOwnerContext` and the
-runtime binding, then rejects activation with `runtime_numeric_limits_unsupported`
+When configured, `MaxPromptTokens` is preserved in `RuntimeOwnerContext` and the
+runtime binding; it is not silently discarded or reclassified as a Knowledge
+retrieval budget. Activation still fails with `runtime_numeric_limits_unsupported`
 before SDK setup. The SDK setting compacts context before sending, but does not
 establish an owner-side N/N+1 no-send boundary for hosted and BYOK requests,
-including compaction.
+including compaction. Issue [#1855](https://github.com/sabbour/agentweaver/issues/1855)
+remains open.
 
 Each built-in tool approval checks current owner authority and Policy again.
 The pre-tool callback checks Policy without reserving a tool slot.
