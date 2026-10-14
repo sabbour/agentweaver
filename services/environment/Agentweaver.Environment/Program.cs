@@ -95,6 +95,7 @@ var remoteMcpCurrentCallVerificationEnabled =
     builder.AddRemoteMcpCurrentCallVerification(authorityUri.AbsoluteUri);
 var remoteMcpNativeCallDispatchEnabled = builder.ConfigureRemoteMcpNativeCallDispatch();
 builder.Services.AddScoped<IEnvironmentLifecycleProducer, EnvironmentLifecycleProducer>();
+builder.Services.AddScoped<EnvironmentLifecycleManager>();
 builder.Services.AddScoped<EnvironmentRuntimePlacementReader>();
 builder.Services.AddSingleton(new EnvironmentRuntimeBootstrapProfileRegistry(
     builder.Configuration.GetSection("Environment:RuntimeBootstrap:Profiles")

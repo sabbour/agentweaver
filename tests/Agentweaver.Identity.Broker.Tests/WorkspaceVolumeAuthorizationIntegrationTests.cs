@@ -1037,14 +1037,19 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 ReleaseDescriptor = JsonSerializer.SerializeToElement(lateReleaseDescriptor)
             }
         };
-        var preservedTerminalLease = await sandboxLeaseStore.CompleteProvisionAsync(
+        var provisionAttempts = await sandboxLeaseStore.GetProviderAttemptsAsync(
+            fence, fencedLateLease.OperationId, CancellationToken.None);
+        var provisionAttempt = Assert.Single(
+            provisionAttempts, attempt => attempt.Request.EffectKind == SandboxProviderEffectKind.Provision);
+        var conflictingLateResult = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
+            sandboxLeaseStore.CompleteProvisionAsync(
             fencedLateLease.OperationId,
             fence,
             differingLateResource,
             effectMayHaveApplied: true,
-            CancellationToken.None);
-        Assert.Equal(SandboxLeaseState.Released, preservedTerminalLease.State);
-        Assert.Equal(fencedLateLease.ProvisionedResource.Resource, preservedTerminalLease.ProvisionedResource!.Resource);
+            CancellationToken.None,
+            provisionAttempt.AttemptId));
+        Assert.Equal("sandbox_provider_attempt_outcome_conflict", conflictingLateResult.Code);
         using (var reconcileLateResource = await SendAsync(
             environment.Client,
             HttpMethod.Post,
@@ -1121,12 +1126,21 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 Generation = callbackReservation.Lease.ResourceGeneration
             }
         };
+        var savedCallbackRequest = await sandboxLeaseStore.SaveProviderRequestAsync(
+            callbackReservation.Lease.OperationId,
+            callbackFence,
+            callbackReservation.Lease.ProvisionIntent.ProviderRequest,
+            CancellationToken.None);
+        var callbackAttempt = await sandboxLeaseStore.BeginProviderAttemptAsync(
+            SandboxProviderAttemptRequest.ForProvision(savedCallbackRequest),
+            CancellationToken.None);
         var callbackLease = await sandboxLeaseStore.CompleteProvisionAsync(
             callbackReservation.Lease.OperationId,
             callbackFence,
             callbackResource,
             effectMayHaveApplied: true,
-            CancellationToken.None);
+            CancellationToken.None,
+            callbackAttempt.Attempt.AttemptId);
         var authorizationReadsBeforeLeaseCallback = selectionObserver.AuthorizationContextReadCount;
         var selectionReadsBeforeLeaseCallback = selectionObserver.SelectionReadCount;
         var createsBeforeLeaseCallback = sandboxKubernetesHandler.CreateCount;

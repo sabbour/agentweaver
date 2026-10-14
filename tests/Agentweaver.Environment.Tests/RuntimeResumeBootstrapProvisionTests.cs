@@ -138,7 +138,8 @@ public sealed partial class RuntimeResumeBootstrapTests
 
         public override Task<SandboxLeaseSnapshot> CompleteProvisionAsync(Guid operationId,
             EnvironmentGenerationFence fence, SandboxProvisionedResource? provisionedResource,
-            bool effectMayHaveApplied, CancellationToken cancellationToken)
+            bool effectMayHaveApplied, CancellationToken cancellationToken, Guid? providerAttemptId = null,
+            string? providerErrorCode = null)
         {
             Assert.Equal(Current.OperationId, operationId);
             Assert.Equal(Current.Fence, fence);

@@ -1,8 +1,8 @@
 {
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
-  "title": "Environment Sandbox lease, readiness, recovery, and late-resource cleanup",
-  "alt": "Environment verifies current Projects authority, the exact Workspace PVC generation, and Cilium policy generation before dispatch. It records an owner-fenced lease and immutable provider request, then provisions and observes the exact agent-sandbox resources. ReadyForDispatch requires the same verified network generation and actual Pod/PVC/isolation evidence. A different provider result after release is stored in a separate durable cleanup record and released with its original provider fence without changing terminal lease evidence. Workspace retention is unchanged.",
+  "title": "Environment Sandbox lease, provider attempts, readiness, and cleanup",
+  "alt": "Environment rechecks trusted Projects authority and selection around owner-fenced lifecycle changes. It records each provider attempt before an external effect and saves its exact outcome under the owner lock. Unknown or unresolved calls block release and generation advance. Late resources use a separate cleanup record and the original provider fence; claim expiry permits recovery but does not prove that a provider call stopped.",
   "autonumber": true,
   "participants": [
     {
@@ -64,15 +64,7 @@
       "type": "message",
       "from": "environment",
       "to": "prerequisites",
-      "label": "Read exact ready Workspace resource/data generation and pinned Storage binding",
-      "line": "solid",
-      "arrow": "filled"
-    },
-    {
-      "type": "message",
-      "from": "environment",
-      "to": "prerequisites",
-      "label": "Verify current owner policy object and requested generation",
+      "label": "Verify exact ready Workspace generation, pinned Storage volume, and policy generation",
       "line": "solid",
       "arrow": "filled"
     },
@@ -80,17 +72,17 @@
       "type": "message",
       "from": "environment",
       "to": "environment",
-      "label": "Reserve idempotent lease under owner lock; persist selection/options/request snapshot and positive fences",
-      "line": "solid",
-      "arrow": "filled"
-    },
-    {
-      "type": "message",
-      "from": "environment",
-      "to": "environment",
-      "label": "One current lease admitted; provider request is write-once",
+      "label": "Reserve idempotent write-once lease; persist selection, options, request snapshot, and positive fences",
       "line": "dashed",
       "arrow": "open"
+    },
+    {
+      "type": "message",
+      "from": "environment",
+      "to": "environment",
+      "label": "Persist exact per-call provider attempt under owner lock before external effect",
+      "line": "solid",
+      "arrow": "filled"
     },
     {
       "type": "message",
@@ -111,18 +103,18 @@
     {
       "type": "message",
       "from": "provider-api",
-      "to": "provider-api",
-      "label": "Verify RuntimeClass/PVC; create owner-specific template, zero-replica pool, and v1beta1 claim",
-      "line": "solid",
-      "arrow": "filled"
+      "to": "environment",
+      "label": "Verify RuntimeClass/PVC; create owner template, zero-replica pool and v1beta1 claim; return exact UIDs and Sandbox/Pod observations",
+      "line": "dashed",
+      "arrow": "open"
     },
     {
       "type": "message",
       "from": "provider-api",
-      "to": "provider-api",
-      "label": "Exact resource UIDs, claim, Sandbox and actual Pod observations",
-      "line": "dashed",
-      "arrow": "open"
+      "to": "environment",
+      "label": "Record exact provider result under the owner lock before resolving its attempt",
+      "line": "solid",
+      "arrow": "filled"
     },
     {
       "type": "message",
@@ -165,7 +157,7 @@
               "type": "message",
               "from": "environment",
               "to": "environment",
-              "label": "CAS retire exact resource/fence; increment current fence and block revival",
+              "label": "CAS-retire exact resource, increment fence, block revival, and persist release attempt",
               "line": "solid",
               "arrow": "filled"
             },
@@ -173,15 +165,15 @@
               "type": "message",
               "from": "environment",
               "to": "provider-api",
-              "label": "Release exact original provider binding with idempotency key",
+              "label": "Release original binding idempotently; delete claim with UID precondition and verify children absent",
               "line": "solid",
               "arrow": "filled"
             },
             {
               "type": "message",
               "from": "provider-api",
-              "to": "provider-api",
-              "label": "Foreground delete with claim UID precondition; verify claim and children absent",
+              "to": "environment",
+              "label": "Record exact receipt before completing the durable release attempt",
               "line": "solid",
               "arrow": "filled"
             }
@@ -202,7 +194,7 @@
               "type": "message",
               "from": "environment",
               "to": "environment",
-              "label": "Validate terminal evidence; keep uncertain effects current and queue a different late result separately",
+              "label": "Validate terminal proof; unresolved and legacy-unknown attempts block release and generation advance",
               "line": "solid",
               "arrow": "filled"
             }
@@ -213,7 +205,7 @@
     {
       "type": "note",
       "over": ["environment", "prerequisites"],
-      "label": "Late cleanup uses current owner auth and the original provider fence. Sandbox retirement leaves Environment and Workspace data unchanged."
+      "label": "Cleanup keeps current authority and original fences. Expiry allows retry, not quiescence; superseded claims reject receipts. Retirement leaves data unchanged."
     }
   ]
 }

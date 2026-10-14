@@ -727,6 +727,19 @@ public sealed class EnvironmentEgressManager(
             string environmentId,
             CancellationToken cancellationToken)
     {
+        var authorization = await GetAuthorizedRunEnvironmentControlContextAsync(
+            caller, projectId, runId, cancellationToken).ConfigureAwait(false);
+        return (
+            new EnvironmentOwnerIdentity(authorization.TenantId, projectId, runId, environmentId),
+            authorization);
+    }
+
+    internal async Task<ProjectAuthorizationContextResponse> GetAuthorizedRunEnvironmentControlContextAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        CancellationToken cancellationToken)
+    {
         var authorization = await ReadCurrentAuthorizationContextAsync(
             caller, projectId, runId, tenantId: null, cancellationToken).ConfigureAwait(false);
         RequirePermission(
@@ -735,9 +748,7 @@ public sealed class EnvironmentEgressManager(
             ProjectAuthorizationPermission.WriteProjects,
             "project_write_not_authorized",
             "The current caller lacks fresh WriteProjects authority for this target project.");
-        return (
-            new EnvironmentOwnerIdentity(authorization.TenantId, projectId, runId, environmentId),
-            authorization);
+        return authorization;
     }
 
     internal Task EnsureRunEnvironmentControlAuthorizationUnchangedAsync(

@@ -837,6 +837,10 @@ public sealed record SandboxLateResourceCleanupClaim(
     Guid ClaimToken,
     DateTimeOffset ClaimExpiresAt)
 {
+    public string ResourceFingerprint { get; init; } = string.Empty;
+    public Guid? ProvisionAttemptId { get; init; }
+    public Guid? ReleaseAttemptId { get; init; }
+
     public SandboxLateResourceCleanupClaim Validate()
     {
         ArgumentNullException.ThrowIfNull(Lease);
@@ -850,7 +854,8 @@ public sealed record SandboxLateResourceCleanupClaim(
             IdempotencyKey.Length > 128 ||
             IdempotencyKey.Any(char.IsControl) ||
             ClaimToken == Guid.Empty ||
-            ClaimExpiresAt <= DateTimeOffset.MinValue)
+            ClaimExpiresAt <= DateTimeOffset.MinValue ||
+            !SandboxProviderAttemptRequest.IsFingerprint(ResourceFingerprint))
             throw new ArgumentException("The late Sandbox resource cleanup claim is invalid.");
         return this;
     }
@@ -858,9 +863,299 @@ public sealed record SandboxLateResourceCleanupClaim(
 
 public sealed record SandboxPartialReleaseCompletionRequest(
     EnvironmentGenerationFence Fence,
-    SandboxPartialReleaseReceipt Receipt);
+    SandboxPartialReleaseReceipt Receipt)
+{
+    public Guid? ProviderAttemptId { get; init; }
+}
 
 public sealed record SandboxLeaseReservation(SandboxLeaseSnapshot Lease, bool Replayed);
+
+public enum SandboxProviderEffectKind
+{
+    Provision,
+    Release,
+    PartialRelease,
+    LateResourceRelease,
+    LegacyUnknown
+}
+
+public enum SandboxProviderAttemptState
+{
+    InProgress,
+    ResultRecorded,
+    FailedNoEffect,
+    Unknown,
+    Completed,
+    LegacyUnknown
+}
+
+public sealed record SandboxProviderAttemptRequest(
+    EnvironmentGenerationFence Fence,
+    long ResourceGeneration,
+    long ProviderFencingGeneration,
+    Guid OperationId,
+    SandboxProviderEffectKind EffectKind,
+    string RequestFingerprint,
+    string? LateResourceFingerprint = null)
+{
+    public static SandboxProviderAttemptRequest ForProvision(SandboxLeaseSnapshot lease)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        var fingerprint = lease.ProviderRequestFingerprint
+            ?? throw new ArgumentException("The immutable Sandbox provider request is not saved.", nameof(lease));
+        return new SandboxProviderAttemptRequest(
+            lease.Fence,
+            lease.ResourceGeneration,
+            lease.ProviderFencingGeneration,
+            lease.OperationId,
+            SandboxProviderEffectKind.Provision,
+            fingerprint).Validate();
+    }
+
+    public static SandboxProviderAttemptRequest ForRelease(
+        SandboxLeaseSnapshot lease,
+        SandboxProvisionedResource resource)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        resource = (resource ?? throw new ArgumentNullException(nameof(resource))).Validate();
+        return ForSavedEffect(
+            lease,
+            SandboxProviderEffectKind.Release,
+            string.Join('\0',
+                lease.ReleaseIdempotencyKey ?? string.Empty,
+                ResourceIdentity(resource),
+                resource.ProviderBinding.ReleaseDescriptor.GetRawText()));
+    }
+
+    public static SandboxProviderAttemptRequest ForPartialRelease(SandboxLeaseSnapshot lease)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        return ForSavedEffect(
+            lease,
+            SandboxProviderEffectKind.PartialRelease,
+            string.Join('\0',
+                lease.ReleaseIdempotencyKey ?? string.Empty,
+                lease.CurrentFencingGeneration,
+                lease.RetirementFingerprint ?? string.Empty,
+                lease.ProviderRequestFingerprint ?? string.Empty));
+    }
+
+    public static SandboxProviderAttemptRequest ForLateResourceRelease(
+        SandboxLateResourceCleanupClaim claim)
+    {
+        claim = (claim ?? throw new ArgumentNullException(nameof(claim))).Validate();
+        return ForLateResourceRelease(
+            claim.Lease,
+            claim.ProvisionedResource,
+            claim.IdempotencyKey,
+            claim.ResourceFingerprint);
+    }
+
+    public static SandboxProviderAttemptRequest ForLateResourceRelease(
+        SandboxLeaseSnapshot lease,
+        SandboxProvisionedResource provisionedResource,
+        string idempotencyKey,
+        string resourceFingerprint)
+    {
+        ArgumentNullException.ThrowIfNull(lease);
+        provisionedResource = (provisionedResource ?? throw new ArgumentNullException(nameof(provisionedResource)))
+            .Validate();
+        ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
+        if (!IsFingerprint(resourceFingerprint))
+            throw new ArgumentException("The late-resource fingerprint is invalid.", nameof(resourceFingerprint));
+        var details = string.Join('\0',
+            idempotencyKey,
+            resourceFingerprint,
+            ResourceIdentity(provisionedResource),
+            provisionedResource.ProviderBinding.ReleaseDescriptor.GetRawText());
+        return ForSavedEffect(
+            lease,
+            SandboxProviderEffectKind.LateResourceRelease,
+            details,
+            resourceFingerprint);
+    }
+
+    public static string Fingerprint(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+
+    public SandboxProviderAttemptRequest Validate()
+    {
+        ArgumentNullException.ThrowIfNull(Fence);
+        if (ResourceGeneration < 1 ||
+            ProviderFencingGeneration < 1 ||
+            OperationId == Guid.Empty ||
+            !Enum.IsDefined(EffectKind) ||
+            !IsFingerprint(RequestFingerprint) ||
+            (EffectKind == SandboxProviderEffectKind.LateResourceRelease) !=
+                IsFingerprint(LateResourceFingerprint))
+            throw new ArgumentException("The Sandbox provider attempt identity is invalid.");
+        return this;
+    }
+
+    internal static bool IsFingerprint(string? value) =>
+        value is { Length: 64 } &&
+        value.All(character =>
+            character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static SandboxProviderAttemptRequest ForSavedEffect(
+        SandboxLeaseSnapshot lease,
+        SandboxProviderEffectKind effectKind,
+        string details,
+        string? lateResourceFingerprint = null)
+    {
+        var owner = lease.Fence.Owner;
+        var canonical = string.Join('\0',
+            "sandbox-provider-attempt-v1",
+            effectKind,
+            owner.TenantId,
+            owner.ProjectId,
+            owner.RunId,
+            owner.EnvironmentId,
+            lease.Fence.LifecycleGeneration,
+            lease.ResourceGeneration,
+            lease.ProviderFencingGeneration,
+            lease.OperationId.ToString("N"),
+            details);
+        return new SandboxProviderAttemptRequest(
+            lease.Fence,
+            lease.ResourceGeneration,
+            lease.ProviderFencingGeneration,
+            lease.OperationId,
+            effectKind,
+            Fingerprint(canonical),
+            lateResourceFingerprint).Validate();
+    }
+
+    private static string ResourceIdentity(SandboxProvisionedResource resource) =>
+        string.Join('\0',
+            resource.Resource.Seam,
+            resource.Resource.ProviderId,
+            resource.Resource.ResourceId,
+            resource.Resource.Generation,
+            resource.ProviderBinding.ProviderId,
+            resource.ProviderBinding.AdapterVersion,
+            resource.ProviderBinding.OptionsSchemaVersion,
+            resource.ProviderBinding.OptionsRevision);
+}
+
+public sealed record SandboxProviderAttemptSnapshot(
+    Guid AttemptId,
+    SandboxProviderAttemptRequest Request,
+    SandboxProviderAttemptState State,
+    JsonElement? Outcome,
+    string? FailureCode,
+    DateTimeOffset StartedAt,
+    DateTimeOffset? OutcomeRecordedAt,
+    DateTimeOffset? ResolvedAt)
+{
+    public SandboxProviderAttemptSnapshot Validate()
+    {
+        _ = (Request ?? throw new ArgumentNullException(nameof(Request))).Validate();
+        if (AttemptId == Guid.Empty ||
+            !Enum.IsDefined(State) ||
+            StartedAt <= DateTimeOffset.MinValue ||
+            OutcomeRecordedAt is { } recordedAt && recordedAt < StartedAt ||
+            ResolvedAt is { } resolvedAt && (OutcomeRecordedAt is null || resolvedAt < OutcomeRecordedAt) ||
+            FailureCode is { } code &&
+                (string.IsNullOrWhiteSpace(code) || code.Length > 128 || code.Any(char.IsControl)) ||
+            (State is SandboxProviderAttemptState.InProgress or SandboxProviderAttemptState.LegacyUnknown) &&
+                (Outcome is not null || OutcomeRecordedAt is not null || ResolvedAt is not null) ||
+            (State is SandboxProviderAttemptState.ResultRecorded or SandboxProviderAttemptState.FailedNoEffect or
+                SandboxProviderAttemptState.Unknown or SandboxProviderAttemptState.Completed) &&
+                (Outcome is not { ValueKind: JsonValueKind.Object } || OutcomeRecordedAt is null) ||
+            (State is SandboxProviderAttemptState.FailedNoEffect or SandboxProviderAttemptState.Completed
+                ? ResolvedAt is null
+                : ResolvedAt is not null))
+            throw new ArgumentException("The Sandbox provider attempt snapshot is invalid.");
+        return this with { Outcome = Outcome?.Clone() };
+    }
+}
+
+public sealed record SandboxProviderAttemptReservation(
+    SandboxProviderAttemptSnapshot Attempt,
+    bool Replayed);
+
+public sealed record SandboxProviderAttemptReceipt(
+    int ContractVersion,
+    Guid AttemptId,
+    Guid OperationId,
+    long LifecycleGeneration,
+    long ResourceGeneration,
+    long ProviderFencingGeneration,
+    SandboxProviderEffectKind EffectKind,
+    SandboxProviderAttemptState State,
+    string RequestFingerprint,
+    string? LateResourceFingerprint,
+    string? FailureCode,
+    DateTimeOffset StartedAt,
+    DateTimeOffset? OutcomeRecordedAt,
+    DateTimeOffset? ResolvedAt)
+{
+    public static SandboxProviderAttemptReceipt From(SandboxProviderAttemptSnapshot attempt)
+    {
+        ArgumentNullException.ThrowIfNull(attempt);
+        attempt.Validate();
+        return new(
+            1,
+            attempt.AttemptId,
+            attempt.Request.OperationId,
+            attempt.Request.Fence.LifecycleGeneration,
+            attempt.Request.ResourceGeneration,
+            attempt.Request.ProviderFencingGeneration,
+            attempt.Request.EffectKind,
+            attempt.State,
+            attempt.Request.RequestFingerprint,
+            attempt.Request.LateResourceFingerprint,
+            attempt.FailureCode,
+            attempt.StartedAt,
+            attempt.OutcomeRecordedAt,
+            attempt.ResolvedAt);
+    }
+}
+
+public sealed record SandboxProviderAttemptReadResponseV1(
+    int ContractVersion,
+    EnvironmentGenerationFence CurrentFence,
+    Guid OperationId,
+    ImmutableArray<SandboxProviderAttemptReceipt> Attempts);
+
+public sealed record SandboxObservationSummary(
+    ProviderResourceRef Resource,
+    SandboxObservedState State,
+    long FencingGeneration,
+    bool VmIsolationVerified,
+    bool WorkspaceAttachmentVerified,
+    long? VerifiedNetworkGeneration,
+    ImmutableArray<SandboxStartupPhaseObservation> StartupPhases,
+    SandboxTerminalEvidence? TerminalEvidence,
+    SandboxStartupBudgetFailure? StartupFailure);
+
+public sealed record SandboxLateResourceCleanupReadItem(
+    EnvironmentGenerationFence SourceFence,
+    Guid OperationId,
+    long ResourceGeneration,
+    long ProviderFencingGeneration,
+    long CurrentFencingGeneration,
+    string ResourceFingerprint,
+    ProviderResourceRef Resource,
+    SandboxProviderAttemptReceipt? ProvisionAttempt,
+    SandboxProviderAttemptReceipt? ReleaseAttempt,
+    DateTimeOffset CreatedAt,
+    DateTimeOffset UpdatedAt,
+    DateTimeOffset? ClaimExpiresAt,
+    SandboxReleaseReceipt? ReleaseReceipt,
+    SandboxObservationSummary? ProviderObservation);
+
+public sealed record SandboxLateResourceCleanupReadResponseV1(
+    int ContractVersion,
+    EnvironmentGenerationFence CurrentFence,
+    ImmutableArray<SandboxLateResourceCleanupReadItem> Items,
+    bool HasMore);
+
+public sealed record SandboxLateResourceCleanupRecord(
+    SandboxLeaseSnapshot Lease,
+    SandboxProvisionedResource ProvisionedResource,
+    SandboxLateResourceCleanupReadItem Receipt);
 
 public sealed record SandboxRetirementAuthorization(
     string Issuer,
@@ -921,6 +1216,29 @@ public interface ISandboxLeaseStore
         EnvironmentGenerationFence fence,
         SandboxProvisionedResource? provisionedResource,
         bool effectMayHaveApplied,
+        CancellationToken cancellationToken,
+        Guid? providerAttemptId = null,
+        string? providerErrorCode = null);
+
+    Task<SandboxProviderAttemptReservation> BeginProviderAttemptAsync(
+        SandboxProviderAttemptRequest request,
+        CancellationToken cancellationToken);
+
+    Task<SandboxProviderAttemptSnapshot> RecordProviderAttemptOutcomeAsync(
+        Guid attemptId,
+        EnvironmentGenerationFence fence,
+        JsonElement outcome,
+        bool effectMayHaveApplied,
+        string? failureCode,
+        CancellationToken cancellationToken);
+
+    Task<ImmutableArray<SandboxProviderAttemptSnapshot>> GetProviderAttemptsAsync(
+        EnvironmentGenerationFence currentFence,
+        Guid operationId,
+        CancellationToken cancellationToken);
+
+    Task<(ImmutableArray<SandboxLateResourceCleanupRecord> Items, bool HasMore)> GetLateResourceCleanupRecordsAsync(
+        EnvironmentGenerationFence currentFence,
         CancellationToken cancellationToken);
 
     Task<SandboxLeaseSnapshot> BeginRetirementAsync(
@@ -939,7 +1257,8 @@ public interface ISandboxLeaseStore
         long providerFencingGeneration,
         SandboxReleaseReceipt receipt,
         CancellationToken cancellationToken,
-        Func<CancellationToken, Task>? beforeCommitCheck = null);
+        Func<CancellationToken, Task>? beforeCommitCheck = null,
+        Guid? providerAttemptId = null);
 
     Task<SandboxLeaseSnapshot> CompletePartialReleaseAsync(
         SandboxPartialReleaseCompletionRequest request,
@@ -953,7 +1272,8 @@ public interface ISandboxLeaseStore
         EnvironmentGenerationFence currentFence,
         SandboxLateResourceCleanupClaim claim,
         SandboxReleaseReceipt receipt,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        Guid? providerAttemptId = null);
 }
 
 public sealed class SandboxProviderException(

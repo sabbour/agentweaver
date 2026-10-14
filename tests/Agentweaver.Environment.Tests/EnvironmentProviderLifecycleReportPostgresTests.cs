@@ -254,7 +254,8 @@ public sealed class EnvironmentProviderLifecycleReportPostgresTests(EnvironmentP
             Intent(),
             CancellationToken.None);
         var resource = Provisioned(reservation.Lease.ResourceGeneration);
-        var lease = await leaseStore.CompleteProvisionAsync(
+        var lease = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+            leaseStore,
             reservation.Lease.OperationId,
             lifecycle.Snapshot.Fence,
             resource,

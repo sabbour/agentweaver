@@ -36,8 +36,8 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
         Assert.Equal(first.Lease.LeaseExpiresAt, replay.Lease.LeaseExpiresAt);
         Assert.Equal(first.Lease.CreatedAt, replay.Lease.CreatedAt);
         var resource = Resource(first.Lease);
-        var completed = await store.CompleteProvisionAsync(
-            first.Lease.OperationId, lifecycle.Fence, resource, true, default);
+        var completed = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+            store, first.Lease.OperationId, lifecycle.Fence, resource, true, default);
         Assert.Equal(2, completed.LeaseRevision);
         Assert.Equal(SandboxLeaseState.Active, completed.State);
         var restarted = new EnvironmentSandboxLeaseStore(fixture.DataSource, TimeProvider.System);
@@ -45,8 +45,8 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
         Assert.Equal(completed.LeaseRevision, current!.LeaseRevision);
         Assert.Equal(first.Lease.CreatedAt, current.CreatedAt);
         Assert.Equal(resource.Resource, current.ProvisionedResource!.Resource);
-        var completeReplay = await restarted.CompleteProvisionAsync(
-            first.Lease.OperationId, lifecycle.Fence, resource, true, default);
+        var completeReplay = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+            restarted, first.Lease.OperationId, lifecycle.Fence, resource, true, default);
         Assert.Equal(completed.LeaseExpiresAt, completeReplay.LeaseExpiresAt);
         Assert.Equal(completed.LeaseRevision, completeReplay.LeaseRevision);
 
@@ -96,8 +96,8 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
     {
         var (owner, lifecycle, store) = await CreateOwnerAsync();
         var lease = await store.ReserveProvisionAsync(lifecycle.Fence, "provision", Intent(), default);
-        var active = await store.CompleteProvisionAsync(
-            lease.Lease.OperationId, lifecycle.Fence, Resource(lease.Lease), true, default);
+        var active = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+            store, lease.Lease.OperationId, lifecycle.Fence, Resource(lease.Lease), true, default);
         var foreign = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
             store.GetCurrentAsync(new EnvironmentGenerationFence(
                 new(owner.TenantId, owner.ProjectId, "foreign", owner.EnvironmentId), 1), default));
@@ -132,8 +132,8 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
         var projects = new ControlledAuthority(owner)
         {
             BeforeSecondRead = async () =>
-                await store.CompleteProvisionAsync(
-                    lease.Lease.OperationId, lifecycle.Fence, Resource(lease.Lease), true, default)
+                await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+                    store, lease.Lease.OperationId, lifecycle.Fence, Resource(lease.Lease), true, default)
         };
         var rejected = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
             Reader(projects, store).GetCurrentPlacementAsync(
@@ -147,8 +147,8 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
     {
         var (owner, lifecycle, store) = await CreateOwnerAsync();
         var lease = await store.ReserveProvisionAsync(lifecycle.Fence, "provision", Intent(), default);
-        var active = await store.CompleteProvisionAsync(
-            lease.Lease.OperationId, lifecycle.Fence, Resource(lease.Lease), true, default);
+        var active = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+            store, lease.Lease.OperationId, lifecycle.Fence, Resource(lease.Lease), true, default);
         var projects = new ControlledAuthority(owner)
         {
             BeforeSecondRead = async () =>
@@ -175,8 +175,8 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
         var notReady = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
             reader.GetCurrentPlacementAsync(Caller(owner), owner.ProjectId, owner.RunId, owner.EnvironmentId, default));
         Assert.Equal("sandbox_placement_unavailable", notReady.Code);
-        var active = await store.CompleteProvisionAsync(
-            lease.Lease.OperationId, lifecycle.Fence, Resource(lease.Lease), true, default);
+        var active = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+            store, lease.Lease.OperationId, lifecycle.Fence, Resource(lease.Lease), true, default);
         var expired = Assert.Throws<EnvironmentLifecycleException>(() =>
             EnvironmentSandboxManager.ProjectCurrentPlacement(
                 owner, lifecycle.Fence, active, active.LeaseExpiresAt!.Value));
@@ -204,8 +204,13 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
         Assert.Equal("sandbox_idempotency_conflict", conflict.Code);
         var resource = Resource(lease.Lease);
         var foreign = resource with { ProviderBinding = resource.ProviderBinding with { OptionsRevision = "foreign" } };
+        var savedRequest = await store.SaveProviderRequestAsync(
+            lease.Lease.OperationId, lifecycle.Fence, lease.Lease.ProvisionIntent.ProviderRequest, default);
+        var attempt = await store.BeginProviderAttemptAsync(
+            SandboxProviderAttemptRequest.ForProvision(savedRequest), default);
         var rejected = await Assert.ThrowsAsync<EnvironmentLifecycleException>(() =>
-            store.CompleteProvisionAsync(lease.Lease.OperationId, lifecycle.Fence, foreign, true, default));
+            store.CompleteProvisionAsync(lease.Lease.OperationId, lifecycle.Fence, foreign, true, default,
+                attempt.Attempt.AttemptId));
         Assert.Equal("sandbox_provider_binding_mismatch", rejected.Code);
         Assert.Equal(SandboxLeaseState.Provisioning, (await store.GetCurrentAsync(lifecycle.Fence, default))!.State);
     }
@@ -287,8 +292,8 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
                 egressSelectorLabels = ImmutableDictionary<string, string>.Empty,
                 workspaceAttachmentTransitionRevision = 4
             }, json), timeout.Token);
-        var lease = await store.CompleteProvisionAsync(
-            reserved.Lease.OperationId, lifecycle.Fence, sandbox, true, timeout.Token);
+        var lease = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+            store, reserved.Lease.OperationId, lifecycle.Fence, sandbox, true, timeout.Token);
         var projects = new ControlledAuthority(owner) { CanReadSelection = true };
         var manager = Reader(projects, new EnvironmentSandboxLeaseStore(fixture.DataSource, TimeProvider.System));
         var snapshot = (await volumes.GetWorkspaceVolumeAsync(lifecycle.Fence, spec.VolumeId, timeout.Token))!;
@@ -465,8 +470,8 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
         }, json);
         await store.SaveProviderRequestAsync(
             reserved.Lease.OperationId, lifecycle.Fence, recoveryIntent, timeout.Token);
-        var lease = await store.CompleteProvisionAsync(reserved.Lease.OperationId, lifecycle.Fence,
-            resource, true, timeout.Token);
+        var lease = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+            store, reserved.Lease.OperationId, lifecycle.Fence, resource, true, timeout.Token);
         var restarted = new EnvironmentSandboxLeaseStore(fixture.DataSource, TimeProvider.System);
         var retained = await restarted.GetCurrentAsync(lifecycle.Fence, timeout.Token);
         Assert.True(JsonElement.DeepEquals(recoveryIntent, retained!.ProvisionIntent.ProviderRequest));
