@@ -24,7 +24,7 @@ npm --prefix apps/web run build
 ```
 
 The source client is not evidence that the Gateway, Broker, or any owner service
-has been deployed.
+is deployed.
 
 The production image runs the ASP.NET Core 10 host in `host/`. It serves the
 Vite build as static files with SPA fallback and provides `/env-config.js` from
@@ -32,7 +32,7 @@ container environment variables, encoded as UTF-8 base64 values for the client.
 Set `VITE_IDENTITY_BROKER_ISSUER` when its exact HTTPS issuer differs from the
 full URL path in `VITE_IDENTITY_BROKER_URL`.
 The Copilot callback path serves the same `index.html` with no-store and
-no-referrer headers; the host suppresses request diagnostics that could record
+no-referrer headers. The host suppresses request diagnostics that can record
 callback query strings. Release packing publishes the framework-dependent host
 from its locked NuGet dependencies and copies it with the Vite assets into the
 digest-pinned ASP.NET runtime image.

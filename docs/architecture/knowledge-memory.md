@@ -125,14 +125,15 @@ validates all document, ETag, and lease changes before one final hash write; del
 leases use Redis server time. Any incompatible configuration, unavailable backend,
 or invalid stored data fails closed without provider fallback.
 
-Redis tests use a controlled command-client fake to cover selection and negotiation,
-durability/eviction/topology rejection, expiry checks, prevalidated single-write
-batches, CAS conflicts, idempotent replay after a lost response, server-time lease
-fencing, and backend-loss behavior. A separate opt-in native suite uses the production
-Redis command client and document store to exercise Lua batch atomicity, concurrent
-CAS, and promotion/receipt/idempotency plus server-time lease fencing across a restart
-of one explicitly test-owned, digest-pinned, loopback-TLS Redis instance with AOF on a
-dedicated labeled volume. It never creates or pulls an instance or flushes keys; the
+Redis tests use a controlled command-client fake. They cover selection and
+negotiation, durability/eviction/topology rejection, expiry checks,
+prevalidated single-write batches, CAS conflicts, idempotent replay after a
+lost response, server-time lease fencing, and backend-loss behavior. A separate opt-in native suite uses the production
+Redis command client and document store. It exercises Lua batch atomicity and
+concurrent CAS. It also tests promotion/receipt/idempotency and server-time lease
+fencing across a restart of one explicitly test-owned, digest-pinned, loopback-TLS
+Redis instance with AOF on a dedicated labeled volume. The suite never creates or
+pulls an instance or flushes keys. The
 restart case restarts only the validated test-owned instance. These tests do not prove
 production Redis permissions, availability, or deployment.
 Neither optional Memory source candidate replaces the PostgreSQL Sessions journal or
@@ -207,10 +208,10 @@ the request may provide the same caller's Events-audience bearer in
 never stored in the outbox. No token is minted or fetched, and there is no background
 relay.
 
-Events fetches the committed receipt from its fixed trusted HTTPS Knowledge address,
-rechecks the same issuer, subject, bounds, and current project `WriteProjects`
-authority, then constructs and commits a native project fact, project sequence, and
-inbox receipt in one Events PostgreSQL transaction. Knowledge marks the outbox
+Events fetches the committed receipt from its fixed trusted HTTPS Knowledge address.
+It rechecks the same issuer, subject, bounds, and current project `WriteProjects`
+authority. It then constructs and commits a native project fact, project
+sequence, and inbox receipt in one Events PostgreSQL transaction. Knowledge marks the outbox
 delivered only after validating the persisted Events acknowledgment. A transport,
 authorization, or persistence failure leaves the accepted decision and receipt
 committed and reports delivery as `PENDING`; for example, a caller with only

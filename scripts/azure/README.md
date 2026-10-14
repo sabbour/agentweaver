@@ -460,10 +460,11 @@ No unsupported deployment tags occur.
 
 After a successful full-foundation or AKS-only deployment, the command also
 bootstraps only `deploy\k8s\base\namespace.yaml`. It uses the signed-in user's
-`az aks get-credentials` context without `--admin`, converts the temporary
-kubeconfig to `--login azurecli`, waits a bounded time for create/get/patch
-authorization, applies the namespace manifest, and verifies the P0 namespace
-and required labels. It removes the temporary kubeconfig on success or failure.
+`az aks get-credentials` context without `--admin`. It converts the temporary
+kubeconfig to `--login azurecli` and waits a bounded time for
+create/get/patch authorization. Then it applies the namespace manifest and
+verifies the P0 namespace and required labels. It removes the temporary
+kubeconfig on success or failure.
 A bootstrap failure is reported even if the infrastructure deployment already
 succeeded; the command never falls back to an admin kubeconfig or applies other
 manifests.
@@ -537,8 +538,8 @@ Docker's repository digests. The Job's immutable image reference and the pod's
 reported pulled image ID must both match that manifest digest. A local config
 digest is never used as a registry manifest digest.
 
-The collector uses only fixed read-only Kubernetes operations: it checks the
-selected context's API server against the observed AKS FQDN, then reads the
+The collector uses only fixed read-only Kubernetes operations. It checks the
+selected context's API server against the observed AKS FQDN. Then it reads the
 named Job, its pod, the ServiceAccount, the immutable target ConfigMap, and the
 completed pod's logs. It does not list unrelated resources, run commands in a
 pod, create resources, or delete resources. The Job must have one completion,
@@ -550,9 +551,10 @@ The immutable target ConfigMap must contain the strict #1784 `ProbeTarget` for
 the exact reviewed SHA, Git tree, infrastructure hash, deployment, identities,
 resources, database target, and read-only Key Vault secret name/version.
 The native probe receipt must preserve the exact federation issuer, subject,
-and audience; provider pins; successful exact-version Key Vault redemption;
-owned PostgreSQL effect/inbox/outbox results; and owned Blob generation, ETag,
-content hash, and confirmed conditional cleanup. The receipt cannot attest to
+and audience, plus the provider pins. It must record successful exact-version
+Key Vault redemption and owned PostgreSQL effect/inbox/outbox results. It must
+also record the owned Blob generation, ETag, content hash, and confirmed
+conditional cleanup. The receipt cannot attest to
 the pod UID, pulled image, or process exit code.
 
 Only after the Job is independently observed complete does the consumer query

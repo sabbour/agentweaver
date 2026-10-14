@@ -222,14 +222,15 @@ Its current manifest/project source version is `1.0.0`.
 The record is release intent, not a registry artifact or deployment receipt.
 Do not use a placeholder digest to represent an unpublished service.
 
-Future `release` compositions must contain an actual `service` component
-(with a SHA-256 image digest and its independently versioned project), plus
-`evidence` with a lowercase 40-character `sourceSha`, matching AKS
-`deploymentSha`, and exactly one API, UI, and MCP persona run at that same
-source SHA with an HTTPS evidence URL. This validates evidence *references*,
-not their authenticity or success; a deployment and its test results require
-external verification before publication. `draft` forbids `evidence` so it
-cannot claim unearned exact-SHA validation. The manual workflow publishes artifacts only.
+Future `release` compositions must contain an actual `service` component with
+a SHA-256 image digest and its independently versioned project. They must also
+contain `evidence` with a lowercase 40-character `sourceSha` and a matching AKS
+`deploymentSha`. Evidence must include exactly one API, UI, and MCP persona run
+at that source SHA. Each run must have an HTTPS evidence URL. This validates
+evidence *references*, not their authenticity or success. Verify deployment
+and test results externally before publication. `draft` forbids `evidence`, so
+it cannot claim unearned exact-SHA validation. The manual workflow publishes
+artifacts only.
 Platform release composition, chart wiring, and deployment gates remain future work.
 
 ## Historical foundation additions
@@ -318,9 +319,9 @@ The plan, apply, and pack commands do not publish or deploy artifacts.
 The manual workflow has a separate publication choice.
 
 - `npm run release:plan` reads `releases/foundation.json` and every pending
-  `.changeset/*.md` record, computes the highest-severity semver bump per
-  touched component (major beats minor beats patch when more than one
-  changeset touches the same component), and writes a checksummed,
+  `.changeset/*.md` record. It computes the highest-severity semver bump per
+  touched component. Major beats minor, which beats patch, when multiple
+  changesets touch the same component. The command writes a checksummed,
   HEAD-bound plan to `artifacts/release/plan.json` (gitignored). Planning
   never modifies source files. Notes must match their exact committed HEAD bytes.
   Uncommitted notes, missing source notes, and stale source claims fail.
@@ -328,11 +329,11 @@ The manual workflow has a separate publication choice.
   NuGet packages at `0.0.0` and does not create a version bump. Other changesets
   continue to use patch, minor, or major intent.
 - `npm run release:apply` consumes that plan and the manifest. It fails
-  closed — writing nothing — on a corrupted or hand-edited plan, a plan
-  computed against a different commit (`stale plan`), a dirty working tree,
-  a version collision, a partially applied plan, or a missing changeset or
-  colliding archive destination; every precondition is checked before any
-  file is touched. On success it bumps each component's manifest entry and
+  closed—writing nothing—if the plan is corrupted or hand-edited, or if it was
+  computed against a different commit (`stale plan`). It also fails on a dirty
+  working tree, a version collision, a partially applied plan, a missing
+  changeset, or a colliding archive destination. It checks every precondition
+  before it touches a file. On success, it bumps each component's manifest entry and
   checked-in `<Version>` mirror, preserves explicit `compatibility` entries,
   records a changelog entry in `releases/CHANGELOG.md`, and archives the
   consumed changesets under `.changeset/archive/`. Reapplying an
@@ -381,11 +382,11 @@ The manual workflow has a separate publication choice.
   It writes an atomic `provenance.json` receipt after all artifacts succeed.
   The receipt includes the source commit SHA, manifest hash, each component's ID/kind/version,
   and a SHA-256 hash of every artifact file it actually produced. It refuses
-  to run on a dirty tree, refuses a non-empty output directory (artifacts
-  from different runs are never mixed), fails if the build step leaves
-  the tree dirty afterward or if HEAD moves mid-run, and verifies the exact
-  expected package or image artifact exists for each component rather
-  than trusting a nonempty output directory. `release:pack` never pushes a
+  to run on a dirty tree. It also refuses a non-empty output directory so
+  artifacts from different runs are not mixed. It fails if the build step
+  leaves the tree dirty afterward or if HEAD moves mid-run. It checks that
+  each component produced the exact expected package or image artifact. It
+  does not trust a nonempty output directory. `release:pack` never pushes a
   package to a feed.
   .NET components retain their checked-in `packages.lock.json`; `Agentweaver.Web`
   binds its committed npm lockfile and ASP.NET host `packages.lock.json`.
@@ -652,11 +653,12 @@ npm run release:deploy -- v1.0.0 `
   --provider-catalog-source-commit <40-character-source-sha>
 ```
 
-The default is a read-only dry-run: it verifies the annotated GitHub tag and
+The default is a read-only dry-run. It verifies the annotated GitHub tag and
 published Release, the source-bound immutable publication result, all 23
-product components and ten GHCR image digests, the exact Azure/kubectl target,
-the generated nine shared-service runtime pairs, existing references and required Cilium
-policy names, and client-rendered Kubernetes resources. The receipt-measured
+product components, and ten GHCR image digests. It checks the exact
+Azure/kubectl target, nine generated shared-service runtime pairs, existing
+references, required Cilium policy names, and client-rendered Kubernetes
+resources. The receipt-measured
 AgentHost image, platform, and compressed pull bytes are passed through the
 Environment Deployment to the per-Sandbox provider.
 Registry checks use GHCR's HTTPS API and require anonymous image access; they do

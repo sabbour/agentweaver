@@ -98,11 +98,11 @@ request timeout returns `504`.
 `GET /api/v1/authorization/context` delegates to the existing Projects & Config
 `GET /api/authorization/context` owner route. It accepts no query parameters,
 forwards the validated Broker bearer and optional `X-Agentweaver-Tenant` selector,
-and requires the owner's `api.read`, non-purpose context contract. The Gateway
-validates the response against the exact versioned JSON contract and returns it
-with `Cache-Control: no-store`; redirects, malformed or duplicate contract fields,
-wrong issuer, actor, signed project/run binding, explicit tenant selector, or
-cacheable responses are rejected rather than passed through.
+and requires the owner's `api.read`, non-purpose context contract. The Gateway validates the response against the exact versioned JSON contract
+and returns it with `Cache-Control: no-store`. It rejects redirects, malformed
+or duplicate contract fields, and responses with a wrong issuer, actor, signed
+project/run binding, explicit tenant selector, or cacheable headers. It does not
+pass rejected responses through.
 The result reports the current actor, selected tenant and membership revision,
 optional project/run bindings, and effective authority. It is advisory context for
 the client, not a permission grant or a cacheable authorization decision.
@@ -176,9 +176,9 @@ or permission grants. OAuth callbacks are bearerless `GET` requests to
 installation callback is `/auth/github/repo-app/installation/callback` with
 only `installation_id`, `setup_action`, and `state`. Each callback forwards only
 its exact `__Host-agentweaver-repo-app-auth` or
-`__Host-agentweaver-repo-app-install-auth` cookie, preserves the owner's
-`Location` and every `Set-Cookie` value, and trusts the owner to consume its
-persisted single-use state and redirect only to a configured allow-listed route.
+`__Host-agentweaver-repo-app-install-auth` cookie. It preserves the owner's
+`Location` and every `Set-Cookie` value. The owner consumes its
+persisted single-use state and redirects only to a configured allow-listed route.
 
 Installation setup is a cookie-and-CSRF-protected browser POST to the
 Identity Broker's `/auth/github/repo-app/install` endpoint. The Broker owns
