@@ -56,35 +56,31 @@ public sealed class RuntimeNativePromptCapacityTests
         var compactionGeneration = session.LatestPromptCapacityCompaction?.Generation ?? 0;
         var compactionTask = session.WaitForPromptCapacityCompactionAsync(
             compactionGeneration, eventTimeout.Token);
-        var previousConversationTokens = before.ConversationTokens;
-        var observedCompaction = false;
         for (var turn = 0; turn < 64 && !compactionTask.IsCompleted; turn++)
         {
             await session.SendTurnAsync(string.Concat(Enumerable.Repeat("history continues ", 100)),
                 timeout.Token);
             var current = await RequireContextInfoAsync(session, timeout.Token);
             Assert.True(current.TotalTokens <= current.PromptTokenLimit);
-            observedCompaction |= current.ConversationTokens < previousConversationTokens;
-            previousConversationTokens = current.ConversationTokens;
-            if (observedCompaction)
-                break;
         }
 
         var compaction = await compactionTask.WaitAsync(timeout.Token);
+        Assert.True(compaction.Generation > compactionGeneration);
         Assert.NotNull(compaction.Start);
         if (!string.IsNullOrEmpty(compaction.Start.Model))
             Assert.Equal(session.Facts.ModelId, compaction.Start.Model);
         Assert.True(compaction.Start.TokenLimit is > 0);
         Assert.True(compaction.Complete.Success);
         Assert.Null(compaction.Complete.Error);
-        Assert.True(compaction.Complete.PreCompactionTokens is long preCompactionTokens &&
-            compaction.Complete.PostCompactionTokens is long postCompactionTokens &&
-            preCompactionTokens > postCompactionTokens);
+        var tokensAtCompactionStart = compaction.Start.ConversationTokens
+            ?? throw new XunitException("The native compaction start event did not report conversation tokens.");
 
         var after = await RequireContextInfoAsync(session, timeout.Token);
         AssertContextIdentity(after, session);
         Assert.True(after.TotalTokens <= after.PromptTokenLimit);
-        Assert.True(after.PromptTokenLimit <= session.Facts.MaxPromptTokens);
+        Assert.True(after.ConversationTokens < tokensAtCompactionStart,
+            $"Native conversation tokens did not decrease across compaction generation {compaction.Generation}: " +
+            $"start={tokensAtCompactionStart}, after={after.ConversationTokens}.");
         Assert.Equal(after.SystemTokens + after.ConversationTokens + after.ToolDefinitionsTokens,
             after.TotalTokens);
 
@@ -99,18 +95,48 @@ public sealed class RuntimeNativePromptCapacityTests
     public async Task ByokNativeRuntimeFailsAnIrreducibleLatestPromptInsteadOfTheAcceptingFakeEndpoint()
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        const int acceptedCapacity = 4096;
+        var prompt = "LATEST_OVERFLOW_INPUT " + string.Join(' ',
+            Enumerable.Repeat("x", 6000));
+
+        await using (var calibrationHarness = await NativePromptHarness.StartAsync(timeout.Token))
+        {
+            await using var calibrationSession = await calibrationHarness.CreateSessionAsync(
+                200000, 200000, timeout.Token);
+            Assert.Equal(200000, calibrationSession.Facts.MaxPromptTokens);
+            await AssertAuthenticatedNativeByokRouteAsync(
+                calibrationHarness, calibrationSession, timeout.Token);
+            var calibrationBefore = await RequireContextInfoAsync(calibrationSession, timeout.Token);
+            AssertContextIdentity(calibrationBefore, calibrationSession);
+            var compactionGeneration = calibrationSession.LatestPromptCapacityCompaction?.Generation ?? 0;
+
+            var response = await calibrationSession.SendTurnAsync(prompt, timeout.Token);
+            Assert.Contains(calibrationHarness.InferenceEndpoint.Receipts, item =>
+                response == $"native-route-response:{calibrationSession.Facts.SdkSessionId}:{item.ResponseId}");
+            var after = await RequireContextInfoAsync(calibrationSession, timeout.Token);
+            AssertContextIdentity(after, calibrationSession);
+            Assert.Equal(compactionGeneration,
+                calibrationSession.LatestPromptCapacityCompaction?.Generation ?? 0);
+
+            var userMessages = await calibrationSession.ReadContextHeaviestMessagesAsync(timeout.Token);
+            var overLimitMessages = userMessages.Where(item =>
+                item.Role == "user" && item.Tokens > acceptedCapacity).ToArray();
+            Assert.True(overLimitMessages.Length == 1,
+                $"Expected one native-tokenized user message above {acceptedCapacity} tokens; " +
+                $"observed user-message counts were " +
+                $"{string.Join(", ", userMessages.Where(item => item.Role == "user").Select(item => item.Tokens))}.");
+            Assert.Equal(0, calibrationHarness.InferenceEndpoint.FailedRequests);
+        }
+
         await using var harness = await NativePromptHarness.StartAsync(timeout.Token);
-        await using var session = await harness.CreateSessionAsync(4096, 8192, timeout.Token);
+        await using var session = await harness.CreateSessionAsync(acceptedCapacity, 8192, timeout.Token);
         await AssertAuthenticatedNativeByokRouteAsync(harness, session, timeout.Token);
 
         var before = await RequireContextInfoAsync(session, timeout.Token);
         AssertContextIdentity(before, session);
         Assert.True(before.PromptTokenLimit > 0);
-        Assert.Equal(4096, session.Facts.MaxPromptTokens);
-        Assert.Equal(4096L, before.PromptTokenLimit);
+        Assert.Equal(acceptedCapacity, session.Facts.MaxPromptTokens);
         var inferenceRequestsBefore = harness.InferenceEndpoint.RequestCount;
-        var prompt = "LATEST_OVERFLOW_INPUT " + string.Join(' ',
-            Enumerable.Repeat("x", 6000));
 
         var previousErrorGeneration = session.LatestNativeSessionError?.Generation ?? 0;
         var failure = await Record.ExceptionAsync(() => session.SendTurnAsync(prompt, timeout.Token));

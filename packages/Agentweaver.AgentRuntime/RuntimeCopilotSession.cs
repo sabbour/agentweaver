@@ -215,6 +215,32 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         }
     }
 
+#pragma warning disable GHCP001 // Context evidence is pinned to SDK 1.0.18.
+    internal async Task<IReadOnlyList<GitHub.Copilot.Rpc.ContextHeaviestMessage>>
+        ReadContextHeaviestMessagesAsync(CancellationToken cancellationToken)
+    {
+        await _turnGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            RequireUsable();
+            var model = await _session.Rpc.Model.GetCurrentAsync(cancellationToken).ConfigureAwait(false);
+            var expectedProviderId = Facts.ByokProvider?.Type;
+            if (model.ModelId != Facts.ModelId ||
+                HasProviderIdentityMismatch(expectedProviderId, model.ProviderId))
+                throw CreateEffectiveModelMismatch(model.ModelId, model.ProviderId);
+
+            var result = await _session.Rpc.Metadata.GetContextHeaviestMessagesAsync(
+                100, cancellationToken).ConfigureAwait(false);
+            return result.Messages?.ToArray()
+                ?? throw new RuntimeAuthorizationException("runtime_context_messages_unavailable");
+        }
+        finally
+        {
+            _turnGate.Release();
+        }
+    }
+#pragma warning restore GHCP001
+
     internal static bool HasProviderIdentityMismatch(string? expectedProviderId, string? actualProviderId) =>
         expectedProviderId is not null &&
         !string.IsNullOrEmpty(actualProviderId) &&
