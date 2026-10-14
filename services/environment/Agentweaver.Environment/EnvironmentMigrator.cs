@@ -24,6 +24,8 @@ public static class EnvironmentMigrator
                AND pg_catalog.to_regclass('"environment"."lifecycle_operations"') IS NOT NULL
                AND pg_catalog.to_regclass('"environment"."owner_effects"') IS NOT NULL
                AND pg_catalog.to_regclass('"environment"."sandbox_leases"') IS NOT NULL
+               AND pg_catalog.to_regclass('"environment"."sandbox_provider_attempts"') IS NOT NULL
+               AND pg_catalog.to_regclass('"environment"."sandbox_late_resource_cleanups"') IS NOT NULL
                AND pg_catalog.to_regclass('"environment"."remote_mcp_connections"') IS NOT NULL
                AND pg_catalog.to_regclass('"environment"."remote_mcp_connection_configurations"') IS NOT NULL
                AND pg_catalog.to_regclass('"environment"."remote_mcp_catalog_snapshots"') IS NOT NULL
@@ -78,6 +80,16 @@ public static class EnvironmentMigrator
                AND has_table_privilege(current_user, 'environment.sandbox_leases', 'UPDATE')
                AND NOT has_table_privilege(current_user, 'environment.sandbox_leases', 'DELETE')
                AND NOT has_table_privilege(current_user, 'environment.sandbox_leases', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'environment.sandbox_provider_attempts', 'SELECT')
+               AND has_table_privilege(current_user, 'environment.sandbox_provider_attempts', 'INSERT')
+               AND has_table_privilege(current_user, 'environment.sandbox_provider_attempts', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'environment.sandbox_provider_attempts', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'environment.sandbox_provider_attempts', 'TRUNCATE')
+               AND has_table_privilege(current_user, 'environment.sandbox_late_resource_cleanups', 'SELECT')
+               AND has_table_privilege(current_user, 'environment.sandbox_late_resource_cleanups', 'INSERT')
+               AND has_table_privilege(current_user, 'environment.sandbox_late_resource_cleanups', 'UPDATE')
+               AND NOT has_table_privilege(current_user, 'environment.sandbox_late_resource_cleanups', 'DELETE')
+               AND NOT has_table_privilege(current_user, 'environment.sandbox_late_resource_cleanups', 'TRUNCATE')
                AND has_table_privilege(current_user, 'environment.remote_mcp_connections', 'SELECT')
                AND has_table_privilege(current_user, 'environment.remote_mcp_connections', 'INSERT')
                AND has_table_privilege(current_user, 'environment.remote_mcp_connections', 'UPDATE')

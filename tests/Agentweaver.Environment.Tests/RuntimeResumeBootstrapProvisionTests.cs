@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
@@ -115,6 +117,7 @@ public sealed partial class RuntimeResumeBootstrapTests
         public int SavedRequests { get; private set; }
         public int Completions { get; private set; }
         public bool EffectMayHaveApplied { get; private set; }
+        private Guid? _providerAttemptId;
 
         public override Task<SandboxLeaseReservation> ReserveProvisionAsync(EnvironmentGenerationFence fence,
             string idempotencyKey, SandboxLeaseProvisionIntent intent, CancellationToken cancellationToken)
@@ -132,16 +135,43 @@ public sealed partial class RuntimeResumeBootstrapTests
             Assert.Equal(Current.Fence, fence);
             SavedRequests++;
             Assert.Equal(2, providerRequest.GetProperty("runtimeResume").GetProperty("phaseVersion").GetInt64());
-            Current = Current with { ProvisionIntent = Current.ProvisionIntent with { ProviderRequest = providerRequest } };
+            var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join('\0',
+                "sandbox-provider-request",
+                operationId.ToString("N"),
+                fence.Owner.TenantId,
+                fence.Owner.ProjectId,
+                fence.Owner.RunId,
+                fence.Owner.EnvironmentId,
+                fence.LifecycleGeneration,
+                providerRequest.GetRawText())))).ToLowerInvariant();
+            Current = Current with
+            {
+                ProvisionIntent = Current.ProvisionIntent with { ProviderRequest = providerRequest },
+                ProviderRequestFingerprint = fingerprint
+            };
             return Task.FromResult(Current);
+        }
+
+        public override Task<SandboxProviderAttemptReservation> BeginProviderAttemptAsync(
+            SandboxProviderAttemptRequest request, CancellationToken cancellationToken)
+        {
+            Assert.Equal(Current.OperationId, request.OperationId);
+            Assert.Equal(Current.ProviderRequestFingerprint, request.RequestFingerprint);
+            var attempt = new SandboxProviderAttemptSnapshot(Guid.NewGuid(), request.Validate(),
+                SandboxProviderAttemptState.InProgress, null, null, DateTimeOffset.UtcNow, null, null).Validate();
+            _providerAttemptId = attempt.AttemptId;
+            return Task.FromResult(new SandboxProviderAttemptReservation(attempt, false));
         }
 
         public override Task<SandboxLeaseSnapshot> CompleteProvisionAsync(Guid operationId,
             EnvironmentGenerationFence fence, SandboxProvisionedResource? provisionedResource,
-            bool effectMayHaveApplied, CancellationToken cancellationToken)
+            bool effectMayHaveApplied, CancellationToken cancellationToken, Guid? providerAttemptId = null,
+            string? providerErrorCode = null)
         {
             Assert.Equal(Current.OperationId, operationId);
             Assert.Equal(Current.Fence, fence);
+            if (providerAttemptId is not null)
+                Assert.Equal(_providerAttemptId, providerAttemptId);
             Completions++;
             EffectMayHaveApplied = effectMayHaveApplied;
             Current = Current with

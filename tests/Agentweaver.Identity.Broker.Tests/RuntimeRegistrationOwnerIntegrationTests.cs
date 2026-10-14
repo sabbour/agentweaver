@@ -1758,6 +1758,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         services.AddSingleton<ISandboxProvider>(sandboxProvider);
         services.AddSingleton(networkOptions);
         services.AddSingleton<ICiliumPolicyResourceStore>(networkStore);
+        services.AddScoped<EnvironmentLifecycleManager>(_ => throw new NotSupportedException());
         services.AddScoped<CiliumEgressPolicyAdapter>();
         services.AddScoped<EnvironmentEgressManager>();
         services.AddScoped<EnvironmentSandboxManager>();
@@ -1936,6 +1937,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 }, jsonOptions);
                 lease = await leaseStore.SaveProviderRequestAsync(
                     lease.OperationId, lifecycle.Snapshot.Fence, recoveryIntent, default);
+                var provisionAttempt = await leaseStore.BeginProviderAttemptAsync(
+                    SandboxProviderAttemptRequest.ForProvision(lease), default);
                 var kubernetesTransport = new RuntimePlacementKubernetesTransport(
                     sandboxOptions, owner, provisionRequest);
                 sandboxHttpClient = new HttpClient(kubernetesTransport)
@@ -1951,7 +1954,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 kubernetesTransport.AddReadySandbox(
                     provisioned, leaseCreatedAt);
                 lease = await leaseStore.CompleteProvisionAsync(
-                    lease.OperationId, lease.Fence, provisioned, true, default);
+                    lease.OperationId, lease.Fence, provisioned, true, default,
+                    provisionAttempt.Attempt.AttemptId);
                 leaseTimeProvider.AdvanceTo(leaseCreatedAt.AddSeconds(2));
                 var profile = new EnvironmentRuntimeBootstrapProfile(
                     "runtime-profile", new(RuntimeReceiverConfigureEndpoint),

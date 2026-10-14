@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
+using System.Collections.Immutable;
 using Agentweaver.Abstractions;
 using Npgsql;
 using NpgsqlTypes;
@@ -17,6 +18,7 @@ public sealed class EnvironmentSandboxLeaseStore(
     private static readonly TimeSpan LateCleanupClaimDuration = TimeSpan.FromMinutes(2);
     private const string Leases = "\"environment\".\"sandbox_leases\"";
     private const string LateResourceCleanups = "\"environment\".\"sandbox_late_resource_cleanups\"";
+    private const string ProviderAttempts = "\"environment\".\"sandbox_provider_attempts\"";
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
     public async Task<SandboxLeaseReservation> ReserveProvisionAsync(
@@ -49,6 +51,9 @@ public sealed class EnvironmentSandboxLeaseStore(
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return new(replay.Value.Lease, Replayed: true);
         }
+
+        await EnsureNoUnresolvedSandboxWorkAsync(
+            connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
 
         var current = await ReadCurrentAsync(
             connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
@@ -307,12 +312,370 @@ public sealed class EnvironmentSandboxLeaseStore(
         return result;
     }
 
+    public Task<SandboxProviderAttemptReservation> BeginProviderAttemptAsync(
+        SandboxProviderAttemptRequest request,
+        CancellationToken cancellationToken)
+    {
+        request = (request ?? throw new ArgumentNullException(nameof(request))).Validate();
+        return BeginProviderAttemptAsync(request, request.Fence, cancellationToken);
+    }
+
+    public async Task<SandboxProviderAttemptReservation> BeginProviderAttemptAsync(
+        SandboxProviderAttemptRequest request,
+        EnvironmentGenerationFence currentFence,
+        CancellationToken cancellationToken)
+    {
+        request = (request ?? throw new ArgumentNullException(nameof(request))).Validate();
+        ArgumentNullException.ThrowIfNull(currentFence);
+        if (request.Fence.Owner != currentFence.Owner)
+            throw new EnvironmentLifecycleException(
+                "environment_owner_mismatch",
+                "The provider attempt source and current authorization fences have different owners.");
+        if ((request.EffectKind != SandboxProviderEffectKind.LateResourceRelease &&
+                request.Fence != currentFence) ||
+            (request.EffectKind == SandboxProviderEffectKind.LateResourceRelease &&
+                request.Fence.LifecycleGeneration > currentFence.LifecycleGeneration))
+            throw new EnvironmentLifecycleException(
+                "environment_fence_stale",
+                "Only late-resource cleanup can use an older source fence under the current Environment fence.");
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await EnvironmentLifecycleStore.AcquireOwnerLockAsync(
+            connection, transaction, currentFence.Owner, cancellationToken).ConfigureAwait(false);
+        await RequireActiveOwnerAsync(connection, transaction, currentFence, cancellationToken).ConfigureAwait(false);
+
+        var lease = await ReadByOperationAsync(
+            connection, transaction, request.OperationId, request.Fence.Owner, cancellationToken).ConfigureAwait(false)
+            ?? throw new EnvironmentLifecycleException(
+                "sandbox_operation_unknown",
+                "The exact Sandbox provider operation is not recorded.");
+        ValidateProviderAttemptRequestForLease(request, lease);
+        var previous = await ReadLatestProviderAttemptAsync(
+            connection, transaction, request, cancellationToken).ConfigureAwait(false);
+        if (previous is { State: SandboxProviderAttemptState.ResultRecorded or SandboxProviderAttemptState.Completed })
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return new(previous, Replayed: true);
+        }
+        if (previous is { State: SandboxProviderAttemptState.InProgress or
+                SandboxProviderAttemptState.Unknown or SandboxProviderAttemptState.LegacyUnknown })
+            throw ProviderAttemptUnresolved(previous);
+
+        await EnsureProviderEffectDoesNotOvertakeLateCleanupAsync(
+            connection, transaction, request, cancellationToken).ConfigureAwait(false);
+
+        var unresolved = await ReadAnyUnresolvedProviderAttemptAsync(
+            connection, transaction, request.Fence.Owner, cancellationToken).ConfigureAwait(false);
+        if (unresolved is not null)
+            throw ProviderAttemptUnresolved(unresolved);
+
+        var attemptId = Guid.NewGuid();
+        var startedAt = timeProvider.GetUtcNow();
+        await using (var insert = new NpgsqlCommand($"""
+            INSERT INTO {ProviderAttempts}
+                (attempt_id, tenant_id, project_id, run_id, environment_id,
+                 lifecycle_generation, resource_generation, provider_fencing_generation,
+                 operation_id, effect_kind, request_fingerprint, late_resource_fingerprint,
+                 attempt_state, started_at, updated_at)
+            VALUES
+                (@attempt_id, @tenant_id, @project_id, @run_id, @environment_id,
+                 @lifecycle_generation, @resource_generation, @provider_fencing_generation,
+                 @operation_id, @effect_kind, @request_fingerprint, @late_resource_fingerprint,
+                 'InProgress', @started_at, @updated_at)
+            """, connection, transaction))
+        {
+            AddOwnerParameters(insert, request.Fence.Owner);
+            insert.Parameters.AddWithValue("attempt_id", NpgsqlDbType.Uuid, attemptId);
+            insert.Parameters.AddWithValue(
+                "lifecycle_generation", NpgsqlDbType.Bigint, request.Fence.LifecycleGeneration);
+            insert.Parameters.AddWithValue(
+                "resource_generation", NpgsqlDbType.Bigint, request.ResourceGeneration);
+            insert.Parameters.AddWithValue(
+                "provider_fencing_generation", NpgsqlDbType.Bigint, request.ProviderFencingGeneration);
+            insert.Parameters.AddWithValue("operation_id", NpgsqlDbType.Uuid, request.OperationId);
+            insert.Parameters.AddWithValue("effect_kind", NpgsqlDbType.Text, request.EffectKind.ToString());
+            insert.Parameters.AddWithValue(
+                "request_fingerprint", NpgsqlDbType.Text, request.RequestFingerprint);
+            insert.Parameters.AddWithValue(
+                "late_resource_fingerprint",
+                NpgsqlDbType.Text,
+                request.LateResourceFingerprint is null ? DBNull.Value : request.LateResourceFingerprint);
+            insert.Parameters.AddWithValue("started_at", NpgsqlDbType.TimestampTz, startedAt);
+            insert.Parameters.AddWithValue("updated_at", NpgsqlDbType.TimestampTz, startedAt);
+            await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        if (request.EffectKind == SandboxProviderEffectKind.LateResourceRelease)
+        {
+            await using var linkReleaseAttempt = new NpgsqlCommand($"""
+                UPDATE {LateResourceCleanups}
+                SET release_attempt_id = @release_attempt_id,
+                    updated_at = @updated_at
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                  AND run_id = @run_id AND environment_id = @environment_id
+                  AND resource_generation = @resource_generation
+                  AND provider_resource_fingerprint = @late_resource_fingerprint
+                  AND release_receipt_json IS NULL
+                  AND claim_token IS NOT NULL
+                  AND claim_expires_at > @updated_at
+                """, connection, transaction);
+            AddOwnerParameters(linkReleaseAttempt, request.Fence.Owner);
+            linkReleaseAttempt.Parameters.AddWithValue(
+                "resource_generation", NpgsqlDbType.Bigint, request.ResourceGeneration);
+            linkReleaseAttempt.Parameters.AddWithValue(
+                "late_resource_fingerprint", NpgsqlDbType.Text, request.LateResourceFingerprint!);
+            linkReleaseAttempt.Parameters.AddWithValue(
+                "release_attempt_id", NpgsqlDbType.Uuid, attemptId);
+            linkReleaseAttempt.Parameters.AddWithValue(
+                "updated_at", NpgsqlDbType.TimestampTz, startedAt);
+            if (await linkReleaseAttempt.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                throw new EnvironmentLifecycleException(
+                    "sandbox_late_cleanup_claim_stale",
+                    "The late Sandbox cleanup claim changed before its release attempt was linked.");
+        }
+
+        var attempt = new SandboxProviderAttemptSnapshot(
+            attemptId,
+            request,
+            SandboxProviderAttemptState.InProgress,
+            Outcome: null,
+            FailureCode: null,
+            startedAt,
+            OutcomeRecordedAt: null,
+            ResolvedAt: null).Validate();
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return new(attempt, Replayed: false);
+    }
+
+    public async Task<SandboxProviderAttemptSnapshot> RecordProviderAttemptOutcomeAsync(
+        Guid attemptId,
+        EnvironmentGenerationFence fence,
+        JsonElement outcome,
+        bool effectMayHaveApplied,
+        string? failureCode,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(fence);
+        if (attemptId == Guid.Empty ||
+            outcome.ValueKind != JsonValueKind.Object ||
+            outcome.GetRawText().Length > 65_536 ||
+            (failureCode is null && !effectMayHaveApplied) ||
+            failureCode is { } code &&
+                (string.IsNullOrWhiteSpace(code) || code.Length > 128 || code.Any(char.IsControl)))
+            throw new ArgumentException("The Sandbox provider attempt outcome is invalid.");
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await EnvironmentLifecycleStore.AcquireOwnerLockAsync(
+            connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
+        var attempt = await ReadProviderAttemptByIdAsync(
+            connection, transaction, attemptId, fence.Owner, cancellationToken).ConfigureAwait(false)
+            ?? throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_unknown",
+                "The exact Sandbox provider attempt is not recorded.");
+        if (attempt.Request.Fence != fence)
+            throw new EnvironmentLifecycleException(
+                "environment_fence_stale",
+                "The Sandbox provider attempt belongs to a stale Environment lifecycle fence.");
+        var lease = await ReadByOperationAsync(
+            connection, transaction, attempt.Request.OperationId, fence.Owner, cancellationToken).ConfigureAwait(false)
+            ?? throw new EnvironmentLifecycleException(
+                "sandbox_operation_unknown",
+                "The exact Sandbox operation for the provider attempt is not recorded.");
+        if (lease.Fence != fence || lease.ResourceGeneration != attempt.Request.ResourceGeneration)
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_mismatch",
+                "The provider attempt does not match the exact retained Sandbox operation.");
+
+        var targetState = failureCode is null
+            ? SandboxProviderAttemptState.ResultRecorded
+            : effectMayHaveApplied
+                ? SandboxProviderAttemptState.Unknown
+                : SandboxProviderAttemptState.FailedNoEffect;
+        if (attempt.State != SandboxProviderAttemptState.InProgress)
+        {
+            if (attempt.State == targetState &&
+                JsonNode.DeepEquals(
+                    JsonNode.Parse(attempt.Outcome?.GetRawText() ?? "null"),
+                    JsonNode.Parse(outcome.GetRawText())) &&
+                string.Equals(attempt.FailureCode, failureCode, StringComparison.Ordinal))
+            {
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return attempt;
+            }
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_outcome_conflict",
+                "The Sandbox provider attempt already has a different durable outcome.",
+                SandboxProviderAttemptReceipt.From(attempt));
+        }
+
+        var recordedAt = timeProvider.GetUtcNow();
+        var resolvedAt = targetState == SandboxProviderAttemptState.FailedNoEffect
+            ? recordedAt
+            : (DateTimeOffset?)null;
+        await UpdateProviderAttemptAsync(
+            connection,
+            transaction,
+            attempt,
+            targetState,
+            outcome,
+            failureCode,
+            recordedAt,
+            resolvedAt,
+            cancellationToken).ConfigureAwait(false);
+        var updated = attempt with
+        {
+            State = targetState,
+            Outcome = outcome.Clone(),
+            FailureCode = failureCode,
+            OutcomeRecordedAt = recordedAt,
+            ResolvedAt = resolvedAt
+        };
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return updated.Validate();
+    }
+
+    public async Task<ImmutableArray<SandboxProviderAttemptSnapshot>> GetProviderAttemptsAsync(
+        EnvironmentGenerationFence currentFence,
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(currentFence);
+        if (operationId == Guid.Empty)
+            throw new ArgumentException("A Sandbox operation ID is required.", nameof(operationId));
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await EnvironmentLifecycleStore.AcquireOwnerLockAsync(
+            connection, transaction, currentFence.Owner, cancellationToken).ConfigureAwait(false);
+        await RequireActiveOwnerAsync(connection, transaction, currentFence, cancellationToken).ConfigureAwait(false);
+        var lease = await ReadByOperationAsync(
+            connection, transaction, operationId, currentFence.Owner, cancellationToken).ConfigureAwait(false)
+            ?? throw new EnvironmentLifecycleException(
+                "sandbox_operation_unknown",
+                "The exact Sandbox provider operation is not recorded.");
+        var attempts = ImmutableArray.CreateBuilder<SandboxProviderAttemptSnapshot>();
+        await using (var select = new NpgsqlCommand($"""
+            SELECT attempt_id, lifecycle_generation, resource_generation, provider_fencing_generation,
+                   operation_id, effect_kind, request_fingerprint, late_resource_fingerprint,
+                   attempt_state, outcome_json, failure_code, started_at, outcome_recorded_at, resolved_at
+            FROM {ProviderAttempts}
+            WHERE tenant_id = @tenant_id AND project_id = @project_id
+              AND run_id = @run_id AND environment_id = @environment_id
+              AND operation_id = @operation_id
+            ORDER BY started_at, attempt_id
+            """, connection, transaction))
+        {
+            AddOwnerParameters(select, currentFence.Owner);
+            select.Parameters.AddWithValue("operation_id", NpgsqlDbType.Uuid, operationId);
+            await using var reader = await select.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                attempts.Add(ReadProviderAttempt(reader, currentFence.Owner));
+        }
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        _ = lease;
+        return attempts.ToImmutable();
+    }
+
+    public async Task<(ImmutableArray<SandboxLateResourceCleanupRecord> Items, bool HasMore)>
+        GetLateResourceCleanupRecordsAsync(
+            EnvironmentGenerationFence currentFence,
+            CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(currentFence);
+        const int pageSize = 100;
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await EnvironmentLifecycleStore.AcquireOwnerLockAsync(
+            connection, transaction, currentFence.Owner, cancellationToken).ConfigureAwait(false);
+        await RequireActiveOwnerAsync(connection, transaction, currentFence, cancellationToken).ConfigureAwait(false);
+
+        var rows = new List<CleanupReadRow>(pageSize + 1);
+        await using (var select = new NpgsqlCommand($"""
+            SELECT resource_generation, provider_resource_fingerprint, resource_json,
+                   claim_expires_at, release_receipt_json, created_at, updated_at,
+                   provision_attempt_id, release_attempt_id
+            FROM {LateResourceCleanups}
+            WHERE tenant_id = @tenant_id AND project_id = @project_id
+              AND run_id = @run_id AND environment_id = @environment_id
+            ORDER BY CASE WHEN release_receipt_json IS NULL THEN 0 ELSE 1 END,
+                     created_at, resource_generation, provider_resource_fingerprint
+            LIMIT @limit
+            """, connection, transaction))
+        {
+            AddOwnerParameters(select, currentFence.Owner);
+            select.Parameters.AddWithValue("limit", NpgsqlDbType.Integer, pageSize + 1);
+            await using var reader = await select.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                rows.Add(new(
+                    reader.GetInt64(0),
+                    reader.GetString(1),
+                    reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetFieldValue<DateTimeOffset>(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.GetFieldValue<DateTimeOffset>(5),
+                    reader.GetFieldValue<DateTimeOffset>(6),
+                    reader.IsDBNull(7) ? null : reader.GetGuid(7),
+                    reader.IsDBNull(8) ? null : reader.GetGuid(8)));
+        }
+
+        var hasMore = rows.Count > pageSize;
+        var output = ImmutableArray.CreateBuilder<SandboxLateResourceCleanupRecord>(
+            Math.Min(rows.Count, pageSize));
+        foreach (var row in rows.Take(pageSize))
+        {
+            var lease = await ReadByGenerationAsync(
+                connection, transaction, currentFence.Owner, row.ResourceGeneration, cancellationToken)
+                .ConfigureAwait(false)
+                ?? throw new EnvironmentLifecycleException(
+                    "sandbox_late_cleanup_unknown",
+                    "The late Sandbox cleanup does not have its retained lease history.");
+            var provisionedResource = JsonSerializer.Deserialize<SandboxProvisionedResource>(
+                row.ResourceJson, JsonOptions)
+                ?? throw new InvalidOperationException("The stored late Sandbox resource is empty.");
+            ValidateProvisionedResource(lease, provisionedResource);
+            var releaseReceipt = row.ReleaseReceiptJson is null
+                ? null
+                : JsonSerializer.Deserialize<SandboxReleaseReceipt>(row.ReleaseReceiptJson, JsonOptions)
+                  ?? throw new InvalidOperationException("The stored late Sandbox release receipt is empty.");
+            var provisionAttempt = row.ProvisionAttemptId is { } provisionAttemptId
+                ? await ReadProviderAttemptByIdAsync(
+                    connection, transaction, provisionAttemptId, currentFence.Owner, cancellationToken)
+                    .ConfigureAwait(false)
+                : null;
+            var releaseAttempt = row.ReleaseAttemptId is { } releaseAttemptId
+                ? await ReadProviderAttemptByIdAsync(
+                    connection, transaction, releaseAttemptId, currentFence.Owner, cancellationToken)
+                    .ConfigureAwait(false)
+                : null;
+            var item = new SandboxLateResourceCleanupReadItem(
+                lease.Fence,
+                lease.OperationId,
+                lease.ResourceGeneration,
+                lease.ProviderFencingGeneration,
+                lease.CurrentFencingGeneration,
+                row.Fingerprint,
+                provisionedResource.Resource,
+                provisionAttempt is null ? null : SandboxProviderAttemptReceipt.From(provisionAttempt),
+                releaseAttempt is null ? null : SandboxProviderAttemptReceipt.From(releaseAttempt),
+                row.CreatedAt,
+                row.UpdatedAt,
+                row.ClaimExpiresAt,
+                releaseReceipt,
+                ProviderObservation: null);
+            output.Add(new(lease, provisionedResource, item));
+        }
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return (output.ToImmutable(), hasMore);
+    }
+
     public async Task<SandboxLeaseSnapshot> CompleteProvisionAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,
         SandboxProvisionedResource? provisionedResource,
         bool effectMayHaveApplied,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? providerAttemptId = null,
+        string? providerErrorCode = null)
     {
         ArgumentNullException.ThrowIfNull(fence);
         if (operationId == Guid.Empty)
@@ -329,7 +692,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await EnvironmentLifecycleStore.AcquireOwnerLockAsync(
             connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
-        await RequireActiveOwnerAsync(connection, transaction, fence, cancellationToken).ConfigureAwait(false);
         var lease = await ReadByOperationAsync(
             connection, transaction, operationId, fence.Owner, cancellationToken).ConfigureAwait(false)
             ?? throw new EnvironmentLifecycleException(
@@ -339,23 +701,260 @@ public sealed class EnvironmentSandboxLeaseStore(
             throw new EnvironmentLifecycleException(
                 "environment_fence_stale",
                 "The Sandbox operation belongs to a stale Environment lifecycle fence.");
+        var attempt = providerAttemptId is { } exactAttemptId
+            ? await ReadProviderAttemptByIdAsync(
+                connection, transaction, exactAttemptId, fence.Owner, cancellationToken).ConfigureAwait(false)
+            : null;
+        var knownNoEffectBeforeCall =
+            attempt is null &&
+            providerAttemptId is null &&
+            provisionedResource is null &&
+            !effectMayHaveApplied;
+        if (!knownNoEffectBeforeCall &&
+            (attempt is null ||
+             attempt.Request != SandboxProviderAttemptRequest.ForProvision(lease)))
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_mismatch",
+                "The provision result must identify its exact durable provider attempt.");
         if (provisionedResource is not null)
             ValidateProvisionedResource(lease, provisionedResource);
+        var ownerFenceIsActive = await IsOwnerFenceActiveAsync(
+            connection, transaction, fence, cancellationToken).ConfigureAwait(false);
+
+        var outcome = JsonSerializer.SerializeToElement(new
+        {
+            provisionedResource,
+            effectMayHaveApplied,
+            providerErrorCode
+        }, JsonOptions);
+        var targetAttemptState = provisionedResource is not null
+            ? SandboxProviderAttemptState.Completed
+            : effectMayHaveApplied
+                ? SandboxProviderAttemptState.Unknown
+                : SandboxProviderAttemptState.FailedNoEffect;
+        if (attempt is not null &&
+            (attempt.State is SandboxProviderAttemptState.ResultRecorded or
+                SandboxProviderAttemptState.Unknown or SandboxProviderAttemptState.FailedNoEffect or
+                SandboxProviderAttemptState.Completed or SandboxProviderAttemptState.LegacyUnknown))
+        {
+            if (attempt.State != targetAttemptState &&
+                !(attempt.State == SandboxProviderAttemptState.Unknown &&
+                  targetAttemptState == SandboxProviderAttemptState.Completed) &&
+                !(attempt.State == SandboxProviderAttemptState.LegacyUnknown &&
+                  targetAttemptState == SandboxProviderAttemptState.Completed) &&
+                !(attempt.State == SandboxProviderAttemptState.ResultRecorded &&
+                  targetAttemptState is SandboxProviderAttemptState.Completed or
+                      SandboxProviderAttemptState.Unknown or SandboxProviderAttemptState.FailedNoEffect))
+                throw new EnvironmentLifecycleException(
+                    "sandbox_provider_attempt_outcome_conflict",
+                    "The provision result conflicts with the durable provider attempt outcome.",
+                    SandboxProviderAttemptReceipt.From(attempt));
+            if (attempt.State is not (SandboxProviderAttemptState.Unknown or
+                    SandboxProviderAttemptState.ResultRecorded or SandboxProviderAttemptState.LegacyUnknown) &&
+                attempt.Outcome is { } existingOutcome &&
+                !JsonNode.DeepEquals(
+                    JsonNode.Parse(existingOutcome.GetRawText()),
+                    JsonNode.Parse(outcome.GetRawText())))
+                throw new EnvironmentLifecycleException(
+                    "sandbox_provider_attempt_outcome_conflict",
+                    "The provision result conflicts with the durable provider attempt outcome.",
+                    SandboxProviderAttemptReceipt.From(attempt));
+        }
+        else if (attempt is not null && attempt.State != SandboxProviderAttemptState.InProgress)
+        {
+            throw ProviderAttemptUnresolved(attempt);
+        }
+
         var samePersistedResource =
             lease.ProvisionedResource is not null &&
             provisionedResource is not null &&
             SameProvisionedResource(lease.ProvisionedResource, provisionedResource);
         if (samePersistedResource &&
-            (lease.State is SandboxLeaseState.Active or SandboxLeaseState.Released or SandboxLeaseState.Failed))
+            (lease.State is SandboxLeaseState.Released or SandboxLeaseState.Failed ||
+             ownerFenceIsActive && lease.State == SandboxLeaseState.Active))
         {
+            if (attempt!.State != SandboxProviderAttemptState.Completed)
+                await UpdateProviderAttemptAsync(
+                    connection,
+                    transaction,
+                    attempt,
+                    SandboxProviderAttemptState.Completed,
+                    outcome,
+                    providerErrorCode,
+                    attempt.OutcomeRecordedAt ?? timeProvider.GetUtcNow(),
+                    attempt.ResolvedAt ?? timeProvider.GetUtcNow(),
+                    cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return lease;
+        }
+        if (provisionedResource is not null &&
+            lease.CurrentFencingGeneration != lease.ProviderFencingGeneration &&
+            lease.State is not (SandboxLeaseState.Released or SandboxLeaseState.Failed))
+        {
+            await RecordLateResourceCleanupAsync(
+                connection,
+                transaction,
+                lease,
+                provisionedResource,
+                attempt!.AttemptId,
+                cancellationToken).ConfigureAwait(false);
+            var lateUpdatedAt = timeProvider.GetUtcNow();
+            await using (var retireLate = new NpgsqlCommand($"""
+                UPDATE {Leases}
+                SET lease_state = 'Released',
+                    resource_json = COALESCE(@resource_json, resource_json),
+                    is_current = FALSE,
+                    lease_revision = lease_revision + 1,
+                    lease_expires_at = NULL,
+                    updated_at = @updated_at
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                  AND run_id = @run_id AND environment_id = @environment_id
+                  AND resource_generation = @resource_generation
+                  AND operation_id = @operation_id
+                  AND lease_revision = @expected_lease_revision
+                """, connection, transaction))
+            {
+                AddOwnerParameters(retireLate, fence.Owner);
+                retireLate.Parameters.AddWithValue(
+                    "resource_generation", NpgsqlDbType.Bigint, lease.ResourceGeneration);
+                retireLate.Parameters.AddWithValue("operation_id", NpgsqlDbType.Uuid, operationId);
+                retireLate.Parameters.AddWithValue(
+                    "expected_lease_revision", NpgsqlDbType.Bigint, lease.LeaseRevision);
+                retireLate.Parameters.AddWithValue(
+                    "resource_json",
+                    NpgsqlDbType.Jsonb,
+                    JsonSerializer.Serialize(provisionedResource, JsonOptions));
+                retireLate.Parameters.AddWithValue("updated_at", NpgsqlDbType.TimestampTz, lateUpdatedAt);
+                if (await retireLate.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                    throw new EnvironmentLifecycleException(
+                        "sandbox_operation_state_conflict",
+                        "The retired Sandbox operation changed before its late resource was recorded.");
+            }
+            await CompleteProviderAttemptAsync(
+                connection,
+                transaction,
+                attempt!,
+                outcome,
+                providerErrorCode,
+                cancellationToken).ConfigureAwait(false);
+            var lateRetiredLease = await ReadByOperationAsync(
+                connection, transaction, operationId, fence.Owner, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("The late Sandbox resource cleanup was not persisted.");
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return lateRetiredLease;
+        }
+        if (!ownerFenceIsActive)
+        {
+            if (provisionedResource is not null)
+                await RecordLateResourceCleanupAsync(
+                    connection,
+                    transaction,
+                    lease,
+                    provisionedResource,
+                    attempt!.AttemptId,
+                    cancellationToken).ConfigureAwait(false);
+
+            var lateState = provisionedResource is not null
+                ? SandboxLeaseState.Released
+                : effectMayHaveApplied
+                    ? SandboxLeaseState.ReconciliationRequired
+                    : SandboxLeaseState.Failed;
+            var lateUpdatedAt = timeProvider.GetUtcNow();
+            await using (var updateLate = new NpgsqlCommand($"""
+                UPDATE {Leases}
+                SET lease_state = @lease_state,
+                    resource_json = COALESCE(@resource_json, resource_json),
+                    is_current = FALSE,
+                    lease_revision = lease_revision + 1,
+                    lease_expires_at = NULL,
+                    updated_at = @updated_at
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                  AND run_id = @run_id AND environment_id = @environment_id
+                  AND resource_generation = @resource_generation
+                  AND operation_id = @operation_id
+                  AND lease_revision = @expected_lease_revision
+                """, connection, transaction))
+            {
+                AddOwnerParameters(updateLate, fence.Owner);
+                updateLate.Parameters.AddWithValue(
+                    "resource_generation", NpgsqlDbType.Bigint, lease.ResourceGeneration);
+                updateLate.Parameters.AddWithValue("operation_id", NpgsqlDbType.Uuid, operationId);
+                updateLate.Parameters.AddWithValue(
+                    "expected_lease_revision", NpgsqlDbType.Bigint, lease.LeaseRevision);
+                updateLate.Parameters.AddWithValue("lease_state", NpgsqlDbType.Text, lateState.ToString());
+                updateLate.Parameters.AddWithValue(
+                    "resource_json",
+                    NpgsqlDbType.Jsonb,
+                    provisionedResource is null
+                        ? DBNull.Value
+                        : JsonSerializer.Serialize(provisionedResource, JsonOptions));
+                updateLate.Parameters.AddWithValue("updated_at", NpgsqlDbType.TimestampTz, lateUpdatedAt);
+                if (await updateLate.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+                    throw new EnvironmentLifecycleException(
+                        "sandbox_operation_state_conflict",
+                        "The retained Sandbox operation changed before its late provider result was recorded.");
+            }
+
+            if (targetAttemptState == SandboxProviderAttemptState.Completed)
+            {
+                await CompleteProviderAttemptAsync(
+                    connection,
+                    transaction,
+                    attempt!,
+                    outcome,
+                    providerErrorCode,
+                    cancellationToken).ConfigureAwait(false);
+            }
+            else if (targetAttemptState == SandboxProviderAttemptState.FailedNoEffect && attempt is not null)
+            {
+                if (attempt.State != SandboxProviderAttemptState.FailedNoEffect)
+                    await UpdateProviderAttemptAsync(
+                        connection,
+                        transaction,
+                        attempt,
+                        targetAttemptState,
+                        outcome,
+                        providerErrorCode ?? "provider_no_effect",
+                        attempt.OutcomeRecordedAt ?? lateUpdatedAt,
+                        attempt.ResolvedAt ?? lateUpdatedAt,
+                        cancellationToken).ConfigureAwait(false);
+            }
+            else if (attempt is not null)
+            {
+                await UpdateProviderAttemptAsync(
+                    connection,
+                    transaction,
+                    attempt,
+                    targetAttemptState,
+                    outcome,
+                    providerErrorCode,
+                    attempt.OutcomeRecordedAt ?? lateUpdatedAt,
+                    resolvedAt: null,
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+            }
+
+            var lateResult = await ReadByOperationAsync(
+                connection, transaction, operationId, fence.Owner, cancellationToken).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("The late Sandbox provider result was not persisted.");
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return lateResult;
         }
         if ((lease.State is SandboxLeaseState.Released or SandboxLeaseState.Failed) &&
             provisionedResource is null &&
             lease.ProvisionedResource is null &&
             !effectMayHaveApplied)
         {
+            if (attempt is not null && attempt.State != SandboxProviderAttemptState.FailedNoEffect)
+                await UpdateProviderAttemptAsync(
+                    connection,
+                    transaction,
+                    attempt,
+                    SandboxProviderAttemptState.FailedNoEffect,
+                    outcome,
+                    providerErrorCode ?? "provider_no_effect",
+                    attempt.OutcomeRecordedAt ?? timeProvider.GetUtcNow(),
+                    attempt.ResolvedAt ?? timeProvider.GetUtcNow(),
+                    cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return lease;
         }
@@ -367,6 +966,14 @@ public sealed class EnvironmentSandboxLeaseStore(
                 transaction,
                 lease,
                 provisionedResource,
+                attempt!.AttemptId,
+                cancellationToken).ConfigureAwait(false);
+            await CompleteProviderAttemptAsync(
+                connection,
+                transaction,
+                attempt,
+                outcome,
+                providerErrorCode,
                 cancellationToken).ConfigureAwait(false);
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return lease;
@@ -450,6 +1057,44 @@ public sealed class EnvironmentSandboxLeaseStore(
                 throw new EnvironmentLifecycleException(
                     "sandbox_operation_state_conflict",
                     "The Sandbox operation changed while its provider result was being recorded.");
+        }
+
+        if (attempt is not null && targetAttemptState == SandboxProviderAttemptState.Unknown)
+        {
+            await UpdateProviderAttemptAsync(
+                connection,
+                transaction,
+                attempt,
+                targetAttemptState,
+                outcome,
+                providerErrorCode,
+                attempt.OutcomeRecordedAt ?? timeProvider.GetUtcNow(),
+                resolvedAt: null,
+                cancellationToken).ConfigureAwait(false);
+        }
+        else if (attempt is not null && targetAttemptState == SandboxProviderAttemptState.FailedNoEffect)
+        {
+            if (attempt.State != SandboxProviderAttemptState.FailedNoEffect)
+                await UpdateProviderAttemptAsync(
+                    connection,
+                    transaction,
+                    attempt,
+                    targetAttemptState,
+                    outcome,
+                    providerErrorCode ?? "provider_no_effect",
+                    attempt.OutcomeRecordedAt ?? timeProvider.GetUtcNow(),
+                    attempt.ResolvedAt ?? timeProvider.GetUtcNow(),
+                    cancellationToken).ConfigureAwait(false);
+        }
+        else if (attempt is not null)
+        {
+            await CompleteProviderAttemptAsync(
+                connection,
+                transaction,
+                attempt,
+                outcome,
+                providerErrorCode,
+                cancellationToken).ConfigureAwait(false);
         }
 
         var result = await ReadByOperationAsync(
@@ -616,7 +1261,8 @@ public sealed class EnvironmentSandboxLeaseStore(
         long providerFencingGeneration,
         SandboxReleaseReceipt receipt,
         CancellationToken cancellationToken,
-        Func<CancellationToken, Task>? beforeCommitCheck = null)
+        Func<CancellationToken, Task>? beforeCommitCheck = null,
+        Guid? providerAttemptId = null)
     {
         ArgumentNullException.ThrowIfNull(fence);
         ArgumentNullException.ThrowIfNull(receipt);
@@ -627,12 +1273,40 @@ public sealed class EnvironmentSandboxLeaseStore(
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await EnvironmentLifecycleStore.AcquireOwnerLockAsync(
             connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
-        await RequireActiveOwnerAsync(connection, transaction, fence, cancellationToken).ConfigureAwait(false);
         var lease = await ReadByOperationAsync(
             connection, transaction, operationId, fence.Owner, cancellationToken).ConfigureAwait(false)
             ?? throw new EnvironmentLifecycleException(
                 "sandbox_operation_unknown",
                 "The exact Sandbox release operation is not recorded.");
+        var attempt = providerAttemptId is { } exactAttemptId
+            ? await ReadProviderAttemptByIdAsync(
+                connection, transaction, exactAttemptId, fence.Owner, cancellationToken).ConfigureAwait(false)
+            : null;
+        var expectedAttempt = lease.ProvisionedResource is null
+            ? null
+            : SandboxProviderAttemptRequest.ForRelease(lease, lease.ProvisionedResource);
+        var receiptOutcome = JsonSerializer.SerializeToElement(receipt, JsonOptions);
+        if (attempt is null || expectedAttempt is null || attempt.Request != expectedAttempt)
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_mismatch",
+                "The release result must identify its exact durable provider attempt.");
+        if ((attempt.State is SandboxProviderAttemptState.ResultRecorded or
+                SandboxProviderAttemptState.Unknown or SandboxProviderAttemptState.Completed) &&
+            attempt.Outcome is { } storedOutcome &&
+            attempt.State != SandboxProviderAttemptState.Unknown &&
+            !JsonNode.DeepEquals(
+                JsonNode.Parse(storedOutcome.GetRawText()),
+                JsonNode.Parse(receiptOutcome.GetRawText())))
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_outcome_conflict",
+                "The release receipt conflicts with the durable provider attempt outcome.",
+                SandboxProviderAttemptReceipt.From(attempt));
+        if (lease.State == SandboxLeaseState.Released &&
+            attempt.State == SandboxProviderAttemptState.Completed)
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return lease;
+        }
         if (lease.Fence != fence ||
             lease.State != SandboxLeaseState.Releasing ||
             lease.ProviderFencingGeneration != providerFencingGeneration ||
@@ -675,6 +1349,13 @@ public sealed class EnvironmentSandboxLeaseStore(
                     "sandbox_fence_stale",
                     "The Sandbox lease changed before release completion could be recorded.");
         }
+        await CompleteProviderAttemptAsync(
+            connection,
+            transaction,
+            attempt,
+            receiptOutcome,
+            failureCode: null,
+            cancellationToken).ConfigureAwait(false);
         var result = await ReadByOperationAsync(
             connection, transaction, operationId, fence.Owner, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The Sandbox release completion was not persisted.");
@@ -698,7 +1379,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await EnvironmentLifecycleStore.AcquireOwnerLockAsync(
             connection, transaction, fence.Owner, cancellationToken).ConfigureAwait(false);
-        await RequireActiveOwnerAsync(connection, transaction, fence, cancellationToken).ConfigureAwait(false);
         var lease = await ReadByOperationAsync(
             connection, transaction, receipt.OperationId, fence.Owner, cancellationToken).ConfigureAwait(false)
             ?? throw new EnvironmentLifecycleException(
@@ -708,8 +1388,30 @@ public sealed class EnvironmentSandboxLeaseStore(
             throw new EnvironmentLifecycleException(
                 "environment_fence_stale",
                 "The Sandbox partial-release operation belongs to a stale Environment lifecycle fence.");
+        var attempt = request.ProviderAttemptId is { } exactAttemptId
+            ? await ReadProviderAttemptByIdAsync(
+                connection, transaction, exactAttemptId, fence.Owner, cancellationToken).ConfigureAwait(false)
+            : null;
+        var expectedAttempt = SandboxProviderAttemptRequest.ForPartialRelease(lease);
+        var receiptOutcome = JsonSerializer.SerializeToElement(receipt, JsonOptions);
+        if (attempt is null || attempt.Request != expectedAttempt)
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_mismatch",
+                "The partial-release result must identify its exact durable provider attempt.");
+        if ((attempt.State is SandboxProviderAttemptState.ResultRecorded or
+                SandboxProviderAttemptState.Unknown or SandboxProviderAttemptState.Completed) &&
+            attempt.Outcome is { } storedOutcome &&
+            attempt.State != SandboxProviderAttemptState.Unknown &&
+            !JsonNode.DeepEquals(
+                JsonNode.Parse(storedOutcome.GetRawText()),
+                JsonNode.Parse(receiptOutcome.GetRawText())))
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_outcome_conflict",
+                "The partial-release receipt conflicts with the durable provider attempt outcome.",
+                SandboxProviderAttemptReceipt.From(attempt));
         if (lease.State == SandboxLeaseState.Released &&
-            lease.PartialReleaseReceipt == receipt)
+            lease.PartialReleaseReceipt == receipt &&
+            attempt.State == SandboxProviderAttemptState.Completed)
         {
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return lease;
@@ -783,6 +1485,13 @@ public sealed class EnvironmentSandboxLeaseStore(
         var result = await ReadByOperationAsync(
             connection, transaction, lease.OperationId, fence.Owner, cancellationToken).ConfigureAwait(false)
             ?? throw new InvalidOperationException("The partial Sandbox release was not persisted.");
+        await CompleteProviderAttemptAsync(
+            connection,
+            transaction,
+            attempt,
+            receiptOutcome,
+            failureCode: null,
+            cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return result;
     }
@@ -803,22 +1512,25 @@ public sealed class EnvironmentSandboxLeaseStore(
         string resourceFingerprint = string.Empty;
         string resourceJson = string.Empty;
         string releaseIdempotencyKey = string.Empty;
+        Guid? provisionAttemptId = null;
+        Guid? releaseAttemptId = null;
+        Guid? existingClaimToken = null;
+        DateTimeOffset? existingClaimExpiresAt = null;
         var hasCandidate = false;
         await using (var select = new NpgsqlCommand($"""
             SELECT resource_generation, provider_resource_fingerprint, resource_json,
-                   release_idempotency_key
+                   release_idempotency_key, provision_attempt_id, release_attempt_id,
+                   claim_token, claim_expires_at
             FROM {LateResourceCleanups}
             WHERE tenant_id = @tenant_id AND project_id = @project_id
               AND run_id = @run_id AND environment_id = @environment_id
               AND release_receipt_json IS NULL
-              AND (claim_expires_at IS NULL OR claim_expires_at <= @now)
             ORDER BY created_at, resource_generation, provider_resource_fingerprint
             LIMIT 1
             FOR UPDATE
             """, connection, transaction))
         {
             AddOwnerParameters(select, fence.Owner);
-            select.Parameters.AddWithValue("now", NpgsqlDbType.TimestampTz, now);
             await using var reader = await select.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
             if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
@@ -826,10 +1538,63 @@ public sealed class EnvironmentSandboxLeaseStore(
                 resourceFingerprint = reader.GetString(1);
                 resourceJson = reader.GetString(2);
                 releaseIdempotencyKey = reader.GetString(3);
+                provisionAttemptId = reader.IsDBNull(4) ? null : reader.GetGuid(4);
+                releaseAttemptId = reader.IsDBNull(5) ? null : reader.GetGuid(5);
+                existingClaimToken = reader.IsDBNull(6) ? null : reader.GetGuid(6);
+                existingClaimExpiresAt = reader.IsDBNull(7)
+                    ? null
+                    : reader.GetFieldValue<DateTimeOffset>(7);
                 hasCandidate = true;
             }
         }
         if (!hasCandidate)
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+
+        if (existingClaimToken is not null &&
+            existingClaimExpiresAt is { } activeClaimExpiry &&
+            activeClaimExpiry > now)
+        {
+            await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+            return null;
+        }
+        if (releaseAttemptId is { } existingReleaseAttemptId)
+        {
+            var previousReleaseAttempt = await ReadProviderAttemptByIdAsync(
+                connection,
+                transaction,
+                existingReleaseAttemptId,
+                fence.Owner,
+                cancellationToken).ConfigureAwait(false)
+                ?? throw new EnvironmentLifecycleException(
+                    "sandbox_provider_attempt_unknown",
+                    "The late Sandbox cleanup references a missing release attempt.");
+            if (previousReleaseAttempt.State is SandboxProviderAttemptState.InProgress or
+                SandboxProviderAttemptState.Unknown or SandboxProviderAttemptState.LegacyUnknown)
+            {
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return null;
+            }
+            if (previousReleaseAttempt.State == SandboxProviderAttemptState.Completed)
+                throw new InvalidOperationException(
+                    "A completed late Sandbox release attempt has no cleanup receipt.");
+        }
+        if (provisionAttemptId is not { } sourceAttemptId)
+            throw new EnvironmentLifecycleException(
+                "sandbox_late_cleanup_attempt_unknown",
+                "The late Sandbox cleanup has no linked provision attempt.");
+        var sourceAttempt = await ReadProviderAttemptByIdAsync(
+            connection,
+            transaction,
+            sourceAttemptId,
+            fence.Owner,
+            cancellationToken).ConfigureAwait(false)
+            ?? throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_unknown",
+                "The late Sandbox cleanup references a missing provision attempt.");
+        if (sourceAttempt.State != SandboxProviderAttemptState.Completed)
         {
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return null;
@@ -888,7 +1653,12 @@ public sealed class EnvironmentSandboxLeaseStore(
             provisionedResource,
             releaseIdempotencyKey,
             claimToken,
-            claimExpiresAt).Validate();
+            claimExpiresAt)
+        {
+            ResourceFingerprint = resourceFingerprint,
+            ProvisionAttemptId = provisionAttemptId,
+            ReleaseAttemptId = releaseAttemptId
+        }.Validate();
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return claim;
     }
@@ -897,7 +1667,8 @@ public sealed class EnvironmentSandboxLeaseStore(
         EnvironmentGenerationFence currentFence,
         SandboxLateResourceCleanupClaim claim,
         SandboxReleaseReceipt receipt,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? providerAttemptId = null)
     {
         ArgumentNullException.ThrowIfNull(currentFence);
         claim = (claim ?? throw new ArgumentNullException(nameof(claim))).Validate();
@@ -927,7 +1698,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await EnvironmentLifecycleStore.AcquireOwnerLockAsync(
             connection, transaction, currentFence.Owner, cancellationToken).ConfigureAwait(false);
-        await RequireActiveOwnerAsync(connection, transaction, currentFence, cancellationToken).ConfigureAwait(false);
         var lease = await ReadByGenerationAsync(
             connection,
             transaction,
@@ -952,8 +1722,9 @@ public sealed class EnvironmentSandboxLeaseStore(
         string? persistedReceiptJson;
         Guid? persistedClaimToken;
         DateTimeOffset? persistedClaimExpiresAt;
+        Guid? persistedReleaseAttemptId;
         await using (var select = new NpgsqlCommand($"""
-            SELECT claim_token, claim_expires_at, release_receipt_json
+            SELECT claim_token, claim_expires_at, release_receipt_json, release_attempt_id
             FROM {LateResourceCleanups}
             WHERE tenant_id = @tenant_id AND project_id = @project_id
               AND run_id = @run_id AND environment_id = @environment_id
@@ -975,7 +1746,32 @@ public sealed class EnvironmentSandboxLeaseStore(
                 ? null
                 : reader.GetFieldValue<DateTimeOffset>(1);
             persistedReceiptJson = reader.IsDBNull(2) ? null : reader.GetString(2);
+            persistedReleaseAttemptId = reader.IsDBNull(3) ? null : reader.GetGuid(3);
         }
+
+        var attempt = providerAttemptId is { } exactAttemptId
+            ? await ReadProviderAttemptByIdAsync(
+                connection, transaction, exactAttemptId, currentFence.Owner, cancellationToken).ConfigureAwait(false)
+            : null;
+        var expectedAttempt = SandboxProviderAttemptRequest.ForLateResourceRelease(claim);
+        var receiptOutcome = JsonSerializer.SerializeToElement(receipt, JsonOptions);
+        if (attempt is null ||
+            attempt.Request != expectedAttempt ||
+            persistedReleaseAttemptId != attempt.AttemptId)
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_mismatch",
+                "The late cleanup result must identify its exact durable provider attempt.");
+        if ((attempt.State is SandboxProviderAttemptState.ResultRecorded or
+                SandboxProviderAttemptState.Unknown or SandboxProviderAttemptState.Completed) &&
+            attempt.Outcome is { } storedOutcome &&
+            attempt.State != SandboxProviderAttemptState.Unknown &&
+            !JsonNode.DeepEquals(
+                JsonNode.Parse(storedOutcome.GetRawText()),
+                JsonNode.Parse(receiptOutcome.GetRawText())))
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_outcome_conflict",
+                "The late cleanup receipt conflicts with the durable provider attempt outcome.",
+                SandboxProviderAttemptReceipt.From(attempt));
 
         if (persistedReceiptJson is not null)
         {
@@ -986,6 +1782,9 @@ public sealed class EnvironmentSandboxLeaseStore(
                 throw new EnvironmentLifecycleException(
                     "sandbox_late_cleanup_receipt_conflict",
                     "The late Sandbox cleanup already has a different durable receipt.");
+            if (attempt.State != SandboxProviderAttemptState.Completed)
+                throw new InvalidOperationException(
+                    "A persisted late Sandbox cleanup receipt has an unresolved provider attempt.");
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return;
         }
@@ -999,10 +1798,10 @@ public sealed class EnvironmentSandboxLeaseStore(
             throw new EnvironmentLifecycleException(
                 "sandbox_late_cleanup_claim_stale",
                 "The late Sandbox cleanup claim expiry changed before its receipt could be committed.");
-        if (persistedClaimExpiresAt is not { } claimExpiresAt || claimExpiresAt <= updatedAt)
+        if (persistedClaimExpiresAt is not { } claimExpiresAt)
             throw new EnvironmentLifecycleException(
-                "sandbox_late_cleanup_claim_expired",
-                "The late Sandbox cleanup claim expired before its receipt could be committed.");
+                "sandbox_late_cleanup_claim_stale",
+                "The late Sandbox cleanup no longer has its original durable claim.");
         await using (var update = new NpgsqlCommand($"""
             UPDATE {LateResourceCleanups}
             SET claim_token = NULL,
@@ -1015,7 +1814,6 @@ public sealed class EnvironmentSandboxLeaseStore(
               AND provider_resource_fingerprint = @provider_resource_fingerprint
               AND claim_token = @claim_token
               AND claim_expires_at = @claim_expires_at
-              AND claim_expires_at > @updated_at
               AND release_receipt_json IS NULL
             """, connection, transaction))
         {
@@ -1035,6 +1833,13 @@ public sealed class EnvironmentSandboxLeaseStore(
                     "The late Sandbox cleanup claim changed before its receipt could be committed.");
         }
 
+        await CompleteProviderAttemptAsync(
+            connection,
+            transaction,
+            attempt,
+            receiptOutcome,
+            failureCode: null,
+            cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -1043,6 +1848,7 @@ public sealed class EnvironmentSandboxLeaseStore(
         NpgsqlTransaction transaction,
         SandboxLeaseSnapshot lease,
         SandboxProvisionedResource provisionedResource,
+        Guid provisionAttemptId,
         CancellationToken cancellationToken)
     {
         var fingerprint = LateResourceFingerprint(lease, provisionedResource.Resource);
@@ -1051,11 +1857,11 @@ public sealed class EnvironmentSandboxLeaseStore(
             INSERT INTO {LateResourceCleanups}
                 (tenant_id, project_id, run_id, environment_id, resource_generation,
                  provider_resource_fingerprint, resource_json, release_idempotency_key,
-                 created_at, updated_at)
+                 provision_attempt_id, created_at, updated_at)
             VALUES
                 (@tenant_id, @project_id, @run_id, @environment_id, @resource_generation,
                  @provider_resource_fingerprint, @resource_json, @release_idempotency_key,
-                 @created_at, @updated_at)
+                 @provision_attempt_id, @created_at, @updated_at)
             ON CONFLICT
                 (tenant_id, project_id, run_id, environment_id, resource_generation,
                  provider_resource_fingerprint)
@@ -1072,10 +1878,417 @@ public sealed class EnvironmentSandboxLeaseStore(
             "release_idempotency_key",
             NpgsqlDbType.Text,
             LateResourceIdempotencyKey(fingerprint));
+        insert.Parameters.AddWithValue(
+            "provision_attempt_id",
+            NpgsqlDbType.Uuid,
+            provisionAttemptId);
         insert.Parameters.AddWithValue("created_at", NpgsqlDbType.TimestampTz, now);
         insert.Parameters.AddWithValue("updated_at", NpgsqlDbType.TimestampTz, now);
         await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        await using var verify = new NpgsqlCommand($"""
+            SELECT provision_attempt_id
+            FROM {LateResourceCleanups}
+            WHERE tenant_id = @tenant_id AND project_id = @project_id
+              AND run_id = @run_id AND environment_id = @environment_id
+              AND resource_generation = @resource_generation
+              AND provider_resource_fingerprint = @provider_resource_fingerprint
+            FOR UPDATE
+            """, connection, transaction);
+        AddOwnerParameters(verify, lease.Fence.Owner);
+        verify.Parameters.AddWithValue("resource_generation", NpgsqlDbType.Bigint, lease.ResourceGeneration);
+        verify.Parameters.AddWithValue("provider_resource_fingerprint", NpgsqlDbType.Text, fingerprint);
+        var persistedAttemptId = await verify.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        if (persistedAttemptId is not Guid exactAttemptId || exactAttemptId != provisionAttemptId)
+            throw new EnvironmentLifecycleException(
+                "sandbox_late_cleanup_attempt_mismatch",
+                "The late Sandbox cleanup is not linked to the exact provision attempt.");
     }
+
+    private static void ValidateProviderAttemptRequestForLease(
+        SandboxProviderAttemptRequest request,
+        SandboxLeaseSnapshot lease)
+    {
+        if (request.Fence != lease.Fence ||
+            request.ResourceGeneration != lease.ResourceGeneration ||
+            request.ProviderFencingGeneration != lease.ProviderFencingGeneration ||
+            request.OperationId != lease.OperationId)
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_mismatch",
+                "The Sandbox provider attempt does not identify the exact saved operation and resource fence.");
+
+        var expected = request.EffectKind switch
+        {
+            SandboxProviderEffectKind.Provision
+                when lease.State is SandboxLeaseState.Provisioning or SandboxLeaseState.ReconciliationRequired =>
+                SandboxProviderAttemptRequest.ForProvision(lease),
+            SandboxProviderEffectKind.Release
+                when lease.State == SandboxLeaseState.Releasing && lease.ProvisionedResource is not null =>
+                SandboxProviderAttemptRequest.ForRelease(lease, lease.ProvisionedResource),
+            SandboxProviderEffectKind.PartialRelease
+                when (lease.State is SandboxLeaseState.Releasing or SandboxLeaseState.ReconciliationRequired) &&
+                     lease.RetirementReason == SandboxRetirementReason.AuthorizedAbandon &&
+                     lease.ProvisionedResource is null =>
+                SandboxProviderAttemptRequest.ForPartialRelease(lease),
+            SandboxProviderEffectKind.LateResourceRelease
+                when !lease.IsCurrent &&
+                     (lease.State is SandboxLeaseState.Released or SandboxLeaseState.Failed) =>
+                null,
+            _ => throw new EnvironmentLifecycleException(
+                "sandbox_provider_effect_invalid",
+                "The provider effect is not valid for the exact Sandbox lease state.")
+        };
+        if (expected is not null && expected != request)
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_mismatch",
+                "The Sandbox provider attempt fingerprint does not match the saved provider request.");
+    }
+
+    private static async Task<SandboxProviderAttemptSnapshot?> ReadLatestProviderAttemptAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SandboxProviderAttemptRequest request,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT attempt_id, lifecycle_generation, resource_generation, provider_fencing_generation,
+                   operation_id, effect_kind, request_fingerprint, late_resource_fingerprint,
+                   attempt_state, outcome_json, failure_code, started_at, outcome_recorded_at, resolved_at
+            FROM {ProviderAttempts}
+            WHERE tenant_id = @tenant_id AND project_id = @project_id
+              AND run_id = @run_id AND environment_id = @environment_id
+              AND operation_id = @operation_id
+              AND resource_generation = @resource_generation
+              AND effect_kind = @effect_kind
+              AND request_fingerprint = @request_fingerprint
+            ORDER BY started_at DESC, attempt_id DESC
+            LIMIT 1
+            FOR UPDATE
+            """, connection, transaction);
+        AddOwnerParameters(command, request.Fence.Owner);
+        command.Parameters.AddWithValue("operation_id", NpgsqlDbType.Uuid, request.OperationId);
+        command.Parameters.AddWithValue("resource_generation", NpgsqlDbType.Bigint, request.ResourceGeneration);
+        command.Parameters.AddWithValue("effect_kind", NpgsqlDbType.Text, request.EffectKind.ToString());
+        command.Parameters.AddWithValue("request_fingerprint", NpgsqlDbType.Text, request.RequestFingerprint);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? ReadProviderAttempt(reader, request.Fence.Owner)
+            : null;
+    }
+
+    private static async Task<SandboxProviderAttemptSnapshot?> ReadAnyUnresolvedProviderAttemptAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        EnvironmentOwnerIdentity owner,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT attempt_id, lifecycle_generation, resource_generation, provider_fencing_generation,
+                   operation_id, effect_kind, request_fingerprint, late_resource_fingerprint,
+                   attempt_state, outcome_json, failure_code, started_at, outcome_recorded_at, resolved_at
+            FROM {ProviderAttempts}
+            WHERE tenant_id = @tenant_id AND project_id = @project_id
+              AND run_id = @run_id AND environment_id = @environment_id
+              AND attempt_state IN ('InProgress', 'ResultRecorded', 'Unknown', 'LegacyUnknown')
+            ORDER BY started_at, attempt_id
+            LIMIT 1
+            FOR UPDATE
+            """, connection, transaction);
+        AddOwnerParameters(command, owner);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? ReadProviderAttempt(reader, owner)
+            : null;
+    }
+
+    private static async Task EnsureNoUnresolvedSandboxWorkAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        EnvironmentOwnerIdentity owner,
+        CancellationToken cancellationToken)
+    {
+        var unresolved = await ReadAnyUnresolvedProviderAttemptAsync(
+            connection, transaction, owner, cancellationToken).ConfigureAwait(false);
+        if (unresolved is not null)
+            throw ProviderAttemptUnresolved(unresolved);
+
+        await using var command = new NpgsqlCommand($"""
+            SELECT resource_generation
+            FROM {LateResourceCleanups}
+            WHERE tenant_id = @tenant_id AND project_id = @project_id
+              AND run_id = @run_id AND environment_id = @environment_id
+              AND release_receipt_json IS NULL
+            ORDER BY created_at, resource_generation, provider_resource_fingerprint
+            LIMIT 1
+            FOR UPDATE
+            """, connection, transaction);
+        AddOwnerParameters(command, owner);
+        if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null)
+            throw new EnvironmentLifecycleException(
+                "sandbox_late_cleanup_pending",
+                "A late Sandbox resource must be cleaned up before another Sandbox generation can be reserved.");
+    }
+
+    private static async Task<SandboxProviderAttemptSnapshot?> ReadProviderAttemptByIdAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid attemptId,
+        EnvironmentOwnerIdentity owner,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            SELECT attempt_id, lifecycle_generation, resource_generation, provider_fencing_generation,
+                   operation_id, effect_kind, request_fingerprint, late_resource_fingerprint,
+                   attempt_state, outcome_json, failure_code, started_at, outcome_recorded_at, resolved_at
+            FROM {ProviderAttempts}
+            WHERE tenant_id = @tenant_id AND project_id = @project_id
+              AND run_id = @run_id AND environment_id = @environment_id
+              AND attempt_id = @attempt_id
+            FOR UPDATE
+            """, connection, transaction);
+        AddOwnerParameters(command, owner);
+        command.Parameters.AddWithValue("attempt_id", NpgsqlDbType.Uuid, attemptId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        return await reader.ReadAsync(cancellationToken).ConfigureAwait(false)
+            ? ReadProviderAttempt(reader, owner)
+            : null;
+    }
+
+    private static SandboxProviderAttemptSnapshot ReadProviderAttempt(
+        NpgsqlDataReader reader,
+        EnvironmentOwnerIdentity owner)
+    {
+        var attemptId = reader.GetGuid(0);
+        var fence = new EnvironmentGenerationFence(owner, reader.GetInt64(1));
+        var resourceGeneration = reader.GetInt64(2);
+        var providerFencingGeneration = reader.GetInt64(3);
+        var operationId = reader.GetGuid(4);
+        var effectKind = Enum.Parse<SandboxProviderEffectKind>(reader.GetString(5), ignoreCase: false);
+        var request = new SandboxProviderAttemptRequest(
+            fence,
+            resourceGeneration,
+            providerFencingGeneration,
+            operationId,
+            effectKind,
+            reader.GetString(6),
+            reader.IsDBNull(7) ? null : reader.GetString(7)).Validate();
+        var state = Enum.Parse<SandboxProviderAttemptState>(reader.GetString(8), ignoreCase: false);
+        JsonElement? outcome = null;
+        if (!reader.IsDBNull(9))
+        {
+            using var document = JsonDocument.Parse(reader.GetString(9));
+            outcome = document.RootElement.Clone();
+        }
+        var failureCode = reader.IsDBNull(10) ? null : reader.GetString(10);
+        var startedAt = reader.GetFieldValue<DateTimeOffset>(11);
+        DateTimeOffset? outcomeRecordedAt = reader.IsDBNull(12)
+            ? null
+            : reader.GetFieldValue<DateTimeOffset>(12);
+        DateTimeOffset? resolvedAt = reader.IsDBNull(13)
+            ? null
+            : reader.GetFieldValue<DateTimeOffset>(13);
+        return new SandboxProviderAttemptSnapshot(
+            attemptId,
+            request,
+            state,
+            outcome,
+            failureCode,
+            startedAt,
+            outcomeRecordedAt,
+            resolvedAt).Validate();
+    }
+
+    private async Task UpdateProviderAttemptAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SandboxProviderAttemptSnapshot current,
+        SandboxProviderAttemptState state,
+        JsonElement outcome,
+        string? failureCode,
+        DateTimeOffset outcomeRecordedAt,
+        DateTimeOffset? resolvedAt,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand($"""
+            UPDATE {ProviderAttempts}
+            SET attempt_state = @attempt_state,
+                outcome_json = @outcome_json,
+                failure_code = @failure_code,
+                outcome_recorded_at = @outcome_recorded_at,
+                resolved_at = @resolved_at,
+                updated_at = @updated_at
+            WHERE tenant_id = @tenant_id AND project_id = @project_id
+              AND run_id = @run_id AND environment_id = @environment_id
+              AND attempt_id = @attempt_id AND attempt_state = @expected_state
+            """, connection, transaction);
+        AddOwnerParameters(command, current.Request.Fence.Owner);
+        command.Parameters.AddWithValue("attempt_id", NpgsqlDbType.Uuid, current.AttemptId);
+        command.Parameters.AddWithValue("expected_state", NpgsqlDbType.Text, current.State.ToString());
+        command.Parameters.AddWithValue("attempt_state", NpgsqlDbType.Text, state.ToString());
+        command.Parameters.AddWithValue("outcome_json", NpgsqlDbType.Jsonb, outcome.GetRawText());
+        command.Parameters.AddWithValue(
+            "failure_code",
+            NpgsqlDbType.Text,
+            failureCode is null ? DBNull.Value : failureCode);
+        command.Parameters.AddWithValue(
+            "outcome_recorded_at", NpgsqlDbType.TimestampTz, outcomeRecordedAt);
+        command.Parameters.AddWithValue(
+            "resolved_at",
+            NpgsqlDbType.TimestampTz,
+            resolvedAt is null ? DBNull.Value : resolvedAt.Value);
+        command.Parameters.AddWithValue("updated_at", NpgsqlDbType.TimestampTz, timeProvider.GetUtcNow());
+        if (await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) != 1)
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_conflict",
+                "The Sandbox provider attempt changed before its outcome could be recorded.");
+    }
+
+    private async Task CompleteProviderAttemptAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SandboxProviderAttemptSnapshot attempt,
+        JsonElement outcome,
+        string? failureCode,
+        CancellationToken cancellationToken)
+    {
+        if (attempt.State == SandboxProviderAttemptState.Completed)
+            return;
+        if (attempt.State == SandboxProviderAttemptState.FailedNoEffect ||
+            attempt.State == SandboxProviderAttemptState.LegacyUnknown &&
+                attempt.Request.EffectKind != SandboxProviderEffectKind.Provision)
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_outcome_conflict",
+                "The provider result cannot resolve this attempt state.",
+                SandboxProviderAttemptReceipt.From(attempt));
+        var recordedAt = attempt.OutcomeRecordedAt ?? timeProvider.GetUtcNow();
+        var resolvedAt = attempt.ResolvedAt ?? timeProvider.GetUtcNow();
+        await UpdateProviderAttemptAsync(
+            connection,
+            transaction,
+            attempt,
+            SandboxProviderAttemptState.Completed,
+            outcome,
+            failureCode,
+            recordedAt,
+            resolvedAt,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static EnvironmentLifecycleException ProviderAttemptUnresolved(
+        SandboxProviderAttemptSnapshot attempt) =>
+        new(
+            "sandbox_provider_attempt_unresolved",
+            "A prior Sandbox provider attempt has no durable resolution; another provider effect is blocked.",
+            SandboxProviderAttemptReceipt.From(attempt));
+
+    private async Task EnsureProviderEffectDoesNotOvertakeLateCleanupAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        SandboxProviderAttemptRequest request,
+        CancellationToken cancellationToken)
+    {
+        long resourceGeneration = 0;
+        string? fingerprint = null;
+        string? resourceJson = null;
+        string? idempotencyKey = null;
+        Guid? provisionAttemptId = null;
+        Guid? claimToken = null;
+        DateTimeOffset? claimExpiresAt = null;
+        var found = false;
+        await using (var command = new NpgsqlCommand($"""
+            SELECT resource_generation, provider_resource_fingerprint, resource_json,
+                   release_idempotency_key, provision_attempt_id, claim_token, claim_expires_at
+            FROM {LateResourceCleanups}
+            WHERE tenant_id = @tenant_id AND project_id = @project_id
+              AND run_id = @run_id AND environment_id = @environment_id
+              AND release_receipt_json IS NULL
+            ORDER BY created_at, resource_generation, provider_resource_fingerprint
+            LIMIT 1
+            FOR UPDATE
+            """, connection, transaction))
+        {
+            AddOwnerParameters(command, request.Fence.Owner);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                resourceGeneration = reader.GetInt64(0);
+                fingerprint = reader.GetString(1);
+                resourceJson = reader.GetString(2);
+                idempotencyKey = reader.GetString(3);
+                provisionAttemptId = reader.IsDBNull(4) ? null : reader.GetGuid(4);
+                claimToken = reader.IsDBNull(5) ? null : reader.GetGuid(5);
+                claimExpiresAt = reader.IsDBNull(6) ? null : reader.GetFieldValue<DateTimeOffset>(6);
+                found = true;
+            }
+        }
+
+        if (request.EffectKind != SandboxProviderEffectKind.LateResourceRelease)
+        {
+            if (found)
+                throw new EnvironmentLifecycleException(
+                    "sandbox_late_cleanup_pending",
+                    "A late Sandbox resource must be cleaned up before another provider effect can begin.");
+            return;
+        }
+
+        if (!found ||
+            resourceGeneration != request.ResourceGeneration ||
+            !string.Equals(fingerprint, request.LateResourceFingerprint, StringComparison.Ordinal) ||
+            provisionAttemptId is null)
+            throw new EnvironmentLifecycleException(
+                "sandbox_late_cleanup_unknown",
+                "The exact late Sandbox resource is not the next pending cleanup.");
+        if (claimToken is null || claimExpiresAt is not { } expiresAt || expiresAt <= timeProvider.GetUtcNow())
+            throw new EnvironmentLifecycleException(
+                "sandbox_late_cleanup_claim_expired",
+                "A current late Sandbox cleanup claim is required before its provider effect can begin.");
+
+        var sourceAttempt = await ReadProviderAttemptByIdAsync(
+            connection, transaction, provisionAttemptId.Value, request.Fence.Owner, cancellationToken)
+            .ConfigureAwait(false)
+            ?? throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_unknown",
+                "The late Sandbox resource has no durable provision attempt.");
+        if (sourceAttempt.State != SandboxProviderAttemptState.Completed)
+            throw ProviderAttemptUnresolved(sourceAttempt);
+
+        var lease = await ReadByGenerationAsync(
+            connection,
+            transaction,
+            request.Fence.Owner,
+            resourceGeneration,
+            cancellationToken).ConfigureAwait(false)
+            ?? throw new EnvironmentLifecycleException(
+                "sandbox_late_cleanup_unknown",
+                "The late Sandbox resource does not have its retained lease history.");
+        var provisionedResource = JsonSerializer.Deserialize<SandboxProvisionedResource>(
+            resourceJson!, JsonOptions)
+            ?? throw new InvalidOperationException("The stored late Sandbox resource is empty.");
+        if (sourceAttempt.Request.EffectKind != SandboxProviderEffectKind.Provision ||
+            sourceAttempt.Request.OperationId != lease.OperationId ||
+            sourceAttempt.Request.ResourceGeneration != lease.ResourceGeneration ||
+            sourceAttempt.Request.Fence != lease.Fence)
+            throw new EnvironmentLifecycleException(
+                "sandbox_late_cleanup_attempt_mismatch",
+                "The late Sandbox cleanup does not reference the exact source provision attempt.");
+        var expectedRequest = SandboxProviderAttemptRequest.ForLateResourceRelease(
+            lease, provisionedResource, idempotencyKey!, fingerprint!);
+        if (expectedRequest != request)
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_mismatch",
+                "The late Sandbox provider attempt does not match the exact pending resource.");
+    }
+
+    private sealed record CleanupReadRow(
+        long ResourceGeneration,
+        string Fingerprint,
+        string ResourceJson,
+        DateTimeOffset? ClaimExpiresAt,
+        string? ReleaseReceiptJson,
+        DateTimeOffset CreatedAt,
+        DateTimeOffset UpdatedAt,
+        Guid? ProvisionAttemptId,
+        Guid? ReleaseAttemptId);
 
     private static async Task RequireActiveOwnerAsync(
         NpgsqlConnection connection,
@@ -1106,6 +2319,31 @@ public sealed class EnvironmentSandboxLeaseStore(
             throw new EnvironmentLifecycleException(
                 "environment_fence_stale",
                 "The Environment lifecycle fence is stale.");
+    }
+
+    private static async Task<bool> IsOwnerFenceActiveAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        EnvironmentGenerationFence fence,
+        CancellationToken cancellationToken)
+    {
+        await using var command = new NpgsqlCommand("""
+            SELECT lifecycle_generation, state
+            FROM "environment"."owners"
+            WHERE tenant_id = @tenant_id AND project_id = @project_id
+              AND run_id = @run_id AND environment_id = @environment_id
+            """, connection, transaction);
+        AddOwnerParameters(command, fence.Owner);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            throw new EnvironmentLifecycleException(
+                "environment_unknown",
+                "The exact Environment owner tuple is not registered.");
+        return reader.GetInt64(0) == fence.LifecycleGeneration &&
+               string.Equals(
+                   reader.GetString(1),
+                   EnvironmentLifecycleState.Active.ToString(),
+                   StringComparison.Ordinal);
     }
 
     private static async Task<SandboxLeaseSnapshot?> ReadCurrentAsync(

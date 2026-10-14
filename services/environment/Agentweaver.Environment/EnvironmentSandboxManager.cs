@@ -47,17 +47,6 @@ public sealed record SandboxAbandonApiRequest(
     }
 }
 
-public sealed record SandboxObservationSummary(
-    ProviderResourceRef Resource,
-    SandboxObservedState State,
-    long FencingGeneration,
-    bool VmIsolationVerified,
-    bool WorkspaceAttachmentVerified,
-    long? VerifiedNetworkGeneration,
-    ImmutableArray<SandboxStartupPhaseObservation> StartupPhases,
-    SandboxTerminalEvidence? TerminalEvidence,
-    SandboxStartupBudgetFailure? StartupFailure);
-
 public sealed record EnvironmentSandboxResult(
     Guid OperationId,
     SandboxLeaseState State,
@@ -212,6 +201,8 @@ public sealed class EnvironmentSandboxManager(
         }
 
         var providerCallStarted = false;
+        var providerAttemptStarted = false;
+        Guid? providerAttemptId = null;
         var workspaceAttachmentAttempted = false;
         long? workspaceAttachmentTransitionRevision = null;
         SandboxProvisionedResource? provisioned = null;
@@ -292,6 +283,17 @@ public sealed class EnvironmentSandboxManager(
             await lifecycleStore.RequireActiveAsync(context.Fence, cancellationToken).ConfigureAwait(false);
             if (requireCurrent is not null)
                 await requireCurrent(cancellationToken).ConfigureAwait(false);
+            providerAttemptStarted = true;
+            var attemptReservation = await leaseStore.BeginProviderAttemptAsync(
+                SandboxProviderAttemptRequest.ForProvision(lease),
+                cancellationToken).ConfigureAwait(false);
+            if (attemptReservation.Replayed ||
+                attemptReservation.Attempt.State != SandboxProviderAttemptState.InProgress)
+                throw new EnvironmentLifecycleException(
+                    "sandbox_provider_attempt_unresolved",
+                    "A durable Sandbox provider attempt already exists; another provision call was not started.",
+                    SandboxProviderAttemptReceipt.From(attemptReservation.Attempt));
+            providerAttemptId = attemptReservation.Attempt.AttemptId;
             providerCallStarted = true;
             provisioned = await sandboxProvider.ProvisionAsync(
                 provisionRequest, cancellationToken).ConfigureAwait(false);
@@ -302,8 +304,10 @@ public sealed class EnvironmentSandboxManager(
                 lease.OperationId,
                 context.Fence,
                 provisionedResource: null,
-                effectMayHaveApplied: exception.EffectMayHaveApplied || providerCallStarted,
-                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                effectMayHaveApplied: exception.EffectMayHaveApplied,
+                cancellationToken: CancellationToken.None,
+                providerAttemptId: providerAttemptId,
+                providerErrorCode: exception.Code).ConfigureAwait(false);
             throw;
         }
         catch (OperationCanceledException)
@@ -315,12 +319,22 @@ public sealed class EnvironmentSandboxManager(
                     workspace.Snapshot,
                     workspaceAttachmentTransitionRevision!.Value,
                     CancellationToken.None).ConfigureAwait(false);
-            _ = await leaseStore.CompleteProvisionAsync(
-                lease.OperationId,
-                context.Fence,
-                provisionedResource: null,
-                effectMayHaveApplied: providerCallStarted,
-                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+            if (providerAttemptId is not null)
+                _ = await leaseStore.CompleteProvisionAsync(
+                    lease.OperationId,
+                    context.Fence,
+                    provisionedResource: null,
+                    effectMayHaveApplied: true,
+                    cancellationToken: CancellationToken.None,
+                    providerAttemptId,
+                    providerErrorCode: "provider_cancelled").ConfigureAwait(false);
+            else if (!providerAttemptStarted)
+                _ = await leaseStore.CompleteProvisionAsync(
+                    lease.OperationId,
+                    context.Fence,
+                    provisionedResource: null,
+                    effectMayHaveApplied: false,
+                    cancellationToken: CancellationToken.None).ConfigureAwait(false);
             throw;
         }
         catch (Exception exception) when (
@@ -331,7 +345,9 @@ public sealed class EnvironmentSandboxManager(
                 context.Fence,
                 provisionedResource: null,
                 effectMayHaveApplied: true,
-                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                cancellationToken: CancellationToken.None,
+                providerAttemptId,
+                providerErrorCode: "provider_invalid_result").ConfigureAwait(false);
             throw;
         }
         catch (Exception exception) when (
@@ -342,11 +358,13 @@ public sealed class EnvironmentSandboxManager(
                 context.Fence,
                 provisionedResource: null,
                 effectMayHaveApplied: true,
-                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                cancellationToken: CancellationToken.None,
+                providerAttemptId,
+                providerErrorCode: "provider_transport_unknown").ConfigureAwait(false);
             throw;
         }
         catch (Exception exception) when (
-            !providerCallStarted && exception is (ArgumentException or
+            !providerAttemptStarted && exception is (ArgumentException or
                 InvalidOperationException or
                 NotSupportedException or
                 RuntimeAuthorizationException or
@@ -376,7 +394,8 @@ public sealed class EnvironmentSandboxManager(
             context.Fence,
             provisioned ?? throw new InvalidOperationException("The Sandbox provider returned no resource."),
             effectMayHaveApplied: true,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken: CancellationToken.None,
+            providerAttemptId: providerAttemptId).ConfigureAwait(false);
         await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
         if (requireCurrent is not null)
             await requireCurrent(cancellationToken).ConfigureAwait(false);
@@ -638,6 +657,47 @@ public sealed class EnvironmentSandboxManager(
         return await ReleaseRetiringLeaseAsync(caller, context, lease, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<SandboxProviderAttemptReadResponseV1> GetProviderAttemptsAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        string environmentId,
+        Guid operationId,
+        CancellationToken cancellationToken)
+    {
+        if (operationId == Guid.Empty)
+            throw new ArgumentException("A Sandbox operation ID is required.", nameof(operationId));
+        var context = await AuthorizeAsync(
+            caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
+        var attempts = await leaseStore.GetProviderAttemptsAsync(
+            context.Fence, operationId, cancellationToken).ConfigureAwait(false);
+        await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        return new(
+            1,
+            context.Fence,
+            operationId,
+            attempts.Select(SandboxProviderAttemptReceipt.From).ToImmutableArray());
+    }
+
+    public async Task<SandboxLateResourceCleanupReadResponseV1> GetLateResourceCleanupsAsync(
+        CurrentCallerRequest caller,
+        string projectId,
+        string runId,
+        string environmentId,
+        CancellationToken cancellationToken)
+    {
+        var context = await AuthorizeAsync(
+            caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
+        var (items, hasMore) = await leaseStore.GetLateResourceCleanupRecordsAsync(
+            context.Fence, cancellationToken).ConfigureAwait(false);
+        await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        return new(
+            1,
+            context.Fence,
+            items.Select(item => item.Receipt).ToImmutableArray(),
+            hasMore);
+    }
+
     public async Task<EnvironmentSandboxResult?> ReconcileAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -650,8 +710,9 @@ public sealed class EnvironmentSandboxManager(
             caller, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
         var result = await ReconcileCurrentLeaseAsync(
             caller, context, networkPolicyGeneration, cancellationToken).ConfigureAwait(false);
-        await ReconcileNextLateResourceCleanupAsync(caller, context, cancellationToken).ConfigureAwait(false);
-        return result;
+        var lateCleanupResult = await ReconcileNextLateResourceCleanupAsync(
+            caller, context, cancellationToken).ConfigureAwait(false);
+        return result ?? lateCleanupResult;
     }
 
     private async Task<EnvironmentSandboxResult?> ReconcileCurrentLeaseAsync(
@@ -743,12 +804,15 @@ public sealed class EnvironmentSandboxManager(
                     lease.CreatedAt ?? throw new EnvironmentLifecycleException(
                         "sandbox_lease_created_at_missing",
                         "The Sandbox lease has no persisted creation timestamp for startup budgets.")));
+                var providerAttemptId = await RequireProvisionAttemptIdAsync(
+                    context.Fence, lease, cancellationToken).ConfigureAwait(false);
                 lease = await leaseStore.CompleteProvisionAsync(
                     lease.OperationId,
                     context.Fence,
                     recoveredResource,
                     effectMayHaveApplied: true,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken: CancellationToken.None,
+                    providerAttemptId).ConfigureAwait(false);
                 await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
                 if (lease.State == SandboxLeaseState.Releasing)
                     return await ReleaseRetiringLeaseAsync(caller, context, lease, cancellationToken)
@@ -784,7 +848,7 @@ public sealed class EnvironmentSandboxManager(
         return ToResult(lease);
     }
 
-    private async Task ReconcileNextLateResourceCleanupAsync(
+    private async Task<EnvironmentSandboxResult?> ReconcileNextLateResourceCleanupAsync(
         CurrentCallerRequest caller,
         AuthorizedSandboxContext context,
         CancellationToken cancellationToken)
@@ -793,23 +857,167 @@ public sealed class EnvironmentSandboxManager(
             context.Fence,
             cancellationToken).ConfigureAwait(false);
         if (cleanup is null)
-            return;
+            return null;
 
         await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        (long TransitionRevision, long DataGeneration, RuntimeSuspendPlacementReleaseRequest? SuspendRelease)?
+            detachment = null;
+        if (cleanup.Lease.Fence == context.Fence)
+        {
+            detachment = await ReadWorkspaceDetachmentAsync(
+                context.Fence, cleanup.Lease, cancellationToken).ConfigureAwait(false);
+            await RequireSuspendReleaseAsync(caller, detachment.Value.SuspendRelease, cancellationToken)
+                .ConfigureAwait(false);
+        }
         var request = new SandboxReleaseRequest(
             cleanup.Lease.Fence,
             cleanup.ProvisionedResource.Resource,
             cleanup.Lease.ProviderFencingGeneration,
             cleanup.ProvisionedResource.ProviderBinding,
             cleanup.IdempotencyKey).Validate();
-        var receipt = await sandboxProvider.ReleaseAsync(request, cancellationToken).ConfigureAwait(false);
+        var attemptReservation = await leaseStore.BeginProviderAttemptAsync(
+            SandboxProviderAttemptRequest.ForLateResourceRelease(cleanup),
+            context.Fence,
+            cancellationToken).ConfigureAwait(false);
+        if (attemptReservation.Attempt.State is not (
+                SandboxProviderAttemptState.InProgress or SandboxProviderAttemptState.ResultRecorded) ||
+            attemptReservation.Attempt.State == SandboxProviderAttemptState.InProgress &&
+                attemptReservation.Replayed)
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_unresolved",
+                "A prior late Sandbox cleanup attempt has no durable result; another release call was not started.",
+                SandboxProviderAttemptReceipt.From(attemptReservation.Attempt));
+
+        SandboxReleaseReceipt receipt;
+        if (attemptReservation.Replayed)
+        {
+            receipt = attemptReservation.Attempt.Outcome is { } savedOutcome
+                ? JsonSerializer.Deserialize<SandboxReleaseReceipt>(savedOutcome.GetRawText(), JsonOptions)
+                    ?? throw new InvalidOperationException("The saved late Sandbox release outcome is empty.")
+                : throw new EnvironmentLifecycleException(
+                    "sandbox_provider_attempt_outcome_missing",
+                    "The recorded late Sandbox release attempt has no receipt outcome.",
+                    SandboxProviderAttemptReceipt.From(attemptReservation.Attempt));
+        }
+        else
+        {
+            try
+            {
+                await CheckLateCleanupAuthorityAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception authorityException) when (
+                authorityException is ProjectsConfigApiException or
+                    EnvironmentLifecycleException or
+                    RuntimeAuthorizationException or
+                    OperationCanceledException)
+            {
+                try
+                {
+                    await RecordLateCleanupFailureAsync(
+                        new { errorCode = "late_cleanup_precondition_failed", effectMayHaveApplied = false },
+                        effectMayHaveApplied: false,
+                        failureCode: "late_cleanup_precondition_failed").ConfigureAwait(false);
+                }
+                catch (Exception recordException)
+                {
+                    throw new InvalidOperationException(
+                        "The late Sandbox release was not started, but its no-effect result could not be durably recorded.",
+                        new AggregateException(authorityException, recordException));
+                }
+                throw;
+            }
+
+            try
+            {
+                receipt = await sandboxProvider.ReleaseAsync(request, cancellationToken).ConfigureAwait(false);
+            }
+            catch (SandboxProviderException exception)
+            {
+                await RecordLateCleanupFailureAsync(
+                    new { errorCode = exception.Code, effectMayHaveApplied = exception.EffectMayHaveApplied },
+                    exception.EffectMayHaveApplied,
+                    exception.Code).ConfigureAwait(false);
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                await RecordLateCleanupFailureAsync(
+                    new { errorCode = "provider_cancelled", effectMayHaveApplied = true },
+                    effectMayHaveApplied: true,
+                    failureCode: "provider_cancelled").ConfigureAwait(false);
+                throw;
+            }
+            catch (Exception exception) when (
+                exception is IOException or HttpRequestException or TimeoutException or
+                    ArgumentException or InvalidOperationException or JsonException)
+            {
+                await RecordLateCleanupFailureAsync(
+                    new { errorCode = "provider_result_unknown", effectMayHaveApplied = true },
+                    effectMayHaveApplied: true,
+                    failureCode: "provider_result_unknown").ConfigureAwait(false);
+                throw;
+            }
+
+            try
+            {
+                receipt = receipt.ValidateFor(request);
+            }
+            catch (ArgumentException)
+            {
+                await RecordLateCleanupFailureAsync(
+                    JsonSerializer.SerializeToElement(receipt, JsonOptions),
+                    effectMayHaveApplied: true,
+                    failureCode: "provider_invalid_receipt").ConfigureAwait(false);
+                throw;
+            }
+            await leaseStore.RecordProviderAttemptOutcomeAsync(
+                attemptReservation.Attempt.AttemptId,
+                cleanup.Lease.Fence,
+                JsonSerializer.SerializeToElement(receipt, JsonOptions),
+                effectMayHaveApplied: true,
+                failureCode: null,
+                CancellationToken.None).ConfigureAwait(false);
+        }
         receipt = receipt.ValidateFor(request);
-        await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+        if (detachment is { } currentDetachment)
+        {
+            await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+            await RequireSuspendReleaseAsync(caller, currentDetachment.SuspendRelease, cancellationToken)
+                .ConfigureAwait(false);
+            await DetachWorkspaceAfterSandboxReleaseAsync(
+                context.Fence,
+                cleanup.Lease,
+                cancellationToken,
+                beforeCommitCheck: CheckLateCleanupAuthorityAsync).ConfigureAwait(false);
+        }
+        await CheckLateCleanupAuthorityAsync(cancellationToken).ConfigureAwait(false);
         await leaseStore.CompleteLateResourceCleanupAsync(
             context.Fence,
             cleanup,
             receipt,
-            cancellationToken).ConfigureAwait(false);
+            CancellationToken.None,
+            attemptReservation.Attempt.AttemptId).ConfigureAwait(false);
+        return ToResult(cleanup.Lease);
+
+        Task<SandboxProviderAttemptSnapshot> RecordLateCleanupFailureAsync<T>(
+            T outcome,
+            bool effectMayHaveApplied,
+            string failureCode) =>
+            leaseStore.RecordProviderAttemptOutcomeAsync(
+                attemptReservation.Attempt.AttemptId,
+                cleanup.Lease.Fence,
+                JsonSerializer.SerializeToElement(outcome, JsonOptions),
+                effectMayHaveApplied,
+                failureCode,
+                CancellationToken.None);
+
+        async Task CheckLateCleanupAuthorityAsync(CancellationToken token)
+        {
+            await EnsureUnchangedAsync(caller, context, token).ConfigureAwait(false);
+            if (detachment is { } currentDetachment)
+                await RequireSuspendReleaseAsync(caller, currentDetachment.SuspendRelease, token)
+                    .ConfigureAwait(false);
+        }
     }
 
     private async Task<EnvironmentSandboxResult> ResumeProvisioningAsync(
@@ -870,6 +1078,16 @@ public sealed class EnvironmentSandboxManager(
         lease = await RequireCurrentLeaseAsync(context.Fence, lease, cancellationToken).ConfigureAwait(false);
 
         SandboxProvisionedResource provisioned;
+        var attemptReservation = await leaseStore.BeginProviderAttemptAsync(
+            SandboxProviderAttemptRequest.ForProvision(lease),
+            cancellationToken).ConfigureAwait(false);
+        if (attemptReservation.Replayed ||
+            attemptReservation.Attempt.State != SandboxProviderAttemptState.InProgress)
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_unresolved",
+                "A durable Sandbox provider attempt already exists; another provision call was not started.",
+                SandboxProviderAttemptReceipt.From(attemptReservation.Attempt));
+        var providerAttemptId = attemptReservation.Attempt.AttemptId;
         try
         {
             provisioned = await sandboxProvider.ProvisionAsync(
@@ -883,7 +1101,11 @@ public sealed class EnvironmentSandboxManager(
                 context.Fence,
                 provisionedResource: null,
                 effectMayHaveApplied: true,
-                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+                cancellationToken: CancellationToken.None,
+                providerAttemptId,
+                providerErrorCode: exception is SandboxProviderException providerException
+                    ? providerException.Code
+                    : "provider_result_unknown").ConfigureAwait(false);
             throw;
         }
 
@@ -892,7 +1114,8 @@ public sealed class EnvironmentSandboxManager(
             context.Fence,
             provisioned,
             effectMayHaveApplied: true,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken: CancellationToken.None,
+            providerAttemptId).ConfigureAwait(false);
         await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
         if (lease.State == SandboxLeaseState.Releasing)
             return await ReleaseRetiringLeaseAsync(caller, context, lease, cancellationToken).ConfigureAwait(false);
@@ -974,8 +1197,85 @@ public sealed class EnvironmentSandboxManager(
         lease = await RequireCurrentLeaseAsync(context.Fence, lease, cancellationToken).ConfigureAwait(false);
         var request = new SandboxPartialReleaseRequest(context.Fence, lease).Validate();
         await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
-        var receipt = (await sandboxProvider.ReleasePartialAsync(
-            request, cancellationToken).ConfigureAwait(false)).ValidateFor(request);
+        var attemptReservation = await leaseStore.BeginProviderAttemptAsync(
+            SandboxProviderAttemptRequest.ForPartialRelease(lease),
+            cancellationToken).ConfigureAwait(false);
+        if (attemptReservation.Attempt.State is not (
+                SandboxProviderAttemptState.InProgress or SandboxProviderAttemptState.ResultRecorded) ||
+            attemptReservation.Attempt.State == SandboxProviderAttemptState.InProgress &&
+                attemptReservation.Replayed)
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_unresolved",
+                "A prior Sandbox partial-release attempt has no durable result; another call was not started.",
+                SandboxProviderAttemptReceipt.From(attemptReservation.Attempt));
+
+        SandboxPartialReleaseReceipt receipt;
+        if (attemptReservation.Replayed)
+        {
+            receipt = attemptReservation.Attempt.Outcome is { } savedOutcome
+                ? JsonSerializer.Deserialize<SandboxPartialReleaseReceipt>(
+                    savedOutcome.GetRawText(), JsonOptions)
+                    ?? throw new InvalidOperationException("The saved Sandbox partial-release outcome is empty.")
+                : throw new EnvironmentLifecycleException(
+                    "sandbox_provider_attempt_outcome_missing",
+                    "The recorded Sandbox partial-release attempt has no receipt outcome.",
+                    SandboxProviderAttemptReceipt.From(attemptReservation.Attempt));
+        }
+        else
+        {
+            try
+            {
+                receipt = await sandboxProvider.ReleasePartialAsync(request, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (SandboxProviderException exception)
+            {
+                await RecordPartialReleaseFailureAsync(
+                    new { errorCode = exception.Code, effectMayHaveApplied = exception.EffectMayHaveApplied },
+                    exception.EffectMayHaveApplied,
+                    exception.Code).ConfigureAwait(false);
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                await RecordPartialReleaseFailureAsync(
+                    new { errorCode = "provider_cancelled", effectMayHaveApplied = true },
+                    effectMayHaveApplied: true,
+                    failureCode: "provider_cancelled").ConfigureAwait(false);
+                throw;
+            }
+            catch (Exception exception) when (
+                exception is IOException or HttpRequestException or TimeoutException or
+                    ArgumentException or InvalidOperationException or JsonException)
+            {
+                await RecordPartialReleaseFailureAsync(
+                    new { errorCode = "provider_result_unknown", effectMayHaveApplied = true },
+                    effectMayHaveApplied: true,
+                    failureCode: "provider_result_unknown").ConfigureAwait(false);
+                throw;
+            }
+
+            try
+            {
+                receipt = receipt.ValidateFor(request);
+            }
+            catch (ArgumentException)
+            {
+                await RecordPartialReleaseFailureAsync(
+                    JsonSerializer.SerializeToElement(receipt, JsonOptions),
+                    effectMayHaveApplied: true,
+                    failureCode: "provider_invalid_receipt").ConfigureAwait(false);
+                throw;
+            }
+            await leaseStore.RecordProviderAttemptOutcomeAsync(
+                attemptReservation.Attempt.AttemptId,
+                context.Fence,
+                JsonSerializer.SerializeToElement(receipt, JsonOptions),
+                effectMayHaveApplied: true,
+                failureCode: null,
+                CancellationToken.None).ConfigureAwait(false);
+        }
+        receipt = receipt.ValidateFor(request);
         await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
         var current = await RequireCurrentLeaseAsync(context.Fence, lease, cancellationToken).ConfigureAwait(false);
         _ = receipt.ValidateFor(new SandboxPartialReleaseRequest(context.Fence, current));
@@ -987,9 +1287,24 @@ public sealed class EnvironmentSandboxManager(
         await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
         _ = await RequireCurrentLeaseAsync(context.Fence, lease, cancellationToken).ConfigureAwait(false);
         var released = await leaseStore.CompletePartialReleaseAsync(
-            new SandboxPartialReleaseCompletionRequest(context.Fence, receipt),
-            cancellationToken).ConfigureAwait(false);
+            new SandboxPartialReleaseCompletionRequest(context.Fence, receipt)
+            {
+                ProviderAttemptId = attemptReservation.Attempt.AttemptId
+            },
+            CancellationToken.None).ConfigureAwait(false);
         return ToResult(released);
+
+        Task<SandboxProviderAttemptSnapshot> RecordPartialReleaseFailureAsync<T>(
+            T outcome,
+            bool effectMayHaveApplied,
+            string failureCode) =>
+            leaseStore.RecordProviderAttemptOutcomeAsync(
+                attemptReservation.Attempt.AttemptId,
+                context.Fence,
+                JsonSerializer.SerializeToElement(outcome, JsonOptions),
+                effectMayHaveApplied,
+                failureCode,
+                CancellationToken.None);
     }
 
     private async Task<SandboxLeaseSnapshot> RequireCurrentLeaseAsync(
@@ -1080,7 +1395,87 @@ public sealed class EnvironmentSandboxManager(
                 ?? throw new EnvironmentLifecycleException(
                     "sandbox_release_intent_missing",
                     "The retiring Sandbox lease is missing its durable release idempotency key.")).Validate();
-        var receipt = await sandboxProvider.ReleaseAsync(releaseRequest, cancellationToken).ConfigureAwait(false);
+        var attemptReservation = await leaseStore.BeginProviderAttemptAsync(
+            SandboxProviderAttemptRequest.ForRelease(lease, provisionedResource),
+            cancellationToken).ConfigureAwait(false);
+        if (attemptReservation.Attempt.State is not (
+                SandboxProviderAttemptState.InProgress or SandboxProviderAttemptState.ResultRecorded) ||
+            attemptReservation.Attempt.State == SandboxProviderAttemptState.InProgress &&
+                attemptReservation.Replayed)
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_unresolved",
+                "A prior Sandbox release attempt has no durable result; another release call was not started.",
+                SandboxProviderAttemptReceipt.From(attemptReservation.Attempt));
+
+        SandboxReleaseReceipt receipt;
+        if (attemptReservation.Replayed)
+        {
+            receipt = attemptReservation.Attempt.Outcome is { } savedOutcome
+                ? JsonSerializer.Deserialize<SandboxReleaseReceipt>(savedOutcome.GetRawText(), JsonOptions)
+                    ?? throw new InvalidOperationException("The saved Sandbox release outcome is empty.")
+                : throw new EnvironmentLifecycleException(
+                    "sandbox_provider_attempt_outcome_missing",
+                    "The recorded Sandbox release attempt has no receipt outcome.",
+                    SandboxProviderAttemptReceipt.From(attemptReservation.Attempt));
+        }
+        else
+        {
+            try
+            {
+                receipt = await sandboxProvider.ReleaseAsync(releaseRequest, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (SandboxProviderException exception)
+            {
+                await RecordReleaseFailureAsync(
+                    attemptReservation.Attempt.AttemptId,
+                    new { errorCode = exception.Code, effectMayHaveApplied = exception.EffectMayHaveApplied },
+                    exception.EffectMayHaveApplied,
+                    exception.Code).ConfigureAwait(false);
+                throw;
+            }
+            catch (OperationCanceledException)
+            {
+                await RecordReleaseFailureAsync(
+                    attemptReservation.Attempt.AttemptId,
+                    new { errorCode = "provider_cancelled", effectMayHaveApplied = true },
+                    effectMayHaveApplied: true,
+                    failureCode: "provider_cancelled").ConfigureAwait(false);
+                throw;
+            }
+            catch (Exception exception) when (
+                exception is IOException or HttpRequestException or TimeoutException or
+                    ArgumentException or InvalidOperationException or JsonException)
+            {
+                await RecordReleaseFailureAsync(
+                    attemptReservation.Attempt.AttemptId,
+                    new { errorCode = "provider_result_unknown", effectMayHaveApplied = true },
+                    effectMayHaveApplied: true,
+                    failureCode: "provider_result_unknown").ConfigureAwait(false);
+                throw;
+            }
+
+            try
+            {
+                receipt = receipt.ValidateFor(releaseRequest);
+            }
+            catch (ArgumentException)
+            {
+                await RecordReleaseFailureAsync(
+                    attemptReservation.Attempt.AttemptId,
+                    JsonSerializer.SerializeToElement(receipt, JsonOptions),
+                    effectMayHaveApplied: true,
+                    failureCode: "provider_invalid_receipt").ConfigureAwait(false);
+                throw;
+            }
+            await leaseStore.RecordProviderAttemptOutcomeAsync(
+                attemptReservation.Attempt.AttemptId,
+                lease.Fence,
+                JsonSerializer.SerializeToElement(receipt, JsonOptions),
+                effectMayHaveApplied: true,
+                failureCode: null,
+                CancellationToken.None).ConfigureAwait(false);
+        }
         receipt = receipt.ValidateFor(releaseRequest);
         var current = await leaseStore.GetCurrentAsync(context.Fence, cancellationToken).ConfigureAwait(false);
         if (current is null ||
@@ -1112,8 +1507,9 @@ public sealed class EnvironmentSandboxManager(
             context.Fence,
             lease.ProviderFencingGeneration,
             receipt,
-            cancellationToken,
-            CheckReleaseAuthorityAsync).ConfigureAwait(false);
+            CancellationToken.None,
+            CheckReleaseAuthorityAsync,
+            attemptReservation.Attempt.AttemptId).ConfigureAwait(false);
         return ToResult(released);
 
         async Task CheckReleaseAuthorityAsync(CancellationToken token)
@@ -1121,6 +1517,19 @@ public sealed class EnvironmentSandboxManager(
             await EnsureUnchangedAsync(caller, context, token).ConfigureAwait(false);
             await RequireSuspendReleaseAsync(caller, detachment.SuspendRelease, token).ConfigureAwait(false);
         }
+
+        Task<SandboxProviderAttemptSnapshot> RecordReleaseFailureAsync<T>(
+            Guid attemptId,
+            T outcome,
+            bool effectMayHaveApplied,
+            string failureCode) =>
+            leaseStore.RecordProviderAttemptOutcomeAsync(
+                attemptId,
+                lease.Fence,
+                JsonSerializer.SerializeToElement(outcome, JsonOptions),
+                effectMayHaveApplied,
+                failureCode,
+                CancellationToken.None);
     }
 
     private async Task<AuthorizedSandboxContext> AuthorizeAsync(
@@ -1729,6 +2138,29 @@ public sealed class EnvironmentSandboxManager(
             lease.CreatedAt ?? throw new EnvironmentLifecycleException(
                 "sandbox_lease_created_at_missing",
                 "The Sandbox lease has no persisted creation timestamp for startup budgets."));
+
+    private async Task<Guid> RequireProvisionAttemptIdAsync(
+        EnvironmentGenerationFence fence,
+        SandboxLeaseSnapshot lease,
+        CancellationToken cancellationToken)
+    {
+        var attempts = await leaseStore.GetProviderAttemptsAsync(
+            fence, lease.OperationId, cancellationToken).ConfigureAwait(false);
+        var candidates = attempts.Where(attempt =>
+                attempt.Request.EffectKind == SandboxProviderEffectKind.Provision &&
+                attempt.Request.ResourceGeneration == lease.ResourceGeneration &&
+                attempt.Request.Fence == lease.Fence &&
+                attempt.State is SandboxProviderAttemptState.InProgress or
+                    SandboxProviderAttemptState.ResultRecorded or
+                    SandboxProviderAttemptState.Unknown or
+                    SandboxProviderAttemptState.LegacyUnknown)
+            .ToArray();
+        if (candidates.Length != 1)
+            throw new EnvironmentLifecycleException(
+                "sandbox_provider_attempt_unknown",
+                "The recovered Sandbox resource does not have exactly one unresolved durable provision attempt.");
+        return candidates[0].AttemptId;
+    }
 
     private static string RequiredJsonString(JsonElement document, string name)
     {

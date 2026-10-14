@@ -155,7 +155,7 @@ test('Current source catalog preserves exact Core and Events versions and embedd
 
 test('Catalog inventory includes exact source functions, tables, and lock grants without setup-table grants', () => {
   const plan = buildP1PostgresPlan();
-  assert.equal(plan.services.flatMap(service => service.tables).length, 94);
+  assert.equal(plan.services.flatMap(service => service.tables).length, 95);
   assert.deepEqual(plan.services.map(service => service.functions.length), [4, 0, 4, 4, 17]);
   assert.equal(plan.services.flatMap(service => service.functions).length, 29);
   const projectSetupGuard = plan.services
@@ -169,6 +169,8 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
     service.tables.every(table => table.table !== 'project_setup_operations')));
   assert.deepEqual(plan.services.find(service => service.schema === 'environment').tables
     .find(table => table.table === 'runtime_bootstrap_profile_replacements').privileges, ['SELECT', 'INSERT']);
+  assert.deepEqual(plan.services.find(service => service.schema === 'environment').tables
+    .find(table => table.table === 'sandbox_provider_attempts').privileges, ['SELECT', 'INSERT', 'UPDATE']);
   assert.deepEqual(plan.services.flatMap(service =>
     service.tables.filter(table => table.lockColumn)
       .map(table => `${service.schema}.${table.table}.${table.lockColumn}`)), [
