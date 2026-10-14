@@ -196,7 +196,9 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
                 !string.IsNullOrEmpty(model.ProviderId) && model.ProviderId != expectedProviderId)
                 throw CreateEffectiveModelMismatch(model.ModelId, model.ProviderId);
 
-            var providerId = expectedProviderId ?? model.ProviderId;
+            string? providerId = expectedProviderId is not null && string.IsNullOrEmpty(model.ProviderId)
+                ? null
+                : model.ProviderId;
             var result = await _session.Rpc.Metadata.ContextInfoAsync(
                 0, 0, model.ModelId, providerId, cancellationToken).ConfigureAwait(false);
             var context = result?.ContextInfo;
