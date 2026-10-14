@@ -2770,8 +2770,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     request.RequestUri?.AbsolutePath !=
                     $"/api/projects/{project.ProjectId}/runs/{RunId}/selection")
                     return Task.FromResult(false);
+                // Each authority check reads the selection directly and again for the grant lookup.
                 return Task.FromResult(
-                    Interlocked.Increment(ref matchingSelectionRequests) == 2);
+                    Interlocked.Increment(ref matchingSelectionRequests) == 4);
             });
             sourceControlRequestBarrier.Release();
             await WaitForMergeBarrierAsync(
