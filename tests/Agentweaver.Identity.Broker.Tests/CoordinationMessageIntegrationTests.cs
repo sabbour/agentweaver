@@ -2733,14 +2733,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var (mergeStartedConflictIntentId, _) =
             await CreateApprovedMergeIntentAsync("source-control-merge-started-race");
         var mergeCountBeforeStartedRace = sourceControlGitHub.MergeRequestCount;
-        mergeStartedSelectionBarrier.Arm(async (request, token) =>
-        {
-            if (request.Method != HttpMethod.Get ||
-                request.RequestUri?.AbsolutePath !=
-                $"/api/projects/{project.ProjectId}/runs/{RunId}/selection")
-                return false;
-            return (await ReadMergeIntentStateAsync(mergeStartedConflictIntentId)).State == "merge_started";
-        });
+        sourceControlRequestBarrier.Arm((request, _) => Task.FromResult(
+            request.Method == HttpMethod.Get &&
+            request.RequestUri?.AbsolutePath == "/repos/octo/agentweaver/rules/branches/main"));
         var mergeStartedMerge = SendAsync(
             orchestrator,
             HttpMethod.Post,
@@ -2748,9 +2743,36 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             runToken,
             [TenantId]);
         var mergeStartedRoleRevoked = false;
+        async Task WaitForMergeBarrierAsync(Task barrier, string barrierName)
+        {
+            if (await Task.WhenAny(barrier, mergeStartedMerge).ConfigureAwait(false) == mergeStartedMerge)
+            {
+                using var earlyResponse = await mergeStartedMerge.ConfigureAwait(false);
+                var body = await earlyResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                Assert.Fail(
+                    $"Merge execute completed before the {barrierName} barrier: " +
+                    $"{(int)earlyResponse.StatusCode} {body}");
+            }
+            await barrier.WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+        }
+
         try
         {
-            await mergeStartedSelectionBarrier.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            await WaitForMergeBarrierAsync(
+                sourceControlRequestBarrier.WaitUntilPausedAsync(), "readiness");
+            var matchingSelectionRequests = 0;
+            mergeStartedSelectionBarrier.Arm((request, _) =>
+            {
+                if (request.Method != HttpMethod.Get ||
+                    request.RequestUri?.AbsolutePath !=
+                    $"/api/projects/{project.ProjectId}/runs/{RunId}/selection")
+                    return Task.FromResult(false);
+                return Task.FromResult(
+                    Interlocked.Increment(ref matchingSelectionRequests) == 2);
+            });
+            sourceControlRequestBarrier.Release();
+            await WaitForMergeBarrierAsync(
+                mergeStartedSelectionBarrier.WaitUntilPausedAsync(), "post-mark selection");
             Assert.Equal("merge_started", (await ReadMergeIntentStateAsync(mergeStartedConflictIntentId)).State);
             await RevokeRoleAsync(
                 projects.PrivilegedFixtureDataSource,
@@ -2764,6 +2786,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
         finally
         {
+            sourceControlRequestBarrier.Release();
             mergeStartedSelectionBarrier.Release();
             if (mergeStartedRoleRevoked)
                 runnerRole = await AssignRoleAsync(
