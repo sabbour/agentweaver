@@ -1512,6 +1512,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         services.AddSingleton<ISandboxProvider>(sandboxProvider);
         services.AddSingleton(networkOptions);
         services.AddSingleton<ICiliumPolicyResourceStore>(networkStore);
+        services.AddScoped<EnvironmentLifecycleManager>(_ => throw new NotSupportedException());
         services.AddScoped<CiliumEgressPolicyAdapter>();
         services.AddScoped<EnvironmentEgressManager>();
         services.AddScoped<EnvironmentSandboxManager>();

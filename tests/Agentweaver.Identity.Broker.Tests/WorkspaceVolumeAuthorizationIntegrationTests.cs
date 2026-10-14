@@ -1943,6 +1943,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             services.AddScoped<ISandboxLeaseStore, EnvironmentSandboxLeaseStore>();
                             services.AddScoped<IEnvironmentSandboxBuildTestCommandStore, EnvironmentSandboxBuildTestCommandStore>();
                             services.AddScoped<WorkspaceVolumeService>();
+                            services.AddScoped<EnvironmentLifecycleManager>(_ => throw new NotSupportedException());
                             services.AddScoped<EnvironmentEgressManager>();
                             services.AddScoped<CiliumEgressPolicyAdapter>();
                             services.AddScoped<EnvironmentSandboxManager>();

@@ -38,7 +38,7 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
         var resource = Resource(first.Lease);
         var completed = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
             store, first.Lease.OperationId, lifecycle.Fence, resource, true, default);
-        Assert.Equal(2, completed.LeaseRevision);
+        Assert.Equal(3, completed.LeaseRevision);
         Assert.Equal(SandboxLeaseState.Active, completed.State);
         var restarted = new EnvironmentSandboxLeaseStore(fixture.DataSource, TimeProvider.System);
         var current = await restarted.GetCurrentAsync(lifecycle.Fence, default);
@@ -139,7 +139,7 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
             Reader(projects, store).GetCurrentPlacementAsync(
                 Caller(owner), owner.ProjectId, owner.RunId, owner.EnvironmentId, default));
         Assert.Equal("sandbox_lease_stale", rejected.Code);
-        Assert.Equal(2, (await store.GetCurrentAsync(lifecycle.Fence, default))!.LeaseRevision);
+        Assert.Equal(3, (await store.GetCurrentAsync(lifecycle.Fence, default))!.LeaseRevision);
     }
 
     [Fact]
@@ -220,6 +220,7 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
     {
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddAuthorization();
+        builder.Services.AddScoped<EnvironmentLifecycleManager>(_ => throw new NotSupportedException());
         builder.Services.AddScoped<EnvironmentEgressManager>();
         builder.Services.AddScoped<EnvironmentWorkspaceVolumeManager>();
         builder.Services.AddScoped<EnvironmentSandboxManager>();
@@ -581,9 +582,11 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
             active.Fence, active.ResourceGeneration, active.ProviderFencingGeneration,
             SandboxRetirementReason.AuthorizedAbandon, "abandon",
             new("https://module-identity.test", "module-actor", 1), null, default);
-        await store.CompleteReleaseAsync(
-            retiring.OperationId, active.Fence, retiring.ProviderFencingGeneration,
-            new(active.ProvisionedResource!.Resource, "abandon", SandboxReleaseDisposition.Released), default);
+        await SandboxLeaseProviderAttemptTestSupport.CompleteReleaseAsync(
+            store,
+            retiring,
+            new(active.ProvisionedResource!.Resource, "abandon", SandboxReleaseDisposition.Released),
+            default);
     }
 
     private static CurrentCallerRequest Caller(EnvironmentOwnerIdentity owner) => new("isolated.module.token", owner.TenantId);
