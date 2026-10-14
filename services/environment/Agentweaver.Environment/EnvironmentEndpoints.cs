@@ -11,6 +11,88 @@ public static class EnvironmentEndpoints
 {
     public static IEndpointRouteBuilder MapEnvironmentEndpoints(this IEndpointRouteBuilder endpoints)
     {
+        var environments = endpoints.MapGroup("/api/projects/{projectId}/runs/{runId}/environments")
+            .RequireAuthorization();
+        environments.MapPost("", async (
+            string projectId,
+            string runId,
+            EnvironmentRegistrationApiRequest request,
+            HttpContext context,
+            EnvironmentLifecycleManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            try
+            {
+                var result = await manager.RegisterAsync(
+                    caller!, projectId, runId, request, cancellationToken).ConfigureAwait(false);
+                return Results.Json(
+                    result,
+                    statusCode: result.Replayed
+                        ? StatusCodes.Status200OK
+                        : StatusCodes.Status201Created);
+            }
+            catch (ProjectsConfigApiException exception)
+            {
+                return ToProjectAuthorizationResult(exception);
+            }
+            catch (EnvironmentLifecycleException exception)
+            {
+                return Results.Json(
+                    new { code = exception.Code, message = exception.Message },
+                    statusCode: exception.Code == "environment_unknown"
+                        ? StatusCodes.Status404NotFound
+                        : StatusCodes.Status409Conflict);
+            }
+            catch (ArgumentException exception)
+            {
+                return Results.BadRequest(new { code = "invalid_environment_request", message = exception.Message });
+            }
+            catch (HttpRequestException)
+            {
+                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            }
+        });
+        environments.MapPost("/{environmentId}/release", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            EnvironmentReleaseApiRequest request,
+            HttpContext context,
+            EnvironmentLifecycleManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            try
+            {
+                var result = await manager.ReleaseAsync(
+                    caller!, projectId, runId, environmentId, request, cancellationToken).ConfigureAwait(false);
+                return Results.Ok(result);
+            }
+            catch (ProjectsConfigApiException exception)
+            {
+                return ToProjectAuthorizationResult(exception);
+            }
+            catch (EnvironmentLifecycleException exception)
+            {
+                return Results.Json(
+                    new { code = exception.Code, message = exception.Message },
+                    statusCode: exception.Code == "environment_unknown"
+                        ? StatusCodes.Status404NotFound
+                        : StatusCodes.Status409Conflict);
+            }
+            catch (ArgumentException exception)
+            {
+                return Results.BadRequest(new { code = "invalid_environment_request", message = exception.Message });
+            }
+            catch (HttpRequestException)
+            {
+                return Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
+            }
+        });
+
         var group = endpoints.MapGroup("/api/network-egress").RequireAuthorization();
         group.MapPost("/apply", async (
             ApplyEnvironmentEgressRequest request,
@@ -505,6 +587,39 @@ public static class EnvironmentEndpoints
                     caller!, projectId, runId, environmentId, cancellationToken).ConfigureAwait(false);
                 return projection is null ? Results.NotFound() : Results.Ok(projection);
             }, cancellationToken).ConfigureAwait(false);
+        });
+        sandboxes.MapGet("/v1/operations/{operationId:guid}/provider-attempts", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            Guid operationId,
+            HttpContext context,
+            EnvironmentSandboxManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteSandboxApiAsync(async () =>
+                Results.Ok(await manager.GetProviderAttemptsAsync(
+                    caller!, projectId, runId, environmentId, operationId, cancellationToken)
+                    .ConfigureAwait(false)), cancellationToken).ConfigureAwait(false);
+        });
+        sandboxes.MapGet("/v1/late-resource-cleanups", async (
+            string projectId,
+            string runId,
+            string environmentId,
+            HttpContext context,
+            EnvironmentSandboxManager manager,
+            CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            if (!TryReadCaller(context, out var caller))
+                return Results.Unauthorized();
+            return await ExecuteSandboxApiAsync(async () =>
+                Results.Ok(await manager.GetLateResourceCleanupsAsync(
+                    caller!, projectId, runId, environmentId, cancellationToken)
+                    .ConfigureAwait(false)), cancellationToken).ConfigureAwait(false);
         });
         sandboxes.MapGet("/build-test/binding-preparation", async (
             string projectId,

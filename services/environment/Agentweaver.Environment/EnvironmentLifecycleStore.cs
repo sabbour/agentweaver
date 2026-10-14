@@ -7,9 +7,13 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Environment;
 
-public sealed class EnvironmentLifecycleException(string code, string message) : Exception(message)
+public sealed class EnvironmentLifecycleException(
+    string code,
+    string message,
+    SandboxProviderAttemptReceipt? providerAttempt = null) : Exception(message)
 {
     public string Code { get; } = code;
+    public SandboxProviderAttemptReceipt? ProviderAttempt { get; } = providerAttempt;
 }
 
 public sealed class EnvironmentLifecycleStore(
@@ -23,6 +27,8 @@ public sealed class EnvironmentLifecycleStore(
     private const string OwnerEffects = $"{Schema}.\"owner_effects\"";
     private const string WorkspaceVolumeCleanup = $"{Schema}.\"workspace_volume_cleanup\"";
     private const string SandboxLeases = $"{Schema}.\"sandbox_leases\"";
+    private const string SandboxProviderAttempts = $"{Schema}.\"sandbox_provider_attempts\"";
+    private const string SandboxLateResourceCleanups = $"{Schema}.\"sandbox_late_resource_cleanups\"";
 
     public async Task<EnvironmentLifecycleSnapshot?> GetAsync(
         EnvironmentOwnerIdentity owner,
@@ -2470,6 +2476,18 @@ public sealed class EnvironmentLifecycleStore(
                       AND run_id = @run_id AND environment_id = @environment_id
                       AND lease_state NOT IN ('Released', 'Failed')
                 )
+                OR EXISTS (
+                    SELECT 1 FROM {SandboxProviderAttempts}
+                    WHERE tenant_id = @tenant_id AND project_id = @project_id
+                      AND run_id = @run_id AND environment_id = @environment_id
+                      AND attempt_state IN ('InProgress', 'ResultRecorded', 'Unknown', 'LegacyUnknown')
+                )
+                OR EXISTS (
+                    SELECT 1 FROM {SandboxLateResourceCleanups}
+                    WHERE tenant_id = @tenant_id AND project_id = @project_id
+                      AND run_id = @run_id AND environment_id = @environment_id
+                      AND release_receipt_json IS NULL
+                )
             """, connection, transaction);
         AddOwnerParameters(command, owner);
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true)
@@ -2490,6 +2508,18 @@ public sealed class EnvironmentLifecycleStore(
                 WHERE tenant_id = @tenant_id AND project_id = @project_id
                  AND run_id = @run_id AND environment_id = @environment_id
                  AND lease_state NOT IN ('Released', 'Failed')
+            )
+            OR EXISTS (
+                SELECT 1 FROM {SandboxProviderAttempts}
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                  AND run_id = @run_id AND environment_id = @environment_id
+                  AND attempt_state IN ('InProgress', 'ResultRecorded', 'Unknown', 'LegacyUnknown')
+            )
+            OR EXISTS (
+                SELECT 1 FROM {SandboxLateResourceCleanups}
+                WHERE tenant_id = @tenant_id AND project_id = @project_id
+                  AND run_id = @run_id AND environment_id = @environment_id
+                  AND release_receipt_json IS NULL
             )
             """, connection, transaction);
         AddOwnerParameters(command, owner);

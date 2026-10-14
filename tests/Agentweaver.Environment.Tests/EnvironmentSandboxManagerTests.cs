@@ -211,6 +211,215 @@ public sealed class EnvironmentSandboxManagerTests
         Assert.Equal(0, provider.ProvisionCalls);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProviderAttemptReadRechecksAuthorityAfterStoreRead(bool changeAuthorityDuringRead)
+    {
+        var (manager, projects, leaseStore, fence, operationId) = CreateAuthorityReadManager();
+        if (changeAuthorityDuringRead)
+            leaseStore.DuringProviderAttemptRead = () => projects.ChangeMembershipRevision();
+
+        if (changeAuthorityDuringRead)
+        {
+            var exception = await Assert.ThrowsAsync<ProjectsConfigApiException>(() =>
+                manager.GetProviderAttemptsAsync(
+                    Caller(), "project-a", "run-a", "environment-a", operationId, CancellationToken.None));
+
+            Assert.Equal("authorization_changed", exception.Code);
+        }
+        else
+        {
+            var response = await manager.GetProviderAttemptsAsync(
+                Caller(), "project-a", "run-a", "environment-a", operationId, CancellationToken.None);
+
+            Assert.Equal(1, response.ContractVersion);
+            Assert.Equal(fence, response.CurrentFence);
+            Assert.Equal(operationId, response.OperationId);
+            Assert.Empty(response.Attempts);
+        }
+
+        Assert.Equal(1, leaseStore.ProviderAttemptReadCalls);
+        Assert.Equal(5, projects.AuthorizationReads);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task LateCleanupReadRechecksAuthorityAfterStoreRead(bool changeAuthorityDuringRead)
+    {
+        var (manager, projects, leaseStore, fence, _) = CreateAuthorityReadManager();
+        if (changeAuthorityDuringRead)
+            leaseStore.DuringLateCleanupRead = () => projects.ChangeMembershipRevision();
+
+        if (changeAuthorityDuringRead)
+        {
+            var exception = await Assert.ThrowsAsync<ProjectsConfigApiException>(() =>
+                manager.GetLateResourceCleanupsAsync(
+                    Caller(), "project-a", "run-a", "environment-a", CancellationToken.None));
+
+            Assert.Equal("authorization_changed", exception.Code);
+        }
+        else
+        {
+            var response = await manager.GetLateResourceCleanupsAsync(
+                Caller(), "project-a", "run-a", "environment-a", CancellationToken.None);
+
+            Assert.Equal(1, response.ContractVersion);
+            Assert.Equal(fence, response.CurrentFence);
+            Assert.Empty(response.Items);
+            Assert.False(response.HasMore);
+        }
+
+        Assert.Equal(1, leaseStore.LateCleanupReadCalls);
+        Assert.Equal(5, projects.AuthorizationReads);
+    }
+
+    [Fact]
+    public async Task LateCleanupFromOlderLifecycleGenerationDoesNotReadOrDetachReplacementWorkspace()
+    {
+        var (manager, _, leaseStore, lifecycleStore, provider, currentFence, sourceFence) =
+            CreateLateCleanupManager();
+
+        var result = await manager.ReconcileAsync(
+            Caller(), "project-a", "run-a", "environment-a", null, CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal(sourceFence, leaseStore.ProviderAttemptRequest!.Fence);
+        Assert.Equal(currentFence, leaseStore.ProviderAttemptAuthorizationFence);
+        Assert.Equal(SandboxProviderEffectKind.LateResourceRelease,
+            leaseStore.ProviderAttemptRequest.EffectKind);
+        Assert.Equal(1, provider.ReleaseCalls);
+        Assert.Equal(1, leaseStore.CompletedCleanupCalls);
+        Assert.Equal(0, lifecycleStore.WorkspaceReadCalls);
+    }
+
+    [Fact]
+    public async Task LateCleanupRechecksAuthorityAfterProviderAttemptReservation()
+    {
+        var (manager, projects, leaseStore, _, provider, _, _) = CreateLateCleanupManager();
+        leaseStore.DuringProviderAttemptReservation = projects.ChangeMembershipRevision;
+
+        var exception = await Assert.ThrowsAsync<ProjectsConfigApiException>(() =>
+            manager.ReconcileAsync(
+                Caller(), "project-a", "run-a", "environment-a", null, CancellationToken.None));
+
+        Assert.Equal("authorization_changed", exception.Code);
+        Assert.Equal(0, provider.ReleaseCalls);
+        Assert.Equal(SandboxProviderAttemptState.FailedNoEffect, leaseStore.RecordedAttempt!.State);
+        Assert.Equal("late_cleanup_precondition_failed", leaseStore.RecordedAttempt.FailureCode);
+        Assert.False(leaseStore.RecordedEffectMayHaveApplied);
+        Assert.Equal(0, leaseStore.CompletedCleanupCalls);
+    }
+
+    private static (
+        EnvironmentSandboxManager Manager,
+        MutableProjectsConfigClient Projects,
+        LateCleanupLeaseStore LeaseStore,
+        WorkspaceAccessTrackingLifecycleStore LifecycleStore,
+        RecordingSandboxProvider Provider,
+        EnvironmentGenerationFence CurrentFence,
+        EnvironmentGenerationFence SourceFence) CreateLateCleanupManager()
+    {
+        var owner = new EnvironmentOwnerIdentity("tenant-a", "project-a", "run-a", "environment-a");
+        var currentFence = new EnvironmentGenerationFence(owner, 2);
+        var sourceFence = new EnvironmentGenerationFence(owner, 1);
+        var now = DateTimeOffset.Parse("2026-10-06T12:00:00Z");
+        var sourceLease = CreateCurrentLease(sourceFence, now, "old-sandbox") with
+        {
+            State = SandboxLeaseState.Released,
+            IsCurrent = false,
+            LeaseRevision = 2,
+            LeaseExpiresAt = null
+        };
+        var cleanup = new SandboxLateResourceCleanupClaim(
+            sourceLease,
+            sourceLease.ProvisionedResource!,
+            "late-cleanup-1",
+            Guid.NewGuid(),
+            now.AddMinutes(1))
+        {
+            ResourceFingerprint = SandboxProviderAttemptRequest.Fingerprint("late-cleanup")
+        }.Validate();
+        var projects = new MutableProjectsConfigClient(
+            CreateReadAuthorization(),
+            EnvironmentEgressManagerTests.Selection());
+        var lifecycleStore = new WorkspaceAccessTrackingLifecycleStore(currentFence);
+        var leaseStore = new LateCleanupLeaseStore(currentFence, cleanup);
+        var provider = new RecordingSandboxProvider();
+        var egressManager = new EnvironmentEgressManager(
+            projects,
+            cilium: null!,
+            providerOptions: null!,
+            lifecycleStore: lifecycleStore);
+        var manager = new EnvironmentSandboxManager(
+            projects,
+            lifecycleStore,
+            leaseStore,
+            provider,
+            sandboxOptions: null!,
+            kubernetesClient: null!,
+            ciliumOptions: null!,
+            egressManager: egressManager);
+
+        return (manager, projects, leaseStore, lifecycleStore, provider, currentFence, sourceFence);
+    }
+
+    private static (
+        EnvironmentSandboxManager Manager,
+        MutableProjectsConfigClient Projects,
+        AuthorityReadLeaseStore LeaseStore,
+        EnvironmentGenerationFence Fence,
+        Guid OperationId) CreateAuthorityReadManager()
+    {
+        var owner = new EnvironmentOwnerIdentity("tenant-a", "project-a", "run-a", "environment-a");
+        var fence = new EnvironmentGenerationFence(owner, 1);
+        var projects = new MutableProjectsConfigClient(
+            CreateReadAuthorization(),
+            EnvironmentEgressManagerTests.Selection());
+        var lifecycleStore = new EnvironmentEgressManagerTests.FakeEnvironmentLifecycleStore(fence);
+        var leaseStore = new AuthorityReadLeaseStore(
+            CreateCurrentLease(fence, DateTimeOffset.Parse("2026-10-06T12:00:00Z"), "sandbox-uid"));
+        var egressManager = new EnvironmentEgressManager(
+            projects,
+            cilium: null!,
+            providerOptions: null!,
+            lifecycleStore: lifecycleStore);
+        var manager = new EnvironmentSandboxManager(
+            projects,
+            lifecycleStore,
+            leaseStore,
+            sandboxProvider: null!,
+            sandboxOptions: null!,
+            kubernetesClient: null!,
+            ciliumOptions: null!,
+            egressManager: egressManager);
+
+        return (manager, projects, leaseStore, fence, Guid.NewGuid());
+    }
+
+    private static ProjectAuthorizationContextResponse CreateReadAuthorization() =>
+        new(
+            ProjectAuthorizationContextContract.CurrentVersion,
+            "https://projects.example",
+            "actor-a",
+            "tenant-a",
+            3,
+            "project-a",
+            "run-a",
+            [
+                new EffectiveProjectAuthorization(
+                    ProjectAuthorityResourceType.Project,
+                    "project-a",
+                    [
+                        new(ProjectAuthorizationPermission.WriteProjects, 1),
+                        new(ProjectAuthorizationPermission.ReadProjects, 1),
+                        new(ProjectAuthorizationPermission.ReadRunSelection, 1)
+                    ])
+            ]);
+
+    private static CurrentCallerRequest Caller() => new("validated.jwt.token", "tenant-a");
+
     private static SandboxLeaseSnapshot CreateCurrentLease(
         EnvironmentGenerationFence fence,
         DateTimeOffset now,
@@ -262,6 +471,185 @@ public sealed class EnvironmentSandboxManagerTests
         };
     }
 
+    private sealed class MutableProjectsConfigClient(
+        ProjectAuthorizationContextResponse authorization,
+        EffectiveNetworkPolicySelection selection) : IProjectsConfigClient
+    {
+        public ProjectAuthorizationContextResponse CurrentAuthorization { get; private set; } = authorization;
+        public int AuthorizationReads { get; private set; }
+
+        public void ChangeMembershipRevision() =>
+            CurrentAuthorization = CurrentAuthorization with
+            {
+                MembershipRevision = CurrentAuthorization.MembershipRevision + 1
+            };
+
+        public Task<ProjectAuthorizationContextResponse> GetAuthorizationContextAsync(
+            CurrentCallerRequest caller,
+            CancellationToken cancellationToken)
+        {
+            AuthorizationReads++;
+            return Task.FromResult(CurrentAuthorization);
+        }
+
+        public Task<EffectiveNetworkPolicySelection> GetRunSelectionAsync(
+            CurrentCallerRequest caller,
+            string projectId,
+            string runId,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(selection);
+    }
+
+    private sealed class AuthorityReadLeaseStore : RuntimeResumeBootstrapTests.SourceLeases
+    {
+        private readonly EnvironmentGenerationFence _fence;
+
+        public AuthorityReadLeaseStore(SandboxLeaseSnapshot lease) : base(lease) =>
+            _fence = lease.Fence;
+
+        public int ProviderAttemptReadCalls { get; private set; }
+        public int LateCleanupReadCalls { get; private set; }
+        public Action? DuringProviderAttemptRead { get; set; }
+        public Action? DuringLateCleanupRead { get; set; }
+
+        public override Task<ImmutableArray<SandboxProviderAttemptSnapshot>> GetProviderAttemptsAsync(
+            EnvironmentGenerationFence currentFence,
+            Guid operationId,
+            CancellationToken cancellationToken)
+        {
+            Assert.Equal(_fence, currentFence);
+            Assert.NotEqual(Guid.Empty, operationId);
+            ProviderAttemptReadCalls++;
+            DuringProviderAttemptRead?.Invoke();
+            return Task.FromResult(ImmutableArray<SandboxProviderAttemptSnapshot>.Empty);
+        }
+
+        public override Task<(ImmutableArray<SandboxLateResourceCleanupRecord> Items, bool HasMore)>
+            GetLateResourceCleanupRecordsAsync(
+                EnvironmentGenerationFence currentFence,
+                CancellationToken cancellationToken)
+        {
+            Assert.Equal(_fence, currentFence);
+            LateCleanupReadCalls++;
+            DuringLateCleanupRead?.Invoke();
+            return Task.FromResult((ImmutableArray<SandboxLateResourceCleanupRecord>.Empty, false));
+        }
+    }
+
+    private sealed class LateCleanupLeaseStore(
+        EnvironmentGenerationFence currentFence,
+        SandboxLateResourceCleanupClaim cleanup) : RuntimeResumeBootstrapTests.SourceLeases(cleanup.Lease)
+    {
+        private SandboxProviderAttemptSnapshot? _attempt;
+
+        public SandboxProviderAttemptRequest? ProviderAttemptRequest { get; private set; }
+        public EnvironmentGenerationFence? ProviderAttemptAuthorizationFence { get; private set; }
+        public Action? DuringProviderAttemptReservation { get; set; }
+        public SandboxProviderAttemptSnapshot? RecordedAttempt { get; private set; }
+        public bool RecordedEffectMayHaveApplied { get; private set; }
+        public int CompletedCleanupCalls { get; private set; }
+
+        public override Task<SandboxLeaseSnapshot?> GetCurrentAsync(
+            EnvironmentGenerationFence fence,
+            CancellationToken cancellationToken)
+        {
+            Assert.Equal(currentFence, fence);
+            return Task.FromResult<SandboxLeaseSnapshot?>(null);
+        }
+
+        public override Task<SandboxLateResourceCleanupClaim?> ClaimNextLateResourceCleanupAsync(
+            EnvironmentGenerationFence fence,
+            CancellationToken cancellationToken)
+        {
+            Assert.Equal(currentFence, fence);
+            return Task.FromResult<SandboxLateResourceCleanupClaim?>(cleanup);
+        }
+
+        public override Task<SandboxProviderAttemptReservation> BeginProviderAttemptAsync(
+            SandboxProviderAttemptRequest request,
+            EnvironmentGenerationFence authorizationFence,
+            CancellationToken cancellationToken)
+        {
+            Assert.Equal(currentFence, authorizationFence);
+            Assert.Equal(cleanup.Lease.Fence, request.Fence);
+            ProviderAttemptRequest = request;
+            ProviderAttemptAuthorizationFence = authorizationFence;
+            DuringProviderAttemptReservation?.Invoke();
+            _attempt = new SandboxProviderAttemptSnapshot(
+                Guid.NewGuid(),
+                request,
+                SandboxProviderAttemptState.InProgress,
+                Outcome: null,
+                FailureCode: null,
+                DateTimeOffset.UtcNow,
+                OutcomeRecordedAt: null,
+                ResolvedAt: null).Validate();
+            return Task.FromResult(new SandboxProviderAttemptReservation(_attempt, Replayed: false));
+        }
+
+        public override Task<SandboxProviderAttemptSnapshot> RecordProviderAttemptOutcomeAsync(
+            Guid attemptId,
+            EnvironmentGenerationFence fence,
+            JsonElement outcome,
+            bool effectMayHaveApplied,
+            string? failureCode,
+            CancellationToken cancellationToken)
+        {
+            Assert.Equal(cleanup.Lease.Fence, fence);
+            Assert.Equal(_attempt!.AttemptId, attemptId);
+            RecordedEffectMayHaveApplied = effectMayHaveApplied;
+            var recordedAt = DateTimeOffset.UtcNow;
+            RecordedAttempt = _attempt with
+            {
+                State = effectMayHaveApplied
+                    ? SandboxProviderAttemptState.ResultRecorded
+                    : SandboxProviderAttemptState.FailedNoEffect,
+                Outcome = outcome.Clone(),
+                FailureCode = failureCode,
+                OutcomeRecordedAt = recordedAt,
+                ResolvedAt = effectMayHaveApplied ? null : recordedAt
+            };
+            _attempt = RecordedAttempt.Validate();
+            return Task.FromResult(_attempt);
+        }
+
+        public override Task CompleteLateResourceCleanupAsync(
+            EnvironmentGenerationFence authorizationFence,
+            SandboxLateResourceCleanupClaim claim,
+            SandboxReleaseReceipt receipt,
+            CancellationToken cancellationToken,
+            Guid? providerAttemptId = null)
+        {
+            Assert.Equal(currentFence, authorizationFence);
+            Assert.Equal(cleanup, claim);
+            Assert.Equal(_attempt!.AttemptId, providerAttemptId);
+            Assert.Equal(SandboxProviderAttemptState.ResultRecorded, _attempt.State);
+            Assert.Equal(cleanup.ProvisionedResource.Resource, receipt.Resource);
+            Assert.Equal(cleanup.IdempotencyKey, receipt.IdempotencyKey);
+            CompletedCleanupCalls++;
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class WorkspaceAccessTrackingLifecycleStore : EnvironmentEgressManagerTests.FakeEnvironmentLifecycleStore
+    {
+        public WorkspaceAccessTrackingLifecycleStore(EnvironmentGenerationFence currentFence)
+            : base(currentFence)
+        {
+        }
+
+        public int WorkspaceReadCalls { get; private set; }
+
+        public override Task<EnvironmentWorkspaceVolumeSnapshot?> GetWorkspaceVolumeAsync(
+            EnvironmentGenerationFence environmentFence,
+            string volumeId,
+            CancellationToken cancellationToken)
+        {
+            WorkspaceReadCalls++;
+            return Task.FromResult<EnvironmentWorkspaceVolumeSnapshot?>(null);
+        }
+    }
+
     private sealed class FakeProjectsConfigClient : IProjectsConfigClient
     {
         private static readonly ProjectAuthorizationContextResponse Context = new(
@@ -311,6 +699,7 @@ public sealed class EnvironmentSandboxManagerTests
     private sealed class RecordingSandboxProvider : ISandboxProvider
     {
         public int ProvisionCalls { get; private set; }
+        public int ReleaseCalls { get; private set; }
 
         public Task<SandboxProvisionedResource> ProvisionAsync(
             SandboxProvisionRequest request,
@@ -332,8 +721,14 @@ public sealed class EnvironmentSandboxManagerTests
 
         public Task<SandboxReleaseReceipt> ReleaseAsync(
             SandboxReleaseRequest request,
-            CancellationToken cancellationToken = default) =>
-            throw new InvalidOperationException("Release is not part of an unauthorized provision.");
+            CancellationToken cancellationToken = default)
+        {
+            ReleaseCalls++;
+            return Task.FromResult(new SandboxReleaseReceipt(
+                request.Resource,
+                request.IdempotencyKey,
+                SandboxReleaseDisposition.Released));
+        }
 
         public Task<SandboxPartialReleaseReceipt> ReleasePartialAsync(
             SandboxPartialReleaseRequest request,

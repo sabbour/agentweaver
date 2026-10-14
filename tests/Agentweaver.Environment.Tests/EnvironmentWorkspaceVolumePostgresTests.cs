@@ -42,8 +42,8 @@ public sealed class EnvironmentWorkspaceVolumePostgresTests(EnvironmentPostgresF
             ImmutableHashSet.Create(SandboxCapabilities.VmIsolation), [],
             new(intent.ProviderId, intent.AdapterVersion, intent.OptionsSchemaVersion, intent.OptionsRevision,
                 intent.OptionsSnapshot, JsonSerializer.SerializeToElement(new { claim = planned.ResourceId })));
-        var expectedLease = await leases.CompleteProvisionAsync(
-            reservation.Lease.OperationId, fence, sandbox, true, timeout.Token);
+        var expectedLease = await SandboxLeaseProviderAttemptTestSupport.CompleteProvisionAsync(
+            leases, reservation.Lease.OperationId, fence, sandbox, true, timeout.Token);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var restarted = new EnvironmentSandboxLeaseStore(fixture.DataSource, TimeProvider.System);

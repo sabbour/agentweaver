@@ -7,9 +7,9 @@ tested.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'" alt="Environment verifies current Projects authority, the exact Workspace PVC generation, and Cilium policy generation before dispatch. It records an owner-fenced lease and immutable provider request, then provisions and observes the exact agent-sandbox resources. ReadyForDispatch requires the same verified network generation and actual Pod, PVC, and isolation evidence. A differing provider result that arrives after release is stored separately and reclaimed by fenced reconciliation without changing terminal lease evidence. Workspace retention is unchanged." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'" alt="Environment rechecks trusted Projects authority and selection around owner-fenced lifecycle changes. It records each provider attempt before an external effect and saves its exact outcome under the owner lock. Unknown or unresolved calls block release and generation advance. Late cleanup uses the active owner fence for authorization and keeps the saved source fence for provider identity; older-generation cleanup does not read or change the current Workspace." />
   </a>
-  <figcaption>Environment Sandbox lease and recovery sequence. A ready lease requires exact Workspace and network observations; retirement releases Sandbox placement only, not the Environment or its Workspace data. Late differing provider results use a separate durable cleanup record.</figcaption>
+  <figcaption>Environment lifecycle and Sandbox provider-call recovery. A ready lease requires exact Workspace and network observations; retirement releases Sandbox placement only, not the Environment or its Workspace data. Every provider call has a durable attempt. Late cleanup uses the active owner fence for authorization and retains its saved source fence for provider identity.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.drawio'">Open editable draw.io source</a></p>
 
@@ -31,6 +31,14 @@ lease store uses the Environment owner's advisory lock and compare-and-swap
 checks, and stores the immutable run selection, provider/options snapshot,
 idempotency key, and provider recovery request before provider dispatch.
 
+Each external provider effect also has its own durable attempt, tied to the
+exact owner, lifecycle/resource/provider fences, and request fingerprint. The
+attempt is written before the call. Its exact result is recorded before the
+lease or cleanup result is committed. An unresolved, unknown, or legacy
+attempt blocks release and lifecycle generation advance; timeout, cancellation,
+client close, an empty provider list, or a terminal lease is not proof that an
+external call has stopped or had no effect.
+
 The store admits one current Sandbox lease per Environment. A lease in
 `Provisioning`, `Active`, `Releasing`, or `ReconciliationRequired` consumes that
 slot. The lease prevents duplicate provisioning for one owner; it does not enforce a
@@ -41,10 +49,16 @@ stored after release.
 A different valid provider resource returned after a lease is terminal is
 stored in a separate cleanup record. The original terminal state, resource, and
 partial-release receipt remain unchanged. Reconciliation can discover pending
-cleanup under current owner authorization across lifecycle generations. It uses
-the original provider fence and binding for the exact release. A durable,
-expiring claim prevents concurrent reconcilers from racing the same delete;
-the validated release receipt is saved with a current-fence compare-and-swap.
+cleanup under the active owner fence across lifecycle generations. The current
+fence authorizes the cleanup attempt; the saved source fence and binding remain
+the provider request and receipt identity. A durable, expiring claim prevents
+concurrent reconcilers from racing the same delete; the validated release
+receipt is saved with a current-fence compare-and-swap. Reconciliation detaches
+the matching Workspace attachment only after that receipt is durable when the
+source and current lifecycle fences match. For an older source generation, it
+does not read or change the current Workspace. If there is no current lease,
+the reconcile route returns the terminal lease result for the late resource it
+processed.
 
 The Sandbox selection must contain exactly one exclusive candidate. The
 configured provider ID, adapter version, options schema, options revision,
@@ -54,6 +68,24 @@ or incompatible. The provider itself advertises VM isolation and PVC attachment;
 Environment separately verifies the selected Cilium policy generation.
 
 ## Authorization and API
+
+Environment lifecycle registration and release use separate owner routes.
+Registration accepts only `idempotencyKey`; the tenant and actor come from the
+fresh Projects context, and the exact immutable run selection is resolved and
+rechecked at the owner-store commit for both a first write and replay. The
+Environment ID is a stable hash of the canonical tenant, project, run, and
+idempotency tuple. The first durable lifecycle generation is registered from
+expected generation zero. Release accepts only a positive
+`expectedLifecycleGeneration` and `idempotencyKey`, and always targets
+`Released`; callers cannot supply provider resources, receipts, or a different
+target state. Its final commit rechecks authority and selection and is blocked
+by unresolved provider attempts or pending late cleanup.
+
+`GET .../lifecycle` requires fresh `ReadProjects` authority and rechecks it
+after the durable read. The provider-attempt and late-cleanup reads require a
+current authenticated caller with run-selection authority; each also
+rechecks authority after its store read. These read routes do not invoke a
+provider effect.
 
 All Sandbox routes require an authenticated caller and fresh Projects
 authority. Provision, inspect, abandon, and reconcile require target-project
@@ -68,12 +100,17 @@ continues to enforce the configured Environment audience for both routes.
 
 | Route | Operation |
 | --- | --- |
+| `POST /api/projects/{projectId}/runs/{runId}/environments` | Register the exact Environment owner from trusted Projects context; body contains only `idempotencyKey`. |
+| `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/release` | Release the exact owner using `expectedLifecycleGeneration` and `idempotencyKey`; provider evidence is read from durable owner state. |
+| `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/lifecycle` | Read the durable lifecycle snapshot under fresh `ReadProjects` authority. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/provision` | Validate the exact Workspace generation and Cilium policy generation, reserve an owner lease, then provision the selected adapter. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox?networkPolicyGeneration={generation}` | Inspect the current lease. It reports `ReadyForDispatch` only after fresh Cilium verification and exact provider observation. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/placement` | Return the versioned owner-local projection of the exact current, active, unexpired lease and its placement references. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/internal/placement` | Return the same projection to a run-bound caller with exact project/run bindings and `ReadRunSelection`; no run selection is fetched and no provider effect occurs. |
+| `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/operations/{operationId}/provider-attempts` | Read the exact operation's durable provider attempts, including unresolved and unknown outcomes. |
+| `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/late-resource-cleanups` | Read retained late-resource cleanup records and their exact attempt, claim, and receipt state. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/abandon` | Explicitly abandon one current resource generation and provider fence. The request is not itself proof of ownership; fresh Projects authorization and the durable owner CAS are required. |
-| `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/reconcile` | Recover an interrupted operation by its recorded owner, operation ID, resource generation, and provider fence. It also claims and releases at most one pending late resource. A network-policy generation can be supplied to verify readiness. |
+| `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/reconcile` | Recover an interrupted operation by its recorded owner, operation ID, resource generation, and provider fence. It also claims and releases at most one pending late resource under the active owner fence, using the saved source fence for provider identity. It detaches the matching Workspace only when the source and current lifecycle fences match, and returns its terminal lease result when no current lease remains. A network-policy generation can be supplied to verify readiness. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/binding-preparation?sessionId={sessionId}&executionProfileReference={profile}` | Validate the current Sandbox profile binding for a session without starting a command. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands` | Resolve the accepted Core checkpoint, reserve its immutable command intent, and execute the stable BuildTest operation. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands/{operationId}` | Read the exact persisted operation under the current owner and Sandbox binding. |
@@ -412,12 +449,14 @@ An uncertain or failed lookup is never interpreted as absence.
 If a different valid provider resource arrives after release, Environment
 records that exact result in the late-resource cleanup table instead of
 overwriting the terminal lease. Reconciliation discovers it under the current
-owner authorization, claims one item at a time, and releases it with the
-original provider binding and fence. Claims expire for recovery after a
-reconciler stops; receipt persistence verifies the current lifecycle fence,
-claim token, and unexpired persisted claim atomically. A matching duplicate
-receipt remains idempotent after completion. Provider failures remain visible
-and leave the cleanup available for retry.
+owner authorization, claims one item at a time, and records a durable release
+attempt before calling the provider with the original binding and fence.
+Claims expire so another reconciler can recover the work, but expiry does not
+prove the original provider call stopped. The original attempt's exact receipt
+may be accepted after expiry only while its claim token remains current; a
+newer claim supersedes it. Receipt persistence and attempt resolution happen
+under the owner lock. Matching duplicates remain idempotent after completion.
+Provider failures stay visible and leave cleanup available for retry.
 
 ## BuildTest command and output collection
 
