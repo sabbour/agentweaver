@@ -116,6 +116,7 @@ if (identityOptions.GitHubRepoApp is { } githubRepoAppOptions)
 }
 foreach (var client in identityOptions.Clients)
     Validator.ValidateObject(client, new ValidationContext(client), validateAllProperties: true);
+BrokerRunBindingAuthority.ValidateTlsConfiguration(identityOptions);
 foreach (var uri in new[] { identityOptions.Issuer, identityOptions.ExternalProvider.Authority })
     if (!Uri.TryCreate(uri, UriKind.Absolute, out var parsed) || parsed.Scheme != Uri.UriSchemeHttps)
         throw new InvalidOperationException("Identity issuer and external authority must be absolute HTTPS URIs.");
@@ -329,6 +330,21 @@ if (builder.AddRemoteMcpCredentialUseTls())
 // PFX; there is no "development certificate" escape hatch in this host.
 var signingCertificate = X509CertificateLoader.LoadPkcs12FromFile(
     identityOptions.Signing.PfxPath, identityOptions.Signing.PfxPassword, X509KeyStorageFlags.EphemeralKeySet);
+builder.Services.AddSingleton(signingCertificate);
+if (identityOptions.RunBinding is not null)
+    builder.Services.AddSingleton<BrokerRunBindingTlsIdentity>(
+        _ => BrokerRunBindingAuthority.LoadTlsConfiguration(identityOptions)!);
+builder.Services.AddHttpClient(BrokerRunBindingAuthority.HttpClientName, client =>
+        client.Timeout = TimeSpan.FromSeconds(15))
+    .ConfigurePrimaryHttpMessageHandler(services =>
+        services.GetService<BrokerRunBindingTlsIdentity>()?.CreateHandler() ??
+        RuntimeOwnerHttpTransport.CreateHandler());
+builder.Services.AddScoped(provider => new BrokerRunBindingAuthority(
+    identityOptions,
+    provider.GetRequiredService<X509Certificate2>(),
+    provider.GetRequiredService<IHttpClientFactory>()
+        .CreateClient(BrokerRunBindingAuthority.HttpClientName),
+    provider.GetRequiredService<TimeProvider>()));
 builder.Services.AddDataProtection()
     .SetApplicationName("Agentweaver.Identity.Broker")
     .PersistKeysToFileSystem(new DirectoryInfo(identityOptions.DataProtectionKeyPath))
@@ -457,6 +473,8 @@ builder.Services.AddCors(options => options.AddPolicy(
     }));
 
 var app = builder.Build();
+if (identityOptions.RunBinding is not null)
+    _ = app.Services.GetRequiredService<BrokerRunBindingTlsIdentity>();
 
 using (var scope = app.Services.CreateScope())
 {

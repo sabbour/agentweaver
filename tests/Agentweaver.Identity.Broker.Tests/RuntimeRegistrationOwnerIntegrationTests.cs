@@ -293,10 +293,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 settings["IdentityBroker__RuntimeBootstrap__BootstrapLifetime"] = "00:01:00";
                 settings["IdentityBroker__RuntimeBootstrap__SourceLifetime"] =
                     sourceLoss == "sdk-preparation-expiry" ? "00:03:00" : "00:02:00";
+                ConfigureRunBindingSettings(settings);
                 copilotConnection.ConfigureSettings(settings);
             },
             configureServices: services =>
             {
+                ConfigureRunBindingTlsIdentity(services);
                 copilotConnection.ConfigureServices(services, projects.CreateHandler);
                 if (byokSecrets is not null)
                 {

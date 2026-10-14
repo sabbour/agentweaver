@@ -189,10 +189,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             foreignProject.ProjectId,
             ProjectAuthorityRole.Owner);
 
-        var runnerBootstrapToken = await IssueTokenAsync(
-            "projects.bootstrap", [TenantId], "workspace-volume-selection-runner", null, null, ["orchestrator"]);
+        var selectionToken = await IssueTokenAsync(
+            "projects.orchestrator", [TenantId], "workspace-volume-selection-runner", null, null, ["orchestrator"]);
         var runnerSubject = SingleClaim(
-            new JwtSecurityTokenHandler().ReadJwtToken(runnerBootstrapToken).Claims, "sub");
+            new JwtSecurityTokenHandler().ReadJwtToken(selectionToken).Claims, "sub");
         var runnerMembership = await AddMembershipAsync(
             projects.PrivilegedFixtureDataSource, runnerSubject, TenantId);
         var runSelectionAssignment = await AssignRoleAsync(
@@ -207,20 +207,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ProjectAuthorityResourceType.Platform,
             ProjectAuthorizationOwner.PlatformResourceId,
             ProjectAuthorityRole.PlatformAdmin);
-        await CreateRunBindingGrantAsync(runnerSubject, project.ProjectId, RunId);
-        var runToken = await IssueTokenAsync(
-            "projects.admin projects.orchestrator",
-            [TenantId],
-            "workspace-volume-selection-runner",
-            project.ProjectId,
-            RunId,
-            ["platform_admin"]);
         var missingRoleSubject = SingleClaim(
             new JwtSecurityTokenHandler().ReadJwtToken(ownerWithoutSelection.Token).Claims, "sub");
         var missingRoleRunId = $"run-{Guid.NewGuid():N}";
         await CreateRunBindingGrantAsync(missingRoleSubject, project.ProjectId, missingRoleRunId);
         var missingRoleRunToken = await IssueTokenAsync(
-            "projects.admin projects.orchestrator",
+            "api.read",
             [TenantId],
             "workspace-volume-owner-without-selection",
             project.ProjectId,
@@ -302,11 +294,19 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             })
         })
         {
-            AddBearerAndTenant(acceptSelection, runToken, TenantId);
+            AddBearerAndTenant(acceptSelection, selectionToken, TenantId);
             using var acceptedSelection = await projects.Client.SendAsync(acceptSelection);
             await AssertStatusAsync(acceptedSelection, HttpStatusCode.OK);
         }
 
+        await CreateRunBindingGrantAsync(runnerSubject, project.ProjectId, RunId);
+        var runToken = await IssueTokenAsync(
+            "projects.orchestrator",
+            [TenantId],
+            "workspace-volume-selection-runner",
+            project.ProjectId,
+            RunId,
+            ["platform_admin"]);
         var selectionObserver = new RunSelectionObserver();
         var environmentId = $"environment-{Guid.NewGuid():N}";
         var volumeId = $"volume-{Guid.NewGuid():N}";

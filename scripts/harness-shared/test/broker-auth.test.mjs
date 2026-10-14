@@ -12,6 +12,9 @@ const options = {
 test('supplied broker identity is origin-bound and expires without acquiring or refreshing credentials', async () => {
   let now = 1000000;
   const provider = createBrokerAuthProvider({ ...options, now: () => now });
+  assert.equal(provider.actorId, claims.sub);
+  assert.equal(provider.issuer, claims.iss);
+  assert.equal(provider.audience, claims.aud);
   assert.equal(await provider.getAuthorization('https://gateway.test/api/v1/projects'),
     ['Bearer', options.token].join(' '));
   await assert.rejects(provider.getAuthorization('https://other.test/'), /outside/);

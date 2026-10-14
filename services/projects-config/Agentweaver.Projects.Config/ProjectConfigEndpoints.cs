@@ -32,7 +32,9 @@ public sealed record UpdatePlatformRuntimeDefaultsRequest
 
 public static class ProjectConfigEndpoints
 {
-    public static IEndpointRouteBuilder MapProjectConfigEndpoints(this IEndpointRouteBuilder app)
+    public static IEndpointRouteBuilder MapProjectConfigEndpoints(
+        this IEndpointRouteBuilder app,
+        bool enableBrokerRunBinding = false)
     {
         var authorization = app.MapGroup("/api/authorization").RequireAuthorization();
         authorization.MapGet("/context", async (
@@ -546,6 +548,41 @@ public static class ProjectConfigEndpoints
                 return ToProblem(exception);
             }
         });
+
+        if (enableBrokerRunBinding)
+        {
+            app.MapPost(
+                "/internal/projects/{projectId}/runs/{runId}/broker-run-binding",
+                async (
+                    string projectId,
+                    string runId,
+                    HttpContext context,
+                    ProjectAuthorizationOwner authorizationOwner,
+                    ProjectsConfigService service,
+                    CancellationToken cancellationToken) =>
+                {
+                    context.Response.Headers.CacheControl = "no-store";
+                    try
+                    {
+                        if (!BrokerRunBindingTlsIdentity.IsNativeHttps(context) ||
+                            context.Request.Query.Count != 0 ||
+                            context.Request.ContentLength is > 0 ||
+                            context.Request.Headers.ContainsKey("Transfer-Encoding") ||
+                            context.Request.ContentType is not null)
+                            throw ProjectConfigException.Forbidden();
+                        var caller = await authorizationOwner.ResolveBrokerRunBindingAsync(
+                            context.User, projectId, runId, cancellationToken).ConfigureAwait(false);
+                        return Results.Ok(await service.GetBrokerRunBindingProofAsync(
+                            caller, projectId, runId, cancellationToken).ConfigureAwait(false));
+                    }
+                    catch (ProjectConfigException exception)
+                    {
+                        return ToProblem(exception);
+                    }
+                })
+                .RequireAuthorization(ProjectAuthorizationOwner.BrokerRunBindingAuthorizationPolicy)
+                .WithName("GetBrokerRunBindingProof");
+        }
 
         return app;
     }

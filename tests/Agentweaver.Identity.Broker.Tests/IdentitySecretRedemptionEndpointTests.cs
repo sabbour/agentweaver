@@ -30,6 +30,7 @@ public sealed class IdentitySecretRedemptionEndpointTests(PostgresContainerFixtu
     private IdentityBrokerWebApplicationFactory _factory = null!;
     private HttpClient _broker = null!;
     private RecordingSecretRedemption _backend = null!;
+    private BrokerRunBindingTlsIdentityTests.TestCertificateAuthority? _runBindingTlsAuthority;
 
     public async Task InitializeAsync()
     {
@@ -54,6 +55,7 @@ public sealed class IdentitySecretRedemptionEndpointTests(PostgresContainerFixtu
     {
         _broker.Dispose();
         await _factory.DisposeAsync();
+        _runBindingTlsAuthority?.Dispose();
         await _fakeIdp.DisposeAsync();
     }
 
@@ -144,6 +146,14 @@ public sealed class IdentitySecretRedemptionEndpointTests(PostgresContainerFixtu
             claim.Type == SecretRedemptionEndpoints.ProjectIdClaim).Value);
         Assert.Equal(runId, issuedPrincipal.Claims.Single(claim =>
             claim.Type == SecretRedemptionEndpoints.RunIdClaim).Value);
+        Assert.Equal(
+            BrokerRunBindingAuthority.SecretGrantAuthorityKind,
+            issuedPrincipal.Claims.Single(claim =>
+                claim.Type == BrokerRunBindingAuthority.AuthorityKindClaim).Value);
+        Assert.DoesNotContain(
+            issuedPrincipal.Claims,
+            claim => claim.Type.StartsWith("aw:run_binding_", StringComparison.Ordinal) &&
+                claim.Type != BrokerRunBindingAuthority.AuthorityKindClaim);
 
         using var success = await SendAsync(
             Input("secret-oauth", "version-a", runId: runId),
@@ -612,6 +622,10 @@ public sealed class IdentitySecretRedemptionEndpointTests(PostgresContainerFixtu
         _broker.Dispose();
         await _factory.DisposeAsync();
         _backend = new RecordingSecretRedemption();
+        _runBindingTlsAuthority?.Dispose();
+        var runBindingTlsAuthority =
+            _runBindingTlsAuthority = BrokerRunBindingTlsIdentityTests.TestCertificateAuthority.Create();
+        var tlsOptions = runBindingTlsAuthority.CreateOptions();
         _factory = new IdentityBrokerWebApplicationFactory(
             connectionString,
             _fakeIdp,
@@ -621,11 +635,22 @@ public sealed class IdentitySecretRedemptionEndpointTests(PostgresContainerFixtu
                 settings["IdentityBroker__Clients__0__Resources__0"] = orchestratorAudience;
                 settings["IdentityBroker__Clients__0__Resources__1"] = brokerAudience;
                 settings["IdentityBroker__Clients__0__Scopes__5"] = "projects.orchestrator";
+                settings["IdentityBroker__RunBinding__ProjectsOwnerAddress"] = "https://projects.test/";
+                settings["IdentityBroker__RunBinding__ProjectsAudience"] = "https://projects-private.test/";
+                settings["IdentityBroker__RunBinding__ProjectsServerCertificateSha256"] =
+                    tlsOptions.ProjectsServerCertificateSha256;
+                settings["IdentityBroker__RunBinding__ProjectsTrustBundleSha256"] =
+                    tlsOptions.ProjectsTrustBundleSha256;
             },
             configureServices: services =>
             {
                 services.RemoveAll<ISecretRedemption>();
                 services.AddSingleton<ISecretRedemption>(_backend);
+                services.AddSingleton<BrokerRunBindingTlsIdentity>(_ =>
+                    BrokerRunBindingTlsIdentity.Load(
+                        tlsOptions, runBindingTlsAuthority.TrustBundleBytes));
+                services.AddHttpClient(BrokerRunBindingAuthority.HttpClientName)
+                    .ConfigurePrimaryHttpMessageHandler(() => new ProjectsRunBindingResponseHandler());
             });
         _broker = _factory.CreateClient(new WebApplicationFactoryClientOptions
         {
@@ -665,6 +690,39 @@ public sealed class IdentitySecretRedemptionEndpointTests(PostgresContainerFixtu
             new SigningCredentials(signingKey, SecurityAlgorithms.RsaSha256));
         token.Header["typ"] = "at+jwt";
         return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    private sealed class ProjectsRunBindingResponseHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            var token = new JwtSecurityTokenHandler().ReadJwtToken(
+                request.Headers.Authorization!.Parameter!);
+            var receipt = new BrokerRunBindingReceipt(
+                token.Claims.Single(claim => claim.Type == "actor_iss").Value,
+                token.Claims.Single(claim => claim.Type == "actor_sub").Value,
+                "source-control-tenant",
+                Guid.Parse("3e152378-43a3-4ac4-8db9-d2ce1361800b"),
+                1,
+                token.Claims.Single(claim => claim.Type == "project_id").Value,
+                token.Claims.Single(claim => claim.Type == "run_id").Value,
+                Guid.Parse("b360b9ed-27b4-4f2a-bc0b-1ab842cbcf4a"),
+                1,
+                1,
+                1,
+                1,
+                "source-control-context",
+                new string('A', 64));
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                RequestMessage = request,
+                Content = System.Net.Http.Json.JsonContent.Create(receipt),
+            };
+            response.Headers.CacheControl = new CacheControlHeaderValue { NoStore = true };
+            return Task.FromResult(response);
+        }
     }
 }
 

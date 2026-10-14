@@ -114,7 +114,7 @@ Its role stage checks all five mappings before commit. Its grant checks preserve
 existing ownership and permit only exact runtime grants. The source checks
 functions by owner and effective EXECUTE privileges, not counts alone.
 Its source catalog includes 20 Core migration versions, with version 17 excluded, and eight Events versions.
-It retains 94 tables, eight row-lock columns, and 28 exact function signatures.
+It retains 94 tables, eight row-lock columns, and 29 exact function signatures.
 The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
 That grant has not been executed; it adds no `UPDATE`, `DELETE`, or default privilege.

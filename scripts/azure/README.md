@@ -55,7 +55,7 @@ The plan retains 94 tables and eight exact row-lock columns.
 The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
 That grant has not been executed; it adds no `UPDATE`, `DELETE`, or default privilege.
-It includes 28 exact function signatures, with runtime EXECUTE only for casting authority.
+It includes 29 exact function signatures, with runtime EXECUTE only for casting authority.
 Actual installed catalog state and restricted-role behavior still require
 separate database proof.
 The five new update guards reject changes with SQLSTATE `55000`.

@@ -64,3 +64,43 @@ It is SDK message evidence, not a raw network-byte capture.
 `close` closes the owned SDK client and transport.
 It does not archive projects, release Environments, or clean up sessions.
 Product cleanup needs separate current owner authority and observed receipts.
+
+## Executable P1 journey
+
+The exported `runP1McpJourney` function reads journal pages through the
+discovered `agentweaver_replayRunEvents` tool. The API client still reads
+owner snapshots and verifies a denied-actor `403`, but API replay does not
+count as MCP evidence. Gate-answer, approval, rejection, and addressed-message
+journeys call the corresponding discovered Gateway-derived MCP tool.
+
+The shared CLI creates and verifies an invocation-owned project, grants,
+selection, and sessions before it supplies those receipts to the selected
+surface. It rejects caller-supplied `ownerFences` and `fixtureScope` claims.
+Cleanup revokes setup grants and archives the project only when no run
+selection was accepted; otherwise it reports `retainedPending` and preserves
+the active grants. The runner does not invoke an Orchestrator dispatch method.
+
+Supply the same `executionIntent: "execute"` manifest and four
+`deploymentEvidence` paths documented by the API harness. `fixturePlan`
+requires a positive `expectedPlatformRuntimeRevision`, the exact selection
+context, a distinct denied actor, and the selected gate or message content.
+The runner sends that expected revision through the existing run-selection
+request and verifies the accepted and observed owner selection revisions.
+This plan value is not authority or an ownership receipt; the owner
+compare-and-swap checks it against current state. The fixture retains its
+project-configuration read and does not call the PlatformAdmin-only global
+runtime-default endpoint. After source and deployment checks pass,
+set `AGENTWEAVER_P1_SETUP_TOKEN` in the process environment and provide
+`--identity-module <authorized-identity-provider.mjs>` returning already-issued
+run-bound and denied-actor tokens. No sign-in, token refresh, or consent is
+performed. The unfinished invocation ID is persisted so setup and idempotent
+MCP actions can be replayed with the same IDs.
+
+```powershell
+npm run harness:p1 -- --surface mcp --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs>
+```
+
+Surface results are reported separately from full P1 acceptance. Full P1 stays
+blocked until the required native probes have real evidence. Controlled MCP
+and runner tests use local fixtures; they do not prove a deployed Gateway,
+Broker, owner, native execution, or AKS acceptance.
