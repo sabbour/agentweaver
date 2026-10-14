@@ -165,6 +165,14 @@ dispatch identifiers and prompt hash, and a SHA-256/UTF-8-length pair for a comp
 result. The endpoint does not return result text and rejects stale owner, decision, or
 selection state.
 
+The `/runtime-execution-observation/v2` GET uses the same owner, decision, child mapping,
+checkpoint, and accepted-selection checks. Its version-2 wrapper contains the unchanged
+validated v1 observation plus `checkpointParent`, whose required `hasParentMetadata` flag
+and nullable `parentCheckpointId` come from the same selected checkpoint row. True/null
+identifies a verified root; false/null means lineage is unknown. Contradictory or invalid
+saved parent data returns a conflict. It does not infer lineage from checkpoint IDs or
+revisions, and it leaves the v1 route unchanged.
+
 The authenticated session-scoped runtime-registration `GET` resolves that current child context.
 It pages registration IDs for the exact project, run, and session, with a maximum of 64 candidates.
 Each candidate must match the current owner and Environment placement.

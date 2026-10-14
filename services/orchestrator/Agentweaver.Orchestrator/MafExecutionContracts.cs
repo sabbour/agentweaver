@@ -173,7 +173,11 @@ internal sealed record MafExecutionCheckpoint(
 
 internal sealed record MafExecutionCheckpointSnapshot(
     CheckpointInfo Info,
-    MafExecutionCheckpoint State);
+    MafExecutionCheckpoint State)
+{
+    public string? ParentCheckpointId { get; init; }
+    public bool HasParentMetadata { get; init; }
+}
 
 internal sealed record MafExecutionOwnerEvidenceBinding(
     CoordinationActor Actor,

@@ -243,7 +243,11 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         return checkpoints;
     }
 
-    internal async Task<(CheckpointInfo Info, JsonElement Value)?> ReadLatestCheckpointAsync(
+    internal async Task<(
+        CheckpointInfo Info,
+        JsonElement Value,
+        string? ParentCheckpointId,
+        bool HasParentMetadata)?> ReadLatestCheckpointAsync(
         MafCheckpointBinding binding,
         CancellationToken cancellationToken)
     {
@@ -256,7 +260,11 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         return latest;
     }
 
-    internal async Task<(CheckpointInfo Info, JsonElement Value)?> ReadLatestCheckpointInTransactionAsync(
+    internal async Task<(
+        CheckpointInfo Info,
+        JsonElement Value,
+        string? ParentCheckpointId,
+        bool HasParentMetadata)?> ReadLatestCheckpointInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         MafCheckpointBinding binding,
@@ -265,7 +273,11 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
             connection, transaction, binding, requireCompletedRootEvidence: false, cancellationToken)
             .ConfigureAwait(false);
 
-    internal Task<(CheckpointInfo Info, JsonElement Value)?> ReadLatestCheckpointForCompletedRootEvidenceInTransactionAsync(
+    internal Task<(
+        CheckpointInfo Info,
+        JsonElement Value,
+        string? ParentCheckpointId,
+        bool HasParentMetadata)?> ReadLatestCheckpointForCompletedRootEvidenceInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         MafCheckpointBinding binding,
@@ -273,7 +285,11 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         ReadLatestCheckpointInTransactionCoreAsync(
             connection, transaction, binding, requireCompletedRootEvidence: true, cancellationToken);
 
-    private async Task<(CheckpointInfo Info, JsonElement Value)?> ReadLatestCheckpointInTransactionCoreAsync(
+    private async Task<(
+        CheckpointInfo Info,
+        JsonElement Value,
+        string? ParentCheckpointId,
+        bool HasParentMetadata)?> ReadLatestCheckpointInTransactionCoreAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         MafCheckpointBinding binding,
@@ -293,7 +309,8 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
             ? "AND checkpoint.accepted_selection_hash = @selectionHash"
             : string.Empty;
         await using var command = new NpgsqlCommand($"""
-            SELECT checkpoint.checkpoint_id, checkpoint.payload
+            SELECT checkpoint.checkpoint_id, checkpoint.parent_checkpoint_id,
+                   checkpoint.has_parent_metadata, checkpoint.payload
             FROM {_schema}.maf_workflow_checkpoints checkpoint
             WHERE checkpoint.project_id = @project AND checkpoint.run_id = @run
                 AND checkpoint.session_id = @session AND checkpoint.store_name = @store
@@ -320,12 +337,18 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             return null;
         var checkpointId = reader.GetString(0);
-        using var document = JsonDocument.Parse(reader.GetString(1));
+        var parentCheckpointId = reader.IsDBNull(1) ? null : reader.GetString(1);
+        var hasParentMetadata = reader.GetBoolean(2);
+        using var document = JsonDocument.Parse(reader.GetString(3));
         var value = document.RootElement.Clone();
         if (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             throw new CoordinationException(
                 "maf_execution_checkpoint_forked", StatusCodes.Status409Conflict);
-        return (new CheckpointInfo(validatedBinding.Identity.SessionId, checkpointId), value);
+        return (
+            new CheckpointInfo(validatedBinding.Identity.SessionId, checkpointId),
+            value,
+            parentCheckpointId,
+            hasParentMetadata);
     }
 
     internal async Task<CheckpointRecoveryDecision> GetRecoveryDecisionAsync(
