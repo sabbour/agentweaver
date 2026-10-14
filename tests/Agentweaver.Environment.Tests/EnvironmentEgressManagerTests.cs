@@ -1,10 +1,15 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Net.Http;
+using System.Security.Claims;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
 using Agentweaver.Providers;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Environment.Tests;
 
@@ -940,6 +945,58 @@ public sealed class EnvironmentEgressManagerTests
         Assert.Equal(3, projects.AuthorizationReads);
         Assert.Equal(0, projects.SelectionReads);
         Assert.Equal(1, lifecycle.OwnerSnapshotReads);
+    }
+
+    [Fact]
+    public async Task LifecycleRouteReturnsOwnerSnapshotAtEnvironmentRootWithNoStore()
+    {
+        var fence = ApplyRequest().Fence;
+        var readOnly = AuthorizationContext(canReadProjects: true, canReadSelection: false, canWrite: false);
+        var projects = new FakeProjectsConfigClient([readOnly, readOnly, readOnly], Selection());
+        var manager = Manager(projects, new FakeCiliumPolicyResourceStore(), new FakeEnvironmentLifecycleStore(fence));
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddAuthorization();
+        builder.Services.AddScoped<EnvironmentLifecycleManager>(_ => throw new NotSupportedException());
+        builder.Services.AddScoped(_ => manager);
+        builder.Services.AddScoped<EnvironmentSandboxManager>(_ => throw new NotSupportedException());
+        builder.Services.AddScoped<EnvironmentWorkspaceVolumeManager>(_ => throw new NotSupportedException());
+        using var app = builder.Build();
+        app.MapEnvironmentEndpoints();
+        var routes = ((IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints).OfType<RouteEndpoint>().ToArray();
+        Assert.DoesNotContain(routes, route =>
+            route.RoutePattern.RawText!.EndsWith("/sandbox/v1/lifecycle", StringComparison.Ordinal));
+        var endpoint = Assert.Single(routes, route => route.RoutePattern.RawText ==
+            "/api/projects/{projectId}/runs/{runId}/environments/{environmentId}/lifecycle");
+        using var scope = app.Services.CreateScope();
+        var context = new DefaultHttpContext
+        {
+            RequestServices = scope.ServiceProvider,
+            User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", "actor-a")], "test")),
+        };
+        context.Request.Method = HttpMethods.Get;
+        context.Request.Headers.Authorization = string.Join(' ', "Bearer", "lifecycle-endpoint-test");
+        context.Request.Headers["X-Agentweaver-Tenant"] = TenantId;
+        context.Request.RouteValues["projectId"] = ProjectId;
+        context.Request.RouteValues["runId"] = RunId;
+        context.Request.RouteValues["environmentId"] = EnvironmentId;
+        context.Response.Body = new MemoryStream();
+
+        await endpoint.RequestDelegate!(context);
+
+        Assert.Equal(StatusCodes.Status200OK, context.Response.StatusCode);
+        Assert.Equal("no-store", context.Response.Headers.CacheControl.ToString());
+        context.Response.Body.Position = 0;
+        using var body = await JsonDocument.ParseAsync(context.Response.Body);
+        Assert.Equal(
+            ["fence", "state"],
+            body.RootElement.EnumerateObject().Select(property => property.Name).Order().ToArray());
+        Assert.Equal(
+            EnvironmentId,
+            body.RootElement.GetProperty("fence").GetProperty("owner").GetProperty("environmentId").GetString());
+        Assert.Equal(1, body.RootElement.GetProperty("fence").GetProperty("lifecycleGeneration").GetInt64());
+        Assert.Equal(3, projects.AuthorizationReads);
+        Assert.Equal(0, projects.SelectionReads);
     }
 
     [Fact]

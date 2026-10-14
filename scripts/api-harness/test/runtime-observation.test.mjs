@@ -213,8 +213,10 @@ async function fixture({ mutate } = {}) {
     });
     response.setHeader('Content-Type', 'application/json');
     response.setHeader('Cache-Control', 'private, no-store');
-    if (request.url.endsWith('/sandbox/v1/lifecycle')) {
+    const environmentRoot = '/api/projects/project-a/runs/run-a/environments/environment-a';
+    if (request.url === `${environmentRoot}/lifecycle`) {
       lifecycleReads += 1;
+      if (mutate === 'cacheable-lifecycle') response.removeHeader('Cache-Control');
       const fence = mutate === 'foreign-lifecycle-owner'
         ? foreignEnvironmentFence
         : mutate === 'changed-fence' && lifecycleReads > 1
@@ -223,13 +225,13 @@ async function fixture({ mutate } = {}) {
       response.end(JSON.stringify({ fence, state: 'active' }));
       return;
     }
-    if (request.url.endsWith('/provider-attempts')) {
+    if (request.url === `${environmentRoot}/sandbox/v1/operations/${operationId}/provider-attempts`) {
       response.end(JSON.stringify(mutate === 'foreign-attempt-current-fence'
         ? { ...providerAttempts, currentFence: foreignEnvironmentFence }
         : providerAttempts));
       return;
     }
-    if (request.url.endsWith('/late-resource-cleanups')) {
+    if (request.url === `${environmentRoot}/sandbox/v1/late-resource-cleanups`) {
       const cleanups = structuredClone(lateResourceCleanups);
       if (mutate === 'foreign-cleanup-current-fence') {
         cleanups.currentFence = foreignEnvironmentFence;
@@ -334,10 +336,13 @@ test('reads current runtime and Environment owner evidence with exact paths, fen
       authenticatedGatewayRequests[0].headers.authorization,
       environmentRequests[0].headers.authorization,
     );
-    assert.ok(requests.some(request => request.destination === 'environment' && request.url.endsWith(
-      `/environments/environment-a/sandbox/v1/operations/${operationId}/provider-attempts`)));
-    assert.ok(requests.some(request => request.destination === 'environment' && request.url.endsWith(
-      '/environments/environment-a/sandbox/v1/late-resource-cleanups')));
+    const environmentRoot = '/api/projects/project-a/runs/run-a/environments/environment-a';
+    assert.deepEqual(environmentRequests.map(request => request.url).sort(), [
+      `${environmentRoot}/lifecycle`,
+      `${environmentRoot}/lifecycle`,
+      `${environmentRoot}/sandbox/v1/late-resource-cleanups`,
+      `${environmentRoot}/sandbox/v1/operations/${operationId}/provider-attempts`,
+    ].sort());
     assert.doesNotMatch(JSON.stringify(host.api.calls), /loopback-test-token/);
     assert.doesNotMatch(JSON.stringify(host.environmentApi.calls), /environment-loopback-test/);
   } finally {
@@ -372,6 +377,21 @@ test('rejects malformed runtime observations and Environment fence changes', asy
     }), /changed while Environment evidence/);
   } finally {
     await changed.close();
+  }
+
+  const cacheable = await fixture({ mutate: 'cacheable-lifecycle' });
+  try {
+    const consumer = new RuntimeObservationClient({
+      api: cacheable.api,
+      environmentApi: cacheable.environmentApi,
+    });
+    await assert.rejects(consumer.readEnvironmentEvidence({
+      environmentCreation,
+      owner,
+      operationId,
+    }), /Environment lifecycle did not satisfy the no-store/);
+  } finally {
+    await cacheable.close();
   }
 });
 

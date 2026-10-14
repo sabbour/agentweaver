@@ -482,10 +482,11 @@ export class RuntimeObservationClient {
     requireSelectedEnvironmentOwner(environmentOwner, owner);
     requireUuid(operationId, 'Environment operation ID');
     const { projectId, runId, environmentId } = environmentOwner;
-    const base = `/api/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}` +
-      `/environments/${encodeURIComponent(environmentId)}/sandbox/v1`;
+    const environmentRoot = `/api/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}` +
+      `/environments/${encodeURIComponent(environmentId)}`;
+    const base = `${environmentRoot}/sandbox/v1`;
     const readLifecycle = async () => {
-      const call = await this.environmentApi.call('GET', `${base}/lifecycle`, undefined, {
+      const call = await this.environmentApi.call('GET', `${environmentRoot}/lifecycle`, undefined, {
         headers: { 'Cache-Control': 'no-store' },
       });
       const body = requireHttp(call, 'Environment lifecycle');
