@@ -229,7 +229,7 @@ public static partial class CoordinationEndpoints
             return observation;
         }, cancellationToken);
 
-    private static void RequireCurrentRuntimeRegistrationForObservation(
+    internal static void RequireCurrentRuntimeRegistrationForObservation(
         RuntimeRegistration registration,
         CoordinationActor actor,
         SessionIdentity identity,
@@ -245,7 +245,8 @@ public static partial class CoordinationEndpoints
             binding.RunId != identity.RunId ||
             binding.SessionId != identity.SessionId ||
             binding.ExecutionFence != owner.ExecutionFence ||
-            binding.AcceptedSelectionHash != owner.AcceptedSelectionHash)
+            !string.Equals(binding.AcceptedSelectionHash, owner.AcceptedSelectionHash,
+                StringComparison.OrdinalIgnoreCase))
             throw new CoordinationException(
                 "runtime_owner_context_stale", StatusCodes.Status409Conflict);
     }

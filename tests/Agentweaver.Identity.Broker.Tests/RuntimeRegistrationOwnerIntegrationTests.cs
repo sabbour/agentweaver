@@ -36,6 +36,27 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed partial class ProjectsConfigBrokerAuthorizationTests
 {
+    [Fact]
+    public void RuntimeObservationRegistrationAcceptsSelectionHashHexCaseDifferences()
+    {
+        var registration = RuntimeCopilotSessionTests.Registration();
+        var binding = registration.Binding;
+        var identity = new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId);
+        var owner = new SessionRuntimeOwnerState(
+            "root-session", null, binding.TenantId, binding.AcceptedSelectionHash.ToUpperInvariant(),
+            binding.ExecutionFence, 1, 1, "runtime-turn");
+        var actor = new CoordinationActor(binding.ActorIssuer, binding.ActorId);
+
+        CoordinationEndpoints.RequireCurrentRuntimeRegistrationForObservation(
+            registration, actor, identity, owner);
+
+        var staleOwner = owner with { AcceptedSelectionHash = new string('b', 64) };
+        var failure = Assert.Throws<OrchestratorHost::Agentweaver.Orchestrator.CoordinationException>(() =>
+            CoordinationEndpoints.RequireCurrentRuntimeRegistrationForObservation(
+                registration, actor, identity, staleOwner));
+        Assert.Equal("runtime_owner_context_stale", failure.Code);
+    }
+
     private static RuntimeModelBindingsResolver AzureByokModelBindings() => new("azure-byok-bindings-v1",
         new Dictionary<string, RuntimeModelBinding>
         {
@@ -49,7 +70,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     [Fact]
     public Task AzureByokNativeUsageUsesBrokerCoreAndEventsWithExactDispatchProvenance() =>
         RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
-            false, null, false, OwnerRunFailureState.Indeterminate, azureByok: true);
+            false, null, false, OwnerRunFailureState.Indeterminate, azureByok: true,
+            reserveObservedToolInvocation: true);
+
+    [Fact]
+    public Task HostedCopilotNativeUsageObservationReturnsPersistedCreditGuard() =>
+        RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
+            false, null, false, OwnerRunFailureState.Indeterminate, copilotHardCreditLimit: 5m);
 
     [Theory]
     [InlineData("sdk-preparation-grant")]
@@ -75,7 +102,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         ControlledCopilotConnection copilotConnection, string connectionOwnerToken,
         Func<bool, Task> setHistoricalReadAuthority, RecordingSecretRedemption? byokSecrets = null,
         SkillRuntimeContentV1? expectedAcceptedSkill = null, string? unassignedAgentId = null,
-        ProjectsConfigResourceServer? skillWriter = null, bool stopAfterRegistration = false)
+        ProjectsConfigResourceServer? skillWriter = null, bool stopAfterRegistration = false,
+        bool reserveObservedToolInvocation = false)
     {
         await AssignRoleAsync(projects.PrivilegedFixtureDataSource, membershipId,
             ProjectAuthorityResourceType.Project, owner.ProjectId, ProjectAuthorityRole.Owner);
@@ -127,7 +155,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await using var factory = new OrchestratorIntegrationFactory(
             _connectionString, ownerSchema, signingKey, projects.CreateHandler,
             () => events.Server.CreateHandler(), sandboxProvider: sandboxProvider,
-            providerCatalog: CreateSourceControlProviderCatalog(), policyOptions: SourceControlMergePolicyOptions(),
+            providerCatalog: CreateSourceControlProviderCatalog(),
+            policyOptions: reserveObservedToolInvocation
+                ? SourceControlMergeToolReadPolicyOptions()
+                : SourceControlMergePolicyOptions(),
             environmentHandler: () => new RuntimeServiceRouter(routes, failures),
             runtimeUsageHandler: () => new RuntimeServiceRouter(routes, failures));
         using var client = factory.CreateClient(new()
@@ -259,7 +290,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             registration, signingKey, runToken, routes, failures, projects, events.Schema, ownerSchema,
             revokeSourceBeforeSdk, sourceLoss, environment, copilotConnection,
             connectionOwnerToken, setHistoricalReadAuthority, factory.Services, client, byokSecrets,
-            expectedAcceptedSkill, skillWriter);
+            expectedAcceptedSkill, skillWriter, reserveObservedToolInvocation);
         TraceNativeStage(failures, "Runtime exercise and explicit cleanup completed.");
     }
 
@@ -293,7 +324,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         IServiceProvider orchestratorServices, HttpClient orchestratorClient,
         RecordingSecretRedemption? byokSecrets = null,
         SkillRuntimeContentV1? expectedAcceptedSkill = null,
-        ProjectsConfigResourceServer? skillWriter = null)
+        ProjectsConfigResourceServer? skillWriter = null,
+        bool reserveObservedToolInvocation = false)
     {
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
         var expiryTimeProvider = sourceLoss == "sdk-preparation-expiry"
@@ -802,7 +834,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             await AssertNativeAccountingCountsAsync(eventsSchema, 2, 0);
                             return ImmutableArray.Create(new RuntimeUsageCostReceiptReference(
                                 nativeReceipt.ReceiptId, ack.Accounting));
-                        } : null, runtimeHttp);
+                        } : null, runtimeHttp, reserveObservedToolInvocation);
                     await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => receiver.DisposeAsync().AsTask());
                     Assert.Equal(RuntimeBootstrapReceiverState.Disposed, receiver.State);
                 });
@@ -838,7 +870,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         HttpClient materialClient, HttpClient orchestratorClient, RuntimeMaterialObjects objects,
         CancellationToken cancellationToken,
         Func<RuntimeNativeTurnRecordedReceipt, Task<ImmutableArray<RuntimeUsageCostReceiptReference>>>?
-            accountNativeUsage = null, HttpClient? ownerClient = null)
+            accountNativeUsage = null, HttpClient? ownerClient = null,
+        bool reserveObservedToolInvocation = false)
     {
         var sourceCredentialValue = session.Proof().Credential.GetValue();
         var material = new RuntimeSessionMaterialHttpClient(
@@ -952,10 +985,36 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             message, RequireCurrentOwner, cancellationToken);
         var runtimeObservationPath = $"/api/projects/{binding.ProjectId}/runs/{binding.RunId}" +
             $"/coordination/sessions/{binding.SessionId}/runtime-observation/v1";
-        var observationStateBefore = await ReadRuntimeObservationPersistenceStateAsync(
-            ownerSchema, binding.ProjectId, binding.RunId, cancellationToken);
         var sdkSendsBeforeObservation = sdk.Requests.Count(request => request.Method == "session.send");
         var objectWritesBeforeObservation = objects.Writes;
+        RuntimeActionAdmission? observedToolAdmission = null;
+        if (reserveObservedToolInvocation)
+        {
+            var toolRequest = new RuntimeActionRequest(
+                1,
+                session.Registration.RuntimeInstanceId,
+                session.Registration.Revision,
+                binding.ExecutionFence,
+                Guid.NewGuid(),
+                "tool.read",
+                RuntimeContractValidation.Hash("bounded tool read"u8))
+            {
+                IsToolInvocation = true
+            };
+            using var toolAdmissionResponse = await SendJsonAsync(
+                orchestratorClient,
+                HttpMethod.Post,
+                "/internal/runtime/actions/authorize",
+                runToken,
+                toolRequest);
+            await AssertStatusAsync(toolAdmissionResponse, HttpStatusCode.OK);
+            observedToolAdmission = await ReadJsonAsync<RuntimeActionAdmission>(toolAdmissionResponse);
+            Assert.Equal(toolRequest, observedToolAdmission.Request);
+            Assert.Equal(PolicyEvaluationOutcome.Allow, observedToolAdmission.Outcome);
+            Assert.Equal(PolicyEvaluationReasonCode.Allowed, observedToolAdmission.ReasonCode);
+        }
+        var observationStateBefore = await ReadRuntimeObservationPersistenceStateAsync(
+            ownerSchema, binding.ProjectId, binding.RunId, cancellationToken);
         using var firstObservationResponse = await SendAsync(
             orchestratorClient, HttpMethod.Get, runtimeObservationPath, runToken, [binding.TenantId]);
         await AssertStatusAsync(firstObservationResponse, HttpStatusCode.OK);
@@ -988,15 +1047,27 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(RuntimeExecutionTaskStatus.Running, observedExecutionValue.Status);
         Assert.Equal(intent.MessageId, observedExecutionValue.PendingDispatch?.MessageId);
         Assert.Null(observedExecutionValue.ResultDigest);
-        if (observationStateBefore.CreditGuard is null)
+        if (binding.ModelSourceMode == ModelSourceMode.Byok)
         {
+            Assert.Equal(0, observationStateBefore.CreditGuards);
+            Assert.Null(observationStateBefore.CreditGuard);
+            Assert.Equal(RuntimeObservationSectionState.Unknown, currentObservation.CreditGuard.State);
+            Assert.Null(currentObservation.CreditGuard.Value);
+        }
+        else if (binding.CopilotSoftCreditLimit is null && binding.CopilotHardCreditLimit is null)
+        {
+            Assert.Equal(0, observationStateBefore.CreditGuards);
+            Assert.Null(observationStateBefore.CreditGuard);
             Assert.Equal(RuntimeObservationSectionState.Unknown, currentObservation.CreditGuard.State);
             Assert.Null(currentObservation.CreditGuard.Value);
         }
         else
         {
+            Assert.Equal(1, observationStateBefore.CreditGuards);
+            var storedCreditGuard = Assert.IsType<RuntimeObservationCreditGuard>(
+                observationStateBefore.CreditGuard);
             Assert.Equal(RuntimeObservationSectionState.Available, currentObservation.CreditGuard.State);
-            Assert.Equal(observationStateBefore.CreditGuard, currentObservation.CreditGuard.Value);
+            Assert.Equal(storedCreditGuard, currentObservation.CreditGuard.Value);
         }
         Assert.Equal(RuntimeObservationSectionState.Available, currentObservation.Dispatches.State);
         var observedDispatch = Assert.Single(
@@ -1018,7 +1089,19 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(RuntimeObservationSectionState.Available, currentObservation.ToolReservations.State);
         var toolReservations = Assert.IsType<RuntimeObservationToolReservationCollection>(
             currentObservation.ToolReservations.Value);
-        Assert.Empty(toolReservations.Items);
+        if (observedToolAdmission is null)
+        {
+            Assert.Equal(0, observationStateBefore.ToolReservations);
+            Assert.Empty(toolReservations.Items);
+        }
+        else
+        {
+            Assert.Equal(1, observationStateBefore.ToolReservations);
+            var reservation = Assert.Single(toolReservations.Items);
+            Assert.Equal(observedToolAdmission.Request.EventId, reservation.EventId);
+            Assert.Equal(binding.SessionId, reservation.SessionId);
+            Assert.Equal(binding.ExecutionFence, reservation.ExecutionFence);
+        }
         Assert.False(toolReservations.Truncated);
         using var repeatedObservationResponse = await SendAsync(
             orchestratorClient, HttpMethod.Get, runtimeObservationPath, runToken, [binding.TenantId]);

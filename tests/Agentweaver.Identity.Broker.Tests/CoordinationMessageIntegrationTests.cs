@@ -256,7 +256,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         OwnerRunFailureState captureFailureState,
         bool azureByok = false,
         bool acceptedSkillJourney = false,
-        int? configuredMaxPromptTokens = null)
+        int? configuredMaxPromptTokens = null,
+        decimal? copilotHardCreditLimit = null,
+        bool reserveObservedToolInvocation = false)
     {
         var sourceControlSecretBackend = new RecordingSecretRedemption();
         await RestartBrokerForSourceControlAsync(sourceControlSecretBackend);
@@ -367,6 +369,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         MaxConcurrentChildren = 2,
                         MaxWallTimeSeconds = 3600,
                         MaxPromptTokens = configuredMaxPromptTokens is null ? null : 30000,
+                        CopilotHardCreditLimit = copilotHardCreditLimit,
                     }
                 }
             })
@@ -3878,7 +3881,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 acceptedSkill,
                 acceptedSkillJourney ? "unassigned-agent" : null,
                 skillWriter,
-                stopAfterRegistration: configuredMaxPromptTokens is not null);
+                stopAfterRegistration: configuredMaxPromptTokens is not null,
+                reserveObservedToolInvocation: reserveObservedToolInvocation);
             if (configuredMaxPromptTokens is not null)
                 return;
         }
@@ -5348,6 +5352,32 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             1,
             "source-control-policy-v1",
             [SourceControlMergeAllowPolicy]);
+
+    private static AgtPolicyProviderOptions SourceControlMergeToolReadPolicyOptions() =>
+        new(
+            "source-control-policy-resource",
+            1,
+            "source-control-policy-tool-read-v1",
+            ["""
+                apiVersion: governance.toolkit/v1
+                version: "1.0"
+                name: source-control-merge-policy
+                scope: global
+                default_action: deny
+                rules:
+                  - name: allow-approved-source-control-merge
+                    condition: "action_id == 'source_control.merge'"
+                    action: allow
+                    priority: 100
+                  - name: allow-current-runtime-model-turn
+                    condition: "action_id == 'model.turn'"
+                    action: allow
+                    priority: 100
+                  - name: allow-observed-runtime-tool-read
+                    condition: "action_id == 'tool.read'"
+                    action: allow
+                    priority: 100
+                """]);
 
     private async Task AssertBrowserReadsPendingOutcomeGateAsync(
         ProjectsConfigResourceServer projects,
