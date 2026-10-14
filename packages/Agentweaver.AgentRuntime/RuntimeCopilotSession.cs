@@ -192,7 +192,17 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
             var model = await _session.Rpc.Model.GetCurrentAsync(cancellationToken).ConfigureAwait(false);
             if (model.ModelId != Facts.ModelId ||
                 Facts.ByokProvider is { } byokProvider && model.ProviderId != byokProvider.Type)
-                throw new RuntimeAuthorizationException("runtime_sdk_effective_model_mismatch");
+            {
+                var expectedProvider = Facts.ByokProvider is { } provider
+                    ? SafeSdkIdentity(provider.Type)
+                    : "<not-applicable>";
+                throw new RuntimeAuthorizationException(
+                    "runtime_sdk_effective_model_mismatch",
+                    $"expected_model={SafeSdkIdentity(Facts.ModelId)}; " +
+                    $"actual_model={SafeSdkIdentity(model.ModelId)}; " +
+                    $"expected_provider={expectedProvider}; " +
+                    $"actual_provider={SafeSdkIdentity(model.ProviderId)}");
+            }
             var result = await _session.Rpc.Metadata.ContextInfoAsync(
                 0, 0, model.ModelId, model.ProviderId, cancellationToken).ConfigureAwait(false);
 #pragma warning restore GHCP001
@@ -242,6 +252,25 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         {
             _turnGate.Release();
         }
+    }
+
+    private static string SafeSdkIdentity(string? identity)
+    {
+        if (string.IsNullOrEmpty(identity))
+            return "<empty>";
+
+        const int maximumLength = 64;
+        var length = Math.Min(identity.Length, maximumLength);
+        var characters = new char[length];
+        for (var index = 0; index < length; index++)
+        {
+            var character = identity[index];
+            characters[index] = char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-'
+                ? character
+                : '_';
+        }
+
+        return new string(characters) + (identity.Length > length ? "..." : string.Empty);
     }
 
     internal async Task<RuntimeNativeEmptyRangeEvidence> RequireNoNativeEventsSinceAsync(
