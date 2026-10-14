@@ -2,6 +2,7 @@ extern alias EventsHost;
 extern alias OrchestratorHost;
 extern alias ProjectsConfig;
 extern alias WebHost;
+extern alias EnvironmentService;
 
 using System.Collections.Immutable;
 using System.Collections.Concurrent;
@@ -42,6 +43,7 @@ using NpgsqlTypes;
 using OpenIddict.Abstractions;
 using OrchestratorHost::Agentweaver.Orchestrator;
 using ProjectsConfig::Agentweaver.Projects.Config;
+using EnvironmentService::Agentweaver.Environment;
 using MAFCheckpointing = Microsoft.Agents.AI.Workflows.Checkpointing;
 using Xunit;
 
@@ -463,7 +465,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         RequiredAdapterVersion = AgtPolicyProvider.AdapterVersion.ToString(),
                         RequiredOptionsSchemaVersion = AgtPolicyProvider.OptionsSchemaVersion,
                         RequiredCapabilities = PolicyProviderCapabilities.All
-                    }
+                    },
+                    CreateSourceControlNetworkPolicyRequirement()
                 ]
             }
         };
@@ -498,6 +501,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             new SecretRef("github-api", "api-v1"),
             SourceControlSecretPurposes.Api);
         var acceptedProjectsSelection = await acceptedSelection.Content.ReadAsStringAsync();
+        var acceptedSelectionSnapshot = JsonSerializer.Deserialize<ProjectRunSelectionResponse>(
+            acceptedProjectsSelection, CoordinationJsonOptions);
+        Assert.NotNull(acceptedSelectionSnapshot);
+        var acceptedNetworkCandidate = Assert.Single(
+            Assert.Single(acceptedSelectionSnapshot.Providers,
+                provider => provider.Seam == ProviderSeam.NetworkPolicy).Candidates,
+            candidate => candidate.Layer == NetworkPolicyLayer.L3L4);
+        Assert.Equal(CiliumEgressPolicyAdapter.ProviderId, acceptedNetworkCandidate.ProviderId);
         using (var selectionDocument = JsonDocument.Parse(acceptedProjectsSelection))
         {
             var runLimits = selectionDocument.RootElement.GetProperty("runLimits");
@@ -3714,7 +3725,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ?? throw new InvalidOperationException("Expected the current-fence selection context.");
         var originalContextBinding = await ReadSelectionContextBindingSnapshotAsync(
             _connectionString, ownerSchema, project.ProjectId, mappedActiveChild.ExecutionFence);
-        var acceptedSelectionSnapshot = await ReadAcceptedSelectionSnapshotAsync(
+        var storedAcceptedSelectionSnapshot = await ReadAcceptedSelectionSnapshotAsync(
             _connectionString, ownerSchema, project.ProjectId);
         await using (var ownerDatabase = NpgsqlDataSource.Create(_connectionString))
         await using (var connection = await ownerDatabase.OpenConnectionAsync())
@@ -3787,7 +3798,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal("O", reader.GetString(2));
         }
         Assert.Equal(
-            acceptedSelectionSnapshot,
+            storedAcceptedSelectionSnapshot,
             await ReadAcceptedSelectionSnapshotAsync(_connectionString, ownerSchema, project.ProjectId));
         await using (var ownerDatabase = NpgsqlDataSource.Create(_connectionString))
         await using (var connection = await ownerDatabase.OpenConnectionAsync())
@@ -3845,7 +3856,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     $"/api/projects/{project.ProjectId}/runs/{RunId}/selection", runToken, [TenantId]);
                 await AssertStatusAsync(afterRotation, HttpStatusCode.OK);
                 Assert.Equal(acceptedBytes, await afterRotation.Content.ReadAsByteArrayAsync());
-                Assert.Equal(acceptedSelectionSnapshot,
+                Assert.Equal(storedAcceptedSelectionSnapshot,
                     await ReadAcceptedSelectionSnapshotAsync(_connectionString, ownerSchema, project.ProjectId));
             }
             await VerifyRunBoundRuntimeRegistrationWithCurrentEnvironmentAsync(
@@ -5209,10 +5220,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             []).Value);
     }
 
-    private static ProviderCatalog CreateSourceControlProviderCatalog()
+    internal static ProviderCatalog CreateSourceControlProviderCatalog()
     {
         var policyOptions = SourceControlMergePolicyOptions();
         var policyProvider = new AgtPolicyProvider();
+        var networkOptions = CreateSourceControlNetworkPolicyOptions();
         var sandboxRegistration = new ProviderRegistration(
             new ProviderDescriptor(
                 ProviderSeam.Sandbox,
@@ -5230,15 +5242,45 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             "options-v1",
             GitHubSourceControlAdapter.CurrentOptionsSchemaVersion);
         var policyRegistration = policyProvider.CreateRegistration(policyOptions);
+        var networkRegistration = networkOptions.CreateRegistration();
         return Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
-            [sandboxRegistration, sourceControlRegistration, policyRegistration],
+            [sandboxRegistration, sourceControlRegistration, policyRegistration, networkRegistration],
             [
                 new ProviderSelection(ProviderSeam.Sandbox, "sandbox-platform"),
                 new ProviderSelection(ProviderSeam.SourceControl, SourceControlProviderIds.GitHub),
                 new ProviderSelection(ProviderSeam.Policy, AgtPolicyProvider.ProviderId)
             ],
-            []).Value);
+            [],
+            layerSelections:
+            [
+                new ProviderLayerSelection(
+                    NetworkPolicyLayer.L3L4,
+                    CiliumEgressPolicyAdapter.ProviderId)
+            ]).Value);
     }
+
+    internal static ProviderRequirement CreateSourceControlNetworkPolicyRequirement()
+    {
+        var networkOptions = CreateSourceControlNetworkPolicyOptions();
+        return new ProviderRequirement
+        {
+            Seam = ProviderSeam.NetworkPolicy,
+            RequiredAdapterVersion = networkOptions.AdapterVersion.ToString(),
+            RequiredOptionsSchemaVersion = networkOptions.OptionsSchemaVersion,
+            RequiredL3L4Capabilities = ImmutableHashSet.Create(
+                StringComparer.Ordinal,
+                CiliumEgressCapabilities.L3L4)
+        };
+    }
+
+    private static CiliumEgressProviderOptions CreateSourceControlNetworkPolicyOptions() =>
+        new(
+            "agentweaver",
+            new Version(1, 0, 0),
+            1,
+            "cilium-options-1",
+            ImmutableDictionary<string, ImmutableDictionary<string, string>>.Empty
+                .WithComparers(StringComparer.Ordinal));
 
     private static AgtPolicyProviderOptions SourceControlMergePolicyOptions() =>
         new(
@@ -6646,4 +6688,30 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
     }
 
+}
+
+public sealed class SourceControlProviderCatalogFixtureTests
+{
+    [Fact]
+    public void SourceControlCatalogResolvesTheAcceptedL3L4NetworkRequirement()
+    {
+        var requirement =
+            ProjectsConfigBrokerAuthorizationTests.CreateSourceControlNetworkPolicyRequirement();
+        var catalog = ProjectsConfigBrokerAuthorizationTests.CreateSourceControlProviderCatalog();
+        var resolution = new ProviderResolver(catalog).ResolveNetworkPolicy(
+            new(
+                Version.Parse(requirement.RequiredAdapterVersion),
+                requirement.RequiredOptionsSchemaVersion,
+                requirement.RequiredL3L4Capabilities,
+                requirement.RequiredL7Capabilities));
+
+        Assert.True(resolution.IsSuccess, resolution.Error?.Message);
+        var networkCandidate = Assert.Single(resolution.Value!.Layers);
+        Assert.Equal(NetworkPolicyLayer.L3L4, networkCandidate.Layer);
+        Assert.Equal(CiliumEgressPolicyAdapter.ProviderId, networkCandidate.Candidate.ProviderId);
+        Assert.Equal(requirement.RequiredAdapterVersion, networkCandidate.Candidate.AdapterVersion.ToString());
+        Assert.Equal(requirement.RequiredOptionsSchemaVersion, networkCandidate.Candidate.OptionsSchemaVersion);
+        Assert.Equal("cilium-options-1", networkCandidate.Candidate.OptionsRevision);
+        Assert.Equal(requirement.RequiredL3L4Capabilities, networkCandidate.Candidate.RequiredCapabilities);
+    }
 }

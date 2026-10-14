@@ -88,6 +88,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             selectionBytes, CoordinationJsonOptions)!;
         var candidate = Assert.Single(Assert.Single(
             selection.Providers, provider => provider.Seam == ProviderSeam.Sandbox).Candidates);
+        var networkCandidate = Assert.Single(
+            Assert.Single(selection.Providers, provider => provider.Seam == ProviderSeam.NetworkPolicy).Candidates,
+            provider => provider.Layer == NetworkPolicyLayer.L3L4);
+        Assert.Equal(CiliumEgressPolicyAdapter.ProviderId, networkCandidate.ProviderId);
         using var selectionDocument = JsonDocument.Parse(selectionBytes);
         var environmentOwner = new EnvironmentOwnerIdentity(
             owner.TenantId, owner.ProjectId, owner.RunId, "runtime-environment");
