@@ -16,9 +16,9 @@ RUN dotnet restore services/agenthost/Agentweaver.AgentHost/Agentweaver.AgentHos
 RUN apt-get update && apt-get install --no-install-recommends --yes curl ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 RUN curl --fail --location --proto '=https' --tlsv1.2 \
-    https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.79.tgz \
+    https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.97.tgz \
     --output /tmp/copilot.tgz && \
-    echo 'c33a2d65fbc7908b6eb5c88b14c5d94f693d4228a2e136bcb6c54308c43b08ff213f157dd45c89d727f7f8515249f3ef5ab7d833a04e022a88b97f8b8e046e8b  /tmp/copilot.tgz' | sha512sum --check --status && \
+    echo '262068b5c39fd83706bec46a11346ed28a33a99f4ceab1fc9e30a416de30ee4059beb1c6f8c1e1228d666c6289b28d86663067655b6f258b0a5cc655dcdc7f8a  /tmp/copilot.tgz' | sha512sum --check --status && \
     mkdir /publish/native && tar --extract --gzip --file /tmp/copilot.tgz --strip-components=1 --directory /publish/native && \
     rm -rf /publish/native/clipboard /publish/native/foundry-local-sdk /publish/native/pvrecorder /publish/native/webview && \
     test -s /publish/native/index.js && test -s /publish/native/app.js && \

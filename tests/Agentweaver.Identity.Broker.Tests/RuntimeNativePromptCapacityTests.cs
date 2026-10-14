@@ -217,7 +217,7 @@ public sealed class RuntimeNativePromptCapacityTests
     private sealed class NativePromptHarness : IAsyncDisposable
     {
         private const string ExpectedArchiveSha512 =
-            "c33a2d65fbc7908b6eb5c88b14c5d94f693d4228a2e136bcb6c54308c43b08ff213f157dd45c89d727f7f8515249f3ef5ab7d833a04e022a88b97f8b8e046e8b";
+            "262068b5c39fd83706bec46a11346ed28a33a99f4ceab1fc9e30a416de30ee4059beb1c6f8c1e1228d666c6289b28d86663067655b6f258b0a5cc655dcdc7f8a";
         private readonly string _runtimeRoot;
         private readonly string _testRoot;
         private readonly string _certificatePath;
@@ -258,7 +258,7 @@ public sealed class RuntimeNativePromptCapacityTests
             using var manifest = JsonDocument.Parse(
                 await File.ReadAllBytesAsync(Path.Combine(runtimeRoot, "runtime-manifest.json"), cancellationToken));
             Assert.Equal("1.0.18", manifest.RootElement.GetProperty("sdkVersion").GetString());
-            Assert.Equal("1.0.79", manifest.RootElement.GetProperty("runtimeVersion").GetString());
+            Assert.Equal("1.0.97", manifest.RootElement.GetProperty("runtimeVersion").GetString());
             Assert.Equal(ExpectedArchiveSha512,
                 manifest.RootElement.GetProperty("archiveSha512").GetString());
 

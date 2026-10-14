@@ -1,7 +1,7 @@
 # AgentHost source candidate
 
 The unpublished AgentHost executable runs the sole model harness inside the selected Sandbox.
-It uses `GitHub.Copilot.SDK` 1.0.18 and the compatible native runtime 1.0.79.
+It uses `GitHub.Copilot.SDK` 1.0.18 and the compatible native runtime 1.0.97.
 Microsoft Agent Framework remains an Orchestrator dependency, not an AgentHost runtime.
 This source does not provide an automatic scheduler, deployment, live OAuth acceptance, or paid model evidence.
 
@@ -396,7 +396,7 @@ The retained SDK source supplies the actual meter mode, including for an empty r
 An absent or unproven manifest returns `404` with `Cache-Control: no-store`.
 The host exposes no caller-facing manifest writer.
 The current native observation path writes only `partial` reports, so it cannot supply this proof.
-SDK 1.0.18 and runtime 1.0.79 expose no supported accounting-source finality guarantee.
+SDK 1.0.18 and runtime 1.0.97 expose no supported accounting-source finality guarantee.
 Their output completion receipt, usage status, idle event, and watermarks do not prove
 that every accounting source is final or that no late usage remains.
 That missing guarantee does not block ordinary answer acknowledgment.
@@ -515,7 +515,7 @@ It is not an uncompressed filesystem estimate or a hard image-size ceiling.
 
 CI then compares the loaded image config digest with the receipt.
 It runs `--verify-native-runtime` without network access, writes, credentials, or a model turn.
-The native SDK status must report runtime 1.0.79, protocol 3, and the image-owned distribution path.
+The native SDK status must report runtime 1.0.97, protocol 3, and the image-owned distribution path.
 Both image checks use explicit `noexec,nosuid,nodev` state and temporary mounts.
 They reject any extracted native package cache in private state.
 CI separately runs the same image as UID/GID 1000 with an owner-writable `0755` workspace and private `0700` mounts.

@@ -36,7 +36,7 @@ public sealed class NativeRuntimeManifestTests
                 change == "checksum" ? new string('0', 64) : Convert.ToHexStringLower(SHA256.HashData(content)));
             var manifest = new NativeRuntimeManifest(
                 change == "sdk" ? "1.0.17" : "1.0.18",
-                change == "runtime" ? "1.0.92" : "1.0.79",
+                change == "runtime" ? "1.0.79" : "1.0.97",
                 change == "archive" ? null! : new string('a', 128));
             File.WriteAllText(Path.Combine(directory, "runtime-manifest.json"),
                 JsonSerializer.Serialize(manifest, new JsonSerializerOptions(JsonSerializerDefaults.Web)));
@@ -52,7 +52,7 @@ public sealed class NativeRuntimeManifestTests
             {
                 var verified = NativeRuntimeManifest.ReadAndVerify(directory);
                 Assert.Equal(Path.Combine(native, "copilot"), verified.ExecutablePath);
-                Assert.Equal("1.0.79", verified.RuntimeVersion);
+                Assert.Equal("1.0.97", verified.RuntimeVersion);
             }
             else
                 Assert.Throws<InvalidOperationException>(() => NativeRuntimeManifest.ReadAndVerify(directory));

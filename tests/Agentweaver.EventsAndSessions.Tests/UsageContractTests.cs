@@ -62,7 +62,7 @@ public sealed class UsageContractTests
     [Fact]
     public void PricedHostedNanoAiuDoesNotRequireOptionalAccountingIdentityOrStatus()
     {
-        var source = new SdkSessionFacts(Guid.NewGuid(), "native-session", "1.0.18", "1.0.79",
+        var source = new SdkSessionFacts(Guid.NewGuid(), "native-session", "1.0.18", "1.0.97",
             "model/ref", "model-1", new string('a', 64), 1m, "hosted-copilot",
             SdkMeterSources.CopilotNanoAiu, new string('b', 64), 1);
         var complete = Submission() with
@@ -114,7 +114,7 @@ public sealed class UsageContractTests
     [Fact]
     public void ByokTokenPricingUsesTheRuntimeMeasurementShapeNotHostedCreditStatus()
     {
-        var source = new SdkSessionFacts(Guid.NewGuid(), "native-session", "1.0.18", "1.0.79",
+        var source = new SdkSessionFacts(Guid.NewGuid(), "native-session", "1.0.18", "1.0.97",
             "model/ref", "model-1", new string('a', 64), null, "byok",
             SdkMeterSources.ByokTokens, new string('b', 64), 1);
         var byok = Submission() with

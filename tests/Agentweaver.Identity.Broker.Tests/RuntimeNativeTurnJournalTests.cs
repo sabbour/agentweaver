@@ -120,7 +120,7 @@ public sealed class RuntimeNativeTurnJournalTests
     }
 
     private static SdkSessionFacts Source() =>
-        new(Guid.NewGuid(), "native-session", "1.0.18", "1.0.79", "model:selected",
+        new(Guid.NewGuid(), "native-session", "1.0.18", "1.0.97", "model:selected",
             Model, new string('a', 64), 1m, "hosted-copilot", SdkMeterSources.CopilotNanoAiu,
             new string('A', 64), 1);
 
