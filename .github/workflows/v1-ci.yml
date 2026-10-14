@@ -136,6 +136,8 @@ jobs:
           output="$GITHUB_WORKSPACE/artifacts/images/agenthost-native-prompt-capacity"
           runtime_root="$(mktemp -d "$RUNNER_TEMP/agentweaver-agenthost-native-prompt-capacity.XXXXXX")"
           test_output="$output/results"
+          test_uid="$(id -u)"
+          test_gid="$(id -g)"
           mkdir -p "$output" "$test_output" "$runtime_root"
 
           created_evidence="$output/created-containers.tsv"
@@ -233,7 +235,6 @@ jobs:
           fi
           docker cp "$bundle_container_id:/app/runtime-manifest.json" "$runtime_root/runtime-manifest.json"
           docker cp "$bundle_container_id:/app/native" "$runtime_root"
-          chmod -R a+rX "$runtime_root"
 
           test -s "$runtime_root/runtime-manifest.json"
           test -x "$runtime_root/native/copilot"
@@ -277,13 +278,16 @@ jobs:
           test_log="$output/native-test-output.log"
           test_status=0
           if test_container_id="$(docker create --platform linux/amd64 --network none --read-only \
+            --user "$test_uid:$test_gid" \
             --cap-drop ALL --security-opt no-new-privileges \
-            --tmpfs /tmp:rw,nosuid,nodev,size=1g \
+            --tmpfs "/tmp:rw,nosuid,nodev,size=1g,uid=$test_uid,gid=$test_gid,mode=700" \
             --mount "type=bind,source=$runtime_root,target=/native,readonly" \
             --mount "type=bind,source=$GITHUB_WORKSPACE/tests/Agentweaver.Identity.Broker.Tests/bin/Release/net10.0,target=/tests,readonly" \
             --mount "type=bind,source=$test_output,target=/results" \
             --env AGENTWEAVER_NATIVE_RUNTIME_ROOT=/native \
             --env AGENTWEAVER_NATIVE_PROMPT_EGRESS_BLOCKED=true \
+            --env AGENTWEAVER_TEST_UID="$test_uid" \
+            --env AGENTWEAVER_TEST_GID="$test_gid" \
             --env HOME=/tmp/home \
             --env DOTNET_CLI_HOME=/tmp/dotnet-cli-home \
             --env DOTNET_CLI_TELEMETRY_OPTOUT=1 \
@@ -291,8 +295,26 @@ jobs:
             --entrypoint /bin/sh "$sdk_image" -ec '
               mkdir -p /tmp/home /tmp/dotnet-cli-home
               test "$(uname -m)" = "x86_64"
+              test "$(id -u)" = "$AGENTWEAVER_TEST_UID"
+              test "$(id -g)" = "$AGENTWEAVER_TEST_GID"
               test "$AGENTWEAVER_NATIVE_RUNTIME_ROOT" = /native
               test "$AGENTWEAVER_NATIVE_PROMPT_EGRESS_BLOCKED" = true
+              test -x /native
+              test -r /native/runtime-manifest.json
+              test -x /native/native
+              test -r /native/native/copilot
+              test -x /native/native/copilot
+              test -r /native/native/copilot.sha256
+              test -r /native/native/index.js
+              test -r /native/native/app.js
+              test -x /native/native/prebuilds
+              test -x /native/native/prebuilds/linux-x64
+              test -r /native/native/prebuilds/linux-x64/runtime.node
+              test -w /tmp/home
+              test -w /tmp/dotnet-cli-home
+              result_probe="/results/.native-prompt-capacity-write-check-$$"
+              : > "$result_probe"
+              rm "$result_probe"
               dotnet vstest /tests/Agentweaver.Identity.Broker.Tests.dll \
                 --TestCaseFilter:"FullyQualifiedName~ByokNativeRuntimeCompactsRemovableHistoryWithinTheAcceptedCapacity|FullyQualifiedName~ByokNativeRuntimeFailsAnIrreducibleLatestPromptInsteadOfTheAcceptingFakeEndpoint" \
                 --ResultsDirectory:/results \
