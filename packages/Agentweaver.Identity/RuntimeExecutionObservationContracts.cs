@@ -78,3 +78,39 @@ public sealed record RuntimeExecutionObservation(
     private static bool ValidHash(string? value) =>
         value is { Length: 64 } && value.All(Uri.IsHexDigit);
 }
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeExecutionObservationV2(
+    [property: JsonRequired] int ContractVersion,
+    [property: JsonRequired] RuntimeExecutionObservation Observation,
+    [property: JsonRequired] RuntimeExecutionCheckpointParent CheckpointParent)
+{
+    public RuntimeExecutionObservationV2 Validate()
+    {
+        if (ContractVersion != 2 || Observation is null || CheckpointParent is null)
+            throw new RuntimeAuthorizationException("runtime_execution_observation_invalid");
+        _ = Observation.Validate();
+        _ = CheckpointParent.Validate();
+        return this;
+    }
+}
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RuntimeExecutionCheckpointParent(
+    [property: JsonRequired] bool HasParentMetadata,
+    [property: JsonRequired] string? ParentCheckpointId)
+{
+    public RuntimeExecutionCheckpointParent Validate()
+    {
+        if (!HasParentMetadata && ParentCheckpointId is not null ||
+            ParentCheckpointId is not null &&
+                !ValidCheckpointId(ParentCheckpointId))
+            throw new RuntimeAuthorizationException("runtime_execution_observation_invalid");
+        return this;
+    }
+
+    private static bool ValidCheckpointId(string value) =>
+        value.Length is > 0 and <= 128 &&
+        value.All(character =>
+            char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-' or ':');
+}

@@ -187,6 +187,12 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         var first = await checkpointStore.CreateCheckpointAsync(
             identity.SessionId, MafExecutionCheckpointContract.Serialize(
                 new MafExecutionCheckpoint(1, "plan-1", 1, MafExecutionProgress.Empty)));
+        var rootLatest = await checkpointStore.ReadLatestCheckpointAsync(binding, CancellationToken.None);
+        Assert.NotNull(rootLatest);
+        Assert.Equal(first.CheckpointId, rootLatest.Value.Info.CheckpointId);
+        Assert.True(rootLatest.Value.HasParentMetadata);
+        Assert.Null(rootLatest.Value.ParentCheckpointId);
+
         var second = await checkpointStore.CreateCheckpointAsync(
             identity.SessionId, MafExecutionCheckpointContract.Serialize(
                 new MafExecutionCheckpoint(2, "plan-1", 1, MafExecutionProgress.Empty)), first);
@@ -200,6 +206,8 @@ public sealed class CoordinationOwnerStorePostgresTests : IAsyncLifetime
         Assert.NotNull(latest);
         Assert.Equal(second.CheckpointId, latest.Value.Info.CheckpointId);
         Assert.Equal(2, latest.Value.Value.GetProperty("revision").GetInt32());
+        Assert.True(latest.Value.HasParentMetadata);
+        Assert.Equal(first.CheckpointId, latest.Value.ParentCheckpointId);
     }
 
     [Fact]

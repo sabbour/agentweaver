@@ -44,7 +44,11 @@ internal sealed class MafExecutionCheckpointStore
         return latest is null
             ? null
             : new MafExecutionCheckpointSnapshot(
-                latest.Value.Info, MafExecutionCheckpointContract.Deserialize(latest.Value.Value));
+                latest.Value.Info, MafExecutionCheckpointContract.Deserialize(latest.Value.Value))
+            {
+                ParentCheckpointId = latest.Value.ParentCheckpointId,
+                HasParentMetadata = latest.Value.HasParentMetadata
+            };
     }
 
     internal async Task<MafExecutionFixedWorkAssociation?> ReadFixedWorkAssociationAsync(
@@ -98,7 +102,11 @@ internal sealed class MafExecutionCheckpointStore
         return latest is null
             ? null
             : new MafExecutionCheckpointSnapshot(
-                latest.Value.Info, MafExecutionCheckpointContract.Deserialize(latest.Value.Value));
+                latest.Value.Info, MafExecutionCheckpointContract.Deserialize(latest.Value.Value))
+            {
+                ParentCheckpointId = latest.Value.ParentCheckpointId,
+                HasParentMetadata = latest.Value.HasParentMetadata
+            };
     }
 
     internal bool IsBoundTo(SessionIdentity identity, long executionFence) =>

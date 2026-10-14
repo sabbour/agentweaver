@@ -335,6 +335,13 @@ result text itself. It can observe active, completed, or failed child sessions u
 current execution fence; terminal state does not bypass owner, decision, or selection
 checks. Observation does not retry or schedule runtime work.
 
+The version-2 runtime-execution-observation route keeps those checks and wraps the unchanged
+version-1 observation with a `checkpointParent` object. Its required
+`hasParentMetadata` flag and nullable `parentCheckpointId` come from the same selected latest
+checkpoint row. True/null identifies a verified root; false/null means unknown legacy
+metadata. Contradictory or invalid saved parent data returns a conflict. The version-1
+route is unchanged.
+
 At an explicit owner turn-boundary request, the Orchestrator asks Events to claim and
 present the next addressed message. Events re-reads the current owner session binding
 for every operation. It permits claim or presentation only while the owner reports

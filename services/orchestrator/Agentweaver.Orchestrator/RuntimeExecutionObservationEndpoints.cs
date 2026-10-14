@@ -20,6 +20,39 @@ public static partial class CoordinationEndpoints
         CoordinatorRunSelectionContextStore selectionContexts,
         PostgresMafCheckpointStore checkpoints,
         CancellationToken cancellationToken) =>
+        ReadRuntimeExecutionObservationCoreAsync(
+            projectId, runId, sessionId, context, options, projects, sessions, decisions,
+            selectionContexts, checkpoints, includeCheckpointParent: false, cancellationToken);
+
+    private static Task<IResult> ReadRuntimeExecutionObservationV2Async(
+        string projectId,
+        string runId,
+        string sessionId,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore sessions,
+        CoordinatorDecisionOwnerStore decisions,
+        CoordinatorRunSelectionContextStore selectionContexts,
+        PostgresMafCheckpointStore checkpoints,
+        CancellationToken cancellationToken) =>
+        ReadRuntimeExecutionObservationCoreAsync(
+            projectId, runId, sessionId, context, options, projects, sessions, decisions,
+            selectionContexts, checkpoints, includeCheckpointParent: true, cancellationToken);
+
+    private static Task<IResult> ReadRuntimeExecutionObservationCoreAsync(
+        string projectId,
+        string runId,
+        string sessionId,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore sessions,
+        CoordinatorDecisionOwnerStore decisions,
+        CoordinatorRunSelectionContextStore selectionContexts,
+        PostgresMafCheckpointStore checkpoints,
+        bool includeCheckpointParent,
+        CancellationToken cancellationToken) =>
         ExecuteAsync(async () =>
         {
             context.Response.Headers.CacheControl = "no-store";
@@ -45,10 +78,10 @@ public static partial class CoordinationEndpoints
             var checkpoint = await execution.ReadLatestAsync(cancellationToken).ConfigureAwait(false)
                 ?? throw new CoordinationException(
                     "maf_execution_checkpoint_unavailable", StatusCodes.Status409Conflict);
-            if (checkpoint.Info.SessionId != root.SessionId ||
-                checkpoint.State.WorkPlanId != decision.State.ConfirmedWorkPlan?.Plan.Id)
-                throw new CoordinationException(
-                    "maf_execution_checkpoint_stale", StatusCodes.Status409Conflict);
+            RequireBoundObservationCheckpoint(
+                checkpoint,
+                root.SessionId,
+                decision.State.ConfirmedWorkPlan?.Plan.Id);
 
             var (associationId, status) = ResolveCurrentAssociation(
                 owner, identity, root, decision, checkpoint.State);
@@ -61,16 +94,33 @@ public static partial class CoordinationEndpoints
                 throw new CoordinationException(
                     "maf_execution_checkpoint_stale", StatusCodes.Status409Conflict);
 
-            var observation = RuntimeExecutionObservationContract.Create(
-                owner.RootSessionId,
-                sessionId,
-                owner.ExecutionFence,
-                decision.StateVersion,
-                checkpoint,
-                associationId,
-                status,
-                pendingIntent,
-                result);
+            IResult observation;
+            if (includeCheckpointParent)
+            {
+                observation = Results.Ok(RuntimeExecutionObservationContract.CreateV2(
+                    owner.RootSessionId,
+                    sessionId,
+                    owner.ExecutionFence,
+                    decision.StateVersion,
+                    checkpoint,
+                    associationId,
+                    status,
+                    pendingIntent,
+                    result));
+            }
+            else
+            {
+                observation = Results.Ok(RuntimeExecutionObservationContract.Create(
+                    owner.RootSessionId,
+                    sessionId,
+                    owner.ExecutionFence,
+                    decision.StateVersion,
+                    checkpoint,
+                    associationId,
+                    status,
+                    pendingIntent,
+                    result));
+            }
 
             await RequireUnchangedAuthorizedSelectionAsync(
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
@@ -88,10 +138,10 @@ public static partial class CoordinationEndpoints
                 currentOwnerContext != ownerContext)
                 throw new CoordinationException(
                     "runtime_owner_context_stale", StatusCodes.Status409Conflict);
-            return Results.Ok(observation);
+            return observation;
         }, cancellationToken);
 
-    private static void RequireCurrentObservationOwner(
+    internal static void RequireCurrentObservationOwner(
         RuntimeOwnerContext ownerContext,
         CoordinationActor actor,
         SessionIdentity identity,
@@ -118,6 +168,18 @@ public static partial class CoordinationEndpoints
             decision.State.ConfirmedWorkPlan is null)
             throw new CoordinationException(
                 "runtime_owner_context_stale", StatusCodes.Status409Conflict);
+    }
+
+    internal static void RequireBoundObservationCheckpoint(
+        MafExecutionCheckpointSnapshot checkpoint,
+        string rootSessionId,
+        string? expectedWorkPlanId)
+    {
+        if (checkpoint.Info.SessionId != rootSessionId ||
+            expectedWorkPlanId is null ||
+            checkpoint.State.WorkPlanId != expectedWorkPlanId)
+            throw new CoordinationException(
+                "maf_execution_checkpoint_stale", StatusCodes.Status409Conflict);
     }
 
     private static (string AssociationId, MafExecutionTaskStatus Status) ResolveCurrentAssociation(
@@ -191,6 +253,48 @@ internal static class RuntimeExecutionObservationContract
                     Convert.ToHexStringLower(SHA256.HashData(resultBytes)),
                     resultBytes.LongLength)
         }.Validate();
+    }
+
+    internal static RuntimeExecutionObservationV2 CreateV2(
+        string rootSessionId,
+        string sessionId,
+        long executionFence,
+        long currentDecisionStateVersion,
+        MafExecutionCheckpointSnapshot checkpoint,
+        string associationId,
+        MafExecutionTaskStatus status,
+        MafExecutionDispatchIntent? pendingIntent,
+        string? result)
+    {
+        var observation = Create(
+            rootSessionId,
+            sessionId,
+            executionFence,
+            currentDecisionStateVersion,
+            checkpoint,
+            associationId,
+            status,
+            pendingIntent,
+            result);
+        RuntimeExecutionCheckpointParent parent;
+        try
+        {
+            parent = new RuntimeExecutionCheckpointParent(
+                checkpoint.HasParentMetadata,
+                checkpoint.ParentCheckpointId).Validate();
+        }
+        catch (RuntimeAuthorizationException exception)
+        {
+            throw new CoordinationException(
+                "maf_execution_checkpoint_parent_metadata_invalid",
+                StatusCodes.Status409Conflict,
+                exception);
+        }
+        return new RuntimeExecutionObservationV2(
+            2,
+            observation,
+            parent)
+            .Validate();
     }
 
     private static RuntimeExecutionTaskStatus ToContractStatus(MafExecutionTaskStatus status) =>
