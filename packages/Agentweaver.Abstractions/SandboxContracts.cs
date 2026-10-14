@@ -455,6 +455,10 @@ public sealed record SandboxRuntimeHttpsEndpoint(
     string PodUid,
     string ServiceUid)
 {
+    [System.Text.Json.Serialization.JsonIgnore(
+        Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public Uri? ReceiverConfigureEndpoint { get; init; }
+
     public SandboxRuntimeHttpsEndpoint Validate()
     {
         if (Address is not { IsAbsoluteUri: true } || Address.Scheme != Uri.UriSchemeHttps ||
@@ -470,6 +474,22 @@ public sealed record SandboxRuntimeHttpsEndpoint(
             string.IsNullOrWhiteSpace(PodUid) || PodUid.Length > 256 || PodUid.Any(char.IsControl) ||
             string.IsNullOrWhiteSpace(ServiceUid) || ServiceUid.Length > 256 || ServiceUid.Any(char.IsControl))
             throw new ArgumentException("The observed Sandbox HTTPS endpoint is invalid.");
+        return this;
+    }
+
+    public SandboxRuntimeHttpsEndpoint ValidateForConfigureEndpoint(Uri configureEndpoint)
+    {
+        Validate();
+        if (configureEndpoint is not { IsAbsoluteUri: true } ||
+            configureEndpoint.Scheme != Uri.UriSchemeHttps ||
+            configureEndpoint.HostNameType != UriHostNameType.Dns ||
+            configureEndpoint.Port != 8443 ||
+            !string.IsNullOrEmpty(configureEndpoint.UserInfo) ||
+            !string.IsNullOrEmpty(configureEndpoint.Fragment) ||
+            !string.IsNullOrEmpty(configureEndpoint.Query) ||
+            configureEndpoint.AbsolutePath != "/runtime/v1/configure" ||
+            ReceiverConfigureEndpoint != configureEndpoint)
+            throw new ArgumentException("The receiver configure endpoint is invalid or does not match its identity.");
         return this;
     }
 }

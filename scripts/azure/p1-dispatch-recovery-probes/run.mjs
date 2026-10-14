@@ -25,7 +25,7 @@ export function runP1DispatchRecoveryProbes() {
   const probes = [
     blockedProbe(
       'numeric-copilot-dispatch-boundaries',
-      'AgentHost supports MaxModelTurns and positive HostedCopilot hard credit limits only for workflow-bound registrations using owner-prepared dispatch and begin admission; unbound MaxModelTurns, MaxToolCalls, MaxPromptTokens, and positive hard credit limits remain unsupported. Existing whole-run priced usage denies the next dispatch at or above its observed floor, but late usage cannot revoke a turn already admitted; no all-usage-final claim is made. This runner has no accepted source-owned observer for the actual floor, guard revision, denial/send state, soft-limit warning, and bounded native cursor evidence.',
+      'AgentHost supports MaxModelTurns and MaxToolCalls only for workflow-bound registrations using owner-prepared dispatch and begin admission. MaxPromptTokens remains preserved through owner projection but is rejected with runtime_numeric_limits_unsupported before SDK setup, including for workflow-bound registrations; unbound MaxModelTurns and MaxToolCalls are also rejected. Positive HostedCopilot hard credit limits are supported only for workflow-bound registrations. Existing whole-run priced usage denies the next dispatch at or above its observed floor, but late usage cannot revoke a turn already admitted; no all-usage-final claim is made. This runner has no accepted source-owned observer for the actual floor, guard revision, denial/send state, soft-limit warning, and bounded native cursor evidence.',
       sourceOnlyEvidence(
         [
           {
@@ -71,6 +71,7 @@ export function runP1DispatchRecoveryProbes() {
             path: 'packages/Agentweaver.Identity/RuntimeContractValidation.cs',
             symbol: 'RequireSupportedNumericRunLimits',
             code: 'runtime_numeric_limits_unsupported',
+            detail: 'Workflow-bound MaxToolCalls uses owner-prepared dispatch and begin admission. MaxPromptTokens is retained through owner projection and registration but is rejected before SDK setup; unbound MaxModelTurns and MaxToolCalls are rejected too.',
           },
           {
             path: 'packages/Agentweaver.AgentRuntime/AuthorizedRuntimeSession.cs',
@@ -87,7 +88,7 @@ export function runP1DispatchRecoveryProbes() {
     ),
     blockedProbe(
       'checkpoint-restart-duplicate-fence',
-      'The P1 Sandbox replacement and ordinary runtime registration/bootstrap path still lack a supported profile producer for the exact replacement resource and an ordinary observer for the Host recovery mode/cache receipt. The P2 manifest suspend/resume path is explicitly excluded. This source-only command has no actual gate/join restart receipts proving checkpoint continuity and no duplicate native send.',
+      'The ordinary replacement-profile producer and owner-fenced placement, bootstrap, readiness, and source-derived recovery receipt exist, but this run-p1 source-only report does not dispatch, invoke, or ingest the native runner or collect a replacement-run recovery receipt. GatewayRouteCatalog has no matching mapping, and no transport or live receipt proves a replacement run. The P2 manifest suspend/resume path is explicitly excluded; ResumeCache remains specific to that flow. This report has no actual gate/join restart receipts proving checkpoint continuity and no duplicate native send.',
       sourceOnlyEvidence([
         {
           owner: 'Projects & Config, Orchestrator, and MAF owner',
@@ -138,15 +139,14 @@ export function runP1DispatchRecoveryProbes() {
         },
       ], [
         {
-          path: 'services/environment/Agentweaver.Environment/EnvironmentRuntimeBootstrapProfiles.cs',
-          symbol: 'EnvironmentRuntimeBootstrapProfileRegistry.Resolve',
-          code: 'runtime_delivery_unavailable',
-          detail: 'Immutable owner/profile mapping requires an exact ProviderResourceRef; no accepted ordinary producer supplies the replacement mapping.',
+          path: 'services/environment/Agentweaver.Environment/EnvironmentRuntimePlacementReader.cs',
+          symbol: 'ResolveCurrentProfileAsync, GetReadinessContextAsync',
+          detail: 'The authenticated replacement producer and ordinary owner/readiness sources exist. This run-p1 report does not invoke or dispatch them; GatewayRouteCatalog has no matching mapping, and no transport or live receipt is produced.',
         },
         {
           path: 'packages/Agentweaver.AgentRuntime/RuntimeAgentHost.cs',
           symbol: 'ReadinessAsyncCore',
-          detail: 'Ordinary readiness omits RuntimeSessionRecovery mode and cache receipt; ResumeCache is populated only by the excluded P2 manifest-resume flow. Readiness/registration alone also cannot prove the exact endpoint matches the receiver expected audience and certificate DNS name.',
+          detail: 'Ordinary RuntimeHostReadinessReceipt includes the source-derived RuntimeSessionRecovery mode and RuntimeHostRecoveryReceipt, including native-cache acknowledgment or journal evidence. This report does not invoke the runner or collect a run-specific recovery receipt; ResumeCache remains specific to the excluded P2 manifest-resume flow. Readiness/registration alone cannot prove actual native consumption or that the exact endpoint matches the receiver expected audience and certificate DNS name.',
         },
       ]),
     ),

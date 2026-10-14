@@ -15,7 +15,8 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
     EnvironmentRuntimePlacementReader placements,
     EnvironmentRuntimeBootstrapProfileRegistry profiles,
     TimeProvider timeProvider,
-    IEnvironmentRuntimeResumeBootstrapStore? resumeBootstraps = null)
+    IEnvironmentRuntimeResumeBootstrapStore? resumeBootstraps = null,
+    IEnvironmentRuntimeBootstrapProfileReplacementStore? profileReplacements = null)
 {
     private readonly RuntimeRegistrationHttpClient _owner = new(
         client, options.OrchestratorOwnerAddress);
@@ -142,7 +143,7 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
         var binding = registration.Binding;
         var placement = await placements.GetBootstrapContextAsync(
             actor, binding.ProjectId, binding.RunId, binding.SessionId, binding.EnvironmentId, binding.ProfileId,
-            profiles, token).ConfigureAwait(false)
+            profiles, token, profileReplacements).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_delivery_unavailable");
         if (placement.TenantId != binding.TenantId || placement.ProjectId != binding.ProjectId ||
             placement.RunId != binding.RunId || placement.EnvironmentId != binding.EnvironmentId ||

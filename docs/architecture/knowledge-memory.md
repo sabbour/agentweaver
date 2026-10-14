@@ -42,6 +42,12 @@ binding a Memory provider. Redirects, owner errors, malformed or mismatched resp
 and missing permissions fail explicitly; Knowledge does not mint a token or infer
 authority from path values.
 
+Context composition always observes Knowledge's configured `DefaultContextTokens`
+ceiling. When the accepted run selection has a prompt-token cap, the lower of that
+cap and the Knowledge ceiling applies; when it omits the cap, the Knowledge ceiling
+still applies. This retrieval budget does not make a configured runtime prompt cap
+enforceable.
+
 Visibility is project-admin scoped, not agent-owned: a current project Owner receives
 `AccessPrivateKnowledge` for that project, including on an exact run-bound token;
 generic `WriteProjects` remains unbound-only. A TenantAdmin receives
@@ -237,7 +243,8 @@ recency. It emits JSON inside explicit untrusted-context delimiters and instruct
 consumers never to follow instructions embedded in stored values. Each selected
 decision, memory, and SessionContext includes an immutable revision reference.
 Configured item and token limits can only be narrowed by a request; the token limit
-is also bounded by the accepted run's prompt-token limit. Candidate overflow and
+is also bounded by the accepted run's Knowledge retrieval budget. This does not
+limit the complete prompt sent to a model. Candidate overflow and
 mandatory-decision or output-budget overflow are visible errors, not silent
 truncation of mandatory content.
 

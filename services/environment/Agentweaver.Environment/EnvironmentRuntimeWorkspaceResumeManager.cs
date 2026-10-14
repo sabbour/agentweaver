@@ -12,7 +12,8 @@ public sealed class EnvironmentRuntimeWorkspaceResumeManager(
     EnvironmentEgressManager egress,
     EnvironmentRuntimeBootstrapDelivery delivery,
     EnvironmentRuntimePlacementReader placements,
-    EnvironmentRuntimeBootstrapProfileRegistry profiles)
+    EnvironmentRuntimeBootstrapProfileRegistry profiles,
+    IEnvironmentRuntimeBootstrapProfileReplacementStore? profileReplacements = null)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly JsonSerializerOptions SelectionJsonOptions = new(JsonSerializerDefaults.Web)
@@ -39,7 +40,21 @@ public sealed class EnvironmentRuntimeWorkspaceResumeManager(
             request, current.Fence, selection, cancellationToken).ConfigureAwait(false);
         var sourceProvision = EnvironmentSandboxManager.ReadProvisionRequest(sourceLease);
         var sourceBinding = request.SourceRelease.HostReceipt.Registration.Binding;
-        profiles.Resolve(sourceFence.Owner, sourceBinding.ProfileId, sourceLease.ProvisionedResource!.Resource);
+        var sourceResource = sourceLease.ProvisionedResource!.Resource;
+        if (!profiles.TryResolve(sourceFence.Owner, sourceBinding.ProfileId, sourceResource, out _))
+        {
+            var replacement = profileReplacements is null
+                ? null
+                : await profileReplacements.ReadAsync(
+                    sourceFence.Owner, sourceBinding.ProfileId, cancellationToken).ConfigureAwait(false);
+            if (replacement is null ||
+                replacement.Registration.Placement != sourceResource ||
+                replacement.LifecycleGeneration != sourceBinding.EnvironmentLifecycleGeneration ||
+                replacement.CurrentFencingGeneration != sourceBinding.EnvironmentCurrentFencingGeneration ||
+                replacement.ProviderFencingGeneration != sourceBinding.EnvironmentProviderFencingGeneration ||
+                replacement.LeaseRevision != sourceBinding.EnvironmentLeaseRevision)
+                throw new RuntimeAuthorizationException("runtime_resume_profile_stale");
+        }
         await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
         var transitioned = await lifecycle.TransitionAsync(
             new(sourceFence.Owner, sourceFence.LifecycleGeneration, EnvironmentLifecycleState.Active,
@@ -69,7 +84,7 @@ public sealed class EnvironmentRuntimeWorkspaceResumeManager(
         if (result.State != SandboxLeaseState.Active)
             throw new RuntimeAuthorizationException("runtime_resume_placement_unavailable");
         var workspace = await placements.GetResumeWorkspaceContextAsync(
-            actor, request, profiles, RequireCurrentAsync, cancellationToken).ConfigureAwait(false)
+            actor, request, profiles, RequireCurrentAsync, cancellationToken, profileReplacements).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_resume_placement_unavailable");
         await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
         return new RuntimeWorkspaceResumePlacementReceipt(
@@ -99,14 +114,14 @@ public sealed class EnvironmentRuntimeWorkspaceResumeManager(
             caller, targetFence.Owner, cancellationToken).ConfigureAwait(false);
         await ReadSourceAsync(request, targetFence, selection, cancellationToken).ConfigureAwait(false);
         var before = await placements.GetResumeWorkspaceContextAsync(
-            actor, request, profiles, RequireCurrentAsync, cancellationToken).ConfigureAwait(false)
+            actor, request, profiles, RequireCurrentAsync, cancellationToken, profileReplacements).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_resume_placement_unavailable");
         if (!SameJson(before, request.RestoredWorkspace))
             throw new RuntimeAuthorizationException("runtime_resume_placement_changed");
         await RequireCurrentAsync(cancellationToken).ConfigureAwait(false);
         var host = await delivery.VerifyResumeWorkspaceAsync(request, actor, cancellationToken).ConfigureAwait(false);
         var after = await placements.GetResumeWorkspaceContextAsync(
-            actor, request, profiles, RequireCurrentAsync, cancellationToken).ConfigureAwait(false)
+            actor, request, profiles, RequireCurrentAsync, cancellationToken, profileReplacements).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_resume_placement_unavailable");
         if (!SameJson(before, after))
             throw new RuntimeAuthorizationException("runtime_resume_placement_changed");

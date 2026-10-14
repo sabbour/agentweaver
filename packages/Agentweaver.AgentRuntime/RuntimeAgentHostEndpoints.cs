@@ -65,7 +65,11 @@ public static class RuntimeAgentHostEndpoints
             (HttpContext context, RuntimeWorkspaceResumeRequest request, CancellationToken token) =>
                 ExecuteAsync(context, configure, timeProvider,
                     actor => host.VerifyWorkspaceResumeAsync(request, actor, token))).RequireAuthorization();
-        endpoints.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
+        endpoints.MapGet("/health/live", (HttpContext context) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            return Results.Ok(new { status = "live" });
+        });
         endpoints.MapGet("/health/ready", async (HttpContext context, CancellationToken token) =>
         {
             context.Response.Headers.CacheControl = "no-store";

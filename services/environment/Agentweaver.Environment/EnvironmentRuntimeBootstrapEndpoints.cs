@@ -31,6 +31,31 @@ public static class EnvironmentRuntimeBootstrapEndpoints
             await ExecuteAsync(context, timeProvider,
                 actor => delivery.ActivateAsync(request, actor, token), token).ConfigureAwait(false))
             .RequireAuthorization();
+        endpoints.MapPost(
+            "/internal/projects/{projectId}/runs/{runId}/environments/{environmentId}" +
+            "/coordination/sessions/{sessionId}/runtime-bootstrap/profiles/{profileId}/resolve",
+            async (
+                string projectId,
+                string runId,
+                string environmentId,
+                string sessionId,
+                string profileId,
+                RuntimeBootstrapProfileResolveRequest request,
+                HttpContext context,
+                [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimePlacementReader placements,
+                [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimeBootstrapProfileRegistry profiles,
+                [Microsoft.AspNetCore.Mvc.FromServices] IEnvironmentRuntimeBootstrapProfileReplacementStore replacements,
+                [Microsoft.AspNetCore.Mvc.FromServices] EnvironmentRuntimeEndpointVerifier endpointVerifier,
+                TimeProvider timeProvider,
+                CancellationToken token) =>
+                await ExecuteAsync(context, timeProvider, actor =>
+                {
+                    request.Validate();
+                    return placements.ResolveCurrentProfileAsync(
+                        actor, projectId, runId, sessionId, environmentId, profileId,
+                        profiles, replacements, endpointVerifier, token);
+                }, token, "runtime_bootstrap_profile_invalid").ConfigureAwait(false))
+            .RequireAuthorization();
         endpoints.MapPost("/internal/runtime/bootstrap/deliver", async (
             RuntimeBootstrapDeliveryRequest request,
             HttpContext context,
@@ -91,7 +116,7 @@ public static class EnvironmentRuntimeBootstrapEndpoints
 
     private static async Task<IResult> ExecuteAsync<T>(
         HttpContext context, TimeProvider time, Func<RuntimeActorAuthorization, Task<T>> action,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string invalidCode = "runtime_activation_invalid")
     {
         context.Response.Headers.CacheControl = "no-store";
         var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
@@ -115,13 +140,17 @@ public static class EnvironmentRuntimeBootstrapEndpoints
         {
             return Results.Conflict(new { code = failure.Code });
         }
+        catch (SandboxProviderException failure)
+        {
+            return Results.Conflict(new { code = failure.Code });
+        }
         catch (ProjectsConfigApiException failure)
         {
             return EnvironmentEndpoints.ToProjectAuthorizationResult(failure);
         }
         catch (ArgumentException)
         {
-            return Results.BadRequest(new { code = "runtime_activation_invalid" });
+            return Results.BadRequest(new { code = invalidCode });
         }
         catch (HttpRequestException)
         {

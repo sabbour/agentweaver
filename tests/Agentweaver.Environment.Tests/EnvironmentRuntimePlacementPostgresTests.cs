@@ -335,7 +335,7 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
         Assert.Equal(4, context.TransitionRevision);
         Assert.Equal(core, context.Placement.RuntimeOwnerContext);
         Assert.Equal(sandbox.Resource, context.Placement.Resource);
-        Assert.Equal(1, coreTransport.Reads);
+        Assert.Equal(2, coreTransport.Reads);
         var responseJson = JsonSerializer.Serialize(context, json);
         Assert.DoesNotContain("providerAttachmentDescriptor", responseJson);
         Assert.DoesNotContain("workspaceTreeSha256", responseJson);

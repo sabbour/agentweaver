@@ -60,6 +60,11 @@ public static class RuntimeUsageSourceEndpoints
                 [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
                 ExecuteAsync(context, () => owner.ReadFixedCreditGuardAsync(context, request, cancellationToken)))
             .RequireAuthorization();
+        endpoints.MapPost("/internal/runtime/credit-guards/read",
+            (RuntimeCreditGuardReadRequest request, HttpContext context,
+                [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>
+                ExecuteAsync(context, () => owner.ReadCreditGuardAsync(context, request, cancellationToken)))
+            .RequireAuthorization();
         endpoints.MapPost("/internal/runtime/turns/fixed-credit-denials/no-send",
             (RuntimeFixedCreditNoSendEvidenceRequest request, HttpContext context,
                 [FromServices] RuntimeUsageSourceOwner owner, CancellationToken cancellationToken) =>

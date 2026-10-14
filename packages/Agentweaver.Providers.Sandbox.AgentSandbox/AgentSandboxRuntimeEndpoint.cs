@@ -57,8 +57,15 @@ public sealed partial class AgentSandboxProvider
             throw RuntimeEndpointUnavailable();
         try
         {
-            return new SandboxRuntimeHttpsEndpoint(
-                new Uri($"https://{fqdn}:8443/"), podAddress, podUid, RequiredString(metadata, "uid")).Validate();
+            var address = new Uri($"https://{fqdn}:8443/");
+            var configureEndpoint = await ReadReceiverConfigureEndpointAsync(
+                @namespace, options.AgentHost, cancellationToken).ConfigureAwait(false);
+            var endpoint = new SandboxRuntimeHttpsEndpoint(
+                address, podAddress, podUid, RequiredString(metadata, "uid"))
+            {
+                ReceiverConfigureEndpoint = configureEndpoint
+            };
+            return endpoint.ValidateForConfigureEndpoint(configureEndpoint);
         }
         catch (ArgumentException exception)
         {
@@ -80,6 +87,50 @@ public sealed partial class AgentSandboxProvider
         label[0] is >= 'a' and <= 'z' or >= '0' and <= '9' &&
         label[^1] is >= 'a' and <= 'z' or >= '0' and <= '9' &&
         label.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
+
+    private async Task<Uri> ReadReceiverConfigureEndpointAsync(
+        string @namespace, AgentSandboxOptions.AgentSandboxAgentHostProfile? host,
+        CancellationToken cancellationToken)
+    {
+        if (host is null)
+            throw RuntimeEndpointUnavailable();
+        var configMap = await _client.GetAsync(
+            string.Empty, "configmaps", @namespace, host.ConfigurationMapName, cancellationToken)
+            .ConfigureAwait(false);
+        if (configMap is null ||
+            ReadOptionalString(configMap.Value, "metadata", "name") != host.ConfigurationMapName ||
+            ReadOptionalString(configMap.Value, "metadata", "namespace") != @namespace ||
+            !TryGetBoolean(configMap.Value, "immutable", out var immutable) || !immutable)
+            throw RuntimeEndpointUnavailable();
+
+        var appSettings = ReadOptionalString(configMap.Value, "data", "appsettings.json")
+            ?? throw RuntimeEndpointUnavailable();
+        try
+        {
+            using var document = JsonDocument.Parse(appSettings);
+            var root = document.RootElement;
+            var configure = ReadOptionalString(root, "AgentHost", "ConfigureEndpoint");
+            var audience = ReadOptionalString(root, "AgentHost", "Authentication", "Audience");
+            if (!Uri.TryCreate(configure, UriKind.Absolute, out var configureEndpoint) ||
+                configureEndpoint.Scheme != Uri.UriSchemeHttps ||
+                !string.IsNullOrEmpty(configureEndpoint.UserInfo) ||
+                !string.IsNullOrEmpty(configureEndpoint.Fragment) ||
+                !string.IsNullOrEmpty(configureEndpoint.Query) ||
+                configureEndpoint.AbsolutePath != "/runtime/v1/configure" ||
+                !Uri.TryCreate(audience, UriKind.Absolute, out var audienceEndpoint) ||
+                audienceEndpoint != configureEndpoint)
+                throw RuntimeEndpointUnavailable();
+            return configureEndpoint;
+        }
+        catch (JsonException exception)
+        {
+            throw new SandboxProviderException(
+                "sandbox_runtime_configuration_invalid",
+                "The immutable AgentHost configuration is invalid.",
+                effectMayHaveApplied: false,
+                exception);
+        }
+    }
 
     private static SandboxProviderException RuntimeEndpointUnavailable() =>
         new("sandbox_runtime_endpoint_unavailable",

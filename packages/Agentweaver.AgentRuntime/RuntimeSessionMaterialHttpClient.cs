@@ -1,4 +1,6 @@
+using System.Buffers.Binary;
 using System.Collections.Immutable;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -121,6 +123,8 @@ public sealed class RuntimeSessionMaterialHttpClient(
         long totalContentBytes = 0;
         string? cursor = null;
         var cursors = new HashSet<string>(StringComparer.Ordinal);
+        using var journalHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var journalEntryCount = 0;
         while (true)
         {
             var path = $"/internal/sessions/{Uri.EscapeDataString(binding.SessionId)}/events?limit=100";
@@ -134,6 +138,8 @@ public sealed class RuntimeSessionMaterialHttpClient(
                     recorded.EventId == Guid.Empty)
                     throw new RuntimeAuthorizationException("runtime_journal_page_invalid");
                 lastPosition = recorded.Position;
+                SessionMaterialAcknowledgment? turnMaterial = null;
+                string? turnContentSha256 = null;
                 if (recorded.Payload is TurnSessionPayload turn)
                 {
                     if (turn.Role is not ("user" or "assistant"))
@@ -148,9 +154,19 @@ public sealed class RuntimeSessionMaterialHttpClient(
                         throw new RuntimeAuthorizationException("runtime_journal_turn_invalid");
                     turns.Add((turn.Role, Utf8.GetString(material.Bytes)));
                     lastTurnPosition = recorded.Position;
+                    turnMaterial = material.Material;
+                    turnContentSha256 = RuntimeContractValidation.Hash(material.Bytes);
                 }
                 else if (recorded.Payload is CacheReferenceSessionPayload)
                     latestCache = recorded;
+
+                var journalEntry = JsonSerializer.SerializeToUtf8Bytes(
+                    new RuntimeSessionJournalHashEntry(recorded, turnMaterial, turnContentSha256), JournalJson);
+                var lengthPrefix = new byte[sizeof(int)];
+                BinaryPrimitives.WriteInt32BigEndian(lengthPrefix, journalEntry.Length);
+                journalHash.AppendData(lengthPrefix);
+                journalHash.AppendData(journalEntry);
+                journalEntryCount++;
             }
             if (!page.HasMore)
                 break;
@@ -174,7 +190,14 @@ public sealed class RuntimeSessionMaterialHttpClient(
                     throw new RuntimeAuthorizationException("runtime_journal_cache_invalid");
             }
         }
-        return new(identity, binding.TenantId, cache, turns);
+        var journalEvidence = journalEntryCount == 0
+            ? null
+            : new RuntimeSessionJournalEvidence(
+                lastPosition, Convert.ToHexStringLower(journalHash.GetHashAndReset()));
+        return new RuntimeSessionRecovery(identity, binding.TenantId, cache, turns)
+        {
+            JournalEvidence = journalEvidence
+        };
     }
 
     internal async Task<RuntimeSessionRecovery> ReadResumeCacheAsync(

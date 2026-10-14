@@ -1235,6 +1235,51 @@ internal sealed class RuntimeUsageSourceStore(
         return stored.Receipt;
     }
 
+    internal async Task<RuntimeCreditGuardSnapshot?> ReadCreditGuardWithinTransactionAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
+        RuntimeCreditGuardIntent intent, CancellationToken cancellationToken)
+    {
+        RuntimeCreditGuardObservationContract.RequireIntent(intent, registration);
+        await using var command = new NpgsqlCommand($"""
+            SELECT root_session_id, tenant_id, accepted_selection_hash, execution_fence,
+                copilot_soft_credit_limit, copilot_hard_credit_limit, cost_rate_scope_identity,
+                cost_unit, cost_scope, copilot_aic_floor,
+                accounted_through_event_position, usage_witness_digest, owner_revision,
+                soft_warning_emitted, hard_cap_exhausted, updated_at
+            FROM {_guards}
+            WHERE project_id = @project AND run_id = @run
+            FOR SHARE
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, intent.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, intent.RunId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            return null;
+
+        var softLimit = reader.IsDBNull(4) ? (decimal?)null : reader.GetDecimal(4);
+        var hardLimit = reader.IsDBNull(5) ? (decimal?)null : reader.GetDecimal(5);
+        var costIdentity = reader.IsDBNull(6) ? null : reader.GetString(6);
+        var floor = reader.IsDBNull(9) ? (decimal?)null : reader.GetDecimal(9);
+        var ledgerEventCount = reader.IsDBNull(10) ? (long?)null : reader.GetInt64(10);
+        var ledgerDigest = reader.IsDBNull(11) ? null : reader.GetString(11);
+        if (reader.GetString(0) != intent.RootSessionId ||
+            reader.GetString(1) != intent.TenantId ||
+            reader.GetString(2) != intent.AcceptedSelectionHash ||
+            reader.GetInt64(3) != intent.ExecutionFence ||
+            softLimit != intent.SoftCreditLimit ||
+            hardLimit != intent.HardCreditLimit ||
+            costIdentity is null || floor is null || ledgerEventCount is null || ledgerDigest is null)
+            throw new RuntimeAuthorizationException("runtime_credit_guard_intent_conflict");
+
+        var snapshot = RuntimeCreditGuardObservationContract.Seal(new(
+            1, intent, RuntimeContractValidation.RegistrationHash(registration), costIdentity,
+            reader.GetString(7), reader.GetString(8), floor.Value, ledgerEventCount.Value,
+            ledgerDigest, reader.GetInt64(12), reader.GetBoolean(13), reader.GetBoolean(14),
+            reader.GetFieldValue<DateTimeOffset>(15), string.Empty));
+        RuntimeCreditGuardObservationContract.ValidateSnapshot(snapshot, registration, intent);
+        return snapshot;
+    }
+
     internal async Task<(UsageDispatchSourceCompletionManifest Manifest, string SelectionHash)?>
         ReadSourceCompletionAsync(
             string projectId, string runId, string sessionId, Guid dispatchId,

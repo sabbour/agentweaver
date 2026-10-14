@@ -227,7 +227,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             $"collector@sha256:{new string('b', 64)}", "linux/amd64",
             SandboxBuildTestLimits.OutputCollectorExecutable, [SandboxBuildTestLimits.OutputCollectorAssembly],
             SandboxBuildTestLimits.OutputCollectorMode, SandboxBuildTestLimits.OutputCollectorContainerName);
-        var sandboxProvider = new ControlledSandboxResourceProvider();
+        var sandboxProvider = new ControlledSandboxResourceProvider(registration.Descriptor.Id);
         using var optionsDocument = JsonDocument.Parse("{}");
         var expectedBinding = new SandboxBuildTestExpectedBinding(
             new(new(TenantId, project.ProjectId, RunId, "environment-1"), 1), Guid.NewGuid(),

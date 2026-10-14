@@ -159,6 +159,12 @@ active child turn. A Fixed association must match the current accepted selection
 execution fence, decision version, and child identity. The endpoint rechecks the
 root decision and current Projects authority after checkpoint reads and before returning.
 
+The authenticated `runtime-execution-observation` GET uses that same child mapping to
+read the current root execution checkpoint. It returns only the child’s status, pending
+dispatch identifiers and prompt hash, and a SHA-256/UTF-8-length pair for a completed
+result. The endpoint does not return result text and rejects stale owner, decision, or
+selection state.
+
 The authenticated session-scoped runtime-registration `GET` resolves that current child context.
 It pages registration IDs for the exact project, run, and session, with a maximum of 64 candidates.
 Each candidate must match the current owner and Environment placement.

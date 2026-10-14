@@ -213,7 +213,7 @@ does not produce a receipt.
   values. Identity stores only OAuth SecretRefs and returns installation
   tokens transiently.
 - Project provider overrides only select provider IDs permitted by the platform catalog. Exclusive, ordered-composite, platform-singleton, layered and meter-keyed Cost seams use the existing `ProviderResolver`; Application Hosting remains unsupported. Cost requirements name a source explicitly, and multiple distinct meter sources can appear in one selection. The snapshot preserves source keys, adapter/options versions and advertised/required capabilities.
-- The service requires project egress rules to be a subset of the platform baseline and checks each run's required destinations. Project run limits can only reduce configured platform limits.
+- The service requires project egress rules to be a subset of the platform baseline and checks each run's required destinations. Project run limits can only reduce configured platform limits. A prompt-token limit is optional in new platform defaults and run selections. A project inherits the configured platform cap, can narrow it, or can add a cap when the platform has none. Omission stays absent in new selections. Existing configured values and accepted snapshots remain unchanged.
 - The immutable run-selection snapshot carries the typed platform egress
   baseline, optional project narrowing, admitted run needs, and the effective
   allow list. It also carries each layered Network Policy provider's layer,

@@ -22,7 +22,8 @@ public static partial class CoordinationEndpoints
         OrchestratorOptions options, ProjectsRunSelectionClient projects,
         CoordinationOwnerStore store, CoordinatorDecisionOwnerStore decisions,
         CoordinatorRunSelectionContextStore runSelectionContexts, PostgresMafCheckpointStore checkpoints,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowTerminalChild = false)
     {
         context.Response.Headers.CacheControl = "no-store";
         var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
@@ -30,8 +31,9 @@ public static partial class CoordinationEndpoints
             context, projectId, runId, cancellationToken).ConfigureAwait(false);
         var budgetLimits = CoordinatorWorkflowCatalog.ReadRuntimeBudgetLimits(selection.Selection.Snapshot);
         var identity = new SessionIdentity(projectId, runId, sessionId);
-        var owner = await store.ReadRuntimeOwnerStateAsync(actor, identity, cancellationToken)
-            .ConfigureAwait(false);
+        var owner = await (allowTerminalChild
+            ? store.ReadRuntimeOwnerStateForObservationAsync(actor, identity, cancellationToken)
+            : store.ReadRuntimeOwnerStateAsync(actor, identity, cancellationToken)).ConfigureAwait(false);
         var root = new SessionIdentity(projectId, runId, owner.RootSessionId);
         var selectionContext = await runSelectionContexts.ReadAsync(
                 selection.Selection, owner.ExecutionFence, cancellationToken).ConfigureAwait(false)
@@ -40,7 +42,8 @@ public static partial class CoordinationEndpoints
             .ConfigureAwait(false);
         if (decision.State.Fence != owner.ExecutionFence ||
             decision.SelectionHash != owner.AcceptedSelectionHash ||
-            !decision.State.CanDispatch || decision.State.ConfirmedWorkPlan is not { } confirmedPlan)
+            (!allowTerminalChild && !decision.State.CanDispatch) ||
+            decision.State.ConfirmedWorkPlan is not { } confirmedPlan)
             throw new CoordinationException("runtime_owner_context_unavailable", StatusCodes.Status409Conflict);
         var validatedPlan = WorkPlanValidator.ValidateAndSnapshot(
             confirmedPlan.Workflow, confirmedPlan.Plan, selectionContext);
@@ -69,8 +72,11 @@ public static partial class CoordinationEndpoints
                 checkpoints, CreateExecutionCheckpointBinding(root, actor, owner.ExecutionFence,
                     MafExecutionCheckpointStore.CurrentSdkVersion,
                     PostgresMafCheckpointStore.ReadSelectedModelReference(selection.Selection.Snapshot)));
-            fixedAssociation = await execution.ReadFixedWorkAssociationAsync(
-                sessionId, plan.Plan.Id, cancellationToken).ConfigureAwait(false);
+            fixedAssociation = await (allowTerminalChild
+                ? execution.ReadFixedWorkAssociationForObservationAsync(
+                    sessionId, plan.Plan.Id, cancellationToken)
+                : execution.ReadFixedWorkAssociationAsync(
+                    sessionId, plan.Plan.Id, cancellationToken)).ConfigureAwait(false);
             if (fixedAssociation is null ||
                 !MatchesFixedRuntimeAssociation(fixedAssociation, plan, selectionContext, root,
                     sessionId, owner.AcceptedSelectionHash, owner.ExecutionFence, decision.StateVersion))
@@ -85,15 +91,17 @@ public static partial class CoordinationEndpoints
             .ConfigureAwait(false);
         await RequireUnchangedAuthorizedSelectionAsync(
             context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
-        var currentOwner = await store.ReadRuntimeOwnerStateAsync(actor, identity, cancellationToken)
-            .ConfigureAwait(false);
+        var currentOwner = await (allowTerminalChild
+            ? store.ReadRuntimeOwnerStateForObservationAsync(actor, identity, cancellationToken)
+            : store.ReadRuntimeOwnerStateAsync(actor, identity, cancellationToken)).ConfigureAwait(false);
         if (currentOwner != owner)
             throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
         var currentDecision = await decisions.ReadCurrentAsync(actor, root, selection, cancellationToken)
             .ConfigureAwait(false);
         if (currentDecision.StateVersion != decision.StateVersion ||
             currentDecision.SelectionHash != decision.SelectionHash ||
-            currentDecision.State.Fence != owner.ExecutionFence || !currentDecision.State.CanDispatch ||
+            currentDecision.State.Fence != owner.ExecutionFence ||
+            (!allowTerminalChild && !currentDecision.State.CanDispatch) ||
             currentDecision.State.ConfirmedWorkPlan is not { } currentConfirmedPlan)
             throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
         if (owner.WorkPlanItemId is { } currentWorkPlanItemId)
@@ -112,8 +120,11 @@ public static partial class CoordinationEndpoints
                 currentConfirmedPlan.Workflow, currentConfirmedPlan.Plan, selectionContext);
             if (!currentPlan.IsValid || currentPlan.Value is null)
                 throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
-            var currentAssociation = await execution!.ReadFixedWorkAssociationAsync(
-                sessionId, currentPlan.Value.Plan.Id, cancellationToken).ConfigureAwait(false);
+            var currentAssociation = await (allowTerminalChild
+                ? execution!.ReadFixedWorkAssociationForObservationAsync(
+                    sessionId, currentPlan.Value.Plan.Id, cancellationToken)
+                : execution!.ReadFixedWorkAssociationAsync(
+                    sessionId, currentPlan.Value.Plan.Id, cancellationToken)).ConfigureAwait(false);
             if (currentAssociation is null ||
                 !MatchesFixedRuntimeAssociation(currentAssociation, currentPlan.Value, selectionContext,
                     root, sessionId, currentDecision.SelectionHash, owner.ExecutionFence,
@@ -122,14 +133,18 @@ public static partial class CoordinationEndpoints
                     root, sessionId, currentDecision.SelectionHash, owner.ExecutionFence,
                     currentDecision.StateVersion))
                 throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
-            if (await store.ReadRuntimeOwnerStateAsync(actor, identity, cancellationToken).ConfigureAwait(false) != owner)
+            var currentFixedOwner = await (allowTerminalChild
+                ? store.ReadRuntimeOwnerStateForObservationAsync(actor, identity, cancellationToken)
+                : store.ReadRuntimeOwnerStateAsync(actor, identity, cancellationToken)).ConfigureAwait(false);
+            if (currentFixedOwner != owner)
                 throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
             var latestDecision = await decisions.ReadCurrentAsync(actor, root, selection, cancellationToken)
                 .ConfigureAwait(false);
             if (latestDecision.StateVersion != decision.StateVersion ||
                 latestDecision.SelectionHash != decision.SelectionHash ||
-                latestDecision.State.Fence != owner.ExecutionFence || !latestDecision.State.CanDispatch)
-                throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
+            latestDecision.State.Fence != owner.ExecutionFence ||
+            (!allowTerminalChild && !latestDecision.State.CanDispatch))
+            throw new CoordinationException("runtime_owner_context_stale", StatusCodes.Status409Conflict);
         }
         await RequireUnchangedAuthorizedSelectionAsync(
             context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);

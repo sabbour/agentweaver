@@ -485,7 +485,31 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
     public async Task EndpointCannotWidenConfiguredPromptTokenBudget()
     {
         await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
-        var owner = new FakeProjectsOwnerHandler(database.Options, writeAllowed: true);
+        var owner = new FakeProjectsOwnerHandler(
+            database.Options, writeAllowed: true, maxPromptTokens: 500);
+        await using var app = await CreateAppAsync(database, owner);
+        using var client = app.GetTestClient();
+        using var contextRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            "/api/projects/project-a/runs/run-a/agents/agent-a/context?maxTokens=501");
+        contextRequest.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+            "Bearer", "caller-token");
+
+        using var response = await client.SendAsync(contextRequest);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("context_budget_exceeded", await response.Content.ReadAsStringAsync());
+        Assert.Equal(
+            ["/api/authorization/context", "/api/projects/project-a/runs/run-a/selection"],
+            owner.Paths.ToArray());
+    }
+
+    [Fact]
+    public async Task EndpointUsesLocalContextTokenCeilingWhenRunSelectionHasNoPromptTokenLimit()
+    {
+        await using var database = await NativePostgresMemoryProviderTests.KnowledgeDatabase.CreateAsync(postgres);
+        var owner = new FakeProjectsOwnerHandler(
+            database.Options, writeAllowed: true, maxPromptTokens: null);
         await using var app = await CreateAppAsync(database, owner);
         using var client = app.GetTestClient();
         using var contextRequest = new HttpRequestMessage(
@@ -977,7 +1001,8 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
         ProviderDescriptor? selectedMemoryDescriptor = null,
         int? selectedOptionsSchemaVersion = null,
         string? selectedOptionsRevision = null,
-        bool revokeWriteAfterFirstSelection = false) : HttpMessageHandler
+        bool revokeWriteAfterFirstSelection = false,
+        int? maxPromptTokens = 1000) : HttpMessageHandler
     {
         private readonly ConcurrentQueue<string> _paths = new();
         private readonly ConcurrentQueue<string?> _authorizationHeaders = new();
@@ -1071,7 +1096,7 @@ public sealed class KnowledgeEndpointBoundaryTests(KnowledgePostgresFixture post
                         descriptor.Hosting,
                         descriptor.AdvertisedCapabilities.ToImmutableArray(),
                         MemoryProviderCapabilities.All.ToImmutableArray())])],
-                new ProjectRunLimitSnapshot(1000));
+                new ProjectRunLimitSnapshot(maxPromptTokens));
         }
     }
 

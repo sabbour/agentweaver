@@ -186,6 +186,7 @@ public sealed class RuntimeWorkspaceResumeTests
 
     [Theory]
     [InlineData("exact")]
+    [InlineData("changed-configure")]
     [InlineData("denied")]
     [InlineData("changed-echo")]
     [InlineData("changed-hash")]
@@ -193,7 +194,16 @@ public sealed class RuntimeWorkspaceResumeTests
     public async Task NativeVerificationRequiresCurrentCoreAuthorityBeforeAndAfterTheRead(string fault)
     {
         var source = Request();
-        var request = source with { PhaseVersion = 3, RestoredWorkspace = Workspace(source) };
+        var workspace = Workspace(source);
+        if (fault == "changed-configure")
+            workspace = workspace with
+            {
+                Placement = workspace.Placement with
+                {
+                    ConfigureEndpoint = new Uri("https://foreign-runtime.agentweaver.svc.cluster.local:8443/runtime/v1/configure")
+                }
+            };
+        var request = source with { PhaseVersion = 3, RestoredWorkspace = workspace };
         var actor = Actor();
         using var handler = new ResumeDeliveryHandler(request, fault, actor);
         using var http = new HttpClient(handler);
@@ -206,13 +216,15 @@ public sealed class RuntimeWorkspaceResumeTests
             Assert.Equal(request.SourceManifest.WorkspaceTreeSha256, receipt.ActualTreeSha256);
             Assert.Equal(2, handler.AuthorityCalls);
             Assert.Equal(1, handler.HostCalls);
-            Assert.Equal("https://sandbox-2.agentweaver.svc.cluster.local:8443/runtime/v1/workspace/resume",
+            Assert.Equal("https://runtime-receiver.agentweaver.svc.cluster.local:8443/runtime/v1/workspace/resume",
                 handler.HostAddress);
         }
         else
         {
             await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 delivery.VerifyResumeWorkspaceAsync(request, actor, CancellationToken.None));
+            if (fault == "changed-configure")
+                Assert.Equal(0, handler.AuthorityCalls);
             if (fault is "denied" or "changed-echo")
                 Assert.Equal(0, handler.HostCalls);
         }
@@ -266,12 +278,17 @@ public sealed class RuntimeWorkspaceResumeTests
     {
         var fence = new EnvironmentGenerationFence(request.SourceManifest.EnvironmentFence!.Owner, 2);
         var resource = new ProviderResourceRef(ProviderSeam.Sandbox, "agent-sandbox", "claim-2", 2);
+        var receiverConfigureEndpoint =
+            new Uri("https://runtime-receiver.agentweaver.svc.cluster.local:8443/runtime/v1/configure");
         var endpoint = new SandboxRuntimeHttpsEndpoint(
-            new("https://sandbox-2.agentweaver.svc.cluster.local:8443/"), "10.2.3.4", "pod-2", "service-2");
+            new("https://sandbox-2.agentweaver.svc.cluster.local:8443/"), "10.2.3.4", "pod-2", "service-2")
+        {
+            ReceiverConfigureEndpoint = receiverConfigureEndpoint
+        };
         var placement = new EnvironmentRuntimeBootstrapContext(
             1, "tenant", "project", "run", "environment", 2, 3, 3, 1, DateTimeOffset.UtcNow.AddMinutes(5),
             resource, new(Guid.NewGuid()), new("cluster"), "profile",
-            new(endpoint.Address, "runtime/v1/configure"), new("https://core.test/observe"))
+            receiverConfigureEndpoint, new("https://core.test/observe"))
         {
             RuntimeEndpoint = endpoint
         };

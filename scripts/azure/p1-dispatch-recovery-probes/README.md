@@ -4,7 +4,8 @@ This source-only command reports the two required P1 checks that cannot yet run
 against accepted production owner contracts. Both results are `blocked`; this is
 not native runtime evidence or P1 acceptance. It does not call Azure, Kubernetes,
 Orchestrator, Events, Environment, a model provider, or a database, and it creates
-no resources.
+no resources. It does not dispatch, invoke, or ingest the native runner.
+`GatewayRouteCatalog` has no matching mapping for this report.
 
 Run the fixed report command from the repository root:
 
@@ -33,14 +34,16 @@ status; the full P1 result must remain incomplete while either slot is blocked.
 
 ## Missing numeric-dispatch contract
 
-`RuntimeAgentHost.ConfigureAsync` permits `MaxModelTurns` only for
-workflow-bound registrations, whose native sends use owner-prepared dispatch
-and begin admission. An unbound `MaxModelTurns`, any `MaxToolCalls`, or any
-`MaxPromptTokens` still fails before SDK setup with
-`runtime_numeric_limits_unsupported`. Positive HostedCopilot hard credit
-limits are supported for workflow-bound registrations through owner-prepared
-dispatch and begin admission. Unbound registrations still deny positive hard
-limits with `runtime_usage_affinity_unavailable`.
+`RuntimeAgentHost.ConfigureAsync` supports `MaxModelTurns` and `MaxToolCalls`
+only for workflow-bound registrations, whose native sends use owner-prepared
+dispatch and begin admission. `MaxPromptTokens` is preserved through owner
+projection and registration but remains unsupported: `RuntimeContractValidation`
+rejects it with `runtime_numeric_limits_unsupported` before SDK setup, even for
+workflow-bound registrations. Unbound `MaxModelTurns` and `MaxToolCalls` are
+also rejected with that code. Positive HostedCopilot hard credit limits are
+supported for workflow-bound registrations through owner-prepared dispatch and
+begin admission. Unbound registrations still deny positive hard limits with
+`runtime_usage_affinity_unavailable`.
 
 The existing owner path already maintains conservative whole-run priced
 Copilot totals across child runs. Before admitting a native workflow turn, the
@@ -65,12 +68,12 @@ ledger-event count. Keep unbound and legacy dispatches denied; do not weaken
 pending/indeterminate sibling checks or claim that an already admitted turn can
 be recalled.
 
-AgentHost permits `MaxModelTurns` only when every constrained send uses the
-prepared-dispatch, action-grant and native-begin path. Other limits remain
-unsupported until their exact native hook or capacity enforcement is wired and
-tested. Existing no-resend, pending-accounting and sticky exhaustion rules must
-remain in force. Estimated counts, a failed dispatch response, an old pricing
-snapshot, or a missing journal event is not proof of no send.
+AgentHost permits `MaxModelTurns` and `MaxToolCalls` only when every constrained
+send uses the prepared-dispatch, action-grant and native-begin path.
+`MaxPromptTokens` remains unsupported before SDK setup. Existing no-resend,
+pending-accounting and sticky exhaustion rules must remain in force. Estimated
+counts, a failed dispatch response, an old pricing snapshot, or a missing
+journal event is not proof of no send.
 
 ## Missing P1 replacement and recovery evidence
 
@@ -82,15 +85,21 @@ check. No same-lease Host restart API is required.
 
 The ordinary Environment bootstrap profile registry is immutable and maps an
 Environment owner plus `ProfileId` to one exact `ProviderResourceRef`.
-`EnvironmentRuntimePlacementReader` rejects a replacement resource unless an
-accepted profile mapping names that exact resource. The current P1 source has
-no owner-authorized ordinary producer for a new mapping. Even after a valid
-replacement mapping exists, ordinary Host readiness reports registration,
-fences, placement phases, image, and source grant, but not
-`RuntimeSessionRecovery` mode or the cache receipt; the optional `ResumeCache`
-is set only by the excluded P2 flow. Readiness or registration alone also
-cannot prove that the replacement's native endpoint matches the receiver's
-expected audience and certificate DNS name.
+`EnvironmentRuntimePlacementReader` now has an authenticated ordinary producer
+for an endpoint-bound replacement and owner-bound bootstrap/readiness sources.
+They pin the actor, accepted selection, source configuration and exact profile
+copy. This report does not invoke or dispatch those sources, and it does not
+ingest the native runner. `GatewayRouteCatalog` has no matching mapping, so no
+transport or live receipt is available; both checks remain blocked. Ordinary
+Host readiness reports registration, fences, placement phases, image, source
+grant, and the source-derived `RuntimeSessionRecovery` mode and
+`RuntimeHostRecoveryReceipt`, including native-cache acknowledgment or journal
+evidence. This report does not invoke the native runner or collect a
+replacement-run recovery receipt, so it has no actual cache-consumption or
+journal evidence. `ResumeCache` remains specific to the excluded P2 flow.
+Readiness or registration alone also cannot prove that the replacement's
+native endpoint matches the receiver's expected audience and certificate DNS
+name.
 
 The ordinary P1 path needs owner receipts for accepted run/actor scope and
 gate/join state; MAF checkpoint ID, parent, revision and dispatch result; old
@@ -107,5 +116,5 @@ duplicate native send, journal event, or external effect. Do not infer this
 from cache compatibility, startup readiness, a changed Pod UID alone, a missing
 event, or a caller-supplied cache/receipt. The fixed source-only command cannot
 perform this run or collect those live owner receipts, so the check remains
-blocked until an accepted ordinary P1 replacement profile/observer and exact
-gate/join evidence exist.
+blocked until a supported invocation/transport path and exact gate/join evidence
+exist.

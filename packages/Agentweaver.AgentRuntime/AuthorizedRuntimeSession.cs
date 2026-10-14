@@ -62,6 +62,9 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
     public RuntimeSessionRecoveryMode RecoveryMode => _session.RecoveryMode;
     public string? RecoveryReason => _session.RecoveryReason;
     internal RuntimeResumeJournalRebuildReceipt? JournalRebuildReceipt => _session.JournalRebuildReceipt;
+    internal SessionMaterialAcknowledgment? ConsumedNativeCacheAcknowledgment =>
+        _session.ConsumedNativeCacheAcknowledgment;
+    internal RuntimeSessionJournalEvidence? JournalEvidence => _session.JournalEvidence;
 
     public async Task<string> SendTurnAsync(
         string prompt, RuntimeSessionMaterialHttpClient material, CancellationToken cancellationToken,

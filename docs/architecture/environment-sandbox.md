@@ -106,8 +106,9 @@ returned Kubernetes UID are distinct values. Missing placement returns no
 content; expired, stale, non-current, foreign, or non-active snapshots are
 rejected. Provider options, release descriptors, and credentials are not
 included. Profile mapping, receiver registration, and delivery receipts remain
-the responsibility of the separately owned bootstrap profile adapter; absent
-approved production transport remains unavailable.
+separate from placement projection; a missing profile mapping remains
+unavailable until the authenticated resolver verifies and persists an
+endpoint-bound replacement.
 
 The additive `providerPin` contains the successful consumer's provider, adapter version, options schema and revision, resource identity and generation, and negotiated capabilities.
 It contains no option values, recovery metadata, credentials, or unresolved candidates.
@@ -120,12 +121,52 @@ that reads the same Environment lease or perform provider effects. A successful
 placement read is not authorization for a later configure or provider effect;
 those operations recheck current authority and lease state independently.
 
-The runtime bootstrap profile adapter uses this same manager callback.
-It reads the fixed Orchestrator work-item context and resolves the exact registered
-profile while the lease transaction remains active.
-The callback does not request the full runtime registration or dispatch a provider effect.
-Both placement routes return no-store responses.
-This composition does not change Workspace attachment, retirement, or public write permission.
+Before creating or replacing a Runtime registration, Orchestrator calls the
+authenticated `POST .../runtime-bootstrap/profiles/{profileId}/resolve` owner
+route with the source profile ID. Environment reads the current run-authorized
+Sandbox placement, exact owner and fences, and actual receiver HTTPS endpoint.
+It checks the receiver configure URL and audience from the immutable AgentHost
+configuration, then verifies `/health/live` over HTTPS by connecting to the
+observed Pod IP while retaining the receiver DNS name for certificate
+validation. The probe accepts only a no-store JSON live response, sends no
+credentials, disables redirects and proxy use, and has a ten-second deadline
+and a 4 KiB response-body limit. It does not reuse a pooled connection across
+endpoint checks, so an old Pod connection cannot verify a replacement Pod.
+Environment stores an immutable profile
+mapping bound to that placement and endpoint. The derived profile ID is stable
+for the same placement and changes when the observed Pod or Service changes.
+Orchestrator uses only that returned ID for the registration and re-reads the
+current placement before committing its binding. A replacement Host therefore
+resolves a new profile after Pod or Service replacement; later bootstrap,
+readiness, and Workspace reads reject an old profile when the current endpoint
+no longer matches the stored one. The mapping carries no credential values and
+does not dispatch a provider effect. Both read and resolve routes return
+no-store responses. These routes do not change Workspace attachment,
+retirement, or public write permission.
+The replacement pins the authenticated actor, accepted selection hash, source
+profile configuration hash, and exact copied replacement profile. Its ID
+includes the requested source profile ID, actor, and accepted selection hash.
+Commit replay and later bootstrap, readiness, and Workspace reads recheck the actor,
+selection, and source configuration; a changed source profile after application
+reload or a changed profile copy fails closed. Only the replacement profile ID
+and configure endpoint differ from the source profile. Base profiles and the
+accepted model, tool, and provider selections remain unchanged.
+
+```mermaid
+sequenceDiagram
+    participant O as Orchestrator
+    participant E as Environment owner
+    participant S as Sandbox provider
+    participant H as AgentHost Pod
+    O->>E: POST profile resolve (source profile ID)
+    E->>S: Read current owner-fenced placement and HTTPS endpoint
+    S-->>E: Exact Service, Pod, receiver URL, and fences
+    E->>H: HTTPS GET /health/live (Pod IP; receiver DNS for TLS)
+    H-->>E: Live health response
+    E->>E: Persist endpoint-bound profile mapping
+    E-->>O: Stable resolved profile ID
+    O->>E: Re-read placement and bind Runtime registration
+```
 
 The Environment owner must already exist and be active. These routes do not
 register or release an Environment lifecycle, create a Core run provider pin,

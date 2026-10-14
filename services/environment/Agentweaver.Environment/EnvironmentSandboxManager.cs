@@ -445,9 +445,12 @@ public sealed class EnvironmentSandboxManager(
         Func<EnvironmentSandboxPlacementProjectionV1?, CancellationToken, Task<TResult>> project,
         CancellationToken cancellationToken,
         bool includeRuntimeReadiness = false,
-        bool includeRuntimeWorkspace = false)
+        bool includeRuntimeWorkspace = false,
+        bool includeRuntimeEndpoint = false,
+        Func<EnvironmentSandboxPlacementProjectionV1, bool>? requireEndpointWhen = null)
     {
-        if ((includeRuntimeReadiness || includeRuntimeWorkspace) && !runBoundRead)
+        if ((includeRuntimeReadiness || includeRuntimeWorkspace || includeRuntimeEndpoint ||
+                requireEndpointWhen is not null) && !runBoundRead)
             throw new ArgumentException("Runtime evidence requires run-bound placement-read authority.");
         var authorization = runBoundRead
             ? await egressManager.GetAuthorizedRunEnvironmentPlacementReadAsync(
@@ -508,7 +511,10 @@ public sealed class EnvironmentSandboxManager(
                 {
                     RuntimeWorkspace = ProjectRuntimeWorkspace(lifecycle.Fence, currentLease!, workspace)
                 };
-            if (projection is not null && (includeRuntimeReadiness || projection.RuntimeResume is not null))
+            var requireRuntimeEndpoint = projection is not null &&
+                (includeRuntimeEndpoint || projection.RuntimeResume is not null ||
+                 requireEndpointWhen?.Invoke(projection) == true);
+            if (projection is not null && (includeRuntimeReadiness || requireRuntimeEndpoint))
             {
                 var pinnedLease = currentLease!;
                 var selection = pinnedLease.ProvisionIntent.SelectionSnapshot
@@ -526,7 +532,7 @@ public sealed class EnvironmentSandboxManager(
                     callbackCancellationToken, runBoundRead).ConfigureAwait(false);
                 var describe = CreateDescribeRequest(pinnedLease) with
                 {
-                    RequireRuntimeEndpoint = projection.RuntimeResume is not null
+                    RequireRuntimeEndpoint = requireRuntimeEndpoint
                 };
                 var observation = (await sandboxProvider.DescribeAsync(describe, callbackCancellationToken)
                     .ConfigureAwait(false)).ValidateFor(describe);

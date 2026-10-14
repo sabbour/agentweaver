@@ -2,6 +2,7 @@ extern alias EventsHost;
 extern alias OrchestratorHost;
 extern alias ProjectsConfig;
 extern alias WebHost;
+extern alias EnvironmentService;
 
 using System.Collections.Immutable;
 using System.Collections.Concurrent;
@@ -21,6 +22,8 @@ using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.Providers;
+using Agentweaver.Providers.Sandbox.AgentSandbox;
+using Agentweaver.Providers.Storage.AzureFiles;
 using Agentweaver.SourceControl;
 using EventsHost::Agentweaver.EventsAndSessions;
 using Microsoft.AspNetCore.Authentication;
@@ -42,6 +45,7 @@ using NpgsqlTypes;
 using OpenIddict.Abstractions;
 using OrchestratorHost::Agentweaver.Orchestrator;
 using ProjectsConfig::Agentweaver.Projects.Config;
+using EnvironmentService::Agentweaver.Environment;
 using MAFCheckpointing = Microsoft.Agents.AI.Workflows.Checkpointing;
 using Xunit;
 
@@ -112,6 +116,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     public Task AcceptedSkillImportAssignmentFlowsThroughRuntimeRegistrationAndNativeSdk() =>
         RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
             false, null, false, OwnerRunFailureState.Indeterminate, acceptedSkillJourney: true);
+
+    [Fact]
+    public Task AcceptedPromptTokenCapSurvivesOwnerProjectionAndRegistration() =>
+        RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
+            false, null, false, OwnerRunFailureState.Indeterminate, configuredMaxPromptTokens: 20000);
 
     private async Task<(SkillRuntimeContentV1 Skill, VersionedProjectConfiguration Configuration)>
         ImportAndAssignSkillAsync(
@@ -246,7 +255,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         bool stopAfterProducedRunCapture,
         OwnerRunFailureState captureFailureState,
         bool azureByok = false,
-        bool acceptedSkillJourney = false)
+        bool acceptedSkillJourney = false,
+        int? configuredMaxPromptTokens = null)
     {
         var sourceControlSecretBackend = new RecordingSecretRedemption();
         await RestartBrokerForSourceControlAsync(sourceControlSecretBackend);
@@ -334,6 +344,37 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             new SecretRef("github-webhook", "webhook-v1"),
             SourceControlSecretPurposes.Webhook);
 
+        using var updateDefaults = new HttpRequestMessage(HttpMethod.Put, "/api/platform/runtime-defaults/")
+        {
+            Content = JsonContent.Create(new UpdatePlatformRuntimeDefaultsRequest
+            {
+                ExpectedRevision = 0,
+                Defaults = new PlatformRuntimeDefaults
+                {
+                    ModelSelection = azureByok ? new ModelSelectionSettings(
+                        "platform-model", new SecretRef("model-api", "model-v1"), ModelSourceMode.Byok)
+                    {
+                        ModelBindingPin = AzureByokModelBindings().Pin("platform-model", ModelSourceMode.Byok)
+                    } : new ModelSelectionSettings(
+                        "platform-model", SourceMode: ModelSourceMode.HostedCopilot,
+                        ConnectionId: linkedConnection!.ConnectionId),
+                    EgressBaseline = [],
+                    RunLimits = new CopilotRunLimits
+                    {
+                        MaxModelTurns = 12,
+                        MaxToolCalls = 100,
+                        MaxChildren = 7,
+                        MaxConcurrentChildren = 2,
+                        MaxWallTimeSeconds = 3600,
+                        MaxPromptTokens = configuredMaxPromptTokens is null ? null : 30000,
+                    }
+                }
+            })
+        };
+        AddBearerAndTenant(updateDefaults, platformAdminToken, TenantId);
+        using var updatedDefaults = await projects.Client.SendAsync(updateDefaults);
+        Assert.Equal(HttpStatusCode.OK, updatedDefaults.StatusCode);
+
         using var updateProjectConfiguration = new HttpRequestMessage(
             HttpMethod.Put, $"/api/projects/{project.ProjectId}/configuration")
         {
@@ -356,6 +397,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             new ProjectAgentCast("test-agent", "implementer", 0),
                             new ProjectAgentCast("unassigned-agent", "reviewer", 1))
                         : ImmutableArray.Create(new ProjectAgentCast("test-agent", "implementer", 0)),
+                    RunLimits = configuredMaxPromptTokens is { } promptTokenLimit
+                        ? new CopilotRunLimitOverrides { MaxPromptTokens = promptTokenLimit }
+                        : new(),
                     SourceControl = new SourceControlProjectSettings(
                         new SourceControlRepositoryIdentity("octo", "agentweaver"),
                         new SecretRef("github-api", "api-v1"),
@@ -384,37 +428,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             projectConfiguration = imported.Configuration;
         }
 
-        using var updateDefaults = new HttpRequestMessage(HttpMethod.Put, "/api/platform/runtime-defaults/")
-        {
-            Content = JsonContent.Create(new UpdatePlatformRuntimeDefaultsRequest
-            {
-                ExpectedRevision = 0,
-                Defaults = new PlatformRuntimeDefaults
-                {
-                    ModelSelection = azureByok ? new ModelSelectionSettings(
-                        "platform-model", new SecretRef("model-api", "model-v1"), ModelSourceMode.Byok)
-                    {
-                        ModelBindingPin = AzureByokModelBindings().Pin("platform-model", ModelSourceMode.Byok)
-                    } : new ModelSelectionSettings(
-                        "platform-model", SourceMode: ModelSourceMode.HostedCopilot,
-                        ConnectionId: linkedConnection!.ConnectionId),
-                    EgressBaseline = [],
-                    RunLimits = new CopilotRunLimits
-                    {
-                        MaxModelTurns = 12,
-                        MaxToolCalls = 100,
-                        MaxChildren = 7,
-                        MaxConcurrentChildren = 2,
-                        MaxWallTimeSeconds = 3600,
-                        MaxPromptTokens = 20000
-                    }
-                }
-            })
-        };
-        AddBearerAndTenant(updateDefaults, platformAdminToken, TenantId);
-        using var updatedDefaults = await projects.Client.SendAsync(updateDefaults);
-        Assert.Equal(HttpStatusCode.OK, updatedDefaults.StatusCode);
-
         var acceptedSelectionRequest = new AcceptRunSelectionRequest
         {
             ExpectedProjectConfigRevision = projectConfiguration.Revision,
@@ -426,14 +439,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     StringComparer.Ordinal, "platform-model"),
                 ProviderRequirements =
                 [
-                    new ProviderRequirement
-                    {
-                        Seam = ProviderSeam.Sandbox,
-                        RequiredAdapterVersion = "1.0.0",
-                        RequiredOptionsSchemaVersion = 1,
-                        RequiredCapabilities = ImmutableHashSet.Create(
-                            StringComparer.Ordinal, "container.create")
-                    },
+                    CreateSourceControlSandboxRequirement(),
                     new ProviderRequirement
                     {
                         Seam = ProviderSeam.SourceControl,
@@ -454,7 +460,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         RequiredAdapterVersion = AgtPolicyProvider.AdapterVersion.ToString(),
                         RequiredOptionsSchemaVersion = AgtPolicyProvider.OptionsSchemaVersion,
                         RequiredCapabilities = PolicyProviderCapabilities.All
-                    }
+                    },
+                    CreateSourceControlNetworkPolicyRequirement()
                 ]
             }
         };
@@ -489,6 +496,22 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             new SecretRef("github-api", "api-v1"),
             SourceControlSecretPurposes.Api);
         var acceptedProjectsSelection = await acceptedSelection.Content.ReadAsStringAsync();
+        var acceptedSelectionSnapshot = JsonSerializer.Deserialize<ProjectRunSelectionResponse>(
+            acceptedProjectsSelection, CoordinationJsonOptions);
+        Assert.NotNull(acceptedSelectionSnapshot);
+        var acceptedNetworkCandidate = Assert.Single(
+            Assert.Single(acceptedSelectionSnapshot.Providers,
+                provider => provider.Seam == ProviderSeam.NetworkPolicy).Candidates,
+            candidate => candidate.Layer == NetworkPolicyLayer.L3L4);
+        Assert.Equal(CiliumEgressPolicyAdapter.ProviderId, acceptedNetworkCandidate.ProviderId);
+        using (var selectionDocument = JsonDocument.Parse(acceptedProjectsSelection))
+        {
+            var runLimits = selectionDocument.RootElement.GetProperty("runLimits");
+            if (configuredMaxPromptTokens is { } acceptedPromptTokenLimit)
+                Assert.Equal(acceptedPromptTokenLimit, runLimits.GetProperty("maxPromptTokens").GetInt32());
+            else
+                Assert.False(runLimits.TryGetProperty("maxPromptTokens", out _));
+        }
         var acceptedProjectsSelectionHash = Convert.ToHexString(SHA256.HashData(
             Encoding.UTF8.GetBytes(acceptedProjectsSelection)));
         using (var changedSelectionPut = await SendJsonAsync(
@@ -586,7 +609,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var captureObjectStore = new InMemoryObjectStore();
         var captureAckBarrier = new ControlledRequestBarrier();
         var loseNextCaptureAck = 0;
-        var sandboxProvider = new ControlledSandboxResourceProvider();
+        var sandboxProvider = new ControlledSandboxResourceProvider(AgentSandboxProviderMetadata.ProviderId);
         var sourceControlGitHub = new ControlledGitHubApi(sourceControlSecretBackend.Value);
         var sourceControlRequestBarrier = new ControlledRequestBarrier();
         var mergeStartedSelectionBarrier = new ControlledRequestBarrier();
@@ -1729,7 +1752,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     ["implementer"],
                     ["implementation"],
                     ["isolated-worktree"],
-                    ["container.create"],
+                    [SandboxCapabilities.VmIsolation],
                     null,
                     null),
                 new WorkflowStepDefinition(
@@ -2168,7 +2191,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     "test-agent",
                     "implementation",
                     "platform-model",
-                    "sandbox-platform",
+                    AgentSandboxProviderMetadata.ProviderId,
                     "isolated-worktree",
                     [],
                     []),
@@ -2181,7 +2204,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     "test-agent",
                     "implementation",
                     "platform-model",
-                    "sandbox-platform",
+                    AgentSandboxProviderMetadata.ProviderId,
                     "isolated-worktree",
                     [],
                     []),
@@ -2194,7 +2217,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     "test-agent",
                     "implementation",
                     "platform-model",
-                    "sandbox-platform",
+                    AgentSandboxProviderMetadata.ProviderId,
                     "isolated-worktree",
                     [],
                     [])
@@ -2204,7 +2227,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                          ownerSchema,
                          signingKey,
                          projects.CreateHandler,
-                         () => eventsFactory.Server.CreateHandler()))
+                         () => eventsFactory.Server.CreateHandler(),
+                         providerCatalog: CreateSourceControlProviderCatalog()))
         using (var unavailableClient = unavailableFactory.CreateClient(new WebApplicationFactoryClientOptions
                {
                    BaseAddress = new Uri("https://orchestrator.test")
@@ -2304,14 +2328,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await AssertAcceptedSandboxBindingAsync(
             _connectionString, ownerSchema, project.ProjectId, sandboxProvider.ResourceId);
 
-        var restoringSandboxProvider = new ControlledSandboxResourceProvider();
+        var restoringSandboxProvider =
+            new ControlledSandboxResourceProvider(AgentSandboxProviderMetadata.ProviderId);
         await using (var restoringFactory = new OrchestratorIntegrationFactory(
                          _connectionString,
                          ownerSchema,
                          signingKey,
                          projects.CreateHandler,
                          () => eventsFactory.Server.CreateHandler(),
-                         sandboxProvider: restoringSandboxProvider))
+                         sandboxProvider: restoringSandboxProvider,
+                         providerCatalog: CreateSourceControlProviderCatalog()))
         using (var restoredOrchestrator = restoringFactory.CreateClient(
                    new WebApplicationFactoryClientOptions
                    {
@@ -3231,6 +3257,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 runtimeOwner.ModelConnectionScope);
             Assert.Equal(azureByok ? ModelSourceMode.Byok : ModelSourceMode.HostedCopilot,
                 runtimeOwner.ModelSourceMode);
+            Assert.Equal(configuredMaxPromptTokens, runtimeOwner.MaxPromptTokens);
             if (azureByok)
                 Assert.Equal(AzureByokModelBindings().Pin("platform-model", ModelSourceMode.Byok),
                     runtimeOwner.ModelBindingPin);
@@ -3392,7 +3419,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(verifiedFixedAssociation.ModelSelectionReference, fixedRuntimeOwner.ModelSelectionReference);
             Assert.Equal(12, fixedRuntimeOwner.MaxModelTurns);
             Assert.Equal(100, fixedRuntimeOwner.MaxToolCalls);
-            Assert.Equal(20000, fixedRuntimeOwner.MaxPromptTokens);
+            Assert.Equal(configuredMaxPromptTokens, fixedRuntimeOwner.MaxPromptTokens);
             Assert.Equal(fixedStep.Id, fixedRuntimeOwner.WorkflowStepId);
             Assert.Equal(fixedChild.Node.ExecutionFence, fixedRuntimeOwner.ExecutionFence);
             Assert.Equal(fixedBoundary.LogicalTurnOrdinal, fixedRuntimeOwner.LogicalTurnOrdinal);
@@ -3406,6 +3433,26 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             if (azureByok)
                 Assert.Equal(AzureByokModelBindings().Pin("platform-model", ModelSourceMode.Byok),
                     fixedRuntimeOwner.ModelBindingPin);
+        }
+        using (var runtimeObservationResponse = await SendAsync(
+                   orchestrator,
+                   HttpMethod.Get,
+                   $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{fixedChild.Node.Identity.SessionId}/runtime-execution-observation",
+                   runToken,
+                   [TenantId]))
+        {
+            await AssertStatusAsync(runtimeObservationResponse, HttpStatusCode.OK);
+            Assert.True(runtimeObservationResponse.Headers.CacheControl?.NoStore);
+            var observation = await ReadJsonAsync<RuntimeExecutionObservation>(runtimeObservationResponse)
+                ?? throw new InvalidOperationException("The runtime execution observation was not returned.");
+            Assert.Equal(root.RootSessionId, observation.RootSessionId);
+            Assert.Equal(fixedChild.Node.Identity.SessionId, observation.SessionId);
+            Assert.Equal(root.ExecutionFence, observation.ExecutionFence);
+            Assert.Equal(acceptedPlan.Id, observation.WorkPlanId);
+            Assert.Equal(fixedAssociationId, observation.AssociationId);
+            Assert.Equal(RuntimeExecutionTaskStatus.Running, observation.Status);
+            Assert.Null(observation.PendingDispatch);
+            Assert.Null(observation.ResultDigest);
         }
         var latestFixedCheckpoint = await fixedExecutionStore.ReadLatestAsync(CancellationToken.None)
             ?? throw new InvalidOperationException("The fixed-work checkpoint was not persisted.");
@@ -3563,7 +3610,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                              projects.CreateHandler(), selectionPause),
                          () => eventsFactory.Server.CreateHandler(),
                          cacheObjectStore,
-                         sandboxProvider))
+                         sandboxProvider,
+                         providerCatalog: CreateSourceControlProviderCatalog()))
         using (var runtimeOwnerClient = runtimeOwnerFactory.CreateClient(
                    new WebApplicationFactoryClientOptions
                    {
@@ -3676,7 +3724,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ?? throw new InvalidOperationException("Expected the current-fence selection context.");
         var originalContextBinding = await ReadSelectionContextBindingSnapshotAsync(
             _connectionString, ownerSchema, project.ProjectId, mappedActiveChild.ExecutionFence);
-        var acceptedSelectionSnapshot = await ReadAcceptedSelectionSnapshotAsync(
+        var storedAcceptedSelectionSnapshot = await ReadAcceptedSelectionSnapshotAsync(
             _connectionString, ownerSchema, project.ProjectId);
         await using (var ownerDatabase = NpgsqlDataSource.Create(_connectionString))
         await using (var connection = await ownerDatabase.OpenConnectionAsync())
@@ -3749,7 +3797,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal("O", reader.GetString(2));
         }
         Assert.Equal(
-            acceptedSelectionSnapshot,
+            storedAcceptedSelectionSnapshot,
             await ReadAcceptedSelectionSnapshotAsync(_connectionString, ownerSchema, project.ProjectId));
         await using (var ownerDatabase = NpgsqlDataSource.Create(_connectionString))
         await using (var connection = await ownerDatabase.OpenConnectionAsync())
@@ -3807,7 +3855,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     $"/api/projects/{project.ProjectId}/runs/{RunId}/selection", runToken, [TenantId]);
                 await AssertStatusAsync(afterRotation, HttpStatusCode.OK);
                 Assert.Equal(acceptedBytes, await afterRotation.Content.ReadAsByteArrayAsync());
-                Assert.Equal(acceptedSelectionSnapshot,
+                Assert.Equal(storedAcceptedSelectionSnapshot,
                     await ReadAcceptedSelectionSnapshotAsync(_connectionString, ownerSchema, project.ProjectId));
             }
             await VerifyRunBoundRuntimeRegistrationWithCurrentEnvironmentAsync(
@@ -3825,7 +3873,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 }, azureByok ? sourceControlSecretBackend : null,
                 acceptedSkill,
                 acceptedSkillJourney ? "unassigned-agent" : null,
-                skillWriter);
+                skillWriter,
+                stopAfterRegistration: configuredMaxPromptTokens is not null);
+            if (configuredMaxPromptTokens is not null)
+                return;
         }
 
         using var sendReply = await SendJsonAsync(
@@ -4736,7 +4787,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                          projects.CreateHandler,
                          () => eventsFactory.Server.CreateHandler(),
                          cacheObjectStore,
-                         sandboxProvider))
+                         sandboxProvider,
+                         providerCatalog: CreateSourceControlProviderCatalog()))
         using (var restartedOrchestrator = restartedOwnerFactory.CreateClient(
                    new WebApplicationFactoryClientOptions
                    {
@@ -5101,6 +5153,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         string projectId,
         string resourceId)
     {
+        var expectedSandboxRegistration = CreateSourceControlSandboxRegistration();
         await using var dataSource = NpgsqlDataSource.Create(connectionString);
         await using var connection = await dataSource.OpenConnectionAsync();
         await using (var query = new NpgsqlCommand($"""
@@ -5114,12 +5167,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             query.Parameters.AddWithValue("run", RunId);
             await using var reader = await query.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync());
-            Assert.Equal("sandbox-platform", reader.GetString(0));
+            Assert.Equal(expectedSandboxRegistration.Descriptor.Id, reader.GetString(0));
             Assert.Equal(resourceId, reader.GetString(1));
             Assert.Equal(7, reader.GetInt64(2));
             var capabilities = JsonSerializer.Deserialize<string[]>(reader.GetString(3));
             Assert.NotNull(capabilities);
-            Assert.Contains("container.create", capabilities);
+            Assert.Equal(
+                expectedSandboxRegistration.Descriptor.AdvertisedCapabilities
+                    .OrderBy(capability => capability, StringComparer.Ordinal),
+                capabilities.OrderBy(capability => capability, StringComparer.Ordinal));
             Assert.True(reader.GetInt64(4) > 0);
             Assert.True(reader.GetInt64(5) > 0);
             Assert.False(await reader.ReadAsync());
@@ -5168,36 +5224,119 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             []).Value);
     }
 
-    private static ProviderCatalog CreateSourceControlProviderCatalog()
+    private const string SourceControlSandboxOptionsRevision = "runtime-sandbox-options-v2";
+
+    internal static AgentSandboxOptions CreateRuntimePlacementSandboxOptions(
+        int optionsSchemaVersion,
+        string optionsRevision) =>
+        new AgentSandboxOptions(
+            optionsSchemaVersion,
+            optionsRevision,
+            "agentweaver",
+            AzureFilesCsiProviderMetadata.ProviderId,
+            "ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "linux/amd64",
+            1,
+            "kata-test",
+            "kata-test",
+            "100m",
+            "128Mi",
+            20,
+            100,
+            new(30, 30, 30, 30, 30, 120))
+        {
+            AgentHost = new("agenthost-runtime-v1", "agenthost-runtime-tls")
+        }.Validate();
+
+    internal static AgentSandboxOptions CreateRuntimePlacementSandboxOptions(
+        EffectiveProviderCandidate candidate)
+    {
+        Assert.Equal(ProviderSeam.Sandbox, candidate.Seam);
+        Assert.Equal(AgentSandboxProviderMetadata.ProviderId, candidate.ProviderId);
+        Assert.Equal(AgentSandboxProviderMetadata.AdapterVersion.ToString(), candidate.AdapterVersion);
+        return CreateRuntimePlacementSandboxOptions(
+            candidate.OptionsSchemaVersion, candidate.OptionsRevision);
+    }
+
+    internal static AgentSandboxOptions CreateRuntimePlacementSandboxOptions(
+        ProviderCandidate candidate)
+    {
+        Assert.Equal(ProviderSeam.Sandbox, candidate.Seam);
+        Assert.Equal(AgentSandboxProviderMetadata.ProviderId, candidate.ProviderId);
+        Assert.Equal(AgentSandboxProviderMetadata.AdapterVersion, candidate.AdapterVersion);
+        return CreateRuntimePlacementSandboxOptions(
+            candidate.OptionsSchemaVersion, candidate.OptionsRevision);
+    }
+
+    private static ProviderRegistration CreateSourceControlSandboxRegistration() =>
+        AgentSandboxProviderMetadata.CreateRegistration(
+            CreateRuntimePlacementSandboxOptions(
+                AgentSandboxOptions.CurrentOptionsSchemaVersion,
+                SourceControlSandboxOptionsRevision));
+
+    internal static ProviderRequirement CreateSourceControlSandboxRequirement()
+    {
+        var registration = CreateSourceControlSandboxRegistration();
+        return new ProviderRequirement
+        {
+            Seam = ProviderSeam.Sandbox,
+            RequiredAdapterVersion = registration.Descriptor.AdapterVersion.ToString(),
+            RequiredOptionsSchemaVersion = registration.OptionsSchemaVersion,
+            RequiredCapabilities = registration.Descriptor.AdvertisedCapabilities
+        };
+    }
+
+    internal static ProviderCatalog CreateSourceControlProviderCatalog()
     {
         var policyOptions = SourceControlMergePolicyOptions();
         var policyProvider = new AgtPolicyProvider();
-        var sandboxRegistration = new ProviderRegistration(
-            new ProviderDescriptor(
-                ProviderSeam.Sandbox,
-                "sandbox-platform",
-                new Version(1, 0, 0),
-                1,
-                ProviderHostingPattern.KubernetesController,
-                ImmutableHashSet.Create(StringComparer.Ordinal, "container.create")),
-            true,
-            "options-v1",
-            1);
+        var networkOptions = CreateSourceControlNetworkPolicyOptions();
+        var sandboxRegistration = CreateSourceControlSandboxRegistration();
         var sourceControlRegistration = new ProviderRegistration(
             GitHubSourceControlAdapter.CreateDescriptor(),
             true,
             "options-v1",
             GitHubSourceControlAdapter.CurrentOptionsSchemaVersion);
         var policyRegistration = policyProvider.CreateRegistration(policyOptions);
+        var networkRegistration = networkOptions.CreateRegistration();
         return Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
-            [sandboxRegistration, sourceControlRegistration, policyRegistration],
+            [sandboxRegistration, sourceControlRegistration, policyRegistration, networkRegistration],
             [
-                new ProviderSelection(ProviderSeam.Sandbox, "sandbox-platform"),
+                new ProviderSelection(ProviderSeam.Sandbox, AgentSandboxProviderMetadata.ProviderId),
                 new ProviderSelection(ProviderSeam.SourceControl, SourceControlProviderIds.GitHub),
                 new ProviderSelection(ProviderSeam.Policy, AgtPolicyProvider.ProviderId)
             ],
-            []).Value);
+            [],
+            layerSelections:
+            [
+                new ProviderLayerSelection(
+                    NetworkPolicyLayer.L3L4,
+                    CiliumEgressPolicyAdapter.ProviderId)
+            ]).Value);
     }
+
+    internal static ProviderRequirement CreateSourceControlNetworkPolicyRequirement()
+    {
+        var networkOptions = CreateSourceControlNetworkPolicyOptions();
+        return new ProviderRequirement
+        {
+            Seam = ProviderSeam.NetworkPolicy,
+            RequiredAdapterVersion = networkOptions.AdapterVersion.ToString(),
+            RequiredOptionsSchemaVersion = networkOptions.OptionsSchemaVersion,
+            RequiredL3L4Capabilities = ImmutableHashSet.Create(
+                StringComparer.Ordinal,
+                CiliumEgressCapabilities.L3L4)
+        };
+    }
+
+    private static CiliumEgressProviderOptions CreateSourceControlNetworkPolicyOptions() =>
+        new(
+            "agentweaver",
+            new Version(1, 0, 0),
+            1,
+            "cilium-options-1",
+            ImmutableDictionary<string, ImmutableDictionary<string, string>>.Empty
+                .WithComparers(StringComparer.Ordinal));
 
     private static AgtPolicyProviderOptions SourceControlMergePolicyOptions() =>
         new(
@@ -5805,11 +5944,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
     private static async Task AssertStatusAsync(
         HttpResponseMessage response,
-        HttpStatusCode expected)
+        HttpStatusCode expected,
+        string? diagnostic = null)
     {
         var body = await response.Content.ReadAsStringAsync();
+        var failureMessage = $"Expected {(int)expected}, got {(int)response.StatusCode}: {body}";
+        if (response.StatusCode != expected && diagnostic is not null)
+            failureMessage += $"\n{diagnostic}";
         Assert.True(response.StatusCode == expected,
-            $"Expected {(int)expected}, got {(int)response.StatusCode}: {body}");
+            failureMessage);
     }
 
     private static async Task<T> ReadJsonAsync<T>(HttpResponseMessage response) =>
@@ -6500,11 +6643,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
     }
 
-    private sealed class ControlledSandboxResourceProvider : ICoordinatorSandboxResourceProvider
+    internal sealed class ControlledSandboxResourceProvider(string providerId) : ICoordinatorSandboxResourceProvider
     {
         private int _negotiationCount;
 
-        public string ProviderId => "sandbox-platform";
+        public string ProviderId { get; } = providerId;
         public string ResourceId => "controlled-sandbox-resource";
         public int NegotiationCount => Volatile.Read(ref _negotiationCount);
         public ImmutableArray<string> IsolationChoices { get; } = ["isolated-worktree"];
@@ -6605,4 +6748,209 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
     }
 
+}
+
+public sealed class SourceControlProviderCatalogFixtureTests
+{
+    [Fact]
+    public async Task RuntimePlacementUsesSandboxDefaultAndControlledProvidersMatchCatalogIds()
+    {
+        var sandboxOptions = ProjectsConfigBrokerAuthorizationTests.CreateRuntimePlacementSandboxOptions(
+            AgentSandboxOptions.CurrentOptionsSchemaVersion, "runtime-sandbox-options-v2");
+        var sandboxRegistration = AgentSandboxProviderMetadata.CreateRegistration(sandboxOptions);
+        var sandboxCapabilities = sandboxRegistration.Descriptor.AdvertisedCapabilities
+            .OrderBy(capability => capability, StringComparer.Ordinal)
+            .ToImmutableArray();
+        var acceptedSandboxCandidate = new EffectiveProviderCandidate(
+            ProviderSeam.Sandbox,
+            sandboxRegistration.Descriptor.Id,
+            sandboxRegistration.Descriptor.AdapterVersion.ToString(),
+            sandboxRegistration.OptionsSchemaVersion,
+            sandboxRegistration.OptionsRevision,
+            sandboxRegistration.Descriptor.Hosting,
+            sandboxCapabilities,
+            sandboxCapabilities);
+        Assert.Throws<InvalidOperationException>(() =>
+            ProjectsConfigBrokerAuthorizationTests.ResolveRuntimePlacementSandboxCandidate(
+                acceptedSandboxCandidate with { ProviderId = "sandbox-platform" }, sandboxOptions));
+
+        var runtimeCandidate = ProjectsConfigBrokerAuthorizationTests.ResolveRuntimePlacementSandboxCandidate(
+            acceptedSandboxCandidate, sandboxOptions);
+        Assert.Equal(sandboxRegistration.Descriptor.Id, runtimeCandidate.ProviderId);
+        Assert.Equal(sandboxRegistration.Descriptor.AdapterVersion, runtimeCandidate.AdapterVersion);
+        Assert.Equal(sandboxRegistration.OptionsSchemaVersion, runtimeCandidate.OptionsSchemaVersion);
+        Assert.Equal(sandboxRegistration.OptionsRevision, runtimeCandidate.OptionsRevision);
+        Assert.Equal(
+            sandboxCapabilities.OrderBy(capability => capability, StringComparer.Ordinal),
+            runtimeCandidate.RequiredCapabilities.OrderBy(capability => capability, StringComparer.Ordinal));
+
+        using var snapshot = JsonDocument.Parse("{}");
+        var selection = new OrchestratorHost::Agentweaver.Orchestrator.EffectiveRunSelection(
+            "project-a", "run-authorized-1", 1, 1, 1, "context-v1", snapshot.RootElement.Clone());
+        var runtimeProvider = new ProjectsConfigBrokerAuthorizationTests.ControlledSandboxResourceProvider(
+            sandboxRegistration.Descriptor.Id);
+        var runtimeNegotiation = await runtimeProvider.NegotiateAsync(
+            runtimeCandidate, selection, CancellationToken.None);
+        Assert.True(runtimeNegotiation.IsSuccess, runtimeNegotiation.Error?.Message);
+
+        var legacyRegistration = new ProviderRegistration(
+            new ProviderDescriptor(
+                ProviderSeam.Sandbox,
+                "sandbox-platform",
+                new Version(1, 0, 0),
+                1,
+                ProviderHostingPattern.KubernetesController,
+                ImmutableHashSet.Create(StringComparer.Ordinal, SandboxCapabilities.BuildTestCommandPod)),
+            true,
+            "options-v1",
+            1);
+        var legacyCatalog = Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
+            [legacyRegistration],
+            [new ProviderSelection(ProviderSeam.Sandbox, legacyRegistration.Descriptor.Id)],
+            []).Value);
+        var legacyResolution = new ProviderResolver(legacyCatalog).Resolve(new(
+            ProviderSeam.Sandbox,
+            null,
+            legacyRegistration.Descriptor.AdapterVersion,
+            legacyRegistration.OptionsSchemaVersion,
+            ImmutableHashSet.Create(StringComparer.Ordinal, SandboxCapabilities.BuildTestCommandPod)));
+        Assert.True(legacyResolution.IsSuccess, legacyResolution.Error?.Message);
+        var legacyCandidate = Assert.IsType<ProviderCandidate>(legacyResolution.Value?.Candidate);
+        var legacyProvider = new ProjectsConfigBrokerAuthorizationTests.ControlledSandboxResourceProvider(
+            legacyRegistration.Descriptor.Id);
+        var legacyNegotiation = await legacyProvider.NegotiateAsync(
+            legacyCandidate, selection, CancellationToken.None);
+        Assert.True(legacyNegotiation.IsSuccess, legacyNegotiation.Error?.Message);
+    }
+
+    [Fact]
+    public void RuntimePlacementServiceGraphConstructsActualManagersWithSharedSandboxClient()
+    {
+        var sandboxOptions = ProjectsConfigBrokerAuthorizationTests.CreateRuntimePlacementSandboxOptions(
+            AgentSandboxOptions.CurrentOptionsSchemaVersion, "runtime-sandbox-options-v2");
+        using var sandboxHttpClient = new HttpClient(new NoNetworkHttpMessageHandler())
+        {
+            BaseAddress = new Uri("https://kubernetes.test/")
+        };
+        var sandboxKubernetesClient = new KubernetesAgentSandboxClient(sandboxHttpClient);
+        var sandboxProvider = new AgentSandboxProvider(sandboxOptions, sandboxKubernetesClient);
+        var networkOptions = new CiliumEgressProviderOptions(
+            "agentweaver",
+            new Version(1, 0, 0),
+            1,
+            "cilium-options-1",
+            ImmutableDictionary<string, ImmutableDictionary<string, string>>.Empty
+                .WithComparers(StringComparer.Ordinal));
+
+        using var projectsHttpClient = new HttpClient(new NoNetworkHttpMessageHandler())
+        {
+            BaseAddress = new Uri("https://projects.test/")
+        };
+        using var runtimeOwnerHttpClient = new HttpClient(new NoNetworkHttpMessageHandler());
+        var services = new ServiceCollection();
+        services.AddSingleton<IProjectsConfigClient>(
+            new EnvironmentService::Agentweaver.Environment.ProjectsConfigHttpClient(projectsHttpClient));
+        services.AddScoped<IEnvironmentLifecycleStore>(_ => NoIoDependency<IEnvironmentLifecycleStore>());
+        services.AddScoped<ISandboxLeaseStore>(_ => NoIoDependency<ISandboxLeaseStore>());
+        services.AddSingleton<TimeProvider>(TimeProvider.System);
+        services.AddSingleton(new EnvironmentRuntimeOwnerContextClient(runtimeOwnerHttpClient));
+        ProjectsConfigBrokerAuthorizationTests.AddRuntimePlacementManagerServices(
+            services, sandboxOptions, sandboxKubernetesClient, sandboxProvider,
+            networkOptions, NoIoDependency<ICiliumPolicyResourceStore>());
+
+        using var serviceProvider = services.BuildServiceProvider(new ServiceProviderOptions
+        {
+            ValidateOnBuild = true,
+            ValidateScopes = true
+        });
+        using var scope = serviceProvider.CreateScope();
+        Assert.IsType<EnvironmentSandboxManager>(
+            scope.ServiceProvider.GetRequiredService<EnvironmentSandboxManager>());
+        Assert.IsType<EnvironmentEgressManager>(
+            scope.ServiceProvider.GetRequiredService<EnvironmentEgressManager>());
+        Assert.IsType<EnvironmentRuntimePlacementReader>(
+            scope.ServiceProvider.GetRequiredService<EnvironmentRuntimePlacementReader>());
+        Assert.Same(
+            sandboxKubernetesClient,
+            scope.ServiceProvider.GetRequiredService<KubernetesAgentSandboxClient>());
+        Assert.Same(sandboxProvider, scope.ServiceProvider.GetRequiredService<ISandboxProvider>());
+    }
+
+    private static T NoIoDependency<T>() where T : class =>
+        System.Reflection.DispatchProxy.Create<T, NoIoDependencyProxy>();
+
+    public class NoIoDependencyProxy : System.Reflection.DispatchProxy
+    {
+        protected override object? Invoke(
+            System.Reflection.MethodInfo? targetMethod, object?[]? args) =>
+            throw new InvalidOperationException(
+                $"Unexpected '{targetMethod?.Name}' call during service construction.");
+    }
+
+    private sealed class NoNetworkHttpMessageHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException(
+                $"Unexpected HTTP request during service construction: {request.Method} {request.RequestUri}.");
+    }
+
+    [Fact]
+    public void SharedCatalogResolvesValidatedSandboxOptionsAndTheAcceptedL3L4NetworkRequirement()
+    {
+        var catalog = ProjectsConfigBrokerAuthorizationTests.CreateSourceControlProviderCatalog();
+        var sandboxRequirement = ProjectsConfigBrokerAuthorizationTests.CreateSourceControlSandboxRequirement();
+        var sandboxResolution = new ProviderResolver(catalog).Resolve(
+            new(
+                ProviderSeam.Sandbox,
+                null,
+                Version.Parse(sandboxRequirement.RequiredAdapterVersion),
+                sandboxRequirement.RequiredOptionsSchemaVersion,
+                sandboxRequirement.RequiredCapabilities));
+
+        Assert.True(sandboxResolution.IsSuccess, sandboxResolution.Error?.Message);
+        var sandboxCandidate = sandboxResolution.Value?.Candidate
+            ?? throw new InvalidOperationException("The shared catalog returned no Sandbox candidate.");
+        var sandboxOptions =
+            ProjectsConfigBrokerAuthorizationTests.CreateRuntimePlacementSandboxOptions(sandboxCandidate);
+        var sandboxRegistration = AgentSandboxProviderMetadata.CreateRegistration(sandboxOptions);
+        Assert.Equal(AgentSandboxOptions.CurrentOptionsSchemaVersion, sandboxOptions.OptionsSchemaVersion);
+        Assert.Equal(
+            sandboxRequirement.RequiredAdapterVersion,
+            sandboxRegistration.Descriptor.AdapterVersion.ToString());
+        Assert.Equal(sandboxRequirement.RequiredOptionsSchemaVersion, sandboxRegistration.OptionsSchemaVersion);
+        Assert.Equal(
+            sandboxRequirement.RequiredCapabilities.OrderBy(capability => capability, StringComparer.Ordinal),
+            sandboxRegistration.Descriptor.AdvertisedCapabilities
+                .OrderBy(capability => capability, StringComparer.Ordinal));
+        Assert.Equal(sandboxCandidate.ProviderId, sandboxRegistration.Descriptor.Id);
+        Assert.Equal(sandboxCandidate.AdapterVersion, sandboxRegistration.Descriptor.AdapterVersion);
+        Assert.Equal(sandboxCandidate.OptionsSchemaVersion, sandboxRegistration.OptionsSchemaVersion);
+        Assert.Equal(sandboxCandidate.OptionsRevision, sandboxRegistration.OptionsRevision);
+        Assert.Equal(
+            sandboxCandidate.AdvertisedCapabilities.OrderBy(capability => capability, StringComparer.Ordinal),
+            sandboxRegistration.Descriptor.AdvertisedCapabilities
+                .OrderBy(capability => capability, StringComparer.Ordinal));
+        Assert.Equal(
+            sandboxRequirement.RequiredCapabilities.OrderBy(capability => capability, StringComparer.Ordinal),
+            sandboxCandidate.RequiredCapabilities.OrderBy(capability => capability, StringComparer.Ordinal));
+
+        var networkRequirement =
+            ProjectsConfigBrokerAuthorizationTests.CreateSourceControlNetworkPolicyRequirement();
+        var networkResolution = new ProviderResolver(catalog).ResolveNetworkPolicy(
+            new(
+                Version.Parse(networkRequirement.RequiredAdapterVersion),
+                networkRequirement.RequiredOptionsSchemaVersion,
+                networkRequirement.RequiredL3L4Capabilities,
+                networkRequirement.RequiredL7Capabilities));
+
+        Assert.True(networkResolution.IsSuccess, networkResolution.Error?.Message);
+        var networkCandidate = Assert.Single(networkResolution.Value!.Layers);
+        Assert.Equal(NetworkPolicyLayer.L3L4, networkCandidate.Layer);
+        Assert.Equal(CiliumEgressPolicyAdapter.ProviderId, networkCandidate.Candidate.ProviderId);
+        Assert.Equal(networkRequirement.RequiredAdapterVersion, networkCandidate.Candidate.AdapterVersion.ToString());
+        Assert.Equal(networkRequirement.RequiredOptionsSchemaVersion, networkCandidate.Candidate.OptionsSchemaVersion);
+        Assert.Equal("cilium-options-1", networkCandidate.Candidate.OptionsRevision);
+        Assert.Equal(networkRequirement.RequiredL3L4Capabilities, networkCandidate.Candidate.RequiredCapabilities);
+    }
 }

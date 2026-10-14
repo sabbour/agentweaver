@@ -216,6 +216,52 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
     }
 
     [Fact]
+    public async Task CreditGuardReadReturnsCurrentOwnerStateWithoutChangingIt()
+    {
+        await RegisterSourceAsync(0, _registrations[0].Binding with
+        {
+            CopilotSoftCreditLimit = 3m,
+            CopilotHardCreditLimit = 5m,
+            ObservationEndpoint = new("https://runtime.test/internal/runtime/observations")
+        });
+        await AdvanceNativeCheckpointAsync($"credit-guard-read-{Guid.NewGuid():N}", _checkpoint.State with
+        {
+            Revision = _checkpoint.State.Revision + 1,
+            PendingDispatches = _intents.ToImmutableDictionary(intent => intent.AssociationId)
+        });
+        Assert.IsType<RuntimeNativeCreditDenialReceipt>(
+            await PrepareAsync(0, PricedSnapshot(0, 5m, 1)));
+        var guardBefore = await ReadCreditGuardAsync();
+        var warningCountBefore = await CountSoftCreditWarningsAsync();
+        Assert.Equal(1, warningCountBefore);
+
+        var registration = _registrations[0];
+        var grant = _grants[0];
+        var intent = RuntimeCreditGuardObservationContract.CreateIntent(registration, _root.SessionId);
+        using var rig = CreateRuntimeUsageOwner(registration, grant);
+        var snapshot = await rig.Owner.ReadCreditGuardAsync(
+            rig.Context, new(SourceProof(grant), intent), CancellationToken.None);
+
+        Assert.Equal(intent, snapshot.Intent);
+        Assert.Equal(RuntimeContractValidation.RegistrationHash(registration), snapshot.RegistrationHash);
+        Assert.Equal("AIC", snapshot.CostUnit);
+        Assert.Equal("root-run", snapshot.CostScope);
+        Assert.Equal(5m, snapshot.CopilotAicFloor);
+        Assert.Equal(1, snapshot.AccountedThroughLedgerEventCount);
+        Assert.True(snapshot.SoftWarningEmitted);
+        Assert.True(snapshot.HardCapExhausted);
+        RuntimeCreditGuardObservationContract.ValidateSnapshot(snapshot, registration, intent);
+
+        var wrongRoot = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
+            rig.Owner.ReadCreditGuardAsync(
+                rig.Context, new(SourceProof(grant), intent with { RootSessionId = "other-root" }),
+                CancellationToken.None));
+        Assert.Equal("runtime_credit_guard_intent_conflict", wrongRoot.Code);
+        Assert.Equal(guardBefore, await ReadCreditGuardAsync());
+        Assert.Equal(warningCountBefore, await CountSoftCreditWarningsAsync());
+    }
+
+    [Fact]
     public async Task PrepareRejectsExistingDispatchWithMismatchedCheckpointBeforeCreditDenial()
     {
         await RegisterPositiveHardCreditAsync(0);

@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Agentweaver.Identity.Tests" />
     <ProjectReference Include="..\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
   </ItemGroup>
 </Project>
