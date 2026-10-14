@@ -12,6 +12,7 @@ public sealed class RuntimeCopilotSessionTests
     [InlineData(20000, 16000, 16000)]
     [InlineData(20000, 20000, 20000)]
     [InlineData(20000, 200000, 20000)]
+    [InlineData(1024, 8192, 1024)]
     public async Task PromptCapacityIsNarrowedAgainstTheConcreteCatalogBeforeNativeCreate(
         int accepted, long supported, int expected)
     {
