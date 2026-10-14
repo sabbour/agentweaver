@@ -45,6 +45,27 @@ public sealed partial class AgentSandboxProviderTests
     }
 
     [Fact]
+    public void StartupEvidenceUsesTheLeaseStoreClock()
+    {
+        var hostTimeProvider = new FixedTimeProvider(DateTimeOffset.Parse("2026-10-06T12:00:10Z"));
+        var leaseTimeProvider = new FixedTimeProvider(DateTimeOffset.Parse("2026-10-06T12:05:10Z"));
+        var leaseCreatedAt = DateTimeOffset.Parse("2026-10-06T12:05:00Z");
+        var phases = ImmutableArray.Create(
+            new SandboxStartupPhaseObservation(
+                SandboxStartupPhase.Scheduled, 1, leaseCreatedAt.AddMilliseconds(500)),
+            new SandboxStartupPhaseObservation(
+                SandboxStartupPhase.ImageReady, 1, leaseCreatedAt.AddSeconds(1),
+                "sha256:" + new string('a', 64), 1),
+            new SandboxStartupPhaseObservation(
+                SandboxStartupPhase.Started, 1, leaseCreatedAt.AddSeconds(2)));
+        var budgets = new SandboxStartupTimeBudgets(30, 90, 30, 30, 30, 180);
+
+        Assert.Throws<ArgumentException>(() =>
+            budgets.Evaluate(leaseCreatedAt, phases, hostTimeProvider.GetUtcNow()));
+        Assert.Null(budgets.Evaluate(leaseCreatedAt, phases, leaseTimeProvider.GetUtcNow()));
+    }
+
+    [Fact]
     public async Task ListOwnedUsesPinnedOptionsNamespaceInsteadOfCurrentDefaults()
     {
         var currentOptions = new AgentSandboxOptions(

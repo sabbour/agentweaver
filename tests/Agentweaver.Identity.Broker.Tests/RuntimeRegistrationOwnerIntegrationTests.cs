@@ -1697,7 +1697,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     BaseAddress = new Uri("https://kubernetes.test/")
                 };
                 var sandboxKubernetesClient = new KubernetesAgentSandboxClient(sandboxHttpClient);
-                var sandboxProvider = new AgentSandboxProvider(sandboxOptions, sandboxKubernetesClient);
+                var sandboxProvider = new AgentSandboxProvider(
+                    sandboxOptions, sandboxKubernetesClient, leaseTimeProvider);
                 var provisioned = await sandboxProvider.ProvisionAsync(sandboxProvisionRequest);
                 kubernetesTransport.AddReadySandbox(
                     provisioned,
