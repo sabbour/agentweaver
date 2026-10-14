@@ -80,7 +80,7 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
     internal ValueTask<NpgsqlConnection> OpenConnectionAsync(CancellationToken cancellationToken) =>
         _dataSource.OpenConnectionAsync(cancellationToken);
 
-    internal async Task<CheckpointInfo> AppendInTransactionAsync(
+    internal async Task<(CheckpointInfo Info, string? ParentCheckpointId, bool HasParentMetadata)> AppendInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         MafCheckpointBinding binding,
@@ -121,10 +121,11 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         await using var insert = new NpgsqlCommand($"""
             INSERT INTO {_schema}.maf_workflow_checkpoints
                 (project_id, run_id, session_id, store_name, checkpoint_id, parent_checkpoint_id,
+                 has_parent_metadata,
                  payload, cache_object_key, cache_sdk_version, pinned_model_reference,
                  accepted_selection_hash, execution_fence, created_at, workspace_seed)
             VALUES
-                (@project, @run, @session, @store, @checkpoint, @parent, @payload, @cache,
+                (@project, @run, @session, @store, @checkpoint, @parent, @hasParentMetadata, @payload, @cache,
                  @sdk, @model, @selectionHash, @fence, @createdAt, @workspaceSeed)
             """, connection, transaction);
         AddBinding(insert, validatedBinding);
@@ -132,6 +133,7 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         insert.Parameters.AddWithValue("checkpoint", NpgsqlDbType.Varchar, checkpointId);
         insert.Parameters.AddWithValue("parent", NpgsqlDbType.Varchar,
             (object?)parent?.CheckpointId ?? DBNull.Value);
+        insert.Parameters.AddWithValue("hasParentMetadata", NpgsqlDbType.Boolean, true);
         insert.Parameters.AddWithValue("payload", NpgsqlDbType.Jsonb, payload);
         insert.Parameters.AddWithValue("cache", NpgsqlDbType.Varchar,
             (object?)validatedBinding.CacheReference?.Value ?? DBNull.Value);
@@ -142,7 +144,7 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         insert.Parameters.AddWithValue("createdAt", NpgsqlDbType.TimestampTz, _timeProvider.GetUtcNow());
         insert.Parameters.AddWithValue("workspaceSeed", NpgsqlDbType.Bytea, (object?)workspaceSeed ?? DBNull.Value);
         await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        return new CheckpointInfo(sessionId, checkpointId);
+        return (new CheckpointInfo(sessionId, checkpointId), parent?.CheckpointId, true);
     }
 
     internal PostgresMafCheckpointStore ForCacheReference(ObjectKey? cacheReference)
@@ -173,7 +175,7 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
             parent,
             CancellationToken.None).ConfigureAwait(false);
         await transaction.CommitAsync().ConfigureAwait(false);
-        return checkpoint;
+        return checkpoint.Info;
     }
 
     public override async ValueTask<JsonElement> RetrieveCheckpointAsync(string sessionId, CheckpointInfo key)
@@ -510,7 +512,8 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
             ?? false);
     }
 
-    private async Task<CheckpointInfo?> FindExistingCheckpointAsync(
+    private async Task<(CheckpointInfo Info, string? ParentCheckpointId, bool HasParentMetadata)?>
+        FindExistingCheckpointAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         MafCheckpointBinding binding,
@@ -522,7 +525,7 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand($"""
-            SELECT payload = @payload, parent_checkpoint_id, cache_object_key,
+            SELECT payload = @payload, parent_checkpoint_id, has_parent_metadata, cache_object_key,
                    cache_sdk_version, pinned_model_reference, accepted_selection_hash, execution_fence,
                    workspace_seed IS NOT DISTINCT FROM @workspaceSeed
             FROM {_schema}.maf_workflow_checkpoints
@@ -541,18 +544,19 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
 
         var samePayload = reader.GetBoolean(0);
         var storedParent = reader.IsDBNull(1) ? null : reader.GetString(1);
-        var storedCache = reader.IsDBNull(2) ? null : reader.GetString(2);
-        var storedSelectionHash = reader.GetString(5).TrimEnd();
+        var hasParentMetadata = reader.GetBoolean(2);
+        var storedCache = reader.IsDBNull(3) ? null : reader.GetString(3);
+        var storedSelectionHash = reader.GetString(6).TrimEnd();
         if (!samePayload ||
             !string.Equals(storedParent, parentCheckpointId, StringComparison.Ordinal) ||
             !string.Equals(storedCache, binding.CacheReference?.Value, StringComparison.Ordinal) ||
-            !string.Equals(reader.GetString(3), binding.SdkVersion, StringComparison.Ordinal) ||
-            !string.Equals(reader.GetString(4), binding.PinnedModelReference, StringComparison.Ordinal) ||
+            !string.Equals(reader.GetString(4), binding.SdkVersion, StringComparison.Ordinal) ||
+            !string.Equals(reader.GetString(5), binding.PinnedModelReference, StringComparison.Ordinal) ||
             !string.Equals(storedSelectionHash, selectionHash, StringComparison.Ordinal) ||
-            reader.GetInt64(6) != binding.ExecutionFence || !reader.GetBoolean(7))
+            reader.GetInt64(7) != binding.ExecutionFence || !reader.GetBoolean(8))
             throw new CoordinationException("checkpoint_idempotency_conflict", StatusCodes.Status409Conflict);
 
-        return new CheckpointInfo(binding.Identity.SessionId, checkpointId);
+        return (new CheckpointInfo(binding.Identity.SessionId, checkpointId), storedParent, hasParentMetadata);
     }
 
     private static void ValidateOriginWorkspaceSeed(

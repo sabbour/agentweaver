@@ -139,8 +139,13 @@ public sealed partial class MafCheckpointStorePostgresTests : IAsyncLifetime
         var first = await _executionStore.AppendAsync(
             "execution-1", null, initial, CancellationToken.None);
         Assert.Equal(initial, first.State);
-        Assert.Equal(first.Info, (await _executionStore.AppendAsync(
-            "execution-1", null, initial, CancellationToken.None)).Info);
+        Assert.True(first.HasParentMetadata);
+        Assert.Null(first.ParentCheckpointId);
+        var firstReplay = await _executionStore.AppendAsync(
+            "execution-1", null, initial, CancellationToken.None);
+        Assert.Equal(first.Info, firstReplay.Info);
+        Assert.True(firstReplay.HasParentMetadata);
+        Assert.Null(firstReplay.ParentCheckpointId);
 
         var changedPayload = initial with { WorkPlanId = "different-plan" };
         var payloadConflict = await Assert.ThrowsAsync<CoordinationException>(() =>
@@ -175,12 +180,20 @@ public sealed partial class MafCheckpointStorePostgresTests : IAsyncLifetime
         var second = await _executionStore.AppendAsync(
             "execution-2", first.Info, running, CancellationToken.None);
         Assert.Equal(running, second.State);
+        Assert.True(second.HasParentMetadata);
+        Assert.Equal(first.Info.CheckpointId, second.ParentCheckpointId);
         var recovered = await new MafExecutionCheckpointStore(
                 new PostgresMafCheckpointStore(_fixture.DataSource, _schema, null), _binding)
             .ReadLatestAsync(CancellationToken.None);
         AssertCheckpointEqual(second, recovered);
-        Assert.Equal(second.Info, (await _executionStore.AppendAsync(
-            "execution-2", first.Info, running, CancellationToken.None)).Info);
+        var secondReplay = await _executionStore.AppendAsync(
+            "execution-2", first.Info, running, CancellationToken.None);
+        AssertCheckpointEqual(second, secondReplay);
+
+        await SetParentMetadataAsync(second.Info.CheckpointId, hasParentMetadata: false);
+        var legacyReplay = await _executionStore.AppendAsync(
+            "execution-2", first.Info, running, CancellationToken.None);
+        AssertCheckpointEqual(second with { HasParentMetadata = false }, legacyReplay);
 
         var historicalReplay = await Assert.ThrowsAsync<CoordinationException>(() =>
             _executionStore.AppendAsync("execution-1", null, initial, CancellationToken.None));
@@ -389,12 +402,12 @@ public sealed partial class MafCheckpointStorePostgresTests : IAsyncLifetime
         AssertCheckpointEqual(initial, await _executionStore.ReadLatestAsync(CancellationToken.None));
     }
 
-    private Task<CheckpointInfo> AppendAsync(
+    private async Task<CheckpointInfo> AppendAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         string checkpointId,
         JsonElement payload) =>
-        _store.AppendInTransactionAsync(
+        (await _store.AppendInTransactionAsync(
             connection,
             transaction,
             _binding,
@@ -402,7 +415,7 @@ public sealed partial class MafCheckpointStorePostgresTests : IAsyncLifetime
             checkpointId,
             payload,
             null,
-            CancellationToken.None);
+            CancellationToken.None)).Info;
 
     private static void AssertCheckpointEqual(
         MafExecutionCheckpointSnapshot expected,
@@ -418,6 +431,26 @@ public sealed partial class MafCheckpointStorePostgresTests : IAsyncLifetime
             actual.State.Progress.WorkItems.OrderBy(item => item.Key, StringComparer.Ordinal).ToArray());
         Assert.Equal(expected.State.Progress.NonModelSteps.OrderBy(step => step.Key, StringComparer.Ordinal).ToArray(),
             actual.State.Progress.NonModelSteps.OrderBy(step => step.Key, StringComparer.Ordinal).ToArray());
+        Assert.Equal(expected.ParentCheckpointId, actual.ParentCheckpointId);
+        Assert.Equal(expected.HasParentMetadata, actual.HasParentMetadata);
+    }
+
+    private async Task SetParentMetadataAsync(string checkpointId, bool hasParentMetadata)
+    {
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            UPDATE "{_schema}".maf_workflow_checkpoints
+            SET has_parent_metadata = @hasParentMetadata
+            WHERE project_id = @project AND run_id = @run AND session_id = @session
+                AND store_name = @store AND checkpoint_id = @checkpoint
+            """, connection);
+        command.Parameters.AddWithValue("hasParentMetadata", hasParentMetadata);
+        command.Parameters.AddWithValue("project", _binding.Identity.ProjectId);
+        command.Parameters.AddWithValue("run", _binding.Identity.RunId);
+        command.Parameters.AddWithValue("session", _binding.Identity.SessionId);
+        command.Parameters.AddWithValue("store", _binding.StoreName);
+        command.Parameters.AddWithValue("checkpoint", checkpointId);
+        Assert.Equal(1, await command.ExecuteNonQueryAsync());
     }
 
     private async Task<long> ReadCheckpointCountAsync()
