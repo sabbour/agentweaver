@@ -53,6 +53,10 @@ cleanup under current owner authorization across lifecycle generations. It uses
 the original provider fence and binding for the exact release. A durable,
 expiring claim prevents concurrent reconcilers from racing the same delete;
 the validated release receipt is saved with a current-fence compare-and-swap.
+Reconciliation detaches the matching Workspace attachment only after that
+receipt is durable, then completes the cleanup record. If there is no current
+lease, the reconcile route returns the terminal lease result for the late
+resource it processed.
 
 The Sandbox selection must contain exactly one exclusive candidate. The
 configured provider ID, adapter version, options schema, options revision,
@@ -104,7 +108,7 @@ continues to enforce the configured Environment audience for both routes.
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/operations/{operationId}/provider-attempts` | Read the exact operation's durable provider attempts, including unresolved and unknown outcomes. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/v1/late-resource-cleanups` | Read retained late-resource cleanup records and their exact attempt, claim, and receipt state. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/abandon` | Explicitly abandon one current resource generation and provider fence. The request is not itself proof of ownership; fresh Projects authorization and the durable owner CAS are required. |
-| `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/reconcile` | Recover an interrupted operation by its recorded owner, operation ID, resource generation, and provider fence. It also claims and releases at most one pending late resource. A network-policy generation can be supplied to verify readiness. |
+| `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/reconcile` | Recover an interrupted operation by its recorded owner, operation ID, resource generation, and provider fence. It also claims and releases at most one pending late resource, detaches its Workspace attachment after the release receipt is saved, and returns its terminal lease result when no current lease remains. A network-policy generation can be supplied to verify readiness. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/binding-preparation?sessionId={sessionId}&executionProfileReference={profile}` | Validate the current Sandbox profile binding for a session without starting a command. |
 | `POST /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands` | Resolve the accepted Core checkpoint, reserve its immutable command intent, and execute the stable BuildTest operation. |
 | `GET /api/projects/{projectId}/runs/{runId}/environments/{environmentId}/sandbox/build-test/commands/{operationId}` | Read the exact persisted operation under the current owner and Sandbox binding. |

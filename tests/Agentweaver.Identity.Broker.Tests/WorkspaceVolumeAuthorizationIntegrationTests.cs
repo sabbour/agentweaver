@@ -928,23 +928,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             var released = await ReadJsonAsync<EnvironmentSandboxResult>(reconcilePartialRelease);
             Assert.Equal(SandboxLeaseState.Released, released.State);
         }
-        Assert.Equal(8, sandboxKubernetesHandler.DeleteRequests.Count);
+        Assert.Equal(9, sandboxKubernetesHandler.DeleteRequests.Count);
         var releasedPartialLease = await sandboxLeaseStore.GetAsync(
             fence, partialLease.ResourceGeneration, CancellationToken.None);
         Assert.NotNull(releasedPartialLease);
         Assert.Equal(SandboxLeaseState.Released, releasedPartialLease.State);
-        Assert.Null(releasedPartialLease.ProvisionedResource);
-        Assert.NotNull(releasedPartialLease.PartialReleaseReceipt);
-        var partialTemplateDelete = Assert.Single(
+        Assert.NotNull(releasedPartialLease.ProvisionedResource);
+        Assert.Null(releasedPartialLease.PartialReleaseReceipt);
+        var interruptedClaimDelete = Assert.Single(
             sandboxKubernetesHandler.DeleteRequests,
-            deletion => deletion.Resource == "sandboxtemplates" &&
-                        deletion.ExpectedUid == releasedPartialLease.PartialReleaseReceipt.TemplateUid);
-        var partialPoolDelete = Assert.Single(
-            sandboxKubernetesHandler.DeleteRequests,
-            deletion => deletion.Resource == "sandboxwarmpools" &&
-                        deletion.ExpectedUid == releasedPartialLease.PartialReleaseReceipt.WarmPoolUid);
-        Assert.True(partialTemplateDelete.UidPreconditionMatched);
-        Assert.True(partialPoolDelete.UidPreconditionMatched);
+            deletion => deletion.Resource == "sandboxclaims" &&
+                        deletion.ExpectedUid == releasedPartialLease.ProvisionedResource.Resource.ResourceId);
+        Assert.True(interruptedClaimDelete.UidPreconditionMatched);
         Assert.All(sandboxKubernetesHandler.DeleteRequests, deletion =>
         {
             Assert.True(deletion.UidPreconditionMatched);
@@ -986,20 +981,20 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             var result = await ReadJsonAsync<EnvironmentSandboxResult>(abandonDuringProvision);
             Assert.Equal(SandboxLeaseState.Releasing, result.State);
         }
-        Assert.Equal(8, sandboxKubernetesHandler.DeleteRequests.Count);
+        Assert.Equal(9, sandboxKubernetesHandler.DeleteRequests.Count);
         callbackGate.AllowCompletion.TrySetResult();
         EnvironmentSandboxResult lateProvisionResult;
         using (var lateProvision = await lateProvisionTask.WaitAsync(TimeSpan.FromSeconds(30)))
         {
-            await AssertStatusAsync(lateProvision, HttpStatusCode.Accepted);
+            await AssertStatusAsync(lateProvision, HttpStatusCode.OK);
             lateProvisionResult = await ReadJsonAsync<EnvironmentSandboxResult>(lateProvision);
-            Assert.Equal(SandboxLeaseState.Releasing, lateProvisionResult.State);
+            Assert.Equal(SandboxLeaseState.Released, lateProvisionResult.State);
             Assert.False(lateProvisionResult.ReadyForDispatch);
         }
         var fencedLateLease = await sandboxLeaseStore.GetAsync(
             fence, lateLease.ResourceGeneration, CancellationToken.None);
         Assert.NotNull(fencedLateLease);
-        Assert.Equal(SandboxLeaseState.Releasing, fencedLateLease.State);
+        Assert.Equal(SandboxLeaseState.Released, fencedLateLease.State);
         Assert.True(fencedLateLease.CurrentFencingGeneration > fencedLateLease.ProviderFencingGeneration);
         Assert.NotNull(fencedLateLease.ProvisionedResource);
         Assert.Equal(fencedLateLease.ProvisionedResource.Resource, lateProvisionResult.Resource);
@@ -1010,7 +1005,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             owner.Token,
             [TenantId]))
             await AssertStatusAsync(reconcileLateProvision, HttpStatusCode.OK);
-        Assert.Equal(11, sandboxKubernetesHandler.DeleteRequests.Count);
+        Assert.Equal(12, sandboxKubernetesHandler.DeleteRequests.Count);
         var releasedLateLease = await sandboxLeaseStore.GetAsync(
             fence, lateLease.ResourceGeneration, CancellationToken.None);
         Assert.NotNull(releasedLateLease);
@@ -1019,10 +1014,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var claimDeletes = sandboxKubernetesHandler.DeleteRequests
             .Where(deletion => deletion.Resource == "sandboxclaims")
             .ToArray();
-        Assert.Equal(3, claimDeletes.Length);
+        Assert.Equal(4, claimDeletes.Length);
         Assert.Equal(
             fencedLateLease.ProvisionedResource.Resource.ResourceId,
-            claimDeletes[2].ExpectedUid);
+            claimDeletes[3].ExpectedUid);
         var lateReleaseDescriptor = JsonNode.Parse(
             fencedLateLease.ProvisionedResource.ProviderBinding.ReleaseDescriptor.GetRawText())!.AsObject();
         lateReleaseDescriptor["claimUid"] = "late-provider-uid";
@@ -1057,7 +1052,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             owner.Token,
             [TenantId]))
             await AssertStatusAsync(reconcileLateResource, HttpStatusCode.NotFound);
-        Assert.Equal(11, sandboxKubernetesHandler.DeleteRequests.Count);
+        Assert.Equal(12, sandboxKubernetesHandler.DeleteRequests.Count);
         Assert.Null(await sandboxLeaseStore.ClaimNextLateResourceCleanupAsync(fence, CancellationToken.None));
         var afterLateResourceCleanup = await sandboxLeaseStore.GetAsync(
             fence, fencedLateLease.ResourceGeneration, CancellationToken.None);
@@ -1448,9 +1443,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             {
                 var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync(cancellationToken)
                     .ConfigureAwait(false))!;
-                if (path.EndsWith("/sandboxclaims", StringComparison.Ordinal) &&
-                    Interlocked.Exchange(ref _failNextClaimCreateResponse, 0) != 0)
-                    return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+                var failClaimCreateResponse = path.EndsWith("/sandboxclaims", StringComparison.Ordinal) &&
+                    Interlocked.Exchange(ref _failNextClaimCreateResponse, 0) != 0;
                 var uid = $"kubernetes-uid-{Interlocked.Increment(ref _createCount)}";
                 body["metadata"]!["uid"] = uid;
                 var name = body["metadata"]!["name"]!.GetValue<string>();
@@ -1467,6 +1461,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         await gate.AllowCompletion.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
                     }
                 }
+                if (failClaimCreateResponse)
+                    return new HttpResponseMessage(HttpStatusCode.InternalServerError);
                 return JsonResponse(HttpStatusCode.Created, body);
             }
 
