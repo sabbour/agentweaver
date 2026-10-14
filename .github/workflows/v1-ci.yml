@@ -233,6 +233,7 @@ jobs:
           fi
           docker cp "$bundle_container_id:/app/runtime-manifest.json" "$runtime_root/runtime-manifest.json"
           docker cp "$bundle_container_id:/app/native" "$runtime_root"
+          chmod -R a+rX "$runtime_root"
 
           test -s "$runtime_root/runtime-manifest.json"
           test -x "$runtime_root/native/copilot"
