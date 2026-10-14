@@ -2,7 +2,7 @@
   "$schema": "../sequence-spec.schema.json",
   "kind": "sequence",
   "title": "Environment Sandbox lease, provider attempts, readiness, and cleanup",
-  "alt": "Environment rechecks trusted Projects authority and selection around owner-fenced lifecycle changes. It records each provider attempt before an external effect and saves its exact outcome under the owner lock. Unknown or unresolved calls block release and generation advance. Late resources use a separate cleanup record and the original provider fence; claim expiry permits recovery but does not prove that a provider call stopped.",
+  "alt": "Environment rechecks trusted Projects authority and selection around owner-fenced lifecycle changes. It records each provider attempt before an external effect and saves its exact outcome under the owner lock. Unknown or unresolved calls block release and generation advance. Late cleanup uses the active owner fence for authorization and keeps the saved source fence for provider identity; older-generation cleanup does not read or change the current Workspace. Claim expiry permits recovery but does not prove that a provider call stopped.",
   "autonumber": true,
   "participants": [
     {
@@ -42,7 +42,7 @@
     {
       "type": "note",
       "over": ["environment", "projects"],
-      "label": "Workspace reads retain both lease and exact attached volume.\nMetadata only: no Storage flush or content checkpoint."
+      "label": "Workspace reads retain the lease and exact attached volume. Metadata only: no Storage flush or content checkpoint. Retirement leaves data unchanged."
     },
     {
       "type": "message",
@@ -205,7 +205,7 @@
     {
       "type": "note",
       "over": ["environment", "prerequisites"],
-      "label": "Cleanup keeps current authority and original fences. Expiry allows retry, not quiescence; superseded claims reject receipts. Retirement leaves data unchanged."
+      "label": "Active fence authorizes cleanup; saved source fence identifies its provider call. Older cleanup skips Workspace. Expiry permits retry, not quiescence."
     }
   ]
 }

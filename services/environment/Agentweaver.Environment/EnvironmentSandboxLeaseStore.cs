@@ -312,16 +312,37 @@ public sealed class EnvironmentSandboxLeaseStore(
         return result;
     }
 
-    public async Task<SandboxProviderAttemptReservation> BeginProviderAttemptAsync(
+    public Task<SandboxProviderAttemptReservation> BeginProviderAttemptAsync(
         SandboxProviderAttemptRequest request,
         CancellationToken cancellationToken)
     {
         request = (request ?? throw new ArgumentNullException(nameof(request))).Validate();
+        return BeginProviderAttemptAsync(request, request.Fence, cancellationToken);
+    }
+
+    public async Task<SandboxProviderAttemptReservation> BeginProviderAttemptAsync(
+        SandboxProviderAttemptRequest request,
+        EnvironmentGenerationFence currentFence,
+        CancellationToken cancellationToken)
+    {
+        request = (request ?? throw new ArgumentNullException(nameof(request))).Validate();
+        ArgumentNullException.ThrowIfNull(currentFence);
+        if (request.Fence.Owner != currentFence.Owner)
+            throw new EnvironmentLifecycleException(
+                "environment_owner_mismatch",
+                "The provider attempt source and current authorization fences have different owners.");
+        if ((request.EffectKind != SandboxProviderEffectKind.LateResourceRelease &&
+                request.Fence != currentFence) ||
+            (request.EffectKind == SandboxProviderEffectKind.LateResourceRelease &&
+                request.Fence.LifecycleGeneration > currentFence.LifecycleGeneration))
+            throw new EnvironmentLifecycleException(
+                "environment_fence_stale",
+                "Only late-resource cleanup can use an older source fence under the current Environment fence.");
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
         await EnvironmentLifecycleStore.AcquireOwnerLockAsync(
-            connection, transaction, request.Fence.Owner, cancellationToken).ConfigureAwait(false);
-        await RequireActiveOwnerAsync(connection, transaction, request.Fence, cancellationToken).ConfigureAwait(false);
+            connection, transaction, currentFence.Owner, cancellationToken).ConfigureAwait(false);
+        await RequireActiveOwnerAsync(connection, transaction, currentFence, cancellationToken).ConfigureAwait(false);
 
         var lease = await ReadByOperationAsync(
             connection, transaction, request.OperationId, request.Fence.Owner, cancellationToken).ConfigureAwait(false)

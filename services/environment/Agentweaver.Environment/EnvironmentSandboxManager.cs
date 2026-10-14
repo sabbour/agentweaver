@@ -860,10 +860,15 @@ public sealed class EnvironmentSandboxManager(
             return null;
 
         await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
-        var detachment = await ReadWorkspaceDetachmentAsync(
-            context.Fence, cleanup.Lease, cancellationToken).ConfigureAwait(false);
-        await RequireSuspendReleaseAsync(caller, detachment.SuspendRelease, cancellationToken)
-            .ConfigureAwait(false);
+        (long TransitionRevision, long DataGeneration, RuntimeSuspendPlacementReleaseRequest? SuspendRelease)?
+            detachment = null;
+        if (cleanup.Lease.Fence == context.Fence)
+        {
+            detachment = await ReadWorkspaceDetachmentAsync(
+                context.Fence, cleanup.Lease, cancellationToken).ConfigureAwait(false);
+            await RequireSuspendReleaseAsync(caller, detachment.Value.SuspendRelease, cancellationToken)
+                .ConfigureAwait(false);
+        }
         var request = new SandboxReleaseRequest(
             cleanup.Lease.Fence,
             cleanup.ProvisionedResource.Resource,
@@ -872,6 +877,7 @@ public sealed class EnvironmentSandboxManager(
             cleanup.IdempotencyKey).Validate();
         var attemptReservation = await leaseStore.BeginProviderAttemptAsync(
             SandboxProviderAttemptRequest.ForLateResourceRelease(cleanup),
+            context.Fence,
             cancellationToken).ConfigureAwait(false);
         if (attemptReservation.Attempt.State is not (
                 SandboxProviderAttemptState.InProgress or SandboxProviderAttemptState.ResultRecorded) ||
@@ -895,6 +901,32 @@ public sealed class EnvironmentSandboxManager(
         }
         else
         {
+            try
+            {
+                await CheckLateCleanupAuthorityAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception authorityException) when (
+                authorityException is ProjectsConfigApiException or
+                    EnvironmentLifecycleException or
+                    RuntimeAuthorizationException or
+                    OperationCanceledException)
+            {
+                try
+                {
+                    await RecordLateCleanupFailureAsync(
+                        new { errorCode = "late_cleanup_precondition_failed", effectMayHaveApplied = false },
+                        effectMayHaveApplied: false,
+                        failureCode: "late_cleanup_precondition_failed").ConfigureAwait(false);
+                }
+                catch (Exception recordException)
+                {
+                    throw new InvalidOperationException(
+                        "The late Sandbox release was not started, but its no-effect result could not be durably recorded.",
+                        new AggregateException(authorityException, recordException));
+                }
+                throw;
+            }
+
             try
             {
                 receipt = await sandboxProvider.ReleaseAsync(request, cancellationToken).ConfigureAwait(false);
@@ -947,14 +979,17 @@ public sealed class EnvironmentSandboxManager(
                 CancellationToken.None).ConfigureAwait(false);
         }
         receipt = receipt.ValidateFor(request);
-        await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
-        await RequireSuspendReleaseAsync(caller, detachment.SuspendRelease, cancellationToken)
-            .ConfigureAwait(false);
-        await DetachWorkspaceAfterSandboxReleaseAsync(
-            context.Fence,
-            cleanup.Lease,
-            cancellationToken,
-            beforeCommitCheck: CheckLateCleanupAuthorityAsync).ConfigureAwait(false);
+        if (detachment is { } currentDetachment)
+        {
+            await EnsureUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
+            await RequireSuspendReleaseAsync(caller, currentDetachment.SuspendRelease, cancellationToken)
+                .ConfigureAwait(false);
+            await DetachWorkspaceAfterSandboxReleaseAsync(
+                context.Fence,
+                cleanup.Lease,
+                cancellationToken,
+                beforeCommitCheck: CheckLateCleanupAuthorityAsync).ConfigureAwait(false);
+        }
         await CheckLateCleanupAuthorityAsync(cancellationToken).ConfigureAwait(false);
         await leaseStore.CompleteLateResourceCleanupAsync(
             context.Fence,
@@ -979,7 +1014,9 @@ public sealed class EnvironmentSandboxManager(
         async Task CheckLateCleanupAuthorityAsync(CancellationToken token)
         {
             await EnsureUnchangedAsync(caller, context, token).ConfigureAwait(false);
-            await RequireSuspendReleaseAsync(caller, detachment.SuspendRelease, token).ConfigureAwait(false);
+            if (detachment is { } currentDetachment)
+                await RequireSuspendReleaseAsync(caller, currentDetachment.SuspendRelease, token)
+                    .ConfigureAwait(false);
         }
     }
 

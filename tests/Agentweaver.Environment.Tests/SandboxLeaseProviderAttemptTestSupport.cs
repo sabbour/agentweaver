@@ -8,6 +8,9 @@ internal static class SandboxLeaseProviderAttemptTestSupport
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
+    public static JsonElement SerializeOutcome<TReceipt>(TReceipt receipt) =>
+        JsonSerializer.SerializeToElement(receipt, JsonOptions);
+
     public static async Task<SandboxLeaseSnapshot> CompleteProvisionAsync(
         ISandboxLeaseStore store,
         Guid operationId,

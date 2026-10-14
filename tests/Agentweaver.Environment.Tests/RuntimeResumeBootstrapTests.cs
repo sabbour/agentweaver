@@ -539,7 +539,7 @@ public sealed partial class RuntimeResumeBootstrapTests
         public virtual Task<SandboxLeaseReservation> ReserveProvisionAsync(EnvironmentGenerationFence fence,
             string idempotencyKey, SandboxLeaseProvisionIntent intent, CancellationToken cancellationToken) =>
             throw new BeforeEffectReachedException();
-        public Task<SandboxLeaseSnapshot?> GetCurrentAsync(
+        public virtual Task<SandboxLeaseSnapshot?> GetCurrentAsync(
             EnvironmentGenerationFence fence, CancellationToken cancellationToken) =>
             Task.FromResult<SandboxLeaseSnapshot?>(lease);
         public Task<T> GetCurrentAsync<T>(EnvironmentGenerationFence fence,
@@ -557,6 +557,17 @@ public sealed partial class RuntimeResumeBootstrapTests
         public virtual Task<SandboxProviderAttemptReservation> BeginProviderAttemptAsync(
             SandboxProviderAttemptRequest request, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+        public virtual Task<SandboxProviderAttemptReservation> BeginProviderAttemptAsync(
+            SandboxProviderAttemptRequest request,
+            EnvironmentGenerationFence currentFence,
+            CancellationToken cancellationToken)
+        {
+            if (request.Fence != currentFence)
+                throw new ArgumentException(
+                    "The provider attempt source fence is not the current Environment authorization fence.",
+                    nameof(currentFence));
+            return BeginProviderAttemptAsync(request, cancellationToken);
+        }
         public virtual Task<SandboxProviderAttemptSnapshot> RecordProviderAttemptOutcomeAsync(
             Guid attemptId, EnvironmentGenerationFence fence, JsonElement outcome, bool effectMayHaveApplied,
             string? failureCode, CancellationToken cancellationToken) =>
@@ -581,9 +592,9 @@ public sealed partial class RuntimeResumeBootstrapTests
         public Task<SandboxLeaseSnapshot> CompletePartialReleaseAsync(
             SandboxPartialReleaseCompletionRequest request, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
-        public Task<SandboxLateResourceCleanupClaim?> ClaimNextLateResourceCleanupAsync(
+        public virtual Task<SandboxLateResourceCleanupClaim?> ClaimNextLateResourceCleanupAsync(
             EnvironmentGenerationFence fence, CancellationToken cancellationToken) => throw new NotSupportedException();
-        public Task CompleteLateResourceCleanupAsync(EnvironmentGenerationFence currentFence,
+        public virtual Task CompleteLateResourceCleanupAsync(EnvironmentGenerationFence currentFence,
             SandboxLateResourceCleanupClaim claim, SandboxReleaseReceipt receipt, CancellationToken cancellationToken,
             Guid? providerAttemptId = null) =>
             throw new NotSupportedException();

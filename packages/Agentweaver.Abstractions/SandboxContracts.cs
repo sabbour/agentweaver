@@ -1224,6 +1224,20 @@ public interface ISandboxLeaseStore
         SandboxProviderAttemptRequest request,
         CancellationToken cancellationToken);
 
+    Task<SandboxProviderAttemptReservation> BeginProviderAttemptAsync(
+        SandboxProviderAttemptRequest request,
+        EnvironmentGenerationFence currentFence,
+        CancellationToken cancellationToken)
+    {
+        request = (request ?? throw new ArgumentNullException(nameof(request))).Validate();
+        ArgumentNullException.ThrowIfNull(currentFence);
+        if (request.Fence != currentFence)
+            throw new ArgumentException(
+                "The provider attempt source fence is not the current Environment authorization fence.",
+                nameof(currentFence));
+        return BeginProviderAttemptAsync(request, cancellationToken);
+    }
+
     Task<SandboxProviderAttemptSnapshot> RecordProviderAttemptOutcomeAsync(
         Guid attemptId,
         EnvironmentGenerationFence fence,
