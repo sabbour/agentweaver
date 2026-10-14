@@ -31,7 +31,8 @@ internal sealed record RuntimeNativePromptCompactionObservation(
     RuntimeNativePromptCompactionStart? Start,
     RuntimeNativePromptCompactionComplete Complete);
 
-internal sealed record RuntimeNativeSessionErrorObservation(long Generation, string? ErrorType);
+internal sealed record RuntimeNativeSessionErrorObservation(
+    long Generation, string? ErrorType, string? ErrorCode, string? Message);
 
 internal sealed class RuntimeNativePromptCapacityObserver
 {
@@ -99,7 +100,8 @@ internal sealed class RuntimeNativePromptCapacityObserver
             }
             else if (sessionEvent is SessionErrorEvent error)
             {
-                _latestError = new(++_errorGeneration, error.Data.ErrorType);
+                _latestError = new(++_errorGeneration,
+                    error.Data.ErrorType, error.Data.ErrorCode, error.Data.Message);
             }
         }
 

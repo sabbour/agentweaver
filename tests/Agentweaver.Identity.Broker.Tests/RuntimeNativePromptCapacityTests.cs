@@ -147,9 +147,12 @@ public sealed class RuntimeNativePromptCapacityTests
         var nativeError = Assert.IsType<RuntimeNativeSessionErrorObservation>(
             session.LatestNativeSessionError);
         Assert.True(nativeError.Generation > previousErrorGeneration);
-        Assert.Equal("context_limit", nativeError.ErrorType);
         Assert.Equal(inferenceRequestsBefore, harness.InferenceEndpoint.RequestCount);
         Assert.Equal(0, harness.InferenceEndpoint.FailedRequests);
+        Assert.True(nativeError.ErrorType == "context_limit",
+            $"Expected a native context-limit event but received type={nativeError.ErrorType ?? "(missing)"}; " +
+            $"code={nativeError.ErrorCode ?? "(missing)"}; message={nativeError.Message ?? "(missing)"}; " +
+            $"promptTokenLimit={before.PromptTokenLimit}.");
     }
 
     private static async Task AssertAuthenticatedNativeByokRouteAsync(
