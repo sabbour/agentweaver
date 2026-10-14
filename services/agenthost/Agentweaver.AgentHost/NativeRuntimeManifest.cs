@@ -46,6 +46,13 @@ public sealed record NativeRuntimeManifest(string SdkVersion, string RuntimeVers
         if (!File.Exists(executable) || !File.Exists(checksum))
             throw new InvalidOperationException("The verified native runtime is not part of this image.");
 
+        foreach (var relative in new[] { "index.js", "app.js", "prebuilds/linux-x64/cli-native.node" })
+        {
+            var file = new FileInfo(Path.Combine(directory, "native", relative));
+            if (!file.Exists || file.Length == 0)
+                throw new InvalidOperationException("The pinned native distribution is incomplete.");
+        }
+
         using var content = File.OpenRead(executable);
         Span<byte> header = stackalloc byte[20];
         if (content.Length < header.Length)

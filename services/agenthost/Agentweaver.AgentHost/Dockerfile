@@ -31,6 +31,18 @@ RUN apt-get update && apt-get install --no-install-recommends --yes git ca-certi
     rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /publish/ ./
+RUN mkdir -p /tmp/copilot-runtime-home && \
+    HOME=/tmp/copilot-runtime-home /app/native/copilot --no-auto-update --version && \
+    runtime_distribution=/tmp/copilot-runtime-home/.cache/copilot/pkg/linux-x64/1.0.97 && \
+    for file in index.js app.js prebuilds/linux-x64/cli-native.node; do \
+      test -s "$runtime_distribution/$file"; \
+    done && \
+    cp -a "$runtime_distribution/." /app/native/ && \
+    for file in index.js app.js prebuilds/linux-x64/cli-native.node; do \
+      test -s "/app/native/$file"; \
+    done && \
+    test "$(sha256sum /app/native/copilot | cut -d ' ' -f 1)" = "$(cat /app/native/copilot.sha256)" && \
+    rm -r /tmp/copilot-runtime-home
 COPY --from=build --chown=1654:1654 /private-state/ /state/
 COPY --from=build --chown=1654:1654 /workspace/ /workspace/
 ENV ASPNETCORE_URLS=https://+:8443 \

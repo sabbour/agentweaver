@@ -480,12 +480,14 @@ The Dockerfile pins the build and runtime base digests and verifies the native a
 The final image runs as UID/GID `1654:1654` on `linux/amd64`.
 It uses explicit HTTPS certificate configuration and a read-only root filesystem.
 Private state and temporary files are separate from the attached workspace.
-The image extracts only the pinned CLI executable to `/app/native/copilot`.
+The image verifies the pinned CLI executable, then runs its non-authenticated
+`--version` command during the build to materialize the matching distribution under
+image-owned `/app/native`. It includes the launcher, application modules, and native
+addon; it does not extract executable packages into private session state at runtime.
 The host starts that image-owned executable through the SDK's stdio connection and
-sets `COPILOT_CLI_DIST_DIR` to its directory, never a caller-selected path.
-Startup checks the Linux x86-64 ELF header, executable checksum, SDK/runtime versions,
-and pinned archive digest.
-The CLI does not extract executable packages into private session state.
+sets `COPILOT_CLI_DIST_DIR` to `/app/native`, never a caller-selected path.
+Startup checks the Linux x86-64 ELF header, executable checksum, required distribution
+files, SDK/runtime versions, and pinned archive digest.
 Private state and temporary mounts need no executable permission.
 Opaque SDK session caches remain private and use the existing authenticated recovery path.
 No registry credential or runtime model credential enters the image.

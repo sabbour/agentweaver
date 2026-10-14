@@ -112,7 +112,7 @@ jobs:
               done
               umask 077
               test -x /app/native/copilot
-              for file in /app/native/copilot /app/native/copilot.sha256; do
+              for file in /app/native/copilot /app/native/copilot.sha256 /app/native/index.js /app/native/app.js /app/native/prebuilds/linux-x64/cli-native.node; do
                 test -s "$file" && test -r "$file" && test ! -w "$file"
               done
               STATUS="$(dotnet /app/Agentweaver.AgentHost.dll --verify-native-runtime)"
@@ -302,6 +302,11 @@ jobs:
               test -r /native/native/copilot
               test -x /native/native/copilot
               test -r /native/native/copilot.sha256
+              test -r /native/native/index.js
+              test -r /native/native/app.js
+              test -x /native/native/prebuilds
+              test -x /native/native/prebuilds/linux-x64
+              test -r /native/native/prebuilds/linux-x64/cli-native.node
               test -w /tmp/home
               test -w /tmp/dotnet-cli-home
               result_probe="/results/.native-prompt-capacity-write-check-$$"

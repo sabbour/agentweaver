@@ -22,10 +22,17 @@ public sealed class NativeRuntimeManifestTests
     [InlineData("empty")]
     [InlineData("not-elf")]
     [InlineData("wrong-machine")]
-    public void ImageOwnedManifestRequiresPinnedSdkCompatibleRuntimeAndVerifiedExecutable(string change)
+    [InlineData("index")]
+    [InlineData("empty-index")]
+    [InlineData("app")]
+    [InlineData("empty-app")]
+    [InlineData("addon")]
+    [InlineData("empty-addon")]
+    public void ImageOwnedManifestRequiresPinnedSdkCompatibleRuntimeAndVerifiedDistribution(string change)
     {
         var directory = Path.Combine(Path.GetTempPath(), "agenthost-manifest-" + Guid.NewGuid().ToString("N"));
         var native = Directory.CreateDirectory(Path.Combine(directory, "native")).FullName;
+        var addonDirectory = Directory.CreateDirectory(Path.Combine(native, "prebuilds", "linux-x64")).FullName;
         try
         {
             var content = CreateAmd64ElfFixture();
@@ -36,6 +43,9 @@ public sealed class NativeRuntimeManifestTests
             if (change == "wrong-machine")
                 content[18] = 0xb7;
             File.WriteAllBytes(Path.Combine(native, "copilot"), content);
+            File.WriteAllBytes(Path.Combine(native, "index.js"), content);
+            File.WriteAllBytes(Path.Combine(native, "app.js"), content);
+            File.WriteAllBytes(Path.Combine(addonDirectory, "cli-native.node"), content);
             File.WriteAllText(Path.Combine(native, "copilot.sha256"),
                 change == "checksum" ? new string('0', 64) : Convert.ToHexStringLower(SHA256.HashData(content)));
             var manifest = new NativeRuntimeManifest(
@@ -50,6 +60,18 @@ public sealed class NativeRuntimeManifestTests
                 File.Delete(Path.Combine(native, "copilot"));
             if (change == "missing-checksum")
                 File.Delete(Path.Combine(native, "copilot.sha256"));
+            if (change == "index")
+                File.Delete(Path.Combine(native, "index.js"));
+            if (change == "empty-index")
+                File.WriteAllBytes(Path.Combine(native, "index.js"), []);
+            if (change == "app")
+                File.Delete(Path.Combine(native, "app.js"));
+            if (change == "empty-app")
+                File.WriteAllBytes(Path.Combine(native, "app.js"), []);
+            if (change == "addon")
+                File.Delete(Path.Combine(addonDirectory, "cli-native.node"));
+            if (change == "empty-addon")
+                File.WriteAllBytes(Path.Combine(addonDirectory, "cli-native.node"), []);
             if (change == "valid")
             {
                 var verified = NativeRuntimeManifest.ReadAndVerify(directory);
