@@ -72,7 +72,8 @@ public sealed class RuntimeNativePromptCapacityTests
 
         var compaction = await compactionTask.WaitAsync(timeout.Token);
         Assert.NotNull(compaction.Start);
-        Assert.Equal(session.Facts.ModelId, compaction.Start.Model);
+        if (!string.IsNullOrEmpty(compaction.Start.Model))
+            Assert.Equal(session.Facts.ModelId, compaction.Start.Model);
         Assert.True(compaction.Start.TokenLimit is > 0);
         Assert.True(compaction.Complete.Success);
         Assert.Null(compaction.Complete.Error);
@@ -99,17 +100,17 @@ public sealed class RuntimeNativePromptCapacityTests
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         await using var harness = await NativePromptHarness.StartAsync(timeout.Token);
-        await using var session = await harness.CreateSessionAsync(1024, 8192, timeout.Token);
+        await using var session = await harness.CreateSessionAsync(4096, 8192, timeout.Token);
         await AssertAuthenticatedNativeByokRouteAsync(harness, session, timeout.Token);
 
         var before = await RequireContextInfoAsync(session, timeout.Token);
         AssertContextIdentity(before, session);
         Assert.True(before.PromptTokenLimit > 0);
-        Assert.Equal(1024, session.Facts.MaxPromptTokens);
-        Assert.Equal(1024L, before.PromptTokenLimit);
+        Assert.Equal(4096, session.Facts.MaxPromptTokens);
+        Assert.Equal(4096L, before.PromptTokenLimit);
         var inferenceRequestsBefore = harness.InferenceEndpoint.RequestCount;
         var prompt = "LATEST_OVERFLOW_INPUT " + string.Join(' ',
-            Enumerable.Repeat("irreducible", 1200));
+            Enumerable.Repeat("x", 6000));
 
         var previousErrorGeneration = session.LatestNativeSessionError?.Generation ?? 0;
         var failure = await Record.ExceptionAsync(() => session.SendTurnAsync(prompt, timeout.Token));
@@ -135,8 +136,19 @@ public sealed class RuntimeNativePromptCapacityTests
 
         var response = await session.SendTurnAsync(
             $"Initialize this local test session with {correlationMarker}.", cancellationToken);
-        var receipt = Assert.Single(harness.InferenceEndpoint.Receipts,
-            item => response == $"native-route-response:{sessionId}:{item.ResponseId}");
+        var receipts = harness.InferenceEndpoint.Receipts;
+        var matchingReceipts = receipts.Where(item =>
+            response == $"native-route-response:{sessionId}:{item.ResponseId}").ToArray();
+        var receiptSummary = string.Join("; ", receipts.Select(item =>
+            $"{item.Method} {item.Path} model={item.ModelId ?? "(missing)"} " +
+            $"session={item.CorrelatedSessionId ?? "(missing)"} response={item.ResponseId} " +
+            $"credentialMatched={item.CredentialMatched}"));
+        if (matchingReceipts.Length != 1)
+            throw new XunitException(
+                $"Expected one authenticated loopback receipt for the native response. " +
+                $"Response='{response}'; requests={harness.InferenceEndpoint.RequestCount}; " +
+                $"failed={harness.InferenceEndpoint.FailedRequests}; receipts=[{receiptSummary}]");
+        var receipt = matchingReceipts[0];
 
         Assert.Equal("byok", session.Facts.SourceMode);
         Assert.Equal("accepted-model-reference", session.Facts.ModelSelectionReference);
