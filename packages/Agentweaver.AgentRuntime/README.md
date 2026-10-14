@@ -6,7 +6,7 @@ dispatch service, or deployment.
 The Copilot session factory uses an explicit registered connection and a server-owned
 mapping from accepted model references to SDK model IDs and provider configuration.
 The accepted platform or project selection fixes `ModelSourceMode`.
-There is no personal provider preference or fallback.
+The factory does not use a personal provider preference or fallback.
 Missing or mismatched modes deny SDK startup.
 Hosted mode reads the actual SDK catalog before it creates the session.
 BYOK mode supplies an explicit SDK `Provider` and does not consult Copilot authentication or its catalog.

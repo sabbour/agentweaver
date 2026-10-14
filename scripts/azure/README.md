@@ -41,8 +41,8 @@ A created identity does not prove database access or a ready service.
 
 ### P1 PostgreSQL initializer source proposal
 
-`tools/P1PostgresInitializer` is source-only; no initialization or database
-connection has been run. Source review does not authorize role creation,
+`tools/P1PostgresInitializer` is source-only; no one ran initialization or
+opened a database connection. Source review does not authorize role creation,
 migrations, grants, or deployment. The existing credential check blocks
 initialization before any credential request or database connection. The source
 validates all planned row-lock mutation guards and, before committing grants,
@@ -153,7 +153,7 @@ These role assignments use the exact zone scope and the identity object ID.
 The existing vault grants Key Vault Certificate User to that same identity.
 The Bicep template defines no DNS record or certificate resource.
 
-The template enables the managed Gateway API installation with
+The template configures the managed Gateway API installation with
 `installation: 'Standard'` and the Application Routing Istio implementation
 with `mode: 'Enabled'`. The Gateway class is `approuting-istio`.
 The template keeps the default nginx controller type at `None`.
@@ -170,7 +170,7 @@ The public issuer must match the hostname on the admitted route.
 The Gateway requires a namespace policy compatible with its managed pods.
 AKS currently rejects a Gateway customization that sets a pod or container
 security context. Its published
-[customization allow-list](https://learn.microsoft.com/azure/aks/istio-gateway-api#deployment-customization-allow-list-fields)
+[customization allow list](https://learn.microsoft.com/azure/aks/istio-gateway-api#deployment-customization-allow-list-fields)
 does not include these fields.
 A managed pod without an explicit seccomp profile cannot satisfy the P0
 namespace's `restricted` policy.
@@ -363,7 +363,7 @@ creation occurred.
 
 CAUTION: Do not run a plan, deployment, bootstrap, or write diagnostic without
 separate explicit approval for its dedicated Azure target and effects.
-Allow-list strings and `--execute` are technical guards, not approval.
+Strings on the allow list and `--execute` are technical guards, not approval.
 
 The resource group must exist with matching ownership tags after approved bootstrap.
 The tools query its exact account, tenant, full ID, tags, and resource inventory.
@@ -373,7 +373,7 @@ Every Azure command explicitly binds the selected subscription.
 
 The target guard checks the selected account, tenant, resource-group ownership,
 and exact approved resource IDs, types, names, and role scopes. Core managed
-resources must match the resource group's ownership tags. Private DNS roots may
+resources must match the resource group's ownership tags. Private DNS roots can
 be untagged or have partial tags; any ownership tags that are present must not
 conflict with the dedicated resource group. Missing DNS tags do not trigger
 tag repair or a historical deployment-operation audit.
@@ -391,8 +391,8 @@ Unexpected resource IDs, child names, scopes, and types still block. Known
 inherited NSG and Smart Detector resources do not trigger management-group
 policy-origin, Activity Log, or provider-generated metadata audits.
 
-The seven P0 Private DNS roots and their VNet links remain exact allow-listed
-resource names. Existing links are checked for successful provisioning,
+The seven P0 Private DNS roots and their VNet links remain exact resource names
+on the allow list. Existing links are checked for successful provisioning,
 registration disabled, and the dedicated VNet. Missing or provider-omitted
 root tags and old resource-operation metadata are not deployment blockers.
 
@@ -409,9 +409,9 @@ The selected JSON parameters must bind prefix, tenant, owner, and cost center.
 The input hash covers all tracked infrastructure files.
 `sourceTree` is the 40-character Git tree SHA for the source commit.
 `sourceHash` is the separate SHA-256 infrastructure input hash.
-For acceptance, `--expected-sha` selects the deployed source commit and may name
-an ancestor of the clean verifier HEAD. The selected commit must exist in that
-reviewed history, and every tracked `infra/bicep` input must match its contents;
+For acceptance, `--expected-sha` must identify the deployed source commit. The
+deployed commit may be an ancestor of the clean verifier HEAD. It must exist in
+that reviewed history, and every tracked `infra/bicep` input must match its contents;
 the deployment name, tree, and input hash are then checked against that exact
 source. The report keeps `candidate.verifierSha` separate from the deployed
 `candidate.sourceSha`, so a docs-only verifier advance does not rewrite the
@@ -569,8 +569,8 @@ stored telemetry. The Probe host uses `AlwaysOnSampler` for its acceptance span.
 An unrecorded span fails with `telemetry_activity_not_recorded` before fixture
 operations. This setting does not change sampling in other Azure Monitor hosts.
 Caller-supplied digests, booleans, trace IDs, and secret
-versions do not satisfy the gate. Failed terminal pods retain only allow-listed
-probe failure codes and types; raw logs and credential-shaped diagnostics are
+versions do not satisfy the gate. Failed terminal pods retain only probe failure
+codes and types on the allow list; raw logs and credential-shaped diagnostics are
 not copied into the report.
 
 This optional collector reports configuration and probe evidence separately.

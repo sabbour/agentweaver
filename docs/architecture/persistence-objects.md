@@ -11,7 +11,7 @@ boundary in detail.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-outbox-inbox.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-outbox-inbox.png'" alt="Independent caller-owned producer and consumer transactions using PostgresOutbox. EnqueueAsync stores the event with producer state; AdmitAsync applies effects only for Admitted, skips duplicates, and acknowledges consumer delivery after commit. ClaimOneAsync leases a selected event only at its stream head." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-outbox-inbox.png'" alt="Independent caller-owned producer and consumer transactions that use PostgresOutbox. EnqueueAsync stores the event with producer state; AdmitAsync applies effects only for Admitted, skips duplicates, and acknowledges consumer delivery after commit. ClaimOneAsync leases a selected event only at its stream head." />
   </a>
   <figcaption>Separate producer and consumer transactions couple local state to outbox writes and inbox admission. The host-driven relay is shown separately; transport delivery remains at least once.</figcaption>
 </figure>
@@ -34,7 +34,12 @@ and `AcknowledgeAsync` accepts only a current, unexpired token. The Orchestrator
 the single-event claim for synchronous admission of its selected owner-outbox message;
 it does not add a background relay.
 
-`OutboxRelay` publishes through an injected `IOutboxPublisher`, then acknowledges only confirmed publishes with the current lease token. A failed, cancelled, or fenced publish remains unacknowledged and can be reclaimed; a publish may still have completed externally before a failure. The host calls `RelayOnceAsync`. The library does not start a daemon or provide exactly-once delivery.
+`OutboxRelay` publishes through an injected `IOutboxPublisher`, then
+acknowledges only confirmed publishes with the current lease token. A failed,
+cancelled, or fenced publish remains unacknowledged and can be reclaimed; the
+transport can finish a publish externally before a failure. The host calls
+`RelayOnceAsync`. The library does not start a daemon or provide exactly-once
+delivery.
 
 Call `AdmitAsync` with the same transaction as consumer state and any new outbox event. Apply effects only for `InboxAdmission.Admitted`. Skip effects for `InboxAdmission.Duplicate`. Acknowledge delivery after commit.
 
@@ -59,7 +64,7 @@ They are not competing event stores.
 | Events PostgreSQL schema | Ordered events, session identity, usage, object keys, purpose, length, and retention references | Events owns journal order and run artifact references. |
 | Azure Blob through `IObjectStore` | Opaque conversation caches, large logs, and run artifacts | Blob stores bytes. The trusted owner controls access and lifetime. |
 | Orchestrator PostgreSQL schema | MAF checkpoint identity, workflow position, and optional cache references | Orchestrator owns workflow recovery, not the Events journal. |
-| Azure Files through Storage | Agent-visible repository and workspace files | Environment owns volume bindings. These are not platform object blobs. |
+| Azure Files through Storage | Agent-visible repository and workspace files | Environment owns volume bindings. These workspace files are not platform object blobs. |
 
 For example, a journal entry can record that a turn completed and refer to an object
 containing its large output. PostgreSQL answers what happened and in which order.

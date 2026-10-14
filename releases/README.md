@@ -100,7 +100,7 @@ The diagnostic job uses only read permissions for contents, Actions, and package
 It permits Docker login, archive loading, config inspection, and the current manifest read.
 It never runs the publisher or writes claims, registry uploads, or tags.
 Its isolated credential directory is temporary and removed after the operations.
-The sanitized result gives only operation names, exit values, and allowlisted error codes.
+The sanitized result gives only operation names, exit values, and error codes on the allow list.
 Successful login and reads do not prove package-write permission or identify the original failure.
 
 The same workflow has one more default-off input, `agenthost_archive_diagnostic`.
@@ -111,7 +111,7 @@ It skips preparation, Probe, and publication jobs.
 It needs `refs/heads/v1`, the exact dispatch source, and the first run attempt.
 The dispatch source must differ from the original image source `6b036e11ff211f96cfddcd837be9b5bce75ddb34`.
 The job checks the archive SHA256 before it loads the archive. It then runs only `docker load` and `docker image inspect`.
-The sanitized result gives allowlisted field names, true or false comparisons, and digests.
+The sanitized result gives only field names on the allow list, true or false comparisons, and digests.
 It never prints raw inspect output, environment values, full config, or arbitrary labels.
 A well-formed image that does not match gives false comparisons. Malformed data is a failure.
 Ordinary `publish: false` without sampler replacement still prepares release artifacts.
@@ -144,7 +144,7 @@ An ambiguous claim response stops before push and records attempted versus ackno
 Each acknowledged claim receives an independent permanent result attempt.
 The local receipt uses create-only file creation. It cannot overwrite a prior receipt.
 The publisher records the actual new digest before later verification.
-It records only allowlisted operation names, exit values, and error codes.
+It records only operation names, exit values, and error codes on the allow list.
 The publisher removes only its newly created temporary Docker credential directory.
 Failure consumes acknowledged claims and stops without automatic retry, claim reuse, or claim deletion.
 The operator then reads the tag independently and preserves the original and new receipts.
@@ -307,8 +307,9 @@ the Azure Blob transport adapter.
   optional L7 layers as platform-selected, platform-owned providers, and
   pinning that layer additionally records a confirmed *applied* egress intent
   generation. Exclusive and singleton provider cardinalities are preserved
-  and other cardinalities are explicitly deferred. This only pins and records
-  the above; it adds no runtime enforcement, egress compilation/application,
+  and other cardinalities are explicitly deferred. This change only pins and records
+  the provider selections and confirmed applied egress intent generation; it adds
+  no runtime enforcement, egress compilation/application,
   deployable service, or version bump, and the draft composition remains at
   `0.0.0`.
 
@@ -359,7 +360,7 @@ The manual workflow has a separate publication choice.
   Each successful apply also writes a tracked (not gitignored) receipt to
   `releases/receipts/<sourceSha>.json`, naming the exact components bumped and,
   for every archived changeset, its original path, archived path, and a
-  SHA-256 hash of its content. This receipt is what lets the CI changeset
+  SHA-256 hash of its content. The receipt lets the CI changeset
   coverage guard (`release:validate -- --base <sha>`) recognize a real,
   `release:apply`-produced archival as equivalent to a fresh top-level
   changeset note for exact version-mirror edits only.
@@ -413,7 +414,7 @@ The manual workflow has a separate publication choice.
   The existing OCI measurer checks actual manifest, config, and compressed layer bytes.
   It does not trust a saved byte total or Docker's filesystem size.
   The saved image is loaded and checked against the measured source/tree labels.
-  Docker may report the loaded image ID as the measured image-config digest or as the measured OCI manifest digest.
+  Docker can report the loaded image ID as the measured image-config digest or as the measured OCI manifest digest.
   The manifest digest is allowed only when it equals the measured manifest, which names the measured config.
   Any other ID is refused. The check never pulls an ID.
   The provenance and receipt keep the image-config digest. The verified loaded ID is used only for the local native check and tag.
@@ -421,7 +422,7 @@ The manual workflow has a separate publication choice.
   Publication repeats these checks before registry login and tags the verified loaded image ID.
   Missing or changed archives, wrong labels, size failures, and runtime failures block publication.
   The receipt keeps the prepared OCI measurement separate from the actual registry digest.
-  Docker may encode the pushed manifest differently; the local OCI digest is not a registry claim.
+  Docker can encode the pushed manifest differently; the local OCI digest is not a registry claim.
   Gateway and MCP retain SDK container preparation with the existing pinned ASP.NET base.
   Provenance records lock hashes and image archive hashes, not fabricated registry digests.
   A failed preparation produces no completed provenance.
@@ -489,7 +490,7 @@ npm run release:deploy-integration -- `
 This integration mode is not a release or acceptance result. The existing
 `release:deploy` path remains the separate final-release gate and requires the
 published v1 release composition and its full publication evidence. Add
-`--execute` only when the read-only preflight has passed and a rollout is intended.
+`--execute` only after the read-only preflight passes and when you intend a rollout.
 
 The manually dispatched `v1 release pack` GitHub Actions workflow
 (`.github/workflows/v1-release-pack.yml`) validates and prepares the exact dispatch source.
@@ -608,7 +609,7 @@ Describe the change and its unreleased impact.
 ```
 
 Additive capabilities use `minor`; select `patch` or `major` based on actual
-compatibility. Tooling-only work may use a version-neutral record with empty
+compatibility. For tooling-only work, use a version-neutral record with empty
 frontmatter (`---`, then `---`, then a blank line and a summary), without
 inventing a product package. Documentation, tests, and CI-only edits are exempt;
 changing product code, project files, schema, or package configuration is not.
@@ -666,9 +667,9 @@ not call Docker or Podman. A real rollout requires a separate explicit
 `--execute`. The execution path applies only the nine named shared-service
 Deployments and private ClusterIP Services in the supplied runtime List. It
 does not create a shared AgentHost Deployment or Service. It then rechecks
-image provenance, target, ready pods, health probes, and live image IDs. `--resume`
-may skip only an already-applied stage from a checkpoint bound to the release,
-source, manifest, publication receipt, runtime List, and exact target. Resume
+image provenance, target, ready pods, health probes, and live image IDs.
+`--resume` skips only an already-applied stage from a checkpoint bound to the
+release, source, manifest, publication receipt, runtime List, and exact target. Resume
 always repeats live verification. Checkpoint read/write/cleanup errors fail
 explicitly.
 

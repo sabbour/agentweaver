@@ -1,7 +1,7 @@
 # Agentweaver 1.0
 
 This branch (`v1`) contains the Agentweaver 1.0 rebuild. It starts from an empty
-history by design. Version 1.0 rebuilds the product. It does not refactor 0.x.
+history by design. Version 1.0 rebuilds the product; it doesn't refactor 0.x.
 
 - **0.x continues to ship** on [`dev`](https://github.com/sabbour/agentweaver/tree/dev).
   It remains the behavior reference and a source of compatible, reviewed code for
@@ -43,7 +43,7 @@ history by design. Version 1.0 rebuilds the product. It does not refactor 0.x.
 - The coordinator prompt stays **thin**. Workflow rules live in code.
 - Previews and published applications become **one application model**, shown in
   Agentweaver's own UI next to a **surface panel**.
-- 1.0 runs **in the cloud only** (AKS and Azure first). There is no local runtime mode.
+- 1.0 runs **in the cloud only** (AKS and Azure first). The product doesn't include a local runtime mode.
 
 ## Implemented foundations
 
@@ -194,7 +194,7 @@ The [Identity broker candidate](docs/specs/1779-identity-broker.md) adds a nativ
 authenticated consent, S256 PKCE, resource audiences, and refresh replay rejection.
 It requires explicit host credentials and has no ambient user-secrets or development-certificate fallback.
 Its P0 redemption composition (#1783) validates bearer issuer, signature, lifetime,
-and configured audience before using token subject/project/run claims; append-only
+and configured audience before trusting token subject/project/run claims; append-only
 grant revisions are changed with PostgreSQL compare-and-swap and durable idempotency.
 The broker issues project/run claims only after matching authorize selectors to
 an active Identity-owned grant for the authenticated subject, and rechecks that
@@ -282,7 +282,7 @@ Agentweaver project sessions discover the executable Copilot SDK extension in
 after checking out a branch containing it. This is a project extension, not a
 GitHub Actions workflow or a global user installation. Discovery only registers
 the workflow; it does not automatically start it. [Project routing instructions](.github/copilot-instructions.md)
-identify when an agent may offer it.
+identify when an agent can offer it.
 
 With explicit user workflow authorization (or a matching skill/slash command),
 invoke `run_dynamic_workflow` by name with arguments such as:
@@ -383,7 +383,7 @@ validation can be retried with a newly staged owned tree; successful validation
 pins the candidate, and publication cannot be silently replaced. If the target
 tip advances after the coordinator grant, admission blocks and requires a fresh
 grant on retry.
-The admission owner may use a live, coordinator-authored top-level comment on
+The admission owner can use a live, coordinator-authored top-level comment on
 the same PR as the coordinator response when a child-session reply is
 unavailable. Its comment ID/URL is the stable response ID, not a fabricated
 message ID. Approval must be explicit on the first line, nonwithdrawn, and
@@ -396,11 +396,11 @@ Run focused native tests with
 `node --test .github/extensions/agentweaver-issue-to-merge/workflow.test.mjs`.
 The [repository workflow canvas](.github/extensions/agentweaver-workflow-canvas/README.md)
 offers a read-only view of native dynamic workflow runs published cooperatively
-by sessions that have loaded its project extension; it does not discover runs
+by sessions that load its project extension; it does not discover runs
 from unobserved sessions.
 The `v1 foundation CI` workflow runs the same suites with coverage for PRs targeting
 `v1` and pushes to `v1`. After restore and build, use `npm run coverage:dotnet`
-and `npm run coverage:node` instead of the test commands above to reproduce its
+and `npm run coverage:node` instead of the test commands in the preceding code block to reproduce its
 coverage reports. CI publishes a readable summary and downloadable reports with
 the tested source and PR head SHAs; no coverage percentage threshold is imposed.
 See [coverage commands and scope](docs/guide/testing.md#code-coverage).

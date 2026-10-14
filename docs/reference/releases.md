@@ -81,7 +81,7 @@ flowchart LR
 
 `npm run release:plan` writes a source-bound plan under ignored `artifacts/release/`. It does not change component versions.
 
-The user-selected P1 plan has applied `1.0.0` source versions for all 23 product components:
+The user-selected P1 plan applied `1.0.0` source versions for all 23 product components:
 13 packages and 10 service images.
 The canonical application archived its major-intent changeset and the consumed earlier records.
 The acceptance-only Probe has its separate prepared `0.0.1` source version.

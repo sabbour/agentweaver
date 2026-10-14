@@ -5,7 +5,7 @@ and Events & Sessions service candidates, Environment and Orchestrator candidate
 and the Orchestrator Core AGT YAML Policy adapter. Environment owns lifecycle,
 egress intent, workspace-volume orchestration, and Sandbox leases; its Azure Files
 CSI adapter provisions or releases generation-pinned claims, while the selected
-Sandbox provider mounts the exact attached PVC. These are source
+Sandbox provider mounts the exact attached PVC. These components are source
 candidates, not deployed services. The native journal includes typed, redacted
 PolicyEvaluation evidence but rejects generic writes without trusted Core-writer
 provenance. The event and policy adapter are not action grants. Orchestrator Core's action guard
@@ -38,7 +38,7 @@ It does not prove deployed AgentHost scheduling or paid model execution.
 
 Environment's [BuildTest path](environment-sandbox#buildtest-command-and-output-collection) resolves Core's immutable accepted checkpoint and persists one stable operation in existing owner-effects state.
 It uses gated offline command Pods and a separate read-only output-collector Pod.
-The optional server profile pins capability, images, executable allowlist, resource limits, and collector mode.
+The optional server profile pins capability, images, executable allow list, resource limits, and collector mode.
 Core retains MAF checkpoint and run-state ownership.
 Source checks do not prove live provider effects or complete native accounting.
 
@@ -48,7 +48,7 @@ Source checks do not prove live provider effects or complete native accounting.
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'">
     <img :src="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'" alt="Structural view of unpublished Knowledge, Events & Sessions, Environment, and Orchestrator candidates; Orchestrator/Core Policy adapters and owner flow; journal evidence and addressed-message delivery; Azure Files/Kubernetes, Azure Blob, and Key Vault adapters. Mapped session context is checked against current owner state and authority, not proof of SDK execution or accounting; public Environment run-bound enrollment remains denied and internal lookup is read-only. The journal rejects untrusted PolicyEvaluation writes. Source structure, not deployment topology." />
   </a>
-  <figcaption>Direct project references and adapter/resource relationships in the v1 source; Events & Sessions, Environment, and Orchestrator are unpublished service candidates, not a deployed topology. The Orchestrator owner flow is shown in the <a href="./events-sessions">Sessions journal diagram</a>. Host composition and Foundation Probe registration IDs are listed below.</figcaption>
+  <figcaption>Direct project references and adapter/resource relationships in the v1 source; Events & Sessions, Environment, and Orchestrator are unpublished service candidates, not a deployed topology. The Orchestrator owner flow is shown in the <a href="./events-sessions">Sessions journal diagram</a>. The host-composition section lists Foundation Probe registration IDs.</figcaption>
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.drawio'">Open editable draw.io source</a></p>
 
