@@ -189,7 +189,8 @@ public sealed class RuntimeSkillContentTests
         var skill = Assert.Single(projection.Skills);
         var runtimeName = RuntimeAcceptedSkillProvider.RuntimeName(skill.SkillId);
         var expectedPath = $"workspace/{RuntimeAcceptedSkillProvider.ResourceDirectory(runtimeName)}/guide.txt";
-        var files = new RuntimeNativeSessionFiles();
+        var workingDirectory = Path.Combine(Path.GetTempPath(), "agentweaver-skill-workspace");
+        var files = new RuntimeNativeSessionFiles([], workingDirectory);
         files.InstallSkillResources(projection);
 
         using var archive = new ZipArchive(new MemoryStream(files.Capture()), ZipArchiveMode.Read);
@@ -197,6 +198,9 @@ public sealed class RuntimeSkillContentTests
         using var reader = new StreamReader(resource.Open(), Encoding.UTF8);
 
         Assert.Equal("Exact resource bytes.", reader.ReadToEnd());
+        Assert.Equal(expectedPath,
+            files.MapWorkingDirectoryPath(Path.Combine(workingDirectory,
+                RuntimeAcceptedSkillProvider.ResourceDirectory(runtimeName), "guide.txt")));
     }
 
     internal static SkillRuntimeContentProjectionV1 EmptyProjection(RuntimeRegistration registration) =>

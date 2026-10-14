@@ -251,7 +251,7 @@ public sealed class RuntimeSuspendPlacementReleaseTests
                 ModelSourceMode = ModelSourceMode.HostedCopilot
             }, RuntimeRegistrationState.Active, now.AddMinutes(5));
         var source = new SdkSessionFacts(
-            registration.RuntimeInstanceId, RuntimeContractValidation.NativeSessionId(registration.Binding), "1.0.18", "1.0.79",
+            registration.RuntimeInstanceId, RuntimeContractValidation.NativeSessionId(registration.Binding), "1.0.18", "1.0.97",
             "model:selected", "controlled-model", new string('a', 64), 1m, "hosted-copilot",
             SdkMeterSources.CopilotNanoAiu, registration.Binding.AcceptedSelectionHash, 1);
         var admission = new RuntimeNativeTurnAdmissionReceipt(

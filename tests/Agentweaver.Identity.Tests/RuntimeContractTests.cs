@@ -137,22 +137,20 @@ public sealed class RuntimeContractTests
             {
                 MaxToolCalls = 1
             }));
-        Assert.Throws<RuntimeAuthorizationException>(() =>
-            RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
-            {
-                MaxPromptTokens = 1024
-            }));
+        RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
+        {
+            MaxPromptTokens = 1024
+        });
+        RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
+        {
+            WorkflowStepId = "implement",
+            MaxPromptTokens = 1024
+        });
         RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
         {
             WorkflowStepId = "implement",
             MaxToolCalls = 1
         });
-        Assert.Throws<RuntimeAuthorizationException>(() =>
-            RuntimeContractValidation.RequireSupportedNumericRunLimits(registration.Binding with
-            {
-                WorkflowStepId = "implement",
-                MaxPromptTokens = 1024
-            }));
 
         var policy = registration with
         {

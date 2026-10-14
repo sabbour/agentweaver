@@ -9,12 +9,32 @@ namespace Agentweaver.AgentRuntime;
 
 #pragma warning disable GHCP001 // Native filesystem RPC contracts belong to the pinned SDK.
 // The SDK owns the file contents. Agentweaver only archives the virtual filesystem.
-internal sealed class RuntimeNativeSessionFiles(params string[] forbiddenCredentials) : SessionFsProvider
+internal sealed class RuntimeNativeSessionFiles : SessionFsProvider
 {
     private static readonly UTF8Encoding Utf8 = new(false, throwOnInvalidBytes: true);
     private readonly object _gate = new();
     private readonly Dictionary<string, NativeFile> _files = new(StringComparer.Ordinal);
     private readonly HashSet<string> _directories = new(StringComparer.Ordinal) { "" };
+    private readonly string[] _forbiddenCredentials;
+    private readonly string? _workingDirectory;
+
+    internal RuntimeNativeSessionFiles(params string[] forbiddenCredentials)
+        : this(forbiddenCredentials, null)
+    {
+    }
+
+    internal RuntimeNativeSessionFiles(string[] forbiddenCredentials, string? workingDirectory)
+    {
+        _forbiddenCredentials = forbiddenCredentials;
+        if (workingDirectory is not null)
+        {
+            _workingDirectory = Path.TrimEndingDirectorySeparator(Path.GetFullPath(workingDirectory));
+            if (_workingDirectory == Path.GetPathRoot(_workingDirectory))
+                throw new ArgumentException("The native session working directory cannot be a filesystem root.",
+                    nameof(workingDirectory));
+            CreateDirectory("workspace", recursive: true);
+        }
+    }
 
     internal void InstallSkillResources(SkillRuntimeContentProjectionV1 projection)
     {
@@ -70,7 +90,7 @@ internal sealed class RuntimeNativeSessionFiles(params string[] forbiddenCredent
     {
         if (bytes is not { Length: > 0 and <= SessionMaterialValidation.MaximumBytes })
             throw new RuntimeAuthorizationException("runtime_sdk_cache_invalid");
-        var restored = new RuntimeNativeSessionFiles(forbiddenCredentials);
+        var restored = new RuntimeNativeSessionFiles(_forbiddenCredentials, _workingDirectory);
         try
         {
             using var buffer = new MemoryStream(bytes, writable: false);
@@ -127,7 +147,7 @@ internal sealed class RuntimeNativeSessionFiles(params string[] forbiddenCredent
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
-            return Task.FromResult(_files.TryGetValue(Normalize(path), out var file)
+            return Task.FromResult(_files.TryGetValue(MapWorkingDirectoryPath(path), out var file)
                 ? file.Content : throw new FileNotFoundException("Native session file is unavailable."));
     }
 
@@ -136,7 +156,7 @@ internal sealed class RuntimeNativeSessionFiles(params string[] forbiddenCredent
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
-            Write(Normalize(path), content, append: false);
+            Write(MapWorkingDirectoryPath(path), content, append: false);
         return Task.CompletedTask;
     }
 
@@ -145,7 +165,7 @@ internal sealed class RuntimeNativeSessionFiles(params string[] forbiddenCredent
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
-            Write(Normalize(path), content, append: true);
+            Write(MapWorkingDirectoryPath(path), content, append: true);
         return Task.CompletedTask;
     }
 
@@ -154,7 +174,7 @@ internal sealed class RuntimeNativeSessionFiles(params string[] forbiddenCredent
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
         {
-            var normalized = Normalize(path);
+            var normalized = MapWorkingDirectoryPath(path);
             return Task.FromResult(_files.ContainsKey(normalized) || _directories.Contains(normalized));
         }
     }
@@ -164,7 +184,7 @@ internal sealed class RuntimeNativeSessionFiles(params string[] forbiddenCredent
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
         {
-            var normalized = Normalize(path);
+            var normalized = MapWorkingDirectoryPath(path);
             if (_files.TryGetValue(normalized, out var file))
                 return Task.FromResult(new SessionFsStatResult
                 {
@@ -182,7 +202,7 @@ internal sealed class RuntimeNativeSessionFiles(params string[] forbiddenCredent
     {
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
-            CreateDirectory(Normalize(path), recursive);
+            CreateDirectory(MapWorkingDirectoryPath(path), recursive);
         return Task.CompletedTask;
     }
 
@@ -196,7 +216,7 @@ internal sealed class RuntimeNativeSessionFiles(params string[] forbiddenCredent
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
         {
-            var normalized = Normalize(path);
+            var normalized = MapWorkingDirectoryPath(path);
             if (!_directories.Contains(normalized))
                 throw new DirectoryNotFoundException("Native session directory is unavailable.");
             IList<SessionFsReaddirWithTypesEntry> entries = _directories
@@ -221,7 +241,7 @@ internal sealed class RuntimeNativeSessionFiles(params string[] forbiddenCredent
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
         {
-            var normalized = Normalize(path);
+            var normalized = MapWorkingDirectoryPath(path);
             if (normalized.Length == 0)
                 throw new IOException("The native session root cannot be removed.");
             if (_files.Remove(normalized))
@@ -250,8 +270,8 @@ internal sealed class RuntimeNativeSessionFiles(params string[] forbiddenCredent
         cancellationToken.ThrowIfCancellationRequested();
         lock (_gate)
         {
-            var from = Normalize(source);
-            var to = Normalize(destination);
+            var from = MapWorkingDirectoryPath(source);
+            var to = MapWorkingDirectoryPath(destination);
             if (from.Length == 0 || to.Length == 0 || Below(to, from) ||
                 _files.ContainsKey(to) || _directories.Contains(to) || !_directories.Contains(Parent(to)))
                 throw new IOException("The native session rename is invalid.");
@@ -307,9 +327,39 @@ internal sealed class RuntimeNativeSessionFiles(params string[] forbiddenCredent
 
     private void RequireCredentialSafe(string content)
     {
-        if (forbiddenCredentials.Any(value =>
+        if (_forbiddenCredentials.Any(value =>
                 value.Length > 0 && content.Contains(value, StringComparison.Ordinal)))
             throw new RuntimeAuthorizationException("runtime_sdk_cache_contains_credential");
+    }
+
+    internal string MapWorkingDirectoryPath(string path)
+    {
+        if (_workingDirectory is not null)
+        {
+            var candidate = path.Replace('\\', '/').TrimEnd('/');
+            var configured = _workingDirectory.Replace('\\', '/').TrimEnd('/');
+            if (TryMapWorkspacePath(candidate, configured, out var relative) ||
+                TryMapWorkspacePath(candidate, configured.TrimStart('/'), out relative))
+            {
+                var virtualPath = relative.Length == 0 ? "workspace" : $"workspace/{relative}";
+                return Normalize(virtualPath);
+            }
+        }
+
+        return Normalize(path);
+    }
+
+    private static bool TryMapWorkspacePath(string path, string root, out string relative)
+    {
+        relative = "";
+        if (root.Length == 0 || !path.StartsWith(root, StringComparison.Ordinal))
+            return false;
+        if (path.Length == root.Length)
+            return true;
+        if (path[root.Length] != '/')
+            return false;
+        relative = path[(root.Length + 1)..];
+        return true;
     }
 
     private static string Normalize(string path)

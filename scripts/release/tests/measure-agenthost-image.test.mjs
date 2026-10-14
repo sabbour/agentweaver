@@ -66,7 +66,7 @@ test('rejects a tag index with multiple platforms', async () => {
     Buffer.from(JSON.stringify({ schemaVersion: 2, manifests: [f.descriptor, f.descriptor] })), f.read, f.source));
 });
 
-test('both exact-image native probes keep private mounts non-executable and verify the image-owned distribution', () => {
+test('both exact-image native probes keep private mounts non-executable and verify the image-owned runtime', () => {
   const workflow = readFileSync(new URL('../../../.github/workflows/v1-ci.yml', import.meta.url), 'utf8');
   const dockerfile = readFileSync(new URL('../../../services/agenthost/Agentweaver.AgentHost/Dockerfile', import.meta.url), 'utf8');
   for (const uid of [1654, 1000]) {
@@ -81,7 +81,14 @@ test('both exact-image native probes keep private mounts non-executable and veri
   assert.match(workflow, /status\.privatePackageCacheAbsent !== true/);
   assert.match(workflow, /result\.native\.privatePackageCacheAbsent !== true/);
   assert.match(workflow, /test ! -d \/state\/\.cache\/copilot\/pkg/);
-  for (const file of ['index.js', 'app.js', 'prebuilds/linux-x64/runtime.node']) {
-    assert.ok(dockerfile.includes(`test -s /publish/native/${file}`));
+  assert.match(workflow, /test -x \/app\/native\/copilot/);
+  assert.match(workflow, /test -r \/native\/native\/copilot\.sha256/);
+  assert.match(dockerfile, /package\/copilot/);
+  assert.match(dockerfile, /\/app\/native\/copilot --no-auto-update --version/);
+  assert.match(dockerfile, /cp -a "\$runtime_distribution\/\." \/app\/native\//);
+  assert.match(dockerfile, /sha256sum \/publish\/native\/copilot \| cut -d ' ' -f 1 > \/publish\/native\/copilot\.sha256/);
+  for (const file of ['index.js', 'app.js', 'prebuilds/linux-x64/cli-native.node']) {
+    assert.ok(dockerfile.includes(file));
+    assert.ok(workflow.includes(file));
   }
 });

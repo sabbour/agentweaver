@@ -873,16 +873,24 @@ Verify requires the retained exact reservation before dispatch.
 
 The accepted project `MaxPromptTokens` value is preserved in `RuntimeOwnerContext`
 and the runtime binding; it is not silently discarded or reclassified as a
-Knowledge retrieval budget. Activation fails with
-`runtime_numeric_limits_unsupported` before SDK setup because the SDK capacity
-setting does not prove an owner-side limit for every model or compaction request.
+Knowledge retrieval budget. When configured, AgentHost resolves the effective
+prompt capacity from the accepted limit and the concrete model capacity,
+including any lower server limit, then passes it to the native SDK as a
+compaction threshold. For BYOK, the server-owned model binding supplies the
+concrete capacity; unavailable capacity rejects activation with
+`runtime_model_prompt_capacity_unavailable`. The pinned SDK compacts removable
+history. For an irreducible latest turn, it may send a provider request during
+compaction and then report a capacity-attributed `query` error. This is not a
+hard admission check for every internal provider request or a no-send guarantee,
+and input is not silently truncated.
 
-Optional `SdkSessionFacts.MaxPromptTokens` records an observed per-prompt/context
-capacity, not aggregate token usage or proof of an enforced request limit.
-The session-material owner binds this source fact and rejects a changed value.
-Absent optional pins preserve historical payloads; they do not authorize a
-configured-capacity resume. These source contracts do not claim a live token-count
-or truncation guarantee.
+Optional `SdkSessionFacts.MaxPromptTokens` records the effective native SDK
+compaction threshold, not aggregate token usage, a per-request admission guarantee,
+or a raw-request token count. The session-material
+owner binds this source fact and rejects a changed value. Absent optional pins
+preserve historical payloads; they do not authorize a configured-capacity resume.
+Native and hosted deployment evidence is still required to close issue
+[#1855](https://github.com/sabbour/agentweaver/issues/1855).
 
 `GET /internal/projects/{projectId}/runs/{runId}/coordination/sessions/{sessionId}/runtime-owner-context`
 requires the authenticated current run owner and returns `Cache-Control: no-store`.

@@ -12,6 +12,7 @@ public sealed class RuntimeCopilotSessionTests
     [InlineData(20000, 16000, 16000)]
     [InlineData(20000, 20000, 20000)]
     [InlineData(20000, 200000, 20000)]
+    [InlineData(1024, 8192, 1024)]
     public async Task PromptCapacityIsNarrowedAgainstTheConcreteCatalogBeforeNativeCreate(
         int accepted, long supported, int expected)
     {
@@ -25,6 +26,43 @@ public sealed class RuntimeCopilotSessionTests
         Assert.Equal(expected, session.Facts.MaxPromptTokens);
         var create = Assert.Single(external.Requests, request => request.Method == "session.create");
         Assert.Equal(expected, create.Parameters.GetProperty("modelCapabilities")
+            .GetProperty("limits").GetProperty("max_prompt_tokens").GetInt32());
+    }
+
+    [Fact]
+    public async Task HostedPromptCapacityUsesTheNarrowestAcceptedServerAndNativeLimit()
+    {
+        await using var external = new ControlledCopilotRuntime { MaxPromptTokens = 16000 };
+        var models = new RuntimeModelBindingsResolver("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.HostedCopilot)
+                {
+                    PromptCapacityTokens = 12000
+                }
+            });
+        var registration = Registration();
+        registration = registration with
+        {
+            Binding = registration.Binding with
+            {
+                MaxPromptTokens = 20000,
+                ModelBindingPin = models.Pin("accepted-model-reference", ModelSourceMode.HostedCopilot)
+            }
+        };
+        var factory = new RuntimeCopilotSessionFactory(external.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), models);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        await using var session = await factory.CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!, SdkCredential(),
+            _ => Task.CompletedTask, timeout.Token);
+
+        Assert.Equal(12000, session.Facts.MaxPromptTokens);
+        Assert.Equal(registration.Binding.ModelSelectionReference, session.Facts.ModelSelectionReference);
+        Assert.Equal(registration.Binding.AcceptedSelectionHash, session.Facts.AcceptedSelectionHash);
+        var create = Assert.Single(external.Requests, request => request.Method == "session.create");
+        Assert.Equal(12000, create.Parameters.GetProperty("modelCapabilities")
             .GetProperty("limits").GetProperty("max_prompt_tokens").GetInt32());
     }
 
@@ -321,6 +359,19 @@ public sealed class RuntimeCopilotSessionTests
         Assert.Contains(external.Requests, request => request.Method == "session.detach");
     }
 
+    [Theory]
+    [InlineData("openai", null, false)]
+    [InlineData("openai", "", false)]
+    [InlineData("openai", "openai", false)]
+    [InlineData("openai", "azure", true)]
+    [InlineData(null, "openai", false)]
+    public void ProviderIdentityRejectsOnlyAReportedMismatch(
+        string? expectedProviderId, string? actualProviderId, bool expectedMismatch)
+    {
+        Assert.Equal(expectedMismatch,
+            RuntimeCopilotSession.HasProviderIdentityMismatch(expectedProviderId, actualProviderId));
+    }
+
     [Fact]
     public async Task NativeMissingMeasurementsRemainNullAndDuplicateEventsKeepTheirStableIdentity()
     {
@@ -447,14 +498,14 @@ public sealed class RuntimeCopilotSessionTests
 
     internal static RuntimeCopilotSessionFactory Factory(
         ControlledCopilotRuntime external, ModelSourceMode mode = ModelSourceMode.HostedCopilot,
-        TimeSpan? abortDrainTimeout = null) =>
+        TimeSpan? abortDrainTimeout = null, string? workingDirectory = null) =>
         new(external.Connection, Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))),
             new Dictionary<string, RuntimeModelBinding>
             {
                 ["accepted-model-reference"] = new("controlled-model", mode,
                     mode == ModelSourceMode.Byok ? new RuntimeByokProvider(
                         "openai", new Uri("https://byok.test/v1"), "responses") : null)
-            }, abortDrainTimeout);
+            }, abortDrainTimeout, workingDirectory);
 
     [Theory]
     [InlineData("openai", "responses", null, "https://byok.test/v1")]

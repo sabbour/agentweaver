@@ -181,6 +181,12 @@ public sealed class RuntimeAuthorizationException : Exception
 {
     public RuntimeAuthorizationException(string code) : this(code, null, null) { }
 
+    public RuntimeAuthorizationException(string code, string diagnosticDetail)
+        : base($"{code}: {diagnosticDetail}")
+    {
+        Code = code;
+    }
+
     public RuntimeAuthorizationException(
         string code, RuntimeFixedCreditGuardReadResult? fixedCreditGuard, Exception? innerException)
         : base(code, innerException)

@@ -49,10 +49,6 @@ jobs:
         run: node scripts/azure/build-foundation-probe-image.mjs
       - name: Render Foundation Probe acceptance Job and egress policy
         run: kubectl kustomize deploy/k8s/acceptance/foundation-probe
-      - name: Install Chromium for broker browser integration tests
-        run: pwsh tests/Agentweaver.Identity.Broker.Tests/bin/Release/net10.0/playwright.ps1 install chromium
-      - name: Test .NET foundations, Identity broker, Projects & Config, and Foundation Probe with coverage
-        run: npm run coverage:dotnet
       - name: Build unpublished Identity broker image
         run: |
           mkdir -p artifacts/images
@@ -78,7 +74,7 @@ jobs:
             --tmpfs /state:rw,noexec,nosuid,nodev,uid=1654,gid=1654,mode=700 \
             --tmpfs /tmp:rw,noexec,nosuid,nodev,uid=1654,gid=1654,mode=700 \
             agentweaver-agenthost:ci --verify-native-runtime > artifacts/images/agenthost-native-status.json
-          node --input-type=module -e 'import fs from "node:fs"; const status = JSON.parse(fs.readFileSync("artifacts/images/agenthost-native-status.json")); if (status.sdkVersion !== "1.0.18" || status.runtimeVersion !== "1.0.79" || status.ProtocolVersion !== 3 || status.nativeDistribution !== "/app/native" || status.privatePackageCacheAbsent !== true) throw Error("The image does not run its pinned image-owned native SDK protocol.");'
+          node --input-type=module -e 'import fs from "node:fs"; const status = JSON.parse(fs.readFileSync("artifacts/images/agenthost-native-status.json")); if (status.sdkVersion !== "1.0.18" || status.runtimeVersion !== "1.0.97" || status.ProtocolVersion !== 3 || status.nativeDistribution !== "/app/native" || status.privatePackageCacheAbsent !== true) throw Error("The image does not run its pinned image-owned native SDK protocol.");'
           timeout 60s docker run --rm --platform linux/amd64 --network none --read-only \
             --user 1000:1000 --cap-drop ALL --security-opt no-new-privileges \
             --tmpfs /workspace:rw,noexec,nosuid,nodev,uid=1000,gid=1000,mode=755 \
@@ -115,15 +111,243 @@ jobs:
                 cat "$file" > /dev/null
               done
               umask 077
-              for file in /app/native/copilot /app/native/index.js /app/native/app.js /app/native/prebuilds/linux-x64/runtime.node; do
+              test -x /app/native/copilot
+              for file in /app/native/copilot /app/native/copilot.sha256 /app/native/index.js /app/native/app.js /app/native/prebuilds/linux-x64/cli-native.node; do
                 test -s "$file" && test -r "$file" && test ! -w "$file"
               done
               STATUS="$(dotnet /app/Agentweaver.AgentHost.dll --verify-native-runtime)"
               test ! -d /state/.cache/copilot/pkg
               printf "{\"uid\":1000,\"gid\":1000,\"workspaceDirectoryMode\":\"0755\",\"workspaceFileMode\":\"0644\",\"privateDirectoryMode\":\"0700\",\"configurationAndTlsMode\":\"0440\",\"native\":%s}\n" "$STATUS"
             ' > artifacts/images/agenthost-profile-access.json
-          node --input-type=module -e 'import fs from "node:fs"; const result = JSON.parse(fs.readFileSync("artifacts/images/agenthost-profile-access.json")); if (result.uid !== 1000 || result.gid !== 1000 || result.native.sdkVersion !== "1.0.18" || result.native.runtimeVersion !== "1.0.79" || result.native.ProtocolVersion !== 3 || result.native.nativeDistribution !== "/app/native" || result.native.privatePackageCacheAbsent !== true) throw Error("The exact AgentHost image cannot execute under its selected workspace owner.");'
+          node --input-type=module -e 'import fs from "node:fs"; const result = JSON.parse(fs.readFileSync("artifacts/images/agenthost-profile-access.json")); if (result.uid !== 1000 || result.gid !== 1000 || result.native.sdkVersion !== "1.0.18" || result.native.runtimeVersion !== "1.0.97" || result.native.ProtocolVersion !== 3 || result.native.nativeDistribution !== "/app/native" || result.native.privatePackageCacheAbsent !== true) throw Error("The exact AgentHost image cannot execute under its selected workspace owner.");'
           rm artifacts/images/agenthost.oci.tar
+      - name: Run pinned native prompt-capacity tests in an isolated AMD64 container
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          sdk_image='mcr.microsoft.com/dotnet/sdk:10.0.401-noble@sha256:e70cdb7f80b0348f5cb85f19a8f670fca061f033d57eed12fa003d58b0e06317'
+          docker pull --platform linux/amd64 "$sdk_image"
+          test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$sdk_image")" = 'linux/amd64'
+
+          output="$GITHUB_WORKSPACE/artifacts/images/agenthost-native-prompt-capacity"
+          runtime_root="$(mktemp -d "$RUNNER_TEMP/agentweaver-agenthost-native-prompt-capacity.XXXXXX")"
+          test_output="$output/results"
+          test_uid="$(id -u)"
+          test_gid="$(id -g)"
+          mkdir -p "$output" "$test_output" "$runtime_root"
+
+          created_evidence="$output/created-containers.tsv"
+          cleanup_evidence="$output/container-cleanup.tsv"
+          printf 'role\tid\tcreated\n' > "$created_evidence"
+          printf 'role\tid\tinspect\tremove\tabsence\n' > "$cleanup_evidence"
+          owned_ids=()
+          owned_roles=()
+          track_container() {
+            local id="$1"
+            local role="$2"
+            if [[ ! "$id" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "Docker returned an invalid ID for the created $role container: $id" >&2
+              return 1
+            fi
+            owned_ids+=("$id")
+            owned_roles+=("$role")
+            if ! printf '%s\t%s\tconfirmed\n' "$role" "$id" >> "$created_evidence"; then
+              echo "Could not record the created $role container ID $id." >&2
+              return 1
+            fi
+            echo "Tracked created $role container $id"
+          }
+          cleanup() {
+            local original_status=$?
+            trap - EXIT INT TERM
+            local cleanup_status=0
+            local index id role inspected inspect_status removed remove_status listed absence_status
+            for ((index = 0; index < ${#owned_ids[@]}; index++)); do
+              id="${owned_ids[$index]}"
+              role="${owned_roles[$index]}"
+              if inspected="$(docker inspect --type=container --format '{{.Id}}' "$id" 2>&1)"; then
+                if [[ "$inspected" == "$id" ]]; then
+                  inspect_status='verified'
+                else
+                  inspect_status='mismatch'
+                  echo "Inspection returned a different ID for owned $role container $id: $inspected" >&2
+                  cleanup_status=1
+                fi
+              else
+                inspect_status='failed'
+                echo "Could not inspect owned $role container $id before cleanup: $inspected" >&2
+                cleanup_status=1
+              fi
+
+              if removed="$(docker rm --force "$id" 2>&1)"; then
+                remove_status='removed'
+                echo "Removed owned $role container $id"
+              else
+                remove_status='failed'
+                echo "Could not remove owned $role container $id: $removed" >&2
+                cleanup_status=1
+              fi
+
+              if listed="$(docker container ls --all --no-trunc --filter "id=$id" --format '{{.ID}}' 2>&1)"; then
+                if [[ -z "$listed" ]]; then
+                  absence_status='confirmed-absent'
+                  echo "Confirmed owned $role container $id is absent."
+                else
+                  absence_status='still-present'
+                  echo "Owned $role container $id remains after cleanup: $listed" >&2
+                  cleanup_status=1
+                fi
+              else
+                absence_status='verification-failed'
+                echo "Could not verify absence of owned $role container $id: $listed" >&2
+                cleanup_status=1
+              fi
+
+              if ! printf '%s\t%s\t%s\t%s\t%s\n' \
+                "$role" "$id" "$inspect_status" "$remove_status" "$absence_status" >> "$cleanup_evidence"; then
+                echo "Could not record cleanup evidence for owned $role container $id." >&2
+                cleanup_status=1
+              fi
+            done
+            if [[ "$original_status" -ne 0 ]]; then
+              if [[ "$cleanup_status" -ne 0 ]]; then
+                echo "Container cleanup also failed; preserving original step exit code $original_status." >&2
+              fi
+              exit "$original_status"
+            fi
+            if [[ "$cleanup_status" -ne 0 ]]; then
+              exit "$cleanup_status"
+            fi
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          if bundle_container_id="$(docker create --platform linux/amd64 --network none agentweaver-agenthost:ci)"; then
+            track_container "$bundle_container_id" 'runtime-bundle'
+          else
+            echo 'Could not create the AgentHost runtime-bundle container.' >&2
+            exit 1
+          fi
+          docker cp "$bundle_container_id:/app/runtime-manifest.json" "$runtime_root/runtime-manifest.json"
+          docker cp "$bundle_container_id:/app/native" "$runtime_root"
+
+          test -s "$runtime_root/runtime-manifest.json"
+          test -x "$runtime_root/native/copilot"
+          test -s "$runtime_root/native/copilot.sha256"
+          test -s "$GITHUB_WORKSPACE/tests/Agentweaver.Identity.Broker.Tests/bin/Release/net10.0/Agentweaver.Identity.Broker.Tests.dll"
+
+          source_tree="$(git rev-parse HEAD^{tree})"
+          agenthost_image_config="$(docker image inspect --format '{{.Id}}' agentweaver-agenthost:ci)"
+          sdk_image_config="$(docker image inspect --format '{{.Id}}' "$sdk_image")"
+          runtime_manifest_sha256="$(sha256sum "$runtime_root/runtime-manifest.json" | cut -d ' ' -f 1)"
+          native_executable_sha256="$(sha256sum "$runtime_root/native/copilot" | cut -d ' ' -f 1)"
+          test_assembly_sha256="$(sha256sum "$GITHUB_WORKSPACE/tests/Agentweaver.Identity.Broker.Tests/bin/Release/net10.0/Agentweaver.Identity.Broker.Tests.dll" | cut -d ' ' -f 1)"
+          export PR_HEAD_SHA source_tree agenthost_image_config sdk_image sdk_image_config
+          export runtime_manifest_sha256 native_executable_sha256 test_assembly_sha256
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const [manifestPath, receiptPath] = process.argv.slice(1);
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+            fs.writeFileSync(receiptPath, JSON.stringify({
+              testedSourceSha: process.env.GITHUB_SHA,
+              headSha: process.env.PR_HEAD_SHA,
+              sourceTreeSha: process.env.source_tree,
+              agentHostImage: "agentweaver-agenthost:ci",
+              agentHostImageConfig: process.env.agenthost_image_config,
+              sdkTestRunnerImage: process.env.sdk_image,
+              sdkTestRunnerImageConfig: process.env.sdk_image_config,
+              runtimeBundleRoot: "runtime-manifest.json plus native/",
+              runtimeManifestSha256: process.env.runtime_manifest_sha256,
+              nativeExecutableSha256: process.env.native_executable_sha256,
+              testAssemblySha256: process.env.test_assembly_sha256,
+              sdkVersion: manifest.sdkVersion,
+              runtimeVersion: manifest.runtimeVersion,
+              archiveSha512: manifest.archiveSha512,
+              containerPlatform: "linux/amd64",
+              network: "none",
+              nativePromptEgressBlocked: true
+            }, null, 2) + "\n");
+          ' "$runtime_root/runtime-manifest.json" "$output/identity.json"
+
+          trx="$test_output/RuntimeNativePromptCapacityTests.trx"
+          test_log="$output/native-test-output.log"
+          test_status=0
+          if test_container_id="$(docker create --platform linux/amd64 --network none --read-only \
+            --user "$test_uid:$test_gid" \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --tmpfs "/tmp:rw,nosuid,nodev,size=1g,uid=$test_uid,gid=$test_gid,mode=700" \
+            --mount "type=bind,source=$runtime_root,target=/native,readonly" \
+            --mount "type=bind,source=$GITHUB_WORKSPACE/tests/Agentweaver.Identity.Broker.Tests/bin/Release/net10.0,target=/tests,readonly" \
+            --mount "type=bind,source=$test_output,target=/results" \
+            --env AGENTWEAVER_NATIVE_RUNTIME_ROOT=/native \
+            --env AGENTWEAVER_NATIVE_PROMPT_EGRESS_BLOCKED=true \
+            --env AGENTWEAVER_TEST_UID="$test_uid" \
+            --env AGENTWEAVER_TEST_GID="$test_gid" \
+            --env HOME=/tmp/home \
+            --env DOTNET_CLI_HOME=/tmp/dotnet-cli-home \
+            --env DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+            --env DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1 \
+            --entrypoint /bin/sh "$sdk_image" -ec '
+              mkdir -p /tmp/home /tmp/dotnet-cli-home
+              test "$(uname -m)" = "x86_64"
+              test "$(id -u)" = "$AGENTWEAVER_TEST_UID"
+              test "$(id -g)" = "$AGENTWEAVER_TEST_GID"
+              test "$AGENTWEAVER_NATIVE_RUNTIME_ROOT" = /native
+              test "$AGENTWEAVER_NATIVE_PROMPT_EGRESS_BLOCKED" = true
+              test -x /native
+              test -r /native/runtime-manifest.json
+              test -x /native/native
+              test -r /native/native/copilot
+              test -x /native/native/copilot
+              test -r /native/native/copilot.sha256
+              test -r /native/native/index.js
+              test -r /native/native/app.js
+              test -x /native/native/prebuilds
+              test -x /native/native/prebuilds/linux-x64
+              test -r /native/native/prebuilds/linux-x64/cli-native.node
+              test -w /tmp/home
+              test -w /tmp/dotnet-cli-home
+              result_probe="/results/.native-prompt-capacity-write-check-$$"
+              : > "$result_probe"
+              rm "$result_probe"
+              dotnet vstest /tests/Agentweaver.Identity.Broker.Tests.dll \
+                --TestCaseFilter:"FullyQualifiedName~ByokNativeRuntimeCompactsRemovableHistoryWithinTheAcceptedCapacity|FullyQualifiedName~ByokNativeRuntimeReportsCapacityAttributedQueryErrorForIrreduciblePrompt" \
+                --ResultsDirectory:/results \
+                --Logger:"trx;LogFileName=RuntimeNativePromptCapacityTests.trx"
+            ')"; then
+            if track_container "$test_container_id" 'native-test'; then
+              if timeout 360s docker start --attach "$test_container_id" 2>&1 | tee "$test_log"; then
+                test_status=0
+              else
+                test_status=$?
+              fi
+            else
+              test_status=1
+            fi
+          else
+            test_status=$?
+            echo "Could not create the native test container (exit $test_status); no container ID was returned." >&2
+          fi
+
+          verification_status=0
+          if test -s "$trx"; then
+            NATIVE_TEST_EXIT_CODE="$test_status" node scripts/ci/verify-agenthost-native-prompt-capacity-trx.mjs \
+              "$trx" "$output/identity.json" "$test_log" || verification_status=$?
+          else
+            echo "The native test run did not produce a nonempty TRX result." >&2
+            verification_status=1
+          fi
+
+          if [ "$test_status" -ne 0 ]; then
+            exit "$test_status"
+          fi
+          exit "$verification_status"
+      - name: Install Chromium for broker browser integration tests
+        run: pwsh tests/Agentweaver.Identity.Broker.Tests/bin/Release/net10.0/playwright.ps1 install chromium
+      - name: Test .NET foundations, Identity broker, Projects & Config, and Foundation Probe with coverage
+        run: npm run coverage:dotnet
       - name: Preload pinned ASP.NET runtime image for release validator
         if: ${{ !cancelled() }}
         run: docker pull --platform linux/amd64 mcr.microsoft.com/dotnet/aspnet:10.0@sha256:222759b391a1aaf241166672c8f99b2d4ada452e7b5319f3c6e8f265a37b5ad4
