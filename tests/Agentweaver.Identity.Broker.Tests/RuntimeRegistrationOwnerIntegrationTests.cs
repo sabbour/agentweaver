@@ -1495,14 +1495,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 var lifecycle = await new EnvironmentLifecycleProducer(lifecycleStore)
                     .RegisterAsync(owner, "runtime-register", default);
                 var leaseStore = new EnvironmentSandboxLeaseStore(dataSource, leaseTimeProvider);
-                var sandboxOptions = new AgentSandboxOptions(
-                    candidate.OptionsSchemaVersion, candidate.OptionsRevision, "agentweaver", "azure-files-csi",
-                    "ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    "linux/amd64", 1, "kata-test", "kata-test", "100m", "128Mi", 20, 100,
-                    new(30, 30, 30, 30, 30, 120))
-                {
-                    AgentHost = new("agenthost-runtime-v1", "agenthost-runtime-tls")
-                };
+                var sandboxOptions = CreateRuntimePlacementSandboxOptions(candidate);
                 var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
                 jsonOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase));
                 var runSelection = selection.Deserialize<EffectiveNetworkPolicySelection>(jsonOptions)
@@ -1545,12 +1538,26 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     throw new InvalidOperationException(
                         sandboxCatalog.Error?.Message ?? "The controlled Sandbox provider catalog is invalid.");
                 var sandboxResolution = new ProviderResolver(sandboxCatalog.Value!).Resolve(
-                    new(ProviderSeam.Sandbox, null, sandboxRegistration.Descriptor.AdapterVersion,
-                        sandboxRegistration.OptionsSchemaVersion,
-                        sandboxRegistration.Descriptor.AdvertisedCapabilities));
+                    new(
+                        ProviderSeam.Sandbox,
+                        candidate.ProviderId,
+                        Version.Parse(candidate.AdapterVersion),
+                        candidate.OptionsSchemaVersion,
+                        candidate.RequiredCapabilities.ToImmutableHashSet(StringComparer.Ordinal)));
                 if (!sandboxResolution.IsSuccess || sandboxResolution.Value?.Candidate is not { } sandboxCandidate)
                     throw new InvalidOperationException(
                         sandboxResolution.Error?.Message ?? "The controlled Sandbox provider is unavailable.");
+                Assert.Equal(candidate.Seam, sandboxCandidate.Seam);
+                Assert.Equal(candidate.ProviderId, sandboxCandidate.ProviderId);
+                Assert.Equal(candidate.AdapterVersion, sandboxCandidate.AdapterVersion.ToString());
+                Assert.Equal(candidate.OptionsSchemaVersion, sandboxCandidate.OptionsSchemaVersion);
+                Assert.Equal(candidate.OptionsRevision, sandboxCandidate.OptionsRevision);
+                Assert.Equal(
+                    candidate.AdvertisedCapabilities.OrderBy(capability => capability, StringComparer.Ordinal),
+                    sandboxCandidate.AdvertisedCapabilities.OrderBy(capability => capability, StringComparer.Ordinal));
+                Assert.Equal(
+                    candidate.RequiredCapabilities.OrderBy(capability => capability, StringComparer.Ordinal),
+                    sandboxCandidate.RequiredCapabilities.OrderBy(capability => capability, StringComparer.Ordinal));
                 var provisionRequest = new SandboxProvisionApiRequest(
                     "runtime-workspace", 1, 0, "/workspace/agentweaver/project",
                     false, networkPolicyGeneration, "runtime-provision");

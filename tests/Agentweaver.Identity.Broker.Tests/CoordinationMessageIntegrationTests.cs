@@ -22,6 +22,8 @@ using Agentweaver.Abstractions;
 using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.Providers;
+using Agentweaver.Providers.Sandbox.AgentSandbox;
+using Agentweaver.Providers.Storage.AzureFiles;
 using Agentweaver.SourceControl;
 using EventsHost::Agentweaver.EventsAndSessions;
 using Microsoft.AspNetCore.Authentication;
@@ -437,14 +439,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     StringComparer.Ordinal, "platform-model"),
                 ProviderRequirements =
                 [
-                    new ProviderRequirement
-                    {
-                        Seam = ProviderSeam.Sandbox,
-                        RequiredAdapterVersion = "1.0.0",
-                        RequiredOptionsSchemaVersion = 1,
-                        RequiredCapabilities = ImmutableHashSet.Create(
-                            StringComparer.Ordinal, "container.create")
-                    },
+                    CreateSourceControlSandboxRequirement(),
                     new ProviderRequirement
                     {
                         Seam = ProviderSeam.SourceControl,
@@ -1757,7 +1752,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     ["implementer"],
                     ["implementation"],
                     ["isolated-worktree"],
-                    ["container.create"],
+                    [SandboxCapabilities.VmIsolation],
                     null,
                     null),
                 new WorkflowStepDefinition(
@@ -2196,7 +2191,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     "test-agent",
                     "implementation",
                     "platform-model",
-                    "sandbox-platform",
+                    AgentSandboxProviderMetadata.ProviderId,
                     "isolated-worktree",
                     [],
                     []),
@@ -2209,7 +2204,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     "test-agent",
                     "implementation",
                     "platform-model",
-                    "sandbox-platform",
+                    AgentSandboxProviderMetadata.ProviderId,
                     "isolated-worktree",
                     [],
                     []),
@@ -2222,7 +2217,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     "test-agent",
                     "implementation",
                     "platform-model",
-                    "sandbox-platform",
+                    AgentSandboxProviderMetadata.ProviderId,
                     "isolated-worktree",
                     [],
                     [])
@@ -2232,7 +2227,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                          ownerSchema,
                          signingKey,
                          projects.CreateHandler,
-                         () => eventsFactory.Server.CreateHandler()))
+                         () => eventsFactory.Server.CreateHandler(),
+                         providerCatalog: CreateSourceControlProviderCatalog()))
         using (var unavailableClient = unavailableFactory.CreateClient(new WebApplicationFactoryClientOptions
                {
                    BaseAddress = new Uri("https://orchestrator.test")
@@ -2339,7 +2335,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                          signingKey,
                          projects.CreateHandler,
                          () => eventsFactory.Server.CreateHandler(),
-                         sandboxProvider: restoringSandboxProvider))
+                         sandboxProvider: restoringSandboxProvider,
+                         providerCatalog: CreateSourceControlProviderCatalog()))
         using (var restoredOrchestrator = restoringFactory.CreateClient(
                    new WebApplicationFactoryClientOptions
                    {
@@ -3612,7 +3609,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                              projects.CreateHandler(), selectionPause),
                          () => eventsFactory.Server.CreateHandler(),
                          cacheObjectStore,
-                         sandboxProvider))
+                         sandboxProvider,
+                         providerCatalog: CreateSourceControlProviderCatalog()))
         using (var runtimeOwnerClient = runtimeOwnerFactory.CreateClient(
                    new WebApplicationFactoryClientOptions
                    {
@@ -4788,7 +4786,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                          projects.CreateHandler,
                          () => eventsFactory.Server.CreateHandler(),
                          cacheObjectStore,
-                         sandboxProvider))
+                         sandboxProvider,
+                         providerCatalog: CreateSourceControlProviderCatalog()))
         using (var restartedOrchestrator = restartedOwnerFactory.CreateClient(
                    new WebApplicationFactoryClientOptions
                    {
@@ -5153,6 +5152,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         string projectId,
         string resourceId)
     {
+        var expectedSandboxRegistration = CreateSourceControlSandboxRegistration();
         await using var dataSource = NpgsqlDataSource.Create(connectionString);
         await using var connection = await dataSource.OpenConnectionAsync();
         await using (var query = new NpgsqlCommand($"""
@@ -5166,12 +5166,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             query.Parameters.AddWithValue("run", RunId);
             await using var reader = await query.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync());
-            Assert.Equal("sandbox-platform", reader.GetString(0));
+            Assert.Equal(expectedSandboxRegistration.Descriptor.Id, reader.GetString(0));
             Assert.Equal(resourceId, reader.GetString(1));
             Assert.Equal(7, reader.GetInt64(2));
             var capabilities = JsonSerializer.Deserialize<string[]>(reader.GetString(3));
             Assert.NotNull(capabilities);
-            Assert.Contains("container.create", capabilities);
+            Assert.Equal(
+                expectedSandboxRegistration.Descriptor.AdvertisedCapabilities
+                    .OrderBy(capability => capability, StringComparer.Ordinal),
+                capabilities.OrderBy(capability => capability, StringComparer.Ordinal));
             Assert.True(reader.GetInt64(4) > 0);
             Assert.True(reader.GetInt64(5) > 0);
             Assert.False(await reader.ReadAsync());
@@ -5220,22 +5223,74 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             []).Value);
     }
 
+    private const string SourceControlSandboxOptionsRevision = "runtime-sandbox-options-v2";
+
+    internal static AgentSandboxOptions CreateRuntimePlacementSandboxOptions(
+        int optionsSchemaVersion,
+        string optionsRevision) =>
+        new AgentSandboxOptions(
+            optionsSchemaVersion,
+            optionsRevision,
+            "agentweaver",
+            AzureFilesCsiProviderMetadata.ProviderId,
+            "ghcr.io/agentweaver/agenthost@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "linux/amd64",
+            1,
+            "kata-test",
+            "kata-test",
+            "100m",
+            "128Mi",
+            20,
+            100,
+            new(30, 30, 30, 30, 30, 120))
+        {
+            AgentHost = new("agenthost-runtime-v1", "agenthost-runtime-tls")
+        }.Validate();
+
+    internal static AgentSandboxOptions CreateRuntimePlacementSandboxOptions(
+        EffectiveProviderCandidate candidate)
+    {
+        Assert.Equal(ProviderSeam.Sandbox, candidate.Seam);
+        Assert.Equal(AgentSandboxProviderMetadata.ProviderId, candidate.ProviderId);
+        Assert.Equal(AgentSandboxProviderMetadata.AdapterVersion.ToString(), candidate.AdapterVersion);
+        return CreateRuntimePlacementSandboxOptions(
+            candidate.OptionsSchemaVersion, candidate.OptionsRevision);
+    }
+
+    internal static AgentSandboxOptions CreateRuntimePlacementSandboxOptions(
+        ProviderCandidate candidate)
+    {
+        Assert.Equal(ProviderSeam.Sandbox, candidate.Seam);
+        Assert.Equal(AgentSandboxProviderMetadata.ProviderId, candidate.ProviderId);
+        Assert.Equal(AgentSandboxProviderMetadata.AdapterVersion, candidate.AdapterVersion);
+        return CreateRuntimePlacementSandboxOptions(
+            candidate.OptionsSchemaVersion, candidate.OptionsRevision);
+    }
+
+    private static ProviderRegistration CreateSourceControlSandboxRegistration() =>
+        AgentSandboxProviderMetadata.CreateRegistration(
+            CreateRuntimePlacementSandboxOptions(
+                AgentSandboxOptions.CurrentOptionsSchemaVersion,
+                SourceControlSandboxOptionsRevision));
+
+    internal static ProviderRequirement CreateSourceControlSandboxRequirement()
+    {
+        var registration = CreateSourceControlSandboxRegistration();
+        return new ProviderRequirement
+        {
+            Seam = ProviderSeam.Sandbox,
+            RequiredAdapterVersion = registration.Descriptor.AdapterVersion.ToString(),
+            RequiredOptionsSchemaVersion = registration.OptionsSchemaVersion,
+            RequiredCapabilities = registration.Descriptor.AdvertisedCapabilities
+        };
+    }
+
     internal static ProviderCatalog CreateSourceControlProviderCatalog()
     {
         var policyOptions = SourceControlMergePolicyOptions();
         var policyProvider = new AgtPolicyProvider();
         var networkOptions = CreateSourceControlNetworkPolicyOptions();
-        var sandboxRegistration = new ProviderRegistration(
-            new ProviderDescriptor(
-                ProviderSeam.Sandbox,
-                "sandbox-platform",
-                new Version(1, 0, 0),
-                1,
-                ProviderHostingPattern.KubernetesController,
-                ImmutableHashSet.Create(StringComparer.Ordinal, "container.create")),
-            true,
-            "options-v1",
-            1);
+        var sandboxRegistration = CreateSourceControlSandboxRegistration();
         var sourceControlRegistration = new ProviderRegistration(
             GitHubSourceControlAdapter.CreateDescriptor(),
             true,
@@ -5246,7 +5301,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         return Assert.IsType<ProviderCatalog>(ProviderCatalog.Create(
             [sandboxRegistration, sourceControlRegistration, policyRegistration, networkRegistration],
             [
-                new ProviderSelection(ProviderSeam.Sandbox, "sandbox-platform"),
+                new ProviderSelection(ProviderSeam.Sandbox, AgentSandboxProviderMetadata.ProviderId),
                 new ProviderSelection(ProviderSeam.SourceControl, SourceControlProviderIds.GitHub),
                 new ProviderSelection(ProviderSeam.Policy, AgtPolicyProvider.ProviderId)
             ],
@@ -6587,7 +6642,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     {
         private int _negotiationCount;
 
-        public string ProviderId => "sandbox-platform";
+        public string ProviderId => AgentSandboxProviderMetadata.ProviderId;
         public string ResourceId => "controlled-sandbox-resource";
         public int NegotiationCount => Volatile.Read(ref _negotiationCount);
         public ImmutableArray<string> IsolationChoices { get; } = ["isolated-worktree"];
@@ -6693,25 +6748,61 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 public sealed class SourceControlProviderCatalogFixtureTests
 {
     [Fact]
-    public void SourceControlCatalogResolvesTheAcceptedL3L4NetworkRequirement()
+    public void SharedCatalogResolvesValidatedSandboxOptionsAndTheAcceptedL3L4NetworkRequirement()
     {
-        var requirement =
-            ProjectsConfigBrokerAuthorizationTests.CreateSourceControlNetworkPolicyRequirement();
         var catalog = ProjectsConfigBrokerAuthorizationTests.CreateSourceControlProviderCatalog();
-        var resolution = new ProviderResolver(catalog).ResolveNetworkPolicy(
+        var sandboxRequirement = ProjectsConfigBrokerAuthorizationTests.CreateSourceControlSandboxRequirement();
+        var sandboxResolution = new ProviderResolver(catalog).Resolve(
             new(
-                Version.Parse(requirement.RequiredAdapterVersion),
-                requirement.RequiredOptionsSchemaVersion,
-                requirement.RequiredL3L4Capabilities,
-                requirement.RequiredL7Capabilities));
+                ProviderSeam.Sandbox,
+                null,
+                Version.Parse(sandboxRequirement.RequiredAdapterVersion),
+                sandboxRequirement.RequiredOptionsSchemaVersion,
+                sandboxRequirement.RequiredCapabilities));
 
-        Assert.True(resolution.IsSuccess, resolution.Error?.Message);
-        var networkCandidate = Assert.Single(resolution.Value!.Layers);
+        Assert.True(sandboxResolution.IsSuccess, sandboxResolution.Error?.Message);
+        var sandboxCandidate = sandboxResolution.Value?.Candidate
+            ?? throw new InvalidOperationException("The shared catalog returned no Sandbox candidate.");
+        var sandboxOptions =
+            ProjectsConfigBrokerAuthorizationTests.CreateRuntimePlacementSandboxOptions(sandboxCandidate);
+        var sandboxRegistration = AgentSandboxProviderMetadata.CreateRegistration(sandboxOptions);
+        Assert.Equal(AgentSandboxOptions.CurrentOptionsSchemaVersion, sandboxOptions.OptionsSchemaVersion);
+        Assert.Equal(
+            sandboxRequirement.RequiredAdapterVersion,
+            sandboxRegistration.Descriptor.AdapterVersion.ToString());
+        Assert.Equal(sandboxRequirement.RequiredOptionsSchemaVersion, sandboxRegistration.OptionsSchemaVersion);
+        Assert.Equal(
+            sandboxRequirement.RequiredCapabilities.OrderBy(capability => capability, StringComparer.Ordinal),
+            sandboxRegistration.Descriptor.AdvertisedCapabilities
+                .OrderBy(capability => capability, StringComparer.Ordinal));
+        Assert.Equal(sandboxCandidate.ProviderId, sandboxRegistration.Descriptor.Id);
+        Assert.Equal(sandboxCandidate.AdapterVersion, sandboxRegistration.Descriptor.AdapterVersion);
+        Assert.Equal(sandboxCandidate.OptionsSchemaVersion, sandboxRegistration.OptionsSchemaVersion);
+        Assert.Equal(sandboxCandidate.OptionsRevision, sandboxRegistration.OptionsRevision);
+        Assert.Equal(
+            sandboxCandidate.AdvertisedCapabilities.OrderBy(capability => capability, StringComparer.Ordinal),
+            sandboxRegistration.Descriptor.AdvertisedCapabilities
+                .OrderBy(capability => capability, StringComparer.Ordinal));
+        Assert.Equal(
+            sandboxRequirement.RequiredCapabilities.OrderBy(capability => capability, StringComparer.Ordinal),
+            sandboxCandidate.RequiredCapabilities.OrderBy(capability => capability, StringComparer.Ordinal));
+
+        var networkRequirement =
+            ProjectsConfigBrokerAuthorizationTests.CreateSourceControlNetworkPolicyRequirement();
+        var networkResolution = new ProviderResolver(catalog).ResolveNetworkPolicy(
+            new(
+                Version.Parse(networkRequirement.RequiredAdapterVersion),
+                networkRequirement.RequiredOptionsSchemaVersion,
+                networkRequirement.RequiredL3L4Capabilities,
+                networkRequirement.RequiredL7Capabilities));
+
+        Assert.True(networkResolution.IsSuccess, networkResolution.Error?.Message);
+        var networkCandidate = Assert.Single(networkResolution.Value!.Layers);
         Assert.Equal(NetworkPolicyLayer.L3L4, networkCandidate.Layer);
         Assert.Equal(CiliumEgressPolicyAdapter.ProviderId, networkCandidate.Candidate.ProviderId);
-        Assert.Equal(requirement.RequiredAdapterVersion, networkCandidate.Candidate.AdapterVersion.ToString());
-        Assert.Equal(requirement.RequiredOptionsSchemaVersion, networkCandidate.Candidate.OptionsSchemaVersion);
+        Assert.Equal(networkRequirement.RequiredAdapterVersion, networkCandidate.Candidate.AdapterVersion.ToString());
+        Assert.Equal(networkRequirement.RequiredOptionsSchemaVersion, networkCandidate.Candidate.OptionsSchemaVersion);
         Assert.Equal("cilium-options-1", networkCandidate.Candidate.OptionsRevision);
-        Assert.Equal(requirement.RequiredL3L4Capabilities, networkCandidate.Candidate.RequiredCapabilities);
+        Assert.Equal(networkRequirement.RequiredL3L4Capabilities, networkCandidate.Candidate.RequiredCapabilities);
     }
 }
