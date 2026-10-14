@@ -60,6 +60,7 @@ the runtime does not silently truncate input. These are not cumulative token bud
 For configured hosted credit limits, Events prices that concrete model before root
 acceptance or backlog claim, without creating SDK or usage facts.
 The Host later checks the accepted pin before SDK startup and verifies actual native model policy.
+The model ID must match the accepted model. Any provider ID returned by the SDK or context metadata must match the accepted BYOK provider; when the SDK omits provider attribution, it remains unknown rather than being treated as a mismatch.
 BYOK token pricing cannot substitute for hosted Copilot credit admission.
 
 Explicit-event forks require the pinned provider's `sessions.events.fork` capability

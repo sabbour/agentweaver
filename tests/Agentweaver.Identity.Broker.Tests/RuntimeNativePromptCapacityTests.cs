@@ -1,5 +1,6 @@
 extern alias AgentHostService;
 
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Sockets;
 using System.Security.Cryptography;
@@ -31,7 +32,7 @@ public sealed class RuntimeNativePromptCapacityTests
         Assert.Equal("accepted-model-reference", session.Facts.ModelSelectionReference);
         Assert.Equal("openai", session.Facts.ByokProvider?.Type);
 
-        await session.SendTurnAsync("Initialize this local test session.", timeout.Token);
+        await AssertAuthenticatedNativeByokRouteAsync(harness, session, timeout.Token);
         var before = await RequireContextInfoAsync(session, timeout.Token);
         AssertContextIdentity(before, session);
 
@@ -77,7 +78,7 @@ public sealed class RuntimeNativePromptCapacityTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         await using var harness = await NativePromptHarness.StartAsync(timeout.Token);
         await using var session = await harness.CreateSessionAsync(1024, 8192, timeout.Token);
-        await session.SendTurnAsync("Initialize this local test session.", timeout.Token);
+        await AssertAuthenticatedNativeByokRouteAsync(harness, session, timeout.Token);
 
         var before = await RequireContextInfoAsync(session, timeout.Token);
         AssertContextIdentity(before, session);
@@ -101,6 +102,39 @@ public sealed class RuntimeNativePromptCapacityTests
         Assert.Equal(0, harness.InferenceEndpoint.FailedRequests);
     }
 
+    private static async Task AssertAuthenticatedNativeByokRouteAsync(
+        NativePromptHarness harness,
+        RuntimeCopilotSession session,
+        CancellationToken cancellationToken)
+    {
+        var sessionId = session.Facts.SdkSessionId;
+        var correlationMarker = $"agentweaver-native-session:{sessionId}";
+        harness.InferenceEndpoint.BindSession(sessionId);
+
+        var response = await session.SendTurnAsync(
+            $"Initialize this local test session with {correlationMarker}.", cancellationToken);
+        var receipt = Assert.Single(harness.InferenceEndpoint.Receipts,
+            item => response == $"native-route-response:{sessionId}:{item.ResponseId}");
+
+        Assert.Equal("byok", session.Facts.SourceMode);
+        Assert.Equal("accepted-model-reference", session.Facts.ModelSelectionReference);
+        Assert.Equal(harness.AcceptedSelectionHash, session.Facts.AcceptedSelectionHash);
+        Assert.Equal("openai", session.Facts.ByokProvider?.Type);
+        Assert.Equal(session.Facts.ModelId, session.Facts.ByokProvider?.DeploymentId);
+        Assert.Equal(harness.ModelBindingConfigurationHash,
+            session.Facts.ByokProvider?.ConfigurationHash);
+        Assert.True(receipt.CredentialMatched);
+        Assert.Equal(sessionId, receipt.CorrelatedSessionId);
+        Assert.Equal(session.Facts.ModelId, receipt.ModelId);
+        Assert.Equal("POST", receipt.Method);
+        Assert.Equal(harness.InferenceEndpoint.BaseUrl.Scheme, receipt.Scheme);
+        Assert.Equal(harness.InferenceEndpoint.BaseUrl.Host, receipt.Host);
+        Assert.Equal(harness.InferenceEndpoint.BaseUrl.Port, receipt.Port);
+        Assert.StartsWith(
+            harness.InferenceEndpoint.BaseUrl.AbsolutePath.TrimEnd('/') + "/", receipt.Path);
+        Assert.EndsWith("/chat/completions", receipt.Path);
+    }
+
     private static async Task<GitHub.Copilot.Rpc.MetadataContextInfoResultContextInfo> RequireContextInfoAsync(
         RuntimeCopilotSession session, CancellationToken cancellationToken)
     {
@@ -113,8 +147,10 @@ public sealed class RuntimeNativePromptCapacityTests
         GitHub.Copilot.Rpc.MetadataContextInfoResultContextInfo context,
         RuntimeCopilotSession session)
     {
+        Assert.Equal("openai", session.Facts.ByokProvider?.Type);
         Assert.Equal(session.Facts.ModelId, context.ModelName);
-        Assert.Equal("openai", context.Provider?.Id);
+        if (!string.IsNullOrEmpty(context.Provider?.Id))
+            Assert.Equal(session.Facts.ByokProvider?.Type, context.Provider.Id);
     }
 
     private sealed class NativePromptHarness : IAsyncDisposable
@@ -124,12 +160,14 @@ public sealed class RuntimeNativePromptCapacityTests
         private readonly string _runtimeRoot;
         private readonly string _testRoot;
         private readonly string _certificatePath;
+        private readonly string _providerCredential;
         private readonly X509Certificate2 _certificate;
 
         private NativePromptHarness(
             string runtimeRoot,
             string testRoot,
             string certificatePath,
+            string providerCredential,
             X509Certificate2 certificate,
             LoopbackInferenceEndpoint inferenceEndpoint,
             string executablePath,
@@ -138,6 +176,7 @@ public sealed class RuntimeNativePromptCapacityTests
             _runtimeRoot = runtimeRoot;
             _testRoot = testRoot;
             _certificatePath = certificatePath;
+            _providerCredential = providerCredential;
             _certificate = certificate;
             InferenceEndpoint = inferenceEndpoint;
             ExecutablePath = executablePath;
@@ -145,6 +184,8 @@ public sealed class RuntimeNativePromptCapacityTests
         }
 
         public LoopbackInferenceEndpoint InferenceEndpoint { get; }
+        public string? AcceptedSelectionHash { get; private set; }
+        public string? ModelBindingConfigurationHash { get; private set; }
         private string ExecutablePath { get; }
         private string RuntimeVersion { get; }
 
@@ -166,11 +207,13 @@ public sealed class RuntimeNativePromptCapacityTests
             var certificate = CreateLoopbackCertificate();
             LoopbackInferenceEndpoint? inferenceEndpoint = null;
             var certificatePath = Path.Combine(testRoot, "loopback-ca.pem");
+            var providerCredential = $"loopback-only-test-key-{Guid.NewGuid():N}";
             try
             {
                 await File.WriteAllTextAsync(certificatePath, certificate.ExportCertificatePem(), cancellationToken);
-                inferenceEndpoint = await LoopbackInferenceEndpoint.StartAsync(certificate, cancellationToken);
-                return new NativePromptHarness(runtimeRoot, testRoot, certificatePath, certificate,
+                inferenceEndpoint = await LoopbackInferenceEndpoint.StartAsync(
+                    certificate, providerCredential, cancellationToken);
+                return new NativePromptHarness(runtimeRoot, testRoot, certificatePath, providerCredential, certificate,
                     inferenceEndpoint, executablePath, runtimeVersion);
             }
             catch
@@ -196,6 +239,7 @@ public sealed class RuntimeNativePromptCapacityTests
                         PromptCapacityTokens = serverCapacity
                     }
                 });
+            ModelBindingConfigurationHash = resolver.ConfigurationHash;
             var registration = RuntimeCopilotSessionTests.Registration();
             registration = registration with
             {
@@ -207,6 +251,7 @@ public sealed class RuntimeNativePromptCapacityTests
                     ModelBindingPin = resolver.Pin(modelReference, ModelSourceMode.Byok)
                 }
             };
+            AcceptedSelectionHash = registration.Binding.AcceptedSelectionHash;
             var privateState = Path.Combine(_testRoot, "private-state");
             var workingDirectory = Path.Combine(_testRoot, "workspace");
             var baseDirectory = Path.Combine(_testRoot, "base");
@@ -220,7 +265,7 @@ public sealed class RuntimeNativePromptCapacityTests
             var factory = new RuntimeCopilotSessionFactory(connection, baseDirectory, resolver,
                 workingDirectory: workingDirectory, expectedRuntimeVersion: RuntimeVersion);
             return await factory.CreateAsync(registration, modelReference,
-                new SecretCredential("loopback-only-test-key", DateTimeOffset.UtcNow.AddMinutes(5)),
+                new SecretCredential(_providerCredential, DateTimeOffset.UtcNow.AddMinutes(5)),
                 _ => Task.CompletedTask, cancellationToken);
         }
 
@@ -250,21 +295,33 @@ public sealed class RuntimeNativePromptCapacityTests
     private sealed class LoopbackInferenceEndpoint : IAsyncDisposable
     {
         private readonly WebApplication _application;
+        private readonly string _providerCredential;
+        private readonly ConcurrentQueue<InferenceRequestReceipt> _receipts = [];
+        private string? _expectedSessionId;
         private int _requestCount;
         private int _failedRequests;
 
-        private LoopbackInferenceEndpoint(WebApplication application, int port)
+        private LoopbackInferenceEndpoint(WebApplication application, int port, string providerCredential)
         {
             _application = application;
+            _providerCredential = providerCredential;
             BaseUrl = new Uri($"https://127.0.0.1:{port}/v1");
         }
 
         public Uri BaseUrl { get; }
         public int RequestCount => Volatile.Read(ref _requestCount);
         public int FailedRequests => Volatile.Read(ref _failedRequests);
+        public IReadOnlyCollection<InferenceRequestReceipt> Receipts => _receipts.ToArray();
+
+        public void BindSession(string sessionId)
+        {
+            if (string.IsNullOrWhiteSpace(sessionId) ||
+                Interlocked.CompareExchange(ref _expectedSessionId, sessionId, null) is not null)
+                throw new InvalidOperationException("The inference endpoint accepts one native test session.");
+        }
 
         public static async Task<LoopbackInferenceEndpoint> StartAsync(
-            X509Certificate2 certificate, CancellationToken cancellationToken)
+            X509Certificate2 certificate, string providerCredential, CancellationToken cancellationToken)
         {
             var port = ReserveLoopbackPort();
             var builder = WebApplication.CreateSlimBuilder(new WebApplicationOptions { Args = [] });
@@ -272,7 +329,7 @@ public sealed class RuntimeNativePromptCapacityTests
             builder.WebHost.ConfigureKestrel(options =>
                 options.Listen(IPAddress.Loopback, port, listen => listen.UseHttps(certificate)));
             var application = builder.Build();
-            var endpoint = new LoopbackInferenceEndpoint(application, port);
+            var endpoint = new LoopbackInferenceEndpoint(application, port, providerCredential);
             application.MapPost("/{**path}", endpoint.HandleInferenceAsync);
             try
             {
@@ -293,13 +350,51 @@ public sealed class RuntimeNativePromptCapacityTests
             {
                 using var request = await JsonDocument.ParseAsync(context.Request.Body,
                     cancellationToken: context.RequestAborted);
+                var root = request.RootElement;
+                var modelId = root.TryGetProperty("model", out var modelValue) &&
+                    modelValue.ValueKind == JsonValueKind.String ? modelValue.GetString() : null;
+                var sessionId = Volatile.Read(ref _expectedSessionId);
+                var correlationMarker = sessionId is null ? null : $"agentweaver-native-session:{sessionId}";
+                var correlatedSessionId = correlationMarker is not null &&
+                    root.GetRawText().Contains(correlationMarker, StringComparison.Ordinal)
+                    ? sessionId : null;
+                var credentialMatched = string.Equals(
+                    context.Request.Headers.Authorization.ToString(),
+                    $"Bearer {_providerCredential}", StringComparison.Ordinal);
+                var requestPath = context.Request.Path.Value ?? string.Empty;
+                var responseId = $"chatcmpl-agentweaver-{Guid.NewGuid():N}";
+                _receipts.Enqueue(new(
+                    context.Request.Method,
+                    context.Request.Scheme,
+                    context.Request.Host.Host,
+                    context.Request.Host.Port ?? 443,
+                    requestPath,
+                    modelId,
+                    credentialMatched,
+                    correlatedSessionId,
+                    responseId));
+
+                var requestIsValid = credentialMatched &&
+                    correlatedSessionId is not null &&
+                    modelId == "prompt-test-model" &&
+                    requestPath.EndsWith("/chat/completions", StringComparison.Ordinal);
+                if (!requestIsValid)
+                {
+                    Interlocked.Increment(ref _failedRequests);
+                    context.Response.StatusCode = credentialMatched
+                        ? StatusCodes.Status400BadRequest
+                        : StatusCodes.Status401Unauthorized;
+                    return;
+                }
+
+                var responseContent = $"native-route-response:{sessionId}:{responseId}";
                 var stream = request.RootElement.TryGetProperty("stream", out var streamValue) &&
                     streamValue.ValueKind == JsonValueKind.True;
                 if (stream)
                 {
                     context.Response.ContentType = "text/event-stream";
-                    await WriteStreamChunkAsync(context, "Short local response.", null);
-                    await WriteStreamChunkAsync(context, "", "stop");
+                    await WriteStreamChunkAsync(context, responseContent, null, responseId);
+                    await WriteStreamChunkAsync(context, "", "stop", responseId);
                     await context.Response.WriteAsync("data: [DONE]\n\n", context.RequestAborted);
                 }
                 else
@@ -307,7 +402,7 @@ public sealed class RuntimeNativePromptCapacityTests
                     context.Response.ContentType = "application/json";
                     await context.Response.WriteAsJsonAsync(new
                     {
-                        id = "chatcmpl-agentweaver-local",
+                        id = responseId,
                         @object = "chat.completion",
                         created = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                         model = "prompt-test-model",
@@ -316,7 +411,7 @@ public sealed class RuntimeNativePromptCapacityTests
                             new
                             {
                                 index = 0,
-                                message = new { role = "assistant", content = "Short local response." },
+                                message = new { role = "assistant", content = responseContent },
                                 finish_reason = "stop"
                             }
                         },
@@ -332,12 +427,12 @@ public sealed class RuntimeNativePromptCapacityTests
         }
 
         private static async Task WriteStreamChunkAsync(
-            HttpContext context, string content, string? finishReason)
+            HttpContext context, string content, string? finishReason, string responseId)
         {
             var data = finishReason is null
                 ? JsonSerializer.Serialize(new
                 {
-                    id = "chatcmpl-agentweaver-local",
+                    id = responseId,
                     @object = "chat.completion.chunk",
                     created = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                     model = "prompt-test-model",
@@ -353,7 +448,7 @@ public sealed class RuntimeNativePromptCapacityTests
                 })
                 : JsonSerializer.Serialize(new
                 {
-                    id = "chatcmpl-agentweaver-local",
+                    id = responseId,
                     @object = "chat.completion.chunk",
                     created = DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
                     model = "prompt-test-model",
@@ -379,6 +474,17 @@ public sealed class RuntimeNativePromptCapacityTests
             listener.Start();
             return ((IPEndPoint)listener.LocalEndpoint).Port;
         }
+
+        public sealed record InferenceRequestReceipt(
+            string Method,
+            string Scheme,
+            string Host,
+            int Port,
+            string Path,
+            string? ModelId,
+            bool CredentialMatched,
+            string? CorrelatedSessionId,
+            string ResponseId);
     }
 }
 

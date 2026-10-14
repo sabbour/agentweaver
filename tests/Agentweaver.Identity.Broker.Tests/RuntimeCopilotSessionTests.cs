@@ -358,6 +358,19 @@ public sealed class RuntimeCopilotSessionTests
         Assert.Contains(external.Requests, request => request.Method == "session.detach");
     }
 
+    [Theory]
+    [InlineData("openai", null, false)]
+    [InlineData("openai", "", false)]
+    [InlineData("openai", "openai", false)]
+    [InlineData("openai", "azure", true)]
+    [InlineData(null, "openai", false)]
+    public void ProviderIdentityRejectsOnlyAReportedMismatch(
+        string? expectedProviderId, string? actualProviderId, bool expectedMismatch)
+    {
+        Assert.Equal(expectedMismatch,
+            RuntimeCopilotSession.HasProviderIdentityMismatch(expectedProviderId, actualProviderId));
+    }
+
     [Fact]
     public async Task NativeMissingMeasurementsRemainNullAndDuplicateEventsKeepTheirStableIdentity()
     {

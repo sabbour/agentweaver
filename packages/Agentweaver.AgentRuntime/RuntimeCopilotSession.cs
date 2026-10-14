@@ -192,8 +192,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
             var model = await _session.Rpc.Model.GetCurrentAsync(cancellationToken).ConfigureAwait(false);
             var expectedProviderId = Facts.ByokProvider?.Type;
             if (model.ModelId != Facts.ModelId ||
-                expectedProviderId is not null &&
-                !string.IsNullOrEmpty(model.ProviderId) && model.ProviderId != expectedProviderId)
+                HasProviderIdentityMismatch(expectedProviderId, model.ProviderId))
                 throw CreateEffectiveModelMismatch(model.ModelId, model.ProviderId);
 
             string? providerId = expectedProviderId is not null && string.IsNullOrEmpty(model.ProviderId)
@@ -202,10 +201,10 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
             var result = await _session.Rpc.Metadata.ContextInfoAsync(
                 0, 0, model.ModelId, providerId, cancellationToken).ConfigureAwait(false);
             var context = result?.ContextInfo;
-            if (expectedProviderId is not null && context is not null &&
-                context.Provider?.Id != expectedProviderId)
+            var contextProviderId = context?.Provider?.Id;
+            if (HasProviderIdentityMismatch(expectedProviderId, contextProviderId))
                 throw CreateEffectiveModelMismatch(
-                    model.ModelId, model.ProviderId, context.Provider?.Id ?? string.Empty);
+                    model.ModelId, model.ProviderId, contextProviderId);
 
 #pragma warning restore GHCP001
             return context;
@@ -215,6 +214,11 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
             _turnGate.Release();
         }
     }
+
+    internal static bool HasProviderIdentityMismatch(string? expectedProviderId, string? actualProviderId) =>
+        expectedProviderId is not null &&
+        !string.IsNullOrEmpty(actualProviderId) &&
+        actualProviderId != expectedProviderId;
 
     internal RuntimeNativePromptCompactionObservation? LatestPromptCapacityCompaction =>
         _promptCapacityObserver.Latest;
