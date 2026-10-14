@@ -49,10 +49,6 @@ jobs:
         run: node scripts/azure/build-foundation-probe-image.mjs
       - name: Render Foundation Probe acceptance Job and egress policy
         run: kubectl kustomize deploy/k8s/acceptance/foundation-probe
-      - name: Install Chromium for broker browser integration tests
-        run: pwsh tests/Agentweaver.Identity.Broker.Tests/bin/Release/net10.0/playwright.ps1 install chromium
-      - name: Test .NET foundations, Identity broker, Projects & Config, and Foundation Probe with coverage
-        run: npm run coverage:dotnet
       - name: Build unpublished Identity broker image
         run: |
           mkdir -p artifacts/images
@@ -115,7 +111,8 @@ jobs:
                 cat "$file" > /dev/null
               done
               umask 077
-              for file in /app/native/copilot /app/native/index.js /app/native/app.js /app/native/prebuilds/linux-x64/runtime.node; do
+              test -x /app/native/copilot
+              for file in /app/native/copilot /app/native/copilot.sha256; do
                 test -s "$file" && test -r "$file" && test ! -w "$file"
               done
               STATUS="$(dotnet /app/Agentweaver.AgentHost.dll --verify-native-runtime)"
@@ -305,11 +302,6 @@ jobs:
               test -r /native/native/copilot
               test -x /native/native/copilot
               test -r /native/native/copilot.sha256
-              test -r /native/native/index.js
-              test -r /native/native/app.js
-              test -x /native/native/prebuilds
-              test -x /native/native/prebuilds/linux-x64
-              test -r /native/native/prebuilds/linux-x64/runtime.node
               test -w /tmp/home
               test -w /tmp/dotnet-cli-home
               result_probe="/results/.native-prompt-capacity-write-check-$$"
@@ -347,6 +339,10 @@ jobs:
             exit "$test_status"
           fi
           exit "$verification_status"
+      - name: Install Chromium for broker browser integration tests
+        run: pwsh tests/Agentweaver.Identity.Broker.Tests/bin/Release/net10.0/playwright.ps1 install chromium
+      - name: Test .NET foundations, Identity broker, Projects & Config, and Foundation Probe with coverage
+        run: npm run coverage:dotnet
       - name: Preload pinned ASP.NET runtime image for release validator
         if: ${{ !cancelled() }}
         run: docker pull --platform linux/amd64 mcr.microsoft.com/dotnet/aspnet:10.0@sha256:222759b391a1aaf241166672c8f99b2d4ada452e7b5319f3c6e8f265a37b5ad4

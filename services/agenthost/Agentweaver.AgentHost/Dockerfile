@@ -19,10 +19,9 @@ RUN curl --fail --location --proto '=https' --tlsv1.2 \
     https://ms-feed-25.pkgs.visualstudio.com/1es-public/_packaging/npm-public/npm/registry/@github/copilot-linux-x64/-/copilot-linux-x64-1.0.97.tgz \
     --output /tmp/copilot.tgz && \
     echo '262068b5c39fd83706bec46a11346ed28a33a99f4ceab1fc9e30a416de30ee4059beb1c6f8c1e1228d666c6289b28d86663067655b6f258b0a5cc655dcdc7f8a  /tmp/copilot.tgz' | sha512sum --check --status && \
-    mkdir /publish/native && tar --extract --gzip --file /tmp/copilot.tgz --strip-components=1 --directory /publish/native && \
-    rm -rf /publish/native/clipboard /publish/native/foundry-local-sdk /publish/native/pvrecorder /publish/native/webview && \
-    test -s /publish/native/index.js && test -s /publish/native/app.js && \
-    test -s /publish/native/prebuilds/linux-x64/runtime.node && \
+    mkdir /publish/native && \
+    tar --extract --gzip --file /tmp/copilot.tgz --strip-components=1 --directory /publish/native package/copilot && \
+    test -s /publish/native/copilot && test -x /publish/native/copilot && \
     rm /tmp/copilot.tgz && \
     sha256sum /publish/native/copilot | cut -d ' ' -f 1 > /publish/native/copilot.sha256 && \
     mkdir /private-state /workspace
