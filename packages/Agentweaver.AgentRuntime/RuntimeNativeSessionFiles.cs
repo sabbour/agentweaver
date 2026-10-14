@@ -172,7 +172,8 @@ internal sealed class RuntimeNativeSessionFiles(params string[] forbiddenCredent
                     Birthtime = file.CreatedAt, Mtime = file.ModifiedAt
                 });
             if (!_directories.Contains(normalized))
-                throw new DirectoryNotFoundException("Native session path is unavailable.");
+                throw new DirectoryNotFoundException(
+                    $"Native session path is unavailable (stat ENOENT): '{normalized}'.");
             return Task.FromResult(new SessionFsStatResult { IsDirectory = true });
         }
     }
