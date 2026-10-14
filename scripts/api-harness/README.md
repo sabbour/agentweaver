@@ -70,6 +70,11 @@ Environment service, actor authorization, provider callback, or resource cleanup
 
 ## Use a separately authorized target
 
+Environment lifecycle and provider evidence are read directly from the
+approved Environment origin. Create a separate client and auth provider for
+that exact origin; do not reuse or extract authorization from the Gateway
+client.
+
 ```javascript
 import { AgentweaverClient } from './scripts/api-harness/lib/client.mjs';
 import { RuntimeObservationClient } from './scripts/api-harness/lib/runtime-observation-client.mjs';
@@ -83,13 +88,28 @@ const authProvider = createBrokerAuthProvider({
   audience,
   actorId,
 });
-const api = new AgentweaverClient({
+const gatewayApi = new AgentweaverClient({
   baseUrl: approvedGatewayOrigin,
   authProvider,
   tenantId,
 });
-await api.discover();
-const runtimeObservation = new RuntimeObservationClient({ api });
+const environmentAuthProvider = createBrokerAuthProvider({
+  target: approvedEnvironmentOrigin,
+  token: separatelyAuthorizedEnvironmentBrokerToken,
+  issuer,
+  audience: environmentAudience,
+  actorId,
+});
+const environmentApi = new AgentweaverClient({
+  baseUrl: approvedEnvironmentOrigin,
+  authProvider: environmentAuthProvider,
+  tenantId,
+});
+await gatewayApi.discover();
+const runtimeObservation = new RuntimeObservationClient({
+  api: gatewayApi,
+  environmentApi,
+});
 const observation = await runtimeObservation.readRuntimeObservationV1({
   projectId, runId, rootSessionId, sessionId, executionFence,
 });
@@ -98,7 +118,7 @@ const environmentObservation = await runtimeObservation.readEnvironmentEvidence(
   owner: { tenantId, projectId, runId },
   operationId,
 });
-const receipt = await api.invoke('getProject', {
+const receipt = await gatewayApi.invoke('getProject', {
   pathParameters: { projectId },
 });
 await appendRedactedJsonLine(evidenceFile, {

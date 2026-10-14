@@ -950,6 +950,87 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var nativeOwner = ownerScope.ServiceProvider.GetRequiredService<RuntimeUsageSourceOwner>();
         await nativeOwner.PrepareNativeTurnAsync(context, session.Registration, rootIdentity, checkpoint, intent,
             message, RequireCurrentOwner, cancellationToken);
+        var runtimeObservationPath = $"/api/projects/{binding.ProjectId}/runs/{binding.RunId}" +
+            $"/coordination/sessions/{binding.SessionId}/runtime-observation/v1";
+        var observationStateBefore = await ReadRuntimeObservationPersistenceStateAsync(
+            ownerSchema, binding.ProjectId, binding.RunId, cancellationToken);
+        var sdkSendsBeforeObservation = sdk.Requests.Count(request => request.Method == "session.send");
+        var objectWritesBeforeObservation = objects.Writes;
+        using var firstObservationResponse = await SendAsync(
+            orchestratorClient, HttpMethod.Get, runtimeObservationPath, runToken, [binding.TenantId]);
+        await AssertStatusAsync(firstObservationResponse, HttpStatusCode.OK);
+        Assert.True(firstObservationResponse.Headers.CacheControl?.NoStore);
+        var firstObservationBody = await firstObservationResponse.Content.ReadAsStringAsync(cancellationToken);
+        var currentObservation = Assert.IsType<RuntimeObservationV1>(
+            JsonSerializer.Deserialize<RuntimeObservationV1>(firstObservationBody, CoordinationJsonOptions));
+        _ = currentObservation.Validate();
+        Assert.Equal(RuntimeObservationSectionState.Available, currentObservation.Registration.State);
+        var observedRegistration = Assert.IsType<RuntimeObservationRegistration>(currentObservation.Registration.Value);
+        Assert.Equal(session.Registration.RuntimeInstanceId, observedRegistration.RuntimeInstanceId);
+        Assert.Equal(session.Registration.Revision, observedRegistration.Revision);
+        Assert.Equal(RuntimeObservationRegistrationState.Active, observedRegistration.State);
+        Assert.Equal(session.Registration.ExpiresAt, observedRegistration.ExpiresAt);
+        Assert.Equal(RuntimeObservationSectionState.Available, currentObservation.Execution.State);
+        var observedExecution = Assert.IsType<RuntimeObservationExecutionV2>(currentObservation.Execution.Value);
+        Assert.Equal(2, observedExecution.ContractVersion);
+        Assert.Equal(checkpoint.HasParentMetadata, observedExecution.CheckpointParent.HasParentMetadata);
+        Assert.Equal(checkpoint.ParentCheckpointId, observedExecution.CheckpointParent.ParentCheckpointId);
+        var observedExecutionValue = observedExecution.Observation;
+        Assert.Equal(rootSessionId, observedExecutionValue.RootSessionId);
+        Assert.Equal(binding.SessionId, observedExecutionValue.SessionId);
+        Assert.Equal(binding.ExecutionFence, observedExecutionValue.ExecutionFence);
+        Assert.Equal(plan.Plan.Id, observedExecutionValue.WorkPlanId);
+        Assert.Equal(associationId, observedExecutionValue.AssociationId);
+        Assert.Equal(checkpoint.Info.CheckpointId, observedExecutionValue.CheckpointId);
+        Assert.Equal(checkpoint.State.Revision, observedExecutionValue.CheckpointRevision);
+        Assert.Equal(checkpoint.State.DecisionStateVersion, observedExecutionValue.CheckpointDecisionStateVersion);
+        Assert.Equal(decision.StateVersion, observedExecutionValue.CurrentDecisionStateVersion);
+        Assert.Equal(RuntimeExecutionTaskStatus.Running, observedExecutionValue.Status);
+        Assert.Equal(intent.MessageId, observedExecutionValue.PendingDispatch?.MessageId);
+        Assert.Null(observedExecutionValue.ResultDigest);
+        if (observationStateBefore.CreditGuard is null)
+        {
+            Assert.Equal(RuntimeObservationSectionState.Unknown, currentObservation.CreditGuard.State);
+            Assert.Null(currentObservation.CreditGuard.Value);
+        }
+        else
+        {
+            Assert.Equal(RuntimeObservationSectionState.Available, currentObservation.CreditGuard.State);
+            Assert.Equal(observationStateBefore.CreditGuard, currentObservation.CreditGuard.Value);
+        }
+        Assert.Equal(RuntimeObservationSectionState.Available, currentObservation.Dispatches.State);
+        var observedDispatch = Assert.Single(
+            Assert.IsType<RuntimeObservationDispatchCollection>(currentObservation.Dispatches.Value).Items);
+        Assert.Equal(intent.MessageId, observedDispatch.DispatchId);
+        Assert.Equal(rootSessionId, observedDispatch.RootSessionId);
+        Assert.Equal(binding.SessionId, observedDispatch.ChildSessionId);
+        Assert.Equal(plan.Plan.Id, observedDispatch.WorkPlanId);
+        Assert.Equal(associationId, observedDispatch.AssociationId);
+        Assert.Equal(checkpoint.Info.CheckpointId, observedDispatch.CheckpointId);
+        Assert.Equal(checkpoint.State.Revision, observedDispatch.CheckpointRevision);
+        Assert.Equal(binding.ExecutionFence, observedDispatch.ExecutionFence);
+        Assert.Equal("prepared", observedDispatch.State);
+        Assert.Equal(1, observedDispatch.OwnerRevision);
+        Assert.Null(observedDispatch.ReportState);
+        Assert.Null(observedDispatch.AccountingState);
+        Assert.Null(observedDispatch.WitnessWatermark);
+        Assert.Null(observedDispatch.WitnessDigest);
+        Assert.Equal(RuntimeObservationSectionState.Available, currentObservation.ToolReservations.State);
+        var toolReservations = Assert.IsType<RuntimeObservationToolReservationCollection>(
+            currentObservation.ToolReservations.Value);
+        Assert.Empty(toolReservations.Items);
+        Assert.False(toolReservations.Truncated);
+        using var repeatedObservationResponse = await SendAsync(
+            orchestratorClient, HttpMethod.Get, runtimeObservationPath, runToken, [binding.TenantId]);
+        await AssertStatusAsync(repeatedObservationResponse, HttpStatusCode.OK);
+        Assert.True(repeatedObservationResponse.Headers.CacheControl?.NoStore);
+        Assert.Equal(firstObservationBody,
+            await repeatedObservationResponse.Content.ReadAsStringAsync(cancellationToken));
+        Assert.Equal(sdkSendsBeforeObservation,
+            sdk.Requests.Count(request => request.Method == "session.send"));
+        Assert.Equal(objectWritesBeforeObservation, objects.Writes);
+        Assert.Equal(observationStateBefore, await ReadRuntimeObservationPersistenceStateAsync(
+            ownerSchema, binding.ProjectId, binding.RunId, cancellationToken));
         sdk.EmitNativeCompletionReceipt = true;
         sdk.EmitUsageWithTurn = accountNativeUsage is not null;
         var (answer, recorded) = await session.SendNativeTurnAsync(message, material, sourceClient, cancellationToken);
@@ -983,8 +1064,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using (var runtimeObservation = await SendAsync(
                    orchestratorClient,
                    HttpMethod.Get,
-                   $"/api/projects/{binding.ProjectId}/runs/{binding.RunId}" +
-                   $"/coordination/sessions/{binding.SessionId}/runtime-observation/v1",
+                   runtimeObservationPath,
                    runToken,
                    [binding.TenantId]))
         {
@@ -1303,6 +1383,69 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             TraceNativeStage(failures, $"HTTP completed {request.Method} {endpoint.Host}{endpoint.AbsolutePath}.");
             return response;
         }
+    }
+
+    private sealed record RuntimeObservationPersistenceState(
+        long Dispatches,
+        long CreditGuards,
+        long ToolReservations,
+        long NativeSources,
+        long UsageObservations,
+        RuntimeObservationCreditGuard? CreditGuard);
+
+    private async Task<RuntimeObservationPersistenceState> ReadRuntimeObservationPersistenceStateAsync(
+        string schema, string projectId, string runId, CancellationToken cancellationToken)
+    {
+        await using var connection = await _nativeDataSource.OpenConnectionAsync(cancellationToken);
+        long dispatches;
+        long guards;
+        long toolReservations;
+        long nativeSources;
+        long usageObservations;
+        await using (var counts = new NpgsqlCommand($"""
+            SELECT (SELECT count(*) FROM "{schema}".maf_execution_dispatches),
+                   (SELECT count(*) FROM "{schema}".maf_execution_run_guards),
+                   (SELECT count(*) FROM "{schema}".outbox_events
+                    WHERE event_type = 'orchestrator.runtime.tool_invocation_admitted'),
+                   (SELECT count(*) FROM "{schema}".runtime_sdk_sources),
+                   (SELECT count(*) FROM "{schema}".runtime_usage_observations)
+            """, connection))
+        await using (var reader = await counts.ExecuteReaderAsync(cancellationToken))
+        {
+            Assert.True(await reader.ReadAsync(cancellationToken));
+            dispatches = reader.GetInt64(0);
+            guards = reader.GetInt64(1);
+            toolReservations = reader.GetInt64(2);
+            nativeSources = reader.GetInt64(3);
+            usageObservations = reader.GetInt64(4);
+        }
+
+        RuntimeObservationCreditGuard? creditGuard = null;
+        await using (var guard = new NpgsqlCommand($"""
+            SELECT copilot_aic_floor, accounted_through_event_position, usage_witness_digest,
+                owner_revision, soft_warning_emitted, hard_cap_exhausted, updated_at
+            FROM "{schema}".maf_execution_run_guards
+            WHERE project_id = @project AND run_id = @run
+            """, connection))
+        {
+            guard.Parameters.AddWithValue("project", NpgsqlTypes.NpgsqlDbType.Varchar, projectId);
+            guard.Parameters.AddWithValue("run", NpgsqlTypes.NpgsqlDbType.Varchar, runId);
+            await using var reader = await guard.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                creditGuard = new RuntimeObservationCreditGuard(
+                    reader.GetDecimal(0),
+                    reader.GetInt64(1),
+                    reader.GetString(2),
+                    reader.GetInt64(3),
+                    reader.GetBoolean(4),
+                    reader.GetBoolean(5),
+                    reader.GetFieldValue<DateTimeOffset>(6)).Validate();
+                Assert.False(await reader.ReadAsync(cancellationToken));
+            }
+        }
+
+        return new(dispatches, guards, toolReservations, nativeSources, usageObservations, creditGuard);
     }
 
     private async Task AssertNativeSourceCountsAsync(string schema, long sources, long observations)

@@ -181,17 +181,21 @@ result text. A missing credit-guard snapshot is `Unknown`, not a zero balance or
 The Orchestrator checks the accepted selection, current child and decision, checkpoint,
 registration, and owner fence again before returning the no-store response.
 
-The API harness validates this response before using it. Its Environment reader takes
+The API harness validates this response before using it. Its Environment reader uses a
+separate client and auth provider bound to the approved Environment origin; it does not
+route Environment reads through Gateway or reuse Gateway authorization. It takes
 `environmentId` from the real create response at
 `snapshot.fence.owner.environmentId`; it then reads the current lifecycle, provider
 attempts for the exact operation, and the bounded late-resource cleanup list. It compares
-the returned current fences with the lifecycle fence and re-reads lifecycle afterward.
-These reads show stored owner state only: they do not exercise a callback race, prove
-that a dispatch was denied, or prove that a resource was released.
+the full returned owner, including `environmentId`, on every fence, compares the current
+fences with the lifecycle fence, and re-reads lifecycle afterward. Older legitimate
+source generations remain valid for late cleanup. These reads show stored owner state
+only: they do not exercise a callback race, prove that a dispatch was denied, or prove
+that a resource was released.
 
 ```mermaid
 sequenceDiagram
-    participant H as Authorized harness
+    participant H as Authorized harness with separate clients
     participant G as Gateway
     participant O as Orchestrator
     participant E as Environment
@@ -199,10 +203,10 @@ sequenceDiagram
     G->>O: Forward actor and exact owner route
     O->>O: Recheck selection, child, decision, checkpoint, registration, fence
     O-->>H: No-store identity, execution, credit, dispatch, and reservation sections
-    H->>E: GET current lifecycle using returned environment ID
-    H->>E: GET provider attempts for exact operation
-    H->>E: GET bounded late-resource cleanup list
-    H->>E: Re-read current lifecycle
+    H->>E: Separately authorized GET lifecycle for returned environment ID
+    H->>E: GET provider attempts for exact operation and full owner
+    H->>E: GET bounded late-resource cleanup list and full owner
+    H->>E: Re-read current lifecycle and full owner
     H->>H: Keep stored reads separate from race and cleanup acceptance
 ```
 

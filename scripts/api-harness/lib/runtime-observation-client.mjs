@@ -250,21 +250,40 @@ function requireHttp(call, label) {
   return call.transientResponseBody;
 }
 
-function requireOwner(value, expected) {
+function validateEnvironmentOwner(value, label = 'Environment owner') {
   exactKeys(value, ['tenantId', 'projectId', 'runId', 'environmentId'], 'Environment owner');
   for (const key of ['tenantId', 'projectId', 'runId', 'environmentId']) {
-    requireString(value[key], `Environment owner.${key}`);
+    requireString(value[key], `${label}.${key}`);
   }
+  return value;
+}
+
+function requireOwner(value, expected) {
+  validateEnvironmentOwner(value);
+  validateEnvironmentOwner(expected, 'Expected Environment owner');
   if (value.tenantId !== expected.tenantId || value.projectId !== expected.projectId
-    || value.runId !== expected.runId) {
-    throw new Error('The Environment owner does not match the selected tenant, project, and run.');
+    || value.runId !== expected.runId || value.environmentId !== expected.environmentId) {
+    throw new Error('The Environment owner does not match the selected Environment.');
   }
 }
 
-function requireEnvironmentFence(value, expectedOwner, label) {
+function validateEnvironmentFence(value, label) {
   exactKeys(value, ['owner', 'lifecycleGeneration'], label);
-  requireOwner(value.owner, expectedOwner);
+  validateEnvironmentOwner(value.owner, `${label}.owner`);
   requirePositiveInteger(value.lifecycleGeneration, `${label}.lifecycleGeneration`);
+  return value;
+}
+
+function requireEnvironmentFence(value, expectedOwner, label) {
+  validateEnvironmentFence(value, label);
+  requireOwner(value.owner, expectedOwner);
+}
+
+function requireSelectedEnvironmentOwner(environmentOwner, owner) {
+  if (environmentOwner.tenantId !== owner.tenantId || environmentOwner.projectId !== owner.projectId
+    || environmentOwner.runId !== owner.runId) {
+    throw new Error('The Environment creation receipt does not match the selected tenant, project, and run.');
+  }
 }
 
 function requireSameFence(actual, expected, label) {
@@ -319,12 +338,13 @@ function validateProviderAttempt(attempt, operationId, expectedFence) {
   }
 }
 
-function validateProviderAttempts(value, expectedFence, operationId) {
+function validateProviderAttempts(value, expectedFence, expectedOwner, operationId) {
   exactKeys(value, ['contractVersion', 'currentFence', 'operationId', 'attempts'], 'provider attempts');
   if (value.contractVersion !== 1 || value.operationId !== operationId
     || !Array.isArray(value.attempts) || value.attempts.length > MAX_ENVIRONMENT_ITEMS) {
     throw new TypeError('provider attempts do not match the Environment read contract.');
   }
+  requireEnvironmentFence(value.currentFence, expectedOwner, 'Provider attempt current fence');
   requireSameFence(value.currentFence, expectedFence, 'Provider attempt owner fence');
   const seen = new Set();
   for (const attempt of value.attempts) {
@@ -402,6 +422,7 @@ function validateLateResourceCleanups(value, expectedFence, expectedOwner) {
     || value.items.length > MAX_ENVIRONMENT_ITEMS || typeof value.hasMore !== 'boolean') {
     throw new TypeError('late-resource cleanups do not match the Environment read contract.');
   }
+  requireEnvironmentFence(value.currentFence, expectedOwner, 'Late-resource cleanup current fence');
   requireSameFence(value.currentFence, expectedFence, 'Late-resource cleanup owner fence');
   const seen = new Set();
   for (const item of value.items) {
@@ -414,11 +435,15 @@ function validateLateResourceCleanups(value, expectedFence, expectedOwner) {
 }
 
 export class RuntimeObservationClient {
-  constructor({ api }) {
-    if (typeof api?.invoke !== 'function' || typeof api?.call !== 'function') {
+  constructor({ api, environmentApi }) {
+    if (typeof api?.invoke !== 'function') {
       throw new Error('A discovered Gateway API client is required for runtime observation reads.');
     }
+    if (typeof environmentApi?.call !== 'function' || environmentApi === api) {
+      throw new Error('A separately authorized Environment API client is required for Environment reads.');
+    }
     this.api = api;
+    this.environmentApi = environmentApi;
   }
 
   async readRuntimeObservationV1(expected) {
@@ -441,36 +466,31 @@ export class RuntimeObservationClient {
 
   async readEnvironmentEvidence({ environmentCreation, owner, operationId }) {
     if (!isRecord(owner)) throw new TypeError('The selected Environment owner is required.');
+    for (const key of ['tenantId', 'projectId', 'runId']) {
+      requireString(owner[key], `Selected owner.${key}`);
+    }
     const createdSnapshot = environmentCreation?.snapshot;
     if (!isRecord(createdSnapshot) || typeof createdSnapshot.state !== 'string'
       || createdSnapshot.state.toLowerCase() !== 'active') {
       throw new TypeError('The Environment creation receipt is missing its active snapshot.');
     }
-    requireEnvironmentFence(
+    const creationFence = validateEnvironmentFence(
       createdSnapshot.fence,
-      owner,
       'Environment creation fence',
     );
-    requireOwner({
-      tenantId: owner.tenantId,
-      projectId: owner.projectId,
-      runId: owner.runId,
-      environmentId: createdSnapshot.fence.owner.environmentId,
-    }, owner);
+    const environmentOwner = { ...creationFence.owner };
+    requireSelectedEnvironmentOwner(environmentOwner, owner);
     requireUuid(operationId, 'Environment operation ID');
-    const { tenantId, projectId, runId, environmentId } = {
-      ...owner,
-      environmentId: environmentCreation.snapshot.fence.owner.environmentId,
-    };
+    const { projectId, runId, environmentId } = environmentOwner;
     const base = `/api/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}` +
       `/environments/${encodeURIComponent(environmentId)}/sandbox/v1`;
     const readLifecycle = async () => {
-      const call = await this.api.call('GET', `${base}/lifecycle`, undefined, {
+      const call = await this.environmentApi.call('GET', `${base}/lifecycle`, undefined, {
         headers: { 'Cache-Control': 'no-store' },
       });
       const body = requireHttp(call, 'Environment lifecycle');
       exactKeys(body, ['fence', 'state'], 'Environment lifecycle');
-      requireEnvironmentFence(body.fence, { tenantId, projectId, runId }, 'Environment lifecycle fence');
+      requireEnvironmentFence(body.fence, environmentOwner, 'Environment lifecycle fence');
       if (typeof body.state !== 'string' || body.state.toLowerCase() !== 'active') {
         throw new Error('The Environment is not active for the selected owner.');
       }
@@ -480,22 +500,23 @@ export class RuntimeObservationClient {
     const before = await readLifecycle();
     const operationPath = `${base}/operations/${encodeURIComponent(operationId)}`;
     const [attemptCall, cleanupCall] = await Promise.all([
-      this.api.call('GET', `${operationPath}/provider-attempts`, undefined, {
+      this.environmentApi.call('GET', `${operationPath}/provider-attempts`, undefined, {
         headers: { 'Cache-Control': 'no-store' },
       }),
-      this.api.call('GET', `${base}/late-resource-cleanups`, undefined, {
+      this.environmentApi.call('GET', `${base}/late-resource-cleanups`, undefined, {
         headers: { 'Cache-Control': 'no-store' },
       }),
     ]);
     const attempts = validateProviderAttempts(
       requireHttp(attemptCall, 'Environment provider attempts'),
       before.fence,
+      environmentOwner,
       operationId,
     );
     const cleanups = validateLateResourceCleanups(
       requireHttp(cleanupCall, 'Environment late-resource cleanups'),
       before.fence,
-      { tenantId, projectId, runId },
+      environmentOwner,
     );
     const after = await readLifecycle();
     requireSameFence(after.fence, before.fence, 'Environment lifecycle fence');

@@ -159,11 +159,16 @@ const lateResourceCleanups = {
 
 async function fixture({ mutate } = {}) {
   const requests = [];
+  const foreignEnvironmentFence = {
+    ...environmentFence,
+    owner: { ...environmentFence.owner, environmentId: 'environment-b' },
+  };
   let lifecycleReads = 0;
   const server = createServer(async (request, response) => {
     const chunks = [];
     for await (const chunk of request) chunks.push(chunk);
     requests.push({
+      destination: 'gateway',
       url: request.url,
       headers: request.headers,
       body: Buffer.concat(chunks).toString(),
@@ -194,20 +199,52 @@ async function fixture({ mutate } = {}) {
         : runtimeObservation));
       return;
     }
+    response.writeHead(404);
+    response.end(JSON.stringify({ error: 'not-found' }));
+  });
+  const environmentServer = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    requests.push({
+      destination: 'environment',
+      url: request.url,
+      headers: request.headers,
+      body: Buffer.concat(chunks).toString(),
+    });
+    response.setHeader('Content-Type', 'application/json');
+    response.setHeader('Cache-Control', 'private, no-store');
     if (request.url.endsWith('/sandbox/v1/lifecycle')) {
       lifecycleReads += 1;
-      const fence = mutate === 'changed-fence' && lifecycleReads > 1
-        ? { ...environmentFence, lifecycleGeneration: 4 }
-        : environmentFence;
+      const fence = mutate === 'foreign-lifecycle-owner'
+        ? foreignEnvironmentFence
+        : mutate === 'changed-fence' && lifecycleReads > 1
+          ? { ...environmentFence, lifecycleGeneration: 4 }
+          : environmentFence;
       response.end(JSON.stringify({ fence, state: 'active' }));
       return;
     }
     if (request.url.endsWith('/provider-attempts')) {
-      response.end(JSON.stringify(providerAttempts));
+      response.end(JSON.stringify(mutate === 'foreign-attempt-current-fence'
+        ? { ...providerAttempts, currentFence: foreignEnvironmentFence }
+        : providerAttempts));
       return;
     }
     if (request.url.endsWith('/late-resource-cleanups')) {
-      response.end(JSON.stringify(lateResourceCleanups));
+      const cleanups = structuredClone(lateResourceCleanups);
+      if (mutate === 'foreign-cleanup-current-fence') {
+        cleanups.currentFence = foreignEnvironmentFence;
+      } else if (mutate === 'foreign-cleanup-source-fence') {
+        cleanups.items[0].sourceFence = {
+          ...foreignEnvironmentFence,
+          lifecycleGeneration: 2,
+        };
+      } else if (mutate === 'future-cleanup-source-fence') {
+        cleanups.items[0].sourceFence = {
+          ...environmentFence,
+          lifecycleGeneration: 4,
+        };
+      }
+      response.end(JSON.stringify(cleanups));
       return;
     }
     response.writeHead(404);
@@ -224,13 +261,28 @@ async function fixture({ mutate } = {}) {
       getAuthorization: async () => 'Bearer loopback-test-token',
     },
   });
+  environmentServer.listen(0, '127.0.0.1');
+  await once(environmentServer, 'listening');
+  const environmentBaseUrl = `http://127.0.0.1:${environmentServer.address().port}/`;
+  const environmentApi = new AgentweaverClient({
+    baseUrl: environmentBaseUrl,
+    tenantId: owner.tenantId,
+    authProvider: {
+      origin: new URL(environmentBaseUrl).origin,
+      getAuthorization: async () => ['Bearer', 'environment-loopback-test'].join(' '),
+    },
+  });
   return {
     api,
+    environmentApi,
     requests,
-    close: () => new Promise((resolve, reject) => {
-      server.close(error => error ? reject(error) : resolve());
-      server.closeAllConnections();
-    }),
+    close: async () => {
+      await Promise.all([server, environmentServer].map(listeningServer =>
+        new Promise((resolve, reject) => {
+          listeningServer.close(error => error ? reject(error) : resolve());
+          listeningServer.closeAllConnections();
+        })));
+    },
   };
 }
 
@@ -238,7 +290,10 @@ test('reads current runtime and Environment owner evidence with exact paths, fen
   const host = await fixture();
   try {
     await host.api.discover();
-    const consumer = new RuntimeObservationClient({ api: host.api });
+    const consumer = new RuntimeObservationClient({
+      api: host.api,
+      environmentApi: host.environmentApi,
+    });
     const runtime = await consumer.readRuntimeObservationV1(owner);
     const environment = await consumer.readEnvironmentEvidence({
       environmentCreation,
@@ -254,15 +309,37 @@ test('reads current runtime and Environment owner evidence with exact paths, fen
     assert.equal(environment.lateResourceCleanups.items[0].resource.resourceId, 'sandbox-resource-a');
     assert.equal(environment.lateResourceCleanups.items[0].releaseReceipt.disposition, 'released');
     assert.equal(environment.lateResourceCleanups.hasMore, false);
-    const requests = host.requests.slice(1);
-    assert.ok(requests.every(request => request.headers['cache-control'] === 'no-store'));
-    assert.ok(requests.some(request => request.url ===
-      '/api/v1/projects/project-a/runs/run-a/coordination/sessions/session-a/runtime-observation/v1'));
-    assert.ok(requests.some(request => request.url.endsWith(
+    const requests = host.requests;
+    const evidenceRequests = requests.filter(request => request.url !== '/openapi/v1.json');
+    assert.ok(evidenceRequests.every(request => request.headers['cache-control'] === 'no-store'));
+    assert.ok(requests.every(request => request.destination === 'gateway'
+      ? request.url === '/openapi/v1.json'
+        || request.url ===
+          '/api/v1/projects/project-a/runs/run-a/coordination/sessions/session-a/runtime-observation/v1'
+      : request.destination === 'environment'
+        && request.url.startsWith('/api/projects/project-a/runs/run-a/environments/environment-a/')));
+    assert.equal(requests.filter(request => request.destination === 'gateway').length, 2);
+    assert.equal(requests.filter(request => request.destination === 'environment').length, 4);
+    const gatewayRequests = requests.filter(request => request.destination === 'gateway');
+    const authenticatedGatewayRequests = gatewayRequests.filter(request => request.url !== '/openapi/v1.json');
+    const environmentRequests = requests.filter(request => request.destination === 'environment');
+    assert.ok(requests.every(request => request.headers['x-agentweaver-tenant'] === owner.tenantId));
+    assert.equal(gatewayRequests.find(request => request.url === '/openapi/v1.json')
+      ?.headers.authorization, undefined);
+    assert.ok(authenticatedGatewayRequests.every(request => request.headers.authorization?.startsWith('Bearer ')));
+    assert.ok(environmentRequests.every(request => request.headers.authorization?.startsWith('Bearer ')));
+    assert.equal(new Set(authenticatedGatewayRequests.map(request => request.headers.authorization)).size, 1);
+    assert.equal(new Set(environmentRequests.map(request => request.headers.authorization)).size, 1);
+    assert.notEqual(
+      authenticatedGatewayRequests[0].headers.authorization,
+      environmentRequests[0].headers.authorization,
+    );
+    assert.ok(requests.some(request => request.destination === 'environment' && request.url.endsWith(
       `/environments/environment-a/sandbox/v1/operations/${operationId}/provider-attempts`)));
-    assert.ok(requests.some(request => request.url.endsWith(
+    assert.ok(requests.some(request => request.destination === 'environment' && request.url.endsWith(
       '/environments/environment-a/sandbox/v1/late-resource-cleanups')));
     assert.doesNotMatch(JSON.stringify(host.api.calls), /loopback-test-token/);
+    assert.doesNotMatch(JSON.stringify(host.environmentApi.calls), /environment-loopback-test/);
   } finally {
     await host.close();
   }
@@ -272,7 +349,10 @@ test('rejects malformed runtime observations and Environment fence changes', asy
   const malformed = await fixture({ mutate: 'invalid-runtime' });
   try {
     await malformed.api.discover();
-    const consumer = new RuntimeObservationClient({ api: malformed.api });
+    const consumer = new RuntimeObservationClient({
+      api: malformed.api,
+      environmentApi: malformed.environmentApi,
+    });
     await assert.rejects(consumer.readRuntimeObservationV1(owner), /runtime observation contract/);
   } finally {
     await malformed.close();
@@ -281,7 +361,10 @@ test('rejects malformed runtime observations and Environment fence changes', asy
   const changed = await fixture({ mutate: 'changed-fence' });
   try {
     await changed.api.discover();
-    const consumer = new RuntimeObservationClient({ api: changed.api });
+    const consumer = new RuntimeObservationClient({
+      api: changed.api,
+      environmentApi: changed.environmentApi,
+    });
     await assert.rejects(consumer.readEnvironmentEvidence({
       environmentCreation,
       owner,
@@ -289,5 +372,31 @@ test('rejects malformed runtime observations and Environment fence changes', asy
     }), /changed while Environment evidence/);
   } finally {
     await changed.close();
+  }
+});
+
+test('rejects Environment evidence owned by a different environment', async () => {
+  for (const mutate of [
+    'foreign-lifecycle-owner',
+    'foreign-attempt-current-fence',
+    'foreign-cleanup-current-fence',
+    'foreign-cleanup-source-fence',
+    'future-cleanup-source-fence',
+  ]) {
+    const host = await fixture({ mutate });
+    try {
+      const consumer = new RuntimeObservationClient({
+        api: host.api,
+        environmentApi: host.environmentApi,
+      });
+      await assert.rejects(consumer.readEnvironmentEvidence({
+        environmentCreation,
+        owner,
+        operationId,
+      }), mutate === 'future-cleanup-source-fence' ? /newer than the current Environment fence/ : /owner|fence/i,
+      mutate);
+    } finally {
+      await host.close();
+    }
   }
 });
