@@ -134,18 +134,105 @@ jobs:
           test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$sdk_image")" = 'linux/amd64'
 
           output="$GITHUB_WORKSPACE/artifacts/images/agenthost-native-prompt-capacity"
-          runtime_root="$RUNNER_TEMP/agentweaver-agenthost-native-prompt-capacity"
+          runtime_root="$(mktemp -d "$RUNNER_TEMP/agentweaver-agenthost-native-prompt-capacity.XXXXXX")"
           test_output="$output/results"
           mkdir -p "$output" "$test_output" "$runtime_root"
 
-          container='agentweaver-agenthost-native-prompt-capacity-bundle'
-          cleanup() { docker rm -f "$container" >/dev/null 2>&1 || true; }
+          created_evidence="$output/created-containers.tsv"
+          cleanup_evidence="$output/container-cleanup.tsv"
+          printf 'role\tid\tcreated\n' > "$created_evidence"
+          printf 'role\tid\tinspect\tremove\tabsence\n' > "$cleanup_evidence"
+          owned_ids=()
+          owned_roles=()
+          track_container() {
+            local id="$1"
+            local role="$2"
+            if [[ ! "$id" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "Docker returned an invalid ID for the created $role container: $id" >&2
+              return 1
+            fi
+            owned_ids+=("$id")
+            owned_roles+=("$role")
+            if ! printf '%s\t%s\tconfirmed\n' "$role" "$id" >> "$created_evidence"; then
+              echo "Could not record the created $role container ID $id." >&2
+              return 1
+            fi
+            echo "Tracked created $role container $id"
+          }
+          cleanup() {
+            local original_status=$?
+            trap - EXIT INT TERM
+            local cleanup_status=0
+            local index id role inspected inspect_status removed remove_status listed absence_status
+            for ((index = 0; index < ${#owned_ids[@]}; index++)); do
+              id="${owned_ids[$index]}"
+              role="${owned_roles[$index]}"
+              if inspected="$(docker inspect --type=container --format '{{.Id}}' "$id" 2>&1)"; then
+                if [[ "$inspected" == "$id" ]]; then
+                  inspect_status='verified'
+                else
+                  inspect_status='mismatch'
+                  echo "Inspection returned a different ID for owned $role container $id: $inspected" >&2
+                  cleanup_status=1
+                fi
+              else
+                inspect_status='failed'
+                echo "Could not inspect owned $role container $id before cleanup: $inspected" >&2
+                cleanup_status=1
+              fi
+
+              if removed="$(docker rm --force "$id" 2>&1)"; then
+                remove_status='removed'
+                echo "Removed owned $role container $id"
+              else
+                remove_status='failed'
+                echo "Could not remove owned $role container $id: $removed" >&2
+                cleanup_status=1
+              fi
+
+              if listed="$(docker container ls --all --no-trunc --filter "id=$id" --format '{{.ID}}' 2>&1)"; then
+                if [[ -z "$listed" ]]; then
+                  absence_status='confirmed-absent'
+                  echo "Confirmed owned $role container $id is absent."
+                else
+                  absence_status='still-present'
+                  echo "Owned $role container $id remains after cleanup: $listed" >&2
+                  cleanup_status=1
+                fi
+              else
+                absence_status='verification-failed'
+                echo "Could not verify absence of owned $role container $id: $listed" >&2
+                cleanup_status=1
+              fi
+
+              if ! printf '%s\t%s\t%s\t%s\t%s\n' \
+                "$role" "$id" "$inspect_status" "$remove_status" "$absence_status" >> "$cleanup_evidence"; then
+                echo "Could not record cleanup evidence for owned $role container $id." >&2
+                cleanup_status=1
+              fi
+            done
+            if [[ "$original_status" -ne 0 ]]; then
+              if [[ "$cleanup_status" -ne 0 ]]; then
+                echo "Container cleanup also failed; preserving original step exit code $original_status." >&2
+              fi
+              exit "$original_status"
+            fi
+            if [[ "$cleanup_status" -ne 0 ]]; then
+              exit "$cleanup_status"
+            fi
+          }
           trap cleanup EXIT
-          docker create --platform linux/amd64 --network none --name "$container" agentweaver-agenthost:ci >/dev/null
-          docker cp "$container:/app/runtime-manifest.json" "$runtime_root/runtime-manifest.json"
-          docker cp "$container:/app/native" "$runtime_root"
-          cleanup
-          trap - EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+
+          if bundle_container_id="$(docker create --platform linux/amd64 --network none agentweaver-agenthost:ci)"; then
+            track_container "$bundle_container_id" 'runtime-bundle'
+          else
+            echo 'Could not create the AgentHost runtime-bundle container.' >&2
+            exit 1
+          fi
+          docker cp "$bundle_container_id:/app/runtime-manifest.json" "$runtime_root/runtime-manifest.json"
+          docker cp "$bundle_container_id:/app/native" "$runtime_root"
 
           test -s "$runtime_root/runtime-manifest.json"
           test -x "$runtime_root/native/copilot"
@@ -188,7 +275,7 @@ jobs:
           trx="$test_output/RuntimeNativePromptCapacityTests.trx"
           test_log="$output/native-test-output.log"
           test_status=0
-          if timeout 360s docker run --rm --platform linux/amd64 --network none --read-only \
+          if test_container_id="$(docker create --platform linux/amd64 --network none --read-only \
             --cap-drop ALL --security-opt no-new-privileges \
             --tmpfs /tmp:rw,nosuid,nodev,size=1g \
             --mount "type=bind,source=$runtime_root,target=/native,readonly" \
@@ -209,10 +296,19 @@ jobs:
                 --TestCaseFilter:"FullyQualifiedName~ByokNativeRuntimeCompactsRemovableHistoryWithinTheAcceptedCapacity|FullyQualifiedName~ByokNativeRuntimeFailsAnIrreducibleLatestPromptInsteadOfTheAcceptingFakeEndpoint" \
                 --ResultsDirectory:/results \
                 --Logger:"trx;LogFileName=RuntimeNativePromptCapacityTests.trx"
-            ' 2>&1 | tee "$test_log"; then
-            test_status=0
+            ')"; then
+            if track_container "$test_container_id" 'native-test'; then
+              if timeout 360s docker start --attach "$test_container_id" 2>&1 | tee "$test_log"; then
+                test_status=0
+              else
+                test_status=$?
+              fi
+            else
+              test_status=1
+            fi
           else
             test_status=$?
+            echo "Could not create the native test container (exit $test_status); no container ID was returned." >&2
           fi
 
           verification_status=0

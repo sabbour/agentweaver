@@ -1299,21 +1299,15 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Theory]
-    [InlineData(1, null, null, false)]
-    [InlineData(null, 1, null, false)]
-    [InlineData(null, null, 1024, false)]
-    [InlineData(null, null, 1024, true)]
-    public async Task ConfiguredNumericRunPolicyFailsBeforeReadyOrNativeSessionCreation(
+    [InlineData(1, null)]
+    [InlineData(null, 1)]
+    public async Task UnboundDispatchLimitFailsBeforeReadyOrNativeSessionCreation(
         int? maxModelTurns,
-        int? maxToolCalls,
-        int? maxPromptTokens,
-        bool workflowBound)
+        int? maxToolCalls)
     {
         await using var fixture = new HostFixture(
             maxModelTurns: maxModelTurns,
-            maxToolCalls: maxToolCalls,
-            maxPromptTokens: maxPromptTokens,
-            workflowBound: workflowBound);
+            maxToolCalls: maxToolCalls);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
         await fixture.DeliverAsync(timeout.Token);
 
@@ -1327,6 +1321,23 @@ public sealed class RuntimeAgentHostTests
         Assert.Equal("runtime_host_not_ready",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 fixture.Host.ReadinessAsync(timeout.Token))).Code);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PromptTokenOnlyLimitAllowsNativeConfiguration(bool workflowBound)
+    {
+        await using var fixture = new HostFixture(maxPromptTokens: 1024, workflowBound: workflowBound);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        await fixture.ConfigureAsync(timeout.Token);
+
+        Assert.Equal(1024, fixture.Registration.Binding.MaxPromptTokens);
+        await fixture.Host.ReadinessAsync(timeout.Token);
+        Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.create");
+        Assert.Equal(0, fixture.CostPreflightRequests);
+        Assert.Empty(fixture.CostTurnRequests);
     }
 
     [Fact]
