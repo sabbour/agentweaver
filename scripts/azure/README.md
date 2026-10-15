@@ -41,17 +41,42 @@ A created identity does not prove database access or a ready service.
 
 ### P1 PostgreSQL initializer source proposal
 
-The initializer source in this PR has not run against the approved database.
-An earlier operator attempt against that database stopped during live preflight
-after recording `fresh_target_checked`; its failed receipt is retained.
-Reconciliation found that no approved five runtime-role/schema state was
-committed. Source review and disposable local catalog tests do not authorize
-role creation, migrations, grants, or deployment.
+The initializer has not completed successfully against the approved database.
+An earlier attempt from source `8476c16337fa015031124196d57979159eca1958`
+stopped during live preflight after recording `fresh_target_checked`, before
+role creation. A separate attempt from source
+`76b09104af7a6f5d3cd2b15cc888183c816f7cd2` failed with SQLSTATE `42501`
+during a role command. The retained initializer record does not identify the
+failed SQL statement or establish whether that transaction rolled back; do not
+infer either from `fresh_target_checked`.
+
+A later approved catalog-only reconciliation used source
+`76b09104af7a6f5d3cd2b15cc888183c816f7cd2`, candidate checkout
+`9d6d1856349ece9e07df0d372e0dde494891c26c`, and plan hash
+`e87a97295be2b6df1f792596ccacac7f84f89b5735d60ac440e52b1e066d0134`.
+Both database reads were read-only and rolled back. At the time of that
+snapshot, the five planned workload roles, their object-ID mappings and
+operator memberships, and their five schemas were absent. The existing
+`identity_broker` schema remained owned by the migration role with three
+zero-argument, non-definer PL/pgSQL functions retaining `PUBLIC EXECUTE`.
+This records the later catalog state; it does not prove the failed initializer
+transaction rolled back, successful initialization, or deployment.
+
+The reader and transport fixes were temporary: a disposable database exposed an
+unaliased catalog-column error (SQLSTATE `42703`), corrected in the temporary
+reader; the first executed helper preflight stopped before creating resources
+because the kubeconfig's `kubelogin` command was missing from that process's
+`PATH`.
+Adding the already verified executable directory to the helper's child-only
+`PATH` enabled the later read. No global `PATH` or cluster-permission change was
+made; these reader and tool fixes were temporary and not product-source changes.
+The successful helper's Pod, ConfigMap, port-forward, and Relay output were
+removed.
 
 Initialization requires `--initialize` with full source and Core merge SHAs,
 the exact source plan hash, and a new receipt path under that source copy's
 `Temp` directory. It requires a clean source checkout whose `HEAD` and fetched
-`origin/v1` both match the supplied source SHA, validates the reviewed Core
+`origin/v1` both match the supplied source SHA. It validates the reviewed Core
 merge and required migration wiring, and recomputes the plan hash. It then
 requests an Azure CLI token, connects to verify the exact operator and fresh
 target, and runs the permission preflight before role creation. These checks
@@ -68,8 +93,8 @@ The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
 That grant has not been executed; it adds no `UPDATE`, `DELETE`, or default privilege.
 It includes 29 exact function signatures, with runtime EXECUTE only for casting authority.
-Actual installed catalog state and restricted-role behavior still require
-separate database proof.
+The read-only catalog snapshot above records the point-in-time catalog state; it
+does not establish successful initialization or deployment.
 The five new update guards reject changes with SQLSTATE `55000`.
 The three older history guards retain `P0001` and their update, delete, and truncate protections.
 
@@ -82,13 +107,31 @@ permitted. Existing owners, grantors, grant options, schemas, Broker, Probe,
 functions, and default privileges must remain unchanged.
 
 Before role creation commits, the source checks all five object-ID mappings,
-service principal types, role flags, and exact operator memberships.
+service principal types, role flags, and one existing operator ADMIN membership
+per mapped role. It captures each membership's grantor OID from the catalog and
+requires that exact OID to remain unchanged through the role setup.
 All five mappings must use the reviewed tenant.
 The administrator and MFA-required integer flags must each equal zero.
 Missing flags and any nonzero integer fail the source checks.
 The operator membership has ADMIN but neither INHERIT nor SET permission.
 Function checks require the operator owner and the exact effective EXECUTE grants.
 Only the existing casting authority function can receive runtime EXECUTE.
+
+The role changes set `NOINHERIT` and disable membership `INHERIT` and `SET`.
+They do not repeat `ADMIN TRUE`: PostgreSQL 16 rejects granting ADMIN back to
+the grantor that originally granted it. If that grantor is not the operator,
+the source removes only the temporary non-ADMIN membership it creates under
+the operator's own grantor identity. It never impersonates the original grantor.
+Final readback must show exactly one membership with the original grantor OID,
+ADMIN true, and INHERIT and SET false; otherwise the role transaction rolls back.
+The source does not rewrite SUPERUSER,
+CREATEDB, CREATEROLE, REPLICATION, or BYPASSRLS, because PostgreSQL 16 requires
+matching privileges even to set those flags false. Their false state is verified
+by readback before COMMIT, and any unexpected true flag rejects the transaction.
+The receipt records fixed stage names (`role_creation`, `role_flag_change`,
+`role_membership_change`, `role_membership_cleanup` when needed, `role_readback`,
+`role_commit`) before each step,
+alongside the SQLSTATE of a failure and never raw errors or payloads.
 
 Pure catalog tests compare the registered resources, function signatures, and
 guard definitions. They also check partial-stage reporting and failure-receipt
@@ -97,6 +140,10 @@ preflight and protected-boundary SQL used by the initializer against
 Broker-shaped trigger functions and rejected privilege cases. It checks that
 the safe functions' ACLs stay unchanged, restricted runtime calls and trigger
 creation fail, and a classification change invalidates the protected boundary.
+The same fixture runs the complete production post-create sequence as a
+non-superuser CREATEROLE operator. It preserves the real membership grantor OID,
+checks the exact single-row ADMIN/INHERIT/SET state after the membership GRANT
+and cleanup, and rejects each unsafe reserved flag before commit.
 These tests do not execute the initializer, connect to Azure, or prove live
 database state. The catalog test requires a Docker-compatible container engine.
 Do not retry or reset partially committed database state.

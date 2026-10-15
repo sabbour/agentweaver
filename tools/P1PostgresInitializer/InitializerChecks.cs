@@ -68,6 +68,65 @@ internal static class InitializerChecks
         WHERE d.datname = 'agentweaver' AND r.rolname = current_user
         """;
 
+    internal const string AadPrincipalFunction = "pg_catalog.pgaadauth_list_principals";
+
+    internal static string PrincipalReadbackQuery(string principalFunction = AadPrincipalFunction) => $"""
+        SELECT coalesce(jsonb_agg(jsonb_build_object(
+          'oid', r.oid, 'role', r.rolname, 'objectId', p.object_id, 'type', p.principal_type,
+          'tenantId', p.tenant_id, 'mfaFlag', p.is_mfa,
+          'adminFlag', p.is_admin, 'canLogin', r.rolcanlogin, 'superuser', r.rolsuper,
+          'createDatabase', r.rolcreatedb, 'createRole', r.rolcreaterole, 'replication', r.rolreplication,
+          'inherit', r.rolinherit, 'bypassRls', r.rolbypassrls,
+          'memberships', (SELECT coalesce(jsonb_agg(jsonb_build_object(
+            'roleOid', m.roleid, 'memberOid', m.member, 'grantorOid', m.grantor,
+            'admin', m.admin_option, 'inherit', m.inherit_option, 'set', m.set_option)
+            ORDER BY m.roleid, m.member, m.grantor), '[]'::jsonb)
+            FROM pg_catalog.pg_auth_members m WHERE m.roleid = r.oid OR m.member = r.oid))
+          ORDER BY r.rolname), '[]'::jsonb)::text
+        FROM pg_catalog.pg_roles r
+        LEFT JOIN {principalFunction}(false)
+          AS p(role_name, principal_type, object_id, tenant_id, is_mfa, is_admin)
+          ON p.role_name::text = r.rolname
+        WHERE r.rolname = ANY(@roles)
+        """;
+
+    internal static string Quote(string value) => "\"" + value.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+
+    // Only INHERIT is changed: the operator may manage it through CREATEROLE ADMIN OPTION. Reserved
+    // flags (SUPERUSER, CREATEDB, REPLICATION, BYPASSRLS) need matching privileges even when set to
+    // false, so they are verified by readback before COMMIT instead of being rewritten.
+    internal static string AlterRoleSql(string role) => $"ALTER ROLE {Quote(role)} NOINHERIT";
+
+    // Preserve the existing ADMIN grant; PostgreSQL 16 rejects granting it back to the original grantor.
+    internal static string GrantOperatorMembershipSql(string role, string operatorName) =>
+        $"GRANT {Quote(role)} TO {Quote(operatorName)} WITH INHERIT FALSE, SET FALSE";
+
+    // Remove only the temporary grant attributed to the current operator, never the original grantor's row.
+    internal static string RevokeOperatorMembershipSql(string role, string operatorName) =>
+        $"REVOKE {Quote(role)} FROM {Quote(operatorName)} GRANTED BY {Quote(operatorName)}";
+
+    internal const string RoleCreationStage = "role_creation";
+    internal const string RoleFlagChangeStage = "role_flag_change";
+    internal const string RoleMembershipChangeStage = "role_membership_change";
+    internal const string RoleMembershipCleanupStage = "role_membership_cleanup";
+    internal const string RoleReadbackStage = "role_readback";
+    internal const string RoleCommitStage = "role_commit";
+
+    internal static (string Stage, string Sql)[] RolePostCreateStatements(string role, string operatorName,
+        uint initialGrantorOid, uint operatorOid)
+    {
+        if (initialGrantorOid == 0 || operatorOid == 0)
+            throw new InvalidOperationException("The runtime-role membership grantor identity is unavailable.");
+        var statements = new List<(string Stage, string Sql)>
+        {
+            (RoleFlagChangeStage, AlterRoleSql(role)),
+            (RoleMembershipChangeStage, GrantOperatorMembershipSql(role, operatorName)),
+        };
+        if (initialGrantorOid != operatorOid)
+            statements.Add((RoleMembershipCleanupStage, RevokeOperatorMembershipSql(role, operatorName)));
+        return [.. statements];
+    }
+
     internal static void AssertMutationDenialPlan(ServicePlan[] services)
     {
         var protectedTables = services.SelectMany(service =>
@@ -148,19 +207,51 @@ internal static class InitializerChecks
                 "Existing ownership or privileges changed, or the database CONNECT delta differs from the exact planned roles. The current grant stage is not committed.");
     }
 
-    internal static void AssertPrincipals(ServicePlan[] services, RuntimePrincipal[] principals,
-        uint operatorOid, string tenantId)
+    internal static IReadOnlyDictionary<string, uint> CaptureMembershipGrantors(ServicePlan[] services,
+        RuntimePrincipal[] principals, uint operatorOid, string tenantId)
     {
         if (services.Length != 5 || principals.Length != services.Length || operatorOid == 0 ||
             principals.Select(item => item.Oid).Distinct().Count() != services.Length)
             throw new InvalidOperationException("The five runtime principal mappings are not exact.");
+        var grantors = new Dictionary<string, uint>(StringComparer.Ordinal);
         foreach (var service in services)
         {
             var matches = principals.Where(item => item.Role == service.Role).ToArray();
             if (matches.Length != 1)
                 throw new InvalidOperationException("A planned runtime principal is missing or duplicated.");
             var principal = matches[0];
-            var membership = new RoleMembership(principal.Oid, operatorOid, operatorOid, true, false, false);
+            var membership = principal.Memberships.Length == 1 ? principal.Memberships[0] : null;
+            if (principal.Oid == 0 || !Guid.TryParse(principal.ObjectId, out var actualObject) ||
+                !Guid.TryParse(service.PrincipalObjectId, out var expectedObject) || actualObject != expectedObject ||
+                !Guid.TryParse(principal.TenantId, out var actualTenant) ||
+                !Guid.TryParse(tenantId, out var expectedTenant) || actualTenant != expectedTenant ||
+                principal.Type != "service" || principal.AdminFlag != 0 || principal.MfaFlag != 0 || !principal.CanLogin ||
+                principal.Superuser || principal.CreateDatabase || principal.CreateRole ||
+                principal.Replication || principal.BypassRls || membership is null ||
+                membership.RoleOid != principal.Oid || membership.MemberOid != operatorOid ||
+                membership.GrantorOid == 0 || !membership.Admin)
+                throw new InvalidOperationException($"The {service.Service} runtime principal has an unexpected mapping, flag, or membership. Role creation is not committed.");
+            grantors.Add(service.Role, membership.GrantorOid);
+        }
+        return grantors;
+    }
+
+    internal static void AssertPrincipals(ServicePlan[] services, RuntimePrincipal[] principals,
+        uint operatorOid, string tenantId, IReadOnlyDictionary<string, uint>? expectedGrantorOids = null)
+    {
+        expectedGrantorOids ??= services.ToDictionary(item => item.Role, _ => operatorOid, StringComparer.Ordinal);
+        if (services.Length != 5 || principals.Length != services.Length || operatorOid == 0 ||
+            principals.Select(item => item.Oid).Distinct().Count() != services.Length ||
+            expectedGrantorOids.Count != services.Length)
+            throw new InvalidOperationException("The five runtime principal mappings are not exact.");
+        foreach (var service in services)
+        {
+            var matches = principals.Where(item => item.Role == service.Role).ToArray();
+            if (matches.Length != 1 || !expectedGrantorOids.TryGetValue(service.Role, out var grantorOid) ||
+                grantorOid == 0)
+                throw new InvalidOperationException("A planned runtime principal is missing or duplicated.");
+            var principal = matches[0];
+            var membership = new RoleMembership(principal.Oid, operatorOid, grantorOid, true, false, false);
             if (principal.Oid == 0 || !Guid.TryParse(principal.ObjectId, out var actualObject) ||
                 !Guid.TryParse(service.PrincipalObjectId, out var expectedObject) || actualObject != expectedObject ||
                 !Guid.TryParse(principal.TenantId, out var actualTenant) ||
@@ -204,11 +295,13 @@ internal static class InitializerChecks
         string.Join(' ', source.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).TrimEnd(';');
 
     internal static async Task RunStageAsync(Func<Task> preflight, Func<Task> mutate,
-        Func<Task> verify, Func<Task> commit, Func<Task> record)
+        Func<Task> verify, Func<Task> commit, Func<Task> record, Func<string, Task>? observe = null)
     {
         await preflight();
         await mutate();
+        if (observe is not null) await observe(RoleReadbackStage);
         await verify();
+        if (observe is not null) await observe(RoleCommitStage);
         await commit();
         await record();
     }

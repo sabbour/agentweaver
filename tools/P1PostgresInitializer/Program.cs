@@ -74,6 +74,7 @@ async Task RecordAsync(string stage)
     await receipt.WriteAsync(Encoding.UTF8.GetBytes(line + "\n"));
     receipt.Flush(flushToDisk: true);
 }
+Task RecordStageAsync(string stage) => RecordAsync($"stage_begin:{stage}");
 
 await RecordAsync("source_checked");
 using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(10));
@@ -135,31 +136,44 @@ try
 
     await using (var transaction = await principalConnection.BeginTransactionAsync(cancellationToken))
     {
+        IReadOnlyDictionary<string, uint> expectedGrantorOids =
+            new Dictionary<string, uint>(StringComparer.Ordinal);
         await InitializerChecks.RunStageAsync(
             () => AssertPreflightAsync(connection, plan, existingBoundary, operatorOid, cancellationToken),
             async () =>
             {
                 foreach (var service in plan.Services)
                 {
+                    await RecordStageAsync(InitializerChecks.RoleCreationStage);
                     await using var create = new NpgsqlCommand(
                         "SELECT pg_catalog.pgaadauth_create_principal_with_oid(@role, @object, 'service', false, false)",
                         principalConnection, transaction);
                     create.Parameters.AddWithValue("role", service.Role);
                     create.Parameters.AddWithValue("object", service.PrincipalObjectId);
                     await create.ExecuteNonQueryAsync(cancellationToken);
-                    await ExecuteAsync(principalConnection, transaction,
-                        $"ALTER ROLE {Quote(service.Role)} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT NOBYPASSRLS", cancellationToken);
-                    await ExecuteAsync(principalConnection, transaction,
-                        $"GRANT {Quote(service.Role)} TO {Quote(plan.Target.OperatorName)} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE", cancellationToken);
+                }
+                var initialPrincipals = await ReadPrincipalsAsync(principalConnection, transaction, plan, cancellationToken);
+                expectedGrantorOids = InitializerChecks.CaptureMembershipGrantors(
+                    plan.Services, initialPrincipals, operatorOid, plan.Target.TenantId);
+                foreach (var service in plan.Services)
+                {
+                    foreach (var (stage, sql) in InitializerChecks.RolePostCreateStatements(
+                        service.Role, plan.Target.OperatorName, expectedGrantorOids[service.Role], operatorOid))
+                    {
+                        await RecordStageAsync(stage);
+                        await ExecuteAsync(principalConnection, transaction, sql, cancellationToken);
+                    }
                 }
             },
             async () =>
             {
                 principals = await ReadPrincipalsAsync(principalConnection, transaction, plan, cancellationToken);
-                InitializerChecks.AssertPrincipals(plan.Services, principals, operatorOid, plan.Target.TenantId);
+                InitializerChecks.AssertPrincipals(
+                    plan.Services, principals, operatorOid, plan.Target.TenantId, expectedGrantorOids);
             },
             () => transaction.CommitAsync(cancellationToken),
-            () => RecordAsync("five_runtime_roles_created_and_exact_mappings_checked"));
+            () => RecordAsync("five_runtime_roles_created_and_exact_mappings_checked"),
+            RecordStageAsync);
     }
 
     List<uint> connectedRoles = [];
@@ -236,7 +250,7 @@ catch (Exception error)
     return 1;
 }
 
-static string Quote(string value) => "\"" + value.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
+static string Quote(string value) => InitializerChecks.Quote(value);
 
 static async Task ExecuteAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction, string sql, CancellationToken cancellationToken)
 {
@@ -277,25 +291,8 @@ static async Task AssertPreflightAsync(NpgsqlConnection connection, PostgresPlan
 
 static Task<RuntimePrincipal[]> ReadPrincipalsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
     PostgresPlan plan, CancellationToken cancellationToken) =>
-    ReadJsonAsync<RuntimePrincipal[]>(connection, transaction, """
-        SELECT coalesce(jsonb_agg(jsonb_build_object(
-          'oid', r.oid, 'role', r.rolname, 'objectId', p.object_id, 'type', p.principal_type,
-          'tenantId', p.tenant_id, 'mfaFlag', p.is_mfa,
-          'adminFlag', p.is_admin, 'canLogin', r.rolcanlogin, 'superuser', r.rolsuper,
-          'createDatabase', r.rolcreatedb, 'createRole', r.rolcreaterole, 'replication', r.rolreplication,
-          'inherit', r.rolinherit, 'bypassRls', r.rolbypassrls,
-          'memberships', (SELECT coalesce(jsonb_agg(jsonb_build_object(
-            'roleOid', m.roleid, 'memberOid', m.member, 'grantorOid', m.grantor,
-            'admin', m.admin_option, 'inherit', m.inherit_option, 'set', m.set_option)
-            ORDER BY m.roleid, m.member, m.grantor), '[]'::jsonb)
-            FROM pg_catalog.pg_auth_members m WHERE m.roleid = r.oid OR m.member = r.oid))
-          ORDER BY r.rolname), '[]'::jsonb)::text
-        FROM pg_catalog.pg_roles r
-        LEFT JOIN pg_catalog.pgaadauth_list_principals(false)
-          AS p(role_name, principal_type, object_id, tenant_id, is_mfa, is_admin)
-          ON p.role_name::text = r.rolname
-        WHERE r.rolname = ANY(@roles)
-        """, cancellationToken, new NpgsqlParameter("roles", plan.Services.Select(item => item.Role).ToArray()));
+    ReadJsonAsync<RuntimePrincipal[]>(connection, transaction, InitializerChecks.PrincipalReadbackQuery(),
+        cancellationToken, new NpgsqlParameter("roles", plan.Services.Select(item => item.Role).ToArray()));
 
 static async Task AssertOwnedObjectsAsync(NpgsqlConnection connection, ServicePlan service, string owner, CancellationToken cancellationToken)
 {
