@@ -12,54 +12,137 @@ permissions:
   contents: read
 
 jobs:
-  compare-load-contexts:
+  load-publisher-engine:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Set up product Docker engine
-        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
-        with:
-          version: v29.9.0
-          set-host: true
-          daemon-config: |
-            {
-              "features": {
-                "containerd-snapshotter": true
-              }
-            }
-      - name: Download exact failed pack artifact
-        uses: actions/download-artifact@v4
-        with:
-          github-token: ${{ github.token }}
-          repository: sabbour/agentweaver
-          run-id: 38664134806
-          artifact-ids: 11940246842
-          path: artifacts/release/pack/
-      - name: Load exact archive in configured publisher context
-        run: |
-          set -euo pipefail
-          provenance="$(find artifacts/release/pack -type f -name provenance.json -print -quit)"
-          test -n "$provenance"
-          file="${provenance%/*}/Agentweaver.Web.1.0.0.tar"
-          expected="$(jq -r '.artifacts[] | select(.componentId == "Agentweaver.Web") | [.imageId, .labels["org.opencontainers.image.revision"], .labels["org.opencontainers.image.version"], .imageReference] | @tsv' "$provenance")"
-          IFS=$'\t' read -r image_id source_sha version image_reference <<< "$expected"
-          echo "engine=$(docker info --format '{{.ServerVersion}}|{{json .DriverStatus}}')"
-          docker load --input "$file" >/dev/null
-          actual="$(docker image inspect --format '{{.Id}}|{{.Os}}|{{.Architecture}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{index .Config.Labels "org.opencontainers.image.version"}}' "$image_reference")"
-          wanted="${image_id}|linux|amd64|${source_sha}|${version}"
-          printf 'publisher-context expected=%s observed=%s match=%s\n' "$wanted" "$actual" "$([[ "$actual" == "$wanted" ]] && echo true || echo false)"
-      - name: Load exact archive in pack context
+      - name: Retrieve exact failed Web archive by range
         env:
-          DOCKER_CONTEXT: default
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, re, struct, urllib.error, urllib.request, zlib
+
+          artifact_id = "11940246842"
+          token = os.environ["GITHUB_TOKEN"]
+
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self, request, file_pointer, code, message, headers, new_url):
+                  return None
+
+          api = urllib.request.build_opener(NoRedirect())
+          request = urllib.request.Request(
+              f"https://api.github.com/repos/sabbour/agentweaver/actions/artifacts/{artifact_id}/zip",
+              headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"})
+          try:
+              api.open(request, timeout=30)
+              raise RuntimeError("Expected an artifact download redirect")
+          except urllib.error.HTTPError as error:
+              if error.code not in (301, 302, 303, 307, 308):
+                  raise RuntimeError(f"Artifact download failed with HTTP {error.code}") from None
+              signed_url = error.headers.get("Location")
+              error.close()
+              if not signed_url:
+                  raise RuntimeError("Artifact download redirect did not include a location")
+
+          def range_read(start, end):
+              request = urllib.request.Request(signed_url, headers={"Range": f"bytes={start}-{end}"})
+              with urllib.request.urlopen(request, timeout=120) as response:
+                  if response.status != 206:
+                      raise RuntimeError(f"Artifact range request returned HTTP {response.status}")
+                  match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", response.headers.get("Content-Range", ""))
+                  if not match or int(match.group(1)) != start or int(match.group(2)) > end:
+                      raise RuntimeError("Artifact server returned an unexpected byte range")
+                  return response.read(), int(match.group(3))
+
+          probe, artifact_size = range_read(0, 0)
+          tail_start = max(0, artifact_size - 65557)
+          tail, _ = range_read(tail_start, artifact_size - 1)
+          eocd_at = tail.rfind(b"PK\x05\x06")
+          if eocd_at < 0:
+              raise RuntimeError("Artifact ZIP end record was not found")
+          eocd = struct.unpack_from("<4s4H2LH", tail, eocd_at)
+          directory_size, directory_offset = eocd[5], eocd[6]
+          directory, _ = range_read(directory_offset, directory_offset + directory_size - 1)
+          entries = {}
+          offset = 0
+          while offset < len(directory):
+              fields = struct.unpack_from("<4s6H3L5H2L", directory, offset)
+              if fields[0] != b"PK\x01\x02":
+                  raise RuntimeError("Artifact ZIP directory entry is invalid")
+              name_length, extra_length, comment_length = fields[10], fields[11], fields[12]
+              name_start = offset + 46
+              name = directory[name_start:name_start + name_length].decode("utf-8")
+              entries[name] = {
+                  "method": fields[4], "crc": fields[7], "compressed": fields[8],
+                  "size": fields[9], "local_offset": fields[16],
+              }
+              offset = name_start + name_length + extra_length + comment_length
+
+          def extract(name, destination):
+              entry = entries[name]
+              local, _ = range_read(entry["local_offset"], entry["local_offset"] + 29)
+              header = struct.unpack("<4s5H3L2H", local)
+              if header[0] != b"PK\x03\x04":
+                  raise RuntimeError(f"Local ZIP header for {name} is invalid")
+              data_start = entry["local_offset"] + 30 + header[9] + header[10]
+              request = urllib.request.Request(
+                  signed_url, headers={"Range": f"bytes={data_start}-{data_start + entry['compressed'] - 1}"})
+              digest, checksum, written = hashlib.sha256(), 0, 0
+              inflater = zlib.decompressobj(-15) if entry["method"] == 8 else None
+              with urllib.request.urlopen(request, timeout=120) as response, open(destination, "wb") as output:
+                  if response.status != 206:
+                      raise RuntimeError(f"Image range request returned HTTP {response.status}")
+                  match = re.fullmatch(
+                      r"bytes (\d+)-(\d+)/(\d+)", response.headers.get("Content-Range", ""))
+                  expected_end = data_start + entry["compressed"] - 1
+                  if not match or int(match.group(1)) != data_start or int(match.group(2)) != expected_end:
+                      raise RuntimeError(f"Image range for {name} was not complete")
+                  remaining = entry["compressed"]
+                  while remaining:
+                      chunk = response.read(min(1024 * 1024, remaining))
+                      if not chunk:
+                          raise RuntimeError(f"Image range for {name} ended early")
+                      remaining -= len(chunk)
+                      decoded = inflater.decompress(chunk) if inflater else chunk
+                      output.write(decoded)
+                      digest.update(decoded)
+                      checksum = zlib.crc32(decoded, checksum)
+                      written += len(decoded)
+                  if inflater:
+                      decoded = inflater.flush()
+                      output.write(decoded)
+                      digest.update(decoded)
+                      checksum = zlib.crc32(decoded, checksum)
+                      written += len(decoded)
+              if written != entry["size"] or checksum & 0xFFFFFFFF != entry["crc"]:
+                  raise RuntimeError(f"Extracted size or CRC for {name} does not match the ZIP directory")
+              return digest.hexdigest()
+
+          os.makedirs("artifacts", exist_ok=True)
+          archive_hash = extract("Agentweaver.Web.1.0.0.tar", "artifacts/Agentweaver.Web.1.0.0.tar")
+          extract("provenance.json", "artifacts/provenance.json")
+          provenance = json.load(open("artifacts/provenance.json", encoding="utf-8"))
+          web = next(item for item in provenance["artifacts"] if item.get("componentId") == "Agentweaver.Web")
+          if web["sha256"] != archive_hash:
+              raise RuntimeError("Extracted Web archive hash does not match its provenance")
+          print(json.dumps({
+              "artifactId": artifact_id, "archiveSize": os.path.getsize("artifacts/Agentweaver.Web.1.0.0.tar"),
+              "archiveSha256": archive_hash, "expectedImageId": web["imageId"],
+              "imageReference": web["imageReference"], "platform": web["platform"],
+          }, sort_keys=True))
+          PY
+      - name: Load exact archive in default publisher engine
+        env:
+          DOCKER_CONFIG: ${{ github.workspace }}/artifacts/docker-config
         run: |
           set -euo pipefail
-          provenance="$(find artifacts/release/pack -type f -name provenance.json -print -quit)"
-          test -n "$provenance"
-          file="${provenance%/*}/Agentweaver.Web.1.0.0.tar"
+          mkdir -p "$DOCKER_CONFIG"
+          provenance=artifacts/provenance.json
           expected="$(jq -r '.artifacts[] | select(.componentId == "Agentweaver.Web") | [.imageId, .labels["org.opencontainers.image.revision"], .labels["org.opencontainers.image.version"], .imageReference] | @tsv' "$provenance")"
           IFS=$'\t' read -r image_id source_sha version image_reference <<< "$expected"
           echo "engine=$(docker info --format '{{.ServerVersion}}|{{json .DriverStatus}}')"
-          docker load --input "$file" >/dev/null
+          docker load --input artifacts/Agentweaver.Web.1.0.0.tar >/dev/null
           actual="$(docker image inspect --format '{{.Id}}|{{.Os}}|{{.Architecture}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{index .Config.Labels "org.opencontainers.image.version"}}' "$image_reference")"
           wanted="${image_id}|linux|amd64|${source_sha}|${version}"
-          printf 'pack-context expected=%s observed=%s match=%s\n' "$wanted" "$actual" "$([[ "$actual" == "$wanted" ]] && echo true || echo false)"
+          printf 'publisher-default-engine expected=%s observed=%s match=%s\n' "$wanted" "$actual" "$([[ "$actual" == "$wanted" ]] && echo true || echo false)"
