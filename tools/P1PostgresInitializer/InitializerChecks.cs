@@ -153,6 +153,74 @@ internal static class InitializerChecks
         }
     }
 
+    internal static void AssertOwnerOnlyObjectPlan(ServicePlan[] services)
+    {
+        var projects = services.SingleOrDefault(service => service.Schema == "projects_config");
+        if (services.Length != 5 || projects is null ||
+            !projects.OwnerOnlyTables.SequenceEqual(["project_setup_operations"], StringComparer.Ordinal) ||
+            !projects.OwnerOnlySequences.SequenceEqual(
+                ["platform_runtime_revisions_revision_seq"], StringComparer.Ordinal) ||
+            services.Where(service => service.Schema != "projects_config")
+                .Any(service => service.OwnerOnlyTables.Length != 0 || service.OwnerOnlySequences.Length != 0) ||
+            projects.OwnerOnlyTables.Intersect(projects.Tables.Select(table => table.Table), StringComparer.Ordinal).Any() ||
+            projects.OwnerOnlyTables.Distinct(StringComparer.Ordinal).Count() != projects.OwnerOnlyTables.Length ||
+            projects.OwnerOnlySequences.Distinct(StringComparer.Ordinal).Count() != projects.OwnerOnlySequences.Length)
+            throw new InvalidOperationException("The exact owner-only Projects relations are required and may not be runtime-granted.");
+
+        var setupGuard = projects.Functions.SingleOrDefault(function =>
+            function.Signature == "reject_project_setup_operation_mutation()");
+        if (setupGuard is null || setupGuard.Execute)
+            throw new InvalidOperationException("The Projects setup-operation guard must remain owner-only.");
+    }
+
+    internal static void AssertExactMigrationHistory(string[] expected, string[] actual, string service)
+    {
+        if (expected.Length == 0 || actual.Length != expected.Length ||
+            expected.Any(string.IsNullOrWhiteSpace) || actual.Any(string.IsNullOrWhiteSpace) ||
+            expected.Distinct(StringComparer.Ordinal).Count() != expected.Length ||
+            actual.Distinct(StringComparer.Ordinal).Count() != actual.Length ||
+            !expected.SequenceEqual(actual, StringComparer.Ordinal))
+            throw new InvalidOperationException($"The {service} migration history does not match the exact source migration set.");
+    }
+
+    internal static void AssertContinuationReceipt(ContinuationReceiptEntry[] entries,
+        string sourceSha, string coreMergeSha, string planHash)
+    {
+        if (entries.Length == 0 || entries.Any(entry =>
+                entry.SourceSha != sourceSha || entry.CoreMergeSha != coreMergeSha ||
+                entry.PlanHash != planHash || entry.At == default))
+            throw new InvalidOperationException("The continuation receipt is not bound to the exact source, Core merge, and plan.");
+
+        var stages = entries.Select(entry => entry.Stage).ToArray();
+        var required = new[]
+        {
+            "source_checked",
+            "fresh_target_checked",
+            "five_runtime_roles_created_and_exact_mappings_checked",
+            "projects-config:schema_created",
+            "projects-config:migrated",
+            "failed_requires_explicit_reconciliation",
+        };
+        var previous = -1;
+        foreach (var stage in required)
+        {
+            var matches = Array.FindIndex(stages, previous + 1, value => value == stage);
+            if (matches <= previous || stages.Count(value => value == stage) != 1)
+                throw new InvalidOperationException("The continuation receipt does not prove the exact Projects-only failed prefix.");
+            previous = matches;
+        }
+
+        var projectsMigratedIndex = Array.IndexOf(stages, "projects-config:migrated");
+        if (stages[^1] != "failed_requires_explicit_reconciliation" ||
+            stages.Contains("projects-config:exact_grants_checked_and_committed") ||
+            stages.Any(stage => stage.StartsWith("environment:", StringComparison.Ordinal) ||
+                stage.StartsWith("knowledge:", StringComparison.Ordinal) ||
+                stage.StartsWith("events-and-sessions:", StringComparison.Ordinal) ||
+                stage.StartsWith("orchestrator:", StringComparison.Ordinal)) ||
+            stages.Skip(projectsMigratedIndex + 1).Any(stage => stage != "failed_requires_explicit_reconciliation"))
+            throw new InvalidOperationException("The continuation receipt records work beyond the exact Projects-only prefix.");
+    }
+
     internal static void AssertMutationDenialGuards(ServicePlan service, MutationGuardState[] guards,
         uint ownerOid, uint runtimeOid)
     {
@@ -205,6 +273,14 @@ internal static class InitializerChecks
             !SameGrants(expected, after.Grants))
             throw new InvalidOperationException(
                 "Existing ownership or privileges changed, or the database CONNECT delta differs from the exact planned roles. The current grant stage is not committed.");
+    }
+
+    internal static void AssertNoRuntimeDatabaseGrants(ExistingBoundary boundary, uint[] runtimeOids)
+    {
+        if (runtimeOids.Length != 5 || runtimeOids.Any(oid => oid == 0) ||
+            runtimeOids.Distinct().Count() != runtimeOids.Length ||
+            boundary.Grants.Any(grant => runtimeOids.Contains(grant.Grantee)))
+            throw new InvalidOperationException("A runtime role already has a direct database grant before continuation.");
     }
 
     internal static IReadOnlyDictionary<string, uint> CaptureMembershipGrantors(ServicePlan[] services,
@@ -264,7 +340,12 @@ internal static class InitializerChecks
         }
     }
 
-    internal static void AssertFunctions(ServicePlan service, FunctionState[] functions, uint ownerOid, uint runtimeOid)
+    internal static void AssertFunctions(
+        ServicePlan service,
+        FunctionState[] functions,
+        uint ownerOid,
+        uint runtimeOid,
+        bool beforeRuntimeGrants = false)
     {
         if (ownerOid == 0 || runtimeOid == 0 || functions.Length != service.Functions.Length ||
             functions.Select(item => item.Oid).Distinct().Count() != functions.Length)
@@ -278,6 +359,24 @@ internal static class InitializerChecks
             if (matches.Length != 1)
                 throw new InvalidOperationException("A planned function is missing or duplicated.");
             var function = matches[0];
+            if (beforeRuntimeGrants)
+            {
+                var ownerOnly = new AclGrant[] { new(ownerOid, ownerOid, "EXECUTE", false) };
+                var ownerAndPublic = new AclGrant[]
+                {
+                    new(ownerOid, ownerOid, "EXECUTE", false),
+                    new(ownerOid, 0, "EXECUTE", false),
+                };
+                var publicExecute = !planned.Execute &&
+                    SameGrants(ownerAndPublic, function.Grants);
+                if (function.Oid == 0 || function.OwnerOid != ownerOid ||
+                    !(SameGrants(ownerOnly, function.Grants) || publicExecute) ||
+                    function.RuntimeCanExecute != publicExecute)
+                    throw new InvalidOperationException(
+                        $"Unexpected pre-grant owner or EXECUTE privileges on {service.Schema}.{planned.Signature}.");
+                continue;
+            }
+
             AclGrant[] expected = planned.Execute
                 ? [new(ownerOid, ownerOid, "EXECUTE", false), new(ownerOid, runtimeOid, "EXECUTE", false)]
                 : [new(ownerOid, ownerOid, "EXECUTE", false)];
@@ -356,7 +455,11 @@ internal sealed record PostgresPlan(int FormatVersion, TargetPlan Target, Servic
 internal sealed record TargetPlan(string TenantId, string PostgresHost, string Database, string OperatorName,
     string OperatorObjectId, string ConnectionHost, int ConnectionPort);
 internal sealed record ServicePlan(string Service, string Schema, string Role, string PrincipalObjectId,
-    TablePlan[] Tables, FunctionPlan[] Functions);
+    TablePlan[] Tables, FunctionPlan[] Functions)
+{
+    public string[] OwnerOnlyTables { get; init; } = [];
+    public string[] OwnerOnlySequences { get; init; } = [];
+}
 internal sealed record TablePlan(string Table, string[] Privileges, string? LockColumn, bool MutationDenialRequired,
     MutationDenialGuardPlan? MutationDenialGuard);
 internal sealed record MutationDenialGuardPlan(string Trigger, string Function, int TriggerType,
@@ -368,3 +471,5 @@ internal sealed record MutationGuardState(string Table, string? TriggerName, str
     bool? RuntimeCanExecute,
     string? FunctionSource);
 internal sealed record FunctionPlan(string Signature, bool Execute);
+internal sealed record ContinuationReceiptEntry(string Stage, string SourceSha, string CoreMergeSha,
+    string PlanHash, DateTimeOffset At);

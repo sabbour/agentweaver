@@ -98,6 +98,37 @@ does not establish successful initialization or deployment.
 The five new update guards reject changes with SQLSTATE `55000`.
 The three older history guards retain `P0001` and their update, delete, and truncate protections.
 
+### Continuing from a verified Projects-only prefix
+
+`--continue-after-projects-config` is a separate continuation mode for a database
+whose five runtime roles already exist and whose Projects & Config schema is the
+only migrated service schema. It requires the exact prior source, plan hash, and
+receipt bytes, and writes a new receipt rather than replacing the old one.
+Before creating another service schema, the continuation validates the exact
+Projects migration history, object inventory, ownership, ACLs, and setup guards.
+It rejects unplanned views and materialized views, including views that could
+expose owner-only data after runtime schema access is granted.
+Before the final grant transaction, planned non-runtime functions may have only
+their exact owner grant, or that grant plus PostgreSQL's default `PUBLIC EXECUTE`;
+the casting function must remain owner-only. Any grant to a runtime or other
+role is rejected. Runtime roles have no schema access at this point. The final
+transaction revokes `PUBLIC EXECUTE` from every planned function and grants
+direct EXECUTE only to the planned casting role, then checks the complete ACL
+state before commit.
+
+The continuation migrates the remaining four service schemas without runtime
+table, sequence, or function grants. It verifies each exact migration inventory
+and owner-owned object inventory before applying the one final grant transaction.
+A failure stops the sequence and preserves the earlier receipt. These source
+checks and disposable PostgreSQL tests do not authorize or prove live database
+execution.
+
+Run the continuation checks against a disposable PostgreSQL container:
+
+```powershell
+dotnet test tests\Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~P1PostgresContinuationPostgresTests
+```
+
 The source preflight rejects incompatible PUBLIC privileges before the first write.
 It also rejects default grants to unrelated principals and an inherited-only
 database CONNECT grant option. It does not revoke existing privileges to proceed.

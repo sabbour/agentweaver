@@ -143,6 +143,7 @@ These source results do not prove native TLS, mounted restore contents, Cilium t
 | Telemetry tests | In-process OpenTelemetry setup and Azure Monitor exporter behavior through an injected transport. | Azure Monitor ingestion. |
 | Azure tooling tests | Target, source, digest, command, and acceptance guards through fake `az` and `git` executors. | A live Azure call or provisioned resource. |
 | P1 PostgreSQL initializer tests | Pure tests cover canonical database grant comparisons, pre-write rejection, five exact principal mappings and memberships, function ownership and EXECUTE grants, planned and read-back installed mutation guard checks, ordered role-stage checks, partial-stage receipts, and original-error preservation when the failure receipt fails. A disposable PostgreSQL test runs the initializer's actual preflight and protected-boundary SQL against Broker-shaped trigger functions, unsafe function types, public grants, and a restricted runtime role. The native role fixture executes the complete production post-create sequence as a non-superuser CREATEROLE operator, preserves the catalog grantor OID, and verifies one exact ADMIN/INHERIT/SET membership after cleanup. | Initializer execution, live Entra principal creation, live database state, or deployment. |
+| P1 PostgreSQL continuation tests | A disposable PostgreSQL database is migrated to the exact Projects-only prefix, then the production continuation dispatches and verifies all five services against the source plan's exact inventories. Tests verify exact ordered Projects and Environment EF histories, operator ownership, the absence of runtime schema/table/sequence grants, acceptance only of the known pre-grant PUBLIC function ACL shape, rejection of explicit runtime EXECUTE and owner-only-table grants, and rejection of unplanned runtime-granted views and materialized views before any later schema is created. | Live Entra principal creation, live database state, or deployment. |
 | Foundation Probe tests | Receipt and token checks, provider pins, exact-version Key Vault read, owned Blob cleanup, PostgreSQL effects, and trace evidence. | Azure resource access or Identity broker redemption. |
 | AgentHost tests | Actual native SDK transport, authenticated configure/refresh/A2A, exact replay, current owner/source rejection, guarded effects, turn content, idle-boundary priority, accounting acknowledgment, cache recovery, and exact startup-time ceilings. CI separately measures the compressed amd64 OCI image and starts its image-owned pinned runtime with non-executable private mounts, without network or a model call. | Automatic scheduling, deployed TLS/Sandbox placement, live OAuth/entitlement, paid model execution, or publication. |
 
@@ -167,6 +168,10 @@ regression for the complete production post-create sequence, including exact
 grantor-OID preservation and membership cleanup, plus negative tests that all
 unsafe reserved flags are rejected before commit. Neither selection runs the initializer or its live
 execution blocks.
+Run the separate disposable PostgreSQL continuation checks with
+`dotnet test tests/Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~P1PostgresContinuationPostgresTests`.
+These tests do not connect to Azure or the approved database.
+
 The separate live P1 status is recorded in the
 [Azure tooling guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal);
 neither these source tests nor that read-only snapshot proves successful

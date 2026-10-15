@@ -23,23 +23,45 @@ if (args.Length == 1 && args[0] == "--plan")
         ["scripts/azure/lib/p1-postgres-plan.mjs", "--json"]));
     return 0;
 }
-if (args.Length != 9 || args[0] != "--initialize" ||
-    args[1] != "--source-sha" || args[3] != "--core-merge-sha" ||
-    args[5] != "--plan-sha256" || args[7] != "--receipt")
+var continuationMode = args.Length == 17 && args[0] == "--continue-after-projects-config" &&
+    args[1] == "--source-sha" && args[3] == "--core-merge-sha" &&
+    args[5] == "--plan-sha256" && args[7] == "--prior-source-sha" &&
+    args[9] == "--prior-plan-sha256" && args[11] == "--prior-receipt" &&
+    args[13] == "--prior-receipt-sha256" && args[15] == "--receipt";
+var freshMode = args.Length == 9 && args[0] == "--initialize" &&
+    args[1] == "--source-sha" && args[3] == "--core-merge-sha" &&
+    args[5] == "--plan-sha256" && args[7] == "--receipt";
+if (!freshMode && !continuationMode)
     throw new ArgumentException(
-        "Use --plan, or --initialize --source-sha SHA --core-merge-sha SHA --plan-sha256 SHA256 --receipt PATH. Initialization requires separate approval.");
+        "Use --plan, --initialize --source-sha SHA --core-merge-sha SHA --plan-sha256 SHA256 --receipt PATH, or the reviewed --continue-after-projects-config mode with its prior source, plan, and receipt hashes.");
 
 var sourceSha = args[2];
 var coreMergeSha = args[4];
 var expectedPlanHash = args[6];
+var priorSourceSha = continuationMode ? args[8] : null;
+var priorPlanHash = continuationMode ? args[10] : null;
+var priorReceiptArgument = continuationMode ? args[12] : null;
+var priorReceiptHash = continuationMode ? args[14] : null;
+var receiptArgument = continuationMode ? args[16] : args[8];
 if (!Regex.IsMatch(sourceSha, "^[0-9a-f]{40}$") ||
     !Regex.IsMatch(coreMergeSha, "^[0-9a-f]{40}$") ||
-    !Regex.IsMatch(expectedPlanHash, "^[0-9a-f]{64}$"))
+    !Regex.IsMatch(expectedPlanHash, "^[0-9a-f]{64}$") ||
+    (continuationMode && (!Regex.IsMatch(priorSourceSha!, "^[0-9a-f]{40}$") ||
+        !Regex.IsMatch(priorPlanHash!, "^[0-9a-f]{64}$") ||
+        !Regex.IsMatch(priorReceiptHash!, "^[0-9a-f]{64}$"))))
     throw new ArgumentException("Full lowercase source, Core merge, and plan hashes are required.");
-if (!string.IsNullOrWhiteSpace(await RunLocalAsync("git", ["status", "--porcelain"])) ||
+var worktreeStatus = await RunLocalAsync("git", ["status", "--porcelain", "--untracked-files=all"]);
+var statusEntries = worktreeStatus.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+var invalidStatus = continuationMode
+    ? statusEntries.Any(line => !line.StartsWith("?? Temp/", StringComparison.Ordinal) &&
+        !line.StartsWith("?? Temp\\", StringComparison.Ordinal))
+    : statusEntries.Length != 0;
+if (invalidStatus ||
     await RunLocalAsync("git", ["rev-parse", "HEAD"]) != sourceSha ||
     await RunLocalAsync("git", ["rev-parse", "origin/v1"]) != sourceSha)
     throw new InvalidOperationException("Initialization requires the clean, locally fetched, reviewed current v1 tip.");
+if (continuationMode)
+    await RunLocalAsync("git", ["merge-base", "--is-ancestor", priorSourceSha!, sourceSha]);
 await RunLocalAsync("git", ["merge-base", "--is-ancestor", coreMergeSha, sourceSha]);
 var coreParents = await RunLocalAsync("git", ["show", "--format=%P", "--no-patch", coreMergeSha]);
 if (coreParents.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length != 2)
@@ -61,11 +83,58 @@ var plan = JsonSerializer.Deserialize<PostgresPlan>(planJson, new JsonSerializer
     PropertyNameCaseInsensitive = true,
 }) ?? throw new InvalidOperationException("The exact source plan is missing.");
 InitializerChecks.AssertMutationDenialPlan(plan.Services);
+InitializerChecks.AssertOwnerOnlyObjectPlan(plan.Services);
 
-var receiptPath = Path.GetFullPath(args[8]);
+if (continuationMode)
+{
+    var oldPlanSource = await RunLocalAsync("git",
+        ["show", $"{priorSourceSha}:scripts/azure/lib/p1-postgres-plan.mjs"]);
+    var previousPlanJson = await RunLocalAsync("node",
+        [
+            "--input-type=module",
+            "-e",
+            "const m=await import(`data:text/javascript;base64,${process.argv[1]}`);const p=m.buildP1PostgresPlan();console.log(JSON.stringify({hash:m.p1PostgresPlanHash(p),target:p.target,services:p.services.map(({service,schema,role,principalObjectId})=>({service,schema,role,principalObjectId}))}));",
+            Convert.ToBase64String(Encoding.UTF8.GetBytes(oldPlanSource)),
+        ]);
+    using var previousPlan = JsonDocument.Parse(previousPlanJson);
+    using var currentPlan = JsonDocument.Parse(planJson);
+    if (previousPlan.RootElement.GetProperty("hash").GetString() != priorPlanHash ||
+        previousPlan.RootElement.GetProperty("target").GetRawText() !=
+            currentPlan.RootElement.GetProperty("target").GetRawText() ||
+        previousPlan.RootElement.GetProperty("services").GetRawText() !=
+            JsonSerializer.Serialize(plan.Services.Select(item => new
+            {
+                item.Service,
+                item.Schema,
+                item.Role,
+                item.PrincipalObjectId,
+            }), new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }))
+        throw new InvalidOperationException("The prior receipt's plan is not the exact same target and runtime mapping as the current source.");
+}
+
+var receiptPath = Path.GetFullPath(receiptArgument);
 var receiptRoot = Path.GetFullPath("Temp") + Path.DirectorySeparatorChar;
 if (!receiptPath.StartsWith(receiptRoot, StringComparison.OrdinalIgnoreCase))
     throw new ArgumentException("Use a new receipt file beneath this source copy's Temp directory.");
+if (continuationMode)
+{
+    var priorReceiptPath = Path.GetFullPath(priorReceiptArgument!);
+    if (!priorReceiptPath.StartsWith(receiptRoot, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(priorReceiptPath, receiptPath, StringComparison.OrdinalIgnoreCase))
+        throw new ArgumentException("The prior receipt and new receipt must be distinct files beneath Temp.");
+    var priorReceiptBytes = await File.ReadAllBytesAsync(priorReceiptPath);
+    var actualPriorReceiptHash = Convert.ToHexString(SHA256.HashData(priorReceiptBytes)).ToLowerInvariant();
+    if (actualPriorReceiptHash != priorReceiptHash)
+        throw new InvalidOperationException("The prior receipt bytes do not match the explicitly supplied hash.");
+    var receiptLines = await File.ReadAllLinesAsync(priorReceiptPath);
+    if (receiptLines.Length == 0 || receiptLines.Any(string.IsNullOrWhiteSpace))
+        throw new InvalidOperationException("The prior receipt is empty or contains an invalid blank record.");
+    var priorEntries = receiptLines.Select(line =>
+        JsonSerializer.Deserialize<ContinuationReceiptEntry>(line,
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+        ?? throw new InvalidOperationException("The prior receipt contains an invalid record.")).ToArray();
+    InitializerChecks.AssertContinuationReceipt(priorEntries, priorSourceSha!, coreMergeSha, priorPlanHash!);
+}
 Directory.CreateDirectory(Path.GetDirectoryName(receiptPath)!);
 await using var receipt = new FileStream(receiptPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
 async Task RecordAsync(string stage)
@@ -116,12 +185,13 @@ try
     }
     await using var source = CreateSource(plan.Target.Database);
     await using var connection = await source.OpenConnectionAsync(cancellationToken);
-    await using (var fresh = new NpgsqlCommand("""
-        SELECT current_user = @operator AND current_database() = 'agentweaver'
-          AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = ANY(@roles))
-          AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = ANY(@schemas))
-        """, connection))
+    if (!continuationMode)
     {
+        await using var fresh = new NpgsqlCommand("""
+            SELECT current_user = @operator AND current_database() = 'agentweaver'
+              AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = ANY(@roles))
+              AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = ANY(@schemas))
+            """, connection);
         fresh.Parameters.AddWithValue("operator", plan.Target.OperatorName);
         fresh.Parameters.AddWithValue("roles", plan.Services.Select(item => item.Role).ToArray());
         fresh.Parameters.AddWithValue("schemas", plan.Services.Select(item => item.Schema).ToArray());
@@ -132,10 +202,27 @@ try
     var operatorOid = await ReadJsonAsync<uint>(connection, null,
         "SELECT to_jsonb(oid::bigint)::text FROM pg_catalog.pg_roles WHERE rolname = current_user", cancellationToken);
     RuntimePrincipal[] principals = [];
-    await RecordAsync("fresh_target_checked");
 
-    await using (var transaction = await principalConnection.BeginTransactionAsync(cancellationToken))
+    if (continuationMode)
     {
+        principals = await P1PostgresContinuation.ReadPrincipalsAsync(
+            principalConnection, null, plan, cancellationToken);
+        var expectedGrantorOids = InitializerChecks.CaptureMembershipGrantors(
+            plan.Services, principals, operatorOid, plan.Target.TenantId);
+        InitializerChecks.AssertPrincipals(
+            plan.Services, principals, operatorOid, plan.Target.TenantId, expectedGrantorOids);
+        InitializerChecks.AssertNoRuntimeDatabaseGrants(
+            existingBoundary, principals.Select(item => item.Oid).ToArray());
+        await AssertPreflightAsync(connection, plan, existingBoundary, operatorOid, cancellationToken);
+        await P1PostgresContinuation.AssertProjectsPrefixAsync(
+            source, connection, plan, principals, operatorOid, plan.Target.OperatorName,
+            plan.Target.TenantId, cancellationToken);
+        await RecordAsync("projects_config_prefix_checked");
+    }
+    else
+    {
+        await RecordAsync("fresh_target_checked");
+        await using var transaction = await principalConnection.BeginTransactionAsync(cancellationToken);
         IReadOnlyDictionary<string, uint> expectedGrantorOids =
             new Dictionary<string, uint>(StringComparer.Ordinal);
         await InitializerChecks.RunStageAsync(
@@ -176,40 +263,109 @@ try
             RecordStageAsync);
     }
 
+    if (continuationMode)
+    {
+        var completedServices = new List<ServicePlan>();
+        async Task VerifyContinuationStateAsync()
+        {
+            await AssertPreflightAsync(connection, plan, existingBoundary, operatorOid, cancellationToken);
+            principals = await P1PostgresContinuation.ReadPrincipalsAsync(
+                principalConnection, null, plan, cancellationToken);
+            var grantors = InitializerChecks.CaptureMembershipGrantors(
+                plan.Services, principals, operatorOid, plan.Target.TenantId);
+            InitializerChecks.AssertPrincipals(plan.Services, principals, operatorOid, plan.Target.TenantId, grantors);
+            InitializerChecks.AssertNoRuntimeDatabaseGrants(
+                await ReadExistingBoundaryAsync(connection, null, plan, cancellationToken),
+                principals.Select(item => item.Oid).ToArray());
+            await P1PostgresContinuation.AssertProjectsPrefixAsync(
+                source, connection, plan, principals, operatorOid, plan.Target.OperatorName,
+                plan.Target.TenantId, cancellationToken, requireOnlyProjectsSchema: completedServices.Count == 0);
+            foreach (var completed in completedServices)
+            {
+                await P1PostgresContinuation.VerifyServiceMigrationsAsync(source, completed, cancellationToken);
+                await P1PostgresContinuation.AssertOwnedObjectsAsync(
+                    connection, completed, plan.Target.OperatorName, cancellationToken);
+                await P1PostgresContinuation.AssertServiceUnprivilegedAsync(
+                    connection, completed, principals, operatorOid, cancellationToken);
+            }
+        }
+
+        await P1PostgresContinuation.MigrateRemainingServicesAsync(
+            source,
+            plan,
+            plan.Target.OperatorName,
+            RecordAsync,
+            VerifyContinuationStateAsync,
+            async service =>
+            {
+                await P1PostgresContinuation.AssertOwnedObjectsAsync(
+                    connection, service, plan.Target.OperatorName, cancellationToken);
+                await P1PostgresContinuation.AssertServiceUnprivilegedAsync(
+                    connection, service, principals, operatorOid, cancellationToken);
+                completedServices.Add(service);
+            },
+            cancellationToken);
+        await VerifyContinuationStateAsync();
+        await RecordAsync("all_missing_migrations_and_inventories_checked");
+
+        var runtimeOids = principals.Select(item => item.Oid).ToArray();
+        await using (var grants = await connection.BeginTransactionAsync(cancellationToken))
+        {
+            foreach (var service in plan.Services)
+            {
+                await ExecuteAsync(connection, grants,
+                    $"GRANT CONNECT ON DATABASE {Quote(plan.Target.Database)} TO {Quote(service.Role)}",
+                    cancellationToken);
+                await ExecuteAsync(connection, grants,
+                    $"GRANT USAGE ON SCHEMA {Quote(service.Schema)} TO {Quote(service.Role)}",
+                    cancellationToken);
+                foreach (var table in service.Tables)
+                {
+                    var relation = $"{Quote(service.Schema)}.{Quote(table.Table)}";
+                    await ExecuteAsync(connection, grants,
+                        $"GRANT {string.Join(", ", table.Privileges)} ON TABLE {relation} TO {Quote(service.Role)}",
+                        cancellationToken);
+                    if (table.LockColumn is not null)
+                        await ExecuteAsync(connection, grants,
+                            $"GRANT UPDATE ({Quote(table.LockColumn)}) ON TABLE {relation} TO {Quote(service.Role)}",
+                            cancellationToken);
+                }
+                foreach (var function in service.Functions)
+                {
+                    var signature = $"{Quote(service.Schema)}.{function.Signature}";
+                    await ExecuteAsync(connection, grants,
+                        $"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC", cancellationToken);
+                    if (function.Execute)
+                        await ExecuteAsync(connection, grants,
+                            $"GRANT EXECUTE ON FUNCTION {signature} TO {Quote(service.Role)}", cancellationToken);
+                }
+            }
+
+            InitializerChecks.AssertBoundary(existingBoundary,
+                await ReadExistingBoundaryAsync(connection, grants, plan, cancellationToken), runtimeOids);
+            foreach (var service in plan.Services)
+            {
+                var runtimeOid = principals.Single(item => item.Role == service.Role).Oid;
+                await AssertFunctionGrantsAsync(connection, grants, service, operatorOid, runtimeOid, cancellationToken);
+                await transactionCheckAsync(connection, grants, service, operatorOid, runtimeOid, cancellationToken);
+            }
+            await grants.CommitAsync(cancellationToken);
+        }
+        await RecordAsync("continuation_all_runtime_grants_committed");
+        Console.WriteLine("P1_POSTGRES_CONTINUATION_FINISHED runtimeIdentityProof=false deploymentProof=false");
+        return 0;
+    }
+
     List<uint> connectedRoles = [];
     foreach (var service in plan.Services)
     {
         await ExecuteAsync(connection, null, $"CREATE SCHEMA {Quote(service.Schema)} AUTHORIZATION {Quote(plan.Target.OperatorName)}", cancellationToken);
         await ExecuteAsync(connection, null, $"REVOKE ALL ON SCHEMA {Quote(service.Schema)} FROM PUBLIC", cancellationToken);
         await RecordAsync($"{service.Service}:schema_created");
-        switch (service.Service)
-        {
-            case "projects-config":
-                await ProjectsConfigMigrator.MigrateAsync(source,
-                    new DbContextOptionsBuilder<ProjectsConfigDbContext>()
-                        .UseNpgsql(source, settings => settings.MigrationsHistoryTable("__ef_migrations_history", service.Schema)).Options,
-                    cancellationToken);
-                break;
-            case "environment":
-                await EnvironmentMigrator.MigrateAsync(source,
-                    new DbContextOptionsBuilder<EnvironmentDbContext>()
-                        .UseNpgsql(source, settings => settings.MigrationsHistoryTable("__ef_migrations_history", service.Schema)).Options,
-                    cancellationToken);
-                break;
-            case "knowledge":
-                await KnowledgeMigrator.MigrateAsync(source, service.Schema, cancellationToken);
-                break;
-            case "events-and-sessions":
-                await EventsAndSessionsMigrator.MigrateAsync(source, service.Schema, cancellationToken);
-                break;
-            case "orchestrator":
-                await CoordinationOwnerMigrator.MigrateAsync(source, service.Schema, cancellationToken);
-                break;
-            default:
-                throw new InvalidOperationException("The source plan contains an unsupported service.");
-        }
+        await P1PostgresContinuation.MigrateServiceAsync(source, service, cancellationToken);
         await RecordAsync($"{service.Service}:migrated");
-        await AssertOwnedObjectsAsync(connection, service, plan.Target.OperatorName, cancellationToken);
+        await P1PostgresContinuation.AssertOwnedObjectsAsync(
+            connection, service, plan.Target.OperatorName, cancellationToken);
         await using var grants = await connection.BeginTransactionAsync(cancellationToken);
         await ExecuteAsync(connection, grants, $"GRANT CONNECT ON DATABASE agentweaver TO {Quote(service.Role)}", cancellationToken);
         await ExecuteAsync(connection, grants, $"GRANT USAGE ON SCHEMA {Quote(service.Schema)} TO {Quote(service.Role)}", cancellationToken);
@@ -294,29 +450,6 @@ static Task<RuntimePrincipal[]> ReadPrincipalsAsync(NpgsqlConnection connection,
     ReadJsonAsync<RuntimePrincipal[]>(connection, transaction, InitializerChecks.PrincipalReadbackQuery(),
         cancellationToken, new NpgsqlParameter("roles", plan.Services.Select(item => item.Role).ToArray()));
 
-static async Task AssertOwnedObjectsAsync(NpgsqlConnection connection, ServicePlan service, string owner, CancellationToken cancellationToken)
-{
-    await using var query = new NpgsqlCommand("""
-        SELECT n.nspowner = (SELECT oid FROM pg_catalog.pg_roles WHERE rolname = @owner)
-          AND (SELECT array_agg(c.relname::text ORDER BY c.relname) FROM pg_catalog.pg_class c
-               WHERE c.relnamespace = n.oid AND c.relkind IN ('r', 'p', 'f', 'S')) = @tables
-          AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c
-               WHERE c.relnamespace = n.oid AND c.relowner <> n.nspowner)
-          AND (SELECT count(*) FROM pg_catalog.pg_proc p WHERE p.pronamespace = n.oid) = cardinality(@functions)
-          AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_proc p
-                          WHERE p.pronamespace = n.oid AND p.proowner <> n.nspowner)
-          AND NOT EXISTS (SELECT 1 FROM unnest(@functions) AS required(signature)
-                          WHERE pg_catalog.to_regprocedure(required.signature) IS NULL)
-        FROM pg_catalog.pg_namespace n WHERE n.nspname = @schema
-        """, connection);
-    query.Parameters.AddWithValue("owner", owner);
-    query.Parameters.AddWithValue("schema", service.Schema);
-    query.Parameters.AddWithValue("tables", service.Tables.Select(item => item.Table).Order(StringComparer.Ordinal).ToArray());
-    query.Parameters.AddWithValue("functions", service.Functions.Select(item => $"{service.Schema}.{item.Signature}").ToArray());
-    if (await query.ExecuteScalarAsync(cancellationToken) is not true)
-        throw new InvalidOperationException($"The {service.Service} schema contains unexpected or foreign-owned objects. No grants were applied.");
-}
-
 static async Task AssertFunctionGrantsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
     ServicePlan service, uint ownerOid, uint runtimeOid, CancellationToken cancellationToken)
 {
@@ -395,6 +528,32 @@ static async Task transactionCheckAsync(NpgsqlConnection connection, NpgsqlTrans
             if (await columnCheck.ExecuteScalarAsync(cancellationToken) is not true)
                 throw new InvalidOperationException(
                     $"The {service.Service} role does not have exactly its planned UPDATE column on {service.Schema}.{table.Table}.");
+        }
+    }
+    foreach (var table in service.OwnerOnlyTables)
+    {
+        foreach (var privilege in new[] { "SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER" })
+        {
+            await using var check = new NpgsqlCommand(
+                "SELECT has_table_privilege(@role, @table, @privilege)", connection, transaction);
+            check.Parameters.AddWithValue("role", service.Role);
+            check.Parameters.AddWithValue("table", $"{service.Schema}.{table}");
+            check.Parameters.AddWithValue("privilege", privilege);
+            if (Equals(await check.ExecuteScalarAsync(cancellationToken), true))
+                throw new InvalidOperationException($"The {service.Service} runtime role has unexpected {privilege} authority on owner-only table {service.Schema}.{table}.");
+        }
+    }
+    foreach (var sequence in service.OwnerOnlySequences)
+    {
+        foreach (var privilege in new[] { "USAGE", "SELECT", "UPDATE" })
+        {
+            await using var check = new NpgsqlCommand(
+                "SELECT has_sequence_privilege(@role, @sequence, @privilege)", connection, transaction);
+            check.Parameters.AddWithValue("role", service.Role);
+            check.Parameters.AddWithValue("sequence", $"{service.Schema}.{sequence}");
+            check.Parameters.AddWithValue("privilege", privilege);
+            if (Equals(await check.ExecuteScalarAsync(cancellationToken), true))
+                throw new InvalidOperationException($"The {service.Service} runtime role has unexpected {privilege} authority on owner-only sequence {service.Schema}.{sequence}.");
         }
     }
     var mutationGuards = await ReadMutationGuardStatesAsync(connection, transaction, service, cancellationToken);

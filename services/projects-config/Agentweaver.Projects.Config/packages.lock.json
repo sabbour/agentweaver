@@ -369,14 +369,14 @@
       "agentweaver.objectstore.azureblob": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[0.0.0, )",
+          "Agentweaver.Abstractions": "[1.0.0, )",
           "Azure.Storage.Blobs": "[12.26.0, )"
         }
       },
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[0.0.0, )"
+          "Agentweaver.Abstractions": "[1.0.0, )"
         }
       }
     }

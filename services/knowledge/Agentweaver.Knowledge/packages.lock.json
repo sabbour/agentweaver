@@ -254,7 +254,7 @@
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[0.0.0, )"
+          "Agentweaver.Abstractions": "[1.0.0, )"
         }
       },
       "agentweaver.telemetry": {

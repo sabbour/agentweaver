@@ -129,6 +129,14 @@ That grant has not been executed; it adds no `UPDATE`, `DELETE`, or default priv
 Only casting authority can receive direct runtime EXECUTE.
 Restricted-role behavior and actual PostgreSQL catalog behavior still require
 separate database proof; source tests do not execute the initializer.
+The separate continuation mode admits only the exact Projects-only prefix,
+checks ordered EF migration histories and every service's migration inventory,
+and migrates the other schemas without runtime object grants. Its pre-grant
+checks allow only owner ACLs or the known default `PUBLIC EXECUTE` on planned
+non-runtime functions while service schemas remain unavailable to runtime
+roles. It rejects unplanned views and materialized views, and checks their
+relation and column ACLs. The final grant transaction removes those public
+function grants and applies only the planned casting-function grant.
 These source changes do not change the P0 Azure topology.
 See the [initializer source limits](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal)
 and the [source-test boundary](../guide/testing).
