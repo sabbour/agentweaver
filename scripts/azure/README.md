@@ -41,14 +41,25 @@ A created identity does not prove database access or a ready service.
 
 ### P1 PostgreSQL initializer source proposal
 
-`tools/P1PostgresInitializer` is source-only; the initializer has not run against
-the approved database. Source review and disposable local catalog tests do not
-authorize role creation, migrations, grants, or deployment. The existing
-credential check blocks initialization before any credential request or
-database connection. The source validates all planned row-lock mutation guards
-and, before committing grants, reads back each installed trigger and function to
-verify the exact table, trigger type, function body/owner, and absence of runtime
-EXECUTE.
+The initializer source in this PR has not run against the approved database.
+An earlier operator attempt against that database stopped during live preflight
+after recording `fresh_target_checked`; its failed receipt is retained.
+Reconciliation found that no approved five runtime-role/schema state was
+committed. Source review and disposable local catalog tests do not authorize
+role creation, migrations, grants, or deployment.
+
+Initialization requires `--initialize` with full source and Core merge SHAs,
+the exact source plan hash, and a new receipt path under that source copy's
+`Temp` directory. It requires a clean source checkout whose `HEAD` and fetched
+`origin/v1` both match the supplied source SHA, validates the reviewed Core
+merge and required migration wiring, and recomputes the plan hash. It then
+requests an Azure CLI token, connects to verify the exact operator and fresh
+target, and runs the permission preflight before role creation. These checks
+block unsafe writes; they do not prevent credential requests or database
+connections. The CLI arguments are technical guards, not approval.
+The source validates all planned row-lock mutation guards and, before
+committing grants, reads back each installed trigger and function to verify the
+exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
 The source catalog requires Core versions 1 through 16 and 18 through 21.
 These are 20 registered versions; version 17 remains excluded.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
