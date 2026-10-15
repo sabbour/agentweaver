@@ -41,13 +41,25 @@ A created identity does not prove database access or a ready service.
 
 ### P1 PostgreSQL initializer source proposal
 
-`tools/P1PostgresInitializer` is source-only; no one ran initialization or
-opened a database connection. Source review does not authorize role creation,
-migrations, grants, or deployment. The existing credential check blocks
-initialization before any credential request or database connection. The source
-validates all planned row-lock mutation guards and, before committing grants,
-reads back each installed trigger and function to verify the exact table,
-trigger type, function body/owner, and absence of runtime EXECUTE.
+The initializer source in this PR has not run against the approved database.
+An earlier operator attempt against that database stopped during live preflight
+after recording `fresh_target_checked`; its failed receipt is retained.
+Reconciliation found that no approved five runtime-role/schema state was
+committed. Source review and disposable local catalog tests do not authorize
+role creation, migrations, grants, or deployment.
+
+Initialization requires `--initialize` with full source and Core merge SHAs,
+the exact source plan hash, and a new receipt path under that source copy's
+`Temp` directory. It requires a clean source checkout whose `HEAD` and fetched
+`origin/v1` both match the supplied source SHA, validates the reviewed Core
+merge and required migration wiring, and recomputes the plan hash. It then
+requests an Azure CLI token, connects to verify the exact operator and fresh
+target, and runs the permission preflight before role creation. These checks
+block unsafe writes; they do not prevent credential requests or database
+connections. The CLI arguments are technical guards, not approval.
+The source validates all planned row-lock mutation guards and, before
+committing grants, reads back each installed trigger and function to verify the
+exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
 The source catalog requires Core versions 1 through 16 and 18 through 21.
 These are 20 registered versions; version 17 remains excluded.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
@@ -78,19 +90,29 @@ The operator membership has ADMIN but neither INHERIT nor SET permission.
 Function checks require the operator owner and the exact effective EXECUTE grants.
 Only the existing casting authority function can receive runtime EXECUTE.
 
-Local controlled tests exercise the same predicates and role-stage ordering.
-Pure catalog tests compare the registered resources, function signatures, and guard definitions.
-They also check partial-stage reporting and failure-receipt errors.
-An unreadable failure receipt must not hide the original failure.
-These tests do not execute the initializer or prove database catalog behavior.
+Pure catalog tests compare the registered resources, function signatures, and
+guard definitions. They also check partial-stage reporting and failure-receipt
+errors. A separate disposable Testcontainers PostgreSQL test runs the exact
+preflight and protected-boundary SQL used by the initializer against
+Broker-shaped trigger functions and rejected privilege cases. It checks that
+the safe functions' ACLs stay unchanged, restricted runtime calls and trigger
+creation fail, and a classification change invalidates the protected boundary.
+These tests do not execute the initializer, connect to Azure, or prove live
+database state. The catalog test requires a Docker-compatible container engine.
 Do not retry or reset partially committed database state.
 Any database execution and reconciliation require separate approval.
 
-Run the source-only checks without starting database tests:
+Run the source-only checks without starting a database:
 
 ```powershell
 dotnet test tests\Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~P1PostgresInitializerTests
 node --test scripts\azure\tests\p1-postgres-plan.test.mjs
+```
+
+Run the production catalog SQL checks against a disposable PostgreSQL container:
+
+```powershell
+dotnet test tests\Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~P1PostgresInitializerPreflightPostgresTests
 ```
 
 ## System pool autoscaling
