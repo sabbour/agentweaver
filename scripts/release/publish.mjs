@@ -369,15 +369,15 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     if (feed.protocol !== 'https:' || feed.username || feed.password || feed.search || feed.hash || !env.RELEASE_NUGET_API_KEY) {
       fail('configure a credential-free HTTPS feed URL and a separate secret API key');
     }
-    const hasNugetUsername = Boolean(env.RELEASE_NUGET_USERNAME);
-    const validNugetUsername = /^[A-Za-z0-9_.-]+$/.test(env.RELEASE_NUGET_USERNAME ?? '');
-    if (feed.hostname === 'nuget.pkg.github.com' && !validNugetUsername) {
-      fail('GitHub Packages publication requires a valid repository-owner username');
+    if (feed.hostname === 'nuget.pkg.github.com') {
+      const validNugetUsername = /^(?=.{1,39}$)[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*$/.test(
+        env.RELEASE_NUGET_USERNAME ?? '',
+      );
+      if (!validNugetUsername) {
+        fail('GitHub Packages publication requires a valid repository-owner username');
+      }
+      nugetUsesCredentials = true;
     }
-    if (hasNugetUsername && !validNugetUsername) {
-      fail('NuGet source username must be a valid repository-owner name');
-    }
-    nugetUsesCredentials = hasNugetUsername;
   }
   if (hasImages) {
     registry = parseRegistry(env.RELEASE_REGISTRY);

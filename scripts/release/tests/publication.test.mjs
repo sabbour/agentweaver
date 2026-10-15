@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -529,7 +529,10 @@ test('manual publication requires confirmation and intact exact-source artifacts
 test('packages-only publication claims and pushes only the exact NuGet selection', (t) => {
   const f = fixture(t);
   f.prepare({ packagesOnly: true });
-  const env = { ...f.env };
+  const env = {
+    ...f.env,
+    RELEASE_NUGET_SOURCE: 'https://nuget.pkg.github.com/test-owner/index.json',
+  };
   env.RELEASE_NUGET_API_KEY = 'nuget-secret & <token> "quoted"';
   delete env.RELEASE_REGISTRY;
   delete env.RELEASE_REGISTRY_USER;
@@ -537,10 +540,16 @@ test('packages-only publication claims and pushes only the exact NuGet selection
   delete env.DOCKER_CONFIG;
 
   let configFile;
+  let configDirectory;
   let configContents;
   const receipt = f.publish({ packagesOnly: true, env, run: (bin, args) => {
     assert.equal(bin, 'dotnet');
     configFile = args[args.indexOf('--configfile') + 1];
+    configDirectory = path.dirname(configFile);
+    if (process.platform !== 'win32') {
+      assert.equal(statSync(configFile).mode & 0o777, 0o600);
+      assert.equal(statSync(configDirectory).mode & 0o777, 0o700);
+    }
     configContents = readFileSync(configFile, 'utf8');
     assert.equal(args[args.indexOf('--source') + 1], 'agentweaver-publication');
     assert.equal(args[args.indexOf('--api-key') + 1], env.RELEASE_NUGET_API_KEY);
@@ -554,36 +563,40 @@ test('packages-only publication claims and pushes only the exact NuGet selection
   assert.ok(push);
   assert.ok(configFile.startsWith(tmpdir()));
   assert.ok(!configFile.startsWith(f.outDir));
-  assert.match(configContents, /<add key="agentweaver-publication" value="https:\/\/feed\.example\.invalid\/v3\/index\.json" \/>/);
+  assert.match(configContents, /<add key="agentweaver-publication" value="https:\/\/nuget\.pkg\.github\.com\/test-owner\/index\.json" \/>/);
   assert.match(configContents, /<add key="Username" value="test-owner" \/>/);
   assert.match(configContents, /<add key="ClearTextPassword" value="nuget-secret &amp; &lt;token&gt; &quot;quoted&quot;" \/>/);
   assert.ok(!existsSync(configFile), 'temporary NuGet credentials must be removed after publication');
+  assert.ok(!existsSync(configDirectory), 'temporary NuGet directory must be removed after publication');
 });
 
-test('non-GitHub NuGet feeds retain API-key-only publication without a source username', (t) => {
-  const f = fixture(t);
-  f.prepare({ packagesOnly: true });
-  const env = { ...f.env };
-  delete env.RELEASE_NUGET_USERNAME;
-  delete env.RELEASE_REGISTRY;
-  delete env.RELEASE_REGISTRY_USER;
-  delete env.RELEASE_REGISTRY_PASSWORD;
-  delete env.DOCKER_CONFIG;
-  let pushArgs;
+test('non-GitHub NuGet feeds retain API-key-only publication with or without a source username', (t) => {
+  for (const username of [undefined, 'test-owner']) {
+    const f = fixture(t);
+    f.prepare({ packagesOnly: true });
+    const env = { ...f.env };
+    if (username === undefined) delete env.RELEASE_NUGET_USERNAME;
+    else env.RELEASE_NUGET_USERNAME = username;
+    delete env.RELEASE_REGISTRY;
+    delete env.RELEASE_REGISTRY_USER;
+    delete env.RELEASE_REGISTRY_PASSWORD;
+    delete env.DOCKER_CONFIG;
+    let pushArgs;
 
-  const receipt = f.publish({ packagesOnly: true, env, run: (bin, args) => {
-    assert.equal(bin, 'dotnet');
-    pushArgs = args;
-    return '';
-  } });
-  assert.equal(receipt.status, 'published');
-  assert.equal(pushArgs[pushArgs.indexOf('--source') + 1], env.RELEASE_NUGET_SOURCE);
-  assert.equal(pushArgs[pushArgs.indexOf('--api-key') + 1], env.RELEASE_NUGET_API_KEY);
-  assert.ok(!pushArgs.includes('--configfile'));
+    const receipt = f.publish({ packagesOnly: true, env, run: (bin, args) => {
+      assert.equal(bin, 'dotnet');
+      pushArgs = args;
+      return '';
+    } });
+    assert.equal(receipt.status, 'published');
+    assert.equal(pushArgs[pushArgs.indexOf('--source') + 1], env.RELEASE_NUGET_SOURCE);
+    assert.equal(pushArgs[pushArgs.indexOf('--api-key') + 1], env.RELEASE_NUGET_API_KEY);
+    assert.ok(!pushArgs.includes('--configfile'));
+  }
 });
 
 test('GitHub Packages requires a valid repository-owner username before claims or external effects', (t) => {
-  for (const username of [undefined, 'invalid owner']) {
+  for (const username of [undefined, 'invalid owner', '-owner', 'owner-', 'owner--name', 'owner..name', 'a'.repeat(40)]) {
     const f = fixture(t);
     f.prepare({ packagesOnly: true });
     const env = {
@@ -611,19 +624,25 @@ test('GitHub Packages requires a valid repository-owner username before claims o
 test('temporary NuGet credentials are removed after a failed package push', (t) => {
   const f = fixture(t);
   f.prepare({ packagesOnly: true });
-  const env = { ...f.env };
+  const env = {
+    ...f.env,
+    RELEASE_NUGET_SOURCE: 'https://nuget.pkg.github.com/test-owner/index.json',
+  };
   delete env.RELEASE_REGISTRY;
   delete env.RELEASE_REGISTRY_USER;
   delete env.RELEASE_REGISTRY_PASSWORD;
   delete env.DOCKER_CONFIG;
   let configFile;
+  let configDirectory;
 
   assert.throws(() => f.publish({ packagesOnly: true, env, run: (_bin, args) => {
     configFile = args[args.indexOf('--configfile') + 1];
+    configDirectory = path.dirname(configFile);
     throw new Error('simulated package push failure');
   } }), /simulated package push failure/);
   assert.ok(configFile);
   assert.ok(!existsSync(configFile), 'temporary NuGet credentials must be removed after failure');
+  assert.ok(!existsSync(configDirectory), 'temporary NuGet directory must be removed after failure');
 });
 
 test('packages-only publication rejects a full composition pack before any external command', (t) => {
