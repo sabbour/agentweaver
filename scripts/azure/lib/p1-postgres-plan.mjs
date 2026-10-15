@@ -141,12 +141,21 @@ const FUNCTIONS = {
   ],
 };
 
+const OWNER_ONLY_OBJECTS = {
+  projects_config: {
+    tables: ['project_setup_operations'],
+    sequences: ['platform_runtime_revisions_revision_seq'],
+  },
+};
+
 export function buildP1PostgresPlan() {
   const services = SERVICES.map(([service, schema, principalObjectId]) => ({
     service,
     schema,
     role: `aw-v1-p0-id-${service}`,
     principalObjectId,
+    ownerOnlyTables: OWNER_ONLY_OBJECTS[schema]?.tables ?? [],
+    ownerOnlySequences: OWNER_ONLY_OBJECTS[schema]?.sequences ?? [],
     tables: Object.entries(GROUPS[schema]).flatMap(([privileges, names]) =>
       names.split(' ').map(table => ({
         table,

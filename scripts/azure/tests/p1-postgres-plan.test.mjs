@@ -15,6 +15,13 @@ test('P1 plan binds the five existing runtime objects and operator-only target',
   assert.equal(new Set(plan.services.map(item => item.role)).size, 5);
   assert.deepEqual(plan.services.map(item => item.schema),
     ['projects_config', 'environment', 'knowledge', 'events_sessions', 'orchestrator']);
+  assert.deepEqual(plan.services.map(item => [item.ownerOnlyTables, item.ownerOnlySequences]), [
+    [['project_setup_operations'], ['platform_runtime_revisions_revision_seq']],
+    [[], []],
+    [[], []],
+    [[], []],
+    [[], []],
+  ]);
   assert.ok(plan.services.every(item => !item.role.includes('migration')));
   assert.ok(!JSON.stringify(plan).includes('password'));
 });
@@ -167,6 +174,10 @@ test('Catalog inventory includes exact source functions, tables, and lock grants
   });
   assert.ok(plan.services.every(service =>
     service.tables.every(table => table.table !== 'project_setup_operations')));
+  const projects = plan.services.find(service => service.schema === 'projects_config');
+  assert.deepEqual(projects.ownerOnlyTables, ['project_setup_operations']);
+  assert.deepEqual(projects.ownerOnlySequences, ['platform_runtime_revisions_revision_seq']);
+  assert.ok(!projects.tables.some(table => projects.ownerOnlyTables.includes(table.table)));
   assert.deepEqual(plan.services.find(service => service.schema === 'environment').tables
     .find(table => table.table === 'runtime_bootstrap_profile_replacements').privileges, ['SELECT', 'INSERT']);
   assert.deepEqual(plan.services.find(service => service.schema === 'environment').tables

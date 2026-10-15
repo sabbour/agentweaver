@@ -83,8 +83,28 @@ public static class KnowledgeMigrator
     {
         ArgumentNullException.ThrowIfNull(dataSource);
         ValidateSchema(schema);
-        var quotedSchema = QuoteSchema(schema);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await AssertMigrationInventoryAsync(connection, schema, cancellationToken).ConfigureAwait(false);
+        await VerifyRuntimePrivilegesAsync(connection, schema, cancellationToken).ConfigureAwait(false);
+    }
+
+    public static async Task VerifyMigrationsAppliedAsync(
+        NpgsqlDataSource dataSource,
+        string schema,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(dataSource);
+        ValidateSchema(schema);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await AssertMigrationInventoryAsync(connection, schema, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task AssertMigrationInventoryAsync(
+        NpgsqlConnection connection,
+        string schema,
+        CancellationToken cancellationToken)
+    {
+        var quotedSchema = QuoteSchema(schema);
         await using var command = new NpgsqlCommand($"""
             SELECT pg_catalog.to_regnamespace(@schema) IS NOT NULL
                AND pg_catalog.to_regclass(@migrations) IS NOT NULL
@@ -110,8 +130,6 @@ public static class KnowledgeMigrator
         if (await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
             throw new InvalidOperationException(
                 "The Knowledge schema is missing, incomplete, or has unsupported migrations. Run the approved Knowledge migration Job.");
-
-        await VerifyRuntimePrivilegesAsync(connection, schema, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task VerifyRuntimePrivilegesAsync(

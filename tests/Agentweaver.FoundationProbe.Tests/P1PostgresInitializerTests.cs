@@ -119,6 +119,63 @@ public sealed class P1PostgresInitializerTests
     }
 
     [Fact]
+    public void OwnerOnlyProjectsRelationsAreExactAndCannotEnterRuntimePlan()
+    {
+        var services = OwnerOnlyServices();
+        InitializerChecks.AssertOwnerOnlyObjectPlan(services);
+
+        foreach (var invalid in new[]
+        {
+            ReplaceProjects(services, service => service with { OwnerOnlyTables = [] }),
+            ReplaceProjects(services, service => service with { OwnerOnlyTables = ["unexpected"] }),
+            ReplaceProjects(services, service => service with { OwnerOnlySequences = ["unexpected"] }),
+            ReplaceProjects(services, service => service with
+            {
+                Tables = [new("project_setup_operations", ["SELECT"], null, false, null)],
+            }),
+            ReplaceProjects(services, service => service with
+            {
+                Functions = [new("reject_project_setup_operation_mutation()", true)],
+            }),
+        })
+            Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertOwnerOnlyObjectPlan(invalid));
+    }
+
+    [Fact]
+    public void ContinuationReceiptMustProveOnlyTheExactProjectsMigratedPrefix()
+    {
+        var valid = ContinuationReceipt();
+        InitializerChecks.AssertContinuationReceipt(valid, "source", "core", "plan");
+
+        foreach (var invalid in new[]
+        {
+            valid[..^1],
+            [.. valid, valid[^1] with { Stage = "environment:schema_created" }],
+            [.. valid, valid[^1] with { Stage = "projects-config:exact_grants_checked_and_committed" }],
+            [.. valid, valid[^1] with { SourceSha = "different" }],
+            [.. valid, valid[^1] with { PlanHash = "different" }],
+        })
+            Assert.Throws<InvalidOperationException>(() =>
+                InitializerChecks.AssertContinuationReceipt(invalid, "source", "core", "plan"));
+    }
+
+    [Fact]
+    public void ContinuationRequiresTheExactKnownMigrationSet()
+    {
+        var expected = new[] { "001_initial", "002_authority", "003_setup" };
+        InitializerChecks.AssertExactMigrationHistory(expected, expected, "Projects");
+        foreach (var actual in new[]
+        {
+            new[] { "003_setup", "001_initial", "002_authority" },
+            new[] { "001_initial", "002_authority" },
+            new[] { "001_initial", "002_authority", "003_setup", "004_unknown" },
+            new[] { "001_initial", "002_authority", "002_authority" },
+        })
+            Assert.Throws<InvalidOperationException>(() =>
+                InitializerChecks.AssertExactMigrationHistory(expected, actual, "Projects"));
+    }
+
+    [Fact]
     public void MutationDenialReadbackRequiresEnabledExactTriggersAndNonExecutableRejectingFunctions()
     {
         foreach (var service in MutationServices().Skip(3))
@@ -252,6 +309,29 @@ public sealed class P1PostgresInitializerTests
         FunctionState casting = new(2, service.Functions[1].Signature, Owner,
             [new(Owner, Runtime, "EXECUTE", false), new(Owner, Owner, "EXECUTE", false)], true);
         InitializerChecks.AssertFunctions(service, [casting, helper], Owner, Runtime);
+        var castingBeforeGrant = casting with
+        {
+            Grants = [new(Owner, Owner, "EXECUTE", false)],
+            RuntimeCanExecute = false,
+        };
+        var defaultPublicHelper = helper with
+        {
+            Grants = [.. helper.Grants, new(Owner, 0, "EXECUTE", false)],
+            RuntimeCanExecute = true,
+        };
+        InitializerChecks.AssertFunctions(
+            service, [castingBeforeGrant, defaultPublicHelper], Owner, Runtime, beforeRuntimeGrants: true);
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertFunctions(
+            service, [castingBeforeGrant, defaultPublicHelper with
+            {
+                Grants = [.. defaultPublicHelper.Grants, new(Owner, Runtime, "EXECUTE", false)],
+            }], Owner, Runtime, beforeRuntimeGrants: true));
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertFunctions(
+            service, [castingBeforeGrant with
+            {
+                Grants = [.. castingBeforeGrant.Grants, new(Owner, 0, "EXECUTE", false)],
+                RuntimeCanExecute = true,
+            }, helper], Owner, Runtime, beforeRuntimeGrants: true));
         foreach (var wrong in new[]
         {
             helper with { OwnerOid = Owner + 1 },
@@ -342,6 +422,45 @@ public sealed class P1PostgresInitializerTests
     private static ServicePlan[] Services() => Enumerable.Range(0, 5).Select(index =>
         new ServicePlan($"service-{index}", $"schema_{index}", $"runtime_{index}",
             $"00000000-0000-0000-0000-{index + 1:000000000000}", [], [])).ToArray();
+
+    private static ServicePlan[] OwnerOnlyServices()
+    {
+        var services = Services();
+        services[0] = services[0] with
+        {
+            Service = "projects-config",
+            Schema = "projects_config",
+            OwnerOnlyTables = ["project_setup_operations"],
+            OwnerOnlySequences = ["platform_runtime_revisions_revision_seq"],
+            Functions =
+            [
+                new("reject_project_setup_operation_mutation()", false),
+                new("lock_casting_authority(uuid, text, text, text, bigint, text, boolean)", false),
+            ],
+        };
+        return services;
+    }
+
+    private static ServicePlan[] ReplaceProjects(ServicePlan[] services, Func<ServicePlan, ServicePlan> replace)
+    {
+        var copy = services.ToArray();
+        copy[0] = replace(copy[0]);
+        return copy;
+    }
+
+    private static ContinuationReceiptEntry[] ContinuationReceipt()
+    {
+        var at = DateTimeOffset.Parse("2026-10-15T10:00:00Z");
+        return
+        [
+            new("source_checked", "source", "core", "plan", at),
+            new("fresh_target_checked", "source", "core", "plan", at),
+            new("five_runtime_roles_created_and_exact_mappings_checked", "source", "core", "plan", at),
+            new("projects-config:schema_created", "source", "core", "plan", at),
+            new("projects-config:migrated", "source", "core", "plan", at),
+            new("failed_requires_explicit_reconciliation", "source", "core", "plan", at),
+        ];
+    }
 
     private static ServicePlan[] MutationServices()
     {
