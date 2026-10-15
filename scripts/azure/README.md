@@ -75,10 +75,9 @@ removed.
 
 Initialization requires `--initialize` with full source and Core merge SHAs,
 the exact source plan hash, and a new receipt path under that source copy's
-`Temp` directory. It requires a clean source checkout whose `HEAD` is the
-admitted source or its pinned candidate commit directly above it, and whose
-fetched `origin/v1` matches the admitted source SHA. It validates the reviewed
-Core merge and required migration wiring, and recomputes the plan hash. It then
+`Temp` directory. It requires a clean source checkout whose `HEAD` and fetched
+`origin/v1` both match the supplied source SHA. It validates the reviewed Core
+merge and required migration wiring, and recomputes the plan hash. It then
 requests an Azure CLI token, connects to verify the exact operator and fresh
 target, and runs the permission preflight before role creation. These checks
 block unsafe writes; they do not prevent credential requests or database
