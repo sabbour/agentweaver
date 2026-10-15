@@ -38,8 +38,9 @@ jobs:
       - name: Load exact archive in configured publisher context
         run: |
           set -euo pipefail
-          file=artifacts/release/pack/Agentweaver.Web.1.0.0.tar
-          provenance=artifacts/release/pack/provenance.json
+          provenance="$(find artifacts/release/pack -type f -name provenance.json -print -quit)"
+          test -n "$provenance"
+          file="${provenance%/*}/Agentweaver.Web.1.0.0.tar"
           expected="$(jq -r '.artifacts[] | select(.componentId == "Agentweaver.Web") | [.imageId, .labels["org.opencontainers.image.revision"], .labels["org.opencontainers.image.version"], .imageReference] | @tsv' "$provenance")"
           IFS=$'\t' read -r image_id source_sha version image_reference <<< "$expected"
           echo "engine=$(docker info --format '{{.ServerVersion}}|{{json .DriverStatus}}')"
@@ -52,8 +53,9 @@ jobs:
           DOCKER_CONTEXT: default
         run: |
           set -euo pipefail
-          file=artifacts/release/pack/Agentweaver.Web.1.0.0.tar
-          provenance=artifacts/release/pack/provenance.json
+          provenance="$(find artifacts/release/pack -type f -name provenance.json -print -quit)"
+          test -n "$provenance"
+          file="${provenance%/*}/Agentweaver.Web.1.0.0.tar"
           expected="$(jq -r '.artifacts[] | select(.componentId == "Agentweaver.Web") | [.imageId, .labels["org.opencontainers.image.revision"], .labels["org.opencontainers.image.version"], .imageReference] | @tsv' "$provenance")"
           IFS=$'\t' read -r image_id source_sha version image_reference <<< "$expected"
           echo "engine=$(docker info --format '{{.ServerVersion}}|{{json .DriverStatus}}')"
