@@ -1,0 +1,63 @@
+name: Temporary Web image load check
+
+on:
+  push:
+    branches:
+      - sabbour-deploy-p1-to-azure
+    paths:
+      - .github/workflows/_temporary-web-image-load-check.yml
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  compare-load-contexts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Set up product Docker engine
+        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+        with:
+          version: v29.9.0
+          set-host: true
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
+      - name: Download exact failed pack artifact
+        uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          repository: sabbour/agentweaver
+          run-id: 38664134806
+          artifact-ids: 11940246842
+          path: artifacts/release/pack/
+      - name: Load exact archive in configured publisher context
+        run: |
+          set -euo pipefail
+          file=artifacts/release/pack/Agentweaver.Web.1.0.0.tar
+          provenance=artifacts/release/pack/provenance.json
+          expected="$(jq -r '.artifacts[] | select(.componentId == "Agentweaver.Web") | [.imageId, .labels["org.opencontainers.image.revision"], .labels["org.opencontainers.image.version"], .imageReference] | @tsv' "$provenance")"
+          IFS=$'\t' read -r image_id source_sha version image_reference <<< "$expected"
+          echo "engine=$(docker info --format '{{.ServerVersion}}|{{json .DriverStatus}}')"
+          docker load --input "$file" >/dev/null
+          actual="$(docker image inspect --format '{{.Id}}|{{.Os}}|{{.Architecture}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{index .Config.Labels "org.opencontainers.image.version"}}' "$image_reference")"
+          wanted="${image_id}|linux|amd64|${source_sha}|${version}"
+          printf 'publisher-context expected=%s observed=%s match=%s\n' "$wanted" "$actual" "$([[ "$actual" == "$wanted" ]] && echo true || echo false)"
+      - name: Load exact archive in pack context
+        env:
+          DOCKER_CONTEXT: default
+        run: |
+          set -euo pipefail
+          file=artifacts/release/pack/Agentweaver.Web.1.0.0.tar
+          provenance=artifacts/release/pack/provenance.json
+          expected="$(jq -r '.artifacts[] | select(.componentId == "Agentweaver.Web") | [.imageId, .labels["org.opencontainers.image.revision"], .labels["org.opencontainers.image.version"], .imageReference] | @tsv' "$provenance")"
+          IFS=$'\t' read -r image_id source_sha version image_reference <<< "$expected"
+          echo "engine=$(docker info --format '{{.ServerVersion}}|{{json .DriverStatus}}')"
+          docker load --input "$file" >/dev/null
+          actual="$(docker image inspect --format '{{.Id}}|{{.Os}}|{{.Architecture}}|{{index .Config.Labels "org.opencontainers.image.revision"}}|{{index .Config.Labels "org.opencontainers.image.version"}}' "$image_reference")"
+          wanted="${image_id}|linux|amd64|${source_sha}|${version}"
+          printf 'pack-context expected=%s observed=%s match=%s\n' "$wanted" "$actual" "$([[ "$actual" == "$wanted" ]] && echo true || echo false)"
