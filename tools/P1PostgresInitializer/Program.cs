@@ -129,7 +129,7 @@ try
     }
     var existingBoundary = await ReadExistingBoundaryAsync(connection, null, plan, cancellationToken);
     var operatorOid = await ReadJsonAsync<uint>(connection, null,
-        "SELECT to_jsonb(oid)::text FROM pg_catalog.pg_roles WHERE rolname = current_user", cancellationToken);
+        "SELECT to_jsonb(oid::bigint)::text FROM pg_catalog.pg_roles WHERE rolname = current_user", cancellationToken);
     RuntimePrincipal[] principals = [];
     await RecordAsync("fresh_target_checked");
 

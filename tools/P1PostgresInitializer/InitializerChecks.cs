@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace Agentweaver.P1PostgresInitializer;
 
 internal static class InitializerChecks
@@ -166,17 +168,32 @@ internal static class InitializerChecks
     }
 }
 
-internal sealed record AclGrant(uint Grantor, uint Grantee, string Privilege, bool Grantable);
-internal sealed record ExistingBoundary(uint DatabaseOid, uint OwnerOid, uint ConnectGrantorOid,
+internal sealed record AclGrant(
+    [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint Grantor,
+    [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint Grantee,
+    string Privilege, bool Grantable);
+internal sealed record ExistingBoundary(
+    [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint DatabaseOid,
+    [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint OwnerOid,
+    [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint ConnectGrantorOid,
     AclGrant[] Grants, string ProtectedState);
-internal sealed record PreflightSnapshot(ExistingBoundary? Boundary, uint OperatorOid,
+internal sealed record PreflightSnapshot(ExistingBoundary? Boundary,
+    [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint OperatorOid,
     bool OperatorCanGrantConnect, bool ForeignPublicAuthority, bool IncompatibleDefaults);
-internal sealed record RoleMembership(uint RoleOid, uint MemberOid, uint GrantorOid,
+internal sealed record RoleMembership(
+    [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint RoleOid,
+    [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint MemberOid,
+    [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint GrantorOid,
     bool Admin, bool Inherit, bool Set);
-internal sealed record RuntimePrincipal(uint Oid, string Role, string? ObjectId, string? Type,
+internal sealed record RuntimePrincipal(
+    [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint Oid,
+    string Role, string? ObjectId, string? Type,
     int? AdminFlag, bool CanLogin, bool Superuser, bool CreateDatabase, bool CreateRole,
     bool Replication, bool Inherit, bool BypassRls, string? TenantId, int? MfaFlag, RoleMembership[] Memberships);
-internal sealed record FunctionState(uint Oid, string Signature, uint OwnerOid,
+internal sealed record FunctionState(
+    [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint Oid,
+    string Signature,
+    [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint OwnerOid,
     AclGrant[] Grants, bool RuntimeCanExecute);
 internal sealed record PostgresPlan(int FormatVersion, TargetPlan Target, ServicePlan[] Services, int[] CoreVersions);
 internal sealed record TargetPlan(string TenantId, string PostgresHost, string Database, string OperatorName,
@@ -189,6 +206,8 @@ internal sealed record MutationDenialGuardPlan(string Trigger, string Function, 
     string Message, string? SqlState);
 internal sealed record MutationGuardState(string Table, string? TriggerName, string? FunctionSchema,
     string? FunctionName, int? TriggerType, string? Enabled, bool? IsInternal, bool? NoColumnFilter,
-    bool? NoCondition, int? ArgumentCount, uint? FunctionOwnerOid, bool? RuntimeCanExecute,
+    bool? NoCondition, int? ArgumentCount,
+    [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint? FunctionOwnerOid,
+    bool? RuntimeCanExecute,
     string? FunctionSource);
 internal sealed record FunctionPlan(string Signature, bool Execute);
