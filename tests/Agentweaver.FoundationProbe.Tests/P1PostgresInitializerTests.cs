@@ -206,6 +206,40 @@ public sealed class P1PostgresInitializerTests
     }
 
     [Fact]
+    public void PostgresOidJsonStringsDeserializeForCatalogReadbacks()
+    {
+        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+        var boundary = JsonSerializer.Deserialize<ExistingBoundary>("""
+            {"databaseOid":"20","ownerOid":"10","connectGrantorOid":"10","grants":[{"grantor":"10","grantee":"0","privilege":"CONNECT","grantable":false}],"protectedState":"unchanged"}
+            """, options)!;
+        Assert.Equal(20u, boundary.DatabaseOid);
+        Assert.Equal(0u, boundary.Grants[0].Grantee);
+
+        var preflight = JsonSerializer.Deserialize<PreflightSnapshot>("""
+            {"boundary":null,"operatorOid":"10","operatorCanGrantConnect":true,"foreignPublicAuthority":false,"incompatibleDefaults":false}
+            """, options)!;
+        Assert.Equal(10u, preflight.OperatorOid);
+
+        var principal = JsonSerializer.Deserialize<RuntimePrincipal>("""
+            {"oid":"100","role":"runtime","objectId":null,"type":"service","adminFlag":0,"canLogin":true,"superuser":false,"createDatabase":false,"createRole":false,"replication":false,"inherit":false,"bypassRls":false,"tenantId":null,"mfaFlag":0,"memberships":[{"roleOid":"100","memberOid":"10","grantorOid":"10","admin":true,"inherit":false,"set":false}]}
+            """, options)!;
+        Assert.Equal(100u, principal.Oid);
+        Assert.Equal(10u, principal.Memberships[0].MemberOid);
+
+        var function = JsonSerializer.Deserialize<FunctionState>("""
+            {"oid":"200","signature":"helper()","ownerOid":"10","grants":[{"grantor":"10","grantee":"100","privilege":"EXECUTE","grantable":false}],"runtimeCanExecute":false}
+            """, options)!;
+        Assert.Equal(200u, function.Oid);
+        Assert.Equal(100u, function.Grants[0].Grantee);
+
+        var mutationGuard = JsonSerializer.Deserialize<MutationGuardState>("""
+            {"table":"sessions","triggerName":"sessions_no_update","functionSchema":"events_sessions","functionName":"reject_row_lock_record_update()","triggerType":19,"enabled":"O","isInternal":false,"noColumnFilter":true,"noCondition":true,"argumentCount":0,"functionOwnerOid":"10","runtimeCanExecute":false,"functionSource":"BEGIN"}
+            """, options)!;
+        Assert.Equal(10u, mutationGuard.FunctionOwnerOid);
+        Assert.Equal(10u, JsonSerializer.Deserialize<uint>("10"));
+    }
+
+    [Fact]
     public void FunctionOwnersAclAndEffectiveExecuteMatchOnlyTheCastingPlan()
     {
         var service = Services()[0] with
