@@ -105,33 +105,35 @@ public sealed class P1PostgresInitializerPreflightPostgresTests(ProbePostgresFix
         await AssertPreflightRejectedAsync(connection, foreignAuthority: true);
         await ExecuteAsync(connection, "DROP FUNCTION identity_broker.definer_trigger()");
 
-        var argumentedTriggerError = await Record.ExceptionAsync(() => ExecuteAsync(connection, """
-            CREATE FUNCTION identity_broker.argumented_trigger(value integer) RETURNS trigger
-            LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$
-            """));
-        if (argumentedTriggerError is null)
+        await ExecuteAsync(connection, "SET check_function_bodies = off");
+        try
         {
-            await AssertPreflightRejectedAsync(connection, foreignAuthority: true);
-            await ExecuteAsync(connection, "DROP FUNCTION identity_broker.argumented_trigger(integer)");
+            await ExecuteAsync(connection, """
+                CREATE FUNCTION identity_broker.argumented_trigger(value integer) RETURNS trigger
+                LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$
+                """);
         }
-        else
+        finally
         {
-            Assert.IsType<PostgresException>(argumentedTriggerError);
+            await ExecuteAsync(connection, "RESET check_function_bodies");
         }
+        await AssertPreflightRejectedAsync(connection, foreignAuthority: true);
+        await ExecuteAsync(connection, "DROP FUNCTION identity_broker.argumented_trigger(integer)");
 
-        var nonPlpgsqlTriggerError = await Record.ExceptionAsync(() => ExecuteAsync(connection, """
+        await ExecuteAsync(connection, """
             CREATE FUNCTION identity_broker.non_plpgsql_trigger() RETURNS trigger
-            LANGUAGE sql AS $$ SELECT NULL::pg_catalog.trigger $$
-            """));
-        if (nonPlpgsqlTriggerError is null)
-        {
-            await AssertPreflightRejectedAsync(connection, foreignAuthority: true);
-            await ExecuteAsync(connection, "DROP FUNCTION identity_broker.non_plpgsql_trigger()");
-        }
-        else
-        {
-            Assert.IsType<PostgresException>(nonPlpgsqlTriggerError);
-        }
+            AS 'suppress_redundant_updates_trigger' LANGUAGE internal
+            """);
+        await ExecuteAsync(connection, """
+            CREATE TRIGGER non_plpgsql_trigger
+            BEFORE UPDATE ON identity_broker.secret_grant_operations
+            FOR EACH ROW EXECUTE FUNCTION identity_broker.non_plpgsql_trigger()
+            """);
+        await AssertPreflightRejectedAsync(connection, foreignAuthority: true);
+        await ExecuteAsync(connection, """
+            DROP TRIGGER non_plpgsql_trigger ON identity_broker.secret_grant_operations
+            """);
+        await ExecuteAsync(connection, "DROP FUNCTION identity_broker.non_plpgsql_trigger()");
 
         var grantOptionError = await Assert.ThrowsAsync<PostgresException>(() =>
             ExecuteAsync(connection, """
