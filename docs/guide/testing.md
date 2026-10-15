@@ -167,6 +167,10 @@ regression for the complete production post-create sequence, including exact
 grantor-OID preservation and membership cleanup, plus negative tests that all
 unsafe reserved flags are rejected before commit. Neither selection runs the initializer or its live
 execution blocks.
+The separate live P1 status is recorded in the
+[Azure tooling guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal);
+neither these source tests nor that read-only snapshot proves successful
+initialization or deployment.
 See the [operator source limits](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal)
 before interpreting these checks as evidence.
 
