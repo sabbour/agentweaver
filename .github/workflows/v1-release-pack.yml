@@ -253,6 +253,18 @@ jobs:
         with:
           name: v1-release-pack-${{ github.sha }}-${{ github.run_id }}
           path: artifacts/release/pack/
+      - name: Set up product Docker engine
+        if: ${{ inputs.platform_only }}
+        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+        with:
+          version: 'v29.9.0'
+          set-host: true
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
       - name: Manually publish verified exact-source artifacts
         env:
           GH_TOKEN: ${{ github.token }}

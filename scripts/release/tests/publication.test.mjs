@@ -812,6 +812,19 @@ test('existing Linux workflow defaults off and isolates the approved sampler rou
   assert.match(ordinary, /RELEASE_REGISTRY: ghcr\.io\/sabbour/);
   assert.match(ordinary, /RELEASE_REGISTRY_USER: \$\{\{ github\.repository_owner \}\}/);
   assert.match(ordinary, /RELEASE_REGISTRY_PASSWORD: \$\{\{ github\.token \}\}/);
+  const publisherEngine = ordinary.slice(
+    ordinary.indexOf('name: Set up product Docker engine'),
+    ordinary.indexOf('name: Manually publish verified exact-source artifacts'),
+  );
+  assert.match(publisherEngine, /if: \$\{\{ inputs\.platform_only \}\}/);
+  assert.match(publisherEngine, /uses: docker\/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70/);
+  assert.match(publisherEngine, /version: 'v29\.9\.0'\s+set-host: true\s+daemon-config:[\s\S]*?"containerd-snapshotter": true/);
+  assert.ok(ordinary.indexOf('name: Set up product Docker engine') <
+    ordinary.indexOf('name: Manually publish verified exact-source artifacts'));
+  assert.doesNotMatch(
+    ordinary.slice(ordinary.indexOf('name: Manually publish verified exact-source artifacts')),
+    /DOCKER_CONTEXT:/,
+  );
   assert.doesNotMatch(ordinary, /secrets\.RELEASE_REGISTRY_(?:USER|PASSWORD)/);
   assert.match(sampler, /packages: write/);
   assert.match(sampler, /RELEASE_REGISTRY: ghcr\.io\/sabbour/);
