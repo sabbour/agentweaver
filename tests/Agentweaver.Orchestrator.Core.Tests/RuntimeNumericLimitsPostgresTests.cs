@@ -569,6 +569,10 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
         Assert.Equal(issued, await IssueAsync(0, invocation));
         await GrantStore().RequireToolInvocationReservationAsync(_registrations[0], invocation, default);
         Assert.Equal(1, await CountToolReservationsAsync());
+        var binding = _registrations[0].Binding;
+        Assert.Equal(
+            $"coordination/{binding.ProjectId}/{binding.RunId}/runtime-tool-invocations",
+            await ReadToolReservationStreamAsync(invocation.EventId));
         Assert.Equal("runtime_tool_call_limit_exhausted",
             (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                 IssueAsync(0, invocation with { EventId = Guid.NewGuid() }))).Code);
@@ -1169,6 +1173,17 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             WHERE event_type = 'orchestrator.runtime.tool_invocation_admitted'
             """, connection);
         return (long)(await command.ExecuteScalarAsync())!;
+    }
+
+    private async Task<string> ReadToolReservationStreamAsync(Guid eventId)
+    {
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var command = new NpgsqlCommand($"""
+            SELECT stream_id FROM "{_schema}".outbox_events
+            WHERE id = @event AND event_type = 'orchestrator.runtime.tool_invocation_admitted'
+            """, connection);
+        command.Parameters.AddWithValue("event", eventId);
+        return (string)(await command.ExecuteScalarAsync())!;
     }
 
     private async Task<long> CountSoftCreditWarningsAsync()

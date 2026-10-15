@@ -4063,12 +4063,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await AssertStatusAsync(replyJournalResponse, HttpStatusCode.OK);
         using var replyJournal = JsonDocument.Parse(await replyJournalResponse.Content.ReadAsStringAsync());
         var childEvents = replyJournal.RootElement.GetProperty("events").EnumerateArray().ToArray();
-        Assert.Equal(!revokeSourceBeforeSdk && sourceLoss is null ? 6 : 1, childEvents.Length);
+        Assert.Equal(!revokeSourceBeforeSdk && sourceLoss is null
+            ? 6 + (reserveObservedToolInvocation ? 1 : 0)
+            : 1, childEvents.Length);
         if (!revokeSourceBeforeSdk && sourceLoss is null)
         {
             Assert.Equal(3, childEvents.Count(item => item.GetProperty("kind").GetString() == "turn"));
             Assert.Single(childEvents, item => item.GetProperty("kind").GetString() == "cacheReference");
-            Assert.Single(childEvents, item => item.GetProperty("kind").GetString() == "policyEvaluation");
+            Assert.Equal(reserveObservedToolInvocation ? 2 : 1,
+                childEvents.Count(item => item.GetProperty("kind").GetString() == "policyEvaluation"));
         }
         var replyJournalEvent = Assert.Single(
             childEvents, item => item.GetProperty("kind").GetString() == "addressedMessage");

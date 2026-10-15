@@ -181,7 +181,7 @@ internal sealed class ExecutableActionGrantOwnerStore(
                     "runtime_tool_call_limit_exhausted");
             }
             await _outbox.EnqueueAsync(connection, transaction, new OutboxEvent(
-                request.EventId, $"coordination/{binding.ProjectId}/{binding.RunId}/{binding.SessionId}",
+                request.EventId, $"coordination/{binding.ProjectId}/{binding.RunId}/runtime-tool-invocations",
                 $"runtime-tool-invocation/{request.EventId:N}", ToolInvocationEventType, 1,
                 JsonSerializer.SerializeToElement(new
                 {
