@@ -259,66 +259,15 @@ static async Task<string> RunLocalAsync(string name, string[] arguments)
 static Task<ExistingBoundary> ReadExistingBoundaryAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction,
     PostgresPlan plan, CancellationToken cancellationToken)
 {
-    return ReadJsonAsync<ExistingBoundary>(connection, transaction, """
-        WITH database AS (
-          SELECT d.*, r.oid AS operator_oid, r.rolsuper
-          FROM pg_catalog.pg_database d CROSS JOIN pg_catalog.pg_roles r
-          WHERE d.datname = 'agentweaver' AND r.rolname = current_user)
-        SELECT jsonb_build_object(
-          'databaseOid', database.oid, 'ownerOid', datdba,
-          'connectGrantorOid', CASE WHEN rolsuper OR datdba = operator_oid THEN datdba ELSE operator_oid END,
-          'grants', (SELECT coalesce(jsonb_agg(jsonb_build_object(
-                     'grantor', a.grantor, 'grantee', a.grantee,
-                     'privilege', a.privilege_type, 'grantable', a.is_grantable)
-                     ORDER BY a.grantor, a.grantee, a.privilege_type, a.is_grantable), '[]'::jsonb)
-                     FROM pg_catalog.aclexplode(coalesce(datacl, pg_catalog.acldefault('d', datdba))) a),
-          'protectedState', jsonb_build_object(
-          'schemas', (SELECT jsonb_agg(jsonb_build_array(nspname, nspowner, nspacl) ORDER BY nspname)
-                     FROM pg_catalog.pg_namespace WHERE nspname <> ALL(@schemas)),
-          'defaults', (SELECT jsonb_agg(to_jsonb(d) ORDER BY d.oid) FROM pg_catalog.pg_default_acl d),
-          'objects', (SELECT jsonb_agg(jsonb_build_array(n.nspname, c.relname, c.relowner, c.relacl) ORDER BY n.nspname, c.relname)
-                      FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                      WHERE n.nspname IN ('public', 'identity_broker', 'foundation_probe')),
-          'functions', (SELECT jsonb_agg(jsonb_build_array(p.oid, p.pronamespace, p.proowner,
-                        coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) ORDER BY p.oid)
-                        FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
-                        WHERE n.nspname <> ALL(@schemas)))::text)::text FROM database
-        """, cancellationToken, new NpgsqlParameter("schemas", plan.Services.Select(item => item.Schema).ToArray()));
+    return ReadJsonAsync<ExistingBoundary>(connection, transaction, InitializerChecks.ExistingBoundaryQuery,
+        cancellationToken, new NpgsqlParameter("schemas", plan.Services.Select(item => item.Schema).ToArray()));
 }
 
 static async Task AssertPreflightAsync(NpgsqlConnection connection, PostgresPlan plan,
     ExistingBoundary baseline, uint operatorOid, CancellationToken cancellationToken)
 {
-    var state = await ReadJsonAsync<PreflightSnapshot>(connection, null, """
-        SELECT jsonb_build_object(
-          'operatorOid', r.oid,
-          'operatorCanGrantConnect', r.rolsuper OR d.datdba = r.oid OR EXISTS (
-            SELECT 1 FROM pg_catalog.aclexplode(coalesce(d.datacl, pg_catalog.acldefault('d', d.datdba))) a
-            WHERE a.grantee = r.oid AND a.privilege_type = 'CONNECT' AND a.is_grantable),
-          'foreignPublicAuthority',
-            EXISTS (SELECT 1 FROM pg_catalog.pg_namespace n,
-              LATERAL pg_catalog.aclexplode(coalesce(n.nspacl, pg_catalog.acldefault('n', n.nspowner))) a
-              WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
-                AND a.grantee = 0 AND a.privilege_type = 'CREATE')
-            OR EXISTS (SELECT 1 FROM pg_catalog.pg_class c
-              JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace,
-              LATERAL pg_catalog.aclexplode(coalesce(c.relacl,
-                pg_catalog.acldefault(CASE WHEN c.relkind = 'S' THEN 's'::"char" ELSE 'r'::"char" END, c.relowner))) a
-              WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
-                AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S') AND a.grantee = 0)
-            OR EXISTS (SELECT 1 FROM pg_catalog.pg_proc p
-              JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace,
-              LATERAL pg_catalog.aclexplode(coalesce(p.proacl, pg_catalog.acldefault('f', p.proowner))) a
-              WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' AND a.grantee = 0),
-          'incompatibleDefaults', EXISTS (
-            SELECT 1 FROM pg_catalog.pg_default_acl defaults,
-              LATERAL pg_catalog.aclexplode(defaults.defaclacl) a
-            WHERE defaults.defaclrole = r.oid AND defaults.defaclnamespace = 0
-              AND a.grantee <> r.oid AND NOT (defaults.defaclobjtype = 'f'
-                AND a.grantee = 0 AND a.privilege_type = 'EXECUTE' AND NOT a.is_grantable)))
-        ::text FROM pg_catalog.pg_database d CROSS JOIN pg_catalog.pg_roles r
-        WHERE d.datname = 'agentweaver' AND r.rolname = current_user
-        """, cancellationToken);
+    var state = await ReadJsonAsync<PreflightSnapshot>(connection, null, InitializerChecks.PreflightQuery,
+        cancellationToken);
     var current = await ReadExistingBoundaryAsync(connection, null, plan, cancellationToken);
     if (state.OperatorOid != operatorOid)
         throw new InvalidOperationException("The operator role changed before initialization. No writes are permitted.");

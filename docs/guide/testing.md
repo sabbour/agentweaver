@@ -142,7 +142,7 @@ These source results do not prove native TLS, mounted restore contents, Cilium t
 | Blob tests | Azure SDK requests, streamed data, create-only writes, and missing-object results through a fake HTTP transport. | Live credentials, permissions, durability, or cloud access. |
 | Telemetry tests | In-process OpenTelemetry setup and Azure Monitor exporter behavior through an injected transport. | Azure Monitor ingestion. |
 | Azure tooling tests | Target, source, digest, command, and acceptance guards through fake `az` and `git` executors. | A live Azure call or provisioned resource. |
-| P1 PostgreSQL initializer source tests | Canonical database grant comparisons, pre-write rejection, five exact principal mappings and memberships, function ownership and EXECUTE grants, planned and read-back installed mutation guard checks, ordered role-stage checks, partial-stage receipts, and original-error preservation when the failure receipt fails. The existing Foundation Probe test project compiles the same dependency-free helper used by the initializer. | Initializer execution, actual PostgreSQL catalog or transaction behavior, live Entra principal creation, restricted-role mutation tests, runtime identity proof, or deployment. |
+| P1 PostgreSQL initializer tests | Pure tests cover canonical database grant comparisons, pre-write rejection, five exact principal mappings and memberships, function ownership and EXECUTE grants, planned and read-back installed mutation guard checks, ordered role-stage checks, partial-stage receipts, and original-error preservation when the failure receipt fails. A disposable PostgreSQL test runs the initializer's actual preflight and protected-boundary SQL against Broker-shaped trigger functions, unsafe function types, public grants, and a restricted runtime role. | Initializer execution, live Entra principal creation, live database state, or deployment. |
 | Foundation Probe tests | Receipt and token checks, provider pins, exact-version Key Vault read, owned Blob cleanup, PostgreSQL effects, and trace evidence. | Azure resource access or Identity broker redemption. |
 | AgentHost tests | Actual native SDK transport, authenticated configure/refresh/A2A, exact replay, current owner/source rejection, guarded effects, turn content, idle-boundary priority, accounting acknowledgment, cache recovery, and exact startup-time ceilings. CI separately measures the compressed amd64 OCI image and starts its image-owned pinned runtime with non-executable private mounts, without network or a model call. | Automatic scheduling, deployed TLS/Sandbox placement, live OAuth/entitlement, paid model execution, or publication. |
 
@@ -158,8 +158,12 @@ checks that the merged SHA remains durable and can be replayed from another host
 
 Run the bounded initializer source tests with
 `dotnet test tests/Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~P1PostgresInitializerTests`.
-This selection does not start the project's PostgreSQL containers.
-Both initializer execution blocks remain active.
+This selection does not start a PostgreSQL container. Run the actual catalog
+SQL tests separately with
+`dotnet test tests/Agentweaver.FoundationProbe.Tests --filter FullyQualifiedName~P1PostgresInitializerPreflightPostgresTests`;
+that selection uses the existing disposable PostgreSQL fixture and requires a
+Docker-compatible engine. Neither selection runs the initializer or its live
+execution blocks.
 See the [operator source limits](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal)
 before interpreting these checks as evidence.
 
