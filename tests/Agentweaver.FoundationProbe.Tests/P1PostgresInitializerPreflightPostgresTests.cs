@@ -165,6 +165,203 @@ public sealed class P1PostgresInitializerPreflightPostgresTests(ProbePostgresFix
         Assert.Equal(functionAcls, await ReadBrokerFunctionAclsAsync(connection));
     }
 
+    [Fact]
+    public async Task ProductionRoleSetupSqlWorksForNonSuperuserCreateRoleOperatorAndCommitsExactState()
+    {
+        await using var admin = new NpgsqlConnection(fixture.ConnectionString);
+        await admin.OpenAsync();
+        await PrepareRoleSetupFixtureAsync(admin);
+        try
+        {
+            await using var operatorConnection = await OpenOperatorAsync();
+            Assert.False(await ScalarAsync<bool>(operatorConnection,
+                "SELECT rolsuper OR rolcreatedb OR rolreplication OR rolbypassrls FROM pg_roles WHERE rolname = current_user"));
+            await using var transaction = await operatorConnection.BeginTransactionAsync();
+            await CreateRuntimeRolesAsync(operatorConnection, transaction);
+            var operatorOid = await ScalarAsync<uint>(operatorConnection,
+                "SELECT oid FROM pg_roles WHERE rolname = current_user", transaction);
+            var initialPrincipals = await ReadRoleSetupPrincipalsAsync(operatorConnection, transaction);
+            var expectedGrantorOids = InitializerChecks.CaptureMembershipGrantors(
+                RoleSetupServices, initialPrincipals, operatorOid, RoleSetupTenant);
+            Assert.All(expectedGrantorOids.Values, grantorOid => Assert.NotEqual(operatorOid, grantorOid));
+
+            var stages = new List<string>();
+            var committed = false;
+            await InitializerChecks.RunStageAsync(() => Task.CompletedTask,
+                async () =>
+                {
+                    foreach (var service in RoleSetupServices)
+                        foreach (var (stage, sql) in InitializerChecks.RolePostCreateStatements(
+                            service.Role, RoleSetupOperator, expectedGrantorOids[service.Role], operatorOid))
+                        {
+                            stages.Add(stage);
+                            await ExecuteAsync(operatorConnection, sql, transaction);
+                        }
+                },
+                async () =>
+                {
+                    var principals = await ReadRoleSetupPrincipalsAsync(operatorConnection, transaction);
+                    InitializerChecks.AssertPrincipals(
+                        RoleSetupServices, principals, operatorOid, RoleSetupTenant, expectedGrantorOids);
+                },
+                async () => { await transaction.CommitAsync(); committed = true; },
+                () => Task.CompletedTask, observed =>
+                {
+                    stages.Add(observed);
+                    return Task.CompletedTask;
+                });
+
+            Assert.True(committed);
+            Assert.Contains(InitializerChecks.RoleMembershipCleanupStage, stages);
+            var expectedStages = RoleSetupServices.SelectMany(service =>
+                InitializerChecks.RolePostCreateStatements(service.Role, RoleSetupOperator,
+                    expectedGrantorOids[service.Role], operatorOid).Select(item => item.Stage))
+                .Concat(["role_readback", "role_commit"]);
+            Assert.Equal(expectedStages, stages);
+        }
+        finally
+        {
+            await DropRoleSetupFixtureAsync(admin);
+        }
+    }
+
+    [Theory]
+    [InlineData("CREATEDB")]
+    [InlineData("CREATEROLE")]
+    [InlineData("REPLICATION")]
+    [InlineData("BYPASSRLS")]
+    [InlineData("SUPERUSER")]
+    public async Task UnsafeFlagsAreNeverMaskedAndAreRejectedBeforeCommit(string flag)
+    {
+        await using var admin = new NpgsqlConnection(fixture.ConnectionString);
+        await admin.OpenAsync();
+        await PrepareRoleSetupFixtureAsync(admin);
+        try
+        {
+            await using var operatorConnection = await OpenOperatorAsync();
+            await CreateRuntimeRolesAsync(operatorConnection);
+            var operatorOid = await ScalarAsync<uint>(operatorConnection,
+                "SELECT oid FROM pg_roles WHERE rolname = current_user");
+            var initialPrincipals = await ReadRoleSetupPrincipalsAsync(operatorConnection, null);
+            var expectedGrantorOids = InitializerChecks.CaptureMembershipGrantors(
+                RoleSetupServices, initialPrincipals, operatorOid, RoleSetupTenant);
+            await ExecuteAsync(admin,
+                $"ALTER ROLE {InitializerChecks.Quote(RoleSetupServices[0].Role)} {flag}");
+
+            await using var transaction = await operatorConnection.BeginTransactionAsync();
+            var committed = false;
+            var observed = new List<string>();
+            async Task RunPostCreateAsync() =>
+                await InitializerChecks.RunStageAsync(
+                    () => Task.CompletedTask,
+                    async () =>
+                    {
+                        foreach (var service in RoleSetupServices)
+                            foreach (var (stage, sql) in InitializerChecks.RolePostCreateStatements(
+                                service.Role, RoleSetupOperator, expectedGrantorOids[service.Role], operatorOid))
+                            {
+                                observed.Add(stage);
+                                await ExecuteAsync(operatorConnection, sql, transaction);
+                            }
+                    },
+                    async () => InitializerChecks.AssertPrincipals(RoleSetupServices,
+                        await ReadRoleSetupPrincipalsAsync(operatorConnection, transaction), operatorOid,
+                        RoleSetupTenant, expectedGrantorOids),
+                    async () => { await transaction.CommitAsync(); committed = true; },
+                    () => Task.CompletedTask, stage =>
+                    {
+                        observed.Add(stage);
+                        return Task.CompletedTask;
+                    });
+
+            if (flag == "SUPERUSER")
+            {
+                var failure = await Assert.ThrowsAsync<PostgresException>(RunPostCreateAsync);
+                Assert.Equal("42501", failure.SqlState);
+            }
+            else
+            {
+                await Assert.ThrowsAsync<InvalidOperationException>(RunPostCreateAsync);
+                Assert.Equal("role_readback", observed[^1]);
+            }
+            await transaction.RollbackAsync();
+
+            Assert.False(committed);
+        }
+        finally
+        {
+            await DropRoleSetupFixtureAsync(admin);
+        }
+    }
+
+    private const string RoleSetupOperator = "p1_role_setup_operator";
+    private const string RoleSetupTenant = "11111111-1111-1111-1111-111111111111";
+
+    private static readonly ServicePlan[] RoleSetupServices = Enumerable.Range(1, 5).Select(index =>
+        new ServicePlan($"service-{index}", $"schema_{index}", $"p1_rt_{index}",
+            $"00000000-0000-0000-0000-{index:000000000000}", [], [])).ToArray();
+
+    private static async Task CreateRuntimeRolesAsync(NpgsqlConnection operatorConnection,
+        NpgsqlTransaction? transaction = null)
+    {
+        foreach (var service in RoleSetupServices)
+            await ExecuteAsync(operatorConnection,
+                $"CREATE ROLE {InitializerChecks.Quote(service.Role)} LOGIN", transaction);
+    }
+
+    // Read the real grantor OID from the catalog; never substitute the operator OID.
+    private static async Task<RuntimePrincipal[]> ReadRoleSetupPrincipalsAsync(NpgsqlConnection connection,
+        NpgsqlTransaction? transaction)
+    {
+        await using var command = new NpgsqlCommand(
+            InitializerChecks.PrincipalReadbackQuery("public.p1_role_setup_principals"), connection, transaction);
+        command.Parameters.AddWithValue("roles", RoleSetupServices.Select(item => item.Role).ToArray());
+        var json = (string)(await command.ExecuteScalarAsync())!;
+        return JsonSerializer.Deserialize<RuntimePrincipal[]>(json, JsonOptions)!;
+    }
+
+    private static async Task<T> ScalarAsync<T>(NpgsqlConnection connection, string sql,
+        NpgsqlTransaction? transaction = null)
+    {
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
+        return (T)(await command.ExecuteScalarAsync())!;
+    }
+
+    private async Task PrepareRoleSetupFixtureAsync(NpgsqlConnection admin)
+    {
+        await DropRoleSetupFixtureAsync(admin);
+        await ExecuteAsync(admin,
+            $"CREATE ROLE {RoleSetupOperator} LOGIN PASSWORD 'operator-secret' NOSUPERUSER NOCREATEDB CREATEROLE");
+        await ExecuteAsync(admin, $$"""
+            CREATE OR REPLACE FUNCTION public.p1_role_setup_principals(boolean)
+            RETURNS TABLE(role_name name, principal_type text, object_id text, tenant_id text, is_mfa integer, is_admin integer)
+            LANGUAGE sql STABLE AS $$
+              SELECT rolname, 'service', '00000000-0000-0000-0000-' || lpad(right(rolname, 1), 12, '0'),
+                     '{{RoleSetupTenant}}', 0, 0
+              FROM pg_catalog.pg_roles WHERE rolname ~ '^p1_rt_[0-9]$'
+            $$
+            """);
+    }
+
+    private static async Task DropRoleSetupFixtureAsync(NpgsqlConnection admin)
+    {
+        foreach (var service in RoleSetupServices)
+            await ExecuteAsync(admin, $"DROP ROLE IF EXISTS {InitializerChecks.Quote(service.Role)}");
+        await ExecuteAsync(admin, $"DROP ROLE IF EXISTS {RoleSetupOperator}");
+    }
+
+    private async Task<NpgsqlConnection> OpenOperatorAsync()
+    {
+        var connection = new NpgsqlConnection(new NpgsqlConnectionStringBuilder(fixture.ConnectionString)
+        {
+            Username = RoleSetupOperator,
+            Password = "operator-secret",
+            Pooling = false,
+        }.ConnectionString);
+        await connection.OpenAsync();
+        return connection;
+    }
+
     private static async Task CreateBrokerFixtureAsync(NpgsqlConnection connection)
     {
         await ExecuteAsync(connection, "CREATE SCHEMA identity_broker");
@@ -266,9 +463,10 @@ public sealed class P1PostgresInitializerPreflightPostgresTests(ProbePostgresFix
             ?? throw new InvalidOperationException("The initializer query returned no state.");
     }
 
-    private static async Task ExecuteAsync(NpgsqlConnection connection, string sql)
+    private static async Task ExecuteAsync(NpgsqlConnection connection, string sql,
+        NpgsqlTransaction? transaction = null)
     {
-        await using var command = new NpgsqlCommand(sql, connection);
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
         await command.ExecuteNonQueryAsync();
     }
 }

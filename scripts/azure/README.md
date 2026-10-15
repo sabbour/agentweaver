@@ -82,13 +82,31 @@ permitted. Existing owners, grantors, grant options, schemas, Broker, Probe,
 functions, and default privileges must remain unchanged.
 
 Before role creation commits, the source checks all five object-ID mappings,
-service principal types, role flags, and exact operator memberships.
+service principal types, role flags, and one existing operator ADMIN membership
+per mapped role. It captures each membership's grantor OID from the catalog and
+requires that exact OID to remain unchanged through the role setup.
 All five mappings must use the reviewed tenant.
 The administrator and MFA-required integer flags must each equal zero.
 Missing flags and any nonzero integer fail the source checks.
 The operator membership has ADMIN but neither INHERIT nor SET permission.
 Function checks require the operator owner and the exact effective EXECUTE grants.
 Only the existing casting authority function can receive runtime EXECUTE.
+
+The role changes set `NOINHERIT` and disable membership `INHERIT` and `SET`.
+They do not repeat `ADMIN TRUE`: PostgreSQL 16 rejects granting ADMIN back to
+the grantor that originally granted it. If that grantor is not the operator,
+the source removes only the temporary non-ADMIN membership it creates under
+the operator's own grantor identity. It never impersonates the original grantor.
+Final readback must show exactly one membership with the original grantor OID,
+ADMIN true, and INHERIT and SET false; otherwise the role transaction rolls back.
+The source does not rewrite SUPERUSER,
+CREATEDB, CREATEROLE, REPLICATION, or BYPASSRLS, because PostgreSQL 16 requires
+matching privileges even to set those flags false. Their false state is verified
+by readback before COMMIT, and any unexpected true flag rejects the transaction.
+The receipt records fixed stage names (`role_creation`, `role_flag_change`,
+`role_membership_change`, `role_membership_cleanup` when needed, `role_readback`,
+`role_commit`) before each step,
+alongside the SQLSTATE of a failure and never raw errors or payloads.
 
 Pure catalog tests compare the registered resources, function signatures, and
 guard definitions. They also check partial-stage reporting and failure-receipt
@@ -97,6 +115,10 @@ preflight and protected-boundary SQL used by the initializer against
 Broker-shaped trigger functions and rejected privilege cases. It checks that
 the safe functions' ACLs stay unchanged, restricted runtime calls and trigger
 creation fail, and a classification change invalidates the protected boundary.
+The same fixture runs the complete production post-create sequence as a
+non-superuser CREATEROLE operator. It preserves the real membership grantor OID,
+checks the exact single-row ADMIN/INHERIT/SET state after the membership GRANT
+and cleanup, and rejects each unsafe reserved flag before commit.
 These tests do not execute the initializer, connect to Azure, or prove live
 database state. The catalog test requires a Docker-compatible container engine.
 Do not retry or reset partially committed database state.
