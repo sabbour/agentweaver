@@ -65,9 +65,12 @@ function sanitizePublicationDiagnostic(stdout, stderr, args) {
   diagnostic = diagnostic
     .replace(/\b(authorization|proxy-authorization)\s*:\s*[^\r\n]*/gi, '$1: [REDACTED]')
     .replace(/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi, '$1 [REDACTED]')
+    .replace(/(<add\s+key="(?:clear[_-]?text[_-]?password|password|api[_-]?key|token)"\s+value=")[^"]*(")/gi,
+      '$1[REDACTED]$2')
     .replace(/"(access[_-]?token|api[_-]?key|gh[_-]?token|github[_-]?token|proxy-authorization|authorization|token|password|secret)"\s*:\s*"(?:\\.|[^"\\])*"/gi,
       '"$1":"[REDACTED]"')
-    .replace(/\b(access[_-]?token|api[_-]?key|gh[_-]?token|github[_-]?token|token|password|secret)\b\s*[:=]\s*[^,\s;]+/gi, '$1=[REDACTED]')
+    .replace(/\b(clear[_-]?text[_-]?password|access[_-]?token|api[_-]?key|gh[_-]?token|github[_-]?token|token|password|secret)\b\s*[:=]\s*[^,\s;]+/gi,
+      '$1=[REDACTED]')
     .replace(/(--api-key(?:=|\s+))[^\s|,;]+/gi, '$1[REDACTED]')
     .replace(/\bhttps?:\/\/[^\s<>"']+/gi, redactDiagnosticUrl)
     .replace(/([?&](?:access[_-]?token|api[_-]?key|apikey|token|password|secret)=)[^&#\s]*/gi, '$1[REDACTED]')

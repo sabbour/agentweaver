@@ -44,6 +44,7 @@ test('sanitizes both NuGet output streams and caps the diagnostic at 8 KiB', () 
       'Source: https://nuget-user:URL_PASSWORD@nuget.pkg.github.com/sabbour/index.json?access_token=URL_TOKEN',
       'api_key=API_KEY_SECRET_123',
       'token=STDOUT_TOKEN_SECRET_123',
+      '<add key="ClearTextPassword" value="CONFIG_PASSWORD_SECRET_123" />',
       '{"password":"JSON SECRET WITH SPACES","token":"JSON_TOKEN_123"}',
       `--api-key ARG_NUGET_SECRET_123 ${secrets.RELEASE_NUGET_API_KEY} ${secrets.GH_TOKEN}`,
     ].join('\n');
@@ -57,7 +58,7 @@ test('sanitizes both NuGet output streams and caps the diagnostic at 8 KiB', () 
     const failure = captureFailure(
       'dotnet',
       ['nuget', 'push', 'fixture.nupkg', '--source', 'https://nuget.pkg.github.com/sabbour/index.json',
-        '--api-key', 'ARG_NUGET_SECRET_123'],
+        '--api-key', 'ARG_NUGET_SECRET_123', '--configfile', 'C:\\runner-temp\\NuGet.Config'],
       stdout,
       stderr,
     );
@@ -72,6 +73,7 @@ test('sanitizes both NuGet output streams and caps the diagnostic at 8 KiB', () 
       'STDOUT_TOKEN_SECRET_123',
       'JSON SECRET WITH SPACES',
       'JSON_TOKEN_123',
+      'CONFIG_PASSWORD_SECRET_123',
       'ARG_NUGET_SECRET_123',
       'STDERR_TOKEN_SECRET_123',
       'STDERR_PASSWORD_SECRET_123',

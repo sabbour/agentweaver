@@ -104,7 +104,7 @@ function integrationRepository(t) {
   return { root, manifest };
 }
 
-test('integration packing builds only source-SHA-tagged product images with exact source-tree labels', t => {
+test('integration image-only publication keeps ten image outputs without NuGet credentials', t => {
   const { root, manifest } = integrationRepository(t);
   const sourceSha = git(root, 'rev-parse', 'HEAD');
   const sourceTree = git(root, 'rev-parse', `${sourceSha}^{tree}`);
@@ -310,6 +310,7 @@ test('integration packing builds only source-SHA-tagged product images with exac
   assert.equal(published.sourceTree, sourceTree);
   assert.equal(published.planned.length, 10);
   assert.equal(published.published.length, 10);
+  assert.ok(published.planned.every(record => record.kind === 'image'));
   assert.ok(published.planned.every(record => record.destination.endsWith(`:${sourceSha}`)));
   assert.ok(published.published.every(record => record.tag === sourceSha && record.sourceTree === sourceTree));
   assert.ok(published.published.every(record => /^sha256:[a-f0-9]{64}$/.test(record.configDigest)));
