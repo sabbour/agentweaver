@@ -16,6 +16,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Set up product Docker engine
+        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+        with:
+          version: v29.9.0
+          set-host: true
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
       - name: Retrieve exact failed Web archive by range
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -132,7 +143,7 @@ jobs:
               "imageReference": web["imageReference"], "platform": web["platform"],
           }, sort_keys=True))
           PY
-      - name: Load exact archive in default publisher engine
+      - name: Load exact archive on the corrected product engine
         env:
           DOCKER_CONFIG: ${{ github.workspace }}/artifacts/docker-config
         run: |
