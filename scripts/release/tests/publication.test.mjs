@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { packComponentsFromFile } from '../pack.mjs';
@@ -141,6 +142,7 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
   const env = {
     GITHUB_REPOSITORY: 'test/release', GH_TOKEN: 'test-github-secret',
     RELEASE_NUGET_SOURCE: 'https://feed.example.invalid/v3/index.json', RELEASE_NUGET_API_KEY: 'test-secret',
+    RELEASE_NUGET_USERNAME: 'test-owner',
     RELEASE_REGISTRY: 'registry.example.invalid', RELEASE_REGISTRY_USER: 'test-user',
     RELEASE_REGISTRY_PASSWORD: 'test-password', DOCKER_CONFIG: path.join(root, 'artifacts', 'docker-config'),
   };
@@ -528,17 +530,100 @@ test('packages-only publication claims and pushes only the exact NuGet selection
   const f = fixture(t);
   f.prepare({ packagesOnly: true });
   const env = { ...f.env };
+  env.RELEASE_NUGET_API_KEY = 'nuget-secret & <token> "quoted"';
   delete env.RELEASE_REGISTRY;
   delete env.RELEASE_REGISTRY_USER;
   delete env.RELEASE_REGISTRY_PASSWORD;
   delete env.DOCKER_CONFIG;
 
-  const receipt = f.publish({ packagesOnly: true, env });
+  let configFile;
+  let configContents;
+  const receipt = f.publish({ packagesOnly: true, env, run: (bin, args) => {
+    assert.equal(bin, 'dotnet');
+    configFile = args[args.indexOf('--configfile') + 1];
+    configContents = readFileSync(configFile, 'utf8');
+    assert.equal(args[args.indexOf('--source') + 1], 'agentweaver-publication');
+    assert.equal(args[args.indexOf('--api-key') + 1], env.RELEASE_NUGET_API_KEY);
+    return '';
+  } });
   assert.equal(receipt.status, 'published');
   assert.deepEqual(receipt.planned.map(({ id, kind }) => ({ id, kind })), [{ id: 'Pkg', kind: 'package' }]);
   assert.deepEqual(receipt.published.map(({ id, kind }) => ({ id, kind })), [{ id: 'Pkg', kind: 'package' }]);
   assert.ok(!f.externalCalls.some(({ bin }) => bin === 'docker'));
-  assert.ok(f.externalCalls.some(({ bin, args }) => bin === 'dotnet' && args[0] === 'nuget'));
+  const push = f.externalCalls.find(({ bin, args }) => bin === 'dotnet' && args[0] === 'nuget');
+  assert.ok(push);
+  assert.ok(configFile.startsWith(tmpdir()));
+  assert.ok(!configFile.startsWith(f.outDir));
+  assert.match(configContents, /<add key="agentweaver-publication" value="https:\/\/feed\.example\.invalid\/v3\/index\.json" \/>/);
+  assert.match(configContents, /<add key="Username" value="test-owner" \/>/);
+  assert.match(configContents, /<add key="ClearTextPassword" value="nuget-secret &amp; &lt;token&gt; &quot;quoted&quot;" \/>/);
+  assert.ok(!existsSync(configFile), 'temporary NuGet credentials must be removed after publication');
+});
+
+test('non-GitHub NuGet feeds retain API-key-only publication without a source username', (t) => {
+  const f = fixture(t);
+  f.prepare({ packagesOnly: true });
+  const env = { ...f.env };
+  delete env.RELEASE_NUGET_USERNAME;
+  delete env.RELEASE_REGISTRY;
+  delete env.RELEASE_REGISTRY_USER;
+  delete env.RELEASE_REGISTRY_PASSWORD;
+  delete env.DOCKER_CONFIG;
+  let pushArgs;
+
+  const receipt = f.publish({ packagesOnly: true, env, run: (bin, args) => {
+    assert.equal(bin, 'dotnet');
+    pushArgs = args;
+    return '';
+  } });
+  assert.equal(receipt.status, 'published');
+  assert.equal(pushArgs[pushArgs.indexOf('--source') + 1], env.RELEASE_NUGET_SOURCE);
+  assert.equal(pushArgs[pushArgs.indexOf('--api-key') + 1], env.RELEASE_NUGET_API_KEY);
+  assert.ok(!pushArgs.includes('--configfile'));
+});
+
+test('GitHub Packages requires a valid repository-owner username before claims or external effects', (t) => {
+  for (const username of [undefined, 'invalid owner']) {
+    const f = fixture(t);
+    f.prepare({ packagesOnly: true });
+    const env = {
+      ...f.env,
+      RELEASE_NUGET_SOURCE: 'https://nuget.pkg.github.com/sabbour/index.json',
+    };
+    if (username === undefined) delete env.RELEASE_NUGET_USERNAME;
+    else env.RELEASE_NUGET_USERNAME = username;
+    delete env.RELEASE_REGISTRY;
+    delete env.RELEASE_REGISTRY_USER;
+    delete env.RELEASE_REGISTRY_PASSWORD;
+    delete env.DOCKER_CONFIG;
+    const calls = [];
+
+    assert.throws(() => f.publish({
+      packagesOnly: true, env, run: (...args) => calls.push(args),
+    }), /GitHub Packages publication requires a valid repository-owner username/);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(f.remoteCalls, []);
+    assert.deepEqual(f.externalCalls, []);
+    assert.equal(f.refs.size, 0);
+  }
+});
+
+test('temporary NuGet credentials are removed after a failed package push', (t) => {
+  const f = fixture(t);
+  f.prepare({ packagesOnly: true });
+  const env = { ...f.env };
+  delete env.RELEASE_REGISTRY;
+  delete env.RELEASE_REGISTRY_USER;
+  delete env.RELEASE_REGISTRY_PASSWORD;
+  delete env.DOCKER_CONFIG;
+  let configFile;
+
+  assert.throws(() => f.publish({ packagesOnly: true, env, run: (_bin, args) => {
+    configFile = args[args.indexOf('--configfile') + 1];
+    throw new Error('simulated package push failure');
+  } }), /simulated package push failure/);
+  assert.ok(configFile);
+  assert.ok(!existsSync(configFile), 'temporary NuGet credentials must be removed after failure');
 });
 
 test('packages-only publication rejects a full composition pack before any external command', (t) => {
@@ -842,6 +927,7 @@ test('ordinary release workflow scopes the existing Actions token to the approve
   assert.match(ordinary, /environment: v1-publication/);
   assert.match(ordinary, /inputs\.publish && !inputs\.foundation_probe_sampler_replacement/);
   assert.match(ordinary, /RELEASE_NUGET_API_KEY: \$\{\{ github\.token \}\}/);
+  assert.match(ordinary, /RELEASE_NUGET_USERNAME: \$\{\{ github\.repository_owner \}\}/);
   assert.doesNotMatch(ordinary, /secrets\.RELEASE_NUGET_API_KEY|\|\|/);
   assert.match(ordinary, /RELEASE_REGISTRY: ghcr\.io\/sabbour/);
   assert.match(ordinary, /RELEASE_REGISTRY_USER: \$\{\{ github\.repository_owner \}\}/);

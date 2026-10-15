@@ -153,6 +153,12 @@ The ordinary publish job rejects another destination before artifact download.
 Only that job gains package-write permission; its existing contents-write permission remains.
 It requires manual publication and the protected environment's approval.
 No stored NuGet key or external-feed credential fallback is added.
+The publisher writes a temporary `NuGet.Config` in the operating system's temp
+folder, binds the approved feed to the repository owner's username and the same
+Actions token, and passes that file explicitly to `dotnet nuget push`. The
+directory and file are restricted to the runner user, then removed whether the
+push succeeds or fails. This does not read or change a developer's global NuGet
+settings, and the config is not included in release artifacts or receipts.
 Package access, environment configuration and actual publication require separate confirmation.
 The existing registry credential inputs and frozen Probe routes remain unchanged.
 

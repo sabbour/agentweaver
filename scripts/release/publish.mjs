@@ -1,7 +1,8 @@
 // Only the manually confirmed publication workflow invokes this script.
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -30,6 +31,30 @@ const samplerProbeDigest = 'sha256:835d5b8899f2a8956faf24d46a934ec745d91ff83363d
 const samplerProbeClaim = 'agentweaver-publication/foundation-probe-0.0.0-sampler-replacement';
 const contentHashPattern = /^[a-f0-9]{64}$/;
 const imageIdPattern = /^sha256:[a-f0-9]{64}$/;
+const nugetSourceName = 'agentweaver-publication';
+
+function xmlAttribute(value) {
+  return String(value).replace(/[<>&'"]/g, character => ({
+    '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;',
+  })[character]);
+}
+
+function nugetConfig(feed, username, token) {
+  return `<?xml version="1.0" encoding="utf-8"?>
+<configuration>
+  <packageSources>
+    <clear />
+    <add key="${nugetSourceName}" value="${xmlAttribute(feed)}" />
+  </packageSources>
+  <packageSourceCredentials>
+    <${nugetSourceName}>
+      <add key="Username" value="${xmlAttribute(username)}" />
+      <add key="ClearTextPassword" value="${xmlAttribute(token)}" />
+    </${nugetSourceName}>
+  </packageSourceCredentials>
+</configuration>
+`;
+}
 
 function validBuildOutput(output) {
   return Array.isArray(output?.files) && output.files.length > 0 &&
@@ -333,6 +358,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   }
   const hasPackages = selected.some(({ artifact }) => artifact.kind === 'package');
   const hasImages = selected.some(({ artifact }) => artifact.kind === 'image');
+  let nugetUsesCredentials = false;
   if (integrationImagesOnly && (hasPackages || selected.length !== 10)) {
     fail('integration image-only publication requires exactly ten product service images and no packages');
   }
@@ -343,6 +369,15 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     if (feed.protocol !== 'https:' || feed.username || feed.password || feed.search || feed.hash || !env.RELEASE_NUGET_API_KEY) {
       fail('configure a credential-free HTTPS feed URL and a separate secret API key');
     }
+    const hasNugetUsername = Boolean(env.RELEASE_NUGET_USERNAME);
+    const validNugetUsername = /^[A-Za-z0-9_.-]+$/.test(env.RELEASE_NUGET_USERNAME ?? '');
+    if (feed.hostname === 'nuget.pkg.github.com' && !validNugetUsername) {
+      fail('GitHub Packages publication requires a valid repository-owner username');
+    }
+    if (hasNugetUsername && !validNugetUsername) {
+      fail('NuGet source username must be a valid repository-owner name');
+    }
+    nugetUsesCredentials = hasNugetUsername;
   }
   if (hasImages) {
     registry = parseRegistry(env.RELEASE_REGISTRY);
@@ -453,8 +488,18 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
       { ...receipt, status: 'claimed' }, replacementClaim);
   }
   receipt.claimSha = createRecord('claim', { ...receipt, status: 'claimed' });
+  let nugetConfigDirectory;
+  let nugetConfigFile;
   let publicationError;
   try {
+    if (nugetUsesCredentials) {
+      nugetConfigDirectory = mkdtempSync(path.join(tmpdir(), 'agentweaver-nuget-'));
+      chmodSync(nugetConfigDirectory, 0o700);
+      nugetConfigFile = path.join(nugetConfigDirectory, 'NuGet.Config');
+      writeFileSync(nugetConfigFile, nugetConfig(env.RELEASE_NUGET_SOURCE, env.RELEASE_NUGET_USERNAME, env.RELEASE_NUGET_API_KEY), {
+        encoding: 'utf8', flag: 'wx', mode: 0o600,
+      });
+    }
     for (const { component, artifact, file, localImageReference, agentHost, preparedImageConfig } of selected) {
       if (localImageReference === undefined) continue;
       if (agentHost) verifyAgentHostArchives(agentHost.archives, directory);
@@ -493,7 +538,11 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     if (hasImages) run('docker', ['login', registry.host, '--username', env.RELEASE_REGISTRY_USER, '--password-stdin'], env.RELEASE_REGISTRY_PASSWORD);
     for (const { component, artifact, file, localImageReference, agentHost, preparedImageConfig } of selected) {
       if (artifact.kind === 'package') {
-        run('dotnet', ['nuget', 'push', file, '--source', env.RELEASE_NUGET_SOURCE, '--api-key', env.RELEASE_NUGET_API_KEY]);
+        const args = ['nuget', 'push', file, '--source',
+          nugetUsesCredentials ? nugetSourceName : env.RELEASE_NUGET_SOURCE,
+          '--api-key', env.RELEASE_NUGET_API_KEY];
+        if (nugetConfigFile) args.push('--configfile', nugetConfigFile);
+        run('dotnet', args);
         receipt.published.push({ id: component.id, version: component.version, kind: 'package', feed: env.RELEASE_NUGET_SOURCE, sha256: artifact.sha256 });
       } else {
         if (agentHost && !/^sha256:[a-f0-9]{64}$/.test(agentHost.loadedImageId ?? ''))
@@ -564,6 +613,13 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     throw error;
   } finally {
     const failures = [];
+    if (nugetConfigDirectory) {
+      try {
+        rmSync(nugetConfigDirectory, { recursive: true, force: true });
+      } catch (error) {
+        failures.push(new Error('temporary NuGet credentials cleanup failed', { cause: error }));
+      }
+    }
     try {
       createRecord('result', receipt);
       if (replaceProbe) createRecord('result', receipt, replacementClaim);
@@ -578,7 +634,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     }
     if (failures.length) {
       throw new AggregateError([...(publicationError ? [publicationError] : []), ...failures],
-        `publication receipt persistence failed: ${failures.map(({ message }) => message).join('; ')}; permanent claim blocks retry; inspect remote state`,
+        `publication finalization failed: ${failures.map(({ message }) => message).join('; ')}; permanent claim blocks retry; inspect remote state`,
         { cause: publicationError ?? failures[0] });
     }
   }

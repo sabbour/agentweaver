@@ -270,6 +270,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_NUGET_SOURCE: ${{ vars.RELEASE_NUGET_SOURCE }}
           RELEASE_NUGET_API_KEY: ${{ github.token }}
+          RELEASE_NUGET_USERNAME: ${{ github.repository_owner }}
           RELEASE_REGISTRY: ghcr.io/sabbour
           RELEASE_REGISTRY_USER: ${{ github.repository_owner }}
           RELEASE_REGISTRY_PASSWORD: ${{ github.token }}

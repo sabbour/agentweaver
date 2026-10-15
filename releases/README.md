@@ -540,6 +540,13 @@ or alternate account token are used. The job remains behind the protected
 `v1-publication` environment. If the token cannot publish to the existing
 packages, publication fails; this workflow change does not grant or verify
 package access or prove that published images are publicly pullable.
+For GitHub Packages, set `RELEASE_NUGET_USERNAME` to the package owner. The
+publisher binds that username and the existing token to the named feed in a
+temporary `NuGet.Config`, passes it explicitly to `dotnet nuget push`, and
+removes the restricted temporary file after success or failure. The protected
+P1 workflow still accepts only the exact `sabbour` feed above. Other manual
+publisher callers may use a non-GitHub HTTPS feed with only an API key when no
+NuGet username is supplied; this is not a fallback in the protected workflow.
 `RELEASE_REGISTRY` is a lowercase registry host, optionally followed by a
 lowercase repository namespace/path for other callers. The host is used for
 Docker login; the full value prefixes each component image path. Schemes,
