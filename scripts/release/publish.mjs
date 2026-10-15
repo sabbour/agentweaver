@@ -584,6 +584,19 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   }
 }
 
+export function findNugetPushDiagnostic(error) {
+  if (!error || typeof error !== 'object') return undefined;
+  if (error.operation === 'nuget.push' && typeof error.nativeDiagnostic === 'string')
+    return error.nativeDiagnostic;
+  if (error instanceof AggregateError) {
+    for (const nested of error.errors) {
+      const diagnostic = findNugetPushDiagnostic(nested);
+      if (diagnostic !== undefined) return diagnostic;
+    }
+  }
+  return undefined;
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const args = process.argv.slice(2);
@@ -616,6 +629,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       : 'Manual artifact publication completed; see publication.json. No platform release or deployment was performed.');
   } catch (error) {
     console.error(`Publication failed: ${error.message}`);
+    const nativeDiagnostic = findNugetPushDiagnostic(error);
+    if (nativeDiagnostic) {
+      const diagnostic = nativeDiagnostic.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+      console.error(`::error title=NuGet push response::${diagnostic}`);
+    }
     process.exitCode = 1;
   }
 }

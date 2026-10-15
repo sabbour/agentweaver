@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import path from 'node:path';
 import test from 'node:test';
 import { packComponentsFromFile } from '../pack.mjs';
-import { publishArtifacts } from '../publish.mjs';
+import { findNugetPushDiagnostic, publishArtifacts } from '../publish.mjs';
 import { resolveProbeImageSource } from '../../azure/build-foundation-probe-image.mjs';
 import { addAgentHostSource, agentHostComponent, agentHostDockerFixture } from './agenthost-fixture.mjs';
 import { measureAgentHostArchiveSync } from '../measure-agenthost-image.mjs';
@@ -1238,7 +1238,14 @@ for (const externalFailure of [false, true]) {
     const f = fixture(t, { service: false });
     f.prepare();
     assert.throws(() => f.publish({
-      run: () => { if (externalFailure) throw new Error('package publication failed'); return ''; },
+      run: () => {
+        if (externalFailure) {
+          const error = Object.assign(new Error('package publication failed'), { operation: 'nuget.push' });
+          Object.defineProperty(error, 'nativeDiagnostic', { value: 'stdout: 403 Forbidden' });
+          throw error;
+        }
+        return '';
+      },
       github: (args, input) => {
         if (args[3].endsWith('/git/refs') && JSON.parse(input).ref.endsWith('/result')) {
           throw new Error('terminal ref persistence failed');
@@ -1248,7 +1255,10 @@ for (const externalFailure of [false, true]) {
     }), (error) => {
       assert.ok(error instanceof AggregateError);
       assert.match(error.message, /permanent claim blocks retry/);
-      if (externalFailure) assert.match(error.errors[0].message, /package publication failed/);
+      if (externalFailure) {
+        assert.match(error.errors[0].message, /package publication failed/);
+        assert.equal(findNugetPushDiagnostic(error), 'stdout: 403 Forbidden');
+      }
       assert.match(error.errors.at(-1).message, /terminal ref persistence failed/);
       return true;
     });
