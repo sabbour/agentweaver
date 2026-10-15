@@ -204,6 +204,8 @@ if (runtimeRegistrationEnabled)
 builder.AddRemoteMcpCallVerificationTls(runtimeRegistrationEnabled);
 builder.AddReviewedRemoteToolTransport(runtimeRegistrationEnabled);
 var runtimeUsageEnabled = builder.Services.AddRuntimeUsageSource(builder.Configuration);
+if (runtimeRegistrationEnabled && !runtimeUsageEnabled)
+    builder.Services.AddSingleton<RuntimeUsageSourceStore>();
 if (remoteToolTlsSection.Exists() && !runtimeUsageEnabled)
     throw new InvalidOperationException("Remote tool result TLS requires the current native SDK source owner.");
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
@@ -252,6 +254,7 @@ app.MapSuspendResumeEndpoints();
 app.MapSourceControlEndpoints();
 if (runtimeRegistrationEnabled)
 {
+    app.MapRuntimeObservationV1Endpoint();
     app.MapRuntimeRegistrationEndpoints();
     app.MapReviewedRemoteToolResultEndpoints();
     app.MapRuntimeSuspendResumeEndpoints();

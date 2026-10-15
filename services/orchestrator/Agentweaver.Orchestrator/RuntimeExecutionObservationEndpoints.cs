@@ -40,6 +40,50 @@ public static partial class CoordinationEndpoints
             projectId, runId, sessionId, context, options, projects, sessions, decisions,
             selectionContexts, checkpoints, includeCheckpointParent: true, cancellationToken);
 
+    private static async Task<IResult> ReadRuntimeObservationV1Async(
+        string projectId,
+        string runId,
+        string sessionId,
+        HttpContext context,
+        OrchestratorOptions options,
+        ProjectsRunSelectionClient projects,
+        CoordinationOwnerStore sessions,
+        CoordinatorDecisionOwnerStore decisions,
+        CoordinatorRunSelectionContextStore selectionContexts,
+        PostgresMafCheckpointStore checkpoints,
+        RuntimeRegistrationOwner registrations,
+        RuntimeUsageSourceStore evidenceStore,
+        CancellationToken cancellationToken)
+    {
+        context.Response.Headers.CacheControl = "no-store";
+        try
+        {
+            return await ReadRuntimeExecutionObservationCoreAsync(
+                projectId, runId, sessionId, context, options, projects, sessions, decisions,
+                selectionContexts, checkpoints, includeCheckpointParent: true, cancellationToken,
+                registrations, evidenceStore).ConfigureAwait(false);
+        }
+        catch (RuntimeAuthorizationException exception)
+        {
+            var statusCode = exception.Code.EndsWith("_conflict", StringComparison.Ordinal) ||
+                    exception.Code.EndsWith("_stale", StringComparison.Ordinal) ||
+                    exception.Code is "runtime_registration_unknown" or "runtime_registration_invalid"
+                        ? StatusCodes.Status409Conflict
+                    : StatusCodes.Status403Forbidden;
+            return Results.Json(new { error = exception.Code }, statusCode: statusCode);
+        }
+        catch (HttpRequestException)
+        {
+            return Results.Json(new { error = "runtime_observation_owner_unavailable" },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return Results.Json(new { error = "runtime_observation_owner_timeout" },
+                statusCode: StatusCodes.Status503ServiceUnavailable);
+        }
+    }
+
     private static Task<IResult> ReadRuntimeExecutionObservationCoreAsync(
         string projectId,
         string runId,
@@ -52,9 +96,13 @@ public static partial class CoordinationEndpoints
         CoordinatorRunSelectionContextStore selectionContexts,
         PostgresMafCheckpointStore checkpoints,
         bool includeCheckpointParent,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        RuntimeRegistrationOwner? registrations = null,
+        RuntimeUsageSourceStore? evidenceStore = null) =>
         ExecuteAsync(async () =>
         {
+            if ((registrations is null) != (evidenceStore is null))
+                throw new InvalidOperationException("Runtime observation evidence owners must be configured together.");
             context.Response.Headers.CacheControl = "no-store";
             var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
             var identity = new SessionIdentity(projectId, runId, sessionId);
@@ -94,10 +142,11 @@ public static partial class CoordinationEndpoints
                 throw new CoordinationException(
                     "maf_execution_checkpoint_stale", StatusCodes.Status409Conflict);
 
+            RuntimeExecutionObservationV2? executionV2 = null;
             IResult observation;
             if (includeCheckpointParent)
             {
-                observation = Results.Ok(RuntimeExecutionObservationContract.CreateV2(
+                executionV2 = RuntimeExecutionObservationContract.CreateV2(
                     owner.RootSessionId,
                     sessionId,
                     owner.ExecutionFence,
@@ -106,7 +155,8 @@ public static partial class CoordinationEndpoints
                     associationId,
                     status,
                     pendingIntent,
-                    result));
+                    result);
+                observation = Results.Ok(executionV2);
             }
             else
             {
@@ -122,6 +172,39 @@ public static partial class CoordinationEndpoints
                     result));
             }
 
+            RuntimeRegistration? registration = null;
+            if (registrations is not null && evidenceStore is not null)
+            {
+                registration = await registrations.ReadCurrentForSessionAsync(
+                    context, projectId, runId, sessionId, cancellationToken).ConfigureAwait(false);
+                RequireCurrentRuntimeRegistrationForObservation(
+                    registration, actor, identity, owner);
+                var evidence = await evidenceStore.ReadObservationEvidenceAsync(
+                    registration, owner.RootSessionId, cancellationToken).ConfigureAwait(false);
+                observation = Results.Ok(new RuntimeObservationV1(
+                    1,
+                    new(RuntimeObservationSectionState.Available,
+                        new RuntimeObservationRegistration(
+                            registration.RuntimeInstanceId,
+                            registration.Revision,
+                            registration.State switch
+                            {
+                                RuntimeRegistrationState.Active => RuntimeObservationRegistrationState.Active,
+                                RuntimeRegistrationState.Revoked => RuntimeObservationRegistrationState.Revoked,
+                                _ => throw new ArgumentOutOfRangeException(nameof(registration.State))
+                            },
+                            registration.ExpiresAt)),
+                    new(RuntimeObservationSectionState.Available,
+                        RuntimeObservationExecutionV2.From(executionV2 ?? throw new InvalidOperationException(
+                            "The runtime observation requires checkpoint-parent evidence."))),
+                    evidence.CreditGuard is null
+                        ? new(RuntimeObservationSectionState.Unknown, null)
+                        : new(RuntimeObservationSectionState.Available, evidence.CreditGuard),
+                    new(RuntimeObservationSectionState.Available, evidence.Dispatches),
+                    new(RuntimeObservationSectionState.Available, evidence.ToolReservations))
+                    .Validate());
+            }
+
             await RequireUnchangedAuthorizedSelectionAsync(
                 context, projectId, runId, selection, projects, cancellationToken).ConfigureAwait(false);
             var currentOwner = await sessions.ReadRuntimeOwnerStateForObservationAsync(
@@ -131,15 +214,42 @@ public static partial class CoordinationEndpoints
             var currentOwnerContext = await ReadRuntimeOwnerContextCoreAsync(
                 projectId, runId, sessionId, context, options, projects, sessions, decisions,
                 selectionContexts, checkpoints, cancellationToken, allowTerminalChild: true).ConfigureAwait(false);
+            var currentRegistration = registrations is null
+                ? null
+                : await registrations.ReadCurrentForSessionAsync(
+                    context, projectId, runId, sessionId, cancellationToken).ConfigureAwait(false);
             if (currentOwner != owner || currentDecision.StateVersion != decision.StateVersion ||
                 currentDecision.SelectionHash != decision.SelectionHash ||
                 currentDecision.State.Fence != decision.State.Fence ||
                 currentDecision.State.ConfirmedWorkPlan?.Plan.Id != checkpoint.State.WorkPlanId ||
-                currentOwnerContext != ownerContext)
+                currentOwnerContext != ownerContext ||
+                currentRegistration != registration)
                 throw new CoordinationException(
                     "runtime_owner_context_stale", StatusCodes.Status409Conflict);
             return observation;
         }, cancellationToken);
+
+    internal static void RequireCurrentRuntimeRegistrationForObservation(
+        RuntimeRegistration registration,
+        CoordinationActor actor,
+        SessionIdentity identity,
+        SessionRuntimeOwnerState owner)
+    {
+        RuntimeContractValidation.Validate(registration);
+        var binding = registration.Binding;
+        if (registration.State != RuntimeRegistrationState.Active ||
+            binding.ActorIssuer != actor.Issuer ||
+            binding.ActorId != actor.Subject ||
+            binding.TenantId != owner.TenantId ||
+            binding.ProjectId != identity.ProjectId ||
+            binding.RunId != identity.RunId ||
+            binding.SessionId != identity.SessionId ||
+            binding.ExecutionFence != owner.ExecutionFence ||
+            !string.Equals(binding.AcceptedSelectionHash, owner.AcceptedSelectionHash,
+                StringComparison.OrdinalIgnoreCase))
+            throw new CoordinationException(
+                "runtime_owner_context_stale", StatusCodes.Status409Conflict);
+    }
 
     internal static void RequireCurrentObservationOwner(
         RuntimeOwnerContext ownerContext,

@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Data;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -9,6 +10,11 @@ using Npgsql;
 using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
+
+internal sealed record RuntimeObservationEvidence(
+    RuntimeObservationCreditGuard? CreditGuard,
+    RuntimeObservationDispatchCollection Dispatches,
+    RuntimeObservationToolReservationCollection ToolReservations);
 
 internal sealed class RuntimeUsageSourceStore(
     NpgsqlDataSource dataSource, OrchestratorOptions options, TimeProvider timeProvider)
@@ -27,6 +33,147 @@ internal sealed class RuntimeUsageSourceStore(
     private readonly string _guards = $"\"{options.Schema}\".maf_execution_run_guards";
     private readonly string _outboxEvents = $"\"{options.Schema}\".outbox_events";
     private readonly PostgresOutbox _outbox = new(dataSource, options.Schema);
+
+    internal async Task<RuntimeObservationEvidence> ReadObservationEvidenceAsync(
+        RuntimeRegistration registration,
+        string rootSessionId,
+        CancellationToken cancellationToken)
+    {
+        RuntimeContractValidation.Validate(registration);
+        if (registration.State != RuntimeRegistrationState.Active)
+            throw new RuntimeAuthorizationException("runtime_registration_stale");
+        RuntimeContractValidation.ValidateIdentifier(rootSessionId);
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await connection.BeginTransactionAsync(
+            IsolationLevel.RepeatableRead, cancellationToken).ConfigureAwait(false);
+        var intent = RuntimeCreditGuardObservationContract.CreateIntent(registration, rootSessionId);
+        var creditGuard = await ReadCreditGuardWithinTransactionAsync(
+            connection, transaction, registration, intent, cancellationToken).ConfigureAwait(false);
+        var dispatches = await ReadObservationDispatchesAsync(
+            connection, transaction, registration, rootSessionId, cancellationToken).ConfigureAwait(false);
+        var toolReservations = await ReadObservationToolReservationsAsync(
+            connection, transaction, registration, cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+
+        return new RuntimeObservationEvidence(
+            creditGuard is null
+                ? null
+                : new RuntimeObservationCreditGuard(
+                    creditGuard.CopilotAicFloor,
+                    creditGuard.AccountedThroughLedgerEventCount,
+                    creditGuard.LedgerDigest,
+                    creditGuard.GuardRevision,
+                    creditGuard.SoftWarningEmitted,
+                    creditGuard.HardCapExhausted,
+                    creditGuard.UpdatedAt).Validate(),
+            dispatches,
+            toolReservations);
+    }
+
+    private async Task<RuntimeObservationDispatchCollection> ReadObservationDispatchesAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RuntimeRegistration registration,
+        string rootSessionId,
+        CancellationToken cancellationToken)
+    {
+        var binding = registration.Binding;
+        var rows = new List<RuntimeObservationDispatch>(RuntimeObservationDispatchCollection.MaximumItems + 1);
+        await using var command = new NpgsqlCommand($"""
+            SELECT dispatch_id, root_session_id, child_session_id, work_plan_id, association_id,
+                checkpoint_id, checkpoint_revision, execution_fence, owner_revision, dispatch_state,
+                source_report_status, accounting_status, usage_witness_watermark, usage_witness_digest,
+                created_at, updated_at
+            FROM {_dispatches}
+            WHERE project_id = @project AND run_id = @run AND root_session_id = @root
+                AND child_session_id = @session AND runtime_instance_id = @runtime
+                AND registration_revision = @registrationRevision AND execution_fence = @fence
+                AND accepted_selection_hash = @selectionHash
+            ORDER BY created_at DESC, dispatch_id DESC
+            LIMIT @limit
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, binding.RunId);
+        command.Parameters.AddWithValue("root", NpgsqlDbType.Varchar, rootSessionId);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, binding.SessionId);
+        command.Parameters.AddWithValue("runtime", NpgsqlDbType.Uuid, registration.RuntimeInstanceId);
+        command.Parameters.AddWithValue("registrationRevision", NpgsqlDbType.Bigint, registration.Revision);
+        command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, binding.ExecutionFence);
+        command.Parameters.AddWithValue("selectionHash", NpgsqlDbType.Char, binding.AcceptedSelectionHash);
+        command.Parameters.AddWithValue(
+            "limit", NpgsqlDbType.Integer, RuntimeObservationDispatchCollection.MaximumItems + 1);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            rows.Add(new RuntimeObservationDispatch(
+                reader.GetGuid(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetString(3),
+                reader.GetString(4),
+                reader.GetString(5),
+                reader.GetInt64(6),
+                reader.GetInt64(7),
+                reader.GetInt64(8),
+                reader.GetString(9),
+                reader.GetString(10),
+                reader.GetString(11),
+                reader.IsDBNull(12) ? null : reader.GetInt64(12),
+                reader.IsDBNull(13) ? null : reader.GetString(13),
+                reader.GetFieldValue<DateTimeOffset>(14),
+                reader.GetFieldValue<DateTimeOffset>(15)));
+        }
+
+        var truncated = rows.Count > RuntimeObservationDispatchCollection.MaximumItems;
+        return new RuntimeObservationDispatchCollection(
+            rows.Take(RuntimeObservationDispatchCollection.MaximumItems).ToArray(),
+            truncated).Validate();
+    }
+
+    private async Task<RuntimeObservationToolReservationCollection> ReadObservationToolReservationsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        RuntimeRegistration registration,
+        CancellationToken cancellationToken)
+    {
+        const string eventType = "orchestrator.runtime.tool_invocation_admitted";
+        var binding = registration.Binding;
+        var rows = new List<RuntimeObservationToolReservation>(
+            RuntimeObservationToolReservationCollection.MaximumItems + 1);
+        await using var command = new NpgsqlCommand($"""
+            SELECT id, payload->>'SessionId', @fence, occurred_at
+            FROM {_outboxEvents}
+            WHERE event_type = @eventType AND payload->>'projectId' = @project
+                AND payload->>'runId' = @run AND payload->>'SessionId' = @session
+                AND payload->>'ExecutionFence' = @fence::text
+            ORDER BY occurred_at DESC, id DESC
+            LIMIT @limit
+            """, connection, transaction);
+        command.Parameters.AddWithValue("eventType", NpgsqlDbType.Varchar, eventType);
+        command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.ProjectId);
+        command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, binding.RunId);
+        command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, binding.SessionId);
+        command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, binding.ExecutionFence);
+        command.Parameters.AddWithValue(
+            "limit", NpgsqlDbType.Integer, RuntimeObservationToolReservationCollection.MaximumItems + 1);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            rows.Add(new RuntimeObservationToolReservation(
+                reader.GetGuid(0),
+                reader.GetString(1),
+                reader.GetInt64(2),
+                reader.GetFieldValue<DateTimeOffset>(3)));
+        }
+
+        var truncated = rows.Count > RuntimeObservationToolReservationCollection.MaximumItems;
+        return new RuntimeObservationToolReservationCollection(
+            rows.Take(RuntimeObservationToolReservationCollection.MaximumItems).ToArray(),
+            truncated).Validate();
+    }
 
     internal async Task<T> ExecuteLockedAsync<T>(
         Guid runtimeInstanceId, Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task<T>> action,

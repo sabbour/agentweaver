@@ -1,5 +1,6 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { redact } from '../../harness-shared/redaction.mjs';
 
 const sourceOnlyEvidence = (requiredReceipts, sourceGates = []) => ({
   kind: 'source-prerequisite-blocker',
@@ -20,7 +21,72 @@ const blockedProbe = (name, reason, evidence) => ({
   },
 });
 
-export function runP1DispatchRecoveryProbes() {
+function summarizeOwnerObservation(runtime, environment) {
+  const execution = runtime.execution.value;
+  const guard = runtime.creditGuard;
+  return {
+    kind: 'read-only-owner-observation',
+    acceptanceEvidence: false,
+    raceObserved: false,
+    cleanupVerified: false,
+    runtime: {
+      registration: runtime.registration.value,
+      execution: execution.observation,
+      checkpointParent: execution.checkpointParent,
+      creditGuard: guard.state === 'Available' ? guard.value : { state: guard.state },
+      dispatches: {
+        count: runtime.dispatches.value.items.length,
+        truncated: runtime.dispatches.value.truncated,
+      },
+      toolReservations: {
+        count: runtime.toolReservations.value.items.length,
+        truncated: runtime.toolReservations.value.truncated,
+      },
+    },
+    environment: {
+      environmentId: environment.environmentId,
+      fence: environment.fence,
+      providerAttempts: {
+        count: environment.providerAttempts.attempts.length,
+        states: environment.providerAttempts.attempts.map(attempt => attempt.state),
+      },
+      lateResourceCleanups: {
+        count: environment.lateResourceCleanups.items.length,
+        hasMore: environment.lateResourceCleanups.hasMore,
+      },
+    },
+  };
+}
+
+export async function runP1DispatchRecoveryProbes({
+  observationClient,
+  observationContext,
+} = {}) {
+  let ownerObservation = { status: 'not-requested' };
+  if (observationClient !== undefined || observationContext !== undefined) {
+    try {
+      if (typeof observationClient?.readRuntimeObservationV1 !== 'function'
+        || typeof observationClient?.readEnvironmentEvidence !== 'function'
+        || !observationContext) {
+        throw new Error('A runtime observation client and complete owner context are required.');
+      }
+      const runtime = await observationClient.readRuntimeObservationV1(observationContext.owner);
+      const environment = await observationClient.readEnvironmentEvidence({
+        environmentCreation: observationContext.environmentCreation,
+        owner: observationContext.owner,
+        operationId: observationContext.operationId,
+      });
+      ownerObservation = {
+        status: 'observed',
+        value: summarizeOwnerObservation(runtime, environment),
+      };
+    } catch (error) {
+      ownerObservation = {
+        status: 'unavailable',
+        reason: redact(error instanceof Error ? error.message : String(error)),
+      };
+    }
+  }
   const startedAt = new Date().toISOString();
   const probes = [
     blockedProbe(
@@ -159,6 +225,7 @@ export function runP1DispatchRecoveryProbes() {
     overallStatus: 'blocked',
     startedAt,
     completedAt,
+    ownerObservation,
     probes,
   };
 }
@@ -168,6 +235,6 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     process.stderr.write('Usage: node scripts/azure/p1-dispatch-recovery-probes/run.mjs\n');
     process.exitCode = 2;
   } else {
-    process.stdout.write(`${JSON.stringify(runP1DispatchRecoveryProbes(), null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify(await runP1DispatchRecoveryProbes(), null, 2)}\n`);
   }
 }

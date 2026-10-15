@@ -188,6 +188,7 @@ public static class EnvironmentEndpoints
                 EnvironmentEgressManager manager,
                 CancellationToken cancellationToken) =>
             {
+                context.Response.Headers.CacheControl = "no-store";
                 if (!TryReadCaller(context, out var caller))
                     return Results.Unauthorized();
                 try

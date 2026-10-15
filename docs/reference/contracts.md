@@ -866,6 +866,8 @@ The ledger preserves explicit `Estimate`, `Reconciled`, and `Unpriced` dispositi
 A configured model-turn cap requires the exact prepared dispatch, runtime binding, and prompt hash.
 The default false invocation flag and null dispatch ID stay omitted from historical payloads and hashes.
 After current Policy allows a tool invocation, Orchestrator reserves its event ID and request hash in the existing outbox.
+Reservations use the run-level `runtime-tool-invocations` ledger stream, separate from
+session message streams, so retained reservations do not block addressed-message delivery.
 `MaxToolCalls` counts those reservations across the whole run, including after store restart.
 Exact HTTP retry reuses the event ID; a new invocation cannot reuse an arguments hash as identity.
 Permission callbacks do not debit another slot.

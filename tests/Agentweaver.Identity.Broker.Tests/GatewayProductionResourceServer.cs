@@ -2,6 +2,7 @@ extern alias GatewayHost;
 
 using System.Text;
 using GatewayOwner = GatewayHost::Agentweaver.Gateway.GatewayOwner;
+using GatewayOptions = GatewayHost::Agentweaver.Gateway.GatewayOptions;
 using GatewayProgram = GatewayHost::Program;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
@@ -27,6 +28,9 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
     }
 
     public HttpClient Client { get; }
+
+    public TimeSpan OwnerRequestTimeout =>
+        _factory.Server.Services.GetRequiredService<GatewayOptions>().OwnerRequestTimeout;
 
     public HttpMessageHandler CreateHandler() => _factory.Server.CreateHandler();
 

@@ -256,8 +256,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         OwnerRunFailureState captureFailureState,
         bool azureByok = false,
         bool acceptedSkillJourney = false,
-        int? configuredMaxPromptTokens = null)
+        int? configuredMaxPromptTokens = null,
+        decimal? copilotHardCreditLimit = null,
+        bool enableHostedCopilotRunAdmission = false,
+        bool reserveObservedToolInvocation = false)
     {
+        if (enableHostedCopilotRunAdmission && (azureByok || copilotHardCreditLimit is null))
+            throw new ArgumentException(
+                "Hosted Copilot run admission requires a hosted model and an explicit hard credit limit.",
+                nameof(enableHostedCopilotRunAdmission));
+        var sourceControlPolicyOptions = reserveObservedToolInvocation
+            ? SourceControlMergeToolReadPolicyOptions()
+            : SourceControlMergePolicyOptions();
         var sourceControlSecretBackend = new RecordingSecretRedemption();
         await RestartBrokerForSourceControlAsync(sourceControlSecretBackend);
         using var signingCertificate = X509CertificateLoader.LoadPkcs12FromFile(
@@ -269,13 +279,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await using var projects = await ProjectsConfigResourceServer.StartAsync(
             _connectionString,
             signingKey,
-            providerCatalog: CreateSourceControlProviderCatalog(),
+            providerCatalog: CreateSourceControlProviderCatalog(sourceControlPolicyOptions),
             skillContentObjects: skillContentObjects);
         await using var skillWriter = acceptedSkillJourney
             ? await ProjectsConfigResourceServer.StartAsync(
                 _connectionString,
                 signingKey,
-                providerCatalog: CreateSourceControlProviderCatalog(),
+                providerCatalog: CreateSourceControlProviderCatalog(sourceControlPolicyOptions),
                 skillContentObjects: skillContentObjects,
                 usePublicWriterFixture: true)
             : null;
@@ -367,6 +377,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         MaxConcurrentChildren = 2,
                         MaxWallTimeSeconds = 3600,
                         MaxPromptTokens = configuredMaxPromptTokens is null ? null : 30000,
+                        CopilotHardCreditLimit = copilotHardCreditLimit,
                     }
                 }
             })
@@ -499,6 +510,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var acceptedSelectionSnapshot = JsonSerializer.Deserialize<ProjectRunSelectionResponse>(
             acceptedProjectsSelection, CoordinationJsonOptions);
         Assert.NotNull(acceptedSelectionSnapshot);
+        var acceptedPolicyCandidate = Assert.Single(
+            Assert.Single(
+                acceptedSelectionSnapshot.Providers,
+                provider => provider.Seam == ProviderSeam.Policy).Candidates);
+        Assert.Equal(AgtPolicyProvider.AdapterVersion.ToString(), acceptedPolicyCandidate.AdapterVersion);
+        Assert.Equal(sourceControlPolicyOptions.OptionsSchemaVersion, acceptedPolicyCandidate.OptionsSchemaVersion);
+        Assert.Equal(sourceControlPolicyOptions.OptionsRevision, acceptedPolicyCandidate.OptionsRevision);
+        Assert.True(PolicyProviderCapabilities.All
+            .ToHashSet(StringComparer.Ordinal)
+            .SetEquals(acceptedPolicyCandidate.AdvertisedCapabilities));
         var acceptedNetworkCandidate = Assert.Single(
             Assert.Single(acceptedSelectionSnapshot.Providers,
                 provider => provider.Seam == ProviderSeam.NetworkPolicy).Candidates,
@@ -590,6 +611,34 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ["EventsAndSessions__Authorization__Audience"] = "https://api.test",
             ["EventsAndSessions__OrchestratorOwner__OwnerBaseAddress"] = "https://orchestrator.test/",
             ["EventsAndSessions__OrchestratorOwner__Audience"] = "https://api.test",
+            ["EventsAndSessions__RuntimeUsage__Enabled"] =
+                enableHostedCopilotRunAdmission ? "true" : "false",
+            ["AgentHost__ModelBindingsRevision"] =
+                enableHostedCopilotRunAdmission ? "native-run-admission-v1" : null,
+            ["AgentHost__ModelBindings__platform-model__ModelId"] =
+                enableHostedCopilotRunAdmission ? "controlled-model" : null,
+            ["AgentHost__ModelBindings__platform-model__SourceMode"] =
+                enableHostedCopilotRunAdmission ? "HostedCopilot" : null,
+            ["EventsAndSessions__Cost__Copilot__ResourceId"] =
+                enableHostedCopilotRunAdmission ? "native-copilot-cost" : null,
+            ["EventsAndSessions__Cost__Copilot__ResourceGeneration"] =
+                enableHostedCopilotRunAdmission ? "1" : null,
+            ["EventsAndSessions__Cost__Copilot__OptionsRevision"] =
+                enableHostedCopilotRunAdmission ? "native-cost-v1" : null,
+            ["EventsAndSessions__Cost__Copilot__OptionsSchemaVersion"] =
+                enableHostedCopilotRunAdmission ? "1" : null,
+            ["EventsAndSessions__Cost__Copilot__RateCard__Id"] =
+                enableHostedCopilotRunAdmission ? "native-sdk-card" : null,
+            ["EventsAndSessions__Cost__Copilot__RateCard__Version"] =
+                enableHostedCopilotRunAdmission ? "1" : null,
+            ["EventsAndSessions__Cost__Copilot__RateCard__MeterSource"] =
+                enableHostedCopilotRunAdmission ? SdkMeterSources.CopilotNanoAiu : null,
+            ["EventsAndSessions__Cost__Copilot__RateCard__Unit"] =
+                enableHostedCopilotRunAdmission ? "AIC" : null,
+            ["EventsAndSessions__Cost__Copilot__RateCard__NanoUnitsPerUnit"] =
+                enableHostedCopilotRunAdmission ? "1000000000" : null,
+            ["EventsAndSessions__Cost__Copilot__RateCard__ModelMultipliers__controlled-model"] =
+                enableHostedCopilotRunAdmission ? "2.5" : null,
             ["Identity__Issuer"] = IdentityBrokerWebApplicationFactory.Issuer,
             ["Identity__Audience"] = "https://api.test",
             ["Identity__SecretRedemption__Audience"] = "https://broker-redemption.test",
@@ -657,8 +706,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             sandboxProvider,
             () => _brokerFactory.Server.CreateHandler(),
             sourceControlGitHub.CreateHandler,
-            CreateSourceControlProviderCatalog(),
-            policyOptions: SourceControlMergePolicyOptions(),
+            CreateSourceControlProviderCatalog(sourceControlPolicyOptions),
+            policyOptions: sourceControlPolicyOptions,
             gitWorkspaceManager: gitWorkspaceManager);
         await using var eventsFactory = new EventsIntegrationFactory(
             _connectionString,
@@ -667,6 +716,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             projects.CreateHandler,
             () => new ForkAdmissionBarrierHandler(
                 orchestratorFactory.Server.CreateHandler(), forkAdmissionGate),
+            nativeUsageHandler: enableHostedCopilotRunAdmission
+                ? () => orchestratorFactory.Server.CreateHandler()
+                : null,
             sessionMaterialObjects: captureObjectStore);
         eventsFactoryReference = eventsFactory;
 
@@ -684,7 +736,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 ForwardOwnerRequestAsync(request, projects.Client, cancellationToken),
             orchestratorOwner: (request, cancellationToken) =>
                 ForwardOwnerRequestAsync(request, orchestrator, cancellationToken),
+            ownerRequestTimeoutSeconds: 120,
             identityAudience: "https://api.test");
+        Assert.Equal(TimeSpan.FromSeconds(120), gateway.OwnerRequestTimeout);
 
         using var rootResponse = await SendJsonAsync(
             orchestrator,
@@ -886,8 +940,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                        checkoutBaseSha,
                        sourceControlWorkspaceBranch)))
         {
-            Assert.Equal(HttpStatusCode.Accepted, prepareWorkspace.StatusCode);
             var workspaceBody = await prepareWorkspace.Content.ReadAsStringAsync();
+            Assert.Equal(HttpStatusCode.Accepted, prepareWorkspace.StatusCode);
             Assert.DoesNotContain(sourceControlSecretBackend.Value, workspaceBody, StringComparison.Ordinal);
             using var workspaceDocument = JsonDocument.Parse(workspaceBody);
             var workspace = workspaceDocument.RootElement;
@@ -2730,14 +2784,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var (mergeStartedConflictIntentId, _) =
             await CreateApprovedMergeIntentAsync("source-control-merge-started-race");
         var mergeCountBeforeStartedRace = sourceControlGitHub.MergeRequestCount;
-        mergeStartedSelectionBarrier.Arm(async (request, token) =>
-        {
-            if (request.Method != HttpMethod.Get ||
-                request.RequestUri?.AbsolutePath !=
-                $"/api/projects/{project.ProjectId}/runs/{RunId}/selection")
-                return false;
-            return (await ReadMergeIntentStateAsync(mergeStartedConflictIntentId)).State == "merge_started";
-        });
+        sourceControlRequestBarrier.Arm((request, _) => Task.FromResult(
+            request.Method == HttpMethod.Get &&
+            request.RequestUri?.AbsolutePath == "/repos/octo/agentweaver/rules/branches/main"));
         var mergeStartedMerge = SendAsync(
             orchestrator,
             HttpMethod.Post,
@@ -2745,9 +2794,40 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             runToken,
             [TenantId]);
         var mergeStartedRoleRevoked = false;
+        async Task WaitForMergeBarrierAsync(Task barrier, string barrierName)
+        {
+            var completed = await Task.WhenAny(barrier, mergeStartedMerge)
+                .WaitAsync(TimeSpan.FromSeconds(30))
+                .ConfigureAwait(false);
+            if (completed == mergeStartedMerge)
+            {
+                using var earlyResponse = await mergeStartedMerge.ConfigureAwait(false);
+                var body = await earlyResponse.Content.ReadAsStringAsync().ConfigureAwait(false);
+                Assert.Fail(
+                    $"Merge execute completed before the {barrierName} barrier: " +
+                    $"{(int)earlyResponse.StatusCode} {body}");
+            }
+            await barrier.WaitAsync(TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+        }
+
         try
         {
-            await mergeStartedSelectionBarrier.WaitUntilPausedAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            await WaitForMergeBarrierAsync(
+                sourceControlRequestBarrier.WaitUntilPausedAsync(), "readiness");
+            var matchingSelectionRequests = 0;
+            mergeStartedSelectionBarrier.Arm((request, _) =>
+            {
+                if (request.Method != HttpMethod.Get ||
+                    request.RequestUri?.AbsolutePath !=
+                    $"/api/projects/{project.ProjectId}/runs/{RunId}/selection")
+                    return Task.FromResult(false);
+                // Each authority check reads the selection directly and again for the grant lookup.
+                return Task.FromResult(
+                    Interlocked.Increment(ref matchingSelectionRequests) == 4);
+            });
+            sourceControlRequestBarrier.Release();
+            await WaitForMergeBarrierAsync(
+                mergeStartedSelectionBarrier.WaitUntilPausedAsync(), "post-mark selection");
             Assert.Equal("merge_started", (await ReadMergeIntentStateAsync(mergeStartedConflictIntentId)).State);
             await RevokeRoleAsync(
                 projects.PrivilegedFixtureDataSource,
@@ -2761,6 +2841,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
         finally
         {
+            sourceControlRequestBarrier.Release();
             mergeStartedSelectionBarrier.Release();
             if (mergeStartedRoleRevoked)
                 runnerRole = await AssignRoleAsync(
@@ -3020,8 +3101,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                          sandboxProvider,
                          () => _brokerFactory.Server.CreateHandler(),
                          sourceControlGitHub.CreateHandler,
-                         CreateSourceControlProviderCatalog(),
-                         policyOptions: SourceControlMergePolicyOptions()))
+                         CreateSourceControlProviderCatalog(sourceControlPolicyOptions),
+                         policyOptions: sourceControlPolicyOptions))
         using (var restartedOrchestrator = restartedOrchestratorFactory.CreateClient(
                    new WebApplicationFactoryClientOptions
                    {
@@ -3131,12 +3212,16 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                    runToken, new RegisterChildRequest("unconfirmed-child", "foreign-item")))
             await AssertStatusAsync(unconfirmedItem, HttpStatusCode.Conflict);
 
+        var childSessionId = MafExecutionPlanner.CreateChildSessionId(
+            new SessionIdentity(project.ProjectId, RunId, root.RootSessionId),
+            acceptedPlan.Id,
+            "implement-1");
         using var childResponse = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
             $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
             runToken,
-            new RegisterChildRequest("child", "implement-1"));
+            new RegisterChildRequest(childSessionId, "implement-1"));
         await AssertStatusAsync(childResponse, HttpStatusCode.Created);
         var child = await ReadJsonAsync<RegisteredChild>(childResponse);
 
@@ -3145,7 +3230,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             HttpMethod.Post,
             $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/root/children",
             runToken,
-            new RegisterChildRequest("child", "implement-1"));
+            new RegisterChildRequest(childSessionId, "implement-1"));
         await AssertStatusAsync(childReplay, HttpStatusCode.Created);
         Assert.Equal(child, await ReadJsonAsync<RegisteredChild>(childReplay));
 
@@ -3207,7 +3292,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var childBindingResponse = await SendAsync(
             orchestrator,
             HttpMethod.Get,
-            $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child/owner-binding",
+            $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{Uri.EscapeDataString(childSessionId)}/owner-binding",
             runToken,
             [TenantId]);
         await AssertStatusAsync(childBindingResponse, HttpStatusCode.OK);
@@ -3218,14 +3303,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var boundaryResponse = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child/turn-boundary",
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{Uri.EscapeDataString(childSessionId)}/turn-boundary",
             runToken,
             new TurnBoundaryRequest(child.ExecutionFence, childBinding.StateVersion));
         await AssertStatusAsync(boundaryResponse, HttpStatusCode.OK);
         var boundary = await ReadJsonAsync<TurnBoundaryResult>(boundaryResponse);
         var presented = Assert.IsType<AddressedMessageEnvelope>(boundary.PresentedMessage);
         Assert.NotEqual(Guid.Empty, sentQuestion.OwnerMessageId);
-        Assert.Equal("child", presented.Recipient.SessionId);
+        Assert.Equal(childSessionId, presented.Recipient.SessionId);
         Assert.Equal(AddressedMessageStatus.Delivered, presented.Status);
         Assert.Equal("active", boundary.ExecutionState);
 
@@ -3235,7 +3320,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var currentDecisionForRuntimeOwner =
             await ReadJsonAsync<CoordinatorDecisionStateView>(currentDecisionForRuntimeOwnerResponse);
         var runtimeOwnerPath =
-            $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child/runtime-owner-context";
+            $"/internal/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{Uri.EscapeDataString(childSessionId)}/runtime-owner-context";
         using (var runtimeOwnerResponse = await SendAsync(
                    orchestrator, HttpMethod.Get, runtimeOwnerPath, runToken, [TenantId]))
         {
@@ -3247,7 +3332,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(TenantId, runtimeOwner.TenantId);
             Assert.Equal(project.ProjectId, runtimeOwner.ProjectId);
             Assert.Equal(RunId, runtimeOwner.RunId);
-            Assert.Equal("child", runtimeOwner.SessionId);
+            Assert.Equal(childSessionId, runtimeOwner.SessionId);
             Assert.Equal("test-agent", runtimeOwner.AgentId);
             Assert.Equal("platform-model", runtimeOwner.ModelSelectionReference);
             Assert.Equal(azureByok ? new SecretRef("model-api", "model-v1") : null,
@@ -3270,7 +3355,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 Contract = "agentweaver.runtime-turn.v1",
                 ProjectId = project.ProjectId,
                 RunId,
-                SessionId = "child",
+                SessionId = childSessionId,
                 ExecutionFence = child.ExecutionFence,
                 LogicalTurnOrdinal = boundary.LogicalTurnOrdinal
             });
@@ -3818,7 +3903,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var boundaryRetryResponse = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child/turn-boundary",
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{Uri.EscapeDataString(childSessionId)}/turn-boundary",
             runToken,
             new TurnBoundaryRequest(child.ExecutionFence, childBinding.StateVersion));
         await AssertStatusAsync(boundaryRetryResponse, HttpStatusCode.OK);
@@ -3829,7 +3914,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var acknowledgmentResponse = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child/messages/{presented.MessageId:D}/acknowledge",
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{Uri.EscapeDataString(childSessionId)}/messages/{presented.MessageId:D}/acknowledge",
             runToken,
             new AddressedMessageClaimFenceRequest(presented.ClaimFence));
         await AssertStatusAsync(acknowledgmentResponse, HttpStatusCode.OK);
@@ -3874,7 +3959,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 acceptedSkill,
                 acceptedSkillJourney ? "unassigned-agent" : null,
                 skillWriter,
-                stopAfterRegistration: configuredMaxPromptTokens is not null);
+                stopAfterRegistration: configuredMaxPromptTokens is not null,
+                reserveObservedToolInvocation: reserveObservedToolInvocation);
             if (configuredMaxPromptTokens is not null)
                 return;
         }
@@ -3882,7 +3968,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var sendReply = await SendJsonAsync(
             orchestrator,
             HttpMethod.Post,
-            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/child/messages",
+            $"/api/projects/{project.ProjectId}/runs/{RunId}/coordination/sessions/{Uri.EscapeDataString(childSessionId)}/messages",
             runToken,
             new CoordinationMessageRequest(
                 "root",
@@ -3895,9 +3981,28 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 ReplyToId: sentQuestion.OwnerMessageId,
                 RequestId: child.PendingRequestId,
                 ReplyCorrelationId: child.PendingRequestId));
-        await AssertStatusAsync(sendReply, HttpStatusCode.OK);
-        Assert.Equal("input_available",
-            await ReadGateStateAsync(_connectionString, ownerSchema, child.PendingRequestId));
+        if (sendReply.StatusCode == HttpStatusCode.Accepted)
+        {
+            var pendingReply = await ReadJsonAsync<CoordinationMessageResult>(sendReply);
+            Assert.Equal("root", pendingReply.RecipientSessionId);
+            Assert.Equal("pending", pendingReply.Status);
+            Assert.Equal(child.PendingRequestId, pendingReply.RequestId);
+            var gateState = await ReadGateStateAsync(_connectionString, ownerSchema, child.PendingRequestId);
+            for (var attempt = 0; gateState != "input_available" && attempt < 150; attempt++)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(100));
+                gateState = await ReadGateStateAsync(_connectionString, ownerSchema, child.PendingRequestId);
+            }
+            Assert.Equal("input_available", gateState);
+        }
+        else
+        {
+            await AssertStatusAsync(sendReply, HttpStatusCode.OK);
+            var admittedReply = await ReadJsonAsync<CoordinationMessageResult>(sendReply);
+            Assert.Equal("root", admittedReply.RecipientSessionId);
+            Assert.Equal("admitted", admittedReply.Status);
+            Assert.Equal(child.PendingRequestId, admittedReply.RequestId);
+        }
 
         using var rootBindingResponse = await SendAsync(
             orchestrator,
@@ -3919,8 +4024,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var rootBoundary = await ReadJsonAsync<TurnBoundaryResult>(rootBoundaryResponse);
         var replyPresented = Assert.IsType<AddressedMessageEnvelope>(rootBoundary.PresentedMessage);
         Assert.Equal(AddressedMessageStatus.Delivered, replyPresented.Status);
+        Assert.Equal("input_available",
+            await ReadGateStateAsync(_connectionString, ownerSchema, child.PendingRequestId));
         var notification = Assert.Single(rootBoundary.ParentNotifications);
-        Assert.Equal("child", notification.ChildSessionId);
+        Assert.Equal(childSessionId, notification.ChildSessionId);
         Assert.Equal(AddressedMessagePurpose.NeedsInput, notification.Purpose);
         Assert.True(notification.WakesParent);
 
@@ -3950,18 +4057,21 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         using var replyJournalResponse = await SendAsync(
             events,
             HttpMethod.Get,
-            "/internal/sessions/child/events",
+            $"/internal/sessions/{Uri.EscapeDataString(childSessionId)}/events",
             runToken,
             [TenantId]);
         await AssertStatusAsync(replyJournalResponse, HttpStatusCode.OK);
         using var replyJournal = JsonDocument.Parse(await replyJournalResponse.Content.ReadAsStringAsync());
         var childEvents = replyJournal.RootElement.GetProperty("events").EnumerateArray().ToArray();
-        Assert.Equal(!revokeSourceBeforeSdk && sourceLoss is null ? 6 : 1, childEvents.Length);
+        Assert.Equal(!revokeSourceBeforeSdk && sourceLoss is null
+            ? 6 + (reserveObservedToolInvocation ? 1 : 0)
+            : 1, childEvents.Length);
         if (!revokeSourceBeforeSdk && sourceLoss is null)
         {
             Assert.Equal(3, childEvents.Count(item => item.GetProperty("kind").GetString() == "turn"));
             Assert.Single(childEvents, item => item.GetProperty("kind").GetString() == "cacheReference");
-            Assert.Single(childEvents, item => item.GetProperty("kind").GetString() == "policyEvaluation");
+            Assert.Equal(reserveObservedToolInvocation ? 2 : 1,
+                childEvents.Count(item => item.GetProperty("kind").GetString() == "policyEvaluation"));
         }
         var replyJournalEvent = Assert.Single(
             childEvents, item => item.GetProperty("kind").GetString() == "addressedMessage");
@@ -5286,9 +5396,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         };
     }
 
-    internal static ProviderCatalog CreateSourceControlProviderCatalog()
+    internal static ProviderCatalog CreateSourceControlProviderCatalog(
+        AgtPolicyProviderOptions? policyOptions = null)
     {
-        var policyOptions = SourceControlMergePolicyOptions();
+        policyOptions ??= SourceControlMergePolicyOptions();
         var policyProvider = new AgtPolicyProvider();
         var networkOptions = CreateSourceControlNetworkPolicyOptions();
         var sandboxRegistration = CreateSourceControlSandboxRegistration();
@@ -5344,6 +5455,32 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             1,
             "source-control-policy-v1",
             [SourceControlMergeAllowPolicy]);
+
+    private static AgtPolicyProviderOptions SourceControlMergeToolReadPolicyOptions() =>
+        new(
+            "source-control-policy-resource",
+            1,
+            "source-control-policy-tool-read-v1",
+            ["""
+                apiVersion: governance.toolkit/v1
+                version: "1.0"
+                name: source-control-merge-policy
+                scope: global
+                default_action: deny
+                rules:
+                  - name: allow-approved-source-control-merge
+                    condition: "action_id == 'source_control.merge'"
+                    action: allow
+                    priority: 100
+                  - name: allow-current-runtime-model-turn
+                    condition: "action_id == 'model.turn'"
+                    action: allow
+                    priority: 100
+                  - name: allow-observed-runtime-tool-read
+                    condition: "action_id == 'tool.read'"
+                    action: allow
+                    priority: 100
+                """]);
 
     private async Task AssertBrowserReadsPendingOutcomeGateAsync(
         ProjectsConfigResourceServer projects,
@@ -6008,7 +6145,6 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     response.Headers.CacheControl?.NoStore == true,
                     Encoding.UTF8.GetString(bytes));
             }
-
             if (afterResponse is not null)
             {
                 try
@@ -6485,6 +6621,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     .ConfigurePrimaryHttpMessageHandler(projectsHandler);
                 services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.EventsAddressedMessageClient>()
                     .ConfigurePrimaryHttpMessageHandler(eventsHandler);
+                services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.RuntimeRunAdmissionClient>()
+                    .ConfigurePrimaryHttpMessageHandler(eventsHandler);
                 if (brokerHandler is not null)
                     services.AddHttpClient<
                             OrchestratorHost::Agentweaver.Orchestrator.SourceControlSecretRedemptionClient>()
@@ -6735,8 +6873,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                         EventsHost::Agentweaver.EventsAndSessions.CoordinationOwnerClient>()
                     .ConfigurePrimaryHttpMessageHandler(orchestratorHandler);
                 if (nativeUsageHandler is not null)
+                {
+                    services.AddHttpClient("RuntimeRunAdmissionService")
+                        .ConfigurePrimaryHttpMessageHandler(projectsHandler);
                     services.AddHttpClient("NativeUsageReceiptClient")
                         .ConfigurePrimaryHttpMessageHandler(nativeUsageHandler);
+                }
                 if (sessionMaterialObjects is not null)
                 {
                     services.RemoveAll<IObjectStore>();

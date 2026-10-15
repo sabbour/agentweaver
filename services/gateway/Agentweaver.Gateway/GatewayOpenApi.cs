@@ -59,6 +59,7 @@ internal static partial class GatewayOpenApi
             ["readDecisions"] = C(null, "CoordinatorDecisionStateView", "200"),
             ["readSessionTree"] = C(null, "SessionTreeSnapshot", "200"),
             ["readSessionStatus"] = C(null, "SessionStatusSnapshot", "200"),
+            ["readRuntimeObservationV1"] = C(null, "RuntimeObservationV1", "200", "409", "503"),
             ["reportTurnFailure"] = C("ReportRunFailureRequest", "RunExecutionTransitionResult", "200"),
             ["answerGate"] = C("AnswerCoordinatorGateRequest", "CoordinatorDecisionOperationResponse", "200"),
             ["askQuestion"] = C("AskCoordinatorQuestionRequest", "CoordinatorDecisionOperationResponse", "200"),
@@ -239,7 +240,17 @@ internal static partial class GatewayOpenApi
                                 $"The OpenAPI response schema for '{route.OperationId}' is missing.")),
                         status == "202"
                             ? "Accepted by the owner; this does not mean the requested work is complete."
-                            : "Owner response; returned by the owning service.");
+                            : "Owner response; returned by the owning service.",
+                        route.OperationId == "readRuntimeObservationV1" && status == "200"
+                            ? new Dictionary<string, object>(StringComparer.Ordinal)
+                            {
+                                ["Cache-Control"] = new
+                                {
+                                    description = "Runtime evidence responses are not cacheable.",
+                                    schema = new { type = "string", example = "no-store" },
+                                },
+                            }
+                            : null);
         }
         if (route.IsRunEventStream)
         {
@@ -321,11 +332,15 @@ internal static partial class GatewayOpenApi
         };
     }
 
-    private static object JsonResponse(object schema, string description) =>
-        new
+    private static object JsonResponse(
+        object schema,
+        string description,
+        IReadOnlyDictionary<string, object>? headers = null)
+    {
+        var response = new Dictionary<string, object>(StringComparer.Ordinal)
         {
-            description,
-            content = new Dictionary<string, object>
+            ["description"] = description,
+            ["content"] = new Dictionary<string, object>
             {
                 ["application/json"] = new
                 {
@@ -333,6 +348,10 @@ internal static partial class GatewayOpenApi
                 },
             },
         };
+        if (headers is not null)
+            response["headers"] = headers;
+        return response;
+    }
 
     private static object ProblemResponse(string description) =>
         new
@@ -804,6 +823,78 @@ internal static partial class GatewayOpenApi
         ["CoordinatorDecisionStateView"] = Obj(["stateVersion", "executionFence", "outcomeConfirmed", "workflowConfirmed", "canDecompose", "canDispatch", "pendingGate"],
             ("stateVersion", Int()), ("executionFence", Int()), ("outcomeConfirmed", Bool()), ("workflowConfirmed", Bool()),
             ("canDecompose", Bool()), ("canDispatch", Bool()), ("pendingGate", NullableRef("CoordinatorGateRequest"))),
+        ["RuntimeObservationV1"] = StrictObj(
+            ["contractVersion", "registration", "execution", "creditGuard", "dispatches", "toolReservations"],
+            ("contractVersion", Int()),
+            ("registration", Ref("RuntimeObservationRegistrationSection")),
+            ("execution", Ref("RuntimeObservationExecutionSection")),
+            ("creditGuard", Ref("RuntimeObservationCreditGuardSection")),
+            ("dispatches", Ref("RuntimeObservationDispatchesSection")),
+            ("toolReservations", Ref("RuntimeObservationToolReservationsSection"))),
+        ["RuntimeObservationRegistrationSection"] = StrictObj(["state", "value"],
+            ("state", Enum("Available", "Unknown", "Unavailable")),
+            ("value", NullableRef("RuntimeObservationRegistration"))),
+        ["RuntimeObservationExecutionSection"] = StrictObj(["state", "value"],
+            ("state", Enum("Available", "Unknown", "Unavailable")),
+            ("value", NullableRef("RuntimeObservationExecutionV2"))),
+        ["RuntimeObservationCreditGuardSection"] = StrictObj(["state", "value"],
+            ("state", Enum("Available", "Unknown", "Unavailable")),
+            ("value", NullableRef("RuntimeObservationCreditGuard"))),
+        ["RuntimeObservationDispatchesSection"] = StrictObj(["state", "value"],
+            ("state", Enum("Available", "Unknown", "Unavailable")),
+            ("value", NullableRef("RuntimeObservationDispatchCollection"))),
+        ["RuntimeObservationToolReservationsSection"] = StrictObj(["state", "value"],
+            ("state", Enum("Available", "Unknown", "Unavailable")),
+            ("value", NullableRef("RuntimeObservationToolReservationCollection"))),
+        ["RuntimeObservationRegistration"] = StrictObj(
+            ["runtimeInstanceId", "revision", "state", "expiresAt"],
+            ("runtimeInstanceId", Uuid()), ("revision", Int()), ("state", Enum("Active", "Revoked")),
+            ("expiresAt", Date())),
+        ["RuntimeObservationCreditGuard"] = StrictObj(
+            ["copilotAicFloor", "accountedThroughLedgerEventCount", "ledgerDigest",
+                "guardRevision", "softWarningEmitted", "hardCapExhausted", "updatedAt"],
+            ("copilotAicFloor", Number()), ("accountedThroughLedgerEventCount", Int()),
+            ("ledgerDigest", Str()), ("guardRevision", Int()), ("softWarningEmitted", Bool()),
+            ("hardCapExhausted", Bool()), ("updatedAt", Date())),
+        ["RuntimeObservationDispatchCollection"] = StrictObj(["items", "truncated"],
+            ("items", BoundedArray(Ref("RuntimeObservationDispatch"), 0, 100)),
+            ("truncated", Bool())),
+        ["RuntimeObservationDispatch"] = StrictObj(
+            ["dispatchId", "rootSessionId", "childSessionId", "workPlanId", "associationId",
+                "checkpointId", "checkpointRevision", "executionFence", "ownerRevision", "state",
+                "reportState", "accountingState", "witnessWatermark", "witnessDigest", "createdAt", "updatedAt"],
+            ("dispatchId", Uuid()), ("rootSessionId", Str()), ("childSessionId", Str()),
+            ("workPlanId", Str()), ("associationId", Str()), ("checkpointId", Str()),
+            ("checkpointRevision", Int()), ("executionFence", Int()), ("ownerRevision", Int()),
+            ("state", Str()), ("reportState", NullableStr()), ("accountingState", NullableStr()),
+            ("witnessWatermark", NullableInt()), ("witnessDigest", NullableStr()),
+            ("createdAt", Date()), ("updatedAt", Date())),
+        ["RuntimeObservationToolReservationCollection"] = StrictObj(["items", "truncated"],
+            ("items", BoundedArray(Ref("RuntimeObservationToolReservation"), 0, 100)),
+            ("truncated", Bool())),
+        ["RuntimeObservationToolReservation"] = StrictObj(
+            ["eventId", "sessionId", "executionFence", "occurredAt"],
+            ("eventId", Uuid()), ("sessionId", Str()), ("executionFence", Int()), ("occurredAt", Date())),
+        ["RuntimeObservationExecutionV2"] = StrictObj(
+            ["contractVersion", "observation", "checkpointParent"],
+            ("contractVersion", Int()), ("observation", Ref("RuntimeObservationExecution")),
+            ("checkpointParent", Ref("RuntimeExecutionCheckpointParent"))),
+        ["RuntimeObservationExecution"] = StrictObj(
+            ["contractVersion", "rootSessionId", "sessionId", "executionFence", "workPlanId",
+                "associationId", "checkpointRevision", "checkpointId", "checkpointDecisionStateVersion",
+                "currentDecisionStateVersion", "status"],
+            ("contractVersion", Int()), ("rootSessionId", Str()), ("sessionId", Str()),
+            ("executionFence", Int()), ("workPlanId", Str()), ("associationId", Str()),
+            ("checkpointRevision", Int()), ("checkpointId", Str()), ("checkpointDecisionStateVersion", Int()),
+            ("currentDecisionStateVersion", Int()), ("status", Enum("Pending", "Running", "Succeeded", "Failed", "Indeterminate")),
+            ("pendingDispatch", NullableRef("RuntimeObservationPendingDispatch")),
+            ("resultDigest", NullableRef("RuntimeExecutionResultDigest"))),
+        ["RuntimeObservationPendingDispatch"] = StrictObj(["messageId"],
+            ("messageId", Uuid())),
+        ["RuntimeExecutionResultDigest"] = StrictObj(["sha256", "utf8ByteLength"],
+            ("sha256", Str()), ("utf8ByteLength", Int())),
+        ["RuntimeExecutionCheckpointParent"] = StrictObj(["hasParentMetadata", "parentCheckpointId"],
+            ("hasParentMetadata", Bool()), ("parentCheckpointId", NullableStr())),
         ["SessionIdentity"] = Obj(["projectId", "runId", "sessionId"],
             ("projectId", Str()), ("runId", Str()), ("sessionId", Str())),
         ["SessionTreeSnapshot"] = Obj(["rootSessionId", "nodes"],

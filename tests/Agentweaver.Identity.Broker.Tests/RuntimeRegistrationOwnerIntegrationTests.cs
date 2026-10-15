@@ -36,6 +36,27 @@ namespace Agentweaver.Identity.Broker.Tests;
 
 public sealed partial class ProjectsConfigBrokerAuthorizationTests
 {
+    [Fact]
+    public void RuntimeObservationRegistrationAcceptsSelectionHashHexCaseDifferences()
+    {
+        var registration = RuntimeCopilotSessionTests.Registration();
+        var binding = registration.Binding;
+        var identity = new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId);
+        var owner = new SessionRuntimeOwnerState(
+            "root-session", null, binding.TenantId, binding.AcceptedSelectionHash.ToUpperInvariant(),
+            binding.ExecutionFence, 1, 1, "runtime-turn");
+        var actor = new CoordinationActor(binding.ActorIssuer, binding.ActorId);
+
+        CoordinationEndpoints.RequireCurrentRuntimeRegistrationForObservation(
+            registration, actor, identity, owner);
+
+        var staleOwner = owner with { AcceptedSelectionHash = new string('b', 64) };
+        var failure = Assert.Throws<OrchestratorHost::Agentweaver.Orchestrator.CoordinationException>(() =>
+            CoordinationEndpoints.RequireCurrentRuntimeRegistrationForObservation(
+                registration, actor, identity, staleOwner));
+        Assert.Equal("runtime_owner_context_stale", failure.Code);
+    }
+
     private static RuntimeModelBindingsResolver AzureByokModelBindings() => new("azure-byok-bindings-v1",
         new Dictionary<string, RuntimeModelBinding>
         {
@@ -49,7 +70,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
     [Fact]
     public Task AzureByokNativeUsageUsesBrokerCoreAndEventsWithExactDispatchProvenance() =>
         RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
-            false, null, false, OwnerRunFailureState.Indeterminate, azureByok: true);
+            false, null, false, OwnerRunFailureState.Indeterminate, azureByok: true,
+            reserveObservedToolInvocation: true);
+
+    [Fact]
+    public Task HostedCopilotNativeUsageObservationReturnsPersistedCreditGuard() =>
+        RunBrokerIssuedRunTokenRegistersSessionsDeliversAtTurnBoundaryAndKeepsGatePending(
+            false, null, false, OwnerRunFailureState.Indeterminate, copilotHardCreditLimit: 5m,
+            enableHostedCopilotRunAdmission: true);
 
     [Theory]
     [InlineData("sdk-preparation-grant")]
@@ -75,7 +103,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         ControlledCopilotConnection copilotConnection, string connectionOwnerToken,
         Func<bool, Task> setHistoricalReadAuthority, RecordingSecretRedemption? byokSecrets = null,
         SkillRuntimeContentV1? expectedAcceptedSkill = null, string? unassignedAgentId = null,
-        ProjectsConfigResourceServer? skillWriter = null, bool stopAfterRegistration = false)
+        ProjectsConfigResourceServer? skillWriter = null, bool stopAfterRegistration = false,
+        bool reserveObservedToolInvocation = false)
     {
         await AssignRoleAsync(projects.PrivilegedFixtureDataSource, membershipId,
             ProjectAuthorityResourceType.Project, owner.ProjectId, ProjectAuthorityRole.Owner);
@@ -124,10 +153,14 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             runToken, [owner.TenantId]);
         await AssertStatusAsync(internalPlacement, HttpStatusCode.OK);
         Assert.True(internalPlacement.Headers.CacheControl?.NoStore);
+        var policyOptions = reserveObservedToolInvocation
+            ? SourceControlMergeToolReadPolicyOptions()
+            : SourceControlMergePolicyOptions();
         await using var factory = new OrchestratorIntegrationFactory(
             _connectionString, ownerSchema, signingKey, projects.CreateHandler,
             () => events.Server.CreateHandler(), sandboxProvider: sandboxProvider,
-            providerCatalog: CreateSourceControlProviderCatalog(), policyOptions: SourceControlMergePolicyOptions(),
+            providerCatalog: CreateSourceControlProviderCatalog(policyOptions),
+            policyOptions: policyOptions,
             environmentHandler: () => new RuntimeServiceRouter(routes, failures),
             runtimeUsageHandler: () => new RuntimeServiceRouter(routes, failures));
         using var client = factory.CreateClient(new()
@@ -258,8 +291,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         await VerifyCurrentRuntimeDeliveryAndNativeSessionAsync(
             registration, signingKey, runToken, routes, failures, projects, events.Schema, ownerSchema,
             revokeSourceBeforeSdk, sourceLoss, environment, copilotConnection,
-            connectionOwnerToken, setHistoricalReadAuthority, factory.Services, byokSecrets,
-            expectedAcceptedSkill, skillWriter);
+            connectionOwnerToken, setHistoricalReadAuthority, factory.Services, client, byokSecrets,
+            expectedAcceptedSkill, skillWriter, reserveObservedToolInvocation);
         TraceNativeStage(failures, "Runtime exercise and explicit cleanup completed.");
     }
 
@@ -290,9 +323,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         ProjectsConfigResourceServer projects, string eventsSchema, string ownerSchema, bool revokeSourceBeforeSdk,
         string? sourceLoss, RuntimePlacementTestServer environment, ControlledCopilotConnection copilotConnection,
         string connectionOwnerToken, Func<bool, Task> setHistoricalReadAuthority,
-        IServiceProvider orchestratorServices, RecordingSecretRedemption? byokSecrets = null,
+        IServiceProvider orchestratorServices, HttpClient orchestratorClient,
+        RecordingSecretRedemption? byokSecrets = null,
         SkillRuntimeContentV1? expectedAcceptedSkill = null,
-        ProjectsConfigResourceServer? skillWriter = null)
+        ProjectsConfigResourceServer? skillWriter = null,
+        bool reserveObservedToolInvocation = false)
     {
         var elapsed = System.Diagnostics.Stopwatch.StartNew();
         var expiryTimeProvider = sourceLoss == "sdk-preparation-expiry"
@@ -428,7 +463,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             }
             Assert.Equal(RuntimeBootstrapReceiverState.Pending, receiver.State);
             var modelBindings = sdk.Byok ? AzureByokModelBindings() :
-                new RuntimeModelBindingsResolver("legacy-unversioned", new Dictionary<string, RuntimeModelBinding>
+                new RuntimeModelBindingsResolver("native-run-admission-v1", new Dictionary<string, RuntimeModelBinding>
                 {
                     [registration.Binding.ModelSelectionReference!] =
                         new(sdk.ModelId, ModelSourceMode.HostedCopilot)
@@ -779,7 +814,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
                                 currentOwner.ReadCurrentAsync(registration.RuntimeInstanceId, actor, timeout.Token));
                         }, setHistoricalReadAuthority, sourceClient, orchestratorServices, ownerSchema,
-                        materialClient, objects, timeout.Token, sdk.Byok ? async recorded =>
+                        materialClient, orchestratorClient, objects, timeout.Token, sdk.Byok ? async recorded =>
                         {
                             Assert.True(await usage.MoveNextAsync());
                             var nativeReceipt = usage.Current;
@@ -801,7 +836,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                             await AssertNativeAccountingCountsAsync(eventsSchema, 2, 0);
                             return ImmutableArray.Create(new RuntimeUsageCostReceiptReference(
                                 nativeReceipt.ReceiptId, ack.Accounting));
-                        } : null, runtimeHttp);
+                        } : null, runtimeHttp, reserveObservedToolInvocation);
                     await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => receiver.DisposeAsync().AsTask());
                     Assert.Equal(RuntimeBootstrapReceiverState.Disposed, receiver.State);
                 });
@@ -834,13 +869,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         ProjectsConfigResourceServer projects, ConcurrentQueue<string> failures, ControlledCopilotRuntime sdk,
         Func<Task> endRuntimeAuthority, Func<bool, Task> setHistoricalReadAuthority,
         RuntimeUsageSourceHttpClient sourceClient, IServiceProvider orchestratorServices, string ownerSchema,
-        HttpClient client, RuntimeMaterialObjects objects,
+        HttpClient materialClient, HttpClient orchestratorClient, RuntimeMaterialObjects objects,
         CancellationToken cancellationToken,
         Func<RuntimeNativeTurnRecordedReceipt, Task<ImmutableArray<RuntimeUsageCostReceiptReference>>>?
-            accountNativeUsage = null, HttpClient? ownerClient = null)
+            accountNativeUsage = null, HttpClient? ownerClient = null,
+        bool reserveObservedToolInvocation = false)
     {
         var sourceCredentialValue = session.Proof().Credential.GetValue();
-        var material = new RuntimeSessionMaterialHttpClient(client, client.BaseAddress!, actor);
+        var material = new RuntimeSessionMaterialHttpClient(
+            materialClient, materialClient.BaseAddress!, actor);
         var eventId = Guid.NewGuid();
         const string userContent = "Run the accepted bounded turn.";
         var receipt = await session.CommitTurnContentAsync(
@@ -861,9 +898,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var input = new SessionMaterialWriteRequest(1, Guid.NewGuid(), session.Registration.RuntimeInstanceId,
             session.Registration.Revision, session.Registration.Binding.ExecutionFence + 1,
             SessionMaterialKind.TurnContent, read.Bytes, "user", session.Facts.SdkVersion, session.Facts.ModelId);
-        using var staleFence = await SendJsonAsync(client, HttpMethod.Post, path, runToken, input);
+        using var staleFence = await SendJsonAsync(materialClient, HttpMethod.Post, path, runToken, input);
         await AssertStatusAsync(staleFence, HttpStatusCode.Forbidden);
-        using var observeOnly = await SendJsonAsync(client, HttpMethod.Post, path,
+        using var observeOnly = await SendJsonAsync(materialClient, HttpMethod.Post, path,
             session.Proof().Credential.GetValue(), input with
             {
                 ExecutionFence = session.Registration.Binding.ExecutionFence
@@ -948,6 +985,139 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         var nativeOwner = ownerScope.ServiceProvider.GetRequiredService<RuntimeUsageSourceOwner>();
         await nativeOwner.PrepareNativeTurnAsync(context, session.Registration, rootIdentity, checkpoint, intent,
             message, RequireCurrentOwner, cancellationToken);
+        var runtimeObservationPath = $"/api/projects/{binding.ProjectId}/runs/{binding.RunId}" +
+            $"/coordination/sessions/{binding.SessionId}/runtime-observation/v1";
+        var sdkSendsBeforeObservation = sdk.Requests.Count(request => request.Method == "session.send");
+        var objectWritesBeforeObservation = objects.Writes;
+        RuntimeActionAdmission? observedToolAdmission = null;
+        if (reserveObservedToolInvocation)
+        {
+            var toolRequest = new RuntimeActionRequest(
+                1,
+                session.Registration.RuntimeInstanceId,
+                session.Registration.Revision,
+                binding.ExecutionFence,
+                Guid.NewGuid(),
+                "tool.read",
+                RuntimeContractValidation.Hash("bounded tool read"u8))
+            {
+                IsToolInvocation = true
+            };
+            using var toolAdmissionResponse = await SendJsonAsync(
+                orchestratorClient,
+                HttpMethod.Post,
+                "/internal/runtime/actions/authorize",
+                runToken,
+                toolRequest);
+            await AssertStatusAsync(toolAdmissionResponse, HttpStatusCode.OK);
+            observedToolAdmission = await ReadJsonAsync<RuntimeActionAdmission>(toolAdmissionResponse);
+            Assert.Equal(toolRequest, observedToolAdmission.Request);
+            Assert.Equal(PolicyEvaluationOutcome.Allow, observedToolAdmission.Outcome);
+            Assert.Equal(PolicyEvaluationReasonCode.Allowed, observedToolAdmission.ReasonCode);
+        }
+        var observationStateBefore = await ReadRuntimeObservationPersistenceStateAsync(
+            ownerSchema, binding.ProjectId, binding.RunId, cancellationToken);
+        using var firstObservationResponse = await SendAsync(
+            orchestratorClient, HttpMethod.Get, runtimeObservationPath, runToken, [binding.TenantId]);
+        await AssertStatusAsync(firstObservationResponse, HttpStatusCode.OK);
+        Assert.True(firstObservationResponse.Headers.CacheControl?.NoStore);
+        var firstObservationBody = await firstObservationResponse.Content.ReadAsStringAsync(cancellationToken);
+        var currentObservation = Assert.IsType<RuntimeObservationV1>(
+            JsonSerializer.Deserialize<RuntimeObservationV1>(firstObservationBody, CoordinationJsonOptions));
+        _ = currentObservation.Validate();
+        Assert.Equal(RuntimeObservationSectionState.Available, currentObservation.Registration.State);
+        var observedRegistration = Assert.IsType<RuntimeObservationRegistration>(currentObservation.Registration.Value);
+        Assert.Equal(session.Registration.RuntimeInstanceId, observedRegistration.RuntimeInstanceId);
+        Assert.Equal(session.Registration.Revision, observedRegistration.Revision);
+        Assert.Equal(RuntimeObservationRegistrationState.Active, observedRegistration.State);
+        Assert.Equal(session.Registration.ExpiresAt, observedRegistration.ExpiresAt);
+        Assert.Equal(RuntimeObservationSectionState.Available, currentObservation.Execution.State);
+        var observedExecution = Assert.IsType<RuntimeObservationExecutionV2>(currentObservation.Execution.Value);
+        Assert.Equal(2, observedExecution.ContractVersion);
+        Assert.Equal(checkpoint.HasParentMetadata, observedExecution.CheckpointParent.HasParentMetadata);
+        Assert.Equal(checkpoint.ParentCheckpointId, observedExecution.CheckpointParent.ParentCheckpointId);
+        var observedExecutionValue = observedExecution.Observation;
+        Assert.Equal(rootSessionId, observedExecutionValue.RootSessionId);
+        Assert.Equal(binding.SessionId, observedExecutionValue.SessionId);
+        Assert.Equal(binding.ExecutionFence, observedExecutionValue.ExecutionFence);
+        Assert.Equal(plan.Plan.Id, observedExecutionValue.WorkPlanId);
+        Assert.Equal(associationId, observedExecutionValue.AssociationId);
+        Assert.Equal(checkpoint.Info.CheckpointId, observedExecutionValue.CheckpointId);
+        Assert.Equal(checkpoint.State.Revision, observedExecutionValue.CheckpointRevision);
+        Assert.Equal(checkpoint.State.DecisionStateVersion, observedExecutionValue.CheckpointDecisionStateVersion);
+        Assert.Equal(decision.StateVersion, observedExecutionValue.CurrentDecisionStateVersion);
+        Assert.Equal(RuntimeExecutionTaskStatus.Running, observedExecutionValue.Status);
+        Assert.Equal(intent.MessageId, observedExecutionValue.PendingDispatch?.MessageId);
+        Assert.Null(observedExecutionValue.ResultDigest);
+        RuntimeObservationCreditGuard? expectedCreditGuard = null;
+        if (binding.ModelSourceMode == ModelSourceMode.Byok)
+        {
+            Assert.Equal(0, observationStateBefore.CreditGuards);
+            Assert.Null(observationStateBefore.CreditGuard);
+            Assert.Equal(RuntimeObservationSectionState.Unknown, currentObservation.CreditGuard.State);
+            Assert.Null(currentObservation.CreditGuard.Value);
+        }
+        else if (binding.CopilotSoftCreditLimit is null && binding.CopilotHardCreditLimit is null)
+        {
+            Assert.Equal(0, observationStateBefore.CreditGuards);
+            Assert.Null(observationStateBefore.CreditGuard);
+            Assert.Equal(RuntimeObservationSectionState.Unknown, currentObservation.CreditGuard.State);
+            Assert.Null(currentObservation.CreditGuard.Value);
+        }
+        else
+        {
+            Assert.Equal(1, observationStateBefore.CreditGuards);
+            var storedCreditGuard = Assert.IsType<RuntimeObservationCreditGuard>(
+                observationStateBefore.CreditGuard);
+            expectedCreditGuard = storedCreditGuard;
+            Assert.Equal(RuntimeObservationSectionState.Available, currentObservation.CreditGuard.State);
+            Assert.Equal(storedCreditGuard, currentObservation.CreditGuard.Value);
+        }
+        Assert.Equal(RuntimeObservationSectionState.Available, currentObservation.Dispatches.State);
+        var observedDispatch = Assert.Single(
+            Assert.IsType<RuntimeObservationDispatchCollection>(currentObservation.Dispatches.Value).Items);
+        Assert.Equal(intent.MessageId, observedDispatch.DispatchId);
+        Assert.Equal(rootSessionId, observedDispatch.RootSessionId);
+        Assert.Equal(binding.SessionId, observedDispatch.ChildSessionId);
+        Assert.Equal(plan.Plan.Id, observedDispatch.WorkPlanId);
+        Assert.Equal(associationId, observedDispatch.AssociationId);
+        Assert.Equal(checkpoint.Info.CheckpointId, observedDispatch.CheckpointId);
+        Assert.Equal(checkpoint.State.Revision, observedDispatch.CheckpointRevision);
+        Assert.Equal(binding.ExecutionFence, observedDispatch.ExecutionFence);
+        Assert.Equal("prepared", observedDispatch.State);
+        Assert.Equal(1, observedDispatch.OwnerRevision);
+        Assert.Equal("unknown", observedDispatch.ReportState);
+        Assert.Equal("unknown", observedDispatch.AccountingState);
+        Assert.Null(observedDispatch.WitnessWatermark);
+        Assert.Null(observedDispatch.WitnessDigest);
+        Assert.Equal(RuntimeObservationSectionState.Available, currentObservation.ToolReservations.State);
+        var toolReservations = Assert.IsType<RuntimeObservationToolReservationCollection>(
+            currentObservation.ToolReservations.Value);
+        if (observedToolAdmission is null)
+        {
+            Assert.Equal(0, observationStateBefore.ToolReservations);
+            Assert.Empty(toolReservations.Items);
+        }
+        else
+        {
+            Assert.Equal(1, observationStateBefore.ToolReservations);
+            var reservation = Assert.Single(toolReservations.Items);
+            Assert.Equal(observedToolAdmission.Request.EventId, reservation.EventId);
+            Assert.Equal(binding.SessionId, reservation.SessionId);
+            Assert.Equal(binding.ExecutionFence, reservation.ExecutionFence);
+        }
+        Assert.False(toolReservations.Truncated);
+        using var repeatedObservationResponse = await SendAsync(
+            orchestratorClient, HttpMethod.Get, runtimeObservationPath, runToken, [binding.TenantId]);
+        await AssertStatusAsync(repeatedObservationResponse, HttpStatusCode.OK);
+        Assert.True(repeatedObservationResponse.Headers.CacheControl?.NoStore);
+        Assert.Equal(firstObservationBody,
+            await repeatedObservationResponse.Content.ReadAsStringAsync(cancellationToken));
+        Assert.Equal(sdkSendsBeforeObservation,
+            sdk.Requests.Count(request => request.Method == "session.send"));
+        Assert.Equal(objectWritesBeforeObservation, objects.Writes);
+        Assert.Equal(observationStateBefore, await ReadRuntimeObservationPersistenceStateAsync(
+            ownerSchema, binding.ProjectId, binding.RunId, cancellationToken));
         sdk.EmitNativeCompletionReceipt = true;
         sdk.EmitUsageWithTurn = accountNativeUsage is not null;
         var (answer, recorded) = await session.SendNativeTurnAsync(message, material, sourceClient, cancellationToken);
@@ -975,6 +1145,88 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(Assert.Single(references), Assert.Single(accounted.Snapshot.RepresentedReceipts));
         await nativeOwner.RequireNativeTurnAccountedAsync(context, session.Registration, message, answer,
             RequireCurrentOwner, cancellationToken);
+        Assert.Equal(
+            MafExecutionPlanner.CreateChildSessionId(rootIdentity, plan.Plan.Id, associationId),
+            binding.SessionId);
+        using (var runtimeObservation = await SendAsync(
+                   orchestratorClient,
+                   HttpMethod.Get,
+                   runtimeObservationPath,
+                   runToken,
+                   [binding.TenantId]))
+        {
+            await AssertStatusAsync(runtimeObservation, HttpStatusCode.OK);
+            Assert.True(runtimeObservation.Headers.CacheControl?.NoStore);
+            var finalObservation = Assert.IsType<RuntimeObservationV1>(
+                JsonSerializer.Deserialize<RuntimeObservationV1>(
+                    await runtimeObservation.Content.ReadAsStringAsync(cancellationToken),
+                    CoordinationJsonOptions));
+            _ = finalObservation.Validate();
+            Assert.Equal(RuntimeObservationSectionState.Available, finalObservation.Registration.State);
+            var finalRegistration = Assert.IsType<RuntimeObservationRegistration>(
+                finalObservation.Registration.Value);
+            Assert.Equal(observedRegistration.RuntimeInstanceId, finalRegistration.RuntimeInstanceId);
+            Assert.Equal(observedRegistration.Revision, finalRegistration.Revision);
+            Assert.Equal(observedRegistration.State, finalRegistration.State);
+            Assert.Equal(observedRegistration.ExpiresAt, finalRegistration.ExpiresAt);
+            Assert.Equal(RuntimeObservationSectionState.Available, finalObservation.Execution.State);
+            var finalExecution = Assert.IsType<RuntimeObservationExecutionV2>(
+                finalObservation.Execution.Value).Observation;
+            Assert.Equal(rootSessionId, finalExecution.RootSessionId);
+            Assert.Equal(binding.SessionId, finalExecution.SessionId);
+            Assert.Equal(binding.ExecutionFence, finalExecution.ExecutionFence);
+            Assert.Equal(plan.Plan.Id, finalExecution.WorkPlanId);
+            Assert.Equal(associationId, finalExecution.AssociationId);
+            Assert.Equal(checkpoint.Info.CheckpointId, finalExecution.CheckpointId);
+            Assert.Equal(checkpoint.State.Revision, finalExecution.CheckpointRevision);
+            Assert.Equal(checkpoint.State.DecisionStateVersion, finalExecution.CheckpointDecisionStateVersion);
+            Assert.Equal(decision.StateVersion, finalExecution.CurrentDecisionStateVersion);
+            Assert.Equal(RuntimeExecutionTaskStatus.Running, finalExecution.Status);
+            Assert.Equal(intent.MessageId, finalExecution.PendingDispatch?.MessageId);
+            Assert.Equal(RuntimeObservationSectionState.Available, finalObservation.Dispatches.State);
+            var finalDispatch = Assert.Single(
+                Assert.IsType<RuntimeObservationDispatchCollection>(finalObservation.Dispatches.Value).Items);
+            Assert.Equal(observedDispatch.DispatchId, finalDispatch.DispatchId);
+            Assert.Equal(rootSessionId, finalDispatch.RootSessionId);
+            Assert.Equal(binding.SessionId, finalDispatch.ChildSessionId);
+            Assert.Equal(plan.Plan.Id, finalDispatch.WorkPlanId);
+            Assert.Equal(associationId, finalDispatch.AssociationId);
+            Assert.Equal(checkpoint.Info.CheckpointId, finalDispatch.CheckpointId);
+            Assert.Equal(checkpoint.State.Revision, finalDispatch.CheckpointRevision);
+            Assert.Equal(binding.ExecutionFence, finalDispatch.ExecutionFence);
+            Assert.True(finalDispatch.OwnerRevision > observedDispatch.OwnerRevision);
+            Assert.Equal("completed", finalDispatch.State);
+            Assert.Equal(binding.ModelSourceMode == ModelSourceMode.Byok ? "unpriced" : "priced",
+                finalDispatch.AccountingState);
+
+            var persistedObservationState = await ReadRuntimeObservationPersistenceStateAsync(
+                ownerSchema, binding.ProjectId, binding.RunId, cancellationToken);
+            Assert.Equal(observationStateBefore.Dispatches, persistedObservationState.Dispatches);
+            if (binding.ModelSourceMode == ModelSourceMode.Byok ||
+                binding.CopilotSoftCreditLimit is null && binding.CopilotHardCreditLimit is null)
+            {
+                Assert.Equal(observationStateBefore.CreditGuards, persistedObservationState.CreditGuards);
+                Assert.Null(persistedObservationState.CreditGuard);
+                Assert.Equal(RuntimeObservationSectionState.Unknown, finalObservation.CreditGuard.State);
+                Assert.Null(finalObservation.CreditGuard.Value);
+            }
+            else
+            {
+                Assert.Equal(RuntimeObservationSectionState.Available, finalObservation.CreditGuard.State);
+                var observedCreditGuard = Assert.IsType<RuntimeObservationCreditGuard>(
+                    finalObservation.CreditGuard.Value);
+                var persistedCreditGuard = Assert.IsType<RuntimeObservationCreditGuard>(
+                    persistedObservationState.CreditGuard);
+                var initialCreditGuard = Assert.IsType<RuntimeObservationCreditGuard>(expectedCreditGuard);
+                Assert.Equal(0.00123456725m, persistedCreditGuard.CopilotAicFloor);
+                Assert.Equal(1L, persistedCreditGuard.AccountedThroughLedgerEventCount);
+                Assert.Equal(initialCreditGuard.LedgerDigest, persistedCreditGuard.LedgerDigest);
+                Assert.True(persistedCreditGuard.GuardRevision > initialCreditGuard.GuardRevision);
+                Assert.True(persistedCreditGuard.UpdatedAt > initialCreditGuard.UpdatedAt);
+                Assert.False(persistedCreditGuard.HardCapExhausted);
+                Assert.Equal(persistedCreditGuard, observedCreditGuard);
+            }
+        }
         Assert.Equal(sendCount + 1, sdk.Requests.Count(request => request.Method == "session.send"));
         Assert.Equal(4, objects.Writes);
         var recovery = await material.ReadRecoveryAsync(session.Registration, cancellationToken);
@@ -996,18 +1248,18 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             receipt.Identity, eventId, SessionMaterialKind.TurnContent, cancellationToken);
         Assert.Equal(receipt, historical.Material);
         Assert.Equal(read.Bytes, historical.Bytes);
-        using var camelCase = await SendAsync(client, HttpMethod.Get,
+        using var camelCase = await SendAsync(materialClient, HttpMethod.Get,
             $"{path}/{eventId:D}/turnContent", runToken, [session.Registration.Binding.TenantId]);
         await AssertStatusAsync(camelCase, HttpStatusCode.OK);
         foreach (var invalidKind in new[] { "unknown", "0", "1" })
         {
-            using var invalid = await SendAsync(client, HttpMethod.Get,
+            using var invalid = await SendAsync(materialClient, HttpMethod.Get,
                 $"{path}/{eventId:D}/{invalidKind}", runToken, [session.Registration.Binding.TenantId]);
             await AssertStatusAsync(invalid, HttpStatusCode.BadRequest);
         }
 
         var pinPath = $"/internal/projects/{receipt.Identity.ProjectId}/runs/{receipt.Identity.RunId}/sessions-provider-binding";
-        using var pinResponse = await SendAsync(client, HttpMethod.Get, pinPath,
+        using var pinResponse = await SendAsync(materialClient, HttpMethod.Get, pinPath,
             runToken, [session.Registration.Binding.TenantId]);
         await AssertStatusAsync(pinResponse, HttpStatusCode.OK);
         Assert.True(pinResponse.Headers.CacheControl?.NoStore);
@@ -1032,11 +1284,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 $"/api/projects/{receipt.Identity.ProjectId}?runId={receipt.Identity.RunId}",
                 runToken, [session.Registration.Binding.TenantId]);
             await AssertStatusAsync(summary, HttpStatusCode.OK);
-            using var deniedCache = await SendAsync(client, HttpMethod.Get,
+            using var deniedCache = await SendAsync(materialClient, HttpMethod.Get,
                 $"{path}/{recovery.Cache.Material.EventId:D}/sdkCache",
                 runToken, [session.Registration.Binding.TenantId]);
             await AssertStatusAsync(deniedCache, HttpStatusCode.Forbidden);
-            using var deniedPin = await SendAsync(client, HttpMethod.Get, pinPath,
+            using var deniedPin = await SendAsync(materialClient, HttpMethod.Get, pinPath,
                 runToken, [session.Registration.Binding.TenantId]);
             await AssertStatusAsync(deniedPin, HttpStatusCode.Forbidden);
         }
@@ -1285,6 +1537,69 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             TraceNativeStage(failures, $"HTTP completed {request.Method} {endpoint.Host}{endpoint.AbsolutePath}.");
             return response;
         }
+    }
+
+    private sealed record RuntimeObservationPersistenceState(
+        long Dispatches,
+        long CreditGuards,
+        long ToolReservations,
+        long NativeSources,
+        long UsageObservations,
+        RuntimeObservationCreditGuard? CreditGuard);
+
+    private async Task<RuntimeObservationPersistenceState> ReadRuntimeObservationPersistenceStateAsync(
+        string schema, string projectId, string runId, CancellationToken cancellationToken)
+    {
+        await using var connection = await _nativeDataSource.OpenConnectionAsync(cancellationToken);
+        long dispatches;
+        long guards;
+        long toolReservations;
+        long nativeSources;
+        long usageObservations;
+        await using (var counts = new NpgsqlCommand($"""
+            SELECT (SELECT count(*) FROM "{schema}".maf_execution_dispatches),
+                   (SELECT count(*) FROM "{schema}".maf_execution_run_guards),
+                   (SELECT count(*) FROM "{schema}".outbox_events
+                    WHERE event_type = 'orchestrator.runtime.tool_invocation_admitted'),
+                   (SELECT count(*) FROM "{schema}".runtime_sdk_sources),
+                   (SELECT count(*) FROM "{schema}".runtime_usage_observations)
+            """, connection))
+        await using (var reader = await counts.ExecuteReaderAsync(cancellationToken))
+        {
+            Assert.True(await reader.ReadAsync(cancellationToken));
+            dispatches = reader.GetInt64(0);
+            guards = reader.GetInt64(1);
+            toolReservations = reader.GetInt64(2);
+            nativeSources = reader.GetInt64(3);
+            usageObservations = reader.GetInt64(4);
+        }
+
+        RuntimeObservationCreditGuard? creditGuard = null;
+        await using (var guard = new NpgsqlCommand($"""
+            SELECT copilot_aic_floor, accounted_through_event_position, usage_witness_digest,
+                owner_revision, soft_warning_emitted, hard_cap_exhausted, updated_at
+            FROM "{schema}".maf_execution_run_guards
+            WHERE project_id = @project AND run_id = @run
+            """, connection))
+        {
+            guard.Parameters.AddWithValue("project", NpgsqlTypes.NpgsqlDbType.Varchar, projectId);
+            guard.Parameters.AddWithValue("run", NpgsqlTypes.NpgsqlDbType.Varchar, runId);
+            await using var reader = await guard.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                creditGuard = new RuntimeObservationCreditGuard(
+                    reader.GetDecimal(0),
+                    reader.GetInt64(1),
+                    reader.GetString(2),
+                    reader.GetInt64(3),
+                    reader.GetBoolean(4),
+                    reader.GetBoolean(5),
+                    reader.GetFieldValue<DateTimeOffset>(6)).Validate();
+                Assert.False(await reader.ReadAsync(cancellationToken));
+            }
+        }
+
+        return new(dispatches, guards, toolReservations, nativeSources, usageObservations, creditGuard);
     }
 
     private async Task AssertNativeSourceCountsAsync(string schema, long sources, long observations)

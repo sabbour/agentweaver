@@ -154,7 +154,7 @@ internal sealed class MafExecutionCheckpointStore
             string.Equals(current.Info.CheckpointId, checkpointId, StringComparison.Ordinal))
         {
             var replayPayload = MafExecutionCheckpointContract.Serialize(state);
-            var replayInfo = await _checkpoints.AppendInTransactionAsync(
+            var replay = await _checkpoints.AppendInTransactionAsync(
                 connection,
                 transaction,
                 _binding,
@@ -163,7 +163,11 @@ internal sealed class MafExecutionCheckpointStore
                 replayPayload,
                 expectedParent,
                 cancellationToken, workspaceSeed).ConfigureAwait(false);
-            return new MafExecutionCheckpointSnapshot(replayInfo, state);
+            return new MafExecutionCheckpointSnapshot(replay.Info, state)
+            {
+                ParentCheckpointId = replay.ParentCheckpointId,
+                HasParentMetadata = replay.HasParentMetadata
+            };
         }
 
         if (expectedParent is null)
@@ -186,7 +190,7 @@ internal sealed class MafExecutionCheckpointStore
         }
 
         var payload = MafExecutionCheckpointContract.Serialize(state);
-        var info = await _checkpoints.AppendInTransactionAsync(
+        var checkpoint = await _checkpoints.AppendInTransactionAsync(
             connection,
             transaction,
             _binding,
@@ -195,7 +199,11 @@ internal sealed class MafExecutionCheckpointStore
             payload,
             expectedParent,
             cancellationToken, workspaceSeed).ConfigureAwait(false);
-        return new MafExecutionCheckpointSnapshot(info, state);
+        return new MafExecutionCheckpointSnapshot(checkpoint.Info, state)
+        {
+            ParentCheckpointId = checkpoint.ParentCheckpointId,
+            HasParentMetadata = checkpoint.HasParentMetadata
+        };
     }
 
     internal async Task<MafExecutionBuildTestIntent> HydrateBuildTestIntentAsync(

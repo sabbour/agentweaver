@@ -45,10 +45,39 @@ already-authenticated actor source. Supplying both is an explicit prerequisite f
 runner integration; this adapter never falls back to the Gateway. Contract tests use
 controlled loopback HTTP only and do not perform live owner or credential operations.
 
+## Runtime and Environment owner observations
+
+`RuntimeObservationClient` consumes the discovered Gateway
+`readRuntimeObservationV1` operation and the direct Environment reads for
+`/sandbox/v1/lifecycle`, one operation's `/provider-attempts`, and
+`/sandbox/v1/late-resource-cleanups`. These requests use the existing
+already-authorized API client, send `Cache-Control: no-store`, require a
+no-store response, and verify that the Environment fence remains unchanged
+around the reads. The Environment ID comes from a real creation receipt's
+`snapshot.fence.owner.environmentId`, not from an input pin.
+
+The runtime response is checked against the strict V1 projection before use.
+Unavailable and unknown sections stay explicit; an unknown credit guard is not
+converted to zero. The Environment reader rejects foreign operations, malformed
+fences, duplicate attempt or cleanup identities, unexpected resource receipts,
+and credential or raw provider-outcome fields. It records owner state only and
+does not create resources, dispatch work, or turn stored rows into race or cleanup
+acceptance.
+
+Controlled loopback coverage is in
+`test/runtime-observation.test.mjs`; it does not prove a deployed Gateway,
+Environment service, actor authorization, provider callback, or resource cleanup.
+
 ## Use a separately authorized target
+
+Environment lifecycle and provider evidence are read directly from the
+approved Environment origin. Create a separate client and auth provider for
+that exact origin; do not reuse or extract authorization from the Gateway
+client.
 
 ```javascript
 import { AgentweaverClient } from './scripts/api-harness/lib/client.mjs';
+import { RuntimeObservationClient } from './scripts/api-harness/lib/runtime-observation-client.mjs';
 import { createBrokerAuthProvider } from './scripts/harness-shared/broker-auth.mjs';
 import { appendRedactedJsonLine } from './scripts/harness-shared/safe-jsonl.mjs';
 
@@ -59,14 +88,43 @@ const authProvider = createBrokerAuthProvider({
   audience,
   actorId,
 });
-const api = new AgentweaverClient({
+const gatewayApi = new AgentweaverClient({
   baseUrl: approvedGatewayOrigin,
   authProvider,
   tenantId,
 });
-await api.discover();
-const receipt = await api.invoke('getProject', {
+const environmentAuthProvider = createBrokerAuthProvider({
+  target: approvedEnvironmentOrigin,
+  token: separatelyAuthorizedEnvironmentBrokerToken,
+  issuer,
+  audience: environmentAudience,
+  actorId,
+});
+const environmentApi = new AgentweaverClient({
+  baseUrl: approvedEnvironmentOrigin,
+  authProvider: environmentAuthProvider,
+  tenantId,
+});
+await gatewayApi.discover();
+const runtimeObservation = new RuntimeObservationClient({
+  api: gatewayApi,
+  environmentApi,
+});
+const observation = await runtimeObservation.readRuntimeObservationV1({
+  projectId, runId, rootSessionId, sessionId, executionFence,
+});
+const environmentObservation = await runtimeObservation.readEnvironmentEvidence({
+  environmentCreation,
+  owner: { tenantId, projectId, runId },
+  operationId,
+});
+const receipt = await gatewayApi.invoke('getProject', {
   pathParameters: { projectId },
+});
+await appendRedactedJsonLine(evidenceFile, {
+  kind: 'runtime-owner-observation',
+  observation,
+  environmentObservation,
 });
 await appendRedactedJsonLine(evidenceFile, receipt);
 ```

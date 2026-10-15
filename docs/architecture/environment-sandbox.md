@@ -82,7 +82,7 @@ target state. Its final commit rechecks authority and selection and is blocked
 by unresolved provider attempts or pending late cleanup.
 
 `GET .../lifecycle` requires fresh `ReadProjects` authority and rechecks it
-after the durable read. The provider-attempt and late-cleanup reads require a
+after the durable read, and responds with `Cache-Control: no-store`. The provider-attempt and late-cleanup reads require a
 current authenticated caller with run-selection authority; each also
 rechecks authority after its store read. These read routes do not invoke a
 provider effect.
