@@ -44,12 +44,17 @@ Examples:
 3. **Do the work.** Make changes, write tests, and commit the completed issue on its own
    branch before accepting another issue.
 
-4. **Run bounded independent review, then push and open a draft PR:**
+4. **Run focused implementation validation, then push and open a draft PR:**
    ```bash
    git push -u origin squad/{issue-number}-{slug}
    gh pr create --base dev --title "{description}" --body "Closes #{issue-number}" --draft
    ```
-   Mark the PR ready only after required validation and independent review/admission have
+   Keep a non-front draft untouched after another PR merges: do not rebase it, wait for
+   or investigate final CI, run final reviews, create a findings ledger, mark it ready,
+   merge it, or clean it up. The coordinator promotes exactly one queue-head draft as
+   the admission candidate. Only that candidate receives its final rebase onto current
+   `origin/dev`, final validation/CI, exact-head risk-based reviews, findings ledger,
+   readiness, merge, and cleanup. Mark the candidate ready only after those checks have
    completed with no unresolved blocker:
    ```bash
    gh pr ready <number>
