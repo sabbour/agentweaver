@@ -610,8 +610,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
-/** Reads the active authentication context and throws if no provider is mounted. */
 // eslint-disable-next-line react-refresh/only-export-components
+/** Reads the active authentication context and throws if no provider is mounted. */
 export function useAuth(): AuthContextValue {
   const value = useContext(AuthContext);
   if (!value) throw new Error('useAuth must be used within AuthProvider.');

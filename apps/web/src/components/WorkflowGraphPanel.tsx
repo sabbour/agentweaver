@@ -1543,6 +1543,10 @@ const useInlinePanelStyles = makeStyles({
  * edge-routing pipeline used by the coordinator topology.
  */
 // eslint-disable-next-line react-refresh/only-export-components -- pure graph transform is unit-tested independently.
+/**
+ * Converts a workflow definition and execution state into positioned React Flow nodes and edges.
+ * It is a deterministic graph projection and performs no API request.
+ */
 export function buildWorkflowDefinitionGraph(
   graph: WorkflowGraphDto,
 ) {
