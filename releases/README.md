@@ -647,8 +647,23 @@ Before writing anything, the continuation checks:
 - the pack and receipt artifact IDs, sizes, and digests
 - the original claim, result, and failed first-attempt run
 - an empty continuation namespace
+- that the registry credential can push to each of the nine missing image
+  repositories
 - that each of the twelve published outputs reads back unchanged
 - that each of the eleven missing destinations is absent
+
+The push check requests a `pull,push` token for each repository, starts a blob
+upload, which must return HTTP 202, and then cancels the upload session. It
+commits no blob, manifest, or tag. A failure names the repository and status and
+stops the run before the claim, so the recovery stays unused. Grant the
+repository's Actions **Write** access on that package, then dispatch again.
+
+GitHub Packages redirects `.nupkg` downloads to signed storage. Package reads
+follow at most three `https:` redirects without userinfo and send the feed
+credential only to the feed origin. A 404 at any hop means the package is
+absent. The read bytes must still match the SHA-256 in the permanent record.
+After each push, the run retries absent or failed reads for about five minutes
+before it records the output as unknown.
 
 Only an explicit registry "manifest unknown" (or buildx `<reference>: not
 found`) answer proves that an image is absent. Authorization, rate-limit,

@@ -19,7 +19,9 @@ const manifestMediaTypes = new Set([
   'application/vnd.oci.image.manifest.v1+json',
   'application/vnd.docker.distribution.manifest.v2+json',
 ]);
-const readAfterWriteDelays = [2_000, 5_000, 10_000, 20_000];
+// GitHub Packages can index a pushed NuGet version or GHCR tag minutes after the push
+// succeeds. Retry absent reads for about five minutes before recording an unknown outcome.
+const readAfterWriteDelays = [2_000, 5_000, 10_000, 20_000, 30_000, 60_000, 60_000, 60_000, 60_000];
 const fail = message => { throw new Error(`partial publication: ${message}`); };
 const canonical = value => {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -249,24 +251,138 @@ async function nugetBaseUrl(env, fetchImpl) {
   return { base, authorization };
 }
 
-async function readPackageBytes(component, { base, authorization }, fetchImpl) {
+const redirectStatuses = new Set([301, 302, 303, 307, 308]);
+const maxPackageRedirects = 3;
+
+async function discardBody(response) {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // The body is not needed; a cancel failure does not affect the read.
+  }
+}
+
+/**
+ * Reads the exact .nupkg bytes from the approved flat-container endpoint.
+ * GitHub Packages redirects downloads to signed storage, so redirects are followed
+ * manually: at most three https hops without userinfo, and the feed credential is sent
+ * only to the feed origin. A 404 at any hop means absent (`null`). Callers hash the bytes
+ * against the permanent receipt, so integrity does not depend on the storage host.
+ */
+export async function readPackageBytes(component, { base, authorization }, fetchImpl) {
   const id = encodeURIComponent(component.id.toLowerCase());
   const version = encodeURIComponent(component.version.toLowerCase());
-  const url = new URL(`${id}/${version}/${id}.${version}.nupkg`, base);
+  let url = new URL(`${id}/${version}/${id}.${version}.nupkg`, base);
   if (url.origin !== base.origin) fail('the NuGet package read escaped the approved feed origin');
-  let response;
-  try {
-    response = await fetchImpl(url, {
-      headers: { authorization, accept: 'application/octet-stream' },
-      cache: 'no-store',
-      redirect: 'manual',
-    });
-  } catch {
-    fail(`the exact ${component.id} package version could not be read`);
+  for (let hop = 0; ; hop += 1) {
+    const headers = { accept: 'application/octet-stream' };
+    if (url.origin === base.origin) headers.authorization = authorization;
+    let response;
+    try {
+      response = await fetchImpl(url, { headers, cache: 'no-store', redirect: 'manual' });
+    } catch {
+      fail(`the exact ${component.id} package version could not be read from ${url.host}`);
+    }
+    if (response.status === 404) {
+      await discardBody(response);
+      return null;
+    }
+    if (response.status >= 200 && response.status < 300) return Buffer.from(await response.arrayBuffer());
+    if (!redirectStatuses.has(response.status)) {
+      await discardBody(response);
+      fail(`the exact ${component.id} package version returned HTTP ${response.status} from ${url.host}`);
+    }
+    const location = response.headers?.get?.('location');
+    await discardBody(response);
+    if (!location) {
+      fail(`the exact ${component.id} package version redirect (HTTP ${response.status}) from ${url.host} has no Location`);
+    }
+    if (hop >= maxPackageRedirects) {
+      fail(`the exact ${component.id} package version exceeded ${maxPackageRedirects} redirects at ${url.host}`);
+    }
+    let next;
+    try {
+      next = new URL(location, url);
+    } catch {
+      fail(`the exact ${component.id} package version redirect from ${url.host} has an invalid Location`);
+    }
+    if (next.protocol !== 'https:' || next.username || next.password) {
+      fail(`the exact ${component.id} package version redirect from ${url.host} is not a plain https URL`);
+    }
+    url = next;
   }
-  if (response.status === 404) return null;
-  if (!response.ok) fail(`the exact ${component.id} package version returned HTTP ${response.status}`);
-  return Buffer.from(await response.arrayBuffer());
+}
+
+const registryWriteProbeHost = 'https://ghcr.io';
+
+/**
+ * Proves the registry credential can push to each repository without publishing anything.
+ * For each repository it requests a `pull,push` bearer token, starts a blob upload
+ * (`POST /v2/<repo>/blobs/uploads/`, which must answer 202), and always cancels the upload
+ * session. No blob, manifest, or tag is committed. Any failure names the repository and status
+ * and stops the continuation before its one-use claim.
+ */
+export async function verifyRegistryWriteAccess(repositories, { username, password }, fetchImpl) {
+  const basic = `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`;
+  for (const repository of repositories) {
+    if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)+$/.test(repository)) {
+      fail(`the GHCR repository ${repository} is not a valid registry path`);
+    }
+    const tokenUrl = new URL(`${registryWriteProbeHost}/token`);
+    tokenUrl.searchParams.set('service', 'ghcr.io');
+    tokenUrl.searchParams.set('scope', `repository:${repository}:pull,push`);
+    let tokenResponse;
+    try {
+      tokenResponse = await fetchImpl(tokenUrl, {
+        headers: { authorization: basic, accept: 'application/json' }, cache: 'no-store', redirect: 'manual',
+      });
+    } catch {
+      fail(`the GHCR push token for ${repository} could not be requested`);
+    }
+    if (!tokenResponse.ok) {
+      await discardBody(tokenResponse);
+      fail(`the GHCR push token for ${repository} returned HTTP ${tokenResponse.status}`);
+    }
+    let token;
+    try {
+      const body = await tokenResponse.json();
+      token = body?.token ?? body?.access_token;
+    } catch {
+      token = undefined;
+    }
+    if (typeof token !== 'string' || !token) fail(`GHCR returned no push token for ${repository}`);
+    const bearer = { authorization: `Bearer ${token}` };
+    let upload;
+    try {
+      upload = await fetchImpl(`${registryWriteProbeHost}/v2/${repository}/blobs/uploads/`, {
+        method: 'POST', headers: { ...bearer, 'content-length': '0' }, cache: 'no-store', redirect: 'manual',
+      });
+    } catch {
+      fail(`the GHCR write check for ${repository} could not start an upload`);
+    }
+    const location = upload.headers?.get?.('location');
+    await discardBody(upload);
+    let session;
+    if (location) {
+      try {
+        session = new URL(location, `${registryWriteProbeHost}/v2/${repository}/blobs/uploads/`);
+      } catch {
+        session = undefined;
+      }
+    }
+    if (session && session.origin === registryWriteProbeHost && !session.username && !session.password) {
+      try {
+        const cancelled = await fetchImpl(session, {
+          method: 'DELETE', headers: bearer, cache: 'no-store', redirect: 'manual',
+        });
+        await discardBody(cancelled);
+      } catch {
+        // An uncancelled upload session holds no committed content and expires on its own.
+      }
+    }
+    if (upload.status !== 202) fail(`the GHCR write check for ${repository} returned HTTP ${upload.status}`);
+    if (!session) fail(`the GHCR write check for ${repository} returned no usable upload session`);
+  }
 }
 
 // Only an explicit registry "missing manifest" answer proves absence. Authorization,
@@ -327,14 +443,25 @@ export function readRemoteImage(run, repository, tag) {
   };
 }
 
-async function readAfterWrite(read, sleep) {
-  let value = await read();
+// A just-pushed output may be absent or briefly unreadable while the registry indexes it.
+// Retry both cases within the bounded schedule; the last error is rethrown if reads never succeed.
+// With `retryAbsent: false`, only read errors are retried and absence is returned at once.
+async function readAfterWrite(read, sleep, { retryAbsent = true } = {}) {
+  const attempt = async () => {
+    try {
+      return { value: await read() };
+    } catch (error) {
+      return { error };
+    }
+  };
+  let result = await attempt();
   for (const delay of readAfterWriteDelays) {
-    if (value !== null) break;
+    if (!result.error && (result.value !== null || !retryAbsent)) break;
     await sleep(delay);
-    value = await read();
+    result = await attempt();
   }
-  return value;
+  if (result.error) throw result.error;
+  return result.value;
 }
 
 function archiveReference(item) {
@@ -448,6 +575,7 @@ export async function continuePartialPublication({
   readArchiveConfig = readDockerArchiveConfig,
   readPackageSha256,
   readImage,
+  verifyRegistryWrite = verifyRegistryWriteAccess,
   sleep = delay => new Promise(resolve => setTimeout(resolve, delay)),
   directory,
   originalReceiptPath,
@@ -500,6 +628,14 @@ export async function continuePartialPublication({
 
   run('docker', ['login', 'ghcr.io', '--username', env.RELEASE_REGISTRY_USER, '--password-stdin'],
     env.RELEASE_REGISTRY_PASSWORD);
+  // Prove push access to every missing image repository before any absence read or claim,
+  // so a package permission gap leaves the one-use recovery unconsumed.
+  await verifyRegistryWrite(
+    missing.filter(({ artifact }) => artifact.kind === 'image')
+      .map(({ component }) => imageRepositoryOf(planById.get(component.id)).slice('ghcr.io/'.length)),
+    { username: env.RELEASE_REGISTRY_USER, password: env.RELEASE_REGISTRY_PASSWORD },
+    fetchImpl,
+  );
   const nuget = readPackageSha256 ? undefined : await nugetBaseUrl(env, fetchImpl);
   const reads = {
     packageSha256: readPackageSha256 ?? (async component => {
@@ -546,7 +682,7 @@ export async function continuePartialPublication({
     let mutated = false;
     try {
       if (artifact.kind === 'package') {
-        if (await readOutput(planItem, component, reads) !== null) {
+        if (await readAfterWrite(() => readOutput(planItem, component, reads), sleep, { retryAbsent: false }) !== null) {
           fail(`the ${component.id} destination appeared after preflight; refusing overwrite`);
         }
         unattempted.shift();
@@ -566,7 +702,7 @@ export async function continuePartialPublication({
         const remote = `${repository}:${component.version}`;
         if (!expected) fail(`the ${component.id} image was not loaded and verified before its continuation claim`);
         run('docker', ['tag', expected.reference, remote]);
-        if (await reads.image(repository, component.version) !== null) {
+        if (await readAfterWrite(() => reads.image(repository, component.version), sleep, { retryAbsent: false }) !== null) {
           fail(`the ${component.id} destination appeared after preflight; refusing overwrite`);
         }
         unattempted.shift();
@@ -594,7 +730,8 @@ export async function continuePartialPublication({
     for (const record of records) {
       const planItem = planById.get(record.id);
       try {
-        const observed = await readOutput(planItem, selectedById.get(record.id).component, reads);
+        const observed = await readAfterWrite(
+          () => readOutput(planItem, selectedById.get(record.id).component, reads), sleep);
         if (!matchesRecord(record, planItem, observed)) unknown.push(record.id);
       } catch {
         unknown.push(record.id);
