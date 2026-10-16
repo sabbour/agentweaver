@@ -1,0 +1,22 @@
+name: v1 partial publication continuation
+
+# GitHub requires this dispatch path on the default branch before it can run on v1.
+# Only the admitted v1 merged helper source contains the actual continuation job.
+on:
+  workflow_dispatch:
+    inputs:
+      expected_source:
+        description: Exact source SHA of the original partial v1.0.0 publication
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  registration-only:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse execution from the default-branch registration stub
+        run: |
+          echo "::error::This default-branch stub only registers the v1 workflow. Dispatch the admitted refs/heads/v1 helper source; no publication is permitted here." >&2
+          exit 1
