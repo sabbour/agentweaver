@@ -21,6 +21,7 @@ jobs:
       actions: read
       contents: write
       packages: write
+      pull-requests: read
     environment: v1-publication
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +63,17 @@ jobs:
           run-id: 38815873763
           artifact-ids: 12010899427
           path: artifacts/release/original/
+      - name: Set up product Docker engine
+        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
+        with:
+          version: 'v29.9.0'
+          set-host: true
+          daemon-config: |
+            {
+              "features": {
+                "containerd-snapshotter": true
+              }
+            }
       - name: Prepare the isolated Docker credential directory
         run: mkdir -p "$RUNNER_TEMP/agentweaver-continuation-docker"
       - name: Continue only the eleven missing exact artifacts
@@ -78,6 +90,7 @@ jobs:
         run: >-
           node scripts/release/publish.mjs releases/foundation.json artifacts/release/pack
           c24d0000fe5fc6163e4f38594c39dff782d3a46d
+          --platform-only
           --continue-partial-publication
           --original-receipt artifacts/release/original/publication.json
       - uses: actions/upload-artifact@v4

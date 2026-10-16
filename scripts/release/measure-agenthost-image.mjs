@@ -95,9 +95,12 @@ async function readTarEntry(archive, entry, retain) {
   };
 }
 
-export function measureAgentHostArchiveSync(archive, repoRoot) {
+export function measureAgentHostArchiveSync(archive, repoRoot, sourceSha) {
+  if (sourceSha !== undefined && !sourcePattern.test(sourceSha))
+    throw new Error('An explicit AgentHost measurement source must be an exact commit SHA.');
   return JSON.parse(execFileSync(process.execPath, [
     fileURLToPath(import.meta.url), '--stdout', resolve(archive), resolve(repoRoot),
+    ...(sourceSha === undefined ? [] : [sourceSha]),
   ], { encoding: 'utf8', maxBuffer: 2 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe'] }));
 }
 
@@ -110,8 +113,10 @@ function git(args, repoRoot = root) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
     const stdout = process.argv[2] === '--stdout';
-    if (process.argv.length !== (stdout ? 5 : 4))
-      throw new Error('Usage: measure-agenthost-image.mjs <gzip-OCI-archive> <receipt.json> | --stdout <gzip-OCI-archive> <source-root>');
+    const explicitSource = stdout && process.argv.length === 6 ? process.argv[5] : undefined;
+    if (process.argv.length !== (stdout ? (explicitSource === undefined ? 5 : 6) : 4) ||
+        (explicitSource !== undefined && !sourcePattern.test(explicitSource)))
+      throw new Error('Usage: measure-agenthost-image.mjs <gzip-OCI-archive> <receipt.json> | --stdout <gzip-OCI-archive> <source-root> [<source-sha>]');
     const repoRoot = stdout ? resolve(process.argv[4]) : root;
     const inputs = [
       'Directory.Build.props', '.dockerignore',
@@ -122,7 +127,11 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
     ];
     if (git(['status', '--porcelain', '--untracked-files=normal', ...(stdout ? [] : ['--', ...inputs])], repoRoot))
       throw new Error('A clean Git working tree is required before writing an image receipt.');
-    const source = { sha: git(['rev-parse', 'HEAD'], repoRoot), tree: git(['rev-parse', 'HEAD^{tree}'], repoRoot) };
+    const sourceRevision = explicitSource ?? 'HEAD';
+    const source = {
+      sha: git(['rev-parse', '--verify', `${sourceRevision}^{commit}`], repoRoot),
+      tree: git(['rev-parse', `${sourceRevision}^{tree}`], repoRoot),
+    };
     const archive = resolve(process.argv[stdout ? 3 : 2]);
     const receipt = await measureAgentHostImage(
       await readTarEntry(archive, 'index.json', true), (entry, retain) => readTarEntry(archive, entry, retain), source);

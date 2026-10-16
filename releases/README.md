@@ -601,6 +601,77 @@ Released composition acceptance still requires actual digests and exact-source A
 See the [release design](../docs/architecture/design/services-and-release.md#fresh-release-tooling)
 for the remaining platform release and deployment gates.
 
+### One-use v1.0.0 partial publication continuation
+
+The original `1.0.0` publication from source
+`c24d0000fe5fc6163e4f38594c39dff782d3a46d` (run `38815873763`) ended
+`partial`: twelve components were published and eleven were not. Its claim,
+result, and retained Actions receipt stay permanent. The
+`v1 partial publication continuation` workflow publishes only the eleven
+missing components from the original prepared pack artifact. It never rebuilds,
+re-signs, or substitutes artifacts, and it never rewrites the original records.
+
+Admission has two parts:
+
+- The workflow runs from a separately reviewed helper commit on `v1`. The
+  helper must differ from the original source and belong to a pull request
+  merged into `v1`. It must not change the original release manifest or any
+  product input; the publisher still compares the manifest, provenance, and
+  every artifact hash with the original source.
+- The run must have a recorded approval of the protected `v1-publication`
+  environment. The publisher reads that approval from the GitHub API before
+  any mutation. A run without it stops, even if the job started.
+
+Before writing anything, the continuation checks:
+
+- the exact original receipt bytes and provenance hash
+- the pack and receipt artifact IDs, sizes, and digests
+- the original claim, result, and failed first-attempt run
+- an empty continuation namespace
+- that each of the twelve published outputs reads back unchanged
+- that each of the eleven missing destinations is absent
+
+Only an explicit registry "manifest unknown" (or buildx `<reference>: not
+found`) answer proves that an image is absent. Authorization, rate-limit,
+transport, and other errors stop the run. The workflow uses the same Docker
+29.9.0 containerd image store as the original publication, so loaded image IDs
+are comparable. Each prepared image archive must
+match its source revision, version, and `linux/amd64` config. Its loaded layers
+must also match the archive's `diff_ids`.
+
+The run then creates the one-use claim at
+`refs/tags/agentweaver-publication-continuation/1.0.0/<sourceSha>/claim`.
+It checks each destination again immediately before that destination's push.
+Packages must read back byte-for-byte. Images must read back with the pushed
+manifest digest, the archive config digest, and the archive layer count.
+Every run that claims also writes an immutable `.../result` record and a local
+`continuation.json`, whatever the outcome. `publication.json` is written only
+when all twenty-three outputs read back exactly and the result record exists. A claim-only, partial, or
+uncertain run stays consumed: any later attempt finds the claim and stops. Such
+a run gives no deployable proof. Recovery after it requires a new reviewed
+plan; this tooling has no retry or delete path.
+
+Known limits:
+
+- GHCR and GitHub Packages have no conditional create. An out-of-band writer
+  that acts between the final absence check and the push cannot be excluded.
+  The shared `v1-product-publication-<repository>` concurrency group serializes
+  the repository's own publication jobs.
+- Image layer identity relies on the config digest, which pins
+  `rootfs.diff_ids`, plus the pushed manifest digest and layer count.
+
+`npm run release:deploy` accepts a continuation receipt only with
+`--completion <publication.json>`. The completion must be identical to the
+publication receipt and contain the embedded original receipt. Deploy verifies:
+
+- the unchanged original records
+- exactly one continuation claim and result, bound to the original source
+- the successful first-attempt continuation run at the helper commit
+- the run's `v1-publication` approval and the merged helper pull request
+
+Deploy reads the continuation result ref instead of the ordinary
+`agentweaver-publication/<sourceSha>/result` ref.
+
 ## Changeset authoring
 
 For each PR that changes a versioned library or service, add a **new or modified**
