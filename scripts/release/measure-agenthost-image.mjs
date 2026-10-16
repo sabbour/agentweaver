@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-/**
- * Measures AgentHost OCI and Docker archives against an exact Git source and runtime index.
- * The measurement records archive digests and image configuration for later release verification.
- */
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -15,7 +11,6 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const hash = bytes => `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 const blobPath = digest => `blobs/sha256/${digest.slice(7)}`;
 
-/** Validates OCI index entries and archive contents, then returns source-bound image measurements. */
 export async function measureAgentHostImage(indexBytes, readEntry, source) {
   if (!sourcePattern.test(source?.sha ?? '') || !sourcePattern.test(source?.tree ?? ''))
     throw new Error('An exact clean Git source SHA and tree are required.');
@@ -100,7 +95,6 @@ async function readTarEntry(archive, entry, retain) {
   };
 }
 
-/** Runs the isolated archive measurement entry point synchronously for pack and publish callers. */
 export function measureAgentHostArchiveSync(archive, repoRoot, sourceSha) {
   if (sourceSha !== undefined && !sourcePattern.test(sourceSha))
     throw new Error('An explicit AgentHost measurement source must be an exact commit SHA.');

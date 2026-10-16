@@ -25,10 +25,6 @@ interface SandboxBadgeProps {
   sandbox: RunSandboxInfo;
 }
 
-/**
- * Renders the sandbox/execution-mode badge from run data supplied by the caller.
- * It does not query execution state or keep local state.
- */
 export const SandboxBadge = memo(function SandboxBadge({ sandbox }: SandboxBadgeProps) {
   const styles = useStyles();
   const badgeLabel = sandbox.isRealIsolation

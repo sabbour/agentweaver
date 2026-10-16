@@ -1,6 +1,5 @@
 // Pure geometry recovered from Agentweaver React renderer at a46721ae77efeba505d2fbfa58c69cdae8b4f3eb.
 import { DESIGN_SYSTEM } from './fluent-tokens.mjs';
-/** Geometry helpers for crossings, shared junctions, rounded edges, and loopback alignment. */
 const CORNER_RADIUS = DESIGN_SYSTEM.connectors.cornerRadiusPx;
 function dist(a, b) {
     return Math.hypot(b.x - a.x, b.y - a.y);
@@ -29,7 +28,6 @@ function segments(points) {
     }
     return result;
 }
-/** Find orthogonal route crossings that need a visible bridge arc instead of a false junction. */
 export function findConnectorBridges(routes) {
     const ordered = routes
         .map((route) => ({ ...route, segments: segments(route.points) }))
@@ -112,7 +110,6 @@ function routeDirectionsAt(point, points) {
     }
     return directions;
 }
-/** Find true shared tee points where at least three route directions meet. */
 function logicalTeePoints(routes) {
     const tees = new Map();
     for (const route of routes) {
@@ -153,7 +150,6 @@ function pointLiesOnRoute(point, points) {
     }
     return false;
 }
-/** Find shared source, tee, and loopback-join locations that need junction markers. */
 export function findConnectorJunctions(routes) {
     const bySource = new Map();
     const byTarget = new Map();
@@ -205,7 +201,6 @@ export function findConnectorJunctions(routes) {
     }
     return junctions;
 }
-/** Convert ordered points to an SVG path with rounded orthogonal corners. */
 export function buildRoundedPath(points, radius = CORNER_RADIUS) {
     if (points.length === 0)
         return '';
@@ -240,7 +235,6 @@ export function buildRoundedPath(points, radius = CORNER_RADIUS) {
     d += ` L ${last.x},${last.y}`;
     return d;
 }
-/** Convert points to an SVG path that draws bridge arcs at the supplied crossings. */
 export function buildBridgedPath(points, bridges, radius = 7) {
     if (bridges.length === 0)
         return buildRoundedPath(points);
@@ -281,7 +275,6 @@ export function buildBridgedPath(points, bridges, radius = 7) {
     }
     return d;
 }
-/** Align a loopback route's return point with the following route's actual continuation join. */
 export function alignLoopbackToContinuation(points, continuation, targetBounds) {
     if (points.length < 4 || !continuation?.length)
         return points;

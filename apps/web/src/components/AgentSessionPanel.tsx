@@ -748,7 +748,6 @@ const useStyles = makeStyles({
   },
 });
 
-/** Tree node describing a coordinator or child run shown in the session panel. */
 export interface RunSessionTree {
   nodeId: string;
   label: string;
@@ -770,7 +769,6 @@ export interface RunSessionTree {
   depth: number;
 }
 
-/** Inputs and callbacks for the run-session panel, including coordinator and selected child data. */
 export interface AgentSessionPanelProps {
   open: boolean;
   onClose: () => void;
@@ -1924,12 +1922,6 @@ function flattenTree(
   });
 }
 
-/**
- * Renders the coordinator/child-run conversation, activity, approvals, and artifact views.
- * Run events come from `useRunStream`, provider context from `useAiExecutionContext`, and
- * artifacts from `useArtifactBrowser` plus the optional aggregate adapter. Effects coordinate
- * run-detail loading, selection changes, scrolling, and follow-up submission.
- */
 export function AgentSessionPanel({
   open,
   onClose,

@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
 
-// Opens a narrow TCP relay for the approved PostgreSQL host, or the single explicit Key Vault endpoint.
 const int postgresPort = 5432;
 const string vaultHost = "aw-v1-p0-kv.vault.azure.net";
 var keyVault = args.Length == 2 && args[0] == "--key-vault" && args[1] == vaultHost;
@@ -26,7 +25,6 @@ while (true)
     _ = RelayAsync(client, targetHost, targetPort);
 }
 
-// Relays bytes in both directions and stops when either side closes; it does not inspect protocol payloads.
 static async Task RelayAsync(TcpClient client, string targetHost, int targetPort)
 {
     using (client)

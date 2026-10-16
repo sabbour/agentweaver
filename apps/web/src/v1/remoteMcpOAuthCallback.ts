@@ -1,15 +1,10 @@
-/** Browser route that captures the Remote MCP provider's OAuth return. */
 export const REMOTE_MCP_OAUTH_CALLBACK_PATH = '/auth/remote-mcp/oauth/callback';
-/** Same-origin popup message discriminator for a Remote MCP OAuth response. */
 export const REMOTE_MCP_OAUTH_CALLBACK_MESSAGE_TYPE = 'agentweaver.remote-mcp.oauth.callback';
-/** Exact base64url-like state length required for the callback transaction. */
 export const REMOTE_MCP_OAUTH_STATE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-/** Maximum accepted authorization-code length. */
 export const REMOTE_MCP_OAUTH_CODE_LIMIT = 4096;
 
 const CALLBACK_PARAMETER_NAMES = new Set(['state', 'code', 'error']);
 
-/** Success or denial payload passed from a remote MCP provider callback popup. */
 export type RemoteMcpOAuthCallbackMessage =
   | {
     type: typeof REMOTE_MCP_OAUTH_CALLBACK_MESSAGE_TYPE;
@@ -24,7 +19,6 @@ export type RemoteMcpOAuthCallbackMessage =
     code?: never;
   };
 
-/** Rejects empty, oversized, or control-character OAuth callback values. */
 function isSafeValue(value: unknown, limit: number): value is string {
   return typeof value === 'string' &&
     value.length > 0 &&
@@ -35,13 +29,11 @@ function isSafeValue(value: unknown, limit: number): value is string {
     });
 }
 
-/** Ensures a relayed callback contains no fields beyond the selected variant. */
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   const actual = Object.keys(value);
   return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 }
 
-/** Accepts only one bounded state plus either one code or the explicit access-denied result. */
 export function parseRemoteMcpOAuthCallbackParameters(
   search: string,
 ): RemoteMcpOAuthCallbackMessage | null {
@@ -71,7 +63,6 @@ export function parseRemoteMcpOAuthCallbackParameters(
   return null;
 }
 
-/** Narrows a popup message to the exact Remote MCP callback contract. */
 export function isRemoteMcpOAuthCallbackMessage(
   value: unknown,
 ): value is RemoteMcpOAuthCallbackMessage {

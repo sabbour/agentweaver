@@ -5,19 +5,11 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Applies and verifies the Orchestrator coordination schema migrations in an explicit operation.
-/// </summary>
 public static class CoordinationOwnerMigrator
 {
     private static readonly Regex SchemaPattern = new(
         "^[a-z][a-z0-9_]{0,62}\\z", RegexOptions.CultureInvariant);
 
-    /// <summary>
-    /// Applies the supported embedded migrations in order under a schema-scoped PostgreSQL lock.
-    /// </summary>
-    /// <remarks>The caller explicitly invokes this method; ordinary service startup uses <see cref="VerifyAsync"/> instead.</remarks>
-    /// <exception cref="InvalidOperationException">The migration history is unsupported or a required embedded migration is missing.</exception>
     public static async Task MigrateAsync(
         NpgsqlDataSource dataSource,
         string schema,
@@ -122,10 +114,6 @@ public static class CoordinationOwnerMigrator
         await transaction.CommitAsync(cancellationToken);
     }
 
-    /// <summary>
-    /// Checks that the recorded migration versions, tables, columns, and immutability guards are current.
-    /// </summary>
-    /// <exception cref="InvalidOperationException">The schema is missing an expected migration or database object.</exception>
     public static async Task VerifyAsync(
         NpgsqlDataSource dataSource,
         string schema,
@@ -305,9 +293,6 @@ public static class CoordinationOwnerMigrator
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }
 
-    /// <summary>
-    /// Rejects unsafe or reserved PostgreSQL schema identifiers before they are interpolated into SQL.
-    /// </summary>
     private static void ValidateSchema(string schema)
     {
         ArgumentNullException.ThrowIfNull(schema);
@@ -316,8 +301,5 @@ public static class CoordinationOwnerMigrator
             throw new ArgumentException("A non-reserved lowercase schema identifier is required.", nameof(schema));
     }
 
-    /// <summary>
-    /// Quotes a schema name after it has passed the strict identifier validation.
-    /// </summary>
     private static string Quote(string schema) => $"\"{schema}\"";
 }

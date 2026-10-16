@@ -17,7 +17,6 @@ import { useNavigate } from 'react-router-dom';
 import type { NotificationDto } from '../api/types';
 import type { ReactNode } from 'react';
 
-/** Polls the signed-in user's notifications and coordinates unread counts, actionable toasts, and sound. */
 // #247 — global notification center. DELIVERY CHOICE: polling GET /api/notifications rather than a
 // new SSE stream (see apps/Agentweaver.Api/Notifications/NotificationsService.cs for the backend
 // rationale). 20s balances "feels live" against load; the endpoint is a couple of indexed DB reads.
@@ -33,7 +32,6 @@ const TOAST_COPY: Record<string, { title: string; cta: string }> = {
 };
 const FALLBACK_TOAST_COPY = { title: 'Action needed', cta: 'Open' };
 
-/** Compares notification identity and its owning run so reused IDs cannot preserve stale approval toasts. */
 function hasSameNotificationSource(current: NotificationDto, announced: NotificationDto): boolean {
   return current.id === announced.id
     && current.type === announced.type
@@ -41,23 +39,17 @@ function hasSameNotificationSource(current: NotificationDto, announced: Notifica
     && current.run_id === announced.run_id;
 }
 
-/** Snapshot accepted for one notification so older overlapping requests cannot replace newer evidence. */
 interface AcceptedNotificationSource {
   requestVersion: number;
   source: NotificationDto | undefined;
 }
 
-/** Provider children and optional polling interval override for isolated tests. */
 export interface NotificationsProviderProps {
   children: ReactNode;
   /** Test seam — override the poll interval so tests don't wait out the real 20s default. */
   pollIntervalMs?: number;
 }
 
-/**
- * Owns notification polling and toast delivery. Initial items update the badge without replaying
- * old notifications; tool approvals are revalidated before navigation.
- */
 export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS_POLL_INTERVAL_MS }: NotificationsProviderProps) {
   const navigate = useNavigate();
   const toasterId = useId('notifications-toaster');
@@ -78,7 +70,6 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
   const acceptedSourcesRef = useRef<Map<string, AcceptedNotificationSource>>(new Map());
   const pendingApprovalValidationsRef = useRef<Map<number, NotificationDto>>(new Map());
 
-  // A poll may complete after a CTA validation; only a newer request can replace the source snapshot.
   const reconcileApprovalToasts = useCallback((items: NotificationDto[], requestVersion: number) => {
     const currentById = new Map(items.map((notification) => [notification.id, notification]));
     for (const [id, announced] of activeApprovalToastsRef.current) {
@@ -101,7 +92,6 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
     }
   }, [dismissToast]);
 
-  // Keep the newest accepted source when concurrent polls and CTA checks finish out of order.
   const acceptValidationSource = useCallback((
     notification: NotificationDto,
     items: NotificationDto[],
@@ -116,7 +106,6 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
     return accepted.source;
   }, []);
 
-  // Replace a stale actionable toast only when it still refers to the notification being checked.
   const showUnavailableTarget = useCallback((notification: NotificationDto, toastId: string) => {
     const active = activeApprovalToastsRef.current.get(notification.id);
     if (!active || hasSameNotificationSource(active, notification)) {
@@ -138,7 +127,6 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
     );
   }, [dismissToast, dispatchToast]);
 
-  // Approval navigation is gated on a fresh server read; other notification links navigate directly.
   const handleCta = useCallback(async (notification: NotificationDto, toastId: string) => {
     if (notification.type !== 'tool_approval') {
       dismissToast(toastId);
@@ -176,7 +164,6 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
     }
   }, [acceptValidationSource, dismissToast, navigate, showUnavailableTarget]);
 
-  // Adds a toast for a newly arrived item and retains active approval records for later reconciliation.
   const announce = useCallback((notification: NotificationDto) => {
     const toastId = `notif-${notification.id}`;
     const copy = TOAST_COPY[notification.type] ?? FALLBACK_TOAST_COPY;
@@ -205,7 +192,6 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
     playNotificationChime();
   }, [dispatchToast, handleCta]);
 
-  // Version each request so an older poll cannot overwrite newer state after overlapping responses.
   const poll = useCallback(async () => {
     const requestVersion = ++notificationRequestVersionRef.current;
     latestPollRequestVersionRef.current = requestVersion;
@@ -253,7 +239,6 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
     };
   }, [poll, pollIntervalMs]);
 
-  // Keep the in-memory control in sync with the best-effort local preference.
   const toggleMuted = useCallback(() => {
     setMuted((current) => {
       const next = !current;
@@ -262,9 +247,7 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
     });
   }, []);
 
-  // Clear the badge only; pending server items remain in the notification list.
   const markAllSeen = useCallback(() => setUnreadCount(0), []);
-  // Remove from the current view immediately, then request the server-side dismissal.
   const dismissNotification = useCallback((id: string) => {
     dismissToast(`notif-${id}`);
     activeApprovalToastsRef.current.delete(id);
@@ -275,7 +258,6 @@ export function NotificationsProvider({ children, pollIntervalMs = NOTIFICATIONS
     });
     void apiClient.dismissNotification(id);
   }, [dismissToast]);
-  // Expose an immediate poll for callers that need to refresh outside the normal timer.
   const refresh = useCallback(() => { void poll(); }, [poll]);
 
   return (

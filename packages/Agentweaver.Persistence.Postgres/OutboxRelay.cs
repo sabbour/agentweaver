@@ -14,10 +14,6 @@ public sealed class OutboxRelay
     private readonly PostgresOutbox _outbox;
     private readonly IOutboxPublisher _publisher;
 
-    /// <summary>Creates a relay over the durable outbox and the caller-provided publisher.</summary>
-    /// <param name="outbox">The store used to claim and acknowledge events.</param>
-    /// <param name="publisher">The transport that publishes each claimed event.</param>
-    /// <exception cref="ArgumentNullException">Either dependency is null.</exception>
     public OutboxRelay(PostgresOutbox outbox, IOutboxPublisher publisher)
     {
         _outbox = outbox ?? throw new ArgumentNullException(nameof(outbox));

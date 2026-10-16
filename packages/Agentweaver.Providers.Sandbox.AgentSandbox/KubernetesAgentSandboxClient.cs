@@ -8,18 +8,11 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Providers.Sandbox.AgentSandbox;
 
-/// <summary>
-/// Performs bounded Kubernetes API calls for Agent Sandbox resources and BuildTest Pods.
-/// Resource writes preserve UID and resource-version preconditions, and responses are size limited.
-/// </summary>
 public sealed partial class KubernetesAgentSandboxClient
 {
     private const int MaximumResponseBytes = 4 * 1024 * 1024;
     private readonly HttpClient _httpClient;
 
-    /// <summary>Creates a client for a clean HTTPS Kubernetes API origin.</summary>
-    /// <param name="httpClient">Configured client carrying the cluster's authentication and trusted CA.</param>
-    /// <exception cref="ArgumentException">The client base address is absent or is not a clean HTTPS URI.</exception>
     public KubernetesAgentSandboxClient(HttpClient httpClient)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -32,7 +25,6 @@ public sealed partial class KubernetesAgentSandboxClient
                 nameof(httpClient));
     }
 
-    /// <summary>Gets a lower-case SHA-256 identity of the configured Kubernetes API target.</summary>
     public string ClusterIdentity
     {
         get
@@ -43,8 +35,6 @@ public sealed partial class KubernetesAgentSandboxClient
         }
     }
 
-    /// <summary>Reads a namespaced Kubernetes resource, returning null when it does not exist.</summary>
-    /// <exception cref="SandboxProviderException">The API call fails or its response is oversized or malformed.</exception>
     public async Task<JsonElement?> GetAsync(
         string apiGroup,
         string resource,
@@ -68,7 +58,6 @@ public sealed partial class KubernetesAgentSandboxClient
         return document.RootElement.Clone();
     }
 
-    /// <summary>Reads a cluster-scoped Kubernetes resource, returning null when it does not exist.</summary>
     public async Task<JsonElement?> GetClusterAsync(
         string apiGroup,
         string apiVersion,
@@ -92,8 +81,6 @@ public sealed partial class KubernetesAgentSandboxClient
         return document.RootElement.Clone();
     }
 
-    /// <summary>Reads and parses the API server version used to gate Pod scheduling-gate support.</summary>
-    /// <exception cref="SandboxProviderException">The server version response is invalid or unavailable.</exception>
     public async Task<KubernetesApiServerVersion> ReadApiServerVersionAsync(
         CancellationToken cancellationToken = default)
     {
@@ -131,8 +118,6 @@ public sealed partial class KubernetesAgentSandboxClient
         return new KubernetesApiServerVersion(major, minor, gitVersionElement.GetString()!);
     }
 
-    /// <summary>Dry-runs Pod creation and confirms admission retained exactly the requested scheduling gate.</summary>
-    /// <exception cref="SandboxProviderException">Scheduling gates are unsupported, rejected, or the dry-run fails.</exception>
     public async Task<JsonElement> DryRunCreatePodAsync(
         string kubernetesNamespace,
         JsonElement body,
@@ -170,8 +155,6 @@ public sealed partial class KubernetesAgentSandboxClient
         return admitted.Clone();
     }
 
-    /// <summary>Creates a namespaced resource; conflict and response failures preserve possible-effect information.</summary>
-    /// <exception cref="SandboxProviderException">Kubernetes rejects the request or returns an invalid response.</exception>
     public async Task<JsonElement> CreateAsync(
         string apiGroup,
         string resource,
@@ -198,9 +181,6 @@ public sealed partial class KubernetesAgentSandboxClient
         return document.RootElement.Clone();
     }
 
-    /// <summary>Lists resources using bounded field selectors and a deterministically ordered label selector.</summary>
-    /// <exception cref="ArgumentException">The field selector contains control characters or exceeds its limit.</exception>
-    /// <exception cref="SandboxProviderException">The API call or returned resource list is invalid.</exception>
     public async Task<IReadOnlyList<JsonElement>> ListAsync(
         string apiGroup,
         string resource,
@@ -248,8 +228,6 @@ public sealed partial class KubernetesAgentSandboxClient
         return items.EnumerateArray().Select(item => item.Clone()).ToArray();
     }
 
-    /// <summary>Deletes a resource with a UID precondition and the selected foreground or background propagation.</summary>
-    /// <remarks>An absent object is treated as already deleted.</remarks>
     public async Task DeleteAsync(
         string apiGroup,
         string resource,
@@ -284,7 +262,6 @@ public sealed partial class KubernetesAgentSandboxClient
         await RequireSuccessAsync(response, "delete-resource", true).ConfigureAwait(false);
     }
 
-    /// <summary>Adds an annotation only when the resource UID still matches the supplied pin.</summary>
     public async Task SetAnnotationAsync(
         string apiGroup,
         string resource,
@@ -318,8 +295,6 @@ public sealed partial class KubernetesAgentSandboxClient
         await RequireSuccessAsync(response, "patch-resource", true).ConfigureAwait(false);
     }
 
-    /// <summary>Removes the expected scheduling gate only when both Pod UID and resource version still match.</summary>
-    /// <exception cref="SandboxProviderException">A precondition changed or Kubernetes rejected the patch.</exception>
     public async Task<JsonElement> RemovePodSchedulingGateAsync(
         SandboxBuildTestPodReference pod,
         string gateName,
@@ -358,13 +333,6 @@ public sealed partial class KubernetesAgentSandboxClient
         return document.RootElement.Clone();
     }
 
-    /// <summary>Streams a bounded log capture from the exact Pod UID and hashes the captured bytes.</summary>
-    /// <param name="pod">Pod reference whose UID must match before and after the log read.</param>
-    /// <param name="containerName">Container whose logs are read.</param>
-    /// <param name="maximumOutputBytes">Maximum bytes retained in the result.</param>
-    /// <param name="cancellationToken">Cancels reads and streaming.</param>
-    /// <returns>Captured bytes, digest, observed count, and truncation status.</returns>
-    /// <exception cref="SandboxProviderException">The Pod identity changed or Kubernetes cannot provide the logs.</exception>
     public async Task<SandboxBuildTestOutputCapture> ReadPodLogsBoundedAsync(
         SandboxBuildTestPodReference pod,
         string containerName,
@@ -420,7 +388,6 @@ public sealed partial class KubernetesAgentSandboxClient
             observedBytes);
     }
 
-    /// <summary>Sends a request through the configured HTTP client and records transport failures consistently.</summary>
     private async Task<HttpResponseMessage> SendAsync(
         HttpMethod method,
         string path,
@@ -433,7 +400,6 @@ public sealed partial class KubernetesAgentSandboxClient
         return await SendAsync(request, operation, effectMayHaveApplied, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Sends a response-headers-first request for a potentially long streaming body.</summary>
     private async Task<HttpResponseMessage> SendStreamingAsync(
         HttpRequestMessage request,
         string operation,
@@ -456,7 +422,6 @@ public sealed partial class KubernetesAgentSandboxClient
         }
     }
 
-    /// <summary>Sends an existing request and maps transport failures to a provider-specific exception.</summary>
     private async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         string operation,
@@ -476,7 +441,6 @@ public sealed partial class KubernetesAgentSandboxClient
         }
     }
 
-    /// <summary>Completes for successful status codes or throws with the operation and possible-effect flag.</summary>
     private static Task RequireSuccessAsync(
         HttpResponseMessage response,
         string operation,
@@ -488,7 +452,6 @@ public sealed partial class KubernetesAgentSandboxClient
                 $"Kubernetes {operation} request failed with HTTP {(int)response.StatusCode}.",
                 effectMayHaveApplied));
 
-    /// <summary>Reads at most the configured response limit and parses JSON, retaining effect semantics on failure.</summary>
     private static async Task<JsonDocument> ReadDocumentAsync(
         HttpResponseMessage response,
         bool effectMayHaveApplied,
@@ -528,7 +491,6 @@ public sealed partial class KubernetesAgentSandboxClient
         }
     }
 
-    /// <summary>Builds a validated API path for one namespaced resource and optional name.</summary>
     private static string NamespacedResourcePath(
         string apiGroup,
         string resource,
@@ -547,7 +509,6 @@ public sealed partial class KubernetesAgentSandboxClient
             : $"{path}/{Uri.EscapeDataString(ValidatePathSegment(name, nameof(name)))}";
     }
 
-    /// <summary>Builds a validated API path for one cluster-scoped resource.</summary>
     private static string ClusterResourcePath(
         string apiGroup,
         string apiVersion,
@@ -563,7 +524,6 @@ public sealed partial class KubernetesAgentSandboxClient
         return $"{prefix}/{resource}/{Uri.EscapeDataString(name)}";
     }
 
-    /// <summary>Validates the restricted syntax used for a Kubernetes API group.</summary>
     private static string ValidateApiGroup(string value)
     {
         if (string.IsNullOrWhiteSpace(value) ||
@@ -572,7 +532,6 @@ public sealed partial class KubernetesAgentSandboxClient
         return value;
     }
 
-    /// <summary>Rejects empty, oversized, control, slash, or backslash characters in a path segment.</summary>
     private static string ValidatePathSegment(string value, string name)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 253 ||
@@ -581,16 +540,13 @@ public sealed partial class KubernetesAgentSandboxClient
         return value;
     }
 
-    /// <summary>Escapes a JSON Pointer token before embedding it in a patch path.</summary>
     private static string EscapeJsonPointer(string value) =>
         value.Replace("~", "~0", StringComparison.Ordinal)
             .Replace("/", "~1", StringComparison.Ordinal);
 
-    /// <summary>Serializes a JSON element into HTTP content with the specified media type.</summary>
     private static StringContent JsonContent(JsonElement body, string mediaType = "application/json") =>
         new(body.GetRawText(), Encoding.UTF8, mediaType);
 
-    /// <summary>Reads scheduling gate names from a Pod object, returning false for malformed gate data.</summary>
     private static bool TryGetSchedulingGates(JsonElement pod, out string[] gates)
     {
         gates = [];
@@ -611,7 +567,6 @@ public sealed partial class KubernetesAgentSandboxClient
         return true;
     }
 
-    /// <summary>Validates a bounded non-empty identifier used in a Kubernetes API request.</summary>
     private static void ValidateBoundedIdentifier(string value, string name, int maximumLength)
     {
         if (string.IsNullOrWhiteSpace(value) ||
@@ -620,8 +575,6 @@ public sealed partial class KubernetesAgentSandboxClient
             throw new ArgumentException("A bounded Kubernetes identifier is required.", name);
     }
 
-    /// <summary>Requires a non-missing Pod response to identify the expected UID.</summary>
-    /// <exception cref="SandboxProviderException">The Pod is absent or its UID has changed.</exception>
     private static void RequirePodUid(JsonElement? pod, string expectedUid)
     {
         if (pod is not { } value ||
@@ -636,9 +589,7 @@ public sealed partial class KubernetesAgentSandboxClient
     }
 }
 
-/// <summary>Parsed Kubernetes API server version and its scheduling-gate feature check.</summary>
 public sealed record KubernetesApiServerVersion(int Major, int Minor, string GitVersion)
 {
-    /// <summary>Returns whether the reported server is Kubernetes 1.30 or later.</summary>
     public bool SupportsPodSchedulingGates => Major > 1 || Major == 1 && Minor >= 30;
 }

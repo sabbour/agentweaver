@@ -1,4 +1,3 @@
-/** Development-only browser for component previews, composed patterns, and the checked-in icon catalog. */
 import './showcase.css';
 import virtualMachineIcon from '../assets/icons/azure/assets/compute--virtual-machine--7a04018565e2.svg';
 import storageAccountsIcon from '../assets/icons/azure/assets/storage--storage-accounts--c993bb3f7b83.svg';
@@ -213,10 +212,8 @@ import type { ReactElement, ReactNode } from 'react';
 
 
 
-/** Primary showcase tab selected by the user. */
 type ShowcaseView = 'components' | 'patterns' | 'icons';
 
-/** Local subset of a catalog group needed to map a design reference to library examples. */
 interface ComponentCatalogGroup {
   id: string;
   status: string;
@@ -239,7 +236,6 @@ interface ComponentCatalogGroup {
   notes?: string;
 }
 
-/** Inventory row fields used to compute required visible component previews. */
 interface CatalogRow {
   figmaNodeReference: string;
   extractionStatus: string;
@@ -249,7 +245,6 @@ interface CatalogRow {
   showcase: 'Yes' | 'No' | string;
 }
 
-/** Shape of the checked-in component catalog data consumed by the browser. */
 interface ComponentInventoryManifest {
   sourceFileKey: string;
   inventoryCoverage?: {
@@ -287,7 +282,6 @@ interface ComponentInventoryManifest {
   inventoryRows: CatalogRow[];
 }
 
-/** Local pattern inventory fields used to label example families. */
 interface PatternFamily {
   id: string;
   name: string;
@@ -306,7 +300,6 @@ interface PatternFamily {
   implementationFiles?: string[];
 }
 
-/** Shape of the checked-in pattern catalog data consumed by the browser. */
 interface PatternInventoryManifest {
   sourceFile: {
     name: string;
@@ -321,7 +314,6 @@ interface PatternInventoryManifest {
   families: PatternFamily[];
 }
 
-/** Preview metadata for one reusable library export. */
 interface ComponentPreviewEntry {
   exportName: string;
   title: string;
@@ -331,13 +323,11 @@ interface ComponentPreviewEntry {
   preview: () => ReactElement;
 }
 
-/** A source design node retained when multiple inventory entries are grouped. */
 interface InventorySourceNode {
   nodeId: string;
   name: string;
 }
 
-/** Fully resolved row rendered by the component inventory browser. */
 interface ComponentInventoryBrowserEntry {
   nodeId: string;
   title: string;
@@ -358,7 +348,6 @@ interface ComponentInventoryBrowserEntry {
   sourceNodes: InventorySourceNode[];
 }
 
-/** Render information for one pattern-family preview. */
 interface PatternPreviewEntry {
   familyId: string;
   summary: string;
@@ -366,7 +355,6 @@ interface PatternPreviewEntry {
   preview: () => ReactElement;
 }
 
-/** Sample row shape used by the general resource-grid previews. */
 interface ResourceRecord {
   id: string;
   name: string;
@@ -375,7 +363,6 @@ interface ResourceRecord {
   status: 'Healthy' | 'Needs attention' | 'Updating';
 }
 
-/** Sample row shape used by the Kubernetes resource-list preview. */
 interface AksResourceRecord {
   id: string;
   name: string;
@@ -438,7 +425,6 @@ for (const [assetPath, assetUrl] of Object.entries(azureIconAssetUrls)) {
   if (fileName) azureIconUrlByFile.set(fileName, assetUrl);
 }
 
-/** Icon-browser row derived from the checked-in asset manifest. */
 interface AzureCatalogIcon {
   name: string;
   collection: string;
@@ -775,16 +761,10 @@ const componentGroupsByExport = componentInventory.groups.reduce<Record<string, 
   return accumulator;
 }, {});
 
-/**
- * Returns the distinct strings in first-seen order for stable catalog labels.
- */
 function uniqueStrings(items: readonly string[]) {
   return Array.from(new Set(items));
 }
 
-/**
- * Splits and normalizes a catalog mapping into distinct library export names.
- */
 function normalizeCatalogImplementedMapping(implementedMapping: string) {
   return uniqueStrings(
     implementedMapping
@@ -796,9 +776,6 @@ function normalizeCatalogImplementedMapping(implementedMapping: string) {
   );
 }
 
-/**
- * Returns required, visible, missing, and menu-only export lists without mutating the catalog inputs.
- */
 export function getComponentShowcaseCoverageAudit(
   rows: readonly CatalogRow[],
   menuExportNames: readonly string[],
@@ -821,16 +798,10 @@ export function getComponentShowcaseCoverageAudit(
   };
 }
 
-/**
- * Reads a design node identifier from a markdown-style catalog reference, or returns an empty string.
- */
 function extractNodeIdFromCatalogReference(reference: string) {
   return reference.match(/\[(\d+:\d+)\]\(/)?.[1] ?? '';
 }
 
-/**
- * Maps internal coverage states to concise labels shown in the component browser.
- */
 function formatComponentCoverageStatus(status: string) {
   switch (status) {
     case 'implemented-rendered':
@@ -848,9 +819,6 @@ function formatComponentCoverageStatus(status: string) {
   }
 }
 
-/**
- * Turns a reference status into readable browser text, including review and failure states.
- */
 function formatComponentReferenceStatus(status: string) {
   const coverageLabel = formatComponentCoverageStatus(status);
   if (coverageLabel !== status) return coverageLabel;
@@ -859,9 +827,6 @@ function formatComponentReferenceStatus(status: string) {
   return status.replace(/[-_]/g, ' ');
 }
 
-/**
- * Provides explanatory copy when an inventory entry has no dedicated rendered preview.
- */
 function getComponentFallbackSummary(status: string, exportNames: readonly string[]) {
   switch (status) {
     case 'showcase-placeholder':
@@ -877,9 +842,6 @@ function getComponentFallbackSummary(status: string, exportNames: readonly strin
   }
 }
 
-/**
- * Suggests the next review or implementation step for an inventory coverage state.
- */
 function getComponentNextAction(status: string, exportNames: readonly string[]) {
   switch (status) {
     case 'implemented-rendered':
@@ -899,9 +861,6 @@ function getComponentNextAction(status: string, exportNames: readonly string[]) 
   }
 }
 
-/**
- * Removes design IDs and normalizes inventory labels for customer-facing preview text.
- */
 function formatShowcaseReferenceLabel(item: string) {
   return item
     .replace(/\s*\(\d+:\d+\)/g, '')
@@ -914,16 +873,10 @@ function formatShowcaseReferenceLabel(item: string) {
     .trim();
 }
 
-/**
- * Normalizes a design reference name for display in the showcase.
- */
 function formatDesignReferenceName(name: string) {
   return formatShowcaseReferenceLabel(name).replace(/\s+/g, ' ');
 }
 
-/**
- * Renders one component preview with its title and catalog notes.
- */
 function PreviewCard({
   title,
   children,
@@ -944,9 +897,6 @@ function PreviewCard({
   );
 }
 
-/**
- * Displays related design references and their coverage context beside a preview.
- */
 function RelatedCoverageNote({ title, items, body }: { title: string; items: string[]; body: string }) {
   return (
     <section className="azf-showcase-coverage-note" aria-label={title}>
@@ -964,9 +914,6 @@ function RelatedCoverageNote({ title, items, body }: { title: string; items: str
   );
 }
 
-/**
- * Renders the portal shell and navigation example in the component browser.
- */
 function PortalShellPreview() {
   return (
     <PreviewCard title="Portal shell preview" frameClassName="azf-showcase-preview__frame--portal">
@@ -1052,9 +999,6 @@ function PortalShellPreview() {
   );
 }
 
-/**
- * Renders the global-search flyout example.
- */
 function PortalGlobalSearchPreview() {
   return (
     <PreviewCard title="Global search">
@@ -1073,9 +1017,6 @@ function PortalGlobalSearchPreview() {
   );
 }
 
-/**
- * Renders the settings flyout example.
- */
 function PortalSettingsFlyoutPreview() {
   return (
     <PreviewCard title="Settings flyout">
@@ -1094,9 +1035,6 @@ function PortalSettingsFlyoutPreview() {
   );
 }
 
-/**
- * Renders the activity flyout example.
- */
 function PortalActivityFlyoutPreview() {
   return (
     <PreviewCard title="Activity flyout">
@@ -1119,9 +1057,6 @@ function PortalActivityFlyoutPreview() {
   );
 }
 
-/**
- * Renders the command bar with representative resource actions.
- */
 function CommandBarPreview() {
   return (
     <PreviewCard title="Command bar preview">
@@ -1138,9 +1073,6 @@ function CommandBarPreview() {
   );
 }
 
-/**
- * Renders form-field labels, guidance, and validation examples.
- */
 function FormFieldRowPreview() {
   return (
     <PreviewCard title="Form row preview">
@@ -1165,9 +1097,6 @@ function FormFieldRowPreview() {
   );
 }
 
-/**
- * Renders the selectable step-list example.
- */
 function StepListPreview() {
   const [selectedValue, setSelectedValue] = useState('basics');
   return (
@@ -1192,9 +1121,6 @@ function StepListPreview() {
   );
 }
 
-/**
- * Renders horizontal and vertical tab-list examples.
- */
 function TabListPreview() {
   const [selectedValue, setSelectedValue] = useState('overview');
   return (
@@ -1212,9 +1138,6 @@ function TabListPreview() {
   );
 }
 
-/**
- * Renders a resource table with representative columns and row states.
- */
 function DataGridPreview() {
   return (
     <PreviewCard title="Data grid preview">
@@ -1227,9 +1150,6 @@ function DataGridPreview() {
   );
 }
 
-/**
- * Renders the data-grid paging controls.
- */
 function PagerPreview() {
   const [page, setPage] = useState(2);
   const [pageSize, setPageSize] = useState(25);
@@ -1253,9 +1173,6 @@ function PagerPreview() {
   );
 }
 
-/**
- * Renders the empty-state presentation and its optional action.
- */
 function EmptyStatePreview() {
   return (
     <PreviewCard title="Empty state preview">
@@ -1268,9 +1185,6 @@ function EmptyStatePreview() {
   );
 }
 
-/**
- * Renders a resource summary card with status metrics.
- */
 function SummaryCardPreview() {
   return (
     <PreviewCard title="Summary card preview">
@@ -1287,9 +1201,6 @@ function SummaryCardPreview() {
   );
 }
 
-/**
- * Renders a resource property list with labeled values.
- */
 function PropertyListPreview() {
   return (
     <PreviewCard title="Property list preview">
@@ -1305,9 +1216,6 @@ function PropertyListPreview() {
   );
 }
 
-/**
- * Renders notification rows, status tones, and available actions.
- */
 function NotificationPanePreview() {
   return (
     <PreviewCard
@@ -1365,9 +1273,6 @@ function NotificationPanePreview() {
   );
 }
 
-/**
- * Renders the low-emphasis feedback footer pattern.
- */
 function FeedbackFooterPreview() {
   return (
     <PreviewCard title="Feedback footer preview">
@@ -1380,9 +1285,6 @@ function FeedbackFooterPreview() {
   );
 }
 
-/**
- * Renders a destructive-action dialog with confirmation details.
- */
 function DeleteDialogPreview() {
   const [acknowledged, setAcknowledged] = useState(false);
   return (
@@ -1410,9 +1312,6 @@ function DeleteDialogPreview() {
   );
 }
 
-/**
- * Renders collapsible content sections in the component browser.
- */
 function AccordionPreview() {
   return (
     <PreviewCard title="Bordered and borderless states">
@@ -1430,9 +1329,6 @@ function AccordionPreview() {
   );
 }
 
-/**
- * Renders tokenized code rows with line numbering and copy support.
- */
 function CodeSnippetPreview() {
   return (
     <PreviewCard title="Scrollable editor region" canvasClassName="azf-showcase-preview__canvas--intrinsic azf-showcase-preview__canvas--code">
@@ -1446,9 +1342,6 @@ function CodeSnippetPreview() {
   );
 }
 
-/**
- * Renders the copy control in its supported visual variants.
- */
 function CopyButtonPreview() {
   return (
     <PreviewCard title="Rest, hover, and copied states">
@@ -1470,9 +1363,6 @@ function CopyButtonPreview() {
   );
 }
 
-/**
- * Renders the Copilot prompt composer with attachments and run controls.
- */
 function CopilotComposerPreview() {
   const [readyPrompt, setReadyPrompt] = useState('Summarize the rollout failures and attach the kubelet log snippet.');
   const [runningPrompt, setRunningPrompt] = useState('Draft the approval comment and attach the rollout log.');
@@ -1519,9 +1409,6 @@ function CopilotComposerPreview() {
   );
 }
 
-/**
- * Renders assistant output, confirmation, and response actions.
- */
 function CopilotResponsePreview() {
   return (
     <PreviewCard
@@ -1563,9 +1450,6 @@ function CopilotResponsePreview() {
   );
 }
 
-/**
- * Renders the inline Copilot prompt panel and its guided state.
- */
 function InlineCopilotPreview() {
   const [openPrompt, setOpenPrompt] = useState('');
   const [guidedPrompt, setGuidedPrompt] = useState('Summarize the warning so it names the private endpoint policy.');
@@ -1608,9 +1492,6 @@ function InlineCopilotPreview() {
   );
 }
 
-/**
- * Renders automation step progress with an approval checkpoint.
- */
 function AgenticProgressPreview() {
   const cotArtifacts = [...chainOfThoughtArtifacts];
   return (
@@ -1642,9 +1523,6 @@ function AgenticProgressPreview() {
   );
 }
 
-/**
- * Renders the Copilot workspace composition.
- */
 function CopilotWorkspacePreview() {
   const [prompt, setPrompt] = useState('Draft the remediation comment for the deployment review.');
 
@@ -1683,9 +1561,6 @@ function CopilotWorkspacePreview() {
   );
 }
 
-/**
- * Renders the run review composition with reasoning and operator input.
- */
 function CoordinatorRunPreview() {
   const [steering, setSteering] = useState('Prioritize the East US remediation and hold the rest until it clears.');
   const runArtifacts = [...chainOfThoughtArtifacts];
@@ -1719,9 +1594,6 @@ function CoordinatorRunPreview() {
   );
 }
 
-/**
- * Renders a human approval pattern for an automation step.
- */
 function AgenticApprovalPreview() {
   return (
     <AgenticApprovalPattern
@@ -1735,9 +1607,6 @@ function AgenticApprovalPreview() {
   );
 }
 
-/**
- * Renders the Copilot triage card with context and response content.
- */
 function CopilotTriagePanelPreview() {
   const [triagePrompt, setTriagePrompt] = useState('Draft the owner update and include the blocked policy name.');
 
@@ -1781,9 +1650,6 @@ function CopilotTriagePanelPreview() {
   );
 }
 
-/**
- * Renders a resource operation header with commands and status items.
- */
 function ResourceOperationHeaderPreview() {
   return (
     <ResourceOperationHeaderPattern
@@ -1850,9 +1716,6 @@ const composedScenarios: {
   },
 ];
 
-/**
- * Groups complete example scenarios assembled from reusable components.
- */
 function ComposedScenariosSection() {
   return (
     <section className="azf-showcase-app__surface azf-showcase-scenarios">
@@ -2048,9 +1911,6 @@ const portalCapturePatternFamilies: PatternFamily[] = [
 
 const showcasePatternFamilies: PatternFamily[] = [...portalCapturePatternFamilies, ...patternGuide.families];
 
-/**
- * Presents the library patterns that can be reused across product pages.
- */
 function ReusablePatternComponentsSection() {
   return (
     <section className="azf-showcase-app__surface azf-showcase-scenarios">
@@ -2086,9 +1946,6 @@ function ReusablePatternComponentsSection() {
   );
 }
 
-/**
- * Shows selected portal-reference highlights and links each highlight to a pattern preview.
- */
 function PortalCaptureHighlights({
   onOpenPattern,
 }: {
@@ -2126,9 +1983,6 @@ function PortalCaptureHighlights({
   );
 }
 
-/**
- * Renders the slider control with a value label and disabled state.
- */
 function AzureSliderPreview() {
   const [cores, setCores] = useState(8);
 
@@ -2152,9 +2006,6 @@ function AzureSliderPreview() {
   );
 }
 
-/**
- * Renders labeled determinate and indeterminate progress examples.
- */
 function ProgressBarWithLabelPreview() {
   return (
     <PreviewCard title="Progress bar preview">
@@ -2175,9 +2026,6 @@ function ProgressBarWithLabelPreview() {
   );
 }
 
-/**
- * Renders file selection, upload progress, and completion states.
- */
 function FileUploadPreview() {
   return (
     <PreviewCard title="File upload preview">
@@ -2191,9 +2039,6 @@ function FileUploadPreview() {
   );
 }
 
-/**
- * Renders a searchable combo box with sample resource choices.
- */
 function FilterableComboBoxPreview() {
   const [selected, setSelected] = useState<string | undefined>('sub-a');
 
@@ -2219,9 +2064,6 @@ function FilterableComboBoxPreview() {
   );
 }
 
-/**
- * Renders the compact toolbar action set.
- */
 function AzureToolbarPreview() {
   return (
     <PreviewCard title="Toolbar preview">
@@ -2239,9 +2081,6 @@ function AzureToolbarPreview() {
   );
 }
 
-/**
- * Renders the optional portal top navigation surface.
- */
 function PortalTopNavPreview() {
   const [search, setSearch] = useState('platform');
   return (
@@ -2265,9 +2104,6 @@ function PortalTopNavPreview() {
   );
 }
 
-/**
- * Renders the collapsible navigation rail and its sections.
- */
 function PortalRailPreview() {
   return (
     <PreviewCard title="Portal rail preview" canvasClassName="azf-showcase-preview__canvas--intrinsic">
@@ -2282,9 +2118,6 @@ function PortalRailPreview() {
   );
 }
 
-/**
- * Renders nested service navigation with search and favorites.
- */
 function ServiceMenuPreview() {
   const [menuQuery, setMenuQuery] = useState('net');
   return (
@@ -2317,9 +2150,6 @@ function ServiceMenuPreview() {
   );
 }
 
-/**
- * Renders the resource header with inline and overflow actions.
- */
 function BladeHeaderPreview() {
   const [pinned, setPinned] = useState(false);
   const [starred, setStarred] = useState(true);
@@ -2352,9 +2182,6 @@ function BladeHeaderPreview() {
   );
 }
 
-/**
- * Renders editable resource-tag rows and their validation states.
- */
 function ResourceTagEditorPreview() {
   const [rows, setRows] = useState([
     { id: 'r1', name: 'environment', value: 'production', resourceId: 'vm' },
@@ -2380,9 +2207,6 @@ function ResourceTagEditorPreview() {
   );
 }
 
-/**
- * Renders the form container with validation and submission feedback.
- */
 function AzureFormPreview() {
   return (
     <PreviewCard title="Form preview">
@@ -2409,9 +2233,6 @@ function AzureFormPreview() {
   );
 }
 
-/**
- * Renders the standard primary and secondary form actions.
- */
 function FormFooterPreview() {
   return (
     <PreviewCard title="Form footer preview">
@@ -2424,9 +2245,6 @@ function FormFooterPreview() {
   );
 }
 
-/**
- * Renders the compact set of key resource properties.
- */
 function EssentialsGridPreview() {
   return (
     <PreviewCard
@@ -2449,9 +2267,6 @@ function EssentialsGridPreview() {
   );
 }
 
-/**
- * Renders selected filters as removable or fixed chips.
- */
 function FilterPillsPreview() {
   const [selected, setSelected] = useState(['all']);
   const toggle = (id: string) =>
@@ -2483,9 +2298,6 @@ function FilterPillsPreview() {
   );
 }
 
-/**
- * Renders the provider wrapper with the system density setting.
- */
 function ProviderPreview() {
   return (
     <PreviewCard title="Provider density preview" canvasClassName="azf-showcase-preview__canvas--intrinsic">
@@ -2502,9 +2314,6 @@ function ProviderPreview() {
   );
 }
 
-/**
- * Renders icons loaded from the local icon registry.
- */
 function IconRegistryPreview() {
   return (
     <PreviewCard title="Icon registry preview" canvasClassName="azf-showcase-preview__canvas--intrinsic">
@@ -2518,9 +2327,6 @@ function IconRegistryPreview() {
   );
 }
 
-/**
- * Renders an icon-only action with its accessible label.
- */
 function IconActionButtonPreview() {
   return (
     <PreviewCard title="Icon action button preview" canvasClassName="azf-showcase-preview__canvas--intrinsic">
@@ -2533,9 +2339,6 @@ function IconActionButtonPreview() {
   );
 }
 
-/**
- * Renders status text paired with a semantic icon.
- */
 function StatusIconTextPreview() {
   return (
     <PreviewCard title="Status icon text preview" canvasClassName="azf-showcase-preview__canvas--intrinsic">
@@ -2548,9 +2351,6 @@ function StatusIconTextPreview() {
   );
 }
 
-/**
- * Renders suggested Copilot prompts in a compact header ribbon.
- */
 function CopilotPromptRibbonPreview() {
   return (
     <PreviewCard title="Copilot prompt ribbon preview">
@@ -2570,9 +2370,6 @@ function CopilotPromptRibbonPreview() {
   );
 }
 
-/**
- * Renders the data toolbar with an optional title and actions.
- */
 function DataToolbarPreview() {
   return (
     <PreviewCard title="Data toolbar preview">
@@ -2589,9 +2386,6 @@ function DataToolbarPreview() {
   );
 }
 
-/**
- * Renders the portal command-bar alias with primary and secondary actions.
- */
 function PortalCommandBarPreview() {
   return (
     <PreviewCard title="Portal command bar preview">
@@ -2607,9 +2401,6 @@ function PortalCommandBarPreview() {
   );
 }
 
-/**
- * Renders a search field and selected filter chips.
- */
 function FilterBarPreview() {
   const [query, setQuery] = useState('east');
 
@@ -2628,9 +2419,6 @@ function FilterBarPreview() {
   );
 }
 
-/**
- * Renders an artifact pill with file metadata and its open affordance.
- */
 function ArtifactPillPreview() {
   return (
     <PreviewCard title="Artifact pill preview" canvasClassName="azf-showcase-preview__canvas--intrinsic">
@@ -2641,9 +2429,6 @@ function ArtifactPillPreview() {
   );
 }
 
-/**
- * Renders step activity and artifacts in the run-reasoning view.
- */
 function ChainOfThoughtPreview() {
   return (
     <PreviewCard title="Reasoning panel preview">
@@ -2659,9 +2444,6 @@ function ChainOfThoughtPreview() {
   );
 }
 
-/**
- * Renders the light help popover variant.
- */
 function HelpPopoverPreview() {
   return (
     <PreviewCard title="Help popover preview" canvasClassName="azf-showcase-preview__canvas--intrinsic">
@@ -2675,9 +2457,6 @@ function HelpPopoverPreview() {
   );
 }
 
-/**
- * Renders the emphasized callout popover variant.
- */
 function CalloutPopoverPreview() {
   return (
     <PreviewCard title="Callout popover preview" canvasClassName="azf-showcase-preview__canvas--intrinsic">
@@ -2691,9 +2470,6 @@ function CalloutPopoverPreview() {
   );
 }
 
-/**
- * Renders the delete confirmation dialog with acknowledgement controls.
- */
 function DeleteConfirmationDialogPreview() {
   const [acknowledged, setAcknowledged] = useState(false);
   return (
@@ -2729,7 +2505,6 @@ const FOUNDATION_COL: React.CSSProperties = { display: 'flex', flexDirection: 'c
 const FOUNDATION_PAGE_URL = 'https://www.figma.com/design/q2TdO4dVcMhNWYp0N6Bc05/Azure-UI-Kit--Fluent-2-?node-id=25156-116&m=dev';
 const FLUENT2_DOCS = 'https://fluent2.microsoft.design/components/web/react/';
 
-/** Metadata that connects a Fluent foundation export to its showcase preview. */
 interface FoundationSpec {
   exportName: string;
   title: string;
@@ -3410,9 +3185,6 @@ const fluent2Foundations: FoundationSpec[] = [
 ];
 
 
-/**
- * Creates a deferred preview renderer for a Fluent foundation export.
- */
 function reuseFoundationPreview(exportName: string): () => ReactElement {
   return () => {
     const Preview = fluent2Foundations.find((spec) => spec.exportName === exportName)?.preview;
@@ -4131,19 +3903,12 @@ const coverageStatusRank: Record<string, number> = {
   'local-only-needed': 4,
 };
 
-/**
- * Identifies catalog entries that describe internal component layers rather than standalone controls.
- */
 function isInternalLayerName(name: string) {
   return /^\s*[.\u21aa]/.test(name);
 }
 
-/** A single component record from the optional inventory coverage section. */
 type InventoryComponent = NonNullable<NonNullable<ComponentInventoryManifest['inventoryCoverage']>['components']>[number];
 
-/**
- * Finds local library exports mapped to one inventory record.
- */
 function resolveComponentExports(component: InventoryComponent): string[] {
   const inventoryRow = componentInventoryRowsByNodeId.get(component.nodeId);
   const raw = component.libraryExports ?? normalizeCatalogImplementedMapping(inventoryRow?.implementedMapping ?? '');
@@ -4152,16 +3917,12 @@ function resolveComponentExports(component: InventoryComponent): string[] {
   return uniqueStrings(override ? [override, ...renamed] : renamed);
 }
 
-/**
- * Groups related design inventory entries by their mapped local component.
- */
 function resolveInventoryGroupKey(component: InventoryComponent, exportNames: string[]): string {
   if (exportNames.length > 0) return `export:${exportNames[0]}`;
   if (isInternalLayerName(component.name ?? '')) return INTERNAL_LAYERS_GROUP_KEY;
   return `unmapped:${component.nodeId}`;
 }
 
-/** Mutable aggregation state used while grouping catalog records into browser entries. */
 interface InventoryGroupAccumulator {
   key: string;
   members: InventoryComponent[];
@@ -4184,9 +3945,6 @@ for (const component of componentInventory.inventoryCoverage?.components ?? []) 
   group.exportNames = uniqueStrings([...group.exportNames, ...exportNames]);
 }
 
-/**
- * Selects the representative inventory record for a grouped browser entry.
- */
 function pickRepresentative(group: InventoryGroupAccumulator): InventoryComponent {
   return (
     group.members.find((member) => member.coverageStatus === 'implemented-rendered')
@@ -4195,9 +3953,6 @@ function pickRepresentative(group: InventoryGroupAccumulator): InventoryComponen
   );
 }
 
-/**
- * Chooses the most actionable coverage state among records in one inventory group.
- */
 function bestCoverageStatus(group: InventoryGroupAccumulator): string {
   return group.members
     .map((member) => member.coverageStatus)
@@ -4304,16 +4059,10 @@ const copilotComponentExportOrder = [
 
 const copilotComponentExportNames = new Set(copilotComponentExportOrder);
 
-/**
- * Checks whether a grouped component entry belongs to the Copilot-focused set.
- */
 function isCopilotComponentInventoryEntry(entry: ComponentInventoryBrowserEntry): boolean {
   return entry.exportNames.some((exportName) => copilotComponentExportNames.has(exportName));
 }
 
-/**
- * Sorts component inventory entries with Copilot exports first, then by display title.
- */
 function compareInventoryTitle(a: ComponentInventoryBrowserEntry, b: ComponentInventoryBrowserEntry): number {
   const aInternal = a.title === 'Shared component details';
   const bInternal = b.title === 'Shared component details';
@@ -4337,13 +4086,11 @@ function compareInventoryTitle(a: ComponentInventoryBrowserEntry, b: ComponentIn
   return a.title.localeCompare(b.title, 'en', { sensitivity: 'base' });
 }
 
-/** Complete sorted component inventory, including entries without a local rendered preview. */
 export const showcaseComponentInventoryEntries: ComponentInventoryBrowserEntry[] = [
   ...groupedComponentInventoryEntries,
   ...foundationInventoryEntries,
 ].sort(compareInventoryTitle);
 
-/** Entries eligible for the rendered component browser, excluding internal composite layers. */
 export const publicShowcaseComponentInventoryEntries = showcaseComponentInventoryEntries.filter(
   (entry) => entry.coverageStatus === 'implemented-rendered'
     && Boolean(entry.previewEntry)
@@ -4351,17 +4098,14 @@ export const publicShowcaseComponentInventoryEntries = showcaseComponentInventor
     && (entry.sourceNodes.length > 0 || entry.exportNames.some((exportName) => publicFoundationExportNames.has(exportName))),
 );
 
-/** Design node IDs represented by the public rendered component browser. */
 export const showcaseComponentInventoryNodeIds = publicShowcaseComponentInventoryEntries.map(({ nodeId }) => nodeId);
 
 // Flat list of every Figma node represented across the grouped inventory (one entry per catalog row),
 // used to guarantee the grouping never drops a component from coverage.
-/** Source node IDs retained across grouped entries for coverage checks. */
 export const showcaseComponentInventorySourceNodeIds = showcaseComponentInventoryEntries.flatMap(
   ({ sourceNodes }) => sourceNodes.map((node) => node.nodeId),
 );
 
-/** Export names with dedicated entries in the component preview menu. */
 export const showcaseComponentMenuExportNames = componentCatalog.map(({ exportName }) => exportName);
 // Showcase marker: Three primary experiences: component preview, pattern example browser, and icon browser
 // Showcase marker: Built from `catalog/COMPONENTS.md`
@@ -4369,9 +4113,6 @@ export const showcaseComponentMenuExportNames = componentCatalog.map(({ exportNa
 // Showcase marker: Built from `catalog/PATTERNS.md`
 // Showcase marker: Local source mappings
 
-/**
- * Renders a multi-step resource-creation flow inside the shell.
- */
 function CreateSteppedFormPatternPreview() {
   const [currentStep, setCurrentStep] = useState('basics');
   const [resourceName, setResourceName] = useState('aks-cluster-primary');
@@ -4452,9 +4193,6 @@ function CreateSteppedFormPatternPreview() {
   );
 }
 
-/**
- * Renders the resource-list pattern with search, filters, and paging.
- */
 function BrowseResourcePatternPreview() {
   const [query, setQuery] = useState('aks');
   const filteredRows = useMemo(
@@ -4478,9 +4216,6 @@ function BrowseResourcePatternPreview() {
   );
 }
 
-/**
- * Renders the simplified filtering-pattern composition.
- */
 function FilteringPatternPreview() {
   const [query, setQuery] = useState('aks');
   const filteredRows = useMemo(
@@ -4506,9 +4241,6 @@ function FilteringPatternPreview() {
   );
 }
 
-/**
- * Renders a form blade with validation and footer actions.
- */
 function FormBladePatternPreview() {
   return (
     <FormBladePattern
@@ -4529,9 +4261,6 @@ function FormBladePatternPreview() {
   );
 }
 
-/**
- * Renders a selectable multi-step form with status-bearing steps.
- */
 function StepWizardPatternPreview() {
   const [currentStep, setCurrentStep] = useState('basics');
 
@@ -4568,9 +4297,6 @@ function StepWizardPatternPreview() {
   );
 }
 
-/**
- * Renders a resource-creation pattern with a review stage.
- */
 function CreateResourcePatternComponentPreview() {
   const [currentStep, setCurrentStep] = useState('basics');
 
@@ -4608,9 +4334,6 @@ function CreateResourcePatternComponentPreview() {
   );
 }
 
-/**
- * Renders an inline error message with a recovery action.
- */
 function ErrorPatternPreview() {
   return (
     <ErrorPattern
@@ -4621,9 +4344,6 @@ function ErrorPatternPreview() {
   );
 }
 
-/**
- * Renders notification content and a service overview together.
- */
 function NotificationsPatternPreview() {
   return (
     <div className="azf-showcase-pattern-stack">
@@ -4664,9 +4384,6 @@ function NotificationsPatternPreview() {
   );
 }
 
-/**
- * Renders the destructive resource confirmation pattern.
- */
 function DeleteResourcePatternPreview() {
   const [acknowledged, setAcknowledged] = useState(false);
   return (
@@ -4705,9 +4422,6 @@ function DeleteResourcePatternPreview() {
   );
 }
 
-/**
- * Renders a management page with service navigation and content.
- */
 function ManageResourcePatternPreview() {
   return (
     <ManageResourcePattern
@@ -4727,9 +4441,6 @@ function ManageResourcePatternPreview() {
   );
 }
 
-/**
- * Renders a service overview with summary cards and actions.
- */
 function ServiceOverviewPatternPreview() {
   return (
     <ServiceOverviewPattern
@@ -4745,9 +4456,6 @@ function ServiceOverviewPatternPreview() {
   );
 }
 
-/**
- * Renders notification and feedback placements in a product surface.
- */
 function FeedbackPatternPreview() {
   return (
     <div className="azf-showcase-pattern-stack">
@@ -4766,9 +4474,6 @@ function FeedbackPatternPreview() {
   );
 }
 
-/**
- * Renders the pattern index and its usage guidance.
- */
 function PatternIndexPreview() {
   return (
     <div className="azf-showcase-pattern-index">
@@ -4862,9 +4567,6 @@ const patternPreviewCatalog: PatternPreviewEntry[] = [
   },
 ];
 
-/**
- * Returns a display-ready name for the supplied pattern family.
- */
 function formatPatternFamilyName(family: PatternFamily) {
   switch (family.id) {
     case 'aks-resource-list':
@@ -4892,9 +4594,6 @@ function formatPatternFamilyName(family: PatternFamily) {
   }
 }
 
-/**
- * Returns plain-language composition guidance for a known pattern family.
- */
 function getPatternUsageGuidance(familyId: string): string[] {
   switch (familyId) {
     case 'aks-resource-list':
@@ -4924,9 +4623,6 @@ function getPatternUsageGuidance(familyId: string): string[] {
   }
 }
 
-/**
- * Returns interaction guidance for a known pattern family.
- */
 function getPatternInteractionGuidance(familyId: string): string[] {
   switch (familyId) {
     case 'aks-resource-list':
@@ -4952,9 +4648,6 @@ function getPatternInteractionGuidance(familyId: string): string[] {
   }
 }
 
-/**
- * Renders a titled card around catalog or preview metadata.
- */
 function MetadataCard({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="azf-showcase-metadata-card">
@@ -4964,9 +4657,6 @@ function MetadataCard({ title, children }: { title: string; children: ReactNode 
   );
 }
 
-/**
- * Renders the searchable icon browser from the checked-in asset manifest.
- */
 function IconBrowserView() {
   const [query, setQuery] = useState('');
   const [collection, setCollection] = useState('All collections');
@@ -5106,9 +4796,6 @@ function IconBrowserView() {
   );
 }
 
-/**
- * Explains why a catalog item has no standalone preview and may link to a related example.
- */
 function ComponentInventoryPlaceholder({
   item,
   onOpenRelatedPreview,
@@ -5138,9 +4825,6 @@ function ComponentInventoryPlaceholder({
   );
 }
 
-/**
- * Renders the component, pattern, and icon browsers from local catalog data and examples.
- */
 export function AzureFluentShowcaseApp() {
   const [view, setView] = useState<ShowcaseView>('components');
   const [selectedComponentNodeId, setSelectedComponentNodeId] = useState('30028:627');

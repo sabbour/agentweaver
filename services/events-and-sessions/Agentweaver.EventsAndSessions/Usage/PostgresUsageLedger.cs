@@ -11,12 +11,10 @@ using NpgsqlTypes;
 
 namespace Agentweaver.EventsAndSessions;
 
-/// <summary>Signals reuse of a usage event or rate-card identity with different immutable content.</summary>
 public sealed class UsageLedgerConflictException(string message) : InvalidOperationException(message)
 {
 }
 
-/// <summary>Persists immutable, idempotent usage entries and computes exact run totals from PostgreSQL.</summary>
 public sealed class PostgresUsageLedger : IUsageLedger
 {
     private const short ContractVersion = 1;
@@ -34,7 +32,6 @@ public sealed class PostgresUsageLedger : IUsageLedger
         _quotedSchema = $"\"{schema}\"";
     }
 
-    /// <summary>Validates and appends a usage event in its own transaction.</summary>
     public async Task<UsageIngestionResult> AppendAsync(
         UsageSubmission submission,
         CostBinding? binding,
@@ -50,7 +47,6 @@ public sealed class PostgresUsageLedger : IUsageLedger
         return result;
     }
 
-    /// <summary>Appends within a caller-owned transaction, rejecting changed duplicates by event identity.</summary>
     internal async Task<UsageIngestionResult> AppendWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction,
         UsageSubmission submission, CostBinding? binding, CostPrice price,
@@ -116,7 +112,6 @@ public sealed class PostgresUsageLedger : IUsageLedger
         return duplicate;
     }
 
-    /// <summary>Returns aggregate measurements and pricing completeness for a tenant/project/run.</summary>
     public async Task<UsageRunTotals> GetRunTotalsAsync(
         string tenantId,
         string projectId,
@@ -129,7 +124,6 @@ public sealed class PostgresUsageLedger : IUsageLedger
             connection, null, tenantId, projectId, runId, null, cancellationToken);
     }
 
-    /// <summary>Reads Copilot-only totals using the caller's transaction.</summary>
     internal Task<UsageRunTotals> GetCopilotRunTotalsWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction,
         string tenantId, string projectId, string runId, CancellationToken cancellationToken)
@@ -139,7 +133,6 @@ public sealed class PostgresUsageLedger : IUsageLedger
             SdkMeterSources.CopilotNanoAiu, cancellationToken);
     }
 
-    /// <summary>Aggregates measurements without substituting zero for missing values.</summary>
     private async Task<UsageRunTotals> GetRunTotalsCoreAsync(
         NpgsqlConnection connection, NpgsqlTransaction? transaction,
         string tenantId, string projectId, string runId, string? filterMeterSource,
@@ -228,7 +221,6 @@ public sealed class PostgresUsageLedger : IUsageLedger
             ToAmountTotals(runAmounts));
     }
 
-    /// <summary>Persists or verifies immutable rate-card content by its ID and version.</summary>
     private async Task EnsureRateCardAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -273,7 +265,6 @@ public sealed class PostgresUsageLedger : IUsageLedger
                 "A rate card ID and version cannot be reused with different immutable content.");
     }
 
-    /// <summary>Reads and hash-checks an entry by its stable event identity.</summary>
     private async Task<StoredEntry?> ReadByEventIdAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -311,7 +302,6 @@ public sealed class PostgresUsageLedger : IUsageLedger
             new UsageLedgerEntry(payload.Usage, payload.CostBinding, payload.Price, recordedAt, payloadHash));
     }
 
-    /// <summary>Returns an identical prior receipt or rejects changed content under the same event ID.</summary>
     private static UsageIngestionResult MatchDuplicate(StoredEntry existing, string canonical)
     {
         if (!string.Equals(existing.CanonicalInput, canonical, StringComparison.Ordinal))
@@ -405,7 +395,6 @@ public sealed class PostgresUsageLedger : IUsageLedger
                 entry.Value.UnpricedEvents))
             .ToImmutableArray();
 
-    /// <summary>Rejects reserved or invalid PostgreSQL schema names before quoting them into SQL.</summary>
     private static void ValidateSchema(string schema)
     {
         ArgumentNullException.ThrowIfNull(schema);
@@ -528,7 +517,6 @@ public sealed class PostgresUsageLedger : IUsageLedger
         }
     }
 
-    /// <summary>Accumulates decimals as a scaled integer and rejects totals System.Decimal cannot represent.</summary>
     private sealed class ExactDecimalAccumulator
     {
         private BigInteger _coefficient;

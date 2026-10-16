@@ -5,7 +5,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Knowledge;
 
-/// <summary>Chooses eligible Knowledge records and serializes them as bounded, explicitly untrusted context.</summary>
 public sealed class MemoryContextCompiler
 {
     private const int ApproximateCharactersPerToken = 4;
@@ -18,9 +17,6 @@ public sealed class MemoryContextCompiler
         StringComparer.Ordinal);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    /// <summary>Builds context from approved Decisions, relevant Memory, and the current run's session context.</summary>
-    /// <returns><see langword="null"/> when there is no eligible or relevance-filtered context.</returns>
-    /// <exception cref="MandatoryContextBudgetExceededException">Required Decisions exceed the character budget.</exception>
     public MemoryContextCompilation? Compile(
         KnowledgeContextCandidates candidates,
         string projectId,
@@ -123,7 +119,6 @@ public sealed class MemoryContextCompiler
             revisionReferences.ToImmutable());
     }
 
-    /// <summary>Ranks visible Memory for one agent, allowing cross-team items only when approved.</summary>
     private static OrderedMemories OrderMemories(
         ImmutableArray<KnowledgeRecord> records,
         string agentId,
@@ -167,7 +162,6 @@ public sealed class MemoryContextCompiler
         return new OrderedMemories(ordered, omitted);
     }
 
-    /// <summary>Scores matching tags twice as strongly as content words.</summary>
     private static int RelevanceScore(KnowledgeRecord record, IReadOnlySet<string> tokens)
     {
         if (tokens.Count == 0 || IsExplicitlyIrrelevant(record))
@@ -202,7 +196,6 @@ public sealed class MemoryContextCompiler
     private static KnowledgeRevisionReference ToReference(string kind, KnowledgeRecord record) =>
         new(kind, record.RecordId, record.Revision, record.RevisionId);
 
-    /// <summary>Serializes selected records inside explicit boundaries that instruct consumers not to follow embedded text.</summary>
     private static string BuildUntrustedContext(
         IReadOnlyList<KnowledgeRecord> decisions,
         IReadOnlyList<(KnowledgeRecord Record, string Label)> memories,

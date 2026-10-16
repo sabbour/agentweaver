@@ -10,7 +10,6 @@ using Agentweaver.Providers.Storage.AzureFiles;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Input for provisioning a Sandbox against a workspace-volume and verified network-policy generation.</summary>
 public sealed record SandboxProvisionApiRequest(
     string VolumeId,
     long VolumeResourceGeneration,
@@ -20,7 +19,6 @@ public sealed record SandboxProvisionApiRequest(
     long NetworkPolicyGeneration,
     string IdempotencyKey)
 {
-    /// <summary>Validates workspace, generation, mount, and idempotency fields before provider work begins.</summary>
     public SandboxProvisionApiRequest Validate()
     {
         _ = new WorkspaceVolumeReference("project", VolumeId, VolumeResourceGeneration).Validate();
@@ -33,13 +31,11 @@ public sealed record SandboxProvisionApiRequest(
     }
 }
 
-/// <summary>Input for abandoning a Sandbox at an exact resource and provider-fencing generation.</summary>
 public sealed record SandboxAbandonApiRequest(
     long ResourceGeneration,
     long ProviderFencingGeneration,
     string IdempotencyKey)
 {
-    /// <summary>Requires positive resource and fence generations and a bounded idempotency key.</summary>
     public SandboxAbandonApiRequest Validate()
     {
         if (ResourceGeneration < 1 || ProviderFencingGeneration < 1 ||
@@ -51,7 +47,6 @@ public sealed record SandboxAbandonApiRequest(
     }
 }
 
-/// <summary>Summarizes Sandbox lifecycle state, placement evidence, and whether it is ready for dispatch.</summary>
 public sealed record EnvironmentSandboxResult(
     Guid OperationId,
     SandboxLeaseState State,
@@ -66,7 +61,6 @@ public sealed record EnvironmentSandboxResult(
     SandboxObservationSummary? Observation,
     bool ReadyForDispatch);
 
-/// <summary>Current owner-scoped Sandbox placement projected for runtime and workspace consumers.</summary>
 public sealed record EnvironmentSandboxPlacementProjectionV1(
     int ContractVersion,
     string TenantId,
@@ -96,7 +90,6 @@ public sealed record EnvironmentSandboxPlacementProjectionV1(
     public RuntimeWorkspaceResumeRequest? RuntimeResume { get; init; }
 }
 
-/// <summary>Pins the Sandbox provider registration, resource generation, and negotiated capabilities.</summary>
 public sealed record EnvironmentSandboxConsumerPinV1(
     int ContractVersion,
     string ProviderId,
@@ -106,22 +99,16 @@ public sealed record EnvironmentSandboxConsumerPinV1(
     ProviderResourceRef Resource,
     ImmutableHashSet<string> NegotiatedCapabilities);
 
-/// <summary>Host startup observations and budgets used to determine runtime readiness for a placement.</summary>
 public sealed record EnvironmentRuntimeReadinessEvidence(
     DateTimeOffset LeaseCreatedAt,
     SandboxObservation Observation,
     SandboxStartupTimeBudgets StartupBudgets,
     string WorkspaceMountPath);
 
-/// <summary>Persisted workspace attachment negotiation and its volume transition revision.</summary>
 public sealed record EnvironmentRuntimeWorkspaceEvidence(
     WorkspaceVolumeAttachmentNegotiation Workspace,
     long TransitionRevision);
 
-/// <summary>
-/// Coordinates Sandbox provider operations with lifecycle, workspace, egress, and lease state.
-/// A provider result is exposed as current only after owner and generation checks succeed.
-/// </summary>
 public sealed class EnvironmentSandboxManager(
     IProjectsConfigClient projects,
     IEnvironmentLifecycleStore lifecycleStore,
@@ -135,7 +122,6 @@ public sealed class EnvironmentSandboxManager(
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
-    /// <summary>Authorizes and provisions the current Sandbox for one project run and Environment.</summary>
     public Task<EnvironmentSandboxResult> ProvisionAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -145,7 +131,6 @@ public sealed class EnvironmentSandboxManager(
         CancellationToken cancellationToken) =>
         ProvisionCoreAsync(caller, projectId, runId, environmentId, request, cancellationToken);
 
-    /// <summary>Provisions a resume Sandbox while rechecking the exact accepted resume request.</summary>
     internal Task<EnvironmentSandboxResult> ProvisionResumeAsync(
         CurrentCallerRequest caller,
         SandboxProvisionApiRequest request,
@@ -159,7 +144,6 @@ public sealed class EnvironmentSandboxManager(
             request, cancellationToken, resume, requireCurrent);
     }
 
-    /// <summary>Reserves the lease, verifies workspace and egress, invokes the provider, then records observed readiness.</summary>
     private async Task<EnvironmentSandboxResult> ProvisionCoreAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -425,7 +409,6 @@ public sealed class EnvironmentSandboxManager(
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Reads the current Sandbox state after validating project and run read authority.</summary>
     public async Task<EnvironmentSandboxResult?> InspectAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -452,7 +435,6 @@ public sealed class EnvironmentSandboxManager(
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Reads the placement after requiring current WriteProjects authority for its project and run.</summary>
     public Task<EnvironmentSandboxPlacementProjectionV1?> GetCurrentPlacementAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -463,7 +445,6 @@ public sealed class EnvironmentSandboxManager(
             caller, projectId, runId, environmentId, runBoundRead: false,
             (projection, _) => Task.FromResult(projection), cancellationToken);
 
-    /// <summary>Reads placement using the stricter read grant bound to the exact project and run.</summary>
     internal Task<EnvironmentSandboxPlacementProjectionV1?> GetCurrentRunBoundPlacementAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -474,10 +455,6 @@ public sealed class EnvironmentSandboxManager(
             caller, projectId, runId, environmentId, runBoundRead: true,
             (projection, _) => Task.FromResult(projection), cancellationToken);
 
-    /// <summary>
-    /// Reads placement under either project-control or exact run-bound read authority, then rechecks that authority.
-    /// Runtime evidence is returned only through the stricter run-bound path.
-    /// </summary>
     internal async Task<TResult> GetCurrentPlacementCoreAsync<TResult>(
         CurrentCallerRequest caller,
         string projectId,
@@ -598,7 +575,6 @@ public sealed class EnvironmentSandboxManager(
         }
     }
 
-    /// <summary>Releases a suspended placement only after the orchestrator confirms current release authority.</summary>
     public async Task<RuntimeSuspendPlacementReleaseReceipt> ReleaseSuspendPlacementAsync(
         CurrentCallerRequest caller,
         RuntimeSuspendPlacementReleaseRequest request,
@@ -638,7 +614,6 @@ public sealed class EnvironmentSandboxManager(
             volume.DataGeneration, volume.TransitionRevision).ValidateFor(request);
     }
 
-    /// <summary>Abandons a Sandbox at the expected resource and fencing generations.</summary>
     public async Task<EnvironmentSandboxResult> AbandonAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -682,7 +657,6 @@ public sealed class EnvironmentSandboxManager(
         return await ReleaseRetiringLeaseAsync(caller, context, lease, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Reads bounded provider-attempt history after checking run-bound placement-read authority.</summary>
     public async Task<SandboxProviderAttemptReadResponseV1> GetProviderAttemptsAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -705,7 +679,6 @@ public sealed class EnvironmentSandboxManager(
             attempts.Select(SandboxProviderAttemptReceipt.From).ToImmutableArray());
     }
 
-    /// <summary>Reads bounded late-resource cleanup history for the current Environment owner.</summary>
     public async Task<SandboxLateResourceCleanupReadResponseV1> GetLateResourceCleanupsAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -725,7 +698,6 @@ public sealed class EnvironmentSandboxManager(
             hasMore);
     }
 
-    /// <summary>Reconciles an uncertain Sandbox provider operation using durable attempt and lease evidence.</summary>
     public async Task<EnvironmentSandboxResult?> ReconcileAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -743,7 +715,6 @@ public sealed class EnvironmentSandboxManager(
         return result ?? lateCleanupResult;
     }
 
-    /// <summary>Reconciles a non-terminal lease using its durable provider intent and recorded attempt history.</summary>
     private async Task<EnvironmentSandboxResult?> ReconcileCurrentLeaseAsync(
         CurrentCallerRequest caller,
         AuthorizedSandboxContext context,
@@ -877,7 +848,6 @@ public sealed class EnvironmentSandboxManager(
         return ToResult(lease);
     }
 
-    /// <summary>Claims and processes one due late-resource cleanup without changing the current Sandbox lease.</summary>
     private async Task<EnvironmentSandboxResult?> ReconcileNextLateResourceCleanupAsync(
         CurrentCallerRequest caller,
         AuthorizedSandboxContext context,
@@ -1050,7 +1020,6 @@ public sealed class EnvironmentSandboxManager(
         }
     }
 
-    /// <summary>Continues a reserved provision operation after checking its provider attempt and exact saved request.</summary>
     private async Task<EnvironmentSandboxResult> ResumeProvisioningAsync(
         CurrentCallerRequest caller,
         AuthorizedSandboxContext context,
@@ -1160,7 +1129,6 @@ public sealed class EnvironmentSandboxManager(
         return ToResult(lease);
     }
 
-    /// <summary>Requires the persisted workspace attachment to match the Sandbox resource and volume generations.</summary>
     private async Task EnsureSandboxWorkspaceAttachedAsync(
         AuthorizedSandboxContext context,
         SandboxProviderRecoveryIntent recovery,
@@ -1220,7 +1188,6 @@ public sealed class EnvironmentSandboxManager(
                 "The Workspace owner did not preserve the exact Sandbox attachment during recovery.");
     }
 
-    /// <summary>Records partial retirement while retaining unresolved Sandbox or workspace cleanup for reconciliation.</summary>
     private async Task<EnvironmentSandboxResult> ReleasePartialRetiringLeaseAsync(
         CurrentCallerRequest caller,
         AuthorizedSandboxContext context,
@@ -1340,7 +1307,6 @@ public sealed class EnvironmentSandboxManager(
                 CancellationToken.None);
     }
 
-    /// <summary>Requires the lease revision, provider fence, resource, and owner generation to remain current.</summary>
     private async Task<SandboxLeaseSnapshot> RequireCurrentLeaseAsync(
         EnvironmentGenerationFence fence,
         SandboxLeaseSnapshot expected,
@@ -1360,7 +1326,6 @@ public sealed class EnvironmentSandboxManager(
         return current;
     }
 
-    /// <summary>Reads provider readiness and verifies workspace and network evidence before marking dispatch ready.</summary>
     private async Task<EnvironmentSandboxResult> ObserveAsync(
         CurrentCallerRequest caller,
         AuthorizedSandboxContext context,
@@ -1392,7 +1357,6 @@ public sealed class EnvironmentSandboxManager(
         return ToResult(currentLease, observation);
     }
 
-    /// <summary>Deletes the retiring resource, detaches its workspace, and commits release under the current fence.</summary>
     private async Task<EnvironmentSandboxResult> ReleaseRetiringLeaseAsync(
         CurrentCallerRequest caller,
         AuthorizedSandboxContext context,
@@ -1568,7 +1532,6 @@ public sealed class EnvironmentSandboxManager(
                 CancellationToken.None);
     }
 
-    /// <summary>Reads the exact run selection, confirms authorization is stable, and requires an active Environment.</summary>
     private async Task<AuthorizedSandboxContext> AuthorizeAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -1600,7 +1563,6 @@ public sealed class EnvironmentSandboxManager(
         return new(lifecycle.Fence, selection);
     }
 
-    /// <summary>Reads the volume and requires a strict-consistency workspace specification for this Environment.</summary>
     private async Task<WorkspaceContext> ReadWorkspaceAsync(
         EnvironmentGenerationFence fence,
         EffectiveNetworkPolicySelection selection,
@@ -1686,7 +1648,6 @@ public sealed class EnvironmentSandboxManager(
         return new(snapshot, spec, storageResource, claim);
     }
 
-    /// <summary>Reserves, performs, and records the volume attachment to the exact Sandbox resource generation.</summary>
     private async Task AttachWorkspaceForSandboxAsync(
         EnvironmentGenerationFence fence,
         Guid sandboxOperationId,
@@ -1746,7 +1707,6 @@ public sealed class EnvironmentSandboxManager(
                 "The Workspace owner did not commit the exact Sandbox attachment.");
     }
 
-    /// <summary>Requires detachment evidence before a retiring Sandbox lease can be fully released.</summary>
     private async Task EnsureWorkspaceAttachmentReleasedAsync(
         EnvironmentGenerationFence fence,
         Guid sandboxOperationId,
@@ -1773,7 +1733,6 @@ public sealed class EnvironmentSandboxManager(
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Detaches a volume only after Sandbox release and validates the provider's recorded attachment receipt.</summary>
     private async Task DetachWorkspaceAfterSandboxReleaseAsync(
         EnvironmentGenerationFence fence,
         SandboxLeaseSnapshot lease,
@@ -1790,7 +1749,6 @@ public sealed class EnvironmentSandboxManager(
             .ConfigureAwait(false);
     }
 
-    /// <summary>Requires the orchestrator's current suspend-release authority before retiring a suspended placement.</summary>
     private Task RequireSuspendReleaseAsync(
         CurrentCallerRequest caller, RuntimeSuspendPlacementReleaseRequest? request,
         CancellationToken cancellationToken) =>
@@ -1798,7 +1756,6 @@ public sealed class EnvironmentSandboxManager(
         (suspendReleaseAuthority ?? throw new RuntimeAuthorizationException(
             "runtime_suspend_release_owner_unavailable")).RequireCurrentAsync(caller, request, cancellationToken);
 
-    /// <summary>Reads persisted workspace detachment and retained flush evidence for one retiring Sandbox lease.</summary>
     private async Task<(long TransitionRevision, long DataGeneration,
         RuntimeSuspendPlacementReleaseRequest? SuspendRelease)> ReadWorkspaceDetachmentAsync(
         EnvironmentGenerationFence fence, SandboxLeaseSnapshot lease, CancellationToken cancellationToken,
@@ -1815,7 +1772,6 @@ public sealed class EnvironmentSandboxManager(
         return ResolveWorkspaceDetachment(fence, lease, current, evidence, allowUnprovisionedResource);
     }
 
-    /// <summary>Checks that release evidence belongs to the exact persisted volume and Sandbox attachment.</summary>
     internal static (long TransitionRevision, long DataGeneration,
         RuntimeSuspendPlacementReleaseRequest? SuspendRelease) ResolveWorkspaceDetachment(
         EnvironmentGenerationFence fence, SandboxLeaseSnapshot lease,
@@ -1900,7 +1856,6 @@ public sealed class EnvironmentSandboxManager(
         return (detachRevision, detachDataGeneration, release);
     }
 
-    /// <summary>Detaches the exact workspace attachment through a reserved transition and commits its provider result.</summary>
     private async Task DetachWorkspaceAttachmentAsync(
         EnvironmentGenerationFence fence,
         Guid sandboxOperationId,
@@ -1953,11 +1908,9 @@ public sealed class EnvironmentSandboxManager(
                 "The Workspace owner did not commit the exact Sandbox detachment.");
     }
 
-    /// <summary>Reconstructs the originally accepted Sandbox provisioning request from its persisted lease record.</summary>
     internal static SandboxProvisionApiRequest ReadProvisionRequest(SandboxLeaseSnapshot lease) =>
         ReadProviderRecoveryIntent(lease).Request;
 
-    /// <summary>Projects the current provider attachment into runtime workspace evidence.</summary>
     internal static EnvironmentRuntimeWorkspaceEvidence ProjectRuntimeWorkspace(
         EnvironmentGenerationFence fence, SandboxLeaseSnapshot lease,
         EnvironmentWorkspaceVolumeSnapshot? snapshot)
@@ -2002,7 +1955,6 @@ public sealed class EnvironmentSandboxManager(
         return new(attachment, snapshot.TransitionRevision);
     }
 
-    /// <summary>Deserializes and validates the immutable recovery intent stored with a Sandbox lease.</summary>
     private static SandboxProviderRecoveryIntent ReadProviderRecoveryIntent(SandboxLeaseSnapshot lease)
     {
         SandboxProviderRecoveryIntent recovery;
@@ -2052,7 +2004,6 @@ public sealed class EnvironmentSandboxManager(
     private static string WorkspaceAttachmentIdempotencyKey(string operation, Guid sandboxOperationId) =>
         $"sandbox-{operation}-{sandboxOperationId:N}";
 
-    /// <summary>Negotiates the selected storage provider's attachment contract for the exact Sandbox and volume.</summary>
     private SandboxWorkspaceAttachment NegotiateWorkspace(
         EnvironmentGenerationFence fence,
         SandboxProvisionApiRequest request,
@@ -2089,7 +2040,6 @@ public sealed class EnvironmentSandboxManager(
             JsonSerializer.SerializeToElement(workspace.ClaimAttachment, JsonOptions)).Validate();
     }
 
-    /// <summary>Requires one selected Sandbox provider whose registration matches the local provider configuration.</summary>
     private ProviderCandidate ResolveSandboxCandidate(EffectiveNetworkPolicySelection selection)
     {
         if (!string.Equals(sandboxOptions.Namespace, ciliumOptions.Namespace, StringComparison.Ordinal))
@@ -2131,7 +2081,6 @@ public sealed class EnvironmentSandboxManager(
         return result.Value.Candidate;
     }
 
-    /// <summary>Rechecks accepted authorization and run selection after provider work before accepting its result.</summary>
     private async Task<AuthorizedSandboxContext> EnsureUnchangedAsync(
         CurrentCallerRequest caller,
         AuthorizedSandboxContext context,
@@ -2162,7 +2111,6 @@ public sealed class EnvironmentSandboxManager(
             fence.Owner.RunId,
             ciliumOptions.Namespace);
 
-    /// <summary>Requires exactly one provider candidate with exclusive cardinality for the requested seam.</summary>
     private static EffectiveProviderCandidate GetExclusiveCandidate(
         EffectiveNetworkPolicySelection selection,
         ProviderSeam seam)
@@ -2191,7 +2139,6 @@ public sealed class EnvironmentSandboxManager(
                 "sandbox_lease_created_at_missing",
                 "The Sandbox lease has no persisted creation timestamp for startup budgets."));
 
-    /// <summary>Finds the durable provider attempt associated with this lease or rejects an untracked provider result.</summary>
     private async Task<Guid> RequireProvisionAttemptIdAsync(
         EnvironmentGenerationFence fence,
         SandboxLeaseSnapshot lease,
@@ -2274,7 +2221,6 @@ public sealed class EnvironmentSandboxManager(
             ready);
     }
 
-    /// <summary>Builds a consumer projection only from an active lease with valid current placement bindings.</summary>
     internal static EnvironmentSandboxPlacementProjectionV1 ProjectCurrentPlacement(
         EnvironmentOwnerIdentity owner,
         EnvironmentGenerationFence fence,
@@ -2350,7 +2296,6 @@ public sealed class EnvironmentSandboxManager(
         };
     }
 
-    /// <summary>Compares the lease revision and fencing values that identify one current placement.</summary>
     internal static bool SameCurrentPlacementLease(
         SandboxLeaseSnapshot? left,
         SandboxLeaseSnapshot? right) =>
@@ -2374,14 +2319,12 @@ public sealed class EnvironmentSandboxManager(
         return options;
     }
 
-    /// <summary>Validated workspace-volume request and snapshot used while preparing a Sandbox placement.</summary>
     private sealed record WorkspaceContext(
         EnvironmentWorkspaceVolumeSnapshot Snapshot,
         WorkspaceVolumeSpec Specification,
         WorkspaceVolumeResource StorageResource,
         AgentSandboxPersistentVolumeClaimAttachment ClaimAttachment);
 
-    /// <summary>Persisted provider intent needed to reconcile an uncertain Sandbox operation.</summary>
     private sealed record SandboxProviderRecoveryIntent(
         int ContractVersion,
         SandboxProvisionApiRequest Request,
@@ -2393,7 +2336,6 @@ public sealed class EnvironmentSandboxManager(
         public RuntimeWorkspaceResumeRequest? RuntimeResume { get; init; }
     }
 
-    /// <summary>Reads the accepted resume request from the lease intent, returning null for ordinary provisioning.</summary>
     private static RuntimeWorkspaceResumeRequest? ReadRuntimeResume(SandboxLeaseSnapshot lease)
     {
         var request = lease.ProvisionIntent.ProviderRequest;
@@ -2411,7 +2353,6 @@ public sealed class EnvironmentSandboxManager(
         }
     }
 
-    /// <summary>Bundles the accepted caller authority, Environment fence, and run selection for Sandbox operations.</summary>
     private sealed record AuthorizedSandboxContext(
         EnvironmentGenerationFence Fence,
         EnvironmentEgressManager.AuthorizedSelection Selection);

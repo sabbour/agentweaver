@@ -23,10 +23,6 @@ export interface FeedbackButtonsProps {
   className?: string;
 }
 
-/**
- * Renders positive/negative feedback controls and reports the selected value to the caller.
- * The current feedback and callback are props; no feedback request is sent from this component.
- */
 export function FeedbackButtons({
   selected,
   disabled = false,

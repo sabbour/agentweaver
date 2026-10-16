@@ -55,7 +55,6 @@ import type {
   VersionedProjectConfiguration,
 } from './contracts';
 
-/** HTTP error returned by a Gateway request, including the parsed problem payload. */
 export class GatewayError extends Error {
   readonly status: number;
   readonly problem: Record<string, unknown>;
@@ -70,7 +69,6 @@ export class GatewayError extends Error {
   }
 }
 
-/** Selects the most useful safe message from a Gateway problem response. */
 function problemMessage(problem: Record<string, unknown>, status: number): string {
   const detail = typeof problem.detail === 'string' ? problem.detail : undefined;
   const title = typeof problem.title === 'string' ? problem.title : undefined;
@@ -78,16 +76,10 @@ function problemMessage(problem: Record<string, unknown>, status: number): strin
   return detail ?? title ?? code ?? `Gateway request failed with HTTP ${status}.`;
 }
 
-/** Encodes each path segment independently so identifiers cannot alter route structure. */
 function encodeSegments(...segments: string[]): string {
   return segments.map((part) => encodeURIComponent(part)).join('/');
 }
 
-/**
- * Authenticated browser client for the v1 Gateway and owner-backed APIs.
- * Requests omit ambient browser credentials by default, avoid caching, and
- * include a tenant selector only when the caller has a confirmed value.
- */
 export class AgentweaverGatewayClient {
   private readonly baseUrl: string;
   private readonly gatewayRootUrl: string;
@@ -104,7 +96,6 @@ export class AgentweaverGatewayClient {
     this.fetcher = fetcher;
   }
 
-  /** Sends one JSON request and preserves structured error details in {@link GatewayError}. */
   private async request<T>(
     token: string,
     path: string,
@@ -147,7 +138,6 @@ export class AgentweaverGatewayClient {
     return await response.json() as T;
   }
 
-  /** Reads and validates the Projects owner's authorization context for this session. */
   async getAuthorizationContext(
     token: string,
     tenantSelector?: string | null,
@@ -168,12 +158,10 @@ export class AgentweaverGatewayClient {
     return context;
   }
 
-  /** Lists projects visible to the supplied Broker session and optional tenant. */
   listProjects(token: string, tenantSelector?: string | null): Promise<ProjectSummary[]> {
     return this.request(token, '/projects', {}, this.baseUrl, tenantSelector);
   }
 
-  /** Creates a project in the selected tenant. */
   createProject(token: string, name: string, tenantSelector?: string | null): Promise<ProjectSummary> {
     return this.request(
       token,
@@ -184,7 +172,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads one project summary. */
   getProject(token: string, projectId: string, tenantSelector?: string | null): Promise<ProjectSummary> {
     return this.request(
       token,
@@ -195,7 +182,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads the current project configuration together with its revision. */
   getProjectConfiguration(
     token: string,
     projectId: string,
@@ -210,7 +196,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Replaces project configuration using the caller's expected revision. */
   updateProjectConfiguration(
     token: string,
     projectId: string,
@@ -224,7 +209,6 @@ export class AgentweaverGatewayClient {
     }, this.baseUrl, tenantSelector);
   }
 
-  /** Lists configured skill marketplace sources for a project. */
   listMarketplaceSources(
     token: string,
     projectId: string,
@@ -239,7 +223,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Adds a marketplace source to the project. */
   createMarketplaceSource(
     token: string,
     projectId: string,
@@ -255,7 +238,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Updates a marketplace source using the supplied source settings. */
   updateMarketplaceSource(
     token: string,
     projectId: string,
@@ -272,7 +254,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Removes a marketplace source only when its expected revision still matches. */
   removeMarketplaceSource(
     token: string,
     projectId: string,
@@ -290,7 +271,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Browses one marketplace source at the requested revision and page. */
   browseMarketplaceSource(
     token: string,
     projectId: string,
@@ -313,7 +293,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Previews marketplace skill content without importing it. */
   previewMarketplaceSkillContent(
     token: string,
     projectId: string,
@@ -330,7 +309,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Imports selected content from a marketplace source into the project. */
   importMarketplaceSkillContent(
     token: string,
     projectId: string,
@@ -347,7 +325,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Previews a skill candidate before project import. */
   previewSkillContent(
     token: string,
     candidate: SkillContentCandidateRequest,
@@ -362,7 +339,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Imports a validated skill-content selection into the project. */
   importSkillContent(
     token: string,
     projectId: string,
@@ -378,7 +354,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Lists the project's skills using its optional cursor and page-size controls. */
   listProjectSkillInventory(
     token: string,
     projectId: string,
@@ -398,7 +373,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Changes a skill assignment and returns the resulting versioned configuration. */
   updateSkillAssignment(
     token: string,
     projectId: string,
@@ -415,7 +389,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Begins project- or platform-scoped Copilot authorization through the Gateway root. */
   beginCopilotConnection(
     token: string,
     scope: 'project' | 'platform',
@@ -435,7 +408,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Completes Copilot authorization using the callback code and state. */
   completeCopilotConnection(
     token: string,
     callback: CopilotAuthorizationCallback,
@@ -454,7 +426,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads a redacted Copilot connection receipt by connection identifier. */
   getCopilotConnection(
     token: string,
     connectionId: string,
@@ -469,7 +440,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Refreshes a Copilot connection using its expected revision. */
   refreshCopilotConnection(
     token: string,
     request: CopilotConnectionMutation,
@@ -484,7 +454,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Revokes a Copilot connection using its expected revision. */
   revokeCopilotConnection(
     token: string,
     request: CopilotConnectionMutation,
@@ -499,7 +468,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Registers the remote MCP OAuth provider metadata with the Gateway. */
   registerRemoteMcpOAuthConnection(
     token: string,
     request: RemoteMcpOAuthConnectionRegistration,
@@ -514,7 +482,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads the redacted state of one remote MCP OAuth connection. */
   getRemoteMcpOAuthConnection(
     token: string,
     connectionId: string,
@@ -529,7 +496,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Prepares the user's consent flow for the selected remote MCP connection. */
   prepareRemoteMcpOAuthConsent(
     token: string,
     connectionId: string,
@@ -545,7 +511,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Sends only the callback state and code, or the explicit denial, to the Gateway. */
   completeRemoteMcpOAuthCallback(
     token: string,
     request: RemoteMcpOAuthCallbackRequest,
@@ -565,7 +530,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Refreshes a remote MCP OAuth connection using its current revision. */
   refreshRemoteMcpOAuthConnection(
     token: string,
     connectionId: string,
@@ -581,7 +545,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Disconnects a remote MCP OAuth connection with the caller's expected state. */
   disconnectRemoteMcpOAuthConnection(
     token: string,
     connectionId: string,
@@ -597,7 +560,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Starts GitHub Repo App authorization and records where the browser should return. */
   beginRepoAppAuthorization(
     token: string,
     returnRouteKey: 'projects' | 'settings' = 'projects',
@@ -614,7 +576,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads the user's Repo App authorization state. */
   getRepoAppAuthorizationStatus(token: string): Promise<RepoAppAuthorizationStatus> {
     return this.request(
       token,
@@ -624,7 +585,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads one Repo App authorization transaction by transaction identifier. */
   getRepoAppAuthorization(
     token: string,
     transactionId: string,
@@ -637,7 +597,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Requests a Repo App credential refresh. */
   refreshRepoAppAuthorization(token: string): Promise<void> {
     return this.request(
       token,
@@ -647,7 +606,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Disconnects the user's Repo App authorization. */
   disconnectRepoAppAuthorization(token: string): Promise<void> {
     return this.request(
       token,
@@ -657,7 +615,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Lists repositories available for Repo App selection. */
   listRepoAppRepositorySelections(token: string): Promise<RepoAppRepositorySelectionList> {
     return this.request(
       token,
@@ -667,7 +624,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Issues a short-lived selection code for the named GitHub repository. */
   issueRepoAppRepositorySelection(
     token: string,
     fullName: string,
@@ -680,7 +636,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Pins a selected repository to one run session; omitting the code preserves legacy requests. */
   pinSourceControlRepository(
     token: string,
     projectId: string,
@@ -703,7 +658,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads the effective provider and source-control selection for one run. */
   getRunSelection(
     token: string,
     projectId: string,
@@ -719,7 +673,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads the owner-maintained lifecycle status for a run. */
   getRunStatus(
     token: string,
     projectId: string,
@@ -735,7 +688,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads the coordination tree snapshot rooted at a run session. */
   getSessionTree(
     token: string,
     projectId: string,
@@ -752,7 +704,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads current activity and blockers for one coordination session. */
   getSessionStatus(
     token: string,
     projectId: string,
@@ -769,7 +720,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads pending decisions and gate state for one coordination session. */
   getDecisions(
     token: string,
     projectId: string,
@@ -786,7 +736,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Answers a decision gate with an expected state version and idempotency key. */
   answerGate(
     token: string,
     projectId: string,
@@ -815,7 +764,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Approves or rejects a gate without reusing a stale decision-state version. */
   resolveGate(
     token: string,
     projectId: string,
@@ -840,7 +788,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Detaches a session using its execution fence and idempotency key. */
   detachSession(
     token: string,
     projectId: string,
@@ -862,7 +809,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Archives a child session under its parent with an execution fence. */
   archiveChild(
     token: string,
     projectId: string,
@@ -885,7 +831,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Sends a coordination message with explicit delivery mode and idempotency key. */
   sendMessage(
     token: string,
     projectId: string,
@@ -916,7 +861,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads a bounded page of persisted coordination events after an optional cursor. */
   async replayEvents(
     token: string,
     projectId: string,
@@ -936,7 +880,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Streams live coordination events and yields each event with its resume cursor. */
   async *streamEvents(
     token: string,
     projectId: string,
@@ -1011,7 +954,6 @@ export class AgentweaverGatewayClient {
     }
   }
 
-  /** Reads usage totals for one run. */
   getRunUsage(
     token: string,
     projectId: string,
@@ -1027,7 +969,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Searches knowledge records within the exact project, run, and agent scope. */
   searchKnowledge(
     token: string,
     projectId: string,
@@ -1051,7 +992,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Creates a knowledge record and forwards the idempotency key to the owner. */
   createKnowledgeRecord(
     token: string,
     projectId: string,
@@ -1082,7 +1022,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Updates a knowledge record using both its expected revision and idempotency key. */
   updateKnowledgeRecord(
     token: string,
     projectId: string,
@@ -1107,7 +1046,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Reads a page of revisions for one knowledge record. */
   readKnowledgeRevisions(
     token: string,
     projectId: string,
@@ -1129,7 +1067,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Restores a prior record revision using the current expected revision. */
   restoreKnowledgeRecord(
     token: string,
     projectId: string,
@@ -1155,7 +1092,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Approves a pending knowledge decision using its expected revision. */
   approveKnowledgeDecision(
     token: string,
     projectId: string,
@@ -1180,7 +1116,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Exports the knowledge records in the selected agent scope as a versioned bundle. */
   exportKnowledgeRecords(
     token: string,
     projectId: string,
@@ -1197,7 +1132,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Imports a versioned bundle into the selected agent scope with an idempotency key. */
   importKnowledgeRecords(
     token: string,
     projectId: string,
@@ -1220,7 +1154,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Promotes a proposal using the expected proposal revision and idempotency key. */
   promoteKnowledgeProposal(
     token: string,
     projectId: string,
@@ -1244,7 +1177,6 @@ export class AgentweaverGatewayClient {
     );
   }
 
-  /** Rejects a proposal using its expected revision and idempotency key. */
   rejectKnowledgeProposal(
     token: string,
     projectId: string,
@@ -1269,5 +1201,4 @@ export class AgentweaverGatewayClient {
   }
 }
 
-/** Shared Gateway client used by the v1 browser application. */
 export const gatewayClient = new AgentweaverGatewayClient();

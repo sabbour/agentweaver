@@ -60,4 +60,3 @@ export type {
   SetupReadinessStatus,
   SetupReadinessViewModel,
 } from '../SetupReadiness';
-/** Public exports for the shared application UI primitives. */

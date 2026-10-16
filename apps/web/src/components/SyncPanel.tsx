@@ -74,10 +74,6 @@ function changeBadgeColor(kind: SyncChange['kind']): 'success' | 'danger' | 'war
   return 'warning';
 }
 
-/**
- * Renders project synchronization status and actions using project sync API data.
- * Props identify the project and callbacks; local state tracks refresh/action progress and errors.
- */
 export function SyncPanel({ projectId }: SyncPanelProps) {
   const styles = useStyles();
   const [status, setStatus] = useState<SyncStatusDto | null>(null);

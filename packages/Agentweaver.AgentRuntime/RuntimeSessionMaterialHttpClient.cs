@@ -9,10 +9,6 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.AgentRuntime;
 
-/// <summary>
-/// Reads and writes bounded session material through the Events owner, validating returned
-/// references against registration, SDK, model, and content hashes.
-/// </summary>
 public sealed class RuntimeSessionMaterialHttpClient(
     HttpClient client, Uri eventsAddress, RuntimeActorAuthorization actor)
 {
@@ -23,7 +19,6 @@ public sealed class RuntimeSessionMaterialHttpClient(
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
-    /// <summary>Stores user or assistant turn content as bounded UTF-8 material.</summary>
     internal async Task<SessionMaterialAcknowledgment> WriteTurnContentAsync(
         AuthorizedRuntimeSession session, Guid eventId, string role, string content, CancellationToken cancellationToken)
     {
@@ -34,29 +29,24 @@ public sealed class RuntimeSessionMaterialHttpClient(
             Utf8.GetBytes(content), role, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Stores a native SDK filesystem snapshot.</summary>
     internal Task<SessionMaterialAcknowledgment> WriteCacheAsync(
         AuthorizedRuntimeSession session, Guid eventId, byte[] nativeFiles, CancellationToken cancellationToken) =>
         WriteAsync(session, eventId, SessionMaterialKind.SdkCache, nativeFiles, null, cancellationToken);
 
-    /// <summary>Stores the runtime configuration whose hash was consumed during bootstrap.</summary>
     internal Task<SessionMaterialAcknowledgment> WriteRuntimeConfigurationAsync(
         AuthorizedRuntimeSession session, Guid eventId, byte[] configuration, CancellationToken cancellationToken) =>
         WriteAsync(session, eventId, SessionMaterialKind.RuntimeConfiguration, configuration, null, cancellationToken);
 
-    /// <summary>Rejects remote tool-result writes because no authorized route is configured.</summary>
     internal Task<SessionMaterialAcknowledgment> WriteRemoteToolResultAsync(
         RemoteToolResultProof proof, ReadOnlyMemory<byte> resultBytes, CancellationToken cancellationToken) =>
         Task.FromException<SessionMaterialAcknowledgment>(
             new RuntimeAuthorizationException("runtime_remote_tool_result_route_unavailable"));
 
-    /// <summary>Rejects remote tool-result reads because no authorized route is configured.</summary>
     internal Task<SessionMaterialReadResult> ReadRemoteToolResultAsync(
         RemoteToolResultProof proof, CancellationToken cancellationToken) =>
         Task.FromException<SessionMaterialReadResult>(
             new RuntimeAuthorizationException("runtime_remote_tool_result_route_unavailable"));
 
-    /// <summary>Writes one material item and validates the owner's receipt against the submitted bytes.</summary>
     private async Task<SessionMaterialAcknowledgment> WriteAsync(
         AuthorizedRuntimeSession session, Guid eventId, SessionMaterialKind kind, byte[] bytes,
         string? role, CancellationToken cancellationToken)
@@ -105,10 +95,6 @@ public sealed class RuntimeSessionMaterialHttpClient(
         return receipt;
     }
 
-    /// <summary>
-    /// Reconstructs session history from ordered Events pages and validates each referenced
-    /// turn and cache item; returns the journal hash and latest usable cache.
-    /// </summary>
     internal async Task<RuntimeSessionRecovery> ReadRecoveryAsync(
         RuntimeRegistration registration,
         CancellationToken cancellationToken,
@@ -214,7 +200,6 @@ public sealed class RuntimeSessionMaterialHttpClient(
         };
     }
 
-    /// <summary>Reads the exact cache acknowledgment pinned by a resume manifest.</summary>
     internal async Task<RuntimeSessionRecovery> ReadResumeCacheAsync(
         RuntimeRegistration registration,
         RuntimeResumeBootstrapRequest request,
@@ -241,7 +226,6 @@ public sealed class RuntimeSessionMaterialHttpClient(
         return new(identity, binding.TenantId, result, Array.Empty<(string Role, string Content)>());
     }
 
-    /// <summary>Rebuilds bounded turn history through the flushed journal position in a resume manifest.</summary>
     internal async Task<RuntimeSessionRecovery> ReadJournalRebuildAsync(
         RuntimeRegistration registration,
         RuntimeResumeBootstrapRequest request,
@@ -355,7 +339,6 @@ public sealed class RuntimeSessionMaterialHttpClient(
         };
     }
 
-    /// <summary>Optionally reads turn content and verifies its registration and model binding.</summary>
     internal async Task<SessionMaterialReadResult?> ReadOptionalTurnAsync(
         RuntimeRegistration registration, SdkSessionFacts facts, Guid eventId,
         CancellationToken cancellationToken)
@@ -384,7 +367,6 @@ public sealed class RuntimeSessionMaterialHttpClient(
         return result;
     }
 
-    /// <summary>Reads one recorded material item; unsupported material kinds fail closed.</summary>
     public async Task<SessionMaterialReadResult> ReadRecordedAsync(
         SessionIdentity identity, Guid eventId, SessionMaterialKind kind, CancellationToken cancellationToken)
     {
@@ -404,7 +386,6 @@ public sealed class RuntimeSessionMaterialHttpClient(
         return result;
     }
 
-    /// <summary>Checks material identity, event, kind, size, and content digest.</summary>
     private static void ValidateRead(
         SessionMaterialReadResult result, SessionIdentity identity, Guid eventId, SessionMaterialKind kind)
     {
@@ -417,7 +398,6 @@ public sealed class RuntimeSessionMaterialHttpClient(
             throw new RuntimeAuthorizationException("runtime_material_read_invalid");
     }
 
-    /// <summary>Checks the receipt contract version, event position, and material reference.</summary>
     private static void Validate(SessionMaterialAcknowledgment receipt)
     {
         if (receipt.ContractVersion != 1 || receipt.EventId == Guid.Empty || receipt.Position <= 0)

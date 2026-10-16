@@ -3,17 +3,11 @@ using System.Text;
 
 namespace Agentweaver.Orchestrator.Core;
 
-/// <summary>Pure validation and normalization for workflow catalogs before they are pinned to a run.</summary>
 public static class WorkflowDefinitionValidator
 {
-    /// <summary>Checks whether a declared output is a canonical repository-relative file path.</summary>
     public static bool IsValidOutputPath(string? path) =>
         WorkflowValidationSupport.IsValidOutputPath(path);
 
-    /// <summary>
-    /// Validates definition identity, step contracts, the step dependency DAG, and bounded BuildTest commands.
-    /// Invalid definitions return issues without a snapshot; valid definitions receive safe output ordering.
-    /// </summary>
     public static WorkflowValidationResult<WorkflowDefinitionSnapshot> ValidateAndSnapshot(
         WorkflowDefinition? definition)
     {
@@ -224,7 +218,6 @@ public static class WorkflowDefinitionValidator
                 "BuildTest requires a bounded typed command, execution profile, workspace paths, and output obligations.");
     }
 
-    /// <summary>Checks the fixed execution-profile, executable, argument, workspace, and output limits.</summary>
     public static bool IsValidBuildTestCommand(WorkflowBuildTestCommand? command)
     {
         if (command is null ||
@@ -357,7 +350,6 @@ public static class WorkflowDefinitionValidator
         return [.. steps.Select(step => step with { DependsOn = dependencies[step.Id] })];
     }
 
-    /// <summary>Validates an initialized, bounded list of unique repository-relative output paths.</summary>
     internal static bool ValidateOutputPaths(
         ImmutableArray<string> outputs,
         string path,

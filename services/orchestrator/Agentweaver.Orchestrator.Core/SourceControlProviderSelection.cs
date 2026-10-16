@@ -6,7 +6,6 @@ using Agentweaver.Providers;
 
 namespace Agentweaver.Orchestrator.Core;
 
-/// <summary>Reason a Source Control provider selection could not be resolved or pinned.</summary>
 public enum SourceControlProviderSelectionFailure
 {
     Missing,
@@ -14,7 +13,6 @@ public enum SourceControlProviderSelectionFailure
     Unavailable
 }
 
-/// <summary>Typed failure category for a missing, malformed, or currently unavailable Source Control provider.</summary>
 public sealed class SourceControlProviderSelectionException(
     SourceControlProviderSelectionFailure failure,
     string message,
@@ -24,12 +22,10 @@ public sealed class SourceControlProviderSelectionException(
     public SourceControlProviderSelectionFailure Failure { get; } = failure;
 }
 
-/// <summary>Validated effective project selection paired with the registered provider candidate.</summary>
 public sealed record SourceControlProviderSelection(
     EffectiveProviderCandidate EffectiveCandidate,
     ProviderCandidate Candidate);
 
-/// <summary>Resolves an accepted Source Control selection and pins its negotiated resource to a run.</summary>
 public static class SourceControlProviderSelectionResolver
 {
     private static readonly JsonSerializerOptions SelectionJsonOptions =
@@ -40,8 +36,6 @@ public static class SourceControlProviderSelectionResolver
             MaxDepth = 16
         };
 
-    /// <summary>Reads exactly one exclusive provider from the accepted snapshot and confirms it still matches the catalog.</summary>
-    /// <exception cref="SourceControlProviderSelectionException">The choice is missing, invalid, or unavailable.</exception>
     public static SourceControlProviderSelection Resolve(
         JsonElement acceptedSelectionSnapshot,
         ProviderCatalog catalog,
@@ -136,7 +130,6 @@ public static class SourceControlProviderSelectionResolver
         return new SourceControlProviderSelection(effective, candidate);
     }
 
-    /// <summary>Pins a negotiated Source Control resource after verifying provider identity and resource generation.</summary>
     public static PinnedProviderBinding PinNegotiatedResource(
         ProviderResolver resolver,
         SourceControlProviderSelection selection,
@@ -172,7 +165,6 @@ public static class SourceControlProviderSelectionResolver
         return pinned.Value;
     }
 
-    /// <summary>Creates a repository pin using API, optional checkout, and optional webhook credentials.</summary>
     public static SourceControlRepositoryPin PinNegotiatedRepository(
         ProviderResolver resolver,
         SourceControlProviderSelection selection,
@@ -205,7 +197,6 @@ public static class SourceControlProviderSelectionResolver
             pinnedAt);
     }
 
-    /// <summary>Creates a repository pin using the exact GitHub App binding and optional webhook credential.</summary>
     public static SourceControlRepositoryPin PinNegotiatedRepository(
         ProviderResolver resolver,
         SourceControlProviderSelection selection,

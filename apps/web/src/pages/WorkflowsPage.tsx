@@ -172,7 +172,6 @@ const useStyles = makeStyles({
 
 type SelectableWorkflow = WorkflowSummaryDto & { id: string };
 
-/** True only for workflows that are valid and have an addressable identifier. */
 function isSelectableWorkflow(workflow: WorkflowSummaryDto): workflow is SelectableWorkflow {
   return workflow.valid && Boolean(workflow.id);
 }
@@ -220,7 +219,6 @@ const ISSUE_ACTIONS = [
   { value: 'untyped', label: 'Untyped' },
 ] as const;
 
-/** Creates the empty issue-event trigger used when the editor has no saved trigger. */
 function defaultEventTrigger(): WorkflowEventTrigger {
   return {
     event: 'issues',
@@ -229,7 +227,6 @@ function defaultEventTrigger(): WorkflowEventTrigger {
   };
 }
 
-/** Creates one condition with a safe initial value for its predicate. */
 function defaultCondition(predicate: WorkflowEventPredicateType): WorkflowEventCondition {
   return {
     predicate,
@@ -238,7 +235,6 @@ function defaultCondition(predicate: WorkflowEventPredicateType): WorkflowEventC
   };
 }
 
-/** Supplies the form label for the value editor associated with a predicate. */
 function conditionValueLabel(predicate: WorkflowEventPredicateType): string {
   switch (predicate) {
     case 'hasLabel':
@@ -257,7 +253,6 @@ function conditionValueLabel(predicate: WorkflowEventPredicateType): string {
   }
 }
 
-/** Returns format guidance only for predicate values that need a precise representation. */
 function conditionValueHint(predicate: WorkflowEventPredicateType): string | undefined {
   switch (predicate) {
     case 'ref':
@@ -269,22 +264,18 @@ function conditionValueHint(predicate: WorkflowEventPredicateType): string | und
   }
 }
 
-/** Normalizes the newer trigger array and the older single-trigger response shape. */
 function workflowTriggers(workflow: WorkflowSummaryDto) {
   return workflow.triggers ?? (workflow.trigger ? [workflow.trigger] : []);
 }
 
-/** Finds a workflow trigger of the requested kind across either response shape. */
 function workflowTrigger(workflow: WorkflowSummaryDto, type: 'schedule' | 'event') {
   return workflowTriggers(workflow).find((trigger) => trigger.type === type);
 }
 
-/** Removes the built-in marker before saving a project-owned copy of a built-in workflow. */
 function stripBuiltInHeader(yaml: string): string {
   return yaml.replace(/^is_built_in:\s*.*(?:\r?\n|$)/m, '');
 }
 
-/** Formats a schedule or event trigger for compact list-row display. */
 function triggerBadgeCopy(trigger: WorkflowTriggerDto): string {
   if (trigger.type === 'schedule') {
     return `${trigger.interval ?? 'scheduled'}${trigger.time_of_day ? ` · ${trigger.time_of_day} UTC` : ''}`;
@@ -293,7 +284,6 @@ function triggerBadgeCopy(trigger: WorkflowTriggerDto): string {
   return `event · ${eventName}`;
 }
 
-/** Manages project workflow discovery, editing, triggers, execution, and generated drafts. */
 export function WorkflowsPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
@@ -347,7 +337,6 @@ export function WorkflowsPage() {
         ? err.message
         : String(err);
 
-  // Workflow data is project-scoped; a failed project lookup does not hide the workflow list.
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
@@ -375,7 +364,6 @@ export function WorkflowsPage() {
     };
   }, [projectId]);
 
-  /** Re-reads workflow files from the project and replaces the current server snapshot. */
   const handleSync = useCallback(async () => {
     if (!projectId) return;
     setSyncing(true);
@@ -392,7 +380,6 @@ export function WorkflowsPage() {
     }
   }, [projectId]);
 
-  /** Persists the selected project default, with null restoring the built-in default. */
   const handleSetDefault = useCallback(async (workflowId: string | null) => {
     if (!projectId) return;
     setSettingDefault(true);
@@ -416,7 +403,6 @@ export function WorkflowsPage() {
     }
   }, [projectId]);
 
-  /** Fetches the workflow YAML and opens the selected editor only after it loads. */
   const handleEdit = useCallback(async (wf: WorkflowSummaryDto, visual = false) => {
     if (!wf.id || !projectId) return;
     setEditLoading(true);
@@ -435,7 +421,6 @@ export function WorkflowsPage() {
     setEditorState({ workflowId: 'my-workflow', initialYaml: BLANK_TEMPLATE, visual: true });
   }, []);
 
-  /** Queues an immediate run with the current AI provider context. */
   const handleRunNow = useCallback(async (wf: WorkflowSummaryDto) => {
     if (!projectId || !wf.id) return;
     setRunningWorkflowId(wf.id);
@@ -456,7 +441,6 @@ export function WorkflowsPage() {
     setScheduleWorkflow(wf);
   }, []);
 
-  /** Reads, updates, and saves the workflow YAML schedule trigger, then refreshes the list. */
   const handleSaveSchedule = useCallback(async (trigger: WorkflowScheduleTrigger | null) => {
     if (!projectId || !scheduleWorkflow?.id) return;
     setSavingSchedule(true);
@@ -475,7 +459,6 @@ export function WorkflowsPage() {
     }
   }, [projectId, scheduleWorkflow]);
 
-  /** Loads the YAML-backed event trigger into the event editor, using list metadata as fallback. */
   const handleOpenEvent = useCallback(async (wf: WorkflowSummaryDto) => {
     if (!projectId || !wf.id) return;
     setLoadingEventTrigger(true);
@@ -497,7 +480,6 @@ export function WorkflowsPage() {
     }
   }, [projectId]);
 
-  /** Updates or removes the event trigger in YAML and refreshes the workflow summary. */
   const handleSaveEvent = useCallback(async (remove = false) => {
     if (!projectId || !eventWorkflow?.id) return;
     setSavingEventTrigger(true);
@@ -516,7 +498,6 @@ export function WorkflowsPage() {
     }
   }, [projectId, eventTrigger, eventWorkflow]);
 
-  /** Creates a uniquely named editable project copy of a built-in workflow. */
   const handleDuplicateBuiltIn = useCallback(async (wf: WorkflowSummaryDto) => {
     if (!projectId || !wf.id) return;
     setDuplicatingWorkflowId(wf.id);
@@ -539,10 +520,6 @@ export function WorkflowsPage() {
     }
   }, [projectId, data]);
 
-  /**
-   * Creates a project-owned copy before editing or changing a built-in workflow's
-   * triggers; reuses the existing copy when one is already present.
-   */
   const handleCopyOnWrite = useCallback(async (
     wf: WorkflowSummaryDto,
     action: 'edit' | 'visual' | 'schedule' | 'event',
@@ -600,7 +577,6 @@ export function WorkflowsPage() {
     }
   }, [pendingGeneration]);
 
-  /** Keeps pending generation jobs resumable, or opens a completed YAML draft for review. */
   const applyGenerationOutcome = useCallback((result: WorkflowGenerationOutcome) => {
     if (result.status === 'pending') {
       setPendingGeneration(result.job);
@@ -619,7 +595,6 @@ export function WorkflowsPage() {
     );
   }, [generationContext]);
 
-  /** Starts AI workflow generation without saving the returned draft automatically. */
   const handleGenerate = useCallback(async () => {
     if (!projectId || !generateDescription.trim()) return;
     setGenerating(true);
@@ -647,7 +622,6 @@ export function WorkflowsPage() {
     projectId,
   ]);
 
-  /** Resumes the stored generation job and clears its handle if the server rejects it. */
   const handleResumeGeneration = useCallback(async () => {
     if (!pendingGeneration) return;
     setGenerating(true);
@@ -675,7 +649,6 @@ export function WorkflowsPage() {
     setEditorState(null);
   }, []);
 
-  /** Changes event type while discarding predicates that are not supported by the new type. */
   const updateEventForPicker = useCallback((nextEvent: WorkflowEventType) => {
     const allowedPredicates = new Set(WORKFLOW_EVENT_PREDICATES_BY_EVENT[nextEvent]);
     setEventTriggerState((prev) => ({
@@ -697,7 +670,6 @@ export function WorkflowsPage() {
     }));
   }, []);
 
-  /** Adds the first allowed predicate for the currently selected event type. */
   const addEventCondition = useCallback(() => {
     setEventTriggerState((prev) => {
       const [firstPredicate] = WORKFLOW_EVENT_PREDICATES_BY_EVENT[prev.event];
@@ -725,10 +697,6 @@ export function WorkflowsPage() {
     }));
   }, []);
 
-  /**
-   * Switches a predicate between one-of-many values and separate all-of conditions,
-   * preserving existing values in either representation.
-   */
   const setConditionMatchAny = useCallback((index: number, checked: boolean) => {
     setEventTriggerState((prev) => {
       const target = prev.conditions[index];

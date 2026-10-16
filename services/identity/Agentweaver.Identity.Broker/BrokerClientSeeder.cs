@@ -21,11 +21,6 @@ public sealed class BrokerClientSeeder
         _options = options;
     }
 
-    /// <summary>
-    /// Creates declared clients that are not yet registered. Existing clients are only
-    /// accepted when their persisted type, secret, redirects, permissions and PKCE
-    /// requirements match exactly; mismatches fail startup.
-    /// </summary>
     public async Task SeedAsync(CancellationToken cancellationToken)
     {
         foreach (var client in _options.Clients)
@@ -51,7 +46,6 @@ public sealed class BrokerClientSeeder
         }
     }
 
-    /// <summary>Rejects unsupported redirects and invalid public/confidential client secret combinations.</summary>
     private static void ValidateClient(BrokerClientOptions client)
     {
         foreach (var redirect in client.RedirectUris)

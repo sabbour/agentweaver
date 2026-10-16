@@ -7,10 +7,8 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Projects.Config;
 
-/// <summary>Object-store location and verified digest/length for one immutable skill bundle.</summary>
 public sealed record SkillContentObjectReference(ObjectKey Key, string ContentDigest, long StoredLength);
 
-/// <summary>Stable error code for unavailable or integrity-invalid skill content objects.</summary>
 public sealed class SkillContentObjectStoreException(string code, string message) : Exception(message)
 {
     public string Code { get; } = code;
@@ -18,19 +16,12 @@ public sealed class SkillContentObjectStoreException(string code, string message
     public const string IntegrityErrorCode = "skill_content_integrity_error";
 }
 
-/// <summary>
-/// Writes versioned skill bundles to the shared object store and revalidates bytes and digest on every read.
-/// </summary>
 public sealed class SkillContentObjectStore(IObjectStore objectStore)
 {
     private const int BundleSchemaVersion = 1;
     private const int MaximumBundleBytes = 3 * 1024 * 1024;
     private static readonly JsonDocumentOptions JsonOptions = new() { MaxDepth = 8 };
 
-    /// <summary>
-    /// Stores a validated bundle at an immutable key; an existing object is verified and reused rather than overwritten.
-    /// </summary>
-    /// <exception cref="SkillContentObjectStoreException">The bundle exceeds the storage bound or an existing object is invalid.</exception>
     public async Task<SkillContentObjectReference> WriteAsync(
         ObjectKey key,
         ValidatedSkillContent content,
@@ -58,8 +49,6 @@ public sealed class SkillContentObjectStore(IObjectStore objectStore)
         return new SkillContentObjectReference(key, verified.ContentDigest, bundle.Length);
     }
 
-    /// <summary>Reads one bounded bundle and verifies its schema, content, and expected digest before returning it.</summary>
-    /// <exception cref="SkillContentObjectStoreException">The object is missing, malformed, oversized, or has a different digest.</exception>
     public async Task<ValidatedSkillContent> ReadVerifiedAsync(
         ObjectKey key,
         string expectedContentDigest,
@@ -102,7 +91,6 @@ public sealed class SkillContentObjectStore(IObjectStore objectStore)
         return buffer.ToArray();
     }
 
-    /// <summary>Requires the exact bundle fields, rebuilds Skill.md, and runs the canonical content validator.</summary>
     private static ValidatedSkillContent DeserializeAndValidate(byte[] bytes, string expectedContentDigest)
     {
         if (bytes.Length > MaximumBundleBytes)
@@ -176,7 +164,6 @@ public sealed class SkillContentObjectStore(IObjectStore objectStore)
             ? element.GetString() ?? throw IntegrityError($"Skill content field '{field}' is null.")
             : throw IntegrityError($"Skill content field '{field}' must be a string.");
 
-    /// <summary>Reads no more than the bundle limit and checks the stream length against object metadata.</summary>
     private static async Task<byte[]> ReadBoundedAsync(ObjectRead objectRead, CancellationToken cancellationToken)
     {
         if (objectRead.Length > MaximumBundleBytes)
@@ -198,7 +185,6 @@ public sealed class SkillContentObjectStore(IObjectStore objectStore)
         return output.ToArray();
     }
 
-    /// <summary>Recomputes the canonical digest before serialization so callers cannot forge a validated record.</summary>
     private static ValidatedSkillContent Revalidate(ValidatedSkillContent content)
     {
         ArgumentNullException.ThrowIfNull(content);

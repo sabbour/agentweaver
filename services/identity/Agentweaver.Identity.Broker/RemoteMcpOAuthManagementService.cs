@@ -9,11 +9,6 @@ using Npgsql;
 
 namespace Agentweaver.Identity.Broker;
 
-/// <summary>
-/// Safe management view of a project-scoped remote MCP OAuth connection. It exposes
-/// revisions and configuration match state, never token material; credential use remains
-/// unavailable through this status contract.
-/// </summary>
 public sealed record RemoteMcpOAuthManagementStatus(
     Guid ConnectionId,
     string ProjectId,
@@ -25,10 +20,6 @@ public sealed record RemoteMcpOAuthManagementStatus(
     bool CurrentConfigurationMatches,
     bool CredentialUseAvailable);
 
-/// <summary>
-/// Registers an unlinked Environment connection against an allowlisted OAuth provider,
-/// resource and scope set at the expected configuration revision and digest.
-/// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RemoteMcpOAuthConnectionRegistrationRequest(
     string ProjectId,
@@ -38,7 +29,6 @@ public sealed record RemoteMcpOAuthConnectionRegistrationRequest(
     string IssuerUri,
     IReadOnlyList<string> Scopes);
 
-/// <summary>Revision-guarded, idempotent request to disconnect a remote MCP OAuth connection.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RemoteMcpOAuthDisconnectRequest(
     long ExpectedConnectionRevision,
@@ -46,14 +36,12 @@ public sealed record RemoteMcpOAuthDisconnectRequest(
     long ExpectedConfigurationRevision,
     Guid IdempotencyKey);
 
-/// <summary>Expected revisions required to rotate the current delegated OAuth credential.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RemoteMcpOAuthRefreshRequest(
     long ExpectedConnectionRevision,
     long ExpectedCredentialRevision,
     long ExpectedConfigurationRevision);
 
-/// <summary>Revision and digest evidence required to prepare one provider consent flow.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record RemoteMcpOAuthConsentPreparationRequest(
     long ExpectedConnectionRevision,
@@ -61,14 +49,12 @@ internal sealed record RemoteMcpOAuthConsentPreparationRequest(
     long ExpectedConfigurationRevision,
     string ExpectedConfigurationSha256);
 
-/// <summary>OAuth callback parameters; only the approved access-denied error is accepted.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record RemoteMcpOAuthCallbackRequest(
     string State,
     string? Code,
     string? Error);
 
-/// <summary>Short-lived authorization URL and PKCE state returned to the calling management flow.</summary>
 internal sealed record RemoteMcpOAuthConsentPreparation(
     Guid CorrelationId,
     string State,
@@ -82,19 +68,12 @@ internal sealed record RemoteMcpOAuthConsentPreparation(
     public override string ToString() => nameof(RemoteMcpOAuthConsentPreparation) + " [REDACTED]";
 }
 
-/// <summary>Safe management error code and HTTP status, without provider response details.</summary>
 internal sealed class RemoteMcpOAuthManagementException(string code, int statusCode) : Exception(code)
 {
     public string Code { get; } = code;
     public int StatusCode { get; } = statusCode;
 }
 
-/// <summary>
-/// Coordinates project-scoped remote MCP OAuth registration, user consent, token refresh
-/// and disconnect. Every credential operation is tied to a Projects permission check and
-/// a live Environment configuration snapshot; mutations use revisions and claim IDs to
-/// reject stale or replayed callbacks and refreshes.
-/// </summary>
 internal sealed class RemoteMcpOAuthManagementService(
     IdentityBrokerDbContext db,
     RemoteMcpOAuthOptions options,
@@ -119,12 +98,6 @@ internal sealed class RemoteMcpOAuthManagementService(
         RuntimeOwnerHttpTransport.RequireOwnerAddress(new Uri(options.EnvironmentOwnerAddress));
     private readonly ISecretRedemption? _secretRedemption = secretRedemption;
 
-    /// <summary>
-    /// Registers only an operator-approved provider, resource and scope set against the
-    /// current unlinked Environment configuration. Project write authority and configuration
-    /// are rechecked around the transaction; an existing matching registration is returned
-    /// only when it remains a valid pre-link replay.
-    /// </summary>
     public async Task<RemoteMcpOAuthManagementStatus> RegisterConnectionAsync(
         RuntimeActorAuthorization actor,
         string issuer,
@@ -250,11 +223,6 @@ internal sealed class RemoteMcpOAuthManagementService(
         return ToStatus(row, current);
     }
 
-    /// <summary>
-    /// Returns safe connection and configuration status after read permission checks.
-    /// A refresh claim older than the recovery window is resolved as possibly sent, not
-    /// retried with the same refresh token.
-    /// </summary>
     public async Task<RemoteMcpOAuthManagementStatus> ReadStatusAsync(
         RuntimeActorAuthorization actor,
         string issuer,
@@ -283,11 +251,6 @@ internal sealed class RemoteMcpOAuthManagementService(
         return ToStatus(row, currentConfiguration);
     }
 
-    /// <summary>
-    /// Disconnects only at the expected connection, credential and Environment configuration
-    /// revisions. The idempotency key is hashed and paired with a request hash so an exact
-    /// replay returns the prior result while a changed request conflicts.
-    /// </summary>
     public async Task<RemoteMcpOAuthManagementStatus> DisconnectAsync(
         RuntimeActorAuthorization actor,
         string issuer,
@@ -371,12 +334,6 @@ internal sealed class RemoteMcpOAuthManagementService(
         return ToStatus(latest, latestConfiguration);
     }
 
-    /// <summary>
-    /// Claims one refresh attempt, redeems its stored refresh-token reference, and calls only
-    /// metadata-approved token endpoints. New token versions are written before a revision-
-    /// guarded commit; if the provider may have consumed the old token, the lifecycle records
-    /// that outcome instead of silently retrying it.
-    /// </summary>
     public async Task<RemoteMcpOAuthManagementStatus> RefreshAsync(
         RuntimeActorAuthorization actor,
         string issuer,
@@ -643,11 +600,6 @@ internal sealed class RemoteMcpOAuthManagementService(
         }
     }
 
-    /// <summary>
-    /// Links the pending Environment identity binding, validates provider metadata, creates
-    /// state and PKCE material, stores the verifier in the secret store, and commits a
-    /// revision-bound pending-consent record. The verifier and state are invalidated in memory.
-    /// </summary>
     public async Task<RemoteMcpOAuthConsentPreparation> PrepareConsentAsync(
         RuntimeActorAuthorization actor,
         string issuer,
@@ -824,12 +776,6 @@ internal sealed class RemoteMcpOAuthManagementService(
         }
     }
 
-    /// <summary>
-    /// Claims the callback once and validates current owner permission, Environment binding,
-    /// provider metadata and consent revision before exchanging the code. Token references
-    /// are committed only with matching callback and connection CAS updates; uncertain
-    /// exchanges are resolved without replaying the authorization code.
-    /// </summary>
     public async Task<RemoteMcpOAuthManagementStatus> CompleteCallbackAsync(
         RuntimeActorAuthorization actor,
         string issuer,
@@ -1125,7 +1071,6 @@ internal sealed class RemoteMcpOAuthManagementService(
         return provider;
     }
 
-    /// <summary>Loads and validates remote resource and authorization-server metadata against operator allowlists.</summary>
     private async Task<RemoteMcpOAuthServerMetadata> DiscoverMetadataAsync(
         RemoteMcpOAuthConnectionBinding binding,
         RemoteMcpOAuthProviderOptions providerOptions,
@@ -1159,7 +1104,6 @@ internal sealed class RemoteMcpOAuthManagementService(
         }
     }
 
-    /// <summary>Fetches a bounded JSON metadata document without redirects or cache reuse.</summary>
     private async Task<ReadOnlyMemory<byte>> ReadMetadataAsync(
         Uri address,
         CancellationToken cancellationToken)
@@ -1197,7 +1141,6 @@ internal sealed class RemoteMcpOAuthManagementService(
         return output.ToArray();
     }
 
-    /// <summary>Posts a one-time authorization code and PKCE verifier, distinguishing definite rejection from ambiguity.</summary>
     private async Task<RemoteMcpOAuthTokenSet> ExchangeCodeAsync(
         string tokenEndpoint,
         RemoteMcpOAuthConnectionBinding binding,
@@ -1286,7 +1229,6 @@ internal sealed class RemoteMcpOAuthManagementService(
         }
     }
 
-    /// <summary>Posts a refresh token only to the validated token endpoint and marks transport ambiguity as possibly sent.</summary>
     private async Task<RemoteMcpOAuthTokenSet> ExchangeRefreshTokenAsync(
         string tokenEndpoint,
         RemoteMcpOAuthConnectionBinding binding,
@@ -1455,7 +1397,6 @@ internal sealed class RemoteMcpOAuthManagementService(
         return count == 1;
     }
 
-    /// <summary>Atomically moves the exact current authorized credential revision into refresh-in-progress state.</summary>
     private async Task ClaimRefreshAsync(
         RemoteMcpOAuthConnectionRecord row,
         RemoteMcpOAuthConnection current,
@@ -1496,7 +1437,6 @@ internal sealed class RemoteMcpOAuthManagementService(
             throw RevisionConflict();
     }
 
-    /// <summary>Resolves a claimed refresh using its attempt ID and lifecycle failure classification.</summary>
     private async Task ResolveRefreshFailureAsync(
         RemoteMcpOAuthConnectionRecord row,
         RemoteMcpOAuthConnectionBinding binding,
@@ -1557,7 +1497,6 @@ internal sealed class RemoteMcpOAuthManagementService(
         throw RevisionConflict();
     }
 
-    /// <summary>Closes a refresh claim past the recovery window as possibly sent and returns the latest connection row.</summary>
     private async Task<RemoteMcpOAuthConnectionRecord> RecoverStaleRefreshAsync(
         RemoteMcpOAuthConnectionRecord row,
         CancellationToken cancellationToken)
@@ -1616,7 +1555,6 @@ internal sealed class RemoteMcpOAuthManagementService(
         throw RevisionConflict();
     }
 
-    /// <summary>Claims the pending consent revision and attempt ID in one transaction before exchanging any code.</summary>
     private async Task ClaimCallbackAsync(
         RemoteMcpOAuthConnectionRecord row,
         RemoteMcpOAuthConsentRecord consent,
@@ -1662,7 +1600,6 @@ internal sealed class RemoteMcpOAuthManagementService(
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Records callback failure and closes or restores lifecycle state based on whether the provider request may have been sent.</summary>
     private async Task ResolveCallbackFailureAsync(
         RemoteMcpOAuthConnectionRecord row,
         RemoteMcpOAuthConnectionBinding binding,
@@ -1820,11 +1757,6 @@ internal sealed class RemoteMcpOAuthManagementService(
             actor, issuer, actorId, row.ProjectId, row.TenantId, requiredPermission, cancellationToken)
             .ConfigureAwait(false);
 
-    /// <summary>
-    /// Requires an unexpired bearer and current Projects permission for the target project
-    /// or tenant, then confirms that the project is active. Any incomplete or mismatched
-    /// owner response denies the requested operation.
-    /// </summary>
     private async Task<ProjectAuthorizationContextResponse> RequireProjectPermissionAsync(
         RuntimeActorAuthorization actor,
         string issuer,
@@ -1943,7 +1875,6 @@ internal sealed class RemoteMcpOAuthManagementService(
         left.IdentityBindingReference == right.IdentityBindingReference;
 
     // Environment digests and references detect configuration drift; neither proves consent or credential authority.
-    /// <summary>Compares stored OAuth binding data with a known, current, non-removed Environment configuration.</summary>
     internal static bool IsCurrentConfiguration(
         RemoteMcpOAuthConnectionRecord row,
         CurrentConfiguration? configuration) =>
@@ -1960,7 +1891,6 @@ internal sealed class RemoteMcpOAuthManagementService(
         configuration.TransportProfile == TransportProfile &&
         row.TransportProfile == RemoteMcpOAuthConnectionBinding.SupportedTransportProfile;
 
-    /// <summary>Builds a status DTO and deliberately reports credential use as unavailable.</summary>
     internal static RemoteMcpOAuthManagementStatus ToStatus(
         RemoteMcpOAuthConnectionRecord row,
         CurrentConfiguration? configuration) =>
@@ -2092,7 +2022,6 @@ internal sealed class RemoteMcpOAuthManagementService(
             receipt.IdentityBindingReference);
     }
 
-    /// <summary>Reconstructs the immutable OAuth identity binding used by lifecycle and credential validation.</summary>
     internal static RemoteMcpOAuthConnectionBinding CreateBinding(
         RemoteMcpOAuthConnectionRecord row,
         long configurationRevision,
@@ -2183,7 +2112,6 @@ internal sealed class RemoteMcpOAuthManagementService(
     private static RemoteMcpOAuthManagementException Unavailable(string code) =>
         new(code, StatusCodes.Status503ServiceUnavailable);
 
-    /// <summary>Validated Environment configuration snapshot used for revision and digest comparisons.</summary>
     internal sealed record CurrentConfiguration(
         long Revision,
         string Hash,

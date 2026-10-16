@@ -7,12 +7,6 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Identity.Broker;
 
-/// <summary>
-/// Issues and validates runtime bootstrap and source grants against the latest owner
-/// registration. It stores only credential hashes, binds operations to immutable
-/// revisions, and fails closed when registration, delivery, expiry or compare-and-swap
-/// checks do not match.
-/// </summary>
 public sealed class RuntimeGrantAuthority(
     IdentityBrokerDbContext db,
     IRuntimeRegistrationOwner owner,
@@ -28,16 +22,6 @@ public sealed class RuntimeGrantAuthority(
         MaxDepth = 16
     };
 
-    /// <summary>
-    /// Issues or idempotently replays a model-session secret grant for the current runtime
-    /// registration. Hosted Copilot credentials require a current linked connection;
-    /// BYOK grants require the registration's configured credential reference.
-    /// </summary>
-    /// <param name="runtimeInstanceId">Runtime registration whose model binding is used.</param>
-    /// <param name="operationId">Stable operation key for this grant issuance.</param>
-    /// <param name="cancellationToken">Cancels owner and database calls.</param>
-    /// <returns>A receipt bound to the current registration, credential reference and expiry.</returns>
-    /// <exception cref="RuntimeAuthorizationException">The registration, model binding, or replay is not authorized.</exception>
     public async Task<RuntimeModelCredentialGrantReceipt> IssueModelCredentialGrantAsync(
         Guid runtimeInstanceId, Guid operationId, CancellationToken cancellationToken = default)
     {
@@ -146,14 +130,6 @@ public sealed class RuntimeGrantAuthority(
         };
     }
 
-    /// <summary>
-    /// Rechecks a model-grant receipt against the active registration, linked connection
-    /// when used, and the grant's current active revision. A changed or expired binding is
-    /// rejected before any secret is redeemed.
-    /// </summary>
-    /// <param name="receipt">Receipt returned by model-grant issuance.</param>
-    /// <param name="cancellationToken">Cancels owner and database calls.</param>
-    /// <returns>The same receipt after every current-state check succeeds.</returns>
     public async Task<RuntimeModelCredentialGrantReceipt> VerifyModelCredentialAsync(
         RuntimeModelCredentialGrantReceipt receipt, CancellationToken cancellationToken)
     {
@@ -213,17 +189,6 @@ public sealed class RuntimeGrantAuthority(
         return receipt;
     }
 
-    /// <summary>
-    /// Verifies the receipt, redeems its secret through the authorized secret service,
-    /// then verifies the receipt again before returning a short-lived credential. Hosted
-    /// Copilot envelopes are validated and unwrapped; temporary credential buffers are
-    /// invalidated on failure or after ownership is transferred to the result.
-    /// </summary>
-    /// <param name="receipt">Receipt identifying the current model-session grant.</param>
-    /// <param name="backend">Secret redemption backend used only after authorization.</param>
-    /// <param name="cancellationToken">Cancels verification and secret-store calls.</param>
-    /// <returns>The receipt and credential limited to the binding's expiry.</returns>
-    /// <exception cref="RuntimeAuthorizationException">The binding or stored credential envelope is invalid.</exception>
     public async Task<RuntimeModelCredential> RedeemModelCredentialAsync(
         RuntimeModelCredentialGrantReceipt receipt, ISecretRedemption backend,
         CancellationToken cancellationToken)
@@ -279,18 +244,6 @@ public sealed class RuntimeGrantAuthority(
             throw Denied("runtime_copilot_connection_stale");
     }
 
-    /// <summary>
-    /// Creates a hashed bootstrap verifier, commits its grant, and asks Environment to
-    /// deliver the raw credential. A matching operation replays its stored receipt;
-    /// failed or mismatched delivery revokes the verifier even if the initial write
-    /// already committed.
-    /// </summary>
-    /// <param name="runtimeInstanceId">Runtime registration receiving the bootstrap credential.</param>
-    /// <param name="configurationHash">Digest binding the grant to the requested configuration.</param>
-    /// <param name="operationId">Stable idempotency key for the delivery operation.</param>
-    /// <param name="cancellationToken">Cancels owner, delivery and database calls.</param>
-    /// <returns>The verified Environment delivery receipt.</returns>
-    /// <exception cref="RuntimeAuthorizationException">The registration, delivery proof or operation is invalid.</exception>
     public async Task<RuntimeBootstrapDeliveryReceipt> DeliverBootstrapAsync(
         Guid runtimeInstanceId, string configurationHash, Guid operationId,
         CancellationToken cancellationToken = default)
@@ -374,7 +327,6 @@ public sealed class RuntimeGrantAuthority(
         }
     }
 
-    /// <summary>Consumes a delivered bootstrap grant once and records its operation receipt.</summary>
     public Task<RuntimeGrantReceipt> ConsumeBootstrapAsync(
         RuntimeCredentialProof proof, Guid operationId, CancellationToken cancellationToken = default) =>
         WithVerifiedProofAsync(proof, RuntimeCredentialPurpose.Configure,
@@ -423,7 +375,6 @@ public sealed class RuntimeGrantAuthority(
         }
     }
 
-    /// <summary>Checks that the bootstrap verifier is active and awaiting its matching delivery receipt.</summary>
     public Task<RuntimeGrantReceipt> VerifyPendingBootstrapDeliveryAsync(
         RuntimeCredentialProof proof, Guid deliveryOperationId, CancellationToken cancellationToken) =>
         WithVerifiedProofAsync(proof, RuntimeCredentialPurpose.Configure,
@@ -453,19 +404,16 @@ public sealed class RuntimeGrantAuthority(
         return Receipt(current);
     }
 
-    /// <summary>Exchanges a consumed bootstrap proof for a new source credential, or replays its receipt.</summary>
     public Task<RuntimeCredentialExchange> ExchangeBootstrapAsync(
         RuntimeCredentialProof proof, Guid operationId, CancellationToken cancellationToken = default) =>
         WithVerifiedProofAsync(proof, RuntimeCredentialPurpose.Configure,
             verified => ExchangeAsync(verified, operationId, rotate: false, cancellationToken));
 
-    /// <summary>Rotates the active source credential using its current proof and a stable operation identifier.</summary>
     public Task<RuntimeCredentialExchange> RotateSourceAsync(
         RuntimeCredentialProof proof, Guid operationId, CancellationToken cancellationToken = default) =>
         WithVerifiedProofAsync(proof, RuntimeCredentialPurpose.Observe,
             verified => ExchangeAsync(verified, operationId, rotate: true, cancellationToken));
 
-    /// <summary>Verifies a live source proof against the current registration and completed delivery record.</summary>
     public Task<RuntimeGrantReceipt> VerifySourceAsync(
         RuntimeCredentialProof proof, CancellationToken cancellationToken = default) =>
         WithVerifiedProofAsync(proof, RuntimeCredentialPurpose.Observe,
@@ -496,7 +444,6 @@ public sealed class RuntimeGrantAuthority(
         return Receipt(current);
     }
 
-    /// <summary>Revokes the current runtime grant by appending a new revision after proof and registration checks.</summary>
     public Task<RuntimeGrantReceipt> RevokeAsync(
         RuntimeCredentialProof proof, Guid operationId, CancellationToken cancellationToken = default) =>
         WithVerifiedProofAsync(proof, proof.Purpose,

@@ -3,14 +3,12 @@ using System.Text.Json.Serialization;
 
 namespace Agentweaver.Projects.Config;
 
-/// <summary>Whether a project marketplace source is currently available for browsing.</summary>
 public enum ProjectMarketplaceSourceState
 {
     Active,
     Removed
 }
 
-/// <summary>Revisioned GitHub source settings stored under one project.</summary>
 public sealed record ProjectMarketplaceSourceRecord
 {
     public required string ProjectId { get; init; }
@@ -28,14 +26,12 @@ public sealed record ProjectMarketplaceSourceRecord
     public DateTimeOffset UpdatedAt { get; init; }
 }
 
-/// <summary>Normalized name, repository, requested ref, and optional subpath ready for persistence.</summary>
 public sealed record ProjectMarketplaceSourceDefinition(
     string Name,
     string Repository,
     string RequestedRef,
     string? Subpath);
 
-/// <summary>Strict request to create a marketplace source; omitted name/ref use repository and main defaults.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record CreateMarketplaceSourceRequest
 {
@@ -45,7 +41,6 @@ public sealed record CreateMarketplaceSourceRequest
     public string? Subpath { get; init; }
 }
 
-/// <summary>Strict request to replace source settings at an expected revision.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record UpdateMarketplaceSourceRequest
 {
@@ -56,7 +51,6 @@ public sealed record UpdateMarketplaceSourceRequest
     public string? Subpath { get; init; }
 }
 
-/// <summary>Public source metadata; omits actor IDs and persistence-only normalized fields.</summary>
 public sealed record MarketplaceSourceView(
     Guid SourceId,
     string Name,
@@ -66,7 +60,6 @@ public sealed record MarketplaceSourceView(
     long Revision,
     ProjectMarketplaceSourceState State)
 {
-    /// <summary>Projects a stored source into its API representation.</summary>
     public static MarketplaceSourceView From(ProjectMarketplaceSourceRecord source) =>
         new(
             source.SourceId,
@@ -78,7 +71,6 @@ public sealed record MarketplaceSourceView(
             source.State);
 }
 
-/// <summary>Bounded browse query tied to the source revision that the user inspected.</summary>
 public sealed record MarketplaceBrowseRequest
 {
     public required long ExpectedSourceRevision { get; init; }
@@ -87,13 +79,11 @@ public sealed record MarketplaceBrowseRequest
     public int PageSize { get; init; } = SkillMarketplaceBrowseService.DefaultPageSize;
 }
 
-/// <summary>A discoverable skill manifest location and its optional frontmatter description.</summary>
 public sealed record MarketplaceBrowseCandidate(
     string Location,
     string Name,
     string? Description);
 
-/// <summary>One source revision resolved to an exact commit and paged skill-manifest candidates.</summary>
 public sealed record MarketplaceBrowsePage(
     Guid SourceId,
     long SourceRevision,
@@ -105,7 +95,6 @@ public sealed record MarketplaceBrowsePage(
     int PageSize,
     bool HasMore);
 
-/// <summary>Request to preview one selected path at an exact source revision and commit.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record MarketplaceSkillPreviewRequest
 {
@@ -114,7 +103,6 @@ public sealed record MarketplaceSkillPreviewRequest
     public required string SelectedPath { get; init; }
 }
 
-/// <summary>Request to import one selected path with a content digest, idempotency key, and optional skill revision.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record MarketplaceSkillImportRequest
 {
@@ -127,27 +115,22 @@ public sealed record MarketplaceSkillImportRequest
     public long? ExpectedRevision { get; init; }
 }
 
-/// <summary>Persistence boundary for project marketplace source records and revision-fenced updates.</summary>
 public interface IProjectMarketplaceSourceStore
 {
-    /// <summary>Lists sources for one project in deterministic order.</summary>
     Task<IReadOnlyList<ProjectMarketplaceSourceRecord>> ListByProjectAsync(
         string projectId,
         bool includeRemoved,
         CancellationToken cancellationToken);
 
-    /// <summary>Reads one source by its project and source IDs.</summary>
     Task<ProjectMarketplaceSourceRecord?> GetAsync(
         string projectId,
         Guid sourceId,
         CancellationToken cancellationToken);
 
-    /// <summary>Creates a source and enforces active-name uniqueness in the database.</summary>
     Task<ProjectMarketplaceSourceRecord> CreateAsync(
         ProjectMarketplaceSourceRecord source,
         CancellationToken cancellationToken);
 
-    /// <summary>Updates a source only if its current active revision equals the supplied revision.</summary>
     Task<ProjectMarketplaceSourceRecord> UpdateAsync(
         string projectId,
         Guid sourceId,
@@ -157,7 +140,6 @@ public interface IProjectMarketplaceSourceStore
         DateTimeOffset updatedAt,
         CancellationToken cancellationToken);
 
-    /// <summary>Creates a removed-state revision only when the expected source revision is current.</summary>
     Task<ProjectMarketplaceSourceRecord> RemoveAsync(
         string projectId,
         Guid sourceId,
@@ -167,7 +149,6 @@ public interface IProjectMarketplaceSourceStore
         CancellationToken cancellationToken);
 }
 
-/// <summary>Stable marketplace error code and HTTP status for request, authority, persistence, or upstream failures.</summary>
 public sealed class MarketplaceSourceException(
     string code,
     string message,
@@ -176,44 +157,34 @@ public sealed class MarketplaceSourceException(
     public string Code { get; } = code;
     public int StatusCode { get; } = statusCode;
 
-    /// <summary>Creates the not-found response used for absent, foreign, or removed sources.</summary>
     public static MarketplaceSourceException NotFound() =>
         new("marketplace_source_not_found", "The marketplace source was not found.", StatusCodes.Status404NotFound);
 
-    /// <summary>Creates a conflict when the caller's source revision is no longer current.</summary>
     public static MarketplaceSourceException RevisionConflict() =>
         new("marketplace_source_revision_conflict", "The marketplace source changed; refresh it and try again.", StatusCodes.Status409Conflict);
 
-    /// <summary>Creates a conflict for a duplicate active source name within one project.</summary>
     public static MarketplaceSourceException NameConflict() =>
         new("marketplace_source_name_conflict", "A marketplace source with that name already exists in this project.", StatusCodes.Status409Conflict);
 
-    /// <summary>Creates a bad-request response for invalid source input.</summary>
     public static MarketplaceSourceException InvalidRequest(string message) =>
         new("invalid_marketplace_request", message, StatusCodes.Status400BadRequest);
 
-    /// <summary>Creates a forbidden response when current project authority is missing.</summary>
     public static MarketplaceSourceException Forbidden() =>
         new("forbidden", "The authenticated caller is not authorized for this operation.", StatusCodes.Status403Forbidden);
 
-    /// <summary>Creates a temporary-unavailable response for a failed upstream read.</summary>
     public static MarketplaceSourceException Unavailable() =>
         new("marketplace_source_unavailable", "The marketplace source is temporarily unavailable.", StatusCodes.Status503ServiceUnavailable);
 
-    /// <summary>Creates a gateway-timeout response when the bounded upstream read expires.</summary>
     public static MarketplaceSourceException TimedOut() =>
         new("marketplace_source_timeout", "The marketplace source did not respond before the operation timed out.", StatusCodes.Status504GatewayTimeout);
 
-    /// <summary>Creates a bad-gateway response for malformed or inconsistent upstream data.</summary>
     public static MarketplaceSourceException InvalidUpstream(string message) =>
         new("invalid_marketplace_response", message, StatusCodes.Status502BadGateway);
 
-    /// <summary>Creates an unprocessable response when a repository exceeds supported browse/import bounds.</summary>
     public static MarketplaceSourceException UnsupportedSourceSize() =>
         new("marketplace_source_too_large", "The marketplace source exceeds the supported browse limits.", StatusCodes.Status422UnprocessableEntity);
 }
 
-/// <summary>Validates and canonicalizes the source name, HTTPS GitHub repository, ref, and safe relative subpath.</summary>
 public static partial class MarketplaceSourceDefinition
 {
     private static readonly Regex NamePattern = new(
@@ -224,7 +195,6 @@ public static partial class MarketplaceSourceDefinition
         "^[A-Za-z0-9_.-]+$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    /// <summary>Applies defaults and validates every stored source field before persistence.</summary>
     public static ProjectMarketplaceSourceDefinition Normalize(
         string? name,
         string? repository,
@@ -252,7 +222,6 @@ public static partial class MarketplaceSourceDefinition
             normalizedSubpath);
     }
 
-    /// <summary>Accepts only a GitHub owner/repository path or canonical HTTPS GitHub repository URL.</summary>
     public static bool TryParseRepository(string? input, out string owner, out string repository)
     {
         owner = string.Empty;
@@ -297,7 +266,6 @@ public static partial class MarketplaceSourceDefinition
         return true;
     }
 
-    /// <summary>Returns null for an omitted path and rejects traversal, separators, control characters, and oversized paths.</summary>
     public static string? NormalizeSubpath(string? subpath)
     {
         if (string.IsNullOrWhiteSpace(subpath))
@@ -313,7 +281,6 @@ public static partial class MarketplaceSourceDefinition
         return normalized;
     }
 
-    /// <summary>Checks the requested Git ref against the supported conservative character and component rules.</summary>
     public static bool IsValidRef(string requestedRef)
     {
         if (string.IsNullOrWhiteSpace(requestedRef) ||
@@ -339,6 +306,5 @@ public static partial class MarketplaceSourceDefinition
         value is not "." and not ".." &&
         RepositoryPartPattern.IsMatch(value);
 
-    /// <summary>Canonicalizes source names for the database's case-insensitive uniqueness key.</summary>
     public static string NormalizeName(string name) => name.ToUpperInvariant();
 }

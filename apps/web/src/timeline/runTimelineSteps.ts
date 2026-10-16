@@ -10,7 +10,6 @@ function extractCallId(payload: Record<string, unknown>): unknown {
   return payload['callId'] ?? payload['call_id'];
 }
 
-/** Removes a user-specific home-directory prefix before displaying a path. */
 export function stripPathPrefix(value: string): string {
   return value
     .replace(/^\/(?:home|Users)\/[^/\\]+[/\\]/, '')
@@ -18,7 +17,6 @@ export function stripPathPrefix(value: string): string {
     .replace(/^[/\\][a-zA-Z][/\\]Users[/\\][^/\\]+[/\\]/, '');
 }
 
-/** Converts common tool names and arguments to a concise human-readable title. */
 export function deriveHumanTitle(toolName: string, args: Record<string, unknown>): string {
   if (toolName === 'report_intent') {
     const intent = args['intent'];
@@ -86,7 +84,6 @@ function serializedWorkPlanSubtaskCount(content: string): number | null {
  * Tool-call correlation accepts both live and persisted call-id shapes.
  */
 
-/** Derived state shown for one intent-grouped timeline step. */
 export type RunTimelineStepStatus = 'pending' | 'running' | 'complete' | 'warning';
 
 /**
@@ -96,7 +93,6 @@ export type RunTimelineStepStatus = 'pending' | 'running' | 'complete' | 'warnin
  */
 export type RunTimelineToolCategory = 'command' | 'read' | 'search' | 'edit' | 'web' | 'other';
 
-/** Tool call and its derived display details within an intent-grouped run step. */
 export interface RunTimelineTool {
   callId: string;
   toolName: string;
@@ -126,7 +122,6 @@ export interface RunTimelineTool {
   isSandboxViolation?: boolean;
 }
 
-/** Agent or operator message stored in timeline reading order. */
 export interface RunTimelineMessage {
   messageId: string;
   text: string;
@@ -155,7 +150,6 @@ export type RunTimelineChild =
   | { kind: 'message'; message: RunTimelineMessage }
   | { kind: 'tool'; tool: RunTimelineTool };
 
-/** One intent group with its status, tools, messages, and stable sequence key. */
 export interface RunTimelineStep {
   id: string;
   /** The reported intent text — the step title. */
@@ -181,7 +175,6 @@ export interface RunTimelineStep {
   sequence: number;
 }
 
-/** Complete timeline projection folded from run events. */
 export interface RunTimelineModel {
   steps: RunTimelineStep[];
   /** Total number of raw events folded into the timeline (for the "{N} steps" subline we use steps.length). */

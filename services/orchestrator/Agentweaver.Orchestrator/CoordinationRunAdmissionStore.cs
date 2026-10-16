@@ -8,17 +8,10 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Persists and reads the immutable run-admission receipt used to guard Copilot credit limits.
-/// </summary>
 internal sealed partial class CoordinationOwnerStore
 {
     private const string RunAdmissionEventType = "orchestrator.run.copilot_admission";
 
-    /// <summary>
-    /// Determines whether the accepted selection requires a hosted-Copilot admission receipt.
-    /// </summary>
-    /// <exception cref="CoordinationException">The selection or the model required for a configured budget is invalid.</exception>
     internal static bool RequiresRunAdmission(JsonElement selection)
     {
         if (selection.ValueKind != JsonValueKind.Object)
@@ -45,10 +38,6 @@ internal sealed partial class CoordinationOwnerStore
         return true;
     }
 
-    /// <summary>
-    /// Serializes admission for this run, validates an existing receipt or records a new one in the caller's transaction.
-    /// </summary>
-    /// <remarks>The run-scoped advisory lock prevents competing admissions; a new receipt is enqueued only after the caller's authority is revalidated.</remarks>
     private async Task PrepareRunAdmissionInTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, AuthorizedRunSelection selection,
         Func<CancellationToken, Task<RuntimeRunAdmissionReceipt>>? readAdmission,
@@ -94,11 +83,6 @@ internal sealed partial class CoordinationOwnerStore
         }
     }
 
-    /// <summary>
-    /// Reads and validates the persisted admission receipt for an authorized run.
-    /// </summary>
-    /// <returns>The validated receipt, or <see langword="null"/> when no budget requires admission.</returns>
-    /// <exception cref="CoordinationException">Admission is required but missing, malformed, or bound to another selection.</exception>
     internal async Task<RuntimeRunAdmissionReceipt?> ReadRunAdmissionAsync(
         CoordinationActor actor, AuthorizedRunSelection selection, CancellationToken cancellationToken)
     {
@@ -114,10 +98,6 @@ internal sealed partial class CoordinationOwnerStore
         return receipt;
     }
 
-    /// <summary>
-    /// Reads an admission event payload from the Orchestrator outbox using the supplied transaction, when present.
-    /// </summary>
-    /// <exception cref="CoordinationException">The stored payload cannot be deserialized as the admission contract.</exception>
     private async Task<RuntimeRunAdmissionReceipt?> ReadRunAdmissionInTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction? transaction,
         AuthorizedRunSelection selection, CancellationToken cancellationToken)
@@ -144,17 +124,10 @@ internal sealed partial class CoordinationOwnerStore
         }
     }
 
-    /// <summary>
-    /// Derives a deterministic receipt identifier from the tenant, project, and run tuple.
-    /// </summary>
     private static Guid RunAdmissionId(string tenantId, string projectId, string runId) =>
         Guid.ParseExact(RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
             $"copilot-run-admission\0{tenantId}\0{projectId}\0{runId}"))[..32], "N");
 
-    /// <summary>
-    /// Verifies that a receipt is bound to the exact tenant, run, and accepted selection.
-    /// </summary>
-    /// <exception cref="CoordinationException">The receipt contract does not match the accepted run.</exception>
     private static decimal ValidateRunAdmission(
         RuntimeRunAdmissionReceipt admission, AuthorizedRunSelection selection)
     {

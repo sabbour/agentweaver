@@ -6,10 +6,6 @@ using OpenIddict.Abstractions;
 
 namespace Agentweaver.Mcp;
 
-/// <summary>
-/// Sends one admitted MCP operation to the configured Gateway using the caller's validated bearer.
-/// Paths and headers are bounded, redirects are disabled by the host, and the target remains HTTPS.
-/// </summary>
 public sealed class GatewayApiClient(
     HttpClient client,
     McpServiceOptions options)
@@ -17,9 +13,6 @@ public sealed class GatewayApiClient(
     private static readonly HashSet<string> AllowedMethods =
         new(StringComparer.Ordinal) { "GET", "POST", "PUT", "PATCH", "DELETE" };
 
-    /// <summary>Forwards the exact caller token and optional owner selectors to an admitted relative Gateway route.</summary>
-    /// <exception cref="UnauthorizedAccessException">The caller does not have one current validated Bearer token.</exception>
-    /// <exception cref="ArgumentException">The method, route, or forwarded header is invalid.</exception>
     public async Task<HttpResponseMessage> SendAsync(
         HttpContext context,
         string method,
@@ -53,7 +46,6 @@ public sealed class GatewayApiClient(
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Rejects absolute, escaped, or traversing paths and anchors the result to the configured service root.</summary>
     private Uri CreateTarget(string pathAndQuery)
     {
         if (string.IsNullOrWhiteSpace(pathAndQuery) ||
@@ -90,7 +82,6 @@ public sealed class GatewayApiClient(
         return false;
     }
 
-    /// <summary>Requires one authenticated, unexpired Bearer value in both validation context and request header.</summary>
     private static async Task<AuthenticationHeaderValue> RequireValidatedBearerAsync(HttpContext context)
     {
         var authentication = await context.AuthenticateAsync().ConfigureAwait(false);

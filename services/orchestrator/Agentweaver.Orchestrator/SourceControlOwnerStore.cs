@@ -13,9 +13,6 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Owns PostgreSQL persistence for immutable repository pins, merge intents, webhook delivery deduplication, and verified output captures.
-/// </summary>
 internal sealed class SourceControlOwnerStore(
     NpgsqlDataSource dataSource,
     string schema,
@@ -30,18 +27,12 @@ internal sealed class SourceControlOwnerStore(
     };
     private static readonly TimeSpan MergeLockTimeout = TimeSpan.FromSeconds(30);
 
-    /// <summary>
-    /// Validates a non-reserved lowercase PostgreSQL schema name before quoting it for fixed table names.
-    /// </summary>
     private readonly string _schema = QuoteSchema(schema);
     private string Pins => $"{_schema}.source_control_repository_pins";
     private string Intents => $"{_schema}.source_control_merge_intents";
     private string Grants => $"{_schema}.executable_action_grants";
     private string OutputCaptures => $"{_schema}.source_control_output_captures";
 
-    /// <summary>
-    /// Creates a stable bounded merge-intent identifier from project, run, session, and idempotency key without embedding the key.
-    /// </summary>
     public static string CreateIntentId(SessionIdentity identity, string idempotencyKey)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(idempotencyKey);
@@ -50,15 +41,9 @@ internal sealed class SourceControlOwnerStore(
         return "source-merge-" + Convert.ToHexString(digest.AsSpan(0, 20)).ToLowerInvariant();
     }
 
-    /// <summary>
-    /// Derives the stable approval request identifier from its merge intent.
-    /// </summary>
     public static string CreateApprovalRequestId(string intentId) =>
         "source-approval-" + intentId;
 
-    /// <summary>
-    /// Creates a stable pin identifier from the accepted project, run, and selection digest.
-    /// </summary>
     public static string CreateRepositoryPinId(SourceControlAcceptedRunBinding acceptedRun) =>
         "source-pin-" +
         Convert.ToHexString(SHA256.HashData(
@@ -66,9 +51,6 @@ internal sealed class SourceControlOwnerStore(
                                    acceptedRun.AcceptedSelectionHash)).AsSpan(0, 20))
             .ToLowerInvariant();
 
-    /// <summary>
-    /// Finds a prior intent only after validating the active owner binding; a record from another actor, selection, tenant, or fence is hidden as unavailable.
-    /// </summary>
     public async Task<SourceControlMergeIntentSnapshot?> FindMergeIntentByIdempotencyKeyAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -110,9 +92,6 @@ internal sealed class SourceControlOwnerStore(
         return snapshot;
     }
 
-    /// <summary>
-    /// Validates the owner decision and immutable repository pin, inserts the intent in one PostgreSQL transaction, and rejects an idempotency key reused for different request data.
-    /// </summary>
     public async Task<SourceControlMergeIntentSnapshot> PersistMergeIntentAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -256,9 +235,6 @@ internal sealed class SourceControlOwnerStore(
         return saved;
     }
 
-    /// <summary>
-    /// Reads an intent for an active run and returns it only when actor, tenant, root session, selection digest, and fence match.
-    /// </summary>
     public async Task<SourceControlMergeIntentSnapshot> ReadMergeIntentAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -299,9 +275,6 @@ internal sealed class SourceControlOwnerStore(
         return snapshot;
     }
 
-    /// <summary>
-    /// Reads and locks one merge intent using the caller-owned connection and transaction.
-    /// </summary>
     internal async Task<SourceControlMergeIntentSnapshot?> ReadMergeIntentInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -321,9 +294,6 @@ internal sealed class SourceControlOwnerStore(
             .ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Locks the current owner binding and merge intent, then verifies both saved run bindings before returning evidence to prerequisite evaluation.
-    /// </summary>
     internal async Task<(SourceControlMergeIntentSnapshot? Intent, OwnerBindingSnapshot CurrentOwner)>
         ReadPrerequisiteMergeIntentInTransactionAsync(
             NpgsqlConnection connection,
@@ -356,9 +326,6 @@ internal sealed class SourceControlOwnerStore(
         return (intent, owner);
     }
 
-    /// <summary>
-    /// Returns the repository pin for the current actor and selection, or a not-found error when no pin is available.
-    /// </summary>
     public async Task<SourceControlRepositoryPin> ReadRepositoryPinAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -371,9 +338,6 @@ internal sealed class SourceControlOwnerStore(
             "source_control_pin_unavailable", StatusCodes.Status404NotFound);
     }
 
-    /// <summary>
-    /// Requires the current accepted decision, active owner rows, matching pin, source owner binding, and execution fence within the caller transaction.
-    /// </summary>
     internal async Task RequireBuildTestInputInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -402,9 +366,6 @@ internal sealed class SourceControlOwnerStore(
             source, actor, identity, selection.Authorization.TenantId, selectionHash, pin, executionFence);
     }
 
-    /// <summary>
-    /// Reads a pin only for the active owner binding and validates its accepted run before returning it.
-    /// </summary>
     public async Task<SourceControlRepositoryPin?> FindRepositoryPinAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -434,9 +395,6 @@ internal sealed class SourceControlOwnerStore(
         return pin;
     }
 
-    /// <summary>
-    /// Validates capture sizes, hashes, and owner bindings, then stores a pending capture in PostgreSQL; a workspace can have only one unresolved capture.
-    /// </summary>
     internal async Task<SourceControlOutputCaptureRecord> RegisterOutputCaptureAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -585,9 +543,6 @@ internal sealed class SourceControlOwnerStore(
         return record;
     }
 
-    /// <summary>
-    /// Reads and validates a pending output capture for a workspace and accepted-selection digest.
-    /// </summary>
     internal async Task<SourceControlOutputCaptureRecord?> ReadPendingOutputCaptureAsync(
         SessionIdentity identity,
         string workspaceId,
@@ -607,9 +562,6 @@ internal sealed class SourceControlOwnerStore(
         return record;
     }
 
-    /// <summary>
-    /// Finds the single pending capture under a workspace, optionally locking rows; multiple pending rows or inconsistent proof data fail closed.
-    /// </summary>
     private async Task<SourceControlOutputCaptureRecord?> ReadPendingOutputCaptureForWorkspaceAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -658,9 +610,6 @@ internal sealed class SourceControlOwnerStore(
         return record;
     }
 
-    /// <summary>
-    /// Reads a capture by validated identifier and returns it only when its selection digest matches and all stored bytes verify.
-    /// </summary>
     internal async Task<SourceControlOutputCaptureRecord?> ReadOutputCaptureAsync(
         SessionIdentity identity,
         string captureId,
@@ -681,9 +630,6 @@ internal sealed class SourceControlOwnerStore(
         return record;
     }
 
-    /// <summary>
-    /// Reads and locks a capture using the caller transaction after validating its identifier and selection digest.
-    /// </summary>
     internal async Task<SourceControlOutputCaptureRecord?> ReadOutputCaptureInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -712,9 +658,6 @@ internal sealed class SourceControlOwnerStore(
         return record;
     }
 
-    /// <summary>
-    /// Locks owner and capture rows, then checks the proof against actor, tenant, selection, fence, and current repository pin.
-    /// </summary>
     internal async Task<(SourceControlOutputCaptureRecord? Capture, OwnerBindingSnapshot CurrentOwner)>
         ReadPrerequisiteOutputCaptureInTransactionAsync(
             NpgsqlConnection connection,
@@ -758,9 +701,6 @@ internal sealed class SourceControlOwnerStore(
         return (capture, owner);
     }
 
-    /// <summary>
-    /// Returns validated admitted proofs for the accepted run, with a hard limit of 100 proofs.
-    /// </summary>
     internal async Task<ImmutableArray<ProducedRunCaptureProof>>
         ReadPrerequisiteOutputCaptureProofsInTransactionAsync(
             NpgsqlConnection connection,
@@ -851,9 +791,6 @@ internal sealed class SourceControlOwnerStore(
         return proofs.ToImmutable();
     }
 
-    /// <summary>
-    /// Reads admitted capture summaries in descending time and identifier order using a bounded keyset cursor, validating each stored record.
-    /// </summary>
     internal async Task<ImmutableArray<SourceControlOutputCaptureSummary>> ReadOutputCapturePageAsync(
         SessionIdentity identity,
         string acceptedSelectionHash,
@@ -905,9 +842,6 @@ internal sealed class SourceControlOwnerStore(
         return rows.ToImmutable();
     }
 
-    /// <summary>
-    /// Returns a capture proof only when its selection and tenant match the requested Events scope.
-    /// </summary>
     internal async Task<ProducedRunCaptureProof> ReadOutputCaptureProofForEventsAsync(
         SessionIdentity identity,
         string captureId,
@@ -923,9 +857,6 @@ internal sealed class SourceControlOwnerStore(
         return record.Proof;
     }
 
-    /// <summary>
-    /// Checks the Events journal acknowledgment and current run binding, then atomically changes a matching pending capture to admitted; matching retries are idempotent.
-    /// </summary>
     internal async Task<SourceControlOutputCaptureRecord> AdmitOutputCaptureAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -1017,9 +948,6 @@ internal sealed class SourceControlOwnerStore(
         return admitted;
     }
 
-    /// <summary>
-    /// Persists one repository pin only while the owner decision and accepted run are current, then verifies the stored pin matches the proposal.
-    /// </summary>
     public async Task<SourceControlRepositoryPin> PersistRepositoryPinAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -1069,9 +997,6 @@ internal sealed class SourceControlOwnerStore(
         return stored;
     }
 
-    /// <summary>
-    /// Stores one signed delivery per repository and delivery identifier, and accepts duplicates only when run, pin, event, and payload digest match.
-    /// </summary>
     public async Task<bool> RecordWebhookDeliveryAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -1172,9 +1097,6 @@ internal sealed class SourceControlOwnerStore(
         return !inserted;
     }
 
-    /// <summary>
-    /// Takes a timed PostgreSQL advisory lock keyed by normalized repository name and returns a lease that releases the lock with its connection.
-    /// </summary>
     public async Task<SourceControlRepositoryMergeLock> AcquireRepositoryMergeLockAsync(
         SourceControlRepositoryIdentity repository,
         CancellationToken cancellationToken)
@@ -1221,9 +1143,6 @@ internal sealed class SourceControlOwnerStore(
         }
     }
 
-    /// <summary>
-    /// Uses a conditional update to start a merge only when the approved intent, accepted run, decision, and referenced active grant remain current.
-    /// </summary>
     public async Task MarkMergeStartedAsync(
         SessionIdentity identity,
         SourceControlMergeIntentSnapshot intent,
@@ -1283,9 +1202,6 @@ internal sealed class SourceControlOwnerStore(
                 "source_control_intent_not_current", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Changes only an approved intent to conflict when authority fails before the remote merge starts.
-    /// </summary>
     public async Task RecordPreEffectMergeConflictAsync(
         SessionIdentity identity,
         string intentId,
@@ -1310,9 +1226,6 @@ internal sealed class SourceControlOwnerStore(
                 "source_control_intent_not_current", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Marks an approved intent conflicted only when a newer run fence supersedes it and its grant has been fully superseded.
-    /// </summary>
     public async Task<bool> RecordStaleFenceMergeConflictAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -1429,9 +1342,6 @@ internal sealed class SourceControlOwnerStore(
         return true;
     }
 
-    /// <summary>
-    /// Confirms the referenced grant is superseded and that no current grant remains for the intent.
-    /// </summary>
     private async Task<bool> IsSupersededMergeGrantAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1460,9 +1370,6 @@ internal sealed class SourceControlOwnerStore(
         return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
     }
 
-    /// <summary>
-    /// Changes a merge-started intent to merged, conflict, or outcome-uncertain and records its commit or failure code.
-    /// </summary>
     public async Task RecordMergeOutcomeAsync(
         SessionIdentity identity,
         string intentId,
@@ -1493,9 +1400,6 @@ internal sealed class SourceControlOwnerStore(
                 "source_control_merge_outcome_unavailable", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Marks a merge-started intent outcome-uncertain after interruption; it does not claim whether the remote merge completed.
-    /// </summary>
     public async Task MarkInterruptedMergeUncertainAsync(
         SessionIdentity identity,
         string intentId,
@@ -1515,9 +1419,6 @@ internal sealed class SourceControlOwnerStore(
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Reads one stored capture and optionally takes a row lock; mismatched project, run, session, or capture identity is treated as corruption.
-    /// </summary>
     private async Task<SourceControlOutputCaptureRecord?> ReadOutputCaptureRowAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -1554,9 +1455,6 @@ internal sealed class SourceControlOwnerStore(
         return record;
     }
 
-    /// <summary>
-    /// Maps a database row into a proof and capture record, preserving nullable admission fields.
-    /// </summary>
     private static SourceControlOutputCaptureRecord ReadOutputCaptureRow(NpgsqlDataReader reader)
     {
         var identity = new SessionIdentity(reader.GetString(0), reader.GetString(1), reader.GetString(2));
@@ -1595,9 +1493,6 @@ internal sealed class SourceControlOwnerStore(
             reader.GetFieldValue<byte[]>(30));
     }
 
-    /// <summary>
-    /// Validates the proof, admission state, object reference, stored byte digests, manifest bindings, and reconstructed package length.
-    /// </summary>
     private static void ValidateOutputCaptureRecord(SourceControlOutputCaptureRecord record)
     {
         try
@@ -1648,9 +1543,6 @@ internal sealed class SourceControlOwnerStore(
         }
     }
 
-    /// <summary>
-    /// Compares each capture owner, workspace, digest, length, and stored byte sequence with a proposed capture document.
-    /// </summary>
     private static bool CaptureMatchesDocument(
         SourceControlOutputCaptureRecord record,
         CoordinationActor actor,
@@ -1687,9 +1579,6 @@ internal sealed class SourceControlOwnerStore(
             record.PackageBytes.AsSpan().SequenceEqual(document.PackageBytes);
     }
 
-    /// <summary>
-    /// Computes the encoded package length from manifest entries and rejects overflow or a package beyond the configured maximum.
-    /// </summary>
     private static long PackageLength(GitWorkspaceCapturedOutputManifest manifest)
     {
         long packageLength = ProducedRunCaptureLimits.PackageHeaderBytes;
@@ -1703,18 +1592,12 @@ internal sealed class SourceControlOwnerStore(
         return packageLength;
     }
 
-    /// <summary>
-    /// Accepts only the fixed Source Control capture prefix and lowercase hexadecimal identifier suffix.
-    /// </summary>
     private static bool IsOutputCaptureId(string? captureId) =>
         captureId is { Length: 42 } &&
         captureId.StartsWith("sc-output-", StringComparison.Ordinal) &&
         captureId[10..].All(character =>
             character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
-    /// <summary>
-    /// Loads the serialized repository pin for one project, run, and accepted-selection digest, restoring its provider binding.
-    /// </summary>
     private async Task<SourceControlRepositoryPin?> ReadPinAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -1733,9 +1616,6 @@ internal sealed class SourceControlOwnerStore(
         return json is null ? null : RestorePin(json);
     }
 
-    /// <summary>
-    /// Inserts a pin and its non-secret binding fields without replacing an existing pin for the same accepted selection.
-    /// </summary>
     private async Task PersistRepositoryPinRowAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1790,9 +1670,6 @@ internal sealed class SourceControlOwnerStore(
         await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Loads one intent by its idempotency key together with the saved pin and any current active grant.
-    /// </summary>
     private async Task<SourceControlMergeIntentSnapshot?> ReadIntentByIdempotencyKeyAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -1839,9 +1716,6 @@ internal sealed class SourceControlOwnerStore(
             : null;
     }
 
-    /// <summary>
-    /// Loads one intent by identifier together with its pin and grant reference, optionally locking the intent row.
-    /// </summary>
     private async Task<SourceControlMergeIntentSnapshot?> ReadIntentByIdAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -1886,9 +1760,6 @@ internal sealed class SourceControlOwnerStore(
             : null;
     }
 
-    /// <summary>
-    /// Exposes the locked owner snapshot for the caller transaction after checking accepted run and fence.
-    /// </summary>
     internal Task<OwnerBindingSnapshot> ReadPrerequisiteOwnerBindingSnapshotInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1908,9 +1779,6 @@ internal sealed class SourceControlOwnerStore(
             executionFence,
             cancellationToken);
 
-    /// <summary>
-    /// Requires the supplied connection and transaction to match, locks owner rows, and validates tenant, selection digest, root session, and fence.
-    /// </summary>
     private async Task<OwnerBindingSnapshot> ReadPrerequisiteOwnerBindingInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1950,9 +1818,6 @@ internal sealed class SourceControlOwnerStore(
         return owner;
     }
 
-    /// <summary>
-    /// Compares a saved accepted-run binding with the exact actor, tenant, session, selection digest, and execution fence.
-    /// </summary>
     private static bool MatchesPrerequisiteAcceptedRun(
         SourceControlAcceptedRunBinding acceptedRun,
         CoordinationActor actor,
@@ -1969,9 +1834,6 @@ internal sealed class SourceControlOwnerStore(
         acceptedRun.AcceptedSelectionHash == acceptedSelectionHash &&
         acceptedRun.Fence == executionFence;
 
-    /// <summary>
-    /// Reads or locks accepted-run, root-session, and latest-decision rows, then rejects actor, tenant, selection, writer, or fence mismatches.
-    /// </summary>
     private async Task<OwnerBindingSnapshot> ReadOwnerBindingAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -2065,9 +1927,6 @@ internal sealed class SourceControlOwnerStore(
         return binding;
     }
 
-    /// <summary>
-    /// Locks the accepted run and its root coordination session so concurrent state changes cannot pass a stale owner check.
-    /// </summary>
     private async Task<OwnerBindingScope> LockOwnerRowsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2106,9 +1965,6 @@ internal sealed class SourceControlOwnerStore(
             reader.GetString(10));
     }
 
-    /// <summary>
-    /// Reads the newest decision identifier, state version, and decision state for the root session.
-    /// </summary>
     private async Task<(Guid DecisionId, long StateVersion, string DecisionState)?> ReadLatestOwnerDecisionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2130,9 +1986,6 @@ internal sealed class SourceControlOwnerStore(
             : null;
     }
 
-    /// <summary>
-    /// Requires owner rows and the accepted run to match current selection revisions, root session, tenant, fence, and accepted active state.
-    /// </summary>
     private static void EnsureCurrentBinding(
         OwnerBindingSnapshot owner,
         AuthorizedRunSelection selection,
@@ -2156,9 +2009,6 @@ internal sealed class SourceControlOwnerStore(
                 "source_control_run_binding_changed", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Reconstructs a merge intent and verifies that the serialized pin and row-level accepted-run binding agree.
-    /// </summary>
     private SourceControlMergeIntentSnapshot ReadIntentSnapshot(NpgsqlDataReader reader)
     {
         var pin = RestorePin(reader.GetString(35))
@@ -2221,9 +2071,6 @@ internal sealed class SourceControlOwnerStore(
             grantReference);
     }
 
-    /// <summary>
-    /// Serializes immutable provider, repository, GitHub App, and versioned secret-reference data without credential values.
-    /// </summary>
     private static StoredRepositoryPin CapturePin(SourceControlRepositoryPin pin) =>
         new(
             pin.PinId,
@@ -2255,15 +2102,9 @@ internal sealed class SourceControlOwnerStore(
             pin.IsPrivate,
             pin.PinnedAt);
 
-    /// <summary>
-    /// Deserializes a pin and resolves its provider version and capabilities through the configured catalog; invalid or unavailable bindings fail closed.
-    /// </summary>
     private SourceControlRepositoryPin RestorePin(string json) =>
         RestorePin(json, providerCatalog, providerResolver);
 
-    /// <summary>
-    /// Deserializes a pin and resolves its provider version and capabilities through the configured catalog; invalid or unavailable bindings fail closed.
-    /// </summary>
     internal static SourceControlRepositoryPin RestorePin(
         string json,
         ProviderCatalog providerCatalog,
@@ -2339,25 +2180,16 @@ internal sealed class SourceControlOwnerStore(
                 : null);
     }
 
-    /// <summary>
-    /// Stores only a credential’s secret identifier, version, and purpose.
-    /// </summary>
     private static StoredCredentialReference? CaptureOptionalCredential(
         SourceControlCredentialReference? credential) =>
         credential is null
             ? null
             : new StoredCredentialReference(credential.Secret.Id, credential.Secret.Version, credential.Purpose);
 
-    /// <summary>
-    /// Rebuilds a credential reference from its stored exact-version secret metadata.
-    /// </summary>
     private static SourceControlCredentialReference RestoreCredential(
         StoredCredentialReference credential) =>
         new(new SecretRef(credential.SecretId, credential.SecretVersion), credential.Purpose);
 
-    /// <summary>
-    /// Checks whether a previously stored idempotent intent represents the same actor, selection, pin, workflow step, pull-request revisions, and method.
-    /// </summary>
     private static bool MatchesRequest(
         SourceControlMergeIntentSnapshot saved,
         CoordinationActor actor,
@@ -2384,9 +2216,6 @@ internal sealed class SourceControlOwnerStore(
         saved.BaseSha == request.PullRequest.BaseSha &&
         saved.Method == request.Method;
 
-    /// <summary>
-    /// Compares all immutable run, provider, repository, credential-reference, GitHub App, and timestamp fields of two pins.
-    /// </summary>
     private static bool SamePin(SourceControlRepositoryPin stored, SourceControlRepositoryPin proposed) =>
         stored.PinId == proposed.PinId &&
         stored.AcceptedRun == proposed.AcceptedRun &&
@@ -2401,18 +2230,12 @@ internal sealed class SourceControlOwnerStore(
         stored.IsPrivate == proposed.IsPrivate &&
         stored.PinnedAt == proposed.PinnedAt;
 
-    /// <summary>
-    /// Compares repository owner and name without case sensitivity.
-    /// </summary>
     private static bool SameRepositoryIdentity(
         SourceControlRepositoryIdentity left,
         SourceControlRepositoryIdentity right) =>
         string.Equals(left.Owner, right.Owner, StringComparison.OrdinalIgnoreCase) &&
         string.Equals(left.Name, right.Name, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>
-    /// Compares provider, adapter, options, hosting, resource generation, run, and negotiated capabilities.
-    /// </summary>
     private static bool SameProviderBinding(
         PinnedProviderBinding left,
         PinnedProviderBinding right) =>
@@ -2426,9 +2249,6 @@ internal sealed class SourceControlOwnerStore(
         left.Resource == right.Resource &&
         left.NegotiatedCapabilities.SetEquals(right.NegotiatedCapabilities);
 
-    /// <summary>
-    /// Compares optional credential references by exact secret identifier, version, and purpose.
-    /// </summary>
     private static bool SameCredential(
         SourceControlCredentialReference? left,
         SourceControlCredentialReference? right) =>
@@ -2439,9 +2259,6 @@ internal sealed class SourceControlOwnerStore(
               left.Secret.Id == right.Secret.Id &&
               left.Secret.Version == right.Secret.Version;
 
-    /// <summary>
-    /// Compares GitHub App connection, installation, permission digest, repository-selection hash, and issue-write permission.
-    /// </summary>
     private static bool SameGitHubAppBinding(
         SourceControlGitHubAppBinding? left,
         SourceControlGitHubAppBinding? right) =>
@@ -2455,9 +2272,6 @@ internal sealed class SourceControlOwnerStore(
               left.IdentityRepositorySelectionHash == right.IdentityRepositorySelectionHash &&
               left.IssueWriteGranted == right.IssueWriteGranted;
 
-    /// <summary>
-    /// Converts a stored merge-method value to the contract enum and rejects unknown database values as invalid stored state.
-    /// </summary>
     private static SourceControlMergeMethod ParseDatabaseMergeMethod(string value) =>
         value switch
         {
@@ -2468,9 +2282,6 @@ internal sealed class SourceControlOwnerStore(
                 "source_control_intent_contract_invalid", StatusCodes.Status503ServiceUnavailable)
         };
 
-    /// <summary>
-    /// Converts a defined merge-method enum to its persisted value and rejects undefined values.
-    /// </summary>
     private static string ToDatabaseMergeMethod(SourceControlMergeMethod value) =>
         value switch
         {
@@ -2481,18 +2292,12 @@ internal sealed class SourceControlOwnerStore(
                 "source_control_merge_method_invalid", StatusCodes.Status400BadRequest)
         };
 
-    /// <summary>
-    /// Adds project and run parameters to a database command.
-    /// </summary>
     private static void AddScope(NpgsqlCommand command, SessionIdentity identity)
     {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, identity.ProjectId);
         command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, identity.RunId);
     }
 
-    /// <summary>
-    /// Adds accepted actor, tenant, selection digest, revisions, and execution fence parameters to a database command.
-    /// </summary>
     private static void AddAcceptedRun(
         NpgsqlCommand command,
         SourceControlAcceptedRunBinding acceptedRun)
@@ -2512,18 +2317,12 @@ internal sealed class SourceControlOwnerStore(
         command.Parameters.AddWithValue("fence", NpgsqlDbType.Bigint, acceptedRun.Fence);
     }
 
-    /// <summary>
-    /// Adds a required secret identifier and exact version to a database command.
-    /// </summary>
     private static void AddSecretReference(NpgsqlCommand command, string prefix, SecretRef secret)
     {
         command.Parameters.AddWithValue(prefix + "SecretId", NpgsqlDbType.Varchar, secret.Id);
         command.Parameters.AddWithValue(prefix + "SecretVersion", NpgsqlDbType.Varchar, secret.Version);
     }
 
-    /// <summary>
-    /// Adds nullable secret identifier and exact version parameters to a database command.
-    /// </summary>
     private static void AddOptionalSecretReference(
         NpgsqlCommand command,
         string prefix,
@@ -2535,9 +2334,6 @@ internal sealed class SourceControlOwnerStore(
             prefix + "SecretVersion", NpgsqlDbType.Varchar, (object?)secret?.Version ?? DBNull.Value);
     }
 
-    /// <summary>
-    /// Adds nullable GitHub App connection and permission-binding parameters to a database command.
-    /// </summary>
     private static void AddOptionalAppBinding(
         NpgsqlCommand command,
         SourceControlGitHubAppBinding? binding)
@@ -2564,24 +2360,15 @@ internal sealed class SourceControlOwnerStore(
             (object?)binding?.IdentityRepositorySelectionHash ?? DBNull.Value);
     }
 
-    /// <summary>
-    /// Computes a SHA-256 digest of the exact accepted selection snapshot text for stable run binding.
-    /// </summary>
     internal static string HashSelection(EffectiveRunSelection selection) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(selection.Snapshot.GetRawText())));
 
-    /// <summary>
-    /// Checks a bounded identifier against the allowed ASCII character set used by owner records.
-    /// </summary>
     internal static bool IsIdentifier(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= 128 &&
         value.All(character =>
             char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-' or ':');
 
-    /// <summary>
-    /// Rejects an idempotency key that is not a valid bounded owner identifier.
-    /// </summary>
     private static void ValidateIdempotencyKey(string value)
     {
         if (!IsIdentifier(value))
@@ -2589,9 +2376,6 @@ internal sealed class SourceControlOwnerStore(
                 "source_control_idempotency_key_invalid", StatusCodes.Status400BadRequest);
     }
 
-    /// <summary>
-    /// Validates a non-reserved lowercase PostgreSQL schema name before quoting it for fixed table names.
-    /// </summary>
     private static string QuoteSchema(string value)
     {
         if (value is null ||
@@ -2604,9 +2388,6 @@ internal sealed class SourceControlOwnerStore(
         return $"\"{value}\"";
     }
 
-    /// <summary>
-    /// The locked owner-row fields used to validate run, session, actor, and execution-fence consistency.
-    /// </summary>
     private sealed record OwnerBindingScope(
         string AcceptedSelectionHash,
         string AcceptedIssuer,
@@ -2620,9 +2401,6 @@ internal sealed class SourceControlOwnerStore(
         string WriterSubject,
         string SessionLifecycle);
 
-    /// <summary>
-    /// The accepted run, root session, latest decision, and owner fields checked before Source Control state is read or changed.
-    /// </summary>
     internal sealed record OwnerBindingSnapshot(
         string AcceptedSelectionHash,
         string AcceptedIssuer,
@@ -2639,9 +2417,6 @@ internal sealed class SourceControlOwnerStore(
         long StateVersion,
         string DecisionState);
 
-    /// <summary>
-    /// The JSON-safe repository pin, including provider revisions and secret references but no credential values.
-    /// </summary>
     private sealed record StoredRepositoryPin(
         string PinId,
         SourceControlAcceptedRunBinding AcceptedRun,
@@ -2664,9 +2439,6 @@ internal sealed class SourceControlOwnerStore(
         bool IsPrivate,
         DateTimeOffset PinnedAt);
 
-    /// <summary>
-    /// The persisted connection, installation, permissions, and selection digest for a GitHub App repository pin.
-    /// </summary>
     private sealed record StoredGitHubAppBinding(
         string IdentityConnectionId,
         long IdentityConnectionRevision,
@@ -2675,18 +2447,12 @@ internal sealed class SourceControlOwnerStore(
         string IdentityRepositorySelectionHash,
         bool IssueWriteGranted = false);
 
-    /// <summary>
-    /// The secret identifier, exact version, and purpose stored with a repository pin.
-    /// </summary>
     private sealed record StoredCredentialReference(
         string SecretId,
         string SecretVersion,
         string Purpose);
 }
 
-/// <summary>
-/// A persisted capture proof, admission state, Events reference, and repository artifact bytes.
-/// </summary>
 internal sealed record SourceControlOutputCaptureRecord(
     ProducedRunCaptureProof Proof,
     string State,
@@ -2697,16 +2463,10 @@ internal sealed record SourceControlOutputCaptureRecord(
     byte[] PatchBytes,
     byte[] PackageBytes);
 
-/// <summary>
-/// The proof and Events journal position used to page admitted captures.
-/// </summary>
 internal sealed record SourceControlOutputCaptureSummary(
     ProducedRunCaptureProof Proof,
     long EventPosition);
 
-/// <summary>
-/// The durable merge request, approval receipt, current grant reference, and recorded outcome for one intent.
-/// </summary>
 internal sealed record SourceControlMergeIntentSnapshot(
     string IntentId,
     SourceControlAcceptedRunBinding AcceptedRun,
@@ -2736,16 +2496,10 @@ internal sealed record SourceControlMergeIntentSnapshot(
     DateTimeOffset CreatedAt,
     ExecutableActionGrantReference? GrantReference);
 
-/// <summary>
-/// An asynchronous lease for the PostgreSQL advisory lock that serializes merges to one repository.
-/// </summary>
 internal sealed class SourceControlRepositoryMergeLock(
     NpgsqlConnection connection,
     string repositoryKey) : IAsyncDisposable
 {
-    /// <summary>
-    /// Releases the repository advisory lock and always disposes its dedicated PostgreSQL connection.
-    /// </summary>
     public async ValueTask DisposeAsync()
     {
         try

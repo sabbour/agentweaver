@@ -10,16 +10,11 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.SourceControl;
 
-/// <summary>An installation token and the verified permission ceiling returned by GitHub.</summary>
 public sealed record GitHubAppInstallationCredential(
     SecretCredential Credential,
     string PermissionDigest,
     bool IssueWriteGranted);
 
-/// <summary>
-/// Mints repository-scoped GitHub App installation tokens from a redeemed private key.
-/// It validates the granted permission set and invalidates the supplied key after every attempt.
-/// </summary>
 public sealed class GitHubAppInstallationTokenIssuer
 {
     private const string GitHubApiVersion = "2022-11-28";
@@ -28,14 +23,6 @@ public sealed class GitHubAppInstallationTokenIssuer
     private readonly long _appId;
     private readonly TimeProvider _timeProvider;
 
-    /// <summary>
-    /// Creates an issuer that can call only the HTTPS api.github.com origin.
-    /// </summary>
-    /// <param name="httpClient">Configured GitHub API client.</param>
-    /// <param name="appId">Positive GitHub App ID used as the JWT issuer.</param>
-    /// <param name="timeProvider">Optional clock for JWT and token-expiry validation.</param>
-    /// <exception cref="ArgumentException">The client does not target the canonical HTTPS API origin.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">The App ID is not positive.</exception>
     public GitHubAppInstallationTokenIssuer(
         HttpClient httpClient,
         long appId,
@@ -55,7 +42,6 @@ public sealed class GitHubAppInstallationTokenIssuer
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    /// <summary>Requests a token for one repository with only the selected minimum permissions.</summary>
     private async Task<HttpResponseMessage> SendTokenRequestAsync(
         long installationId,
         long repositoryId,
@@ -86,8 +72,6 @@ public sealed class GitHubAppInstallationTokenIssuer
             request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Validates the bounded token response and returns a credential with a canonical permission digest.</summary>
-    /// <exception cref="SourceControlOperationException">The response is denied, malformed, expired, or exceeds the requested permission set.</exception>
     private async Task<GitHubAppInstallationCredential> ReadCredentialAsync(
         HttpResponseMessage response,
         bool issueWriteRequested,
@@ -139,16 +123,6 @@ public sealed class GitHubAppInstallationTokenIssuer
         }
     }
 
-    /// <summary>
-    /// Creates an App JWT, requests a repository-scoped token, and invalidates the redeemed private key.
-    /// </summary>
-    /// <param name="installationId">Positive GitHub App installation ID.</param>
-    /// <param name="repositoryId">Positive numeric repository ID that limits the token.</param>
-    /// <param name="appPrivateKey">One-use PEM private-key credential; invalidated after the attempt.</param>
-    /// <param name="issueWriteRequested">Whether the optional issues:write grant is required.</param>
-    /// <param name="cancellationToken">Cancels the outbound API request.</param>
-    /// <returns>A token credential and digest of the permissions actually granted.</returns>
-    /// <exception cref="SourceControlOperationException">The key, API response, transport result, or requested grants are invalid.</exception>
     public async Task<GitHubAppInstallationCredential> MintAsync(
         long installationId,
         long repositoryId,
@@ -192,7 +166,6 @@ public sealed class GitHubAppInstallationTokenIssuer
         }
     }
 
-    /// <summary>Reads a bounded JSON object from the token response.</summary>
     private static async Task<JsonDocument> ReadDocumentAsync(
         HttpContent content,
         CancellationToken cancellationToken)
@@ -220,8 +193,6 @@ public sealed class GitHubAppInstallationTokenIssuer
         throw new JsonException("The GitHub installation-token response was not a JSON object.");
     }
 
-    /// <summary>Signs a short-lived RS256 GitHub App JWT using the one-use private key.</summary>
-    /// <exception cref="SourceControlOperationException">The private key cannot be imported or signed with.</exception>
     private string CreateAppJwt(SecretCredential appPrivateKey)
     {
         var now = _timeProvider.GetUtcNow();
@@ -259,7 +230,6 @@ public sealed class GitHubAppInstallationTokenIssuer
         }
     }
 
-    /// <summary>Validates GitHub's granted permissions against the requested permission ceiling.</summary>
     private static ImmutableSortedDictionary<string, string> ReadPermissions(
         JsonElement permissionsElement,
         bool issueWriteRequested)
@@ -291,7 +261,6 @@ public sealed class GitHubAppInstallationTokenIssuer
         return permissions.ToImmutable();
     }
 
-    /// <summary>Hashes canonical sorted permission entries for a stable grant identity.</summary>
     private static string ComputePermissionDigest(ImmutableSortedDictionary<string, string> permissions)
     {
         var canonical = "github-app-permissions-v1\n" +
@@ -299,7 +268,6 @@ public sealed class GitHubAppInstallationTokenIssuer
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
     }
 
-    /// <summary>Maps GitHub HTTP status to a stable Source Control failure category.</summary>
     private static SourceControlOperationException CreateResponseException(
         HttpStatusCode statusCode,
         bool issueWriteRequested) =>
@@ -337,7 +305,6 @@ public sealed class GitHubAppInstallationTokenIssuer
                     statusCode)
         };
 
-    /// <summary>Encodes JWT bytes using unpadded base64url.</summary>
     private static string Base64UrlEncode(byte[] value) =>
         Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 }

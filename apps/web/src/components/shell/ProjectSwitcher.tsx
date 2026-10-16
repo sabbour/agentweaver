@@ -65,7 +65,6 @@ function currentCategorySegment(pathname: string, projectId: string | undefined)
 // target project. Preserves the page category where possible (mapping deep
 // sub-resource routes to their category root); otherwise lands on the target
 // project home.
-/** Chooses the destination route when the user changes the active project. */
 export function projectSwitchTarget(
   pathname: string,
   currentProjectId: string | undefined,
@@ -86,11 +85,6 @@ export interface ProjectSwitcherProps {
   onFallbackProjectMissing?: () => void;
 }
 
-/**
- * Renders the project selector using the project collection from `useProjectList`.
- * Route and local selection state coordinate navigation; the hook remains the source of project
- * data and loading status.
- */
 export function ProjectSwitcher({
   projectId,
   pathname,

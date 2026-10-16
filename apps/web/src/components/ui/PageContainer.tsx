@@ -41,10 +41,6 @@ export interface PageContainerProps {
   className?: string;
 }
 
-/**
- * Constrains page content to the requested width and supplies the shared page spacing.
- * Children and width mode are props; no data or local state is involved.
- */
 export function PageContainer({ children, width = 'full', className }: PageContainerProps) {
   const styles = useStyles();
   const maxWidth = WIDTHS[width];

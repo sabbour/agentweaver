@@ -82,11 +82,6 @@ interface ConnectGitHubRepositoryDialogProps {
  * brand-new repository through the caller's Repo App authorization or selecting an existing,
  * Repo-App-authorized repository and attaching the project's current history to it.
  */
-/**
- * Loads connectable GitHub repositories and renders the repository-selection dialog.
- * API effects refresh the repository list and track errors; local state handles filtering and
- * selection, while the parent receives the chosen repository.
- */
 export function ConnectGitHubRepositoryDialog({
   projectId,
   projectName,

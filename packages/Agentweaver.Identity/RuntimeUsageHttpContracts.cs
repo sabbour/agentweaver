@@ -5,7 +5,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity;
 
-/// <summary>Authenticated request to register the SDK and model source used by a runtime session.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeSdkSourceRequest(
     RuntimeCredentialHttpRequest Authorization, SdkSessionFacts Source)
@@ -13,7 +12,6 @@ public sealed record RuntimeSdkSourceRequest(
     public override string ToString() => nameof(RuntimeSdkSourceRequest) + " [REDACTED]";
 }
 
-/// <summary>Authenticated request to submit one SDK usage observation.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeUsageObservationRequest(
     RuntimeCredentialHttpRequest Authorization, SdkUsageObservation Observation)
@@ -21,7 +19,6 @@ public sealed record RuntimeUsageObservationRequest(
     public override string ToString() => nameof(RuntimeUsageObservationRequest) + " [REDACTED]";
 }
 
-/// <summary>Owner receipt binding one SDK source description to a runtime grant and registration.</summary>
 public sealed record RuntimeSdkSourceReceipt(
     Guid RuntimeInstanceId,
     long RegistrationRevision,
@@ -30,11 +27,9 @@ public sealed record RuntimeSdkSourceReceipt(
     string CanonicalPayloadHash,
     DateTimeOffset RecordedAt);
 
-/// <summary>Request for a current runtime usage cost preflight.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeUsageCostPreflightRequest(int ContractVersion = 1);
 
-/// <summary>Current provider, meter, and pricing readiness for a runtime usage source.</summary>
 public sealed record RuntimeUsageCostPreflightReceipt(
     int ContractVersion,
     Guid RuntimeInstanceId,
@@ -49,10 +44,8 @@ public sealed record RuntimeUsageCostPreflightReceipt(
     bool IsPriced,
     string? UnpricedReason);
 
-/// <summary>Validates that a cost preflight is consistent with its selected source and binding.</summary>
 public static class RuntimeUsageCostPreflightContract
 {
-    /// <summary>Checks receipt identifiers, source hashes, and the priced/unpriced shape.</summary>
     public static void Validate(RuntimeUsageCostPreflightReceipt receipt)
     {
         ArgumentNullException.ThrowIfNull(receipt);
@@ -78,7 +71,6 @@ public static class RuntimeUsageCostPreflightContract
     }
 }
 
-/// <summary>Authenticated request to begin one native model turn with its source facts.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeNativeTurnBeginRequest(
     RuntimeCredentialHttpRequest Authorization, RuntimeA2ASendRequest Message, SdkSessionFacts Source)
@@ -86,7 +78,6 @@ public sealed record RuntimeNativeTurnBeginRequest(
     public override string ToString() => nameof(RuntimeNativeTurnBeginRequest) + " [REDACTED]";
 }
 
-/// <summary>Owner admission binding one native prompt to the current source and registration.</summary>
 public sealed record RuntimeNativeTurnAdmissionReceipt(
     RuntimeRegistration Registration,
     SdkSessionFacts Source,
@@ -95,13 +86,11 @@ public sealed record RuntimeNativeTurnAdmissionReceipt(
     string RequestHash,
     long OwnerRevision);
 
-/// <summary>Usage accounting watermark captured at the native turn boundary.</summary>
 public sealed record RuntimeNativeAccountingCheckpoint(
     Guid NativeEventId,
     decimal ReportedNanoAiu,
     ImmutableDictionary<string, long> SourceWatermarks);
 
-/// <summary>Observed SDK turn events, cursor, output digest, and optional accounting checkpoint.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeNativeTurnObservation(
     SdkSessionFacts Source,
@@ -118,7 +107,6 @@ public sealed record RuntimeNativeTurnObservation(
     public ImmutableArray<Guid> UsageEventIds { get; init; } = [];
 }
 
-/// <summary>Authenticated request to persist a native turn observation against its admission.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeNativeTurnObservationRequest(
     RuntimeCredentialHttpRequest Authorization,
@@ -128,14 +116,12 @@ public sealed record RuntimeNativeTurnObservationRequest(
     public override string ToString() => nameof(RuntimeNativeTurnObservationRequest) + " [REDACTED]";
 }
 
-/// <summary>Owner receipt for the exact native turn observation and owner revision.</summary>
 public sealed record RuntimeNativeTurnRecordedReceipt(
     RuntimeNativeTurnAdmissionReceipt Admission,
     RuntimeNativeTurnObservation Observation,
     string CanonicalPayloadHash,
     long OwnerRevision);
 
-/// <summary>Request to reconcile native turn usage against the required accounting receipts.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeNativeTurnAccountingRequest(
     RuntimeCredentialHttpRequest Authorization,
@@ -145,16 +131,13 @@ public sealed record RuntimeNativeTurnAccountingRequest(
     public override string ToString() => nameof(RuntimeNativeTurnAccountingRequest) + " [REDACTED]";
 }
 
-/// <summary>Owner receipt confirming the native turn's accounting snapshot and revision.</summary>
 public sealed record RuntimeNativeTurnAccountingReceipt(
     RuntimeNativeTurnRecordedReceipt Recorded,
     RuntimeUsageCostSnapshotReceipt Snapshot,
     long OwnerRevision);
 
-/// <summary>Validates admission, observation, durability, and accounting contracts for native SDK turns.</summary>
 public static class RuntimeNativeTurnContract
 {
-    /// <summary>Builds the cost snapshot request from a recorded turn and its exact usage references.</summary>
     public static RuntimeUsageCostSnapshotRequest AccountingSnapshotRequest(
         RuntimeNativeTurnRecordedReceipt recorded, ImmutableArray<RuntimeUsageCostReceiptReference> references)
     {
@@ -168,7 +151,6 @@ public static class RuntimeNativeTurnContract
         return request;
     }
 
-    /// <summary>Requires a snapshot request to represent exactly the turn's recorded usage events.</summary>
     public static void ValidateAccountingSnapshot(
         RuntimeUsageCostSnapshotRequest request, RuntimeNativeTurnRecordedReceipt recorded)
     {
@@ -189,7 +171,6 @@ public static class RuntimeNativeTurnContract
             throw new RuntimeAuthorizationException("runtime_native_turn_accounting_invalid");
     }
 
-    /// <summary>Checks the accounting receipt advances the owner revision and represents every required receipt.</summary>
     public static void ValidateAccounted(
         RuntimeNativeTurnAccountingReceipt receipt, RuntimeNativeTurnRecordedReceipt recorded,
         ImmutableArray<RuntimeUsageCostReceiptReference> references)
@@ -205,11 +186,9 @@ public static class RuntimeNativeTurnContract
         RuntimeUsageCostSnapshotContract.ValidateObservedReceipt(receipt.Snapshot, request);
     }
 
-    /// <summary>Hashes the exact serialized A2A request used for admission.</summary>
     public static string RequestHash(RuntimeA2ASendRequest message) =>
         RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(message));
 
-    /// <summary>Checks that admission matches a valid user text message, runtime registration, and SDK source.</summary>
     public static void ValidateAdmission(
         RuntimeNativeTurnAdmissionReceipt admission, RuntimeRegistration registration,
         SdkSessionFacts source, RuntimeA2ASendRequest message)
@@ -234,7 +213,6 @@ public static class RuntimeNativeTurnContract
             throw new RuntimeAuthorizationException("runtime_native_turn_admission_invalid");
     }
 
-    /// <summary>Checks that observed SDK events and accounting data are valid for the admitted turn.</summary>
     public static void ValidateObservation(
         RuntimeNativeTurnAdmissionReceipt admission, RuntimeNativeTurnObservation observation)
     {
@@ -272,7 +250,6 @@ public static class RuntimeNativeTurnContract
             throw new RuntimeAuthorizationException("runtime_native_accounting_checkpoint_invalid");
     }
 
-    /// <summary>Computes a deterministic digest using normalized times and sorted watermarks.</summary>
     public static string ObservationHash(RuntimeNativeTurnObservation observation)
     {
         ArgumentNullException.ThrowIfNull(observation);
@@ -317,7 +294,6 @@ public static class RuntimeNativeTurnContract
         return RuntimeContractValidation.Hash(stream.ToArray());
     }
 
-    /// <summary>Checks the persisted observation digest and that its owner revision follows admission.</summary>
     public static void ValidateRecorded(RuntimeNativeTurnRecordedReceipt receipt)
     {
         ArgumentNullException.ThrowIfNull(receipt);

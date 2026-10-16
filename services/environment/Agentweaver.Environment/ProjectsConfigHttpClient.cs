@@ -5,10 +5,8 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Holds the authenticated caller token and optional tenant selector for Projects &amp; Config requests.</summary>
 public sealed class CurrentCallerRequest
 {
-    /// <summary>Creates a caller context with a bounded bearer token and optional tenant selector.</summary>
     public CurrentCallerRequest(string bearerToken, string? tenantSelector = null)
     {
         if (string.IsNullOrWhiteSpace(bearerToken) ||
@@ -22,25 +20,20 @@ public sealed class CurrentCallerRequest
     internal string BearerToken { get; }
     public string? TenantSelector { get; }
 
-    /// <summary>Returns a redacted representation so logs cannot expose the caller's bearer token.</summary>
     public override string ToString() => "CurrentCallerRequest [token redacted]";
 }
 
-/// <summary>Represents a coded failure returned by the Projects &amp; Config client.</summary>
 public sealed class ProjectsConfigApiException(string code, string message) : Exception(message)
 {
     public string Code { get; } = code;
 }
 
-/// <summary>Provides authenticated access to current project authorization and run policy selections.</summary>
 public interface IProjectsConfigClient
 {
-    /// <summary>Reads and validates the caller's current authorization context.</summary>
     Task<ProjectAuthorizationContextResponse> GetAuthorizationContextAsync(
         CurrentCallerRequest caller,
         CancellationToken cancellationToken);
 
-    /// <summary>Reads the immutable policy selection for one authorized project run.</summary>
     Task<EffectiveNetworkPolicySelection> GetRunSelectionAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -48,13 +41,10 @@ public interface IProjectsConfigClient
         CancellationToken cancellationToken);
 }
 
-/// <summary>HTTP implementation of the Projects &amp; Config authorization and run-selection contract.</summary>
 public sealed class ProjectsConfigHttpClient(HttpClient httpClient) : IProjectsConfigClient
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
-    /// <summary>Fetches a no-store authorization response and validates its actor, tenant, revision, and grants.</summary>
-    /// <exception cref="ProjectsConfigApiException">The remote response is denied, malformed, cached, or inconsistent.</exception>
     public async Task<ProjectAuthorizationContextResponse> GetAuthorizationContextAsync(
         CurrentCallerRequest caller,
         CancellationToken cancellationToken)
@@ -89,8 +79,6 @@ public sealed class ProjectsConfigHttpClient(HttpClient httpClient) : IProjectsC
         return context;
     }
 
-    /// <summary>Fetches the no-store run selection and ensures it belongs to the requested project and run.</summary>
-    /// <exception cref="ProjectsConfigApiException">The remote response is denied, malformed, cached, or mismatched.</exception>
     public async Task<EffectiveNetworkPolicySelection> GetRunSelectionAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -120,7 +108,6 @@ public sealed class ProjectsConfigHttpClient(HttpClient httpClient) : IProjectsC
         return selection;
     }
 
-    /// <summary>Sends a bearer-authenticated GET without cache permission and rejects redirects and failed responses.</summary>
     private async Task<HttpResponseMessage> SendGetAsync(
         CurrentCallerRequest caller,
         string path,
@@ -160,7 +147,6 @@ public sealed class ProjectsConfigHttpClient(HttpClient httpClient) : IProjectsC
         return response;
     }
 
-    /// <summary>Reads a JSON response and maps invalid or empty content to a coded client exception.</summary>
     private static async Task<T> ReadJsonAsync<T>(
         HttpResponseMessage response,
         CancellationToken cancellationToken) where T : class
@@ -182,7 +168,6 @@ public sealed class ProjectsConfigHttpClient(HttpClient httpClient) : IProjectsC
             "Projects & Config returned an empty response.");
     }
 
-    /// <summary>Requires the upstream authorization response to prohibit storage in HTTP caches.</summary>
     private static void RequireNoStore(HttpResponseMessage response)
     {
         if (response.Headers.CacheControl?.NoStore != true)
@@ -191,7 +176,6 @@ public sealed class ProjectsConfigHttpClient(HttpClient httpClient) : IProjectsC
                 "Projects & Config authorization and run-selection responses must be no-store.");
     }
 
-    /// <summary>Validates the bounded opaque identifier format used in project and run paths.</summary>
     private static void ValidateOpaqueId(string value, string name)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 256 ||
@@ -202,7 +186,6 @@ public sealed class ProjectsConfigHttpClient(HttpClient httpClient) : IProjectsC
                 $"The {name} is invalid.");
     }
 
-    /// <summary>Uses camel-case enum values when decoding Projects &amp; Config responses.</summary>
     private static JsonSerializerOptions CreateJsonOptions()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);

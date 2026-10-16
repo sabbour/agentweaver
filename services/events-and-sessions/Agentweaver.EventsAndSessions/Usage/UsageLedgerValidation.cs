@@ -5,10 +5,8 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.EventsAndSessions;
 
-/// <summary>Validates usage records and determines whether their measurements support complete accounting.</summary>
 internal static class UsageLedgerValidation
 {
-    /// <summary>Checks usage attribution, measurement ranges, rate-card identity, and priced/unpriced shape.</summary>
     public static void Validate(
         UsageSubmission submission,
         CostBinding? binding,
@@ -90,19 +88,16 @@ internal static class UsageLedgerValidation
             throw new ArgumentException("A priced usage record must match its pinned rate card.", nameof(price));
     }
 
-    /// <summary>Validates tenant and project/run scope before ledger reads or writes.</summary>
     public static void ValidateRunScope(string tenantId, string projectId, string runId)
     {
         ValidateIdentifier(tenantId, nameof(tenantId), 256);
         _ = new SessionIdentity(projectId, runId, "_");
     }
 
-    /// <summary>Reports complete pricing only when cost is priced and its source accounting is complete.</summary>
     internal static bool IsFinanciallyComplete(
         UsageSubmission submission, CostDisposition disposition) =>
         disposition != CostDisposition.Unpriced && HasCompleteSdkAccounting(submission);
 
-    /// <summary>Checks that native source mode and measurements agree without treating unknown fields as zero.</summary>
     internal static bool HasCompleteSdkAccounting(UsageSubmission submission)
     {
         ArgumentNullException.ThrowIfNull(submission);
@@ -132,12 +127,10 @@ internal static class UsageLedgerValidation
         };
     }
 
-    /// <summary>Accepts bounded, non-whitespace SDK accounting identity values.</summary>
     private static bool IsAccountingIdentityText(string? value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= 512 &&
         !value.Any(character => char.IsControl(character) || char.IsWhiteSpace(character));
 
-    /// <summary>Validates every persisted cost binding and rate-card identity before canonicalization.</summary>
     private static void ValidateBinding(CostBinding binding)
     {
         ValidateIdentifier(binding.MeterSource, nameof(binding.MeterSource), 256);
@@ -167,7 +160,6 @@ internal static class UsageLedgerValidation
             ValidateIdentifier(capability, nameof(binding.NegotiatedCapabilities));
     }
 
-    /// <summary>Requires a bounded identifier without whitespace or control characters.</summary>
     private static void ValidateIdentifier(string value, string parameter, int maximumLength = 512)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > maximumLength ||
@@ -175,21 +167,18 @@ internal static class UsageLedgerValidation
             throw new ArgumentException("A non-empty bounded identifier without whitespace is required.", parameter);
     }
 
-    /// <summary>Rejects a negative required usage number.</summary>
     private static void RequireNonNegative(long value, string parameter)
     {
         if (value < 0)
             throw new ArgumentOutOfRangeException(parameter, "Usage values cannot be negative.");
     }
 
-    /// <summary>Rejects negative values while preserving null as unknown.</summary>
     private static void RequireNonNegative(long? value, string parameter)
     {
         if (value < 0)
             throw new ArgumentOutOfRangeException(parameter, "Usage values cannot be negative.");
     }
 
-    /// <summary>Rejects a negative price while preserving null as unknown.</summary>
     private static void RequireNonNegative(decimal? value, string parameter)
     {
         if (value < 0)
@@ -197,10 +186,8 @@ internal static class UsageLedgerValidation
     }
 }
 
-/// <summary>Serializes ledger inputs in stable property and collection order before hashing or duplicate comparison.</summary>
 internal static class UsageLedgerCanonicalizer
 {
-    /// <summary>Serializes attribution, measurements, source metadata, binding, and price for immutable event identity.</summary>
     public static string Serialize(
         UsageSubmission submission,
         CostBinding? binding,
@@ -285,7 +272,6 @@ internal static class UsageLedgerCanonicalizer
         return Encoding.UTF8.GetString(stream.ToArray());
     }
 
-    /// <summary>Serializes a rate card in canonical key order for stable identity checks.</summary>
     public static string SerializeRateCard(CostRateCard card)
     {
         using var stream = new MemoryStream();
@@ -294,11 +280,9 @@ internal static class UsageLedgerCanonicalizer
         return Encoding.UTF8.GetString(stream.ToArray());
     }
 
-    /// <summary>Compares rate-card contents rather than object identity.</summary>
     public static bool RateCardsEqual(CostRateCard left, CostRateCard right) =>
         string.Equals(SerializeRateCard(left), SerializeRateCard(right), StringComparison.Ordinal);
 
-    /// <summary>Writes the pinned provider and capabilities in deterministic order.</summary>
     private static void WriteBinding(Utf8JsonWriter writer, CostBinding binding)
     {
         writer.WriteStartObject();
@@ -319,7 +303,6 @@ internal static class UsageLedgerCanonicalizer
         writer.WriteEndObject();
     }
 
-    /// <summary>Writes rate-card values and model rates in deterministic key order.</summary>
     private static void WriteRateCard(Utf8JsonWriter writer, CostRateCard card)
     {
         writer.WriteStartObject();
@@ -336,7 +319,6 @@ internal static class UsageLedgerCanonicalizer
         writer.WriteEndObject();
     }
 
-    /// <summary>Writes a nullable integer as a number or explicit JSON null.</summary>
     private static void WriteNullableNumber(Utf8JsonWriter writer, string name, long? value)
     {
         if (value.HasValue)
@@ -345,7 +327,6 @@ internal static class UsageLedgerCanonicalizer
             writer.WriteNull(name);
     }
 
-    /// <summary>Writes a nullable decimal without conversion through binary floating point.</summary>
     private static void WriteNullableNumber(Utf8JsonWriter writer, string name, decimal? value)
     {
         writer.WritePropertyName(name);
@@ -355,7 +336,6 @@ internal static class UsageLedgerCanonicalizer
             writer.WriteNullValue();
     }
 
-    /// <summary>Writes a nullable string as its value or explicit JSON null.</summary>
     private static void WriteNullableString(Utf8JsonWriter writer, string name, string? value)
     {
         if (value is null)
@@ -364,14 +344,12 @@ internal static class UsageLedgerCanonicalizer
             writer.WriteString(name, value);
     }
 
-    /// <summary>Writes a decimal using invariant exact decimal text.</summary>
     private static void WriteNumber(Utf8JsonWriter writer, string name, decimal value)
     {
         writer.WritePropertyName(name);
         WriteNumberValue(writer, value);
     }
 
-    /// <summary>Emits exact decimal digits without locale-dependent formatting.</summary>
     private static void WriteNumberValue(Utf8JsonWriter writer, decimal value) =>
         writer.WriteRawValue(value.ToString("G29", CultureInfo.InvariantCulture), skipInputValidation: true);
 }

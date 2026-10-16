@@ -5,10 +5,8 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Implements resume-specific bootstrap authorization, delivery, and host-state reconciliation.</summary>
 public sealed partial class EnvironmentRuntimeBootstrapDelivery
 {
-    /// <summary>Requires the orchestrator to echo the same still-current resume bootstrap request.</summary>
     public async Task RequireCurrentResumeBootstrapAsync(
         RuntimeResumeBootstrapRequest request, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
     {
@@ -24,9 +22,6 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
             throw new RuntimeAuthorizationException("runtime_resume_bootstrap_authority_changed");
     }
 
-    /// <summary>
-    /// Executes or reconciles bootstrap for a restored runtime, including delivery verification and host activation.
-    /// </summary>
     public async Task<RuntimeResumeBootstrapReceipt> BootstrapResumeAsync(
         RuntimeResumeBootstrapRequest request, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
     {
@@ -59,7 +54,6 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
         }
     }
 
-    /// <summary>Reads protected resume configuration, delivers it to the broker, activates the host, and clears bytes.</summary>
     private async Task<RuntimeResumeBootstrapReceipt> ProduceResumeBootstrapAsync(
         RuntimeResumeBootstrapRequest request, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
     {
@@ -96,7 +90,6 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
         }
     }
 
-    /// <summary>Builds the host configuration request bound to the resume registration and operation identifiers.</summary>
     private static RuntimeHostConfigureRequest ResumeConfigurationRequest(RuntimeResumeBootstrapRequest request) =>
         new(1, request.Registration, request.ConsumeOperationId, request.ExchangeOperationId,
             JsonSerializer.SerializeToElement<object?>(null))
@@ -104,7 +97,6 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
             ResumeBootstrap = request
         };
 
-    /// <summary>Checks that the host retained the expected resume state and that registration and placement remain current.</summary>
     private async Task RequireHostStateAsync(
         RuntimeResumeBootstrapRequest request, RuntimeBootstrapDeliveryReceipt delivery,
         RuntimeActorAuthorization actor, CancellationToken cancellationToken)
@@ -124,7 +116,6 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
                 new RuntimeResumeBootstrapStateLossReceipt(delivery, state).ValidateFor(request));
     }
 
-    /// <summary>Rejects a broker receipt that does not bind to the requested operation, hash, registration, and placement.</summary>
     private static void RequireResumeDelivery(
         RuntimeBootstrapDeliveryReceipt delivery, RuntimeResumeBootstrapRequest request, string hash)
     {

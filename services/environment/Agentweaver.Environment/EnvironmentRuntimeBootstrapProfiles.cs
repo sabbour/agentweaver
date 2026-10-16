@@ -5,13 +5,11 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Runtime host endpoints and optional MCP server pinned to one profile identifier.</summary>
 public sealed record EnvironmentRuntimeBootstrapProfile(
     string ProfileId,
     Uri ConfigureEndpoint,
     Uri ObservationEndpoint)
 {
-    /// <summary>Validates the profile identifier and HTTPS endpoints before the profile can be used.</summary>
     public EnvironmentRuntimeBootstrapProfile Validate()
     {
         if (!IsIdentifier(ProfileId) ||
@@ -24,7 +22,6 @@ public sealed record EnvironmentRuntimeBootstrapProfile(
 
     public RuntimeMcpServerEndpoint? McpServer { get; init; }
 
-    /// <summary>Checks the bounded identifier alphabet shared by bootstrap profile IDs.</summary>
     internal static bool IsIdentifier(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= 256 &&
@@ -32,13 +29,11 @@ public sealed record EnvironmentRuntimeBootstrapProfile(
             character is '.' or '_' or '-' or ':');
 }
 
-    /// <summary>Registration of a bootstrap profile for an exact Environment owner and Sandbox resource.</summary>
 public sealed record EnvironmentRuntimeBootstrapProfileRegistration(
     EnvironmentOwnerIdentity Owner,
     EnvironmentRuntimeBootstrapProfile Profile,
     ProviderResourceRef Placement)
 {
-    /// <summary>Validates that the profile registration names an exact Sandbox placement.</summary>
     public EnvironmentRuntimeBootstrapProfileRegistration Validate()
     {
         ArgumentNullException.ThrowIfNull(Owner);
@@ -54,7 +49,6 @@ public sealed record EnvironmentRuntimeBootstrapProfileRegistration(
     }
 }
 
-/// <summary>Owner-authorized profile replacement pinned to actor, selection, source profile, lease, and runtime endpoint.</summary>
 public sealed record EnvironmentRuntimeBootstrapProfileReplacement(
     int ContractVersion,
     string SourceProfileId,
@@ -72,7 +66,6 @@ public sealed record EnvironmentRuntimeBootstrapProfileReplacement(
     DateTimeOffset LeaseExpiresAt,
     SandboxRuntimeHttpsEndpoint RuntimeEndpoint)
 {
-    /// <summary>Validates the replacement contract, configuration hashes, actor binding, endpoint, and lease fences.</summary>
     public EnvironmentRuntimeBootstrapProfileReplacement Validate()
     {
         ArgumentNullException.ThrowIfNull(Registration);
@@ -100,7 +93,6 @@ public sealed record EnvironmentRuntimeBootstrapProfileReplacement(
         return this;
     }
 
-    /// <summary>Checks whether this replacement was created for the same owner-context actor and accepted selection.</summary>
     internal bool MatchesOwnerContext(RuntimeOwnerContext ownerContext) =>
         ownerContext.ContractVersion == 1 &&
         ownerContext.TenantId == Registration.Owner.TenantId &&
@@ -110,7 +102,6 @@ public sealed record EnvironmentRuntimeBootstrapProfileReplacement(
         ownerContext.ActorId == ActorId &&
         ownerContext.AcceptedSelectionHash == AcceptedSelectionHash;
 
-    /// <summary>Checks that a runtime registration is bound to this replacement's owner, profile, actor, and selection.</summary>
     internal bool MatchesRuntimeBinding(RuntimeBinding binding) =>
         binding.TenantId == Registration.Owner.TenantId &&
         binding.ProjectId == Registration.Owner.ProjectId &&
@@ -121,7 +112,6 @@ public sealed record EnvironmentRuntimeBootstrapProfileReplacement(
         binding.ActorId == ActorId &&
         binding.AcceptedSelectionHash == AcceptedSelectionHash;
 
-    /// <summary>Checks that a replacement derives from the exact stored source profile and requested profile identifier.</summary>
     internal bool MatchesSourceProfile(
         EnvironmentRuntimeBootstrapProfileRegistration source,
         string profileId)
@@ -142,7 +132,6 @@ public sealed record EnvironmentRuntimeBootstrapProfileReplacement(
         return Registration.Profile == expectedProfile;
     }
 
-    /// <summary>Compares every saved lifecycle and lease fence with the current Sandbox placement projection.</summary>
     public bool MatchesCurrentPlacement(EnvironmentSandboxPlacementProjectionV1 placement)
     {
         ArgumentNullException.ThrowIfNull(placement);
@@ -156,7 +145,6 @@ public sealed record EnvironmentRuntimeBootstrapProfileReplacement(
             LeaseExpiresAt == placement.LeaseExpiresAt;
     }
 
-    /// <summary>Computes a stable hash of the validated profile configuration for replacement integrity checks.</summary>
     internal static string ConfigurationHash(EnvironmentRuntimeBootstrapProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
@@ -169,12 +157,10 @@ public sealed record EnvironmentRuntimeBootstrapProfileReplacement(
         value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
 }
 
-/// <summary>Provides immutable profile registrations keyed by Environment owner and profile ID.</summary>
 public sealed class EnvironmentRuntimeBootstrapProfileRegistry
 {
     private readonly ImmutableDictionary<OwnerProfileKey, EnvironmentRuntimeBootstrapProfileRegistration> _registrations;
 
-    /// <summary>Validates all profile registrations and rejects duplicate owner/profile keys.</summary>
     public EnvironmentRuntimeBootstrapProfileRegistry(
         IEnumerable<EnvironmentRuntimeBootstrapProfileRegistration> registrations)
     {
@@ -193,7 +179,6 @@ public sealed class EnvironmentRuntimeBootstrapProfileRegistry
         _registrations = builder.ToImmutable();
     }
 
-    /// <summary>Returns the profile only when it is registered for the exact current placement.</summary>
     public EnvironmentRuntimeBootstrapProfile Resolve(
         EnvironmentOwnerIdentity owner,
         string profileId,
@@ -204,7 +189,6 @@ public sealed class EnvironmentRuntimeBootstrapProfileRegistry
         return registration!.Profile;
     }
 
-    /// <summary>Looks up a profile bound to the exact Environment owner and Sandbox placement.</summary>
     public bool TryResolve(
         EnvironmentOwnerIdentity owner,
         string profileId,
@@ -229,7 +213,6 @@ public sealed class EnvironmentRuntimeBootstrapProfileRegistry
         return false;
     }
 
-    /// <summary>Looks up a source profile by owner and ID without requiring the target placement to match.</summary>
     public bool TryResolveSource(
         EnvironmentOwnerIdentity owner,
         string profileId,
@@ -247,7 +230,6 @@ public sealed class EnvironmentRuntimeBootstrapProfileRegistry
     private static RuntimeAuthorizationException Unavailable() =>
         new("runtime_delivery_unavailable");
 
-    /// <summary>Forms the immutable lookup key from all owner fields and the profile ID.</summary>
     private sealed record OwnerProfileKey(
         string TenantId,
         string ProjectId,
@@ -255,7 +237,6 @@ public sealed class EnvironmentRuntimeBootstrapProfileRegistry
         string EnvironmentId,
         string ProfileId)
     {
-        /// <summary>Creates a profile lookup key from the complete owner identity and profile ID.</summary>
         public static OwnerProfileKey From(EnvironmentOwnerIdentity owner, string profileId) => new(
             owner.TenantId,
             owner.ProjectId,

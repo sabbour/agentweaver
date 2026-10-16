@@ -1,7 +1,3 @@
-/**
- * Project-scoped view of one agent's durable memory entries. It loads a paged
- * slice from the API, exposes retryable errors, and links back to the team.
- */
 import { apiClient } from '../api/apiClient';
 import { ApiError } from '../api/client';
 import { Badge, makeStyles, tokens } from '@fluentui/react-components';
@@ -52,21 +48,14 @@ const useStyles = makeStyles({
   },
 });
 
-/** Converts transport and API failures into a message suitable for the page. */
 function formatApiError(err: unknown): string {
   if (err instanceof ApiError) return `API error ${err.status}: ${err.body || 'Request failed'}`;
   return err instanceof Error ? err.message : String(err);
 }
 
-/**
- * Loads memory for the route's project and agent; changing either route parameter
- * or the requested page cancels the previous result from updating this view.
- */
 export function AgentMemoryPage() {
   const styles = useStyles();
   const { projectId, agentName } = useParams<{ projectId: string; agentName: string }>();
-  // Keep a null entry list distinct from an empty result so first-load and no-data
-  // states can be rendered separately.
   const [entries, setEntries] = useState<AgentMemoryDto[] | null>(null);
   const [totalCount, setTotalCount] = useState(0);
   const [page, setPage] = useState(1);
@@ -75,8 +64,6 @@ export function AgentMemoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
 
-  // Fetch only when both route identifiers exist. The local cancellation flag prevents
-  // a slower request for an old page or agent from replacing newer data.
   useEffect(() => {
     if (!projectId || !agentName) return;
     let cancelled = false;

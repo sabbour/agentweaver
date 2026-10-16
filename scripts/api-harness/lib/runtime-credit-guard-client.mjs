@@ -7,15 +7,9 @@ import {
   validateRuntimeCreditGuardSnapshot,
 } from './runtime-credit-guard-contract.mjs';
 
-/** Reads the Orchestrator's actor-scoped runtime credit-guard snapshot for the P1 harness. */
 const CORRELATION_HEADERS = ['traceparent', 'request-id', 'x-request-id', 'x-correlation-id'];
 
-/**
- * Calls the no-store credit-guard read endpoint and records redacted HTTP evidence.
- * The endpoint response is checked against the shared contract before a successful snapshot is accepted.
- */
 export class RuntimeCreditGuardClient {
-  /** Require a validated root URL, origin-bound actor auth provider, and fetch implementation. */
   constructor({ baseUrl, authProvider, fetchImpl = globalThis.fetch }) {
     this.target = validateNetworkTarget(baseUrl, { exactPath: '/' });
     if (typeof authProvider?.getAuthorization !== 'function' || authProvider.origin !== this.target.origin) {
@@ -27,10 +21,6 @@ export class RuntimeCreditGuardClient {
     this.calls = [];
   }
 
-  /**
-   * Read one validated intent and preserve its actual status, cache policy, and redacted response.
-   * Non-no-store responses and invalid successful snapshots throw after the call evidence is retained.
-   */
   async read(request, { signal } = {}) {
     validateRuntimeCreditGuardReadRequest(request);
     const url = new URL(RUNTIME_CREDIT_GUARD_READ_PATH, this.target);

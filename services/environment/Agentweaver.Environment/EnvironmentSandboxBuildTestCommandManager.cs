@@ -11,7 +11,6 @@ using Agentweaver.Providers.Storage.AzureFiles;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Runs accepted build/test commands in a Sandbox and tracks external effects for safe reconciliation.</summary>
 public sealed partial class EnvironmentSandboxBuildTestCommandManager(
     EnvironmentEgressManager egressManager,
     IEnvironmentLifecycleStore lifecycleStore,
@@ -44,7 +43,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
     private const string CollectorPodGateReleased = "collector-pod:gate-released";
     private const string CommandSucceededMarker = "command:exit-zero-observed";
 
-    /// <summary>Resolves accepted metadata, reserves the operation, and advances it unless it is an exact replay.</summary>
     public async Task<SandboxBuildTestOperationResult> ExecuteAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -88,7 +86,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
         return new(result.Operation, false);
     }
 
-    /// <summary>Reads an operation after validating the current Sandbox binding and network policy.</summary>
     public async Task<SandboxBuildTestOperationResult?> GetAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -116,7 +113,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
         return new(state.Operation, true);
     }
 
-    /// <summary>Resumes a non-terminal operation only when its immutable accepted request is unchanged.</summary>
     public async Task<SandboxBuildTestOperationResult> ReconcileAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -169,7 +165,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
         return new(result.Operation, true);
     }
 
-    /// <summary>Prepares the Sandbox binding for one accepted build/test execution profile.</summary>
     public async Task<SandboxBuildTestBindingPreparation> PrepareBindingAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -212,7 +207,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
             profile).Validate(sessionId, executionProfileReference);
     }
 
-    /// <summary>Resolves the checkpoint's immutable accepted command from the current owner service.</summary>
     private async Task<SandboxBuildTestAcceptedCommand> ResolveAcceptedCommandAsync(
         SandboxBuildTestCheckpointReference checkpoint,
         CancellationToken cancellationToken)
@@ -224,7 +218,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
         return command;
     }
 
-    /// <summary>Requires a prepared binding for the accepted command, current Sandbox lease, workspace, and policy.</summary>
     private async Task<PinnedBuildTestContext> RequirePreparedBindingAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -253,7 +246,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
         return context;
     }
 
-    /// <summary>Re-verifies the exact network generation and current provider binding before reading command state.</summary>
     private async Task VerifyNetworkAndBindingAsync(
         CurrentCallerRequest caller,
         PinnedBuildTestContext context,
@@ -268,7 +260,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
         await ConfirmUnchangedAsync(caller, context, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Requires the route owner to match the owner tuple in the accepted command request.</summary>
     private static void ValidateRequestOwner(
         SandboxBuildTestApiRequest request,
         string projectId,
@@ -283,7 +274,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
             throw new ArgumentException("The BuildTest request must match its project, run, and Environment route.");
     }
 
-    /// <summary>Creates the initial immutable operation snapshot with the accepted command fingerprint.</summary>
     private SandboxBuildTestOperationSnapshot CreateInitialOperation(
         SandboxBuildTestApiRequest request,
         SandboxBuildTestAcceptedCommand acceptedCommand,
@@ -323,7 +313,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
             now).Validate(acceptedCommand, acceptedCommand.ExecutionOptions.MaximumOutputBytes);
     }
 
-    /// <summary>Builds the isolated command policy from the accepted execution profile and selected egress rules.</summary>
     private BuildTestPolicyDefinition CreatePolicyDefinition(
         Guid operationId,
         SandboxBuildTestExpectedBinding expectedBinding,
@@ -440,10 +429,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
             SandboxBuildTestOperationStatus.Interrupted or
             SandboxBuildTestOperationStatus.Stale;
 
-    /// <summary>
-    /// Advances the command state machine through policy, command Pods, gates, execution, collection, and cleanup.
-    /// Durable attempt markers allow an interrupted step to be reconciled without guessing whether it ran.
-    /// </summary>
     private async Task<EnvironmentSandboxBuildTestCommandState> AdvanceAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -612,7 +597,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Creates and observes the command and collector network policies before allowing Pod execution.</summary>
     private async Task<EnvironmentSandboxBuildTestCommandState> EnsurePolicyAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -714,7 +698,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
         }
     }
 
-    /// <summary>Creates or observes the command Pod only after its policy binding and current intent are confirmed.</summary>
     private async Task<EnvironmentSandboxBuildTestCommandState> EnsureCommandPodAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -783,7 +766,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Creates or observes the separate output collector Pod under its pinned network policy.</summary>
     private async Task<EnvironmentSandboxBuildTestCommandState> EnsureCollectorPodAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -854,7 +836,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Releases a Pod's execution gate only after the accepted command and policy state remain current.</summary>
     private async Task<EnvironmentSandboxBuildTestCommandState> ReleasePodGateAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -1009,7 +990,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Persists pod observations and terminal output before accepting further provider effects.</summary>
     internal async Task<EnvironmentSandboxBuildTestCommandState> RecordCollectorObservationAsync(
         SandboxBuildTestApiRequest request,
         SandboxBuildTestAcceptedCommand acceptedCommand,
@@ -1193,7 +1173,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
         return await SaveOperationAsync(state, operation, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Revalidates authorization, accepted command, lease, workspace, and network binding before an effect.</summary>
     private async Task<EnvironmentSandboxBuildTestCommandState> RequireCurrentIntentAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -1237,7 +1216,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
         }
     }
 
-    /// <summary>Rechecks both persisted and owner-service command metadata before continuing a native operation.</summary>
     internal async Task VerifyCurrentCommandAsync(
         SandboxBuildTestAcceptedCommand acceptedCommand,
         SandboxBuildTestAcceptedCommand persistedCommand,
@@ -1250,7 +1228,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
         await commandVerifier.VerifyCurrentAsync(acceptedCommand, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Restores the latest accepted command only when it is byte-for-byte equivalent to the persisted intent.</summary>
     internal static EnvironmentSandboxBuildTestCommandState RestoreAcceptedCommand(
         EnvironmentSandboxBuildTestCommandState state,
         SandboxBuildTestAcceptedCommand acceptedCommand)
@@ -1277,7 +1254,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
             "workspace_unsupported" or
             "buildtest_profile_mismatch";
 
-    /// <summary>Persists a unique provider-effect marker before the corresponding external operation is attempted.</summary>
     private async Task<EnvironmentSandboxBuildTestCommandState> AddAttemptAsync(
         EnvironmentSandboxBuildTestCommandState state,
         string marker,
@@ -1307,7 +1283,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
         return prefix + next.ToString(CultureInfo.InvariantCulture);
     }
 
-    /// <summary>Stops automatic progress when a provider effect may have occurred but its result is unresolved.</summary>
     private async Task<EnvironmentSandboxBuildTestCommandState> MarkReconciliationRequiredAsync(
         EnvironmentSandboxBuildTestCommandState state,
         string failureCode,
@@ -1324,7 +1299,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
         return await SaveOperationAsync(state, updated, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Marks an operation stale when its accepted command or current owner binding has changed.</summary>
     private async Task<EnvironmentSandboxBuildTestCommandState> MarkStaleAsync(
         EnvironmentSandboxBuildTestCommandState state,
         string failureCode,
@@ -1342,7 +1316,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Records a safe provider failure code and preserves attempted-effect evidence for reconciliation.</summary>
     private async Task<EnvironmentSandboxBuildTestCommandState> MarkProviderFailureAsync(
         EnvironmentSandboxBuildTestCommandState state,
         SandboxProviderException exception,
@@ -1363,7 +1336,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Persists a validated operation transition and its attempted-effect markers under the owner fence.</summary>
     private async Task<EnvironmentSandboxBuildTestCommandState> SaveOperationAsync(
         EnvironmentSandboxBuildTestCommandState state,
         SandboxBuildTestOperationSnapshot operation,
@@ -1400,7 +1372,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
             expected.NetworkPolicyGeneration,
             commandPolicy).Validate();
 
-    /// <summary>Reads the exact current Sandbox, workspace, selected policy, and owner authority for a command.</summary>
     private async Task<PinnedBuildTestContext> ReadPinnedContextAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -1493,7 +1464,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
             expected);
     }
 
-    /// <summary>Rejects the operation if the pinned selection or owner binding changed after provider work.</summary>
     private async Task ConfirmUnchangedAsync(
         CurrentCallerRequest caller,
         PinnedBuildTestContext context,
@@ -1578,7 +1548,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
             throw new ArgumentException("A bounded opaque identifier is required.", name);
     }
 
-    /// <summary>Current owner, provider, network policy, and accepted selection pinned for one command operation.</summary>
     private sealed record PinnedBuildTestContext(
         CurrentCallerRequest Caller,
         EnvironmentOwnerIdentity Owner,
@@ -1591,7 +1560,6 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager(
         AgentSandboxOptions Options,
         SandboxBuildTestExpectedBinding ExpectedBinding);
 
-    /// <summary>Resolved Cilium policy configuration used to isolate the command Pods.</summary>
     private sealed record BuildTestPolicyDefinition(
         CiliumNetworkPolicyDocument Resource,
         SandboxBuildTestCommandNetworkPolicyBinding? CommandBinding,

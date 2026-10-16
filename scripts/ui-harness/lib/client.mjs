@@ -10,7 +10,6 @@ const GATE_KINDS = new Map([
   ['awaitingApproval', ['approval']],
 ]);
 
-/** Validate and encode one exact owner identifier for a project/run path. */
 function segment(value) {
   if (typeof value !== 'string' || !value.trim() || value === '.' || value === '..') {
     throw new Error('An exact owner identifier is required.');
@@ -18,12 +17,7 @@ function segment(value) {
   return encodeURIComponent(value);
 }
 
-/**
- * Observe the Gateway requests made by an already-authorized browser page.
- * Actions are allowed only for the selected project and run, with captured evidence bound to tenant and actor.
- */
 export class UiHarnessClient {
-  /** Bind browser traffic to the exact web origin, Gateway origin, tenant, and broker actor. */
   constructor({ page, baseUrl, gatewayUrl, tenantId, issuer, audience, actorId }) {
     this.target = validateNetworkTarget(baseUrl, { exactPath: '/' });
     this.gateway = validateNetworkTarget(gatewayUrl, { exactPath: '/api/v1' });
@@ -57,13 +51,11 @@ export class UiHarnessClient {
     page.on('requestfailed', this.onFailedRequest);
   }
 
-  /** Return whether a URL is an API v1 request to the selected Gateway origin. */
   matches(url) {
     const target = new URL(url);
     return target.origin === this.gateway.origin && target.pathname.startsWith('/api/v1/');
   }
 
-  /** Capture one matching Playwright response at most once, including its redirect ancestry. */
   capture(response) {
     let original = response.request();
     while (original.redirectedFrom?.()) original = original.redirectedFrom();
@@ -74,10 +66,6 @@ export class UiHarnessClient {
     return promise;
   }
 
-  /**
-   * Verify and record a Gateway request/response, retaining redacted evidence and private transient bodies.
-   * Failed verification is recorded and surfaced by flush rather than accepted as owner evidence.
-   */
   async captureResponse(response) {
     const request = response.request();
     const url = new URL(request.url());
@@ -125,20 +113,17 @@ export class UiHarnessClient {
     return record;
   }
 
-  /** Wait for pending network captures and reject if any selected-surface request failed validation. */
   async flush() {
     while (this.pending.size) await Promise.all([...this.pending]);
     if (this.failures.length) throw new Error('UI network evidence failed; inspect the redacted calls.');
   }
 
-  /** Build an API path beneath the currently bound project and run. */
   runPath(...parts) {
     if (!this.binding) throw new Error('Open the exact project and run before taking an action.');
     return `/api/v1/projects/${segment(this.binding.projectId)}/runs/${segment(this.binding.runId)}`
       + (parts.length ? `/${parts.map(segment).join('/')}` : '');
   }
 
-  /** Navigate the injected page to one exact project/run without initiating login or consent. */
   async openRun({ projectId, runId }) {
     segment(projectId);
     segment(runId);
@@ -150,7 +135,6 @@ export class UiHarnessClient {
     }
   }
 
-  /** Fail if the browser has left the selected project and run page. */
   requirePageScope() {
     const url = validateNetworkTarget(this.page.url());
     if (!this.binding || url.origin !== this.target.origin
@@ -159,23 +143,17 @@ export class UiHarnessClient {
     }
   }
 
-  /** Select one of the known P1 run tabs after validating the page scope. */
   async selectView(name) {
     if (!VIEWS.has(name)) throw new Error('Unknown P1 run view.');
     this.requirePageScope();
     await this.page.getByRole('tab', { name, exact: true }).click();
   }
 
-  /** Wait for a response at the exact Gateway path and HTTP method. */
   waitFor(path, method = 'GET') {
     return this.page.waitForResponse(response => response.url() === `${this.gateway.origin}${path}`
       && response.request().method() === method, { timeout: 30000 });
   }
 
-  /**
-   * Trigger a UI refresh, capture the run and requested owner snapshots, and verify their scope.
-   * Any failed capture or non-200 snapshot throws before a caller can take an action.
-   */
   async refresh(paths = []) {
     const runPath = this.runPath('coordination', 'status');
     const responses = [runPath, ...paths].map(path => this.waitFor(path));
@@ -193,10 +171,6 @@ export class UiHarnessClient {
     return calls.map(call => call.transientResponseBody);
   }
 
-  /**
-   * Answer, approve, or reject the exact gate authorized by current owner snapshots.
-   * Checks the actor, run fence, state version, fresh idempotency key, and actual decision receipt.
-   */
   async gate({ sessionId, requestId, action, answer }) {
     if (!['answer', 'approve', 'reject'].includes(action)) throw new Error('Unknown exact-gate action.');
     segment(requestId);
@@ -269,10 +243,6 @@ export class UiHarnessClient {
     return call;
   }
 
-  /**
-   * Send a message between existing active sessions through the visible UI.
-   * Verifies the exact recipient, immediate delivery mode, progress purpose, payload, and owner receipt.
-   */
   async sendMessage({ rootSessionId, senderSessionId, recipientSessionId, text }) {
     if (senderSessionId === recipientSessionId || typeof text !== 'string' || !text.trim()) {
       throw new Error('An addressed message needs different existing sessions and nonempty text.');
@@ -320,10 +290,6 @@ export class UiHarnessClient {
     return call;
   }
 
-  /**
-   * Reload the Activity view, verify its complete owner cursor chain, and compare rendered journal order.
-   * Returns event metadata only; transcript content is deliberately unavailable in this evidence record.
-   */
   async replayJournal() {
     await this.selectView('Activity');
     const start = this.calls.length;
@@ -388,7 +354,6 @@ export class UiHarnessClient {
       pageCount: pages.length, nextCursor: cursor, transcriptContentAvailable: false });
   }
 
-  /** Remove network listeners and fail if captured evidence remains invalid. */
   async close() {
     this.page.off('response', this.onResponse);
     this.page.off('requestfailed', this.onFailedRequest);

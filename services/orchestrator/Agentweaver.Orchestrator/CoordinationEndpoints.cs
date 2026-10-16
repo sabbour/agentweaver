@@ -6,16 +6,10 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Maps the authenticated run-coordination API and adapts owner results to HTTP responses.
-/// </summary>
 public static partial class CoordinationEndpoints
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    /// <summary>
-    /// Registers session, decision, messaging, turn, and run-execution routes.
-    /// </summary>
     public static IEndpointRouteBuilder MapCoordinationEndpoints(this IEndpointRouteBuilder app)
     {
         var coordination = app.MapGroup("/api/projects/{projectId}/runs/{runId}/coordination")
@@ -129,9 +123,6 @@ public static partial class CoordinationEndpoints
         return app;
     }
 
-    /// <summary>
-    /// Registers the runtime-observation route used to report an authenticated SDK observation.
-    /// </summary>
     public static IEndpointRouteBuilder MapRuntimeObservationV1Endpoint(this IEndpointRouteBuilder app)
     {
         app.MapGet(
@@ -140,9 +131,6 @@ public static partial class CoordinationEndpoints
         return app;
     }
 
-    /// <summary>
-    /// Reads the current coordinator decision state for the authorized root session.
-    /// </summary>
     private static Task<IResult> ReadCoordinatorDecisionStateAsync(
         string projectId,
         string runId,
@@ -173,9 +161,6 @@ public static partial class CoordinationEndpoints
                 current.State.PendingGate));
         }, cancellationToken);
 
-    /// <summary>
-    /// Reads the root session's current tree from the coordination owner.
-    /// </summary>
     private static Task<IResult> ReadSessionTreeAsync(
         string projectId,
         string runId,
@@ -198,9 +183,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(tree);
         }, cancellationToken);
 
-    /// <summary>
-    /// Combines owner session state with runtime observations to report current blockers and activity.
-    /// </summary>
     private static Task<IResult> ReadSessionStatusAsync(
         string projectId,
         string runId,
@@ -239,9 +221,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(status);
         }, cancellationToken);
 
-    /// <summary>
-    /// Converts a coordinator gate into the public session-status blocker shape.
-    /// </summary>
     private static SessionStatusBlocker ToStatusBlocker(CoordinatorGateRequest gate)
     {
         var kind = gate.Kind switch
@@ -259,9 +238,6 @@ public static partial class CoordinationEndpoints
             kind, gate.RequestId, gate.AllowedChoices, gate.AllowsFreeform, gate.Prompt);
     }
 
-    /// <summary>
-    /// Creates a child session through the session-tree owner and returns its dispatch request.
-    /// </summary>
     private static Task<IResult> SpawnSessionAsync(
         string projectId,
         string runId,
@@ -323,9 +299,6 @@ public static partial class CoordinationEndpoints
             return Results.Accepted(value: spawned);
         }, cancellationToken);
 
-    /// <summary>
-    /// Starts a fork command from a validated source event and reports pending or completed registration.
-    /// </summary>
     private static Task<IResult> ForkSessionAsync(
         string projectId,
         string runId,
@@ -425,9 +398,6 @@ public static partial class CoordinationEndpoints
                 : Results.Conflict(completed);
         }, cancellationToken);
 
-    /// <summary>
-    /// Detaches a child from its parent using a fenced, idempotent tree command.
-    /// </summary>
     private static Task<IResult> DetachSessionAsync(
         string projectId,
         string runId,
@@ -450,9 +420,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(detached);
         }, cancellationToken);
 
-    /// <summary>
-    /// Archives a child session through the coordination owner.
-    /// </summary>
     private static Task<IResult> ArchiveChildAsync(
         string projectId,
         string runId,
@@ -479,9 +446,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(archived);
         }, cancellationToken);
 
-    /// <summary>
-    /// Creates or updates the caller's subscription to a target session's idle notifications.
-    /// </summary>
     private static Task<IResult> SubscribeToIdleAsync(
         string projectId,
         string runId,
@@ -504,9 +468,6 @@ public static partial class CoordinationEndpoints
             return Results.Accepted(value: subscription);
         }, cancellationToken);
 
-    /// <summary>
-    /// Sends a typed steering message to a session and returns the owner message result.
-    /// </summary>
     private static Task<IResult> SteerSessionAsync(
         string projectId,
         string runId,
@@ -556,9 +517,6 @@ public static partial class CoordinationEndpoints
                 cancellationToken).ConfigureAwait(false);
         }, cancellationToken);
 
-    /// <summary>
-    /// Approves the pending coordinator gate using its expected decision version.
-    /// </summary>
     private static Task<IResult> ApproveCoordinatorGateAsync(
         string projectId,
         string runId,
@@ -586,9 +544,6 @@ public static partial class CoordinationEndpoints
             decisions,
             cancellationToken);
 
-    /// <summary>
-    /// Rejects the pending coordinator gate using its expected decision version.
-    /// </summary>
     private static Task<IResult> RejectCoordinatorGateAsync(
         string projectId,
         string runId,
@@ -616,9 +571,6 @@ public static partial class CoordinationEndpoints
             decisions,
             cancellationToken);
 
-    /// <summary>
-    /// Proposes a coordinator outcome and persists the resulting decision transition.
-    /// </summary>
     private static Task<IResult> ProposeCoordinatorOutcomeAsync(
         string projectId,
         string runId,
@@ -671,9 +623,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(ToDecisionResponse(saved));
         }, cancellationToken);
 
-    /// <summary>
-    /// Adds a coordinator question and its allowed response set to the decision state.
-    /// </summary>
     private static Task<IResult> AskCoordinatorQuestionAsync(
         string projectId,
         string runId,
@@ -731,9 +680,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(ToDecisionResponse(saved));
         }, cancellationToken);
 
-    /// <summary>
-    /// Selects a permitted workflow and persists the resulting decision transition.
-    /// </summary>
     private static Task<IResult> SelectCoordinatorWorkflowAsync(
         string projectId,
         string runId,
@@ -796,9 +742,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(ToDecisionResponse(saved));
         }, cancellationToken);
 
-    /// <summary>
-    /// Proposes a work plan for validation against the selected workflow and run context.
-    /// </summary>
     private static Task<IResult> ProposeCoordinatorWorkPlanAsync(
         string projectId,
         string runId,
@@ -874,9 +817,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(ToDecisionResponse(saved));
         }, cancellationToken);
 
-    /// <summary>
-    /// Revises the candidate work plan and applies the coordinator's revision-attempt limit.
-    /// </summary>
     private static Task<IResult> ReviseCoordinatorWorkPlanAsync(
         string projectId,
         string runId,
@@ -955,9 +895,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(ToDecisionResponse(saved));
         }, cancellationToken);
 
-    /// <summary>
-    /// Requests assembly of results for a confirmed work plan.
-    /// </summary>
     private static Task<IResult> RequestCoordinatorAssemblyAsync(
         string projectId,
         string runId,
@@ -1005,9 +942,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(ToDecisionResponse(saved));
         }, cancellationToken);
 
-    /// <summary>
-    /// Requests the next outcome-clarifying question when the decision state permits one.
-    /// </summary>
     private static Task<IResult> AskNextOutcomeClarifyingQuestionAsync(
         string projectId,
         string runId,
@@ -1057,9 +991,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(ToDecisionResponse(saved));
         }, cancellationToken);
 
-    /// <summary>
-    /// Requests approval for a subject through the coordinator decision gate.
-    /// </summary>
     private static Task<IResult> RequestCoordinatorApprovalAsync(
         string projectId,
         string runId,
@@ -1113,9 +1044,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(ToDecisionResponse(saved));
         }, cancellationToken);
 
-    /// <summary>
-    /// Applies a user's answer to the pending gate and persists the decision transition.
-    /// </summary>
     private static Task<IResult> AnswerCoordinatorGateAsync(
         string projectId,
         string runId,
@@ -1170,9 +1098,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(ToDecisionResponse(saved));
         }, cancellationToken);
 
-    /// <summary>
-    /// Acknowledges a pending gate without supplying a choice or freeform answer.
-    /// </summary>
     private static Task<IResult> AcknowledgeCoordinatorGateAsync(
         string projectId,
         string runId,
@@ -1228,10 +1153,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(ToDecisionResponse(saved));
         }, cancellationToken);
 
-    /// <summary>
-    /// Re-reads Projects authority and rejects an operation if the accepted selection has changed.
-    /// </summary>
-    /// <remarks>This check is repeated around state-changing operations so revocation or revision changes fail closed.</remarks>
     internal static async Task RequireUnchangedAuthorizedSelectionAsync(
         HttpContext context,
         string projectId,
@@ -1247,9 +1168,6 @@ public static partial class CoordinationEndpoints
                 "coordinator_selection_stale", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Compares the complete accepted selection and authorization context rather than only project and run identifiers.
-    /// </summary>
     private static bool AuthorizedSelectionIsUnchanged(
         string projectId,
         AuthorizedRunSelection initial,
@@ -1279,9 +1197,6 @@ public static partial class CoordinationEndpoints
         return true;
     }
 
-    /// <summary>
-    /// Counts existing children before applying a decision transition that would exceed the accepted run limit.
-    /// </summary>
     private static async Task<CoordinatorDecisionTransition<T>> EnforceRunChildLimitAsync<T>(
         CoordinatorDecisionTransition<T> transition,
         CoordinatorDecisionState currentState,
@@ -1311,18 +1226,12 @@ public static partial class CoordinationEndpoints
             ]);
     }
 
-    /// <summary>
-    /// Identifies plans whose run context must include a pinned provider resource binding.
-    /// </summary>
     private static bool RequiresProviderBinding(CoordinatorDecisionState state, WorkPlan? plan) =>
         plan?.Items.IsDefaultOrEmpty == false ||
         state.SelectedWorkflow?.Definition.Steps.Any(step =>
             step.Mode == WorkflowStepMode.Fixed && step.FixedWork is not null ||
             step.BuildTestCommand is not null) == true;
 
-    /// <summary>
-    /// Reads the caller's current Projects role revision for grant issuance.
-    /// </summary>
     private static long GetProjectRoleRevision(
         ProjectsAuthorizationContext authorization,
         string projectId,
@@ -1341,9 +1250,6 @@ public static partial class CoordinationEndpoints
         return grants[0];
     }
 
-    /// <summary>
-    /// Projects a persisted coordinator transition into the HTTP response contract.
-    /// </summary>
     private static CoordinatorDecisionOperationResponse ToDecisionResponse(
         CoordinatorDecisionPersistedResult saved) =>
         new(
@@ -1355,9 +1261,6 @@ public static partial class CoordinationEndpoints
             saved.Issues,
             saved.TransitionValue);
 
-    /// <summary>
-    /// Reads a policy-evaluation receipt from the Events owner for the authorized root.
-    /// </summary>
     private static Task<IResult> ReadPolicyEvaluationReceiptAsync(
         string projectId,
         string runId,
@@ -1387,9 +1290,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(receipt);
         }, cancellationToken);
 
-    /// <summary>
-    /// Validates that a policy-evaluation receipt can be admitted for the accepted run.
-    /// </summary>
     private static Task<IResult> ValidatePolicyEvaluationReceiptAdmissionAsync(
         string projectId,
         string runId,
@@ -1408,9 +1308,6 @@ public static partial class CoordinationEndpoints
                 receiptId, receipt.Identity));
         }, cancellationToken);
 
-    /// <summary>
-    /// Accepts the root session and binds it to the current authorized run selection.
-    /// </summary>
     private static Task<IResult> AcceptRootAsync(
         string projectId,
         string runId,
@@ -1451,9 +1348,6 @@ public static partial class CoordinationEndpoints
                 accepted);
         }, cancellationToken);
 
-    /// <summary>
-    /// Registers a child session under an accepted root or parent.
-    /// </summary>
     private static Task<IResult> RegisterChildAsync(
         string projectId,
         string runId,
@@ -1507,9 +1401,6 @@ public static partial class CoordinationEndpoints
                 child);
         }, cancellationToken);
 
-    /// <summary>
-    /// Sends an owner-addressed message after validating the sender and recipient route.
-    /// </summary>
     private static Task<IResult> SendMessageAsync(
         string projectId,
         string runId,
@@ -1546,9 +1437,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(result with { Status = "admitted" });
         }, cancellationToken);
 
-    /// <summary>
-    /// Checks that the requested message recipient belongs to the authorized coordination route.
-    /// </summary>
     private static Task<IResult> ValidateMessageRouteAsync(
         string projectId,
         string runId,
@@ -1574,9 +1462,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(binding);
         }, cancellationToken);
 
-    /// <summary>
-    /// Reads the persisted run and parent binding for a session.
-    /// </summary>
     private static Task<IResult> GetSessionBindingAsync(
         string projectId,
         string runId,
@@ -1599,9 +1484,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(binding);
         }, cancellationToken);
 
-    /// <summary>
-    /// Checks whether a fork request is allowed for its source event and target session.
-    /// </summary>
     private static Task<IResult> ValidateSessionForkAdmissionAsync(
         string projectId,
         string runId,
@@ -1629,9 +1511,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(receipt);
         }, cancellationToken);
 
-    /// <summary>
-    /// Advances a logical turn boundary and returns any message presented to the session.
-    /// </summary>
     private static Task<IResult> AdvanceTurnBoundaryAsync(
         string projectId,
         string runId,
@@ -1688,9 +1567,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(boundary);
         }, cancellationToken);
 
-    /// <summary>
-    /// Finishes a logical turn using the supplied completion state and expected owner versions.
-    /// </summary>
     private static Task<IResult> FinishTurnAsync(
         string projectId,
         string runId,
@@ -1714,9 +1590,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(result);
         }, cancellationToken);
 
-    /// <summary>
-    /// Reads the run owner status for an authorized session binding.
-    /// </summary>
     private static Task<IResult> ReadOwnerRunStatusAsync(
         string projectId,
         string runId,
@@ -1736,9 +1609,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(result);
         }, cancellationToken);
 
-    /// <summary>
-    /// Reports a failed or indeterminate run state to the coordination owner.
-    /// </summary>
     private static Task<IResult> ReportRunFailureAsync(
         string projectId,
         string runId,
@@ -1764,9 +1634,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(result);
         }, cancellationToken);
 
-    /// <summary>
-    /// Recovers an eligible failed run while fencing sessions bound to the previous execution generation.
-    /// </summary>
     private static Task<IResult> RecoverRunExecutionAsync(
         string projectId,
         string runId,
@@ -1787,9 +1654,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(result);
         }, cancellationToken);
 
-    /// <summary>
-    /// Reads notifications addressed to the authenticated session.
-    /// </summary>
     private static Task<IResult> ReadNotificationsAsync(
         string projectId,
         string runId,
@@ -1814,9 +1678,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(notifications);
         }, cancellationToken);
 
-    /// <summary>
-    /// Acknowledges a notification using its owner-issued identifier.
-    /// </summary>
     private static Task<IResult> AcknowledgeNotificationAsync(
         string projectId,
         string runId,
@@ -1840,9 +1701,6 @@ public static partial class CoordinationEndpoints
             return Results.NoContent();
         }, cancellationToken);
 
-    /// <summary>
-    /// Acknowledges a delivered coordination message for the bound recipient.
-    /// </summary>
     private static Task<IResult> AcknowledgeMessageAsync(
         string projectId,
         string runId,
@@ -1868,9 +1726,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(acknowledged);
         }, cancellationToken);
 
-    /// <summary>
-    /// Builds the authenticated owner actor after validating the bearer, audience, scope, and project-run claims.
-    /// </summary>
     private static CoordinationActor RequireOwnerActor(
         HttpContext context,
         OrchestratorOptions options,
@@ -1887,10 +1742,6 @@ public static partial class CoordinationEndpoints
         return actor;
     }
 
-    /// <summary>
-    /// Runs an endpoint operation and maps coordination failures to controlled HTTP results.
-    /// </summary>
-    /// <remarks>Request cancellation is passed to the operation; expected owner rejections retain their typed status and code.</remarks>
     internal static async Task<IResult> ExecuteAsync(
         Func<Task<IResult>> action,
         CancellationToken cancellationToken)

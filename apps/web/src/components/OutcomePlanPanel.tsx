@@ -247,11 +247,6 @@ interface OutcomePlanPanelProps {
   onFooterChange?: (node: ReactNode) => void;
 }
 
-/**
- * Renders an orchestration's outcome plan and its confirm/clarify actions.
- * Run events and AI-provider context come from the run stream and `useAiExecutionContext`;
- * effects synchronize plan state, and local state manages edits and submission feedback.
- */
 export function OutcomePlanPanel({ runId, events, streamStatus, runStatus, onCollapse, onReconnect, onConfirmed, onClarifyPlan, clarificationSent = false, onFooterChange }: OutcomePlanPanelProps) {
   const styles = useStyles();
   const providerPreparation = useAiExecutionContext('orchestration', undefined, runId, Boolean(runId));

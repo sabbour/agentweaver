@@ -11,10 +11,6 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Agentweaver.AgentHost;
 
-/// <summary>
-/// Linux-only BuildTest output collector. It opens paths relative to no-follow directory handles,
-/// verifies mount and inode metadata before and after reads, and emits bounded hashed evidence.
-/// </summary>
 internal static partial class BuildTestOutputCollectorProgram
 {
     private const int AtFileDescriptorCwd = -100;
@@ -49,8 +45,6 @@ internal static partial class BuildTestOutputCollectorProgram
 
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
-    /// <summary>Reads one encoded collector request and writes a validated, bounded evidence receipt to stdout.</summary>
-    /// <remarks>Invalid requests, unsafe paths, unsupported Linux primitives, and read failures return nonzero codes.</remarks>
     internal static async Task<int> RunAsync(
         string[] args,
         CancellationToken cancellationToken = default)
@@ -135,7 +129,6 @@ internal static partial class BuildTestOutputCollectorProgram
         }
     }
 
-    /// <summary>Pre-opens all obligations, reads only bounded regular files, and rechecks each path after capture.</summary>
     private static async Task<ImmutableArray<SandboxBuildTestOutputEvidence>> CollectAsync(
         SandboxBuildTestOutputCollectorRequest request,
         string podUid,
@@ -200,7 +193,6 @@ internal static partial class BuildTestOutputCollectorProgram
         }
     }
 
-    /// <summary>Hashes a stable open file descriptor while enforcing file and aggregate byte limits.</summary>
     private static async Task<FileReadResult> ReadFileAsync(
         PreparedOutput output,
         long maximumFileBytes,
@@ -256,7 +248,6 @@ internal static partial class BuildTestOutputCollectorProgram
         return new(true, readBytes, Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant());
     }
 
-    /// <summary>Walks a relative path with no-follow handles and rejects links, special files, and mount changes.</summary>
     private static PreparedOutput PrepareOutput(
         string workspaceMountPath,
         SandboxBuildTestOutputObligation obligation,
@@ -345,7 +336,6 @@ internal static partial class BuildTestOutputCollectorProgram
         }
     }
 
-    /// <summary>Reopens the obligation path and verifies it still identifies the captured file or missing path.</summary>
     private static void VerifyPathUnchanged(
         string workspaceMountPath,
         PreparedOutput original,

@@ -1,6 +1,5 @@
 import { redact } from '../../harness-shared/redaction.mjs';
 
-/** Check that an API receipt identifies the expected project and has a usable owner revision. */
 function requireProject(call, projectId, name) {
   const project = call.transientResponseBody;
   if (call.status !== 200 && call.status !== 201 || typeof project?.projectId !== 'string'
@@ -12,12 +11,7 @@ function requireProject(call, projectId, name) {
   return project;
 }
 
-/**
- * Owns a project created by the API harness and archives only that exact resource during cleanup.
- * The fixture uses owner revisions and a follow-up read so cleanup is both guarded and verified.
- */
 export class OwnedProjectFixture {
-  /** Create a named active project after confirming the live contract exposes its required operations. */
   static async create(client, { name }) {
     if (typeof name !== 'string' || !name.trim()) throw new Error('A test-owned project name is required.');
     for (const operation of ['createProject', 'getProject', 'updateProject']) {
@@ -30,7 +24,6 @@ export class OwnedProjectFixture {
     return new OwnedProjectFixture(client, project, call);
   }
 
-  /** Bind cleanup evidence to the client's actual successful create-project receipt. */
   constructor(client, project, creation) {
     if (!client.calls.includes(creation) || creation.operationId !== 'createProject' || creation.status !== 201
       || creation.transientResponseBody?.projectId !== project.projectId) {
@@ -49,10 +42,6 @@ export class OwnedProjectFixture {
     };
   }
 
-  /**
-   * Archive the created project if needed, then verify the owner reports it archived.
-   * A changed target, tenant, or auth provider fails closed; errors are recorded in redacted evidence.
-   */
   async archive() {
     this.evidence.cleanupResult = 'pending';
     try {

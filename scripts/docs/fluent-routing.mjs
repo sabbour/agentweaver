@@ -1,6 +1,5 @@
 import { DESIGN_SYSTEM } from './fluent-tokens.mjs';
 
-/** Assign ports, route connectors around cards, and place labels without overlaps. */
 const near=(a,b)=>Math.abs(a-b)<.01;
 const length=(a,b)=>Math.abs(a.x-b.x)+Math.abs(a.y-b.y);
 const intersects=(a,b)=>a.x<b.x+b.width&&b.x<a.x+a.width&&a.y<b.y+b.height&&b.y<a.y+a.height;
@@ -59,7 +58,6 @@ function wrap(text) {
   return lines.join('\n');
 }
 
-/** Choose connector sides and distribute edge ports while avoiding heading collisions. */
 function assignPorts(spec,cards,headings) {
   const buckets=new Map(),refs=[];
   const all=[...cards.values()],middle=(Math.min(...all.map(b=>b.x))+Math.max(...all.map(b=>b.x+b.width)))/2;
@@ -98,7 +96,6 @@ function assignPorts(spec,cards,headings) {
   return spec.edges.map((_,i)=>({from:refs.find(r=>r.edge===i&&r.which==='from'),to:refs.find(r=>r.edge===i&&r.which==='to')}));
 }
 
-/** Find a low-cost orthogonal route that avoids cards and previously occupied connector segments. */
 function route(start,end,boxes,occupied,ports) {
   const xs=new Set([start.x,end.x]),ys=new Set([start.y,end.y]);
   for(const b of boxes)for(const n of [44,68,92,116,140,164]) {
@@ -157,7 +154,6 @@ function route(start,end,boxes,occupied,ports) {
   throw new Error('No collision-free orthogonal route; explicit layout review required');
 }
 
-/** Route every graph edge in a stable order and attach Fluent connector and label metadata. */
 export function routeFluentGraph(spec,cards,headings=[],{order='returns-first'}={}) {
   const ports=assignPorts(spec,cards,headings),allPorts=ports.flatMap(p=>[p.from,p.to]);
   const boxes=[...cards.values(),...headings],occupied=[],labels=[],result=[];
@@ -178,7 +174,6 @@ export function routeFluentGraph(spec,cards,headings=[],{order='returns-first'}=
   return result.sort((a,b)=>Number(a.id.slice(1))-Number(b.id.slice(1)));
 }
 
-/** Place connector labels away from cards, other labels, and unrelated routes, using leaders if needed. */
 export function placeFluentLabels(result,boxes) {
   const labels=[];
   for(const edge of [...result].sort((a,b)=>b.label.length-a.label.length)) {
@@ -222,7 +217,6 @@ export function placeFluentLabels(result,boxes) {
   }
 }
 
-/** Expand card columns when same-band edges need more room for readable labels. */
 export function spaceFluentCards(spec,cards) {
   for(const e of spec.edges) {
     const a=cards.get(e.from),b=cards.get(e.to);

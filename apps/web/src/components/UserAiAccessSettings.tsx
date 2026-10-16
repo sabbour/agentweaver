@@ -34,11 +34,6 @@ const blankProvider: ByokProviderRequest = {
   wire_api: null,
 };
 
-/**
- * Loads and renders the user's personal AI-access settings from the API.
- * Search parameters initialize callback feedback; local state and effects manage provider data,
- * saves, and error/loading messages.
- */
 export function UserAiAccessSettings() {
   const styles = useStyles();
   const [searchParams, setSearchParams] = useSearchParams();

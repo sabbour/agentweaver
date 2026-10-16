@@ -62,10 +62,8 @@ const useStyles = makeStyles({
   iconFail: { color: tokens.colorPaletteRedForeground1, fontSize: '20px' },
 });
 
-/** Selects whether diagnostics are requested for the platform or one project. */
 type Scope = 'global' | 'project';
 
-/** Formats uptime into non-zero day, hour, and minute units plus seconds. */
 function humanizeUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
@@ -79,7 +77,6 @@ function humanizeUptime(seconds: number): string {
   return parts.join(' ');
 }
 
-/** Converts backend check states into badge tones; unknown states stay neutral. */
 function badgeColor(status: string): 'success' | 'warning' | 'danger' | 'subtle' {
   if (status === 'pass') return 'success';
   if (status === 'warn') return 'warning';
@@ -87,7 +84,6 @@ function badgeColor(status: string): 'success' | 'warning' | 'danger' | 'subtle'
   return 'subtle';
 }
 
-/** Renders one executed diagnostic with its status, detail, and measured duration. */
 function CheckCard({ check, styles }: { check: DiagnosticsCheckDto; styles: ReturnType<typeof useStyles> }) {
   const icon =
     check.status === 'pass' ? (
@@ -120,8 +116,6 @@ export function DiagnosticsPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
 
-  // Cache global and project snapshots separately so switching scope can reuse any
-  // earlier result while refreshing only the currently selected endpoint.
   const [scope, setScope] = useState<Scope>('global');
   const [global, setGlobal] = useState<SystemDiagnosticsDto | null>(null);
   const [project, setProject] = useState<ProjectDiagnosticsDto | null>(null);
@@ -136,7 +130,6 @@ export function DiagnosticsPage() {
         ? err.message
         : String(err);
 
-  /** Loads the selected scope and suppresses results after the effect is cleaned up. */
   const load = useCallback(async (signal: { cancelled: boolean }) => {
     try {
       if (scope === 'project' && projectId) {
@@ -153,8 +146,6 @@ export function DiagnosticsPage() {
     }
   }, [scope, projectId]);
 
-  // Run immediately and optionally poll. Cleanup both marks the request stale and
-  // clears the interval to avoid updates after scope changes or unmount.
   useEffect(() => {
     const signal = { cancelled: false };
     const runLoad = () => {

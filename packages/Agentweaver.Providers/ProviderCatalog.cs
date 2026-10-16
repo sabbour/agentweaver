@@ -3,7 +3,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Providers;
 
-/// <summary>Stable error categories used when validating or resolving provider selections.</summary>
 public enum ProviderErrorCode
 {
     InvalidConfiguration,
@@ -25,39 +24,21 @@ public enum ProviderErrorCode
     PinnedBindingMismatch
 }
 
-/// <summary>A machine-readable catalog or resolution failure with a safe diagnostic.</summary>
 public sealed record ProviderError(ProviderErrorCode Code, string Message);
 
-/// <summary>
-/// Holds either a successful provider contract or a structured failure. It avoids throwing for
-/// expected invalid selections while reserving exceptions for programmer and configuration faults.
-/// </summary>
 public sealed class ProviderResult<T> where T : class
 {
     private ProviderResult(T? value, ProviderError? error) => (Value, Error) = (value, error);
 
-    /// <summary>The successful value, or null when the result is a failure.</summary>
     public T? Value { get; }
-
-    /// <summary>The failure code and message, or null when the result succeeded.</summary>
     public ProviderError? Error { get; }
-
-    /// <summary>True when <see cref="Value"/> contains a result.</summary>
     public bool IsSuccess => Error is null;
 
-    /// <summary>Creates a successful result and rejects a null value.</summary>
     public static ProviderResult<T> Success(T value) => new(value ?? throw new ArgumentNullException(nameof(value)), null);
-
-    /// <summary>Creates a failed result with its stable error code and diagnostic.</summary>
     public static ProviderResult<T> Failure(ProviderErrorCode code, string message) =>
         new(null, new ProviderError(code, message));
 }
 
-/// <summary>
-/// Immutable validated snapshot of provider registrations and per-seam selection policy.
-/// The resolver uses this catalog as its sole source of defaults, overrides, ordered sets,
-/// network layers, and cost meter mappings.
-/// </summary>
 public sealed class ProviderCatalog
 {
     private readonly ImmutableDictionary<string, ProviderRegistration> _registrations;
@@ -77,17 +58,6 @@ public sealed class ProviderCatalog
         (_registrations, _defaults, _permittedOverrides, _ordered, _layers, _meterSources) =
             (registrations, defaults, permittedOverrides, ordered, layers, meterSources);
 
-    /// <summary>
-    /// Validates and freezes the provider snapshot. Invalid references, duplicate selections,
-    /// incompatible seam cardinalities, and missing required network layers are returned as errors.
-    /// </summary>
-    /// <param name="registrations">Descriptors and options metadata for available adapters.</param>
-    /// <param name="defaults">Selections for exclusive and platform-singleton seams.</param>
-    /// <param name="permittedOverrides">Project override permissions for eligible seams.</param>
-    /// <param name="orderedSelections">Optional ordered provider sets for composite seams.</param>
-    /// <param name="layerSelections">Optional network policy providers by layer.</param>
-    /// <param name="meterSourceSelections">Optional cost providers keyed by meter source.</param>
-    /// <returns>A frozen catalog or a structured validation failure.</returns>
     public static ProviderResult<ProviderCatalog> Create(
         IEnumerable<ProviderRegistration> registrations,
         IEnumerable<ProviderSelection> defaults,
@@ -232,23 +202,12 @@ public sealed class ProviderCatalog
         return null;
     }
 
-    /// <summary>Checks whether the exact seam/provider pair may be selected by project policy.</summary>
     public bool IsOverridePermitted(ProviderSeam seam, string id) => _permittedOverrides.Contains((seam, id));
-
-    /// <summary>Looks up a platform default provider for a seam.</summary>
     public bool TryGetDefault(ProviderSeam seam, out string? id) => _defaults.TryGetValue(seam, out id);
-
-    /// <summary>Looks up the frozen provider order for an ordered-composite seam.</summary>
     public bool TryGetOrdered(ProviderSeam seam, out ImmutableArray<string> ids) => _ordered.TryGetValue(seam, out ids);
-
-    /// <summary>Looks up the configured provider for a network policy layer.</summary>
     public bool TryGetLayer(NetworkPolicyLayer layer, out string? id) => _layers.TryGetValue(layer, out id);
-
-    /// <summary>Looks up the provider assigned to a cost meter source.</summary>
     public bool TryGetMeterSource(string meterSource, out string? id) =>
         _meterSources.TryGetValue(meterSource, out id);
-
-    /// <summary>Looks up a registered provider by its exact ID.</summary>
     public bool TryGetProvider(string id, out ProviderRegistration? registration) =>
         _registrations.TryGetValue(id, out registration);
 

@@ -14,7 +14,6 @@ import {
   PageHeader,
 } from '../../components/ui';
 
-/** Layout for the no-project state and redirect to the user's last active project. */
 const useStyles = makeStyles({
   root: {
     minHeight: 'min(560px, calc(100vh - 160px))',
@@ -29,10 +28,6 @@ const useStyles = makeStyles({
   },
 });
 
-/**
- * Redirects into a project's observability route when a prior project is known;
- * otherwise presents a project-selection action.
- */
 export function ObservabilityRedirectPage({ suffix = '' }: { suffix?: string }) {
   const styles = useStyles();
   const projectId = getLastActiveProjectId();

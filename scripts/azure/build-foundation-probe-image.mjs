@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-/**
- * Builds and verifies the Foundation Probe container used by Azure acceptance checks.
- * Receipts bind the local image metadata to an exact clean Git source before a registry image is accepted.
- */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -24,7 +20,6 @@ function runProcess(command, args, cwd) {
   return result.stdout ?? '';
 }
 
-/** Creates a receipt only when image labels and the local image digest match the selected source. */
 export function buildImageReceipt({ sourceSha, sourceTree, sourceHash, imageReference, inspect }) {
   if (!sourceShaPattern.test(sourceSha ?? '') || !sourceShaPattern.test(sourceTree ?? '') ||
       !sourceHashPattern.test(sourceHash ?? '') || !imageReference || !inspect ||
@@ -62,7 +57,6 @@ export function buildImageReceipt({ sourceSha, sourceTree, sourceHash, imageRefe
   };
 }
 
-/** Rejects a pulled image unless its digest, identity labels, and recorded source match the receipt. */
 export function verifyPublishedImageReceipt(receipt, imageReference, inspect) {
   if (typeof imageReference === 'string' && imageReference.includes('@')) {
     throw new Error('Use a registry image reference without a caller-supplied digest.');
@@ -102,7 +96,6 @@ export function verifyPublishedImageReceipt(receipt, imageReference, inspect) {
   };
 }
 
-/** Reads the clean Git commit, tree, and infrastructure source hash used to name a probe image. */
 export function resolveProbeImageSource({
   repoRoot = root,
   run = runProcess,
@@ -132,10 +125,6 @@ export function resolveProbeImageSource({
   return { sourceSha, sourceTree, sourceHash };
 }
 
-/**
- * Builds the probe image from the checked-out source and writes its local verification receipt.
- * Git and Docker failures are surfaced as errors; no registry publication is performed here.
- */
 export function buildFoundationProbeImage({
   repoRoot = root,
   run = runProcess,
@@ -174,10 +163,6 @@ export function buildFoundationProbeImage({
   return { receiptPath, receipt };
 }
 
-/**
- * Pulls and inspects a caller-selected registry image, then records its verified source relationship.
- * The supplied reference must not contain a caller-chosen digest.
- */
 export function verifyPublishedFoundationProbeImage(
   imageReference,
   { repoRoot = root, run = runProcess, readReceiptPath = receiptPath,

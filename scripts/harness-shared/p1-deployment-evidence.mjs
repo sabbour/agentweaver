@@ -7,7 +7,6 @@ import { pullToken } from '../release/registry.mjs';
 import { measureAgentHostArchiveSync } from '../release/measure-agenthost-image.mjs';
 import { validateManifest } from '../release/validate.mjs';
 
-/** Read-only checks that bind P1 runtime observations to the reviewed source and published images. */
 const SHA = /^[a-f0-9]{40}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
@@ -52,12 +51,10 @@ const IDENTITY_SERVICES = new Set([
 const SOURCE_ANNOTATION = 'agentweaver.io/provider-catalog-source';
 const PROVIDER_CATALOG_PREFIX = 'ProjectsConfig__ProviderCatalog__';
 
-/** Hash a JSON-compatible value using the exact serialization used by deployment receipts. */
 function hashJson(value) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
-/** Validate the explicit Kubernetes context and namespace before any observation command is run. */
 function requireTarget(context, namespace) {
   if (typeof context !== 'string' || !/^[A-Za-z0-9._:/@-]{1,128}$/.test(context)) {
     throw new Error('An exact Kubernetes context is required.');
@@ -67,7 +64,6 @@ function requireTarget(context, namespace) {
   }
 }
 
-/** Read the selected namespace's workload objects without applying or changing Kubernetes resources. */
 function runKubectl({ context, namespace, executable = 'kubectl', spawnSyncImpl = spawnSync }) {
   const args = [
     '--context', context,
@@ -96,19 +92,16 @@ function runKubectl({ context, namespace, executable = 'kubectl', spawnSyncImpl 
   return document.items;
 }
 
-/** Parse one immutable GHCR image reference into its repository and digest. */
 function imageParts(reference) {
   const match = IMAGE_REFERENCE.exec(reference ?? '');
   if (!match) throw new Error('A reviewed immutable GHCR image reference is required.');
   return { repository: match[1], digest: match[2] };
 }
 
-/** Return a prefixed SHA-256 digest for registry response bytes. */
 function sha256(bytes) {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 }
 
-/** Fetch registry metadata and require its exact bytes to match the requested immutable digest. */
 async function registryJson(url, expectedDigest, fetchImpl, token) {
   let response;
   try {
@@ -138,7 +131,6 @@ async function registryJson(url, expectedDigest, fetchImpl, token) {
   return { bytes, value };
 }
 
-/** Verify registry manifest and image-config digests, platform, and source labels against the reviewed image. */
 async function verifyRegistryImage(reference, imageId, sourceSha, sourceTree, fetchImpl, { allowMissingSourceTree = false } = {}) {
   const { repository, digest } = imageParts(reference);
   const base = `https://ghcr.io/v2/${repository}`;
@@ -175,19 +167,16 @@ async function verifyRegistryImage(reference, imageId, sourceSha, sourceTree, fe
   return { manifestDigest, platformDigest, configDigest, sourceSha, sourceTree, platform: 'linux/amd64' };
 }
 
-/** Return controller owner references matching the expected Kubernetes kind and UID. */
 function ownerReference(resource, kind, uid) {
   return resource.metadata?.ownerReferences?.filter(reference =>
     reference.kind === kind && reference.uid === uid && reference.controller === true) ?? [];
 }
 
-/** Check that an object's labels satisfy every key/value in a nonempty selector. */
 function matchesSelector(labels, selector) {
   return selector && Object.entries(selector).length > 0
     && Object.entries(selector).every(([key, value]) => labels?.[key] === value);
 }
 
-/** Require a Deployment template to run only the one reviewed application image. */
 function deploymentContainers(deployment, image) {
   const containers = deployment.spec?.template?.spec?.containers;
   if (!Array.isArray(containers) || containers.length !== 1 || containers[0].image !== image) {
@@ -196,7 +185,6 @@ function deploymentContainers(deployment, image) {
   return containers;
 }
 
-/** Require a single mandatory prefixed ConfigMap source for the provider catalog. */
 function hasExactProviderCatalogBinding(envFrom, configMapName) {
   if (!Array.isArray(envFrom)) return false;
   const bindings = envFrom.filter(source =>
@@ -207,22 +195,16 @@ function hasExactProviderCatalogBinding(envFrom, configMapName) {
     && bindings[0].configMapRef?.optional === false;
 }
 
-/** Detect direct environment variables that could override provider catalog values. */
 function hasProviderCatalogEnvironmentOverride(env) {
   return Array.isArray(env) && env.some(variable =>
     typeof variable?.name === 'string'
     && variable.name.toLowerCase().startsWith(PROVIDER_CATALOG_PREFIX.toLowerCase()));
 }
 
-/** Select namespaced Kubernetes objects of one kind from a readback list. */
 function selectRuntimeObjects(items, kind, namespace) {
   return items.filter(item => item.kind === kind && item.metadata?.namespace === namespace);
 }
 
-/**
- * Observe the exact P1 Deployments, ReplicaSets, Pods, provider catalog, and registry image metadata.
- * Uses read-only Kubernetes and registry calls; incomplete rollouts or mismatched source pins throw.
- */
 export async function observeP1ServiceDeployments({
   context,
   namespace,
@@ -441,7 +423,6 @@ export async function observeP1ServiceDeployments({
   };
 }
 
-/** Validate the publication receipt and require the full nine-service plus AgentHost image set. */
 export async function loadValidatedPublicationImages({
   publication,
   manifest,
@@ -470,10 +451,6 @@ export async function loadValidatedPublicationImages({
   return images;
 }
 
-/**
- * Match each planned and published immutable image to the release manifest and reviewed source.
- * Returns normalized image evidence or throws when component, archive, digest, or source receipts disagree.
- */
 export function validateP1PublicationReceipt(publication, manifest, sourceSha, sourceTree) {
   const integrationImagesOnly = publication?.mode === 'images-only';
   if (!publication || typeof publication !== 'object' || Array.isArray(publication)
@@ -566,10 +543,6 @@ export function validateP1PublicationReceipt(publication, manifest, sourceSha, s
   return images;
 }
 
-/**
- * Validate the recorded integration deployment against the exact manifest, publication, images, and target.
- * The readback digest must cover the required resource observations for every service.
- */
 export function validateP1IntegrationDeploymentReceipt(receipt, {
   sourceSha,
   sourceTree,
@@ -706,7 +679,6 @@ function sha256File(file) {
   });
 }
 
-/** Require the repository HEAD to equal the reviewed commit and the worktree to be clean. */
 export function resolveReviewedSource({
   repoRoot,
   expectedSourceSha,
@@ -724,10 +696,6 @@ export function resolveReviewedSource({
   return { sourceSha: actualSourceSha, sourceTree };
 }
 
-/**
- * Assemble source, publication, deployment, live workload, and AgentHost archive measurements.
- * This function reads evidence and live state only; it does not publish images or change infrastructure.
- */
 export async function prepareP1DeploymentEvidence({
   repoRoot,
   expectedSourceSha,

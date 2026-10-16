@@ -1,4 +1,3 @@
-/** Normalized identity labels used to render an agent consistently across run surfaces. */
 export interface ResolvedAgentIdentity {
   rawLabel: string;
   displayName: string;
@@ -46,7 +45,6 @@ function titleizeToken(token: string): string {
   return `${token.charAt(0).toUpperCase()}${token.slice(1)}`;
 }
 
-/** Converts a model identifier into a readable label while preserving common model names. */
 export function formatModelLabel(model: string | null | undefined): string {
   const trimmed = model?.trim();
   if (!trimmed) return '—';
@@ -94,11 +92,6 @@ function findRoleTitle(label: string, roleByAgent?: Record<string, string>): str
   return undefined;
 }
 
-/**
- * Resolves a display label and role from run metadata.
- * Explicit role metadata takes precedence; model-like labels are presented as
- * model fallbacks rather than being mistaken for named agents.
- */
 export function resolveAgentIdentity(
   label: string | null | undefined,
   roleByAgent?: Record<string, string>,

@@ -1,4 +1,3 @@
-/** Repository lint rules for TypeScript/React sources and generated build output exclusions. */
 import js from '@eslint/js'
 import globals from 'globals'
 import reactHooks from 'eslint-plugin-react-hooks'

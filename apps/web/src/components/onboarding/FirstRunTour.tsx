@@ -179,11 +179,6 @@ function positionsMatch(left: CSSProperties, right: CSSProperties): boolean {
     && left.bottom === right.bottom;
 }
 
-/**
- * Renders the guided first-run tour from the configured target elements.
- * Local refs/state and effects coordinate target discovery, focus, and completion; completion is
- * persisted through the first-run tour storage helpers.
- */
 export function FirstRunTour({
   open,
   targets,

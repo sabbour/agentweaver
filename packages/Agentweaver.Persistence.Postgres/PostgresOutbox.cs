@@ -6,11 +6,6 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Persistence.Postgres;
 
-/// <summary>
-/// Persists ordered outbox events and consumer inbox receipts in one PostgreSQL schema.
-/// Enqueue and inbox admission accept the caller's transaction so domain writes can share
-/// their commit boundary with the corresponding delivery record.
-/// </summary>
 public sealed class PostgresOutbox
 {
     private static readonly Regex SchemaPattern = new("^[a-z][a-z0-9_]{0,62}\\z", RegexOptions.CultureInvariant);
@@ -21,10 +16,6 @@ public sealed class PostgresOutbox
     private readonly string _migrations;
     private readonly string _receipts;
 
-    /// <summary>Creates an outbox adapter bound to one validated, non-system schema.</summary>
-    /// <param name="dataSource">The Npgsql data source used to open connections.</param>
-    /// <param name="schema">A lowercase application schema identifier.</param>
-    /// <exception cref="ArgumentException">The schema is invalid or reserved.</exception>
     public PostgresOutbox(NpgsqlDataSource dataSource, string schema)
     {
         _dataSource = dataSource ?? throw new ArgumentNullException(nameof(dataSource));
@@ -40,12 +31,6 @@ public sealed class PostgresOutbox
         _receipts = $"{_schema}.consumer_inbox_receipts";
     }
 
-    /// <summary>
-    /// Serializes schema initialization with a transaction-scoped advisory lock and applies
-    /// the embedded migrations in order. Unknown or inconsistent recorded versions fail startup.
-    /// </summary>
-    /// <param name="cancellationToken">Cancels database work before the transaction commits.</param>
-    /// <exception cref="InvalidOperationException">Migration resources or recorded versions are invalid.</exception>
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
@@ -94,17 +79,6 @@ public sealed class PostgresOutbox
         await transaction.CommitAsync(cancellationToken);
     }
 
-    /// <summary>
-    /// Inserts the consumer/message receipt in the caller's open transaction. A unique-key
-    /// conflict is reported as a duplicate without changing the existing receipt.
-    /// </summary>
-    /// <param name="connection">The connection owning the transaction.</param>
-    /// <param name="transaction">The transaction that must contain this receipt.</param>
-    /// <param name="consumerId">The consumer identity scoped to the inbox.</param>
-    /// <param name="messageId">The event identity being admitted.</param>
-    /// <param name="cancellationToken">Cancels the insert.</param>
-    /// <returns>Whether the receipt was newly admitted or already existed.</returns>
-    /// <exception cref="ArgumentException">The transaction does not belong to the open connection.</exception>
     public async Task<InboxAdmission> AdmitAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction,
         string consumerId, string messageId, CancellationToken cancellationToken = default)
@@ -127,18 +101,6 @@ public sealed class PostgresOutbox
             ? InboxAdmission.Admitted : InboxAdmission.Duplicate;
     }
 
-    /// <summary>
-    /// Adds an event in the caller's transaction and assigns the next stream sequence.
-    /// Repeating the same event is idempotent; reusing its ID or key with different data
-    /// throws <see cref="OutboxConflictException"/>.
-    /// </summary>
-    /// <param name="connection">The connection owning the transaction.</param>
-    /// <param name="transaction">The transaction that must contain this event.</param>
-    /// <param name="message">The event to persist.</param>
-    /// <param name="cancellationToken">Cancels database work.</param>
-    /// <returns>The stored event and its stable sequence.</returns>
-    /// <exception cref="ArgumentException">The transaction or event is invalid.</exception>
-    /// <exception cref="OutboxConflictException">An event identity is already bound to other data.</exception>
     public async Task<StoredOutboxEvent> EnqueueAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, OutboxEvent message,
         CancellationToken cancellationToken = default)
@@ -197,8 +159,7 @@ public sealed class PostgresOutbox
         if (inserted == 1)
             return new StoredOutboxEvent(ownedMessage, sequence);
 
-        // Undo the provisional sequence while holding the stream row lock, so a duplicate retry
-        // does not leave a gap in the stream's committed ordering.
+        // The stream row lock keeps sequence assignment contiguous even on a duplicate retry.
         await using (var command = new NpgsqlCommand($"""
             UPDATE {_streams} SET last_sequence = last_sequence - 1 WHERE stream_id = @stream
             """, connection, transaction))
@@ -235,17 +196,6 @@ public sealed class PostgresOutbox
         }
     }
 
-    /// <summary>
-    /// Leases eligible events for a worker, selecting only the earliest undelivered event in
-    /// each stream. Row locking with skip-locked semantics lets competing workers claim separate
-    /// events without blocking one another.
-    /// </summary>
-    /// <param name="workerId">The nonblank identity recorded on each lease.</param>
-    /// <param name="batchSize">Maximum number of deliveries, from 1 through 1000.</param>
-    /// <param name="leaseDuration">Lease lifetime, greater than zero and at most one hour.</param>
-    /// <param name="cancellationToken">Cancels the database operation.</param>
-    /// <returns>The claimed deliveries with fresh lease tokens.</returns>
-    /// <exception cref="ArgumentOutOfRangeException">The batch size or lease duration is outside its bound.</exception>
     public async Task<IReadOnlyList<OutboxDelivery>> ClaimAsync(
         string workerId, int batchSize, TimeSpan leaseDuration, CancellationToken cancellationToken = default)
     {
@@ -293,12 +243,6 @@ public sealed class PostgresOutbox
         return deliveries;
     }
 
-    /// <summary>Claims one event by its ID, if it is currently eligible for delivery.</summary>
-    /// <param name="workerId">The nonblank identity recorded on the lease.</param>
-    /// <param name="eventId">The event to claim.</param>
-    /// <param name="leaseDuration">Lease lifetime, greater than zero and at most one hour.</param>
-    /// <param name="cancellationToken">Cancels the database operation.</param>
-    /// <returns>The claimed event, or null when it is absent, delivered, leased, or behind another event.</returns>
     public Task<OutboxDelivery?> ClaimAsync(
         string workerId,
         Guid eventId,
@@ -306,12 +250,6 @@ public sealed class PostgresOutbox
         CancellationToken cancellationToken = default) =>
         ClaimOneAsync(workerId, eventId, leaseDuration, cancellationToken);
 
-    /// <summary>Performs the transactional single-event claim used by the overload above.</summary>
-    /// <param name="workerId">The nonblank identity recorded on the lease.</param>
-    /// <param name="eventId">The event to claim.</param>
-    /// <param name="leaseDuration">Lease lifetime, greater than zero and at most one hour.</param>
-    /// <param name="cancellationToken">Cancels the database operation.</param>
-    /// <returns>The claimed event, or null when it is not eligible.</returns>
     public async Task<OutboxDelivery?> ClaimOneAsync(
         string workerId,
         Guid eventId,
@@ -373,10 +311,6 @@ public sealed class PostgresOutbox
         return delivery;
     }
 
-    /// <summary>Reads one event and its delivery state without changing its lease.</summary>
-    /// <param name="eventId">The event identity to look up.</param>
-    /// <param name="cancellationToken">Cancels the database operation.</param>
-    /// <returns>The event and delivery flag, or null when it is absent.</returns>
     public async Task<(StoredOutboxEvent Event, bool IsDelivered)?> ReadAsync(
         Guid eventId,
         CancellationToken cancellationToken = default)
@@ -397,11 +331,6 @@ public sealed class PostgresOutbox
             : null;
     }
 
-    /// <summary>Clears an undelivered lease only when its fencing token still matches.</summary>
-    /// <param name="eventId">The event whose lease should be released.</param>
-    /// <param name="leaseToken">The exact token returned by the claim.</param>
-    /// <param name="cancellationToken">Cancels the database operation.</param>
-    /// <returns>True when this token released the lease; false when it was stale or settled.</returns>
     public async Task<bool> ReleaseAsync(
         Guid eventId,
         Guid leaseToken,
@@ -420,14 +349,6 @@ public sealed class PostgresOutbox
         return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
     }
 
-    /// <summary>
-    /// Marks an event delivered only if the supplied token still owns a live lease. The row
-    /// is locked before checking expiry so time spent waiting for that lock cannot extend a lease.
-    /// </summary>
-    /// <param name="eventId">The event to acknowledge.</param>
-    /// <param name="leaseToken">The exact token returned by the claim.</param>
-    /// <param name="cancellationToken">Cancels the database operation.</param>
-    /// <returns>True when acknowledgment committed; false when the token or lease is no longer valid.</returns>
     public async Task<bool> AcknowledgeAsync(
         Guid eventId, Guid leaseToken, CancellationToken cancellationToken = default)
     {
@@ -456,7 +377,6 @@ public sealed class PostgresOutbox
         return acknowledged;
     }
 
-    /// <summary>Reads the shared event columns and clones JSON before disposing its document.</summary>
     private static StoredOutboxEvent ReadStored(NpgsqlDataReader reader)
     {
         using var document = JsonDocument.Parse(reader.GetString(5));
@@ -467,14 +387,12 @@ public sealed class PostgresOutbox
             reader.GetInt64(7));
     }
 
-    /// <summary>Normalizes event time to UTC and PostgreSQL's microsecond precision.</summary>
     private static DateTimeOffset NormalizeTimestamp(DateTimeOffset timestamp)
     {
         var utc = timestamp.ToUniversalTime();
         return new DateTimeOffset(utc.Ticks - utc.Ticks % 10, TimeSpan.Zero);
     }
 
-    /// <summary>Enforces nonempty identities, positive versions, object payloads, and event time.</summary>
     private static void ValidateMessage(OutboxEvent message)
     {
         if (message.Id == Guid.Empty) throw new ArgumentException("An event ID is required.", nameof(message));

@@ -8,10 +8,6 @@ using GitHub.Copilot.Rpc;
 #pragma warning disable GHCP001 // Permission callbacks are pinned to SDK 1.0.18.
 namespace Agentweaver.AgentRuntime;
 
-/// <summary>
-/// Converts SDK tool and permission callbacks into deterministic, turn-bound owner action
-/// requests. It approves a callback only after the owner confirms the matching authority.
-/// </summary>
 internal sealed class RuntimeCopilotToolCallAuthorization(
     RuntimeRegistration registration,
     string sessionId,
@@ -22,7 +18,6 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
     private readonly Dictionary<string, NativeToolCall> _calls = new(StringComparer.Ordinal);
     private Guid? _messageId;
 
-    /// <summary>Checks tool policy before invocation without reserving a native tool-call slot.</summary>
     internal async Task<PreToolUseHookOutput?> OnPreToolUseAsync(
         PreToolUseHookInput input, HookInvocation invocation)
     {
@@ -46,10 +41,6 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
         }
     }
 
-    /// <summary>
-    /// Binds native permission requests to one tool call, rechecks owner authority before
-    /// approval, and rejects unsupported or mismatched callbacks.
-    /// </summary>
     internal async Task<PermissionDecision> OnPermissionRequestAsync(
         PermissionRequest request, PermissionInvocation invocation)
     {
@@ -100,7 +91,6 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
         }
     }
 
-    /// <summary>Clears all native call bindings when the SDK turn ends or fails.</summary>
     internal void Clear()
     {
         lock (_gate)
@@ -199,7 +189,6 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
         return request;
     }
 
-    /// <summary>Derives a stable event ID from the runtime, turn, message, call, and permission phase.</summary>
     private Guid CreateEventId(Guid messageId, string callId, string phase)
     {
         var value = FormattableString.Invariant(
@@ -209,7 +198,6 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
         return new Guid(bytes.AsSpan(0, 16));
     }
 
-    /// <summary>Maps only the SDK tools enabled by this runtime to owner action names.</summary>
     private static string? ActionForTool(string? name) => name switch
     {
         "view" => "tool.read",
@@ -224,7 +212,6 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
     private static bool IsValidCallId(string? value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= 256 && !value.Any(char.IsControl);
 
-    /// <summary>Accepts only ordinary read, write, or shell permission requests with no bypass flags.</summary>
     private static bool TryReadSecondary(PermissionRequest request, out string kind, out string? callId)
     {
         switch (request)
@@ -263,7 +250,6 @@ internal sealed class RuntimeCopilotToolCallAuthorization(
 
     private sealed record NativeToolCall(Guid MessageId, string CallId, RuntimeActionRequest Request)
     {
-        /// <summary>Owner requests already issued for the call's secondary SDK permission checks.</summary>
         internal Dictionary<string, RuntimeActionRequest> Permissions { get; } = new(StringComparer.Ordinal);
     }
 }

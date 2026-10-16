@@ -9,7 +9,6 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Reports a coded connection mutation failure and its intended HTTP status.</summary>
 public sealed class RemoteMcpConnectionException(string code, string message, int statusCode)
     : Exception(message)
 {
@@ -17,19 +16,16 @@ public sealed class RemoteMcpConnectionException(string code, string message, in
     public int StatusCode { get; } = statusCode;
 }
 
-/// <summary>Validated draft values used to create or replace a Remote MCP connection configuration.</summary>
 public sealed record RemoteMcpConnectionDraft(
     string DisplayName,
     string EndpointUri,
     string? ResourceUri,
     RemoteMcpAuthenticationMode AuthenticationMode);
 
-/// <summary>Returns the current connection snapshot and whether the request replayed a saved result.</summary>
 public sealed record RemoteMcpConnectionMutationResult(
     RemoteMcpConnectionSnapshot Snapshot,
     bool Replayed);
 
-/// <summary>Receipt binding an Identity operation to the exact saved connection configuration revision and digest.</summary>
 public sealed record RemoteMcpIdentityBindingReceipt(
     string ProjectId,
     Guid ConnectionId,
@@ -38,15 +34,10 @@ public sealed record RemoteMcpIdentityBindingReceipt(
     string FinalConfigurationSha256,
     string IdentityBindingReference);
 
-/// <summary>One page of project connections and the cursor for the next page.</summary>
 public sealed record RemoteMcpConnectionPage(
     ImmutableArray<RemoteMcpConnectionSnapshot> Connections,
     Guid? NextConnectionId);
 
-/// <summary>
-/// Stores project-scoped Remote MCP connection heads, immutable configurations, discovery pins, and mutation receipts.
-/// Every read is permission-checked, and mutations recheck authorization around their database transaction.
-/// </summary>
 public sealed class RemoteMcpConnectionStore(
     NpgsqlDataSource dataSource,
     IProjectsConfigClient projectsClient,
@@ -59,7 +50,6 @@ public sealed class RemoteMcpConnectionStore(
     private const int MaximumPageSize = 100;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    /// <summary>Lists a bounded page of non-removed connections and rechecks ReadProjects authority before returning.</summary>
     public async Task<RemoteMcpConnectionPage> ListAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -119,7 +109,6 @@ public sealed class RemoteMcpConnectionStore(
         return new(results.ToImmutable(), next);
     }
 
-    /// <summary>Reads one project connection snapshot and rechecks ReadProjects authority afterward.</summary>
     public async Task<RemoteMcpConnectionSnapshot?> GetAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -139,7 +128,6 @@ public sealed class RemoteMcpConnectionStore(
         return snapshot;
     }
 
-    /// <summary>Reads one immutable configuration revision after checking current project read authority.</summary>
     public async Task<RemoteMcpConnectionConfiguration?> GetConfigurationRevisionAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -168,7 +156,6 @@ public sealed class RemoteMcpConnectionStore(
         return configuration;
     }
 
-    /// <summary>Creates a draft connection and its first immutable configuration under a WriteProjects grant.</summary>
     public Task<RemoteMcpConnectionMutationResult> CreateAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -224,7 +211,6 @@ public sealed class RemoteMcpConnectionStore(
             cancellationToken);
     }
 
-    /// <summary>Appends a new configuration revision only when the connection row revision matches the caller's fence.</summary>
     public Task<RemoteMcpConnectionMutationResult> UpdateAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -291,7 +277,6 @@ public sealed class RemoteMcpConnectionStore(
             cancellationToken);
     }
 
-    /// <summary>Links an identity binding only to the expected configuration revision and digest.</summary>
     public async Task<RemoteMcpIdentityBindingReceipt> BindIdentityAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -407,7 +392,6 @@ public sealed class RemoteMcpConnectionStore(
                 ?? throw new InvalidOperationException("The Identity binding reference was not persisted."));
     }
 
-    /// <summary>Enables, disables, or removes a connection at an expected row revision.</summary>
     public Task<RemoteMcpConnectionMutationResult> SetStateAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -478,7 +462,6 @@ public sealed class RemoteMcpConnectionStore(
             cancellationToken);
     }
 
-    /// <summary>Saves a discovery catalog only for an enabled connection and its exact applied network policy.</summary>
     internal Task<RemoteMcpConnectionMutationResult> SaveDiscoveryAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -572,7 +555,6 @@ public sealed class RemoteMcpConnectionStore(
             cancellationToken);
     }
 
-    /// <summary>Serializes an idempotent mutation with authorization checks and a transaction-scoped row lock.</summary>
     private async Task<RemoteMcpConnectionMutationResult> MutateAsync(
         CurrentCallerRequest caller,
         string projectId,

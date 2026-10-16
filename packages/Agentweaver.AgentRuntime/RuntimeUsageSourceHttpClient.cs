@@ -4,16 +4,11 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.AgentRuntime;
 
-/// <summary>
-/// Sends SDK source, usage, native-turn, and credit-denial evidence to the Orchestrator,
-/// validating each owner receipt against the current runtime session.
-/// </summary>
 public sealed class RuntimeUsageSourceHttpClient(
     HttpClient client, Uri orchestratorAddress, RuntimeActorAuthorization actor)
 {
     private readonly Uri _address = RuntimeOwnerHttpTransport.RequireOwnerAddress(orchestratorAddress);
 
-    /// <summary>Registers the exact SDK source and validates its canonical payload hash.</summary>
     internal async Task<RuntimeSdkSourceReceipt> RegisterAsync(
         AuthorizedRuntimeSession session, CancellationToken cancellationToken)
     {
@@ -33,7 +28,6 @@ public sealed class RuntimeUsageSourceHttpClient(
         return receipt;
     }
 
-    /// <summary>Appends one SDK usage observation and requires the returned observation to match it.</summary>
     internal async Task<RuntimeUsageSourceReceipt> AppendAsync(
         AuthorizedRuntimeSession session, SdkUsageObservation observation, CancellationToken cancellationToken)
     {
@@ -50,7 +44,6 @@ public sealed class RuntimeUsageSourceHttpClient(
         return receipt;
     }
 
-    /// <summary>Starts owner-side admission for a workflow turn and validates its result.</summary>
     internal async Task<RuntimeNativeTurnBeginResult> BeginNativeTurnAsync(
         AuthorizedRuntimeSession session, RuntimeA2ASendRequest message, CancellationToken cancellationToken)
     {
@@ -68,7 +61,6 @@ public sealed class RuntimeUsageSourceHttpClient(
         return result;
     }
 
-    /// <summary>Reads denial evidence for a native dispatch at the requested stage.</summary>
     internal async Task<RuntimeNativeCreditDenialReadResult> ReadNativeCreditDenialAsync(
         AuthorizedRuntimeSession session, Guid dispatchId, RuntimeCreditLimitDenialStage stage,
         CancellationToken cancellationToken)
@@ -91,7 +83,6 @@ public sealed class RuntimeUsageSourceHttpClient(
         return response;
     }
 
-    /// <summary>Records evidence that an admitted native turn was denied without sending it.</summary>
     internal async Task<RuntimeNativeTurnNoSendReceipt> RecordNativeTurnNoSendAsync(
         AuthorizedRuntimeSession session, RuntimeNativeCreditDenialReceipt denial,
         RuntimeNativeTurnNoSendReceipt evidence, CancellationToken cancellationToken)
@@ -111,7 +102,6 @@ public sealed class RuntimeUsageSourceHttpClient(
         return receipt;
     }
 
-    /// <summary>Records the fixed-credit guard receipt under the current source grant.</summary>
     internal async Task<RuntimeFixedCreditGuardReceipt> RecordFixedCreditGuardAsync(
         AuthorizedRuntimeSession session, RuntimeHostSessionProof expectedProof,
         RuntimeFixedCreditGuardReceipt receipt, CancellationToken cancellationToken)
@@ -137,7 +127,6 @@ public sealed class RuntimeUsageSourceHttpClient(
         return stored;
     }
 
-    /// <summary>Records no-send evidence for a fixed-credit denial.</summary>
     internal async Task<RuntimeFixedCreditNoSendReceipt> RecordFixedCreditNoSendAsync(
         AuthorizedRuntimeSession session, RuntimeHostSessionProof expectedProof,
         RuntimeFixedCreditGuardReceipt receipt, RuntimeFixedCreditNoSendReceipt evidence,
@@ -159,7 +148,6 @@ public sealed class RuntimeUsageSourceHttpClient(
         return stored;
     }
 
-    /// <summary>Reads and validates host pre-queue fixed-credit evidence.</summary>
     internal async Task<RuntimeFixedCreditGuardReadResult> ReadFixedCreditGuardAsync(
         AuthorizedRuntimeSession session, Guid requestId, string requestHash,
         CancellationToken cancellationToken)
@@ -186,7 +174,6 @@ public sealed class RuntimeUsageSourceHttpClient(
         return result;
     }
 
-    /// <summary>Stores the observed native turn and verifies its canonical observation hash.</summary>
     internal async Task<RuntimeNativeTurnRecordedReceipt> RecordNativeTurnAsync(
         AuthorizedRuntimeSession session, RuntimeNativeTurnAdmissionReceipt admission,
         RuntimeNativeTurnObservation observation, CancellationToken cancellationToken)
@@ -204,7 +191,6 @@ public sealed class RuntimeUsageSourceHttpClient(
         return receipt;
     }
 
-    /// <summary>Completes owner-side accounting using the exact usage references for the recorded turn.</summary>
     internal async Task<RuntimeNativeTurnAccountingReceipt> CompleteNativeTurnAsync(
         AuthorizedRuntimeSession session, RuntimeNativeTurnRecordedReceipt recorded,
         ImmutableArray<RuntimeUsageCostReceiptReference> references, CancellationToken cancellationToken)
@@ -221,7 +207,6 @@ public sealed class RuntimeUsageSourceHttpClient(
         return receipt;
     }
 
-    /// <summary>Requires the session's observation endpoint to match this client's owner address and route.</summary>
     private void RequireAudience(AuthorizedRuntimeSession session)
     {
         var endpoint = session.Registration.Binding.ObservationEndpoint;
@@ -256,13 +241,11 @@ public sealed class RuntimeUsageSourceHttpClient(
     }
 }
 
-/// <summary>Requires an owner cost-preflight receipt proving the selected model is priced.</summary>
 internal sealed class RuntimeUsageCostPreflightHttpClient(
     HttpClient client, Uri eventsAddress, RuntimeActorAuthorization actor)
 {
     private readonly Uri _address = RuntimeOwnerHttpTransport.RequireOwnerAddress(eventsAddress);
 
-    /// <summary>Validates cost-preflight evidence against the runtime binding and SDK source facts.</summary>
     internal async Task EnsurePricedAsync(
         AuthorizedRuntimeSession session, CancellationToken cancellationToken)
     {

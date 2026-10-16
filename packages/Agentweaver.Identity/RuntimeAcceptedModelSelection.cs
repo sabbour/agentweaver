@@ -5,10 +5,6 @@ using Agentweaver.AgentRuntime;
 
 namespace Agentweaver.Identity;
 
-/// <summary>
-/// Parsed model selection from the accepted run snapshot, including the exact credential or
-/// connection reference and optional validated BYOK binding pin.
-/// </summary>
 public sealed record RuntimeAcceptedModelSelection(
     string Reference,
     ModelSourceMode? SourceMode,
@@ -19,13 +15,6 @@ public sealed record RuntimeAcceptedModelSelection(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeModelBindingPin? ModelBindingPin { get; init; }
 
-    /// <summary>
-    /// Reads and validates the model selection without accepting unknown credential shapes,
-    /// mismatched project overrides, or a BYOK pin for a hosted model.
-    /// </summary>
-    /// <param name="snapshot">The immutable accepted run snapshot.</param>
-    /// <returns>The validated model selection and its optional authority references.</returns>
-    /// <exception cref="RuntimeAuthorizationException">The snapshot contains invalid or inconsistent fields.</exception>
     public static RuntimeAcceptedModelSelection Read(JsonElement snapshot)
     {
         if (snapshot.ValueKind != JsonValueKind.Object ||

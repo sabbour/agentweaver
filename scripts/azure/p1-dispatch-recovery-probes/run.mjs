@@ -1,7 +1,3 @@
-/**
- * Runs read-only P1 dispatch recovery probes and emits evidence for the missing prerequisites.
- * Probe outcomes are represented as structured blockers; this entry point does not repair infrastructure.
- */
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { redact } from '../../harness-shared/redaction.mjs';
@@ -62,10 +58,6 @@ function summarizeOwnerObservation(runtime, environment) {
   };
 }
 
-/**
- * Collects the configured recovery-probe observations and writes the resulting evidence document.
- * Missing prerequisites are reported as blockers; failed command execution is returned as probe evidence.
- */
 export async function runP1DispatchRecoveryProbes({
   observationClient,
   observationContext,

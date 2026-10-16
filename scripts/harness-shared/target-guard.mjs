@@ -1,12 +1,9 @@
 import { isIP } from 'node:net';
 
-/** Validate harness destinations and capture only the target metadata needed for evidence. */
-/** Normalize URL hostnames before loopback checks, including IPv6 brackets and trailing dots. */
 function normalizedHostname(url) {
   return url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
 }
 
-/** Return whether a URL or hostname resolves syntactically to a loopback name or address. */
 export function isLoopbackTarget(urlOrHostname) {
   const hostname = urlOrHostname instanceof URL
     ? normalizedHostname(urlOrHostname)
@@ -42,7 +39,6 @@ export function validateNetworkTarget(target, { exactPath } = {}) {
   return url;
 }
 
-/** Build non-secret target evidence for an HTTP or stdio surface without inferring an environment. */
 export function networkTargetEvidence(target, { surface, authSource = 'none', exactPath } = {}) {
   if (target === 'stdio') {
     return {

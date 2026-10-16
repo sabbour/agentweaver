@@ -37,11 +37,6 @@ export interface AppShellProps {
   onFirstRunTourStarted?: () => void;
 }
 
-/**
- * Renders the application frame around routed content and shared navigation.
- * Project data comes from `useProjectList`; model-provider requirements are resolved by the shared
- * helper. Route effects manage project selection and layout state.
- */
 export function AppShell({
   children,
   banner,

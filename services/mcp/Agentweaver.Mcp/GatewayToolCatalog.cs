@@ -5,7 +5,6 @@ using ModelContextProtocol.Protocol;
 
 namespace Agentweaver.Mcp;
 
-/// <summary>OpenAPI parameter mapped into an MCP input property and Gateway request location.</summary>
 internal sealed record GatewayToolParameter(
     string ApiName,
     string InputName,
@@ -13,7 +12,6 @@ internal sealed record GatewayToolParameter(
     bool Required,
     JsonElement Schema);
 
-/// <summary>Admitted HTTP operation and schema used for MCP discovery and request dispatch.</summary>
 internal sealed record GatewayToolOperation(
     Tool Tool,
     JsonElement InputSchema,
@@ -24,10 +22,6 @@ internal sealed record GatewayToolOperation(
     bool HasBody,
     bool BodyRequired);
 
-/// <summary>
-/// Fetches the Gateway's OpenAPI document once and builds a bounded allowlist of MCP tools.
-/// Only supported owner operations under the v1 API root are exposed; streams and unsupported methods are skipped.
-/// </summary>
 public sealed class GatewayToolCatalog(HttpClient client)
 {
     private const int MaximumOpenApiBytes = 2 * 1024 * 1024;
@@ -35,7 +29,6 @@ public sealed class GatewayToolCatalog(HttpClient client)
     private readonly SemaphoreSlim _loadLock = new(1, 1);
     private volatile IReadOnlyList<GatewayToolOperation>? _operations;
 
-    /// <summary>Returns cached operations or downloads and validates the catalog under a request deadline.</summary>
     internal async Task<IReadOnlyList<GatewayToolOperation>> GetOperationsAsync(
         CancellationToken cancellationToken)
     {
@@ -87,7 +80,6 @@ public sealed class GatewayToolCatalog(HttpClient client)
             schemas.ValueKind != JsonValueKind.Object)
             throw new InvalidDataException("The Gateway tool catalog has an unsupported OpenAPI shape.");
 
-        // The catalog is an allowlist: paths, methods, streams, headers, and operation names are admitted explicitly.
         var operations = new Dictionary<string, GatewayToolOperation>(StringComparer.Ordinal);
         foreach (var path in paths.EnumerateObject())
         {

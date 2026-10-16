@@ -9,10 +9,6 @@ using Npgsql;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// A snapshot of the backlog task and claim revisions plus the run binding used to prove a prerequisite.
-/// The claim fields are compared again at commit time; descriptive phase text is not itself proof of completion.
-/// </summary>
 internal sealed record MafBacklogTaskClaimTuple(
     BacklogTaskReference Task,
     long TaskRevision,
@@ -31,24 +27,15 @@ internal sealed record MafBacklogTaskClaimTuple(
     long ClaimExecutionFence,
     long ClaimDecisionStateVersion);
 
-/// <summary>
-/// One output path that a work item must provide before its prerequisite can be considered complete.
-/// </summary>
 internal sealed record MafBacklogOutputObligation(
     string WorkItemId,
     string OutputPath);
 
-/// <summary>
-/// The canonical output obligations for one accepted work plan and their digest.
-/// </summary>
 internal sealed record MafBacklogOutputSetSnapshot(
     string WorkPlanId,
     string Digest,
     ImmutableArray<MafBacklogOutputObligation> Obligations);
 
-/// <summary>
-/// A root session snapshot with the accepted selection, decision, execution checkpoint, and output proof context.
-/// </summary>
 internal sealed record MafBacklogAcceptedRootEvidence(
     CoordinationActor Actor,
     string TenantId,
@@ -66,14 +53,8 @@ internal sealed record MafBacklogAcceptedRootEvidence(
     MafBacklogOutputSetSnapshot OutputSet,
     ImmutableArray<string> MissingFixedAssociationIds);
 
-/// <summary>
-/// Base type for current owner records that prove a prerequisite's outputs or merge result.
-/// </summary>
 internal abstract record MafBacklogOwnerProof;
 
-/// <summary>
-/// Owner proof for one admitted produced-run capture and the output files it contains.
-/// </summary>
 internal sealed record MafBacklogCaptureOwnerProof(
     ProducedRunCaptureProof Capture,
     string State,
@@ -82,17 +63,11 @@ internal sealed record MafBacklogCaptureOwnerProof(
     DateTimeOffset AdmittedAt,
     ImmutableArray<MafBacklogCapturedOutput> Outputs) : MafBacklogOwnerProof;
 
-/// <summary>
-/// One captured file's path, digest, and byte length.
-/// </summary>
 internal sealed record MafBacklogCapturedOutput(
     string Path,
     string Sha256,
     long ByteLength);
 
-/// <summary>
-/// Owner proof for the accepted-run and approval evidence of a completed source-control merge.
-/// </summary>
 internal sealed record MafBacklogMergeOwnerProof(
     string IntentId,
     SourceControlAcceptedRunBinding AcceptedRun,
@@ -108,33 +83,21 @@ internal sealed record MafBacklogMergeOwnerProof(
     CoordinatorGateDecisionReceipt? ApprovalReceipt,
     string? MergeSha) : MafBacklogOwnerProof;
 
-/// <summary>
-/// Owner proof that an accepted plan has no declared output obligations.
-/// </summary>
 internal sealed record MafBacklogNoOutputOwnerProof(
     string WorkPlanId,
     string OutputSetSha256,
     long CheckpointRevision,
     long DecisionStateVersion) : MafBacklogOwnerProof;
 
-/// <summary>
-/// A prepared prerequisite snapshot with the exact claim, root, and owner records to be rechecked during task claim.
-/// </summary>
 internal sealed record MafBacklogPreparedPrerequisite(
     BacklogPrerequisiteExecutionSnapshot Snapshot,
     MafBacklogTaskClaimTuple Claim,
     MafBacklogAcceptedRootEvidence Root,
     ImmutableArray<MafBacklogOwnerProof> OwnerProofs);
 
-/// <summary>
-/// Prepared prerequisite snapshots understood by the MAF verifier, including evidence for later transactional revalidation.
-/// </summary>
 internal sealed record MafBacklogPrerequisiteEvidencePreparation
     : BacklogPrerequisiteEvidencePreparation
 {
-    /// <summary>
-    /// Creates a preparation only when both snapshots and their corresponding proof records are initialized.
-    /// </summary>
     internal MafBacklogPrerequisiteEvidencePreparation(
         ImmutableArray<BacklogPrerequisiteExecutionSnapshot> snapshots,
         ImmutableArray<MafBacklogPreparedPrerequisite> preparedPrerequisites)
@@ -148,10 +111,6 @@ internal sealed record MafBacklogPrerequisiteEvidencePreparation
     internal ImmutableArray<MafBacklogPreparedPrerequisite> PreparedPrerequisites { get; }
 }
 
-/// <summary>
-/// Reads MAF execution and source-control evidence to determine whether backlog prerequisites are truly complete.
-/// It prepares evidence before a claim, then rechecks the same claim and owner state inside the claim transaction.
-/// </summary>
 internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisiteEvidenceReader
 {
     private static readonly JsonSerializerOptions OwnerEvidenceJsonOptions =
@@ -171,10 +130,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
     private readonly PostgresMafCheckpointStore _checkpoints;
     private readonly MafExecutionOutputWitnessStore _outputWitnesses;
 
-    /// <summary>
-    /// Creates the evidence reader from the owners that hold backlog, run, decision, checkpoint, and capture state.
-    /// </summary>
-    /// <exception cref="ArgumentNullException">Thrown when any required owner dependency is missing.</exception>
     internal MafBacklogPrerequisiteEvidenceReader(
         NpgsqlDataSource dataSource,
         BacklogOwnerStore backlog,
@@ -195,16 +150,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         _outputWitnesses = outputWitnesses ?? throw new ArgumentNullException(nameof(outputWitnesses));
     }
 
-    /// <summary>
-    /// Prepares prerequisite snapshots and proof inputs before a backlog task is claimed.
-    /// </summary>
-    /// <param name="actor">The caller requesting the claim.</param>
-    /// <param name="selection">The authorized project and run selection.</param>
-    /// <param name="graph">The current dependency graph.</param>
-    /// <param name="task">The task whose prerequisites are evaluated.</param>
-    /// <param name="cancellationToken">Cancels database and owner reads.</param>
-    /// <returns>Unverified snapshots plus evidence that can be checked again inside the claim transaction.</returns>
-    /// <remarks>Owner outages remain indeterminate; stale bindings are marked stale rather than treated as complete.</remarks>
     public async Task<BacklogPrerequisiteEvidencePreparation> PrepareForClaimAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -380,22 +325,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
             snapshots.MoveToImmutable(), prepared.ToImmutable());
     }
 
-    /// <summary>
-    /// Rechecks prepared prerequisite evidence against current claim, root, checkpoint, and owner records in the claim transaction.
-    /// </summary>
-    /// <param name="connection">The database connection for the backlog claim.</param>
-    /// <param name="transaction">The transaction that must contain all current-state reads.</param>
-    /// <param name="actor">The actor claiming the dependent task.</param>
-    /// <param name="selection">The authorized selection used for the claim.</param>
-    /// <param name="graph">The current dependency graph.</param>
-    /// <param name="task">The task being claimed.</param>
-    /// <param name="prepared">The previously prepared evidence to compare with current state.</param>
-    /// <param name="decisionStateVersion">The current decision-state version.</param>
-    /// <param name="executionFence">The current run execution fence.</param>
-    /// <param name="cancellationToken">Cancels the transactional reads.</param>
-    /// <returns>Current prerequisite snapshots; only stable, verified evidence can be marked complete.</returns>
-    /// <exception cref="ArgumentException">Thrown when the transaction does not belong to the supplied connection.</exception>
-    /// <exception cref="CoordinationException">Thrown when the claim scope or execution binding is invalid.</exception>
     public async Task<ImmutableArray<BacklogPrerequisiteExecutionSnapshot>> ReadCurrentForClaimAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -524,9 +453,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         return snapshots.ToImmutable();
     }
 
-    /// <summary>
-    /// Reads the authoritative root session, accepted run, selection, and decision version for a backlog claim.
-    /// </summary>
     private async Task<AcceptedRootBinding> ReadRootBindingAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -552,13 +478,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
             binding.DecisionStateVersion);
     }
 
-    /// <summary>
-    /// Loads confirmed plan, latest checkpoint, child bindings, output obligations, and any stored output witness.
-    /// </summary>
-    /// <param name="binding">The current accepted-root binding.</param>
-    /// <param name="selectionContext">The workflow role and provider context pinned for the accepted selection.</param>
-    /// <returns>The complete root evidence, or <see langword="null"/> when the decision is not in a confirmed executable state.</returns>
-    /// <exception cref="CoordinationException">Thrown when the checkpoint is forked or no longer matches the accepted root.</exception>
     private async Task<MafBacklogAcceptedRootEvidence?> ReadRootEvidenceInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -649,10 +568,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
             output.MissingFixedAssociationIds);
     }
 
-    /// <summary>
-    /// Reads capture and merge owner records and reconstructs the witness to ensure it still matches stored evidence.
-    /// </summary>
-    /// <returns>Current owner proofs, or an empty set when evidence is unavailable, stale, or malformed.</returns>
     private async Task<ImmutableArray<MafBacklogOwnerProof>> ReadCurrentOwnerProofsInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -766,10 +681,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         return proofs.ToImmutable();
     }
 
-    /// <summary>
-    /// Reads every current capture proof and its record under one owner binding.
-    /// </summary>
-    /// <returns>The current capture inventory, or <see langword="null"/> if any proof or owner binding is inconsistent.</returns>
     private async Task<CurrentOutputCaptureInventory?> ReadCurrentOutputCaptureInventoryInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -830,16 +741,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         return new CurrentOutputCaptureInventory(currentOwner, captures.ToImmutable());
     }
 
-    /// <summary>
-    /// Rebuilds canonical owner-evidence JSON for a current capture set and optional merge intent.
-    /// </summary>
-    /// <param name="root">The accepted run and output-witness binding.</param>
-    /// <param name="tenantId">The tenant expected on owner records.</param>
-    /// <param name="witnessCaptureId">The capture ID stored in the witness, or <see langword="null"/> for no-output evidence.</param>
-    /// <param name="captures">Current capture records read from the source-control owner.</param>
-    /// <param name="mergeIntents">Current merge intents associated with the capture.</param>
-    /// <param name="ownerEvidence">Receives the rebuilt JSON when the inputs satisfy the witness shape.</param>
-    /// <returns><see langword="true"/> when a valid canonical representation was produced.</returns>
     internal static bool TryRebuildCurrentOwnerEvidence(
         MafExecutionOwnerEvidenceBinding root,
         string tenantId,
@@ -873,9 +774,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         return true;
     }
 
-    /// <summary>
-    /// Projects accepted-root evidence into the binding contract consumed by the witness serializer.
-    /// </summary>
     private static MafExecutionOwnerEvidenceBinding CreateOwnerEvidenceBinding(
         MafBacklogAcceptedRootEvidence root) =>
         new(
@@ -888,14 +786,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
             root.WorkPlan,
             root.OutputSet);
 
-    /// <summary>
-    /// Parses versioned owner-evidence rows and rejects unknown, duplicate, or incompatible row combinations.
-    /// </summary>
-    /// <param name="evidence">The persisted JSON array to parse.</param>
-    /// <param name="capture">Receives the single capture row when present.</param>
-    /// <param name="merge">Receives the optional merge row.</param>
-    /// <param name="noOutput">Receives the single no-output row when present.</param>
-    /// <returns><see langword="true"/> only for one valid no-output row or a capture row with an optional merge row.</returns>
     internal static bool TryParseOwnerEvidence(
         JsonElement evidence,
         out MafExecutionOwnerEvidenceCaptureRow? capture,
@@ -958,9 +848,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
             : capture is not null && count == (merge is null ? 1 : 2);
     }
 
-    /// <summary>
-    /// Deserializes one owner-evidence row with strict JSON member handling.
-    /// </summary>
     private static bool TryDeserializeOwnerEvidence<T>(JsonElement value, out T? result)
         where T : class
     {
@@ -976,9 +863,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         }
     }
 
-    /// <summary>
-    /// Checks the capture proof contract without allowing malformed persisted evidence to escape as an exception.
-    /// </summary>
     private static bool ValidCaptureProof(ProducedRunCaptureProof proof)
     {
         try
@@ -992,9 +876,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         }
     }
 
-    /// <summary>
-    /// Confirms that current source-control owner state still matches the accepted root evidence.
-    /// </summary>
     private static bool IsCurrentOwnerBinding(
         SourceControlOwnerStore.OwnerBindingSnapshot owner,
         MafBacklogAcceptedRootEvidence root) =>
@@ -1010,10 +891,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         owner.StateVersion == root.CurrentDecision.StateVersion &&
         owner.DecisionState == "accepted";
 
-    /// <summary>
-    /// Marks a prerequisite complete only when its claim is current and its witness and owner proof set are complete.
-    /// </summary>
-    /// <remarks>Archived claims, pending automation invocations, missing output witnesses, or unsupported merge evidence remain unverified.</remarks>
     private static BacklogPrerequisiteExecutionSnapshot CreateVerifiedSnapshot(
         MafBacklogTaskClaimTuple claim,
         long executionRevision,
@@ -1063,10 +940,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
             witness.ProofSha256);
     }
 
-    /// <summary>
-    /// Reads the latest completed-root checkpoint within the current transaction and validates its stored state.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the persisted checkpoint is corrupt or unavailable.</exception>
     private async Task<MafExecutionCheckpointSnapshot?> ReadLatestExecutionCheckpointInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1092,9 +965,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         }
     }
 
-    /// <summary>
-    /// Creates the PostgreSQL checkpoint binding for the accepted root and its pinned model.
-    /// </summary>
     private static MafCheckpointBinding CreateCheckpointBinding(AcceptedRootBinding binding)
     {
         var sdkVersion = typeof(WorkflowBuilder).Assembly.GetName().Version?.ToString();
@@ -1111,10 +981,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
             StoreName: MafExecutionCheckpointContract.StoreName);
     }
 
-    /// <summary>
-    /// Reads and validates the pinned model reference from the accepted selection JSON.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the model reference is absent or invalid.</exception>
     private static string ReadPinnedModelReference(JsonElement snapshot)
     {
         if (snapshot.ValueKind == JsonValueKind.Object &&
@@ -1130,10 +996,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
             "maf_execution_checkpoint_binding_unavailable", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Returns the prerequisite references for a task in stable task-ID order.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the graph and task refer to different projects.</exception>
     private static ImmutableArray<BacklogTaskReference> GetPrerequisites(
         BacklogDependencyGraph graph,
         BacklogTaskReference task)
@@ -1150,10 +1012,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         ];
     }
 
-    /// <summary>
-    /// Finds the exact task snapshot in the dependency graph.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the prerequisite is no longer present in the graph.</exception>
     private static BacklogTaskSnapshot FindTask(
         BacklogDependencyGraph graph,
         BacklogTaskReference task) =>
@@ -1161,9 +1019,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         ?? throw new CoordinationException(
             "backlog_prerequisite_binding_stale", StatusCodes.Status409Conflict);
 
-    /// <summary>
-    /// Maps an unverified claim to pending, archived, or indeterminate execution and output states.
-    /// </summary>
     private static BacklogPrerequisiteExecutionSnapshot CreateUnverifiedSnapshot(
         MafBacklogTaskClaimTuple claim,
         long executionRevision)
@@ -1184,9 +1039,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
             claim.Task, claim.TaskRevision, executionRevision, state, outputState);
     }
 
-    /// <summary>
-    /// Creates the immutable result snapshot for a prerequisite at the supplied task and execution revisions.
-    /// </summary>
     private static BacklogPrerequisiteExecutionSnapshot CreateSnapshot(
         BacklogTaskReference task,
         long taskRevision,
@@ -1196,9 +1048,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         string? outputProofReference = null) =>
         new(task, taskRevision, executionRevision, state, outputState, outputProofReference);
 
-    /// <summary>
-    /// Compares every task and claim field that must remain stable between preparation and the claim transaction.
-    /// </summary>
     private static bool SameClaim(MafBacklogTaskClaimTuple left, MafBacklogTaskClaimTuple right) =>
         left.Task == right.Task &&
         left.TaskRevision == right.TaskRevision &&
@@ -1216,9 +1065,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         left.ClaimExecutionFence == right.ClaimExecutionFence &&
         left.ClaimDecisionStateVersion == right.ClaimDecisionStateVersion;
 
-    /// <summary>
-    /// Compares the root, actor, tenant, accepted selection, and decision version across two owner reads.
-    /// </summary>
     private static bool SameRootBinding(AcceptedRootBinding left, AcceptedRootBinding right) =>
         SameClaim(left.Claim, right.Claim) &&
         left.Root == right.Root &&
@@ -1234,9 +1080,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         left.SelectionHash == right.SelectionHash &&
         left.DecisionStateVersion == right.DecisionStateVersion;
 
-    /// <summary>
-    /// Compares prepared accepted-root evidence with a newly read root binding.
-    /// </summary>
     private static bool SameRootBinding(
         MafBacklogAcceptedRootEvidence prepared,
         AcceptedRootBinding current) =>
@@ -1252,9 +1095,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         prepared.CurrentDecision.State.Fence == current.Root.ExecutionFence &&
         prepared.CurrentDecision.SelectionHash == current.SelectionHash;
 
-    /// <summary>
-    /// Compares the complete effective run selection, including its serialized snapshot.
-    /// </summary>
     private static bool SameSelection(EffectiveRunSelection left, EffectiveRunSelection right) =>
         left.ProjectId == right.ProjectId &&
         left.RunId == right.RunId &&
@@ -1264,9 +1104,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         left.ContextRevision == right.ContextRevision &&
         left.Snapshot.GetRawText() == right.Snapshot.GetRawText();
 
-    /// <summary>
-    /// Compares checkpoint identity and canonical validated state.
-    /// </summary>
     private static bool SameCheckpoint(
         MafExecutionCheckpointSnapshot left,
         MafExecutionCheckpointSnapshot right) =>
@@ -1275,9 +1112,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         MafExecutionCheckpointContract.Serialize(left.State).GetRawText() ==
         MafExecutionCheckpointContract.Serialize(right.State).GetRawText();
 
-    /// <summary>
-    /// Compares obligations, missing associations, and witness identity between root evidence reads.
-    /// </summary>
     private static bool SameOutputEvidence(
         MafBacklogAcceptedRootEvidence left,
         MafBacklogAcceptedRootEvidence right) =>
@@ -1285,9 +1119,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         left.MissingFixedAssociationIds.SequenceEqual(right.MissingFixedAssociationIds) &&
         SameOutputWitness(left.OutputWitness, right.OutputWitness);
 
-    /// <summary>
-    /// Compares work-plan identity, digest, and ordered obligations for two output sets.
-    /// </summary>
     private static bool SameOutputSet(
         MafBacklogOutputSetSnapshot? left,
         MafBacklogOutputSetSnapshot? right) =>
@@ -1298,9 +1129,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
               left.Digest == right.Digest &&
               left.Obligations.SequenceEqual(right.Obligations);
 
-    /// <summary>
-    /// Compares all persisted witness bindings and canonical output-set bytes.
-    /// </summary>
     private static bool SameOutputWitness(
         MafExecutionOutputWitnessRecord? left,
         MafExecutionOutputWitnessRecord? right) =>
@@ -1318,9 +1146,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
               left.ProofSha256 == right.ProofSha256 &&
               left.OutputSetCanonicalBytes.AsSpan().SequenceEqual(right.OutputSetCanonicalBytes.AsSpan());
 
-    /// <summary>
-    /// Compares capture, merge, and no-output owner proofs by their complete persisted contents.
-    /// </summary>
     private static bool SameOwnerProofs(
         ImmutableArray<MafBacklogOwnerProof> left,
         ImmutableArray<MafBacklogOwnerProof> right)
@@ -1350,9 +1175,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         return true;
     }
 
-    /// <summary>
-    /// Classifies errors that mean current owner evidence could not be read.
-    /// </summary>
     private static bool IsUnavailableBinding(CoordinationException exception) =>
         exception.Code is
             "backlog_prerequisite_binding_unavailable" or
@@ -1361,9 +1183,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
             "maf_execution_checkpoint_forked" or
             "checkpoint_session_unavailable";
 
-    /// <summary>
-    /// Classifies errors that mean a previously prepared owner binding is now stale.
-    /// </summary>
     private static bool IsStaleBinding(CoordinationException exception) =>
         exception.Code is
             "backlog_prerequisite_binding_stale" or
@@ -1378,9 +1197,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
             "source_control_intent_unavailable" or
             "source_control_run_binding_changed";
 
-    /// <summary>
-    /// The root task, run authority, and selection binding captured while preparing prerequisite evidence.
-    /// </summary>
     private sealed record AcceptedRootBinding(
         MafBacklogTaskClaimTuple Claim,
         AcceptedRoot Root,
@@ -1390,9 +1206,6 @@ internal sealed class MafBacklogPrerequisiteEvidenceReader : IBacklogPrerequisit
         string SelectionHash,
         long DecisionStateVersion);
 
-    /// <summary>
-    /// Current source-control owner binding and all admitted output captures read under that binding.
-    /// </summary>
     private sealed record CurrentOutputCaptureInventory(
         SourceControlOwnerStore.OwnerBindingSnapshot CurrentOwner,
         ImmutableArray<SourceControlOutputCaptureRecord> Captures);

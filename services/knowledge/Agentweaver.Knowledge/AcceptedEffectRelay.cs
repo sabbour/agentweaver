@@ -9,7 +9,6 @@ using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.Knowledge;
 
-/// <summary>Summarizes accepted-effect delivery and, when available, the Events service acknowledgement.</summary>
 public sealed record AcceptedEffectDeliveryResult(
     string Delivery,
     string? Code = null,
@@ -17,7 +16,6 @@ public sealed record AcceptedEffectDeliveryResult(
     string? RequiredAudience = null,
     ProjectFactAcknowledgment? Acknowledgment = null);
 
-/// <summary>Claims, forwards, validates, and acknowledges accepted-effect receipts with the original caller identity.</summary>
 public sealed class AcceptedEffectRelay(
     HttpClient client,
     IHttpContextAccessor contextAccessor,
@@ -33,8 +31,6 @@ public sealed class AcceptedEffectRelay(
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
-    /// <summary>Attempts ordered delivery; transport, contract, and authorization failures leave the receipt pending.</summary>
-    /// <remarks>A lease token fences acknowledgement, and redirects are rejected to avoid forwarding credentials elsewhere.</remarks>
     public async Task<AcceptedEffectDeliveryResult> TryDeliverAsync(
         IMemoryProvider provider,
         string projectId,
@@ -200,7 +196,6 @@ public sealed class AcceptedEffectRelay(
         }
     }
 
-    /// <summary>Validates and separates the inbound caller token, Events token, and optional tenant selector.</summary>
     private ForwardedCallerHeaders GetForwardedCallerHeaders()
     {
         var context = contextAccessor.HttpContext;
@@ -242,7 +237,6 @@ public sealed class AcceptedEffectRelay(
             null);
     }
 
-    /// <summary>Releases the current receipt lease when possible and returns a pending delivery result.</summary>
     private async Task<AcceptedEffectDeliveryResult> FailAsync(
         IMemoryProvider provider,
         string projectId,
@@ -305,7 +299,6 @@ public sealed class AcceptedEffectRelay(
         value.All(character => char.IsAsciiLetterOrDigit(character) ||
             character is '.' or '_' or '-' or ':');
 
-    /// <summary>Validated authentication and tenant values forwarded to the Events receiver.</summary>
     private sealed record ForwardedCallerHeaders(
         AuthenticationHeaderValue? EventsAuthorization,
         AuthenticationHeaderValue? KnowledgeAuthorization,

@@ -23,7 +23,6 @@ import type { CSSProperties, ElementType, ReactNode } from 'react';
 
 export type TypographyRole = 'display' | 'headline' | 'title' | 'body' | 'nav' | 'label';
 
-/** Creates the shared class styles used by semantic typography components. */
 export const useTypographyStyles = makeStyles({
   display: {
     fontSize: '28px',
@@ -88,10 +87,6 @@ export interface TypeTextProps {
  * Renders a plain element (styling is pure CSS), so it composes onto any tag.
  * Prefer the named role components below for readability.
  */
-/**
- * Renders text using a semantic typography role, tone, and optional class/style props.
- * It is presentational and has no data source or state.
- */
 export function TypeText({ role, tone = 'default', as, className, children, ...rest }: TypeTextProps) {
   const styles = useTypographyStyles();
   const toneClass = tone === 'muted' ? styles.muted : tone === 'quiet' ? styles.quiet : undefined;
@@ -106,31 +101,26 @@ export function TypeText({ role, tone = 'default', as, className, children, ...r
 type RoleComponentProps = Omit<TypeTextProps, 'role'>;
 
 /** Page title — 28/600. Renders as an <h1> by default. */
-/** Renders its children with the shared display typography role. */
 export function Display({ as = 'h1', ...rest }: RoleComponentProps) {
   return <TypeText role="display" as={as} {...rest} />;
 }
 
 /** Major section / dialog header — 20/600. */
-/** Renders its children with the shared headline typography role. */
 export function Headline({ as = 'h2', ...rest }: RoleComponentProps) {
   return <TypeText role="headline" as={as} {...rest} />;
 }
 
 /** Card / sub-section title — 16/600. */
-/** Renders its children with the shared title typography role. */
 export function TitleText({ as = 'h3', ...rest }: RoleComponentProps) {
   return <TypeText role="title" as={as} {...rest} />;
 }
 
 /** Default prose — 15/1.5. */
-/** Renders its children with the shared body typography role. */
 export function Body({ as = 'span', ...rest }: RoleComponentProps) {
   return <TypeText role="body" as={as} {...rest} />;
 }
 
 /** Field labels + quiet metadata — 13/500. */
-/** Renders its children with the shared label typography role. */
 export function Label({ as = 'span', ...rest }: RoleComponentProps) {
   return <TypeText role="label" as={as} {...rest} />;
 }

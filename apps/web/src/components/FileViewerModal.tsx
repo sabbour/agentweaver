@@ -75,10 +75,6 @@ export interface FileViewerModalProps {
   getContent?: (runId: string, path: string) => Promise<WorkspaceFileContent>;
 }
 
-/**
- * Presents the selected file viewer in a modal using the file data and callbacks supplied by
- * its parent. The modal itself manages no API requests or file-loading state.
- */
 export function FileViewerModal({
   runId,
   filePath,

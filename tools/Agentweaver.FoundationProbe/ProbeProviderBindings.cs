@@ -4,7 +4,6 @@ using Agentweaver.Providers;
 
 namespace Agentweaver.FoundationProbe;
 
-/// <summary>Builds and pins the exact secret, object-store, and telemetry providers used by the probe.</summary>
 internal static class ProbeProviderBindings
 {
     private static readonly Version AdapterVersion = new(0, 1, 0);
@@ -12,8 +11,6 @@ internal static class ProbeProviderBindings
         ImmutableHashSet.Create<string>(StringComparer.Ordinal);
     private const string OptionsRevision = "foundation-probe-v1";
 
-    /// <summary>Resolves provider candidates and pins each one to its target resource for this probe nonce.</summary>
-    /// <exception cref="ProbeException">A provider catalog, resolution, or pin operation is invalid.</exception>
     public static IReadOnlyList<ProviderPinEvidence> ResolveAndPin(ProbeTarget target, string nonce)
     {
         var registrations = new[]

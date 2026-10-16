@@ -12,9 +12,6 @@ using Microsoft.AspNetCore.Server.Kestrel.Https;
 
 namespace Agentweaver.Projects.Config;
 
-/// <summary>
-/// Holds the certificate used by the optional private Broker proof listener and disposes it with the host.
-/// </summary>
 internal sealed class BrokerRunBindingTlsIdentity : IDisposable
 {
     private const string ServerAuthenticationOid = "1.3.6.1.5.5.7.3.1";
@@ -25,12 +22,6 @@ internal sealed class BrokerRunBindingTlsIdentity : IDisposable
 
     internal X509Certificate2 Certificate { get; }
 
-    /// <summary>
-    /// Loads and pins the configured leaf certificate when the private Broker audience is enabled.
-    /// </summary>
-    /// <param name="builder">The service host builder to configure.</param>
-    /// <param name="enabled">Whether the private Broker audience is configured.</param>
-    /// <exception cref="InvalidOperationException">The TLS settings or certificate do not match the required profile.</exception>
     internal static void Configure(WebApplicationBuilder builder, bool enabled)
     {
         var section = builder.Configuration.GetSection(TlsSection);
@@ -66,17 +57,11 @@ internal sealed class BrokerRunBindingTlsIdentity : IDisposable
             }));
     }
 
-    /// <summary>
-    /// Confirms that the request itself completed a native TLS 1.2 or TLS 1.3 handshake.
-    /// </summary>
     internal static bool IsNativeHttps(HttpContext context) =>
         context.Request.IsHttps &&
         context.Features.Get<ITlsHandshakeFeature>()?.Protocol is
             SslProtocols.Tls12 or SslProtocols.Tls13;
 
-    /// <summary>
-    /// Reads the PEM certificate and key, verifies the server profile and leaf digest, and clears temporary key bytes.
-    /// </summary>
     private static BrokerRunBindingTlsIdentity Load(
         string certificatePath, string keyPath, string expectedSha256)
     {
@@ -117,6 +102,5 @@ internal sealed class BrokerRunBindingTlsIdentity : IDisposable
     private static bool IsSha256(string value) =>
         value.Length == 64 && value.All(char.IsAsciiHexDigit);
 
-    /// <summary>Releases the loaded certificate and its private-key handle.</summary>
     public void Dispose() => Certificate.Dispose();
 }

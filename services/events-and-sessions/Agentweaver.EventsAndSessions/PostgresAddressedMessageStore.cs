@@ -12,21 +12,15 @@ using NpgsqlTypes;
 
 namespace Agentweaver.EventsAndSessions;
 
-/// <summary>Signals an addressed-message rejection using a stable domain error code.</summary>
 internal sealed class AddressedMessageException(string code) : Exception(code)
 {
     public string Code { get; } = code;
 }
 
-/// <summary>Signals that the configured Messaging provider could not be negotiated.</summary>
 internal sealed class MessagingProviderUnavailableException(string message) : Exception(message);
 
-/// <summary>Signals that a run already has a different immutable Messaging provider pin.</summary>
 internal sealed class MessagingProviderBindingConflictException(string message) : Exception(message);
 
-/// <summary>
-/// Owns addressed-message admission, thread ordering, claim leases, and acknowledgment in PostgreSQL.
-/// </summary>
 internal sealed class PostgresAddressedMessageStore
 {
     private const string AckInboxConsumer = "events-and-sessions.addressed-message-ack";
@@ -51,7 +45,6 @@ internal sealed class PostgresAddressedMessageStore
     private readonly string _identityIssuer;
     private readonly TimeProvider _timeProvider;
 
-    /// <summary>Creates the message store for validated schema, provider, claim, and Identity issuer settings.</summary>
     public PostgresAddressedMessageStore(
         NpgsqlDataSource dataSource,
         PostgresSessionsProviderOptions resourceOptions,
@@ -87,10 +80,6 @@ internal sealed class PostgresAddressedMessageStore
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    /// <summary>
-    /// Admits one message with stable sender identity; message state, journal event, and outbox entry commit together.
-    /// </summary>
-    /// <returns>The created message or its prior envelope for an identical scoped retry.</returns>
     public async Task<AddressedMessageSendResult> SendAsync(
         ClaimsPrincipal principal,
         AddressedMessageDraft draft,
@@ -103,7 +92,6 @@ internal sealed class PostgresAddressedMessageStore
         var identity = CreateIdentityMetadata(principal);
         var canonicalInput = CreateCanonicalInput(normalized);
 
-        // The fast lookup avoids provider negotiation on ordinary retries; the transaction repeats it to close races.
         await using (var lookup = await _dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false))
         {
             var existing = await FindByIdempotencyAsync(
@@ -217,8 +205,6 @@ internal sealed class PostgresAddressedMessageStore
         return new AddressedMessageSendResult(message, IsDuplicate: false);
     }
 
-    /// <summary>Claims the earliest eligible thread message at a turn boundary using a leased, increasing claim fence.</summary>
-    /// <returns>The current claim or null when no eligible message is ready.</returns>
     public async Task<AddressedMessageClaim?> ClaimNextAtTurnBoundaryAsync(
         SessionIdentity recipient,
         long currentFence,
@@ -294,7 +280,6 @@ internal sealed class PostgresAddressedMessageStore
             }
         }
 
-        // SKIP LOCKED lets concurrent recipients claim different messages while the per-thread predicate preserves order.
         if (messageId is null)
         {
             await using var claim = new NpgsqlCommand($"""
@@ -368,7 +353,6 @@ internal sealed class PostgresAddressedMessageStore
         return new AddressedMessageClaim(message, owner, leaseExpiresAt!.Value);
     }
 
-    /// <summary>Marks a still-leased claim as presented after matching recipient, owner, execution, and claim fences.</summary>
     public async Task<AddressedMessageEnvelope> PresentAsync(
         SessionIdentity recipient,
         long currentFence,
@@ -387,7 +371,6 @@ internal sealed class PostgresAddressedMessageStore
             new AddressedMessageClaim(message, owner, message.ExpiresAt), cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Builds a claim from current message state and delegates the fenced presentation update.</summary>
     public async Task<AddressedMessageEnvelope> PresentAsync(
         AddressedMessageClaim claim,
         CancellationToken cancellationToken = default)
@@ -423,8 +406,6 @@ internal sealed class PostgresAddressedMessageStore
         return presented;
     }
 
-    /// <summary>Transitions one delivered message to acknowledged and records its inbox receipt atomically.</summary>
-    /// <returns>The acknowledged envelope, including the saved envelope for an identical acknowledgment retry.</returns>
     public async Task<AddressedMessageEnvelope> AcknowledgeAsync(
         SessionIdentity recipient,
         Guid messageId,
@@ -489,7 +470,6 @@ internal sealed class PostgresAddressedMessageStore
         return acknowledged;
     }
 
-    /// <summary>Marks a pending message undeliverable and clears any claim lease.</summary>
     public async Task<AddressedMessageEnvelope> MarkUndeliverableAsync(
         SessionIdentity recipient,
         Guid messageId,
@@ -529,7 +509,6 @@ internal sealed class PostgresAddressedMessageStore
         return message;
     }
 
-    /// <summary>Reads a message by project and ID; callers must separately enforce recipient or sender scope.</summary>
     public async Task<AddressedMessageEnvelope?> GetAsync(
         string projectId,
         Guid messageId,
@@ -543,7 +522,6 @@ internal sealed class PostgresAddressedMessageStore
             .ConfigureAwait(false);
     }
 
-    /// <summary>Expires at most the requested number of due pending messages without starting a background worker.</summary>
     public async Task<int> ExpireDueAsync(
         int batchSize = 1000,
         CancellationToken cancellationToken = default)
@@ -574,7 +552,6 @@ internal sealed class PostgresAddressedMessageStore
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Returns the existing message only when sender identity, canonical request, and expiry still match.</summary>
     private async Task<AddressedMessageSendResult> ExistingOrConflictAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -603,7 +580,6 @@ internal sealed class PostgresAddressedMessageStore
         return new AddressedMessageSendResult(existing, IsDuplicate: true);
     }
 
-    /// <summary>Looks up a retry using sender identity and idempotency key within the exact session scope.</summary>
     private async Task<AddressedMessageEnvelope?> FindByIdempotencyAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -626,7 +602,6 @@ internal sealed class PostgresAddressedMessageStore
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadMessage(reader) : null;
     }
 
-    /// <summary>Reads one envelope and its immutable sender-run provider metadata.</summary>
     private async Task<AddressedMessageEnvelope?> ReadMessageAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -644,7 +619,6 @@ internal sealed class PostgresAddressedMessageStore
         return await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ? ReadMessage(reader) : null;
     }
 
-    /// <summary>Validates reply ownership and allocates a serialized sequence within an allowed participant thread.</summary>
     private async Task<(Guid ThreadId, long Sequence, bool CreatedThread)> AllocateThreadSequenceAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -730,7 +704,6 @@ internal sealed class PostgresAddressedMessageStore
             : throw new InvalidOperationException("An addressed-message thread could not be sequenced.");
     }
 
-    /// <summary>Restores an uncommitted sequence allocation when a concurrent idempotent insert won.</summary>
     private async Task RevertThreadSequenceAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -751,7 +724,6 @@ internal sealed class PostgresAddressedMessageStore
             throw new InvalidOperationException("An uncommitted addressed-message sequence could not be restored.");
     }
 
-    /// <summary>Inserts an envelope unless its sender-scoped idempotency key already exists.</summary>
     private async Task<bool> InsertMessageAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -808,7 +780,6 @@ internal sealed class PostgresAddressedMessageStore
         return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is Guid;
     }
 
-    /// <summary>Stores or verifies the immutable Messaging provider binding for a project/run.</summary>
     private async Task PersistProviderBindingAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -864,7 +835,6 @@ internal sealed class PostgresAddressedMessageStore
                 "The run already has a different immutable Messaging provider binding.");
     }
 
-    /// <summary>Negotiates the configured PostgreSQL Messaging provider for the run.</summary>
     private async Task<PinnedProviderBinding> ResolveBindingAsync(
         string runId,
         CancellationToken cancellationToken)
@@ -890,7 +860,6 @@ internal sealed class PostgresAddressedMessageStore
         return result.Value;
     }
 
-    /// <summary>Requires the exact sender or recipient session to exist in the journal's project/run.</summary>
     private async Task RequireSessionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -908,7 +877,6 @@ internal sealed class PostgresAddressedMessageStore
             throw new SessionNotFoundException("The addressed-message session does not exist.");
     }
 
-    /// <summary>Adds the project, thread, sender, and recipient values to a parameterized participant query.</summary>
     private static void AddThreadParticipants(
         NpgsqlCommand command,
         AddressedMessageDraft request,
@@ -922,7 +890,6 @@ internal sealed class PostgresAddressedMessageStore
         command.Parameters.AddWithValue("recipient_session", NpgsqlDbType.Varchar, request.Recipient.SessionId);
     }
 
-    /// <summary>Adds all statuses that remain eligible for delivery or expiry.</summary>
     private static void AddPendingStatusParameters(NpgsqlCommand command)
     {
         command.Parameters.AddWithValue("accepted", NpgsqlDbType.Varchar, AddressedMessageStatus.Accepted.ToString());
@@ -930,7 +897,6 @@ internal sealed class PostgresAddressedMessageStore
         command.Parameters.AddWithValue("delivered", NpgsqlDbType.Varchar, AddressedMessageStatus.Delivered.ToString());
     }
 
-    /// <summary>Adds a project/run/session identity to a parameterized query.</summary>
     private static void AddIdentity(NpgsqlCommand command, SessionIdentity identity)
     {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, identity.ProjectId);
@@ -938,14 +904,12 @@ internal sealed class PostgresAddressedMessageStore
         command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
     }
 
-    /// <summary>Adds a project/run identity to a parameterized query.</summary>
     private static void AddProjectRun(NpgsqlCommand command, string projectId, string runId)
     {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
         command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, runId);
     }
 
-    /// <summary>Hashes the configured issuer and caller subject so the stored sender key does not expose the subject.</summary>
     private AddressedMessageIdentityMetadata CreateIdentityMetadata(ClaimsPrincipal principal)
     {
         var subject = principal.FindFirst(SessionIdentityClaims.Subject)?.Value;
@@ -956,7 +920,6 @@ internal sealed class PostgresAddressedMessageStore
         return new AddressedMessageIdentityMetadata(_identityIssuer, subjectHash, ContractVersion: 1);
     }
 
-    /// <summary>Requires the message sender to match the authenticated project/run claims.</summary>
     private static SessionRunScope RequireSenderScope(
         ClaimsPrincipal principal,
         SessionIdentity sender)
@@ -969,17 +932,14 @@ internal sealed class PostgresAddressedMessageStore
         return current;
     }
 
-    /// <summary>Reconstructs persisted identity metadata from its issuer and stored subject hash.</summary>
     private static AddressedMessageIdentityMetadata CreateIdentityMetadata(
         string issuer,
         string subjectHash) =>
         new(issuer, subjectHash, ContractVersion: 1);
 
-    /// <summary>Creates canonical request JSON while leaving an omitted expiry stable across retries.</summary>
     private static JsonElement CreateCanonicalInput(AddressedMessageDraft draft) =>
         JsonSerializer.SerializeToElement(draft with { ExpiresAt = null }, JsonOptions);
 
-    /// <summary>Derives an outbox key scoped by sender, issuer, subject hash, and caller idempotency value.</summary>
     private static string OutboxIdempotencyKey(
         AddressedMessageIdentityMetadata identity,
         SessionIdentity sender,
@@ -988,7 +948,6 @@ internal sealed class PostgresAddressedMessageStore
             $"{sender.ProjectId}\0{sender.RunId}\0{sender.SessionId}\0" +
             $"{identity.Issuer}\0{identity.SubjectHash}\0{idempotencyKey}")));
 
-    /// <summary>Copies the provider identity while replacing the resource name with a stable hash.</summary>
     private static AddressedMessageProviderMetadata ToProviderMetadata(PinnedProviderBinding binding)
     {
         var capabilities = binding.NegotiatedCapabilities.OrderBy(value => value, StringComparer.Ordinal)
@@ -1005,7 +964,6 @@ internal sealed class PostgresAddressedMessageStore
             capabilities);
     }
 
-    /// <summary>Rebuilds an envelope from a row while parsing enums and restoring pinned provider metadata.</summary>
     private static AddressedMessageEnvelope ReadMessage(NpgsqlDataReader reader)
     {
         var sender = new SessionIdentity(reader.GetString(1), reader.GetString(2), reader.GetString(3));
@@ -1066,13 +1024,11 @@ internal sealed class PostgresAddressedMessageStore
             ON p.project_id = m.project_id AND p.run_id = m.sender_run_id
         """;
 
-    /// <summary>Validates a bounded opaque value used for owner and idempotency identities.</summary>
     private static bool IsToken(string value, int maximumLength) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= maximumLength &&
         value.All(character => char.IsAsciiLetterOrDigit(character) ||
             character is '.' or '_' or '-' or ':');
 
-    /// <summary>Normalizes timestamps to UTC at PostgreSQL's stored precision.</summary>
     private static DateTimeOffset NormalizeTimestamp(DateTimeOffset timestamp)
     {
         var utc = timestamp.ToUniversalTime();

@@ -1,7 +1,3 @@
-/**
- * Establishes the guarded PostgreSQL access needed to bootstrap identity service schemas.
- * The flow uses a temporary local port forward and removes its transient process and files afterward.
- */
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
@@ -77,10 +73,6 @@ async function stopProcess(child) {
   }
 }
 
-/**
- * Starts a local forward to the selected PostgreSQL pod and waits until its port accepts connections.
- * If startup fails or times out, the child process is stopped and an error is thrown.
- */
 export function startIdentityPostgresPortForward({ kubeconfig, podName, localPort, namespace, keyVault = false }, {
   spawnProcess = spawn,
   startupTimeoutMs = 30_000,
@@ -177,10 +169,6 @@ function buildProxy(repoRoot, outputDirectory, {
   assertCommand(result, 'Could not build the temporary PostgreSQL TCP proxy');
 }
 
-/**
- * Applies the identity PostgreSQL bootstrap through the validated private connection path.
- * Temporary credentials and port-forward resources are cleaned up even when bootstrap commands fail.
- */
 export async function bootstrapIdentityPostgres({
   repoRoot = process.cwd(), resourceGroup, subscriptionId, tenantId, clusterName,
   postgresHost, adminUsername, runtimePrincipalObjectId, migrationPrincipalObjectId,

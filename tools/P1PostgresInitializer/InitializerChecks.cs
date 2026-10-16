@@ -2,10 +2,8 @@ using System.Text.Json.Serialization;
 
 namespace Agentweaver.P1PostgresInitializer;
 
-/// <summary>Builds exact database readbacks and enforces the initializer's ownership and grant invariants.</summary>
 internal static class InitializerChecks
 {
-    // Captures the pre-existing database ACL and protected objects so every committed stage can prove its delta.
     internal const string ExistingBoundaryQuery = """
         WITH database AS (
           SELECT d.*, r.oid AS operator_oid, r.rolsuper
@@ -72,7 +70,6 @@ internal static class InitializerChecks
 
     internal const string AadPrincipalFunction = "pg_catalog.pgaadauth_list_principals";
 
-    /// <summary>Builds a readback of planned runtime principals and their membership flags.</summary>
     internal static string PrincipalReadbackQuery(string principalFunction = AadPrincipalFunction) => $"""
         SELECT coalesce(jsonb_agg(jsonb_build_object(
           'oid', r.oid, 'role', r.rolname, 'objectId', p.object_id, 'type', p.principal_type,
@@ -93,21 +90,17 @@ internal static class InitializerChecks
         WHERE r.rolname = ANY(@roles)
         """;
 
-    /// <summary>Quotes a database identifier by escaping embedded quote characters.</summary>
     internal static string Quote(string value) => "\"" + value.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
 
-    /// <summary>Returns the one permitted runtime-role flag change.</summary>
     // Only INHERIT is changed: the operator may manage it through CREATEROLE ADMIN OPTION. Reserved
     // flags (SUPERUSER, CREATEDB, REPLICATION, BYPASSRLS) need matching privileges even when set to
     // false, so they are verified by readback before COMMIT instead of being rewritten.
     internal static string AlterRoleSql(string role) => $"ALTER ROLE {Quote(role)} NOINHERIT";
 
-    /// <summary>Returns the operator membership SQL while leaving the original administrator grant intact.</summary>
     // Preserve the existing ADMIN grant; PostgreSQL 16 rejects granting it back to the original grantor.
     internal static string GrantOperatorMembershipSql(string role, string operatorName) =>
         $"GRANT {Quote(role)} TO {Quote(operatorName)} WITH INHERIT FALSE, SET FALSE";
 
-    /// <summary>Removes only a temporary membership row attributed to the current operator.</summary>
     // Remove only the temporary grant attributed to the current operator, never the original grantor's row.
     internal static string RevokeOperatorMembershipSql(string role, string operatorName) =>
         $"REVOKE {Quote(role)} FROM {Quote(operatorName)} GRANTED BY {Quote(operatorName)}";
@@ -119,7 +112,6 @@ internal static class InitializerChecks
     internal const string RoleReadbackStage = "role_readback";
     internal const string RoleCommitStage = "role_commit";
 
-    /// <summary>Builds the ordered role-flag and membership statements using the observed grantor identity.</summary>
     internal static (string Stage, string Sql)[] RolePostCreateStatements(string role, string operatorName,
         uint initialGrantorOid, uint operatorOid)
     {
@@ -135,7 +127,6 @@ internal static class InitializerChecks
         return [.. statements];
     }
 
-    /// <summary>Requires the exact planned row-lock protection set and owner-only denial functions.</summary>
     internal static void AssertMutationDenialPlan(ServicePlan[] services)
     {
         var protectedTables = services.SelectMany(service =>
@@ -162,7 +153,6 @@ internal static class InitializerChecks
         }
     }
 
-    /// <summary>Restricts the owner-only relation and sequence inventory to the reviewed Projects objects.</summary>
     internal static void AssertOwnerOnlyObjectPlan(ServicePlan[] services)
     {
         var projects = services.SingleOrDefault(service => service.Schema == "projects_config");
@@ -183,7 +173,6 @@ internal static class InitializerChecks
             throw new InvalidOperationException("The Projects setup-operation guard must remain owner-only.");
     }
 
-    /// <summary>Requires applied migration IDs to exactly match the source inventory, in order.</summary>
     internal static void AssertExactMigrationHistory(string[] expected, string[] actual, string service)
     {
         if (expected.Length == 0 || actual.Length != expected.Length ||
@@ -194,7 +183,6 @@ internal static class InitializerChecks
             throw new InvalidOperationException($"The {service} migration history does not match the exact source migration set.");
     }
 
-    /// <summary>Accepts only a receipt proving the failed Projects-only prefix and binding it to exact source hashes.</summary>
     internal static void AssertContinuationReceipt(ContinuationReceiptEntry[] entries,
         string sourceSha, string coreMergeSha, string planHash)
     {
@@ -233,7 +221,6 @@ internal static class InitializerChecks
             throw new InvalidOperationException("The continuation receipt records work beyond the exact Projects-only prefix.");
     }
 
-    /// <summary>Verifies guard trigger shape, owner, source body, and runtime non-executability before grants.</summary>
     internal static void AssertMutationDenialGuards(ServicePlan service, MutationGuardState[] guards,
         uint ownerOid, uint runtimeOid)
     {
@@ -264,7 +251,6 @@ internal static class InitializerChecks
         }
     }
 
-    /// <summary>Rejects pre-existing public authority, incompatible defaults, or an operator unable to grant Connect.</summary>
     internal static void AssertPreflight(PreflightSnapshot state)
     {
         var boundary = state.Boundary;
@@ -277,7 +263,6 @@ internal static class InitializerChecks
                 "Existing public, inherited, or default privileges are incompatible with the planned runtime limits. No initialization writes are permitted.");
     }
 
-    /// <summary>Allows only the exact planned database Connect grants; all protected state must remain unchanged.</summary>
     internal static void AssertBoundary(ExistingBoundary before, ExistingBoundary after, uint[] connectedRoles)
     {
         var expected = before.Grants.Concat(connectedRoles.Select(role =>
@@ -290,7 +275,6 @@ internal static class InitializerChecks
                 "Existing ownership or privileges changed, or the database CONNECT delta differs from the exact planned roles. The current grant stage is not committed.");
     }
 
-    /// <summary>Requires all five runtime identities to have no direct database ACL before continuation.</summary>
     internal static void AssertNoRuntimeDatabaseGrants(ExistingBoundary boundary, uint[] runtimeOids)
     {
         if (runtimeOids.Length != 5 || runtimeOids.Any(oid => oid == 0) ||
@@ -299,7 +283,6 @@ internal static class InitializerChecks
             throw new InvalidOperationException("A runtime role already has a direct database grant before continuation.");
     }
 
-    /// <summary>Captures each service role's existing administrator grantor after validating its Entra mapping.</summary>
     internal static IReadOnlyDictionary<string, uint> CaptureMembershipGrantors(ServicePlan[] services,
         RuntimePrincipal[] principals, uint operatorOid, string tenantId)
     {
@@ -329,7 +312,6 @@ internal static class InitializerChecks
         return grantors;
     }
 
-    /// <summary>Checks exact role mappings, disabled elevated flags, and operator-only non-inheriting membership.</summary>
     internal static void AssertPrincipals(ServicePlan[] services, RuntimePrincipal[] principals,
         uint operatorOid, string tenantId, IReadOnlyDictionary<string, uint>? expectedGrantorOids = null)
     {
@@ -358,7 +340,6 @@ internal static class InitializerChecks
         }
     }
 
-    /// <summary>Compares every function owner and execute ACL with the exact pre-grant or committed plan.</summary>
     internal static void AssertFunctions(
         ServicePlan service,
         FunctionState[] functions,
@@ -412,7 +393,6 @@ internal static class InitializerChecks
     private static string NormalizeGuardSource(string source) =>
         string.Join(' ', source.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).TrimEnd(';');
 
-    /// <summary>Runs preflight, mutation, readback, verification, commit, then durable receipt recording in order.</summary>
     internal static async Task RunStageAsync(Func<Task> preflight, Func<Task> mutate,
         Func<Task> verify, Func<Task> commit, Func<Task> record, Func<string, Task>? observe = null)
     {
@@ -425,7 +405,6 @@ internal static class InitializerChecks
         await record();
     }
 
-    /// <summary>Reports failure without implying rollback and attempts to append an explicit-reconciliation receipt.</summary>
     internal static async Task ReportFailureAsync(Exception original, string receiptPath,
         Func<string, Task> record, TextWriter errors, string? sqlState = null)
     {
@@ -445,66 +424,52 @@ internal static class InitializerChecks
     }
 }
 
-/// <summary>One observed PostgreSQL ACL grant, including its grantor and grantability.</summary>
 internal sealed record AclGrant(
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint Grantor,
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint Grantee,
     string Privilege, bool Grantable);
-/// <summary>Database owner, ACL, and protected-object snapshot used to detect unauthorized changes.</summary>
 internal sealed record ExistingBoundary(
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint DatabaseOid,
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint OwnerOid,
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint ConnectGrantorOid,
     AclGrant[] Grants, string ProtectedState);
-/// <summary>Read-only checks required before initializer mutations may begin.</summary>
 internal sealed record PreflightSnapshot(ExistingBoundary? Boundary,
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint OperatorOid,
     bool OperatorCanGrantConnect, bool ForeignPublicAuthority, bool IncompatibleDefaults);
-/// <summary>One role membership edge including PostgreSQL's grant, inherit, and set options.</summary>
 internal sealed record RoleMembership(
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint RoleOid,
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint MemberOid,
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint GrantorOid,
     bool Admin, bool Inherit, bool Set);
-/// <summary>Entra principal identity, role flags, and memberships read back from PostgreSQL.</summary>
 internal sealed record RuntimePrincipal(
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint Oid,
     string Role, string? ObjectId, string? Type,
     int? AdminFlag, bool CanLogin, bool Superuser, bool CreateDatabase, bool CreateRole,
     bool Replication, bool Inherit, bool BypassRls, string? TenantId, int? MfaFlag, RoleMembership[] Memberships);
-/// <summary>Observed owner and execute grants for one planned database function.</summary>
 internal sealed record FunctionState(
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint Oid,
     string Signature,
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint OwnerOid,
     AclGrant[] Grants, bool RuntimeCanExecute);
-/// <summary>Source-generated target and exact per-service role, schema, relation, and function plan.</summary>
 internal sealed record PostgresPlan(int FormatVersion, TargetPlan Target, ServicePlan[] Services, int[] CoreVersions);
-/// <summary>Connection and Entra operator identity selected for a PostgreSQL initialization.</summary>
 internal sealed record TargetPlan(string TenantId, string PostgresHost, string Database, string OperatorName,
     string OperatorObjectId, string ConnectionHost, int ConnectionPort);
-/// <summary>Exact schema, runtime principal, relation, and function contract for one service.</summary>
 internal sealed record ServicePlan(string Service, string Schema, string Role, string PrincipalObjectId,
     TablePlan[] Tables, FunctionPlan[] Functions)
 {
     public string[] OwnerOnlyTables { get; init; } = [];
     public string[] OwnerOnlySequences { get; init; } = [];
 }
-/// <summary>Runtime table privileges and any one-column lock update allowed for the service.</summary>
 internal sealed record TablePlan(string Table, string[] Privileges, string? LockColumn, bool MutationDenialRequired,
     MutationDenialGuardPlan? MutationDenialGuard);
-/// <summary>Expected trigger and owner-only function that denies mutation of a protected row-lock table.</summary>
 internal sealed record MutationDenialGuardPlan(string Trigger, string Function, int TriggerType,
     string Message, string? SqlState);
-/// <summary>Readback of a mutation guard's catalog state and function source.</summary>
 internal sealed record MutationGuardState(string Table, string? TriggerName, string? FunctionSchema,
     string? FunctionName, int? TriggerType, string? Enabled, bool? IsInternal, bool? NoColumnFilter,
     bool? NoCondition, int? ArgumentCount,
     [property: JsonNumberHandling(JsonNumberHandling.AllowReadingFromString)] uint? FunctionOwnerOid,
     bool? RuntimeCanExecute,
     string? FunctionSource);
-/// <summary>Function signature and whether its execute privilege is granted to the runtime principal.</summary>
 internal sealed record FunctionPlan(string Signature, bool Execute);
-/// <summary>Durable stage marker bound to a source SHA, Core merge SHA, and source-plan hash.</summary>
 internal sealed record ContinuationReceiptEntry(string Stage, string SourceSha, string CoreMergeSha,
     string PlanHash, DateTimeOffset At);

@@ -9,12 +9,8 @@ using Microsoft.Extensions.Options;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Maps the trusted internal Remote MCP native-call dispatch route.</summary>
 public static class RemoteMcpNativeCallEndpoints
 {
-    /// <summary>
-    /// Validates the bounded request and current call authority, then fails closed while native transport is unavailable.
-    /// </summary>
     public static IEndpointRouteBuilder MapRemoteMcpNativeCallDispatch(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost(RemoteMcpNativeCallContract.DispatchPath, async (
@@ -102,7 +98,6 @@ public static class RemoteMcpNativeCallEndpoints
         return endpoints;
     }
 
-    /// <summary>Reads at most the requested body limit plus one byte so callers can detect an oversized request.</summary>
     internal static async Task<byte[]> ReadBoundedBodyAsync(
         HttpContext context,
         int maximumBytes,
@@ -126,7 +121,6 @@ public static class RemoteMcpNativeCallEndpoints
         return body.AsSpan(0, bodyLength).ToArray();
     }
 
-    /// <summary>Builds the outbound MCP HTTP request from the validated call target and owned request bytes.</summary>
     internal static HttpRequestMessage CreateOutboundRequest(
         RemoteMcpNativeCallRequest request,
         byte[] ownedRequestBytes)
@@ -142,7 +136,6 @@ public static class RemoteMcpNativeCallEndpoints
         return outbound;
     }
 
-    /// <summary>Returns the standard response for a request that exceeds the accepted byte limit.</summary>
     private static IResult RequestTooLarge() =>
         Results.Json(new { code = "remote_mcp_native_call_request_too_large" },
             statusCode: StatusCodes.Status413PayloadTooLarge);

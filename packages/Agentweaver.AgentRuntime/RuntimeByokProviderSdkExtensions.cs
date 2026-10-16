@@ -2,13 +2,8 @@ using GitHub.Copilot;
 
 namespace Agentweaver.AgentRuntime;
 
-/// <summary>Maps the accepted provider-neutral BYOK contract into the pinned Copilot SDK shape.</summary>
 internal static class RuntimeByokProviderSdkExtensions
 {
-    /// <summary>
-    /// Copies the selected provider configuration into SDK fields, adding the Azure OpenAI
-    /// path segment when needed and leaving absent optional headers unset.
-    /// </summary>
     internal static ProviderConfig ToSdkProvider(
         this RuntimeByokProvider provider, string modelId, string apiKey)
     {

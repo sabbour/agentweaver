@@ -9,8 +9,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Knowledge;
 
-/// <summary>Stores project-scoped Memory documents in persistent Redis hashes with atomic Lua batches.</summary>
-/// <remarks>Provider negotiation rejects unsupported topology, persistence settings, TTLs, and malformed existing data.</remarks>
 public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
 {
     public const int MaximumGlobalReceiptScanKeys = 100_000;
@@ -137,7 +135,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
     private readonly IRedisMemoryCommandClient client;
     private readonly RedisMemoryOptions options;
 
-    /// <summary>Creates a store using the validated Redis command client and namespace settings.</summary>
     public RedisMemoryDocumentStore(IRedisMemoryCommandClient client, RedisMemoryOptions options)
     {
         ArgumentNullException.ThrowIfNull(client);
@@ -147,8 +144,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
         this.options = options;
     }
 
-    /// <summary>Checks server durability/topology and audits every existing project hash before resource negotiation.</summary>
-    /// <exception cref="KnowledgeProviderUnavailableException">The Redis server or stored namespace is incompatible.</exception>
     public async Task VerifyProviderCompatibilityAsync(CancellationToken cancellationToken)
     {
         try
@@ -188,7 +183,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
         }
     }
 
-    /// <summary>Reads a document and its ETag and lease state atomically from its project hash.</summary>
     public async Task<MemoryStoredDocument?> ReadAsync(
         string projectId,
         string documentId,
@@ -232,7 +226,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
         return new MemoryStoredDocument(ApplyLeaseState(document, leaseState), etag);
     }
 
-    /// <summary>Scans the bounded global namespace for a receipt ID so the provider can detect duplicates.</summary>
     public async Task<IReadOnlyList<KnowledgeMemoryDocument>> FindAcceptedEffectAsync(
         Guid receiptId,
         CancellationToken cancellationToken)
@@ -267,7 +260,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
         return matches.Take(2).ToArray();
     }
 
-    /// <summary>Filters one project's records in memory, then returns a stable page of matches.</summary>
     public async Task<KnowledgeRecordPage> SearchAsync(
         KnowledgeRecordQuery query,
         CancellationToken cancellationToken)
@@ -296,7 +288,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
             query.PageSize);
     }
 
-    /// <summary>Reads transfer-eligible Decisions and Memory for one project and agent.</summary>
     public async Task<IReadOnlyList<KnowledgeRecord>> ReadTransferCandidatesAsync(
         string projectId,
         string agentId,
@@ -318,7 +309,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
             .ToArray();
     }
 
-    /// <summary>Finds which requested revision IDs already exist in the project's stored history.</summary>
     public async Task<IReadOnlyCollection<Guid>> FindRevisionIdsAsync(
         string projectId,
         IReadOnlyCollection<Guid> revisionIds,
@@ -338,7 +328,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
             .ToHashSet();
     }
 
-    /// <summary>Returns one page of matching immutable revisions in descending revision order.</summary>
     public async Task<KnowledgeRecordRevisionPage> ReadRevisionsAsync(
         string projectId,
         Guid recordId,
@@ -362,7 +351,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
         return new KnowledgeRecordRevisionPage(items, revisions.Length, page, pageSize);
     }
 
-    /// <summary>Returns only context-eligible Decisions, Memory, and the current run's session context.</summary>
     public async Task<IReadOnlyList<KnowledgeRecord>> ReadContextCandidatesAsync(
         string projectId,
         string agentId,
@@ -394,7 +382,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
             .ToArray();
     }
 
-    /// <summary>Blocks delivery when an earlier accepted effect in the stream is still pending.</summary>
     public async Task<bool> HasUndeliveredPredecessorAsync(
         string projectId,
         string streamId,
@@ -409,8 +396,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
             !document.IsDelivered);
     }
 
-    /// <summary>Runs a bounded create/replace batch atomically, including optional lease fencing updates.</summary>
-    /// <remarks>The Lua script compares ETags and validates all operations before writing any document fields.</remarks>
     public async Task<MemoryBatchResult> ExecuteBatchAsync(
         string projectId,
         IReadOnlyList<MemoryBatchOperation> operations,
@@ -489,7 +474,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
 
     private static string LeaseField(string documentId) => $"lease:{documentId}";
 
-    /// <summary>Rechecks server compatibility for an operation and reports field-expiration support.</summary>
     private async Task<bool> EnsureOperationalAsync(CancellationToken cancellationToken)
     {
         var snapshot = await client.ReadServerSnapshotAsync(cancellationToken).ConfigureAwait(false);
@@ -507,7 +491,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
             ThrowIncompatibleRetention(negotiation);
     }
 
-    /// <summary>Rejects expiring keys/fields and malformed document, ETag, or lease triples in a project hash.</summary>
     private async Task<IReadOnlyList<RedisMemoryHashField>> ReadPersistentHashAsync(
         string key,
         bool supportsFieldExpiration,
@@ -582,7 +565,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
         return documents.Values.ToArray();
     }
 
-    /// <summary>Requires a healthy standalone primary with durable AOF settings and no eviction.</summary>
     private void ValidateSnapshot(RedisMemoryServerSnapshot snapshot, bool negotiation)
     {
         var incompatible =
@@ -657,7 +639,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
         }
     }
 
-    /// <summary>Checks each stored document type against its identity and required payload fields.</summary>
     private static bool HasValidDocumentPayload(KnowledgeMemoryDocument document) =>
         document.DocumentType switch
         {
@@ -753,7 +734,6 @@ public sealed class RedisMemoryDocumentStore : IKnowledgeMemoryDocumentStore
         throw new KnowledgeStorageUnavailableException();
     }
 
-    /// <summary>Parses the separate lease field into document state and rejects malformed fencing data.</summary>
     private static KnowledgeMemoryDocument ApplyLeaseState(
         KnowledgeMemoryDocument document,
         string leaseState)

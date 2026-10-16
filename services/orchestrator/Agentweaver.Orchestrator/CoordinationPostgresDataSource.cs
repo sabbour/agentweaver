@@ -7,24 +7,14 @@ using WorkloadIdentityCredentialOptions =
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Holds the PostgreSQL connection string and explicit workload-identity settings for Orchestrator.
-/// </summary>
 internal sealed record CoordinationPostgresConnection(
     string ConnectionString,
     WorkloadIdentityCredentialOptions Identity);
 
-/// <summary>
-/// Builds Orchestrator PostgreSQL connections using verified TLS and asynchronous Entra token authentication.
-/// </summary>
 internal static class CoordinationPostgresDataSource
 {
     private const string TokenScope = "https://ossrdbms-aad.database.windows.net/.default";
 
-    /// <summary>
-    /// Reads and validates the named connection string and workload-identity configuration section.
-    /// </summary>
-    /// <exception cref="InvalidOperationException">Required connection or identity settings are absent or invalid.</exception>
     public static CoordinationPostgresConnection ReadConnection(
         IConfiguration configuration,
         string connectionName,
@@ -41,10 +31,6 @@ internal static class CoordinationPostgresDataSource
         return new CoordinationPostgresConnection(connectionString, identity);
     }
 
-    /// <summary>
-    /// Creates a data source that obtains an Entra token asynchronously for PostgreSQL connections.
-    /// </summary>
-    /// <exception cref="InvalidOperationException">The configured connection uses a missing role, password, or invalid token flow.</exception>
     public static NpgsqlDataSource Create(
         string connectionString,
         TokenCredential credential)

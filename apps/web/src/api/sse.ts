@@ -3,8 +3,6 @@ import { AgentweaverApiClient } from './client';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { RunDetail } from './types';
 import { isTerminalRunStatus } from '../utils/runStatus';
-
-/** State reported by the polling fallback for a run detail endpoint. */
 export type PollStatus = 'polling' | 'done' | 'error';
 
 interface PollState {
@@ -37,10 +35,6 @@ const SINGLETON_EVENT_TYPES: ReadonlySet<string> = new Set([
   'merge.completed', 'merge.failed',
 ]);
 
-/**
- * Polls run detail until the run reaches a terminal state or the request fails.
- * The effect stops polling when its run or base URL changes or the component unmounts.
- */
 export function useRunPoll(runId: string, baseUrl: string = API_URL): PollState {
   const [run, setRun] = useState<RunDetail | null>(null);
   const [status, setStatus] = useState<PollStatus>('polling');
@@ -76,7 +70,6 @@ export function useRunPoll(runId: string, baseUrl: string = API_URL): PollState 
   return { run, status, error };
 }
 
-/** Event names understood by the run timeline and coordinator views. */
 export type EventType =
   | 'run.model_provider_resolved'
   | 'agent.message.delta'
@@ -175,14 +168,12 @@ export type EventType =
   | 'done'
   | 'error';
 
-/** One parsed server-sent event, including its replay sequence and JSON payload. */
 export interface RunStreamEvent {
   sequence: number;
   type: EventType;
   payload: Record<string, unknown>;
 }
 
-/** Connection lifecycle for the run's server-sent event stream. */
 export type StreamStatus = 'connecting' | 'streaming' | 'done' | 'error';
 
 interface StreamState {
@@ -193,11 +184,6 @@ interface StreamState {
   reconnect: () => void;
 }
 
-/**
- * Streams live run events, resumes after the last positive sequence, and reconnects
- * with bounded backoff. The local event buffer is capped; terminal singleton events
- * are deduplicated while repeatable review gates remain visible.
- */
 export function useRunStream(runId: string, baseUrl: string = API_URL, maxEvents = DEFAULT_EVENT_BUFFER_LIMIT): StreamState {
   const [events, setEvents] = useState<RunStreamEvent[]>([]);
   const [droppedEventCount, setDroppedEventCount] = useState(0);

@@ -8,10 +8,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.SourceControl;
 
-/// <summary>
-/// Creates, verifies, captures, and prepares isolated Git repositories for run-owned workspaces.
-/// A versioned manifest binds each directory to one run and resource generation; external Git access uses only the pinned remote and credential.
-/// </summary>
 public sealed class GitWorkspaceManager
 {
     private const int ManifestVersion = 2;
@@ -30,18 +26,11 @@ public sealed class GitWorkspaceManager
     private readonly IGitRepositoryRemote _remote;
     private readonly string _gitExecutable;
 
-    /// <summary>Creates a workspace manager that clones from GitHub using Git.</summary>
-    /// <param name="rootPath">Filesystem root reserved for managed workspaces.</param>
     public GitWorkspaceManager(string rootPath)
         : this(rootPath, new GitHubGitRepositoryRemote(), "git")
     {
     }
 
-    /// <summary>Creates a workspace manager with an explicit remote resolver and Git executable.</summary>
-    /// <param name="rootPath">Filesystem root reserved for managed workspaces.</param>
-    /// <param name="remote">Resolver for the repository's remote clone URI.</param>
-    /// <param name="gitExecutable">Git executable name or path.</param>
-    /// <exception cref="ArgumentException">The root path or Git executable is invalid.</exception>
     internal GitWorkspaceManager(
         string rootPath,
         IGitRepositoryRemote remote,
@@ -55,14 +44,6 @@ public sealed class GitWorkspaceManager
             : gitExecutable;
     }
 
-    /// <summary>
-    /// Creates or recovers a run-owned repository, fetches the pinned base commit, and checks out the requested branch.
-    /// </summary>
-    /// <param name="request">Validated run, repository, credential, workspace, base commit, and branch.</param>
-    /// <param name="cancellationToken">Cancels Git and filesystem operations.</param>
-    /// <returns>The workspace path and its immutable incarnation identity.</returns>
-    /// <exception cref="GitWorkspaceException">Ownership, remote, Git, path, or base-revision validation fails.</exception>
-    /// <remarks>The workspace manifest is written in a preparing state before clone and marked ready only after checkout.</remarks>
     public async Task<GitWorkspace> PrepareAsync(
         GitWorkspaceRequest request,
         CancellationToken cancellationToken)
@@ -145,7 +126,6 @@ public sealed class GitWorkspaceManager
         return ToWorkspace(request, repositoryPath, manifest with { State = "ready" });
     }
 
-    /// <summary>Opens an existing workspace by translating the checkout request to its capture binding.</summary>
     public async Task<GitWorkspace> OpenExistingAsync(
         GitWorkspaceRequest request,
         CancellationToken cancellationToken)
@@ -162,8 +142,6 @@ public sealed class GitWorkspaceManager
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Reads an existing workspace manifest and verifies its run, repository, base commit, and incarnation.</summary>
-    /// <exception cref="GitWorkspaceException">The workspace is absent, corrupt, unowned, or bound to another revision.</exception>
     public async Task<GitWorkspace> OpenExistingAsync(
         GitWorkspaceCaptureRequest request,
         CancellationToken cancellationToken)
@@ -208,8 +186,6 @@ public sealed class GitWorkspaceManager
             incarnationId);
     }
 
-    /// <summary>Returns a bounded binary diff, status, and HEAD after validating the workspace against its request.</summary>
-    /// <remarks>The method uses intent-to-add for untracked files so they are included in the resulting diff.</remarks>
     public async Task<GitWorkspaceDiff> AssembleDiffAsync(
         GitWorkspaceRequest request,
         GitWorkspace workspace,
@@ -289,7 +265,6 @@ public sealed class GitWorkspaceManager
             DecodeGitOutput(patchBytes));
     }
 
-    /// <summary>Captures a workspace using the Source Control binding carried by a checkout request.</summary>
     public async Task<GitWorkspaceCapture> CaptureAsync(
         GitWorkspaceRequest request,
         GitWorkspace workspace,
@@ -309,15 +284,6 @@ public sealed class GitWorkspaceManager
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Builds a private index from the pinned base, writes a resulting tree, and captures bounded file bytes and diff.
-    /// </summary>
-    /// <param name="request">Pinned Source Control binding and workspace identity.</param>
-    /// <param name="workspace">Workspace reference whose path and incarnation must match its manifest.</param>
-    /// <param name="cancellationToken">Cancels Git and capture operations.</param>
-    /// <returns>Repository tree, patch, and content for every captured file.</returns>
-    /// <exception cref="GitWorkspaceException">The workspace is invalid or a path, file, diff, or package limit is exceeded.</exception>
-    /// <remarks>A temporary Git index is removed after capture; the workspace's normal index is not used.</remarks>
     public async Task<GitWorkspaceCapture> CaptureAsync(
         GitWorkspaceCaptureRequest request,
         GitWorkspace workspace,
@@ -426,8 +392,6 @@ public sealed class GitWorkspaceManager
         }
     }
 
-    /// <summary>Creates a BuildTest seed from a baseline capture and Git bundle, then confirms the source stayed stable.</summary>
-    /// <exception cref="GitWorkspaceException">Bundle generation fails, exceeds bounds, or the workspace changes during capture.</exception>
     public async Task<GitWorkspaceBuildTestSeedDocument> CreateBuildTestSeedAsync(
         GitWorkspaceCaptureRequest request,
         GitWorkspace workspace,
@@ -464,14 +428,6 @@ public sealed class GitWorkspaceManager
         return new(baseline, bundle, bytes, GitWorkspaceCapturePackage.Hash(bytes));
     }
 
-    /// <summary>
-    /// Reconstructs a local no-remote Git repository from accepted seed bytes and verifies its baseline tree.
-    /// </summary>
-    /// <param name="source">Accepted Source Control resource, workspace, and seed binding.</param>
-    /// <param name="bytes">Serialized seed package already pinned by the accepted command.</param>
-    /// <param name="cancellationToken">Cancels file and Git operations.</param>
-    /// <returns>The prepared local repository workspace.</returns>
-    /// <exception cref="GitWorkspaceException">The seed is invalid, files collide or escape, or the reconstructed tree differs.</exception>
     public async Task<GitWorkspace> PrepareBuildTestSeedAsync(
         SandboxBuildTestWorkspaceSource source,
         ReadOnlyMemory<byte> bytes,
@@ -620,8 +576,6 @@ public sealed class GitWorkspaceManager
         return BuildTestSeedWorkspace(source, repositoryPath);
     }
 
-    /// <summary>Builds a bounded output capture in a private Git index and checks it against the baseline and obligations.</summary>
-    /// <exception cref="GitWorkspaceException">Seed, output evidence, file content, or prepared workspace validation fails.</exception>
     public async Task<GitWorkspaceCaptureDocument> CreateBuildTestOutputDocumentAsync(
         SandboxBuildTestWorkspaceSource source,
         ReadOnlyMemory<byte> seedBytes,
@@ -693,8 +647,6 @@ public sealed class GitWorkspaceManager
         }
     }
 
-    /// <summary>Acquires an exclusive file lease so only one BuildTest preparer mutates a seed repository at a time.</summary>
-    /// <exception cref="GitWorkspaceException">Another process holds the lock or the lock cannot be acquired.</exception>
     private static FileStream AcquireBuildTestSeedLock(string path)
     {
         try
@@ -709,7 +661,6 @@ public sealed class GitWorkspaceManager
         }
     }
 
-    /// <summary>Requires a real repository directory with non-reparse-point root and Git metadata.</summary>
     private static void RequireBuildTestSeedRepository(string path)
     {
         if (!Directory.Exists(path) || !Directory.Exists(Path.Combine(path, ".git")))
@@ -719,7 +670,6 @@ public sealed class GitWorkspaceManager
         EnsureNotReparsePoint(Path.Combine(path, ".git"));
     }
 
-    /// <summary>Rejects undeclared files, links, and missing files unless the caller explicitly permits missing entries.</summary>
     private static void RequireBuildTestSeedFiles(string root, HashSet<string> expected, bool allowMissing = false)
     {
         var directories = new Stack<string>();
@@ -741,13 +691,11 @@ public sealed class GitWorkspaceManager
                 GitWorkspaceFailureCode.CorruptWorkspace, "The BuildTest repository contains undeclared input files.");
     }
 
-    /// <summary>Creates the workspace reference returned for the reconstructed BuildTest repository.</summary>
     private static GitWorkspace BuildTestSeedWorkspace(SandboxBuildTestWorkspaceSource source, string path) =>
         new(source.WorkspaceId, source.Identity.RunId, source.SourceControlResource.ResourceId,
             source.SourceControlResource.Generation, source.BaseSha, source.BranchName,
             path, source.WorkspaceIncarnationId);
 
-    /// <summary>Reads a bounded tree and its blob contents from Git, validating modes, paths, and per-file limits.</summary>
     private async Task<ImmutableArray<GitWorkspaceCapturedFile>> ReadCapturedFilesAsync(
         string repositoryPath,
         string emptyGitConfig,
@@ -784,7 +732,6 @@ public sealed class GitWorkspaceManager
         return ParseBlobBatch(entries, output);
     }
 
-    /// <summary>Parses NUL-delimited tree entries and rejects unsupported modes, duplicate paths, or unsafe UTF-8 names.</summary>
     private static List<GitTreeEntry> ParseTreeEntries(byte[] treeBytes)
     {
         var entries = new List<GitTreeEntry>();
@@ -837,7 +784,6 @@ public sealed class GitWorkspaceManager
         return entries;
     }
 
-    /// <summary>Parses `cat-file --batch` output and verifies blob headers, lengths, and aggregate capture bounds.</summary>
     private static ImmutableArray<GitWorkspaceCapturedFile> ParseBlobBatch(
         IReadOnlyList<GitTreeEntry> entries,
         byte[] output)
@@ -896,7 +842,6 @@ public sealed class GitWorkspaceManager
         return files.MoveToImmutable();
     }
 
-    /// <summary>Rejects absolute, traversal, control-character, and Git metadata paths in a captured tree.</summary>
     private static void ValidateCapturedPath(string path)
     {
         if (string.IsNullOrWhiteSpace(path) ||
@@ -913,11 +858,9 @@ public sealed class GitWorkspaceManager
                 "The captured tree contains an invalid relative path.");
     }
 
-    /// <summary>Checks the hexadecimal object-ID format used by the supported Git repository.</summary>
     private static bool IsGitObjectId(string value) =>
         value.Length == 40 && value.All(Uri.IsHexDigit);
 
-    /// <summary>Reads the existing ownership manifest or writes a new preparing manifest for the exact request.</summary>
     private async Task<WorkspaceManifest> ReadOrCreateManifestAsync(
         string manifestPath,
         string workspaceRoot,
@@ -946,7 +889,6 @@ public sealed class GitWorkspaceManager
         return manifest;
     }
 
-    /// <summary>Deserializes the workspace manifest and maps malformed JSON to a corruption error.</summary>
     private async Task<WorkspaceManifest> ReadManifestAsync(
         string path,
         CancellationToken cancellationToken)
@@ -968,7 +910,6 @@ public sealed class GitWorkspaceManager
         }
     }
 
-    /// <summary>Writes the manifest through a sibling file and atomic replacement, cleaning up the sibling afterward.</summary>
     private static async Task WriteManifestAsync(
         string path,
         WorkspaceManifest manifest,
@@ -989,8 +930,6 @@ public sealed class GitWorkspaceManager
         }
     }
 
-    /// <summary>Confirms that Git resolves to the owned path and that origin matches the pinned remote URI.</summary>
-    /// <exception cref="GitWorkspaceException">Repository metadata or remote origin differs from the expected owner.</exception>
     private async Task ValidateOwnedRepositoryAsync(
         string repositoryPath,
         Uri expectedRemote,
@@ -1041,21 +980,6 @@ public sealed class GitWorkspaceManager
                 "The source-control workspace origin does not match its pinned repository.");
     }
 
-    /// <summary>
-    /// Runs Git without inherited GIT_* settings, bounds both output streams, and redacts credentials from diagnostics.
-    /// </summary>
-    /// <param name="workingDirectory">Owned repository or workspace directory for the operation.</param>
-    /// <param name="arguments">Git argument vector; arguments are passed without a shell.</param>
-    /// <param name="maximumOutputBytes">Maximum accepted stdout size.</param>
-    /// <param name="emptyGitConfig">Empty global configuration that prevents user settings from affecting the command.</param>
-    /// <param name="remoteUri">Optional remote URI that determines whether GitHub authorization is attached.</param>
-    /// <param name="credential">Optional credential invalidated by its caller after the Git operation.</param>
-    /// <param name="cancellationToken">Cancels the process wait and any standard-input write.</param>
-    /// <param name="gitIndexFile">Optional private index for capture operations.</param>
-    /// <param name="standardInput">Optional bounded input stream bytes.</param>
-    /// <param name="outputFailureCode">Failure category to use when stdout exceeds its limit.</param>
-    /// <returns>Standard output bytes.</returns>
-    /// <exception cref="GitWorkspaceException">Git is unavailable, fails, returns invalid output, or exceeds a bound.</exception>
     private async Task<byte[]> RunGitAsync(
         string workingDirectory,
         IReadOnlyList<string> arguments,
@@ -1174,7 +1098,6 @@ public sealed class GitWorkspaceManager
         }
     }
 
-    /// <summary>Writes the supplied bytes to Git's standard input and closes the stream.</summary>
     private static async Task WriteStandardInputAsync(
         Process process,
         byte[] input,
@@ -1185,7 +1108,6 @@ public sealed class GitWorkspaceManager
         process.StandardInput.Close();
     }
 
-    /// <summary>Reads a process stream until EOF or fails when it exceeds the caller's byte limit.</summary>
     private static async Task<byte[]> ReadBoundedOutputAsync(
         Stream stream,
         int maximumBytes,
@@ -1206,7 +1128,6 @@ public sealed class GitWorkspaceManager
         }
     }
 
-    /// <summary>Stops a Git process and its descendants when a bound, cancellation, or other operation fails.</summary>
     private static void KillProcessTree(Process process)
     {
         if (process.HasExited)
@@ -1220,7 +1141,6 @@ public sealed class GitWorkspaceManager
         }
     }
 
-    /// <summary>Decodes strict UTF-8 Git output and rejects invalid byte sequences.</summary>
     private static string DecodeGitOutput(byte[] output)
     {
         try
@@ -1236,8 +1156,6 @@ public sealed class GitWorkspaceManager
         }
     }
 
-    /// <summary>Requires a checkout request pinned to GitHub, run, repository, credential, base SHA, and safe branch.</summary>
-    /// <exception cref="GitWorkspaceException">The request is missing a required binding or contains an invalid identifier.</exception>
     private static void ValidateRequest(GitWorkspaceRequest request)
     {
         var context = request.Context;
@@ -1262,8 +1180,6 @@ public sealed class GitWorkspaceManager
                 "The source-control workspace request is not bound to a valid run, repository, revision, and branch.");
     }
 
-    /// <summary>Requires a capture request bound to a GitHub repository, run, safe branch, and base SHA.</summary>
-    /// <exception cref="GitWorkspaceException">The request is missing a required binding or contains an invalid identifier.</exception>
     private static void ValidateCaptureRequest(GitWorkspaceCaptureRequest request)
     {
         var binding = request.Binding;
@@ -1286,7 +1202,6 @@ public sealed class GitWorkspaceManager
                 "The source-control workspace request is not bound to a valid run, repository, revision, and branch.");
     }
 
-    /// <summary>Checks the bounded branch syntax and rejects path traversal and Git-special suffixes.</summary>
     internal static bool IsValidBranchName(string branch) =>
         !string.IsNullOrWhiteSpace(branch) &&
         branch.Length <= 255 &&
@@ -1301,16 +1216,12 @@ public sealed class GitWorkspaceManager
                 character is '-' or '_' or '.')) &&
         !branch.Contains("..", StringComparison.Ordinal);
 
-    /// <summary>Checks the 40-character hexadecimal form of a Git commit ID.</summary>
     private static bool IsGitSha(string value) =>
         value is { Length: 40 } && value.All(Uri.IsHexDigit);
 
-    /// <summary>Hashes run and workspace identifiers into an opaque directory component.</summary>
     private static string Hash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..32].ToLowerInvariant();
 
-    /// <summary>Allows only absolute HTTPS or file remotes without embedded credentials or extra URI components.</summary>
-    /// <exception cref="GitWorkspaceException">The repository resolver returns a disallowed or malformed URI.</exception>
     private static void ValidateRemoteUri(Uri uri)
     {
         if (!uri.IsAbsoluteUri ||
@@ -1323,7 +1234,6 @@ public sealed class GitWorkspaceManager
                 "The source-control adapter returned an invalid repository URL.");
     }
 
-    /// <summary>Creates or verifies the empty Git configuration used to isolate commands from user-level settings.</summary>
     private static void EnsureEmptyGitConfig(string path)
     {
         if (File.Exists(path))
@@ -1338,8 +1248,6 @@ public sealed class GitWorkspaceManager
         using var _ = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
     }
 
-    /// <summary>Rejects symbolic links and other reparse points at managed workspace paths.</summary>
-    /// <exception cref="GitWorkspaceException">The path is a reparse point.</exception>
     private static void EnsureNotReparsePoint(string path)
     {
         var attributes = File.GetAttributes(path);
@@ -1349,18 +1257,14 @@ public sealed class GitWorkspaceManager
                 "A source-control workspace path cannot be a symbolic link or reparse point.");
     }
 
-    /// <summary>Resolves filesystem paths for a normal run-owned workspace.</summary>
     private (string WorkspaceRoot, string RepositoryPath, string ManifestPath) GetWorkspacePaths(
         GitWorkspaceRequest request)
         => GetWorkspacePaths(request.Context.Binding.RunId, request.WorkspaceId);
 
-    /// <summary>Resolves filesystem paths for a capture request with the same run and workspace identity.</summary>
     private (string WorkspaceRoot, string RepositoryPath, string ManifestPath) GetWorkspacePaths(
         GitWorkspaceCaptureRequest request)
         => GetWorkspacePaths(request.Binding.RunId, request.WorkspaceId);
 
-    /// <summary>Builds safe repository paths and ensures the resulting directory remains beneath the configured root.</summary>
-    /// <exception cref="GitWorkspaceException">The resolved path escapes the configured workspace root.</exception>
     private (string WorkspaceRoot, string RepositoryPath, string ManifestPath) GetWorkspacePaths(
         string runId,
         string workspaceId)
@@ -1381,7 +1285,6 @@ public sealed class GitWorkspaceManager
             Path.Combine(fullRoot, "workspace.json"));
     }
 
-    /// <summary>Creates the manifest binding for the requested run, repository, generation, base, and branch.</summary>
     private static WorkspaceManifest CreateManifest(
         GitWorkspaceRequest request,
         string state,
@@ -1400,8 +1303,6 @@ public sealed class GitWorkspaceManager
             state,
             workspaceIncarnationId);
 
-    /// <summary>Validates the manifest against a checkout request, including its workspace-incarnation identifier.</summary>
-    /// <exception cref="GitWorkspaceException">The manifest is corrupt or belongs to another run or revision.</exception>
     private static void ValidateManifestBinding(WorkspaceManifest manifest, GitWorkspaceRequest request)
     {
         if (!Guid.TryParseExact(manifest.WorkspaceIncarnationId, "N", out _))
@@ -1424,8 +1325,6 @@ public sealed class GitWorkspaceManager
                 "The source-control workspace belongs to a different run, repository, or pinned revision.");
     }
 
-    /// <summary>Validates the manifest against a capture request, including its workspace-incarnation identifier.</summary>
-    /// <exception cref="GitWorkspaceException">The manifest is corrupt or belongs to another run or revision.</exception>
     private static void ValidateManifestBinding(WorkspaceManifest manifest, GitWorkspaceCaptureRequest request)
     {
         if (!Guid.TryParseExact(manifest.WorkspaceIncarnationId, "N", out _))
@@ -1447,7 +1346,6 @@ public sealed class GitWorkspaceManager
                 "The source-control workspace belongs to a different run, repository, or pinned revision.");
     }
 
-    /// <summary>Builds the public workspace reference from a validated request and ready manifest.</summary>
     private static GitWorkspace ToWorkspace(
         GitWorkspaceRequest request,
         string repositoryPath,
@@ -1462,11 +1360,9 @@ public sealed class GitWorkspaceManager
             Path.GetFullPath(repositoryPath),
             Guid.ParseExact(manifest.WorkspaceIncarnationId, "N"));
 
-    /// <summary>Uses case-insensitive filesystem path comparison on Windows and ordinal comparison elsewhere.</summary>
     private static StringComparison PathComparison =>
         OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
-    /// <summary>Persisted owner, revision, state, and incarnation fields that authorize recovery of a workspace directory.</summary>
     private sealed record WorkspaceManifest(
         int Version,
         string RunId,
@@ -1483,13 +1379,10 @@ public sealed class GitWorkspaceManager
         [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         string? BuildTestSeedBindingSha256 = null);
 
-    /// <summary>One validated file entry from Git's recursive tree output.</summary>
     private sealed record GitTreeEntry(string Mode, string ObjectId, string Path);
 
-    /// <summary>Default Source Control remote resolver for canonical GitHub repository clone URLs.</summary>
     private sealed class GitHubGitRepositoryRemote : IGitRepositoryRemote
     {
-        /// <summary>Builds the HTTPS clone URI from the validated owner and repository names.</summary>
         public Uri GetCloneUri(SourceControlRepositoryIdentity repository) =>
             new($"https://github.com/{Uri.EscapeDataString(repository.Owner)}/" +
                 $"{Uri.EscapeDataString(repository.Name)}.git");

@@ -15,21 +15,11 @@ using WorkloadIdentityCredential = AzureIdentity::Azure.Identity.WorkloadIdentit
 
 namespace Agentweaver.Projects.Config;
 
-/// <summary>
-/// Runs the one-shot, privileged project setup protocol used by the operator-facing command-line entry point.
-/// </summary>
 internal static class PrivilegedProjectSetupCommand
 {
     private const int MaxInputBytes = 64 * 1024;
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
-    /// <summary>
-    /// Reads bounded JSON from standard input, authenticates the supplied bearer token, and executes a setup operation.
-    /// </summary>
-    /// <param name="configuration">Service configuration for authentication, database access, and approved caller identity.</param>
-    /// <param name="cancellationToken">Cancels input, database, and authentication work.</param>
-    /// <exception cref="ProjectConfigException">The request or authenticated caller is not authorized.</exception>
-    /// <exception cref="InvalidOperationException">Required configuration or database migration state is invalid.</exception>
     public static async Task RunAsync(IConfiguration configuration, CancellationToken cancellationToken = default)
     {
         var input = await ReadInputAsync(cancellationToken).ConfigureAwait(false);
@@ -131,7 +121,6 @@ internal static class PrivilegedProjectSetupCommand
         await Console.Out.WriteLineAsync(JsonSerializer.Serialize(result, JsonOptions)).ConfigureAwait(false);
     }
 
-    /// <summary>Reads at most the configured input bound and rejects malformed or unknown JSON fields.</summary>
     private static async Task<PrivilegedProjectSetupInput> ReadInputAsync(CancellationToken cancellationToken)
     {
         await using var input = Console.OpenStandardInput();
@@ -164,7 +153,6 @@ internal static class PrivilegedProjectSetupCommand
         }
     }
 
-    /// <summary>Parses an absolute HTTPS authority URI without credentials, query parameters, or fragments.</summary>
     private static Uri RequireHttpsUri(string? value, string setting)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
@@ -177,7 +165,6 @@ internal static class PrivilegedProjectSetupCommand
         return uri;
     }
 
-    /// <summary>Validates an opaque identifier used to pin the approved setup caller.</summary>
     private static string RequireIdentifier(string? value, string setting)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 256 ||
@@ -188,7 +175,6 @@ internal static class PrivilegedProjectSetupCommand
         return value;
     }
 
-    /// <summary>Creates strict command JSON settings with camel-case enum values.</summary>
     private static JsonSerializerOptions CreateJsonOptions()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)

@@ -6,15 +6,8 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Serves versioned runtime execution observations assembled from current owner, selection, decision, and checkpoint state.
-/// The newer response also includes checkpoint-parent metadata and runtime evidence sections.
-/// </summary>
 public static partial class CoordinationEndpoints
 {
-    /// <summary>
-    /// Reads the original runtime execution observation contract.
-    /// </summary>
     private static Task<IResult> ReadRuntimeExecutionObservationAsync(
         string projectId,
         string runId,
@@ -31,9 +24,6 @@ public static partial class CoordinationEndpoints
             projectId, runId, sessionId, context, options, projects, sessions, decisions,
             selectionContexts, checkpoints, includeCheckpointParent: false, cancellationToken);
 
-    /// <summary>
-    /// Reads the version-two execution observation, including checkpoint-parent metadata.
-    /// </summary>
     private static Task<IResult> ReadRuntimeExecutionObservationV2Async(
         string projectId,
         string runId,
@@ -50,9 +40,6 @@ public static partial class CoordinationEndpoints
             projectId, runId, sessionId, context, options, projects, sessions, decisions,
             selectionContexts, checkpoints, includeCheckpointParent: true, cancellationToken);
 
-    /// <summary>
-    /// Reads the version-one aggregate runtime observation and maps owner authorization failures to HTTP responses.
-    /// </summary>
     private static async Task<IResult> ReadRuntimeObservationV1Async(
         string projectId,
         string runId,
@@ -97,14 +84,6 @@ public static partial class CoordinationEndpoints
         }
     }
 
-    /// <summary>
-    /// Builds an execution observation from the current accepted selection, runtime owner, decision, and checkpoint.
-    /// </summary>
-    /// <param name="includeCheckpointParent">Whether to emit version-two checkpoint-parent metadata.</param>
-    /// <param name="registrations">Optional registration owner; required together with <paramref name="evidenceStore"/> for the aggregate response.</param>
-    /// <param name="evidenceStore">Optional evidence store paired with <paramref name="registrations"/>.</param>
-    /// <exception cref="CoordinationException">Thrown when any owner state, selection, checkpoint, or association is stale or invalid.</exception>
-    /// <remarks>All participating authority is reread before returning so changes during construction invalidate the observation.</remarks>
     private static Task<IResult> ReadRuntimeExecutionObservationCoreAsync(
         string projectId,
         string runId,
@@ -250,10 +229,6 @@ public static partial class CoordinationEndpoints
             return observation;
         }, cancellationToken);
 
-    /// <summary>
-    /// Requires the active registration to match the authenticated actor and current session owner binding.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the registration is inactive or bound to stale owner state.</exception>
     internal static void RequireCurrentRuntimeRegistrationForObservation(
         RuntimeRegistration registration,
         CoordinationActor actor,
@@ -276,10 +251,6 @@ public static partial class CoordinationEndpoints
                 "runtime_owner_context_stale", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Requires the observation's owner context and current decision to describe the same session, turn, fence, and selection.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when context, owner, or decision versions no longer agree.</exception>
     internal static void RequireCurrentObservationOwner(
         RuntimeOwnerContext ownerContext,
         CoordinationActor actor,
@@ -309,10 +280,6 @@ public static partial class CoordinationEndpoints
                 "runtime_owner_context_stale", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Requires the checkpoint to belong to the expected root session and confirmed work plan.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when checkpoint ownership or work-plan binding is stale.</exception>
     internal static void RequireBoundObservationCheckpoint(
         MafExecutionCheckpointSnapshot checkpoint,
         string rootSessionId,
@@ -325,10 +292,6 @@ public static partial class CoordinationEndpoints
                 "maf_execution_checkpoint_stale", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Resolves the child association and task status from the current checkpoint.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when neither the model-work nor fixed-work binding matches current state.</exception>
     private static (string AssociationId, MafExecutionTaskStatus Status) ResolveCurrentAssociation(
         SessionRuntimeOwnerState owner,
         SessionIdentity identity,
@@ -363,16 +326,8 @@ public static partial class CoordinationEndpoints
     }
 }
 
-/// <summary>
-/// Creates the validated public contracts for runtime execution observations.
-/// </summary>
 internal static class RuntimeExecutionObservationContract
 {
-    /// <summary>
-    /// Creates a version-one observation with dispatch intent and result digest evidence.
-    /// </summary>
-    /// <param name="checkpoint">The current checkpoint containing task status and optional result text.</param>
-    /// <returns>A validated observation; result content itself is not included, only its SHA-256 digest and byte length.</returns>
     internal static RuntimeExecutionObservation Create(
         string rootSessionId,
         string sessionId,
@@ -410,10 +365,6 @@ internal static class RuntimeExecutionObservationContract
         }.Validate();
     }
 
-    /// <summary>
-    /// Creates a version-two observation and attaches validated checkpoint-parent metadata.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when checkpoint parent metadata is malformed.</exception>
     internal static RuntimeExecutionObservationV2 CreateV2(
         string rootSessionId,
         string sessionId,
@@ -456,10 +407,6 @@ internal static class RuntimeExecutionObservationContract
             .Validate();
     }
 
-    /// <summary>
-    /// Maps internal checkpoint task states to the stable runtime observation contract.
-    /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown for an unknown internal task status.</exception>
     private static RuntimeExecutionTaskStatus ToContractStatus(MafExecutionTaskStatus status) =>
         status switch
         {

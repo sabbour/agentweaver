@@ -1,7 +1,3 @@
-/**
- * Plans, verifies, and bootstraps the P0 identity broker's external routing and callback configuration.
- * Azure and Kubernetes readbacks are validated before routing changes are applied.
- */
 import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { join } from 'node:path';
@@ -14,7 +10,6 @@ const CONTROLLER = 'istio.aks.azure.com/gateway-controller';
 const COMMAND_OPTIONS = { check: false, timeout: 35_000 };
 const GUID_PATTERN = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
-/** Projects routing readback data to the fields that are safe and relevant for verification. */
 export function projectIdentityRoutingReadback(value) {
   if (Array.isArray(value?.items)) {
     if (value.items.length > 1) throw new Error('Exact-name routing lookup returned more than one object.');
@@ -116,7 +111,6 @@ function projectPublicApplication(value) {
   return { id: value?.id, appId: value?.appId, publicClient: { redirectUris: value?.publicClient?.redirectUris } };
 }
 
-/** Requires the gateway and its security policy to be placed in the approved namespace. */
 export function assertIdentityRoutingPlacement({ gatewayNamespace, gatewaySecurityPolicy }) {
   if (gatewayNamespace !== GATEWAY_NAMESPACE ||
       !['restricted', 'baseline'].includes(gatewaySecurityPolicy)) {
@@ -146,7 +140,6 @@ function requireConditions(object, conditions, types) {
   }
 }
 
-/** Derives the broker hostname from the managed certificate and namespace inputs. */
 export function managedBrokerHostname(certificate, namespace) {
   assertObject(certificate, 'DefaultDomainCertificate', namespace);
   requireConditions(certificate, certificate.status?.conditions, ['Available']);
@@ -164,7 +157,6 @@ function managedPortalHostname(certificate, namespace) {
   return `portal.${managedBrokerHostname(certificate, namespace).slice('agentweaver.'.length)}`;
 }
 
-/** Reads existing P0 broker routing resources and checks them against the desired routing shape. */
 export function observeExistingP0BrokerRouting({
   certificate, gateway, route, backendPolicy, webRoute, apiRoute, apiBackendPolicy,
   mcpRoute, mcpBackendPolicy,
@@ -268,7 +260,6 @@ export function observeExistingP0BrokerRouting({
   };
 }
 
-/** Aligns a pre-existing broker route only after its observed resources pass the ownership checks. */
 export function alignExistingP0BrokerHostname(config, {
   withKubeconfig = withP0UserKubeconfig,
   execKubectl = (args, options) => run('kubectl', args, options),
@@ -417,7 +408,6 @@ function requireManagedBackendConditions(policy, gatewayNamespace, sectionName) 
   requireConditions(policy, ancestor?.conditions, ['Accepted', 'ResolvedRefs']);
 }
 
-/** Builds the desired routing resource description from validated certificate and callback inputs. */
 export function deriveIdentityRouting({
   gatewayCertificate, brokerCertificate, gateway, route, backendPolicy, webRoute, apiRoute, apiBackendPolicy,
   mcpRoute, mcpBackendPolicy,
@@ -488,7 +478,6 @@ export function deriveIdentityRouting({
   };
 }
 
-/** Produces a tenant- and application-bound callback registration plan without applying it. */
 export function planPublicBrokerCallback(application, clientId, callbackUri, tenantId) {
   const callback = new URL(callbackUri);
   if (!GUID_PATTERN.test(application?.id ?? '') || !GUID_PATTERN.test(clientId ?? '') ||
@@ -511,7 +500,6 @@ export function planPublicBrokerCallback(application, clientId, callbackUri, ten
   };
 }
 
-/** Applies a validated public broker callback registration through Azure CLI. */
 export function registerPublicBrokerCallback(plan, config, { execAz = runAz } = {}) {
   if (!config.registerBrokerCallback) {
     if (config.confirmBrokerCallback) throw new Error('Callback confirmation requires --register-identity-broker-callback.');
@@ -556,7 +544,6 @@ export function registerPublicBrokerCallback(plan, config, { execAz = runAz } = 
   return { ...verified, action: 'append', mutationExecuted: true };
 }
 
-/** Checks the routing receipt and live prerequisites required before broker runtime bootstrap. */
 export function verifyIdentityBrokerReadiness(receipt, {
   execCurl = (args, options) => run('curl', args, options),
 } = {}) {
@@ -581,10 +568,6 @@ export function verifyIdentityBrokerReadiness(receipt, {
   return { ...receipt, runtimeVerified: true, dnsVerified: true, httpsVerified: true };
 }
 
-/**
- * Verifies and applies the identity broker routing configuration for the dedicated P0 target.
- * Resource lookup or placement failures stop the bootstrap instead of accepting partial routing.
- */
 export function bootstrapIdentityRouting(config, {
   execAz = runAz, execKubelogin = (args, options) => run('kubelogin', args, options),
   execKubectl = (args, options) => run('kubectl', args, options), execCurl,

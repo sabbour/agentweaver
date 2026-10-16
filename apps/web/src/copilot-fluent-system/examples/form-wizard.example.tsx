@@ -1,6 +1,5 @@
 import { useMemo, useState } from 'react';
 import { AzureForm, FormFieldRow, FormFooter, Input, StatusIconText, StepWizardPattern, Text } from '..';
-/** Demonstrates host-owned validation across a field form and a three-step wizard. */
 export function FormWizardExample() {
   const [subscription, setSubscription] = useState('Sample subscription A');
   const [resourceGroup, setResourceGroup] = useState('rg-sample-platform');

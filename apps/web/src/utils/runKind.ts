@@ -5,13 +5,11 @@ import type { WorkflowRunDto } from '../api/types';
 // explicit discriminator the backend may add later.
 export const COORDINATOR_AGENT_NAME = 'Coordinator';
 
-/** Minimal run fields needed to recognize coordinator executions. */
 type RunLike = Pick<WorkflowRunDto, 'agent_name'> & {
   kind?: string;
   is_coordinator?: boolean;
 };
 
-/** Detects coordinator runs from an explicit discriminator or the legacy agent label. */
 export function isCoordinatorRun(run: RunLike): boolean {
   if (run.is_coordinator === true) return true;
   if (typeof run.kind === 'string' && run.kind.toLowerCase() === 'coordinator') return true;

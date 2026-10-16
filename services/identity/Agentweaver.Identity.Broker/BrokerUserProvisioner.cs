@@ -10,11 +10,6 @@ namespace Agentweaver.Identity.Broker;
 /// </summary>
 public sealed class BrokerUserProvisioner(IdentityBrokerDbContext db, TimeProvider timeProvider)
 {
-    /// <summary>
-    /// Finds or creates a local account by exact issuer and subject. Profile fields may be
-    /// refreshed for display, but email never links separate external identities; a
-    /// concurrent first login resolves to the unique persisted identity row.
-    /// </summary>
     public async Task<BrokerUser> ProvisionAsync(
         string issuer, string subject, string? displayName, string? email, CancellationToken cancellationToken)
     {

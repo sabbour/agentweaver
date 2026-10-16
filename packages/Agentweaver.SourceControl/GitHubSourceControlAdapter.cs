@@ -8,7 +8,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.SourceControl;
 
-/// <summary>Stable failure categories for Source Control provider operations.</summary>
 public enum SourceControlFailureCode
 {
     InvalidBinding,
@@ -25,7 +24,6 @@ public enum SourceControlFailureCode
     InvalidResponse
 }
 
-/// <summary>Typed Source Control failure with an optional HTTP status and inner exception.</summary>
 public sealed class SourceControlOperationException(
     SourceControlFailureCode code,
     string message,
@@ -33,25 +31,15 @@ public sealed class SourceControlOperationException(
     Exception? innerException = null)
     : Exception(message, innerException)
 {
-    /// <summary>Gets the stable failure category used by callers.</summary>
     public SourceControlFailureCode Code { get; } = code;
-    /// <summary>Gets the HTTP status when the operation received a GitHub response.</summary>
     public HttpStatusCode? StatusCode { get; } = statusCode;
 }
 
-/// <summary>
-/// Implements the Source Control provider contract against GitHub's REST API.
-/// Every operation checks the pinned provider/resource/capability binding and treats uncertain writes distinctly.
-/// </summary>
 public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
 {
-    /// <summary>The provider-options schema version supported by this adapter.</summary>
     public const int CurrentOptionsSchemaVersion = 1;
     private const string GitHubApiVersion = "2022-11-28";
     private readonly HttpClient _httpClient;
-    /// <summary>Creates an adapter restricted to the canonical HTTPS api.github.com origin.</summary>
-    /// <param name="httpClient">Configured GitHub client with no alternate base path.</param>
-    /// <exception cref="ArgumentException">The client does not target the canonical HTTPS API origin.</exception>
     public GitHubSourceControlAdapter(HttpClient httpClient)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -63,10 +51,8 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
                 "The GitHub API client must use the HTTPS api.github.com origin.", nameof(httpClient));
     }
 
-    /// <summary>Gets the stable GitHub provider identifier.</summary>
     public string ProviderId => SourceControlProviderIds.GitHub;
 
-    /// <summary>Capabilities this adapter can implement when a repository and credential grant them.</summary>
     public ImmutableHashSet<string> AdvertisedCapabilities { get; } =
         ImmutableHashSet.Create(
             StringComparer.Ordinal,
@@ -78,7 +64,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
             SourceControlCapabilities.ReviewRead,
             SourceControlCapabilities.Merge);
 
-    /// <summary>Creates the provider descriptor with the capabilities supported by this adapter.</summary>
     public static ProviderDescriptor CreateDescriptor() =>
         new(
             ProviderSeam.SourceControl,
@@ -96,15 +81,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
                 SourceControlCapabilities.ReviewRead,
                 SourceControlCapabilities.Merge));
 
-    /// <summary>
-    /// Reads the repository and negotiates the capabilities granted by the current credential.
-    /// </summary>
-    /// <param name="candidate">Selected provider candidate whose advertised contract must match this adapter.</param>
-    /// <param name="repository">Requested owner and repository.</param>
-    /// <param name="credential">Credential used to read repository permissions.</param>
-    /// <param name="cancellationToken">Cancels the GitHub request.</param>
-    /// <returns>The repository resource identity, negotiated capabilities, and repository metadata.</returns>
-    /// <exception cref="SourceControlOperationException">The candidate, repository response, or capabilities are invalid.</exception>
     public async Task<SourceControlRepositoryNegotiation> NegotiateRepositoryAsync(
         ProviderCandidate candidate,
         SourceControlRepositoryIdentity repository,
@@ -142,8 +118,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
             info.IsPrivate);
     }
 
-    /// <summary>Rereads repository identity and permission-derived capabilities for a pinned operation.</summary>
-    /// <exception cref="SourceControlOperationException">The capability or repository identity no longer matches the binding.</exception>
     public async Task VerifyCurrentBindingAsync(
         SourceControlOperationContext context,
         string requiredCapability,
@@ -170,8 +144,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
                 "The current GitHub credential does not have the required repository capability.");
     }
 
-    /// <summary>Creates a bounded issue in the bound repository and parses GitHub's resulting issue identity.</summary>
-    /// <exception cref="SourceControlOperationException">The request or binding is invalid, permission is denied, or remote outcome is uncertain.</exception>
     public async Task<SourceControlIssue> CreateIssueAsync(
         SourceControlOperationContext context,
         SourceControlIssueRequest request,
@@ -204,8 +176,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         }
     }
 
-    /// <summary>Creates a pull request or reuses only one open request with the exact pinned branches and SHAs.</summary>
-    /// <exception cref="SourceControlOperationException">Creation is rejected, an existing request differs, or the result is uncertain.</exception>
     public async Task<SourceControlPullRequest> CreateOrReusePullRequestAsync(
         SourceControlOperationContext context,
         SourceControlPullRequestRequest request,
@@ -259,8 +229,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         }
     }
 
-    /// <summary>Reads and validates one pull request from the bound repository.</summary>
-    /// <exception cref="SourceControlOperationException">The number, binding, response, or repository identity is invalid.</exception>
     public async Task<SourceControlPullRequest> ReadPullRequestAsync(
         SourceControlOperationContext context,
         long pullRequestNumber,
@@ -282,8 +250,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
             SourceControlPullRequestDisposition.Observed);
     }
 
-    /// <summary>Reads the bounded first page of pull-request reviews and maps GitHub states to provider states.</summary>
-    /// <exception cref="SourceControlOperationException">The binding or response shape is invalid.</exception>
     public async Task<ImmutableArray<SourceControlReview>> ReadReviewsAsync(
         SourceControlOperationContext context,
         long pullRequestNumber,
@@ -336,14 +302,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         return reviews.ToImmutable();
     }
 
-    /// <summary>
-    /// Reads a pull request and determines whether all effective required checks have evidence for the pinned head.
-    /// </summary>
-    /// <param name="context">Repository, credential, and capability binding.</param>
-    /// <param name="request">Expected pull request, branch names, and head/base SHAs.</param>
-    /// <param name="cancellationToken">Cancels GitHub API requests.</param>
-    /// <returns>Pull-request details and evidence for required checks.</returns>
-    /// <exception cref="SourceControlOperationException">Required rules or exact check evidence cannot be verified.</exception>
     public async Task<SourceControlMergeReadiness> ReadMergeReadinessAsync(
         SourceControlOperationContext context,
         SourceControlMergeReadinessRequest request,
@@ -387,8 +345,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
             evidence);
     }
 
-    /// <summary>Merges only the expected pull-request head SHA using the requested GitHub merge method.</summary>
-    /// <exception cref="SourceControlOperationException">The write is rejected, the head conflicts, or its remote outcome is uncertain.</exception>
     public async Task<SourceControlMergeOutcome> MergePullRequestAsync(
         SourceControlOperationContext context,
         SourceControlMergeRequest request,
@@ -448,8 +404,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         }
     }
 
-    /// <summary>Reads effective branch rules and classic protection to determine every required status check.</summary>
-    /// <exception cref="SourceControlOperationException">Rules are unknown, truncated, malformed, or require unsupported evidence.</exception>
     private async Task<ImmutableArray<RequiredCheck>> ReadRequiredChecksAsync(
         SourceControlOperationContext context,
         string baseBranch,
@@ -539,7 +493,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
             .ToImmutableArray();
     }
 
-    /// <summary>Reads classic required-status-check identities and optional GitHub App IDs.</summary>
     private static void ParseClassicRequiredChecks(
         JsonElement protection,
         ImmutableArray<RequiredCheck>.Builder requirements)
@@ -610,7 +563,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
                 "GitHub returned no classic required check identities.");
     }
 
-    /// <summary>Recognizes GitHub's explicit unprotected-branch response; malformed responses fail closed.</summary>
     private static async Task<bool> IsUnprotectedBranchResponseAsync(
         HttpResponseMessage response,
         CancellationToken cancellationToken)
@@ -631,7 +583,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         }
     }
 
-    /// <summary>Reads required status-check contexts and optional integration IDs from a branch rule.</summary>
     private static void ParseRequiredStatusChecks(
         JsonElement rule,
         ImmutableArray<RequiredCheck>.Builder requirements)
@@ -666,7 +617,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         }
     }
 
-    /// <summary>Combines exact-head check-run and commit-status evidence, returning Unknown for ambiguous matches.</summary>
     private async Task<ImmutableArray<SourceControlRequiredCheckEvidence>> ReadRequiredCheckEvidenceAsync(
         SourceControlOperationContext context,
         string expectedHeadSha,
@@ -717,7 +667,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         }).ToImmutableArray();
     }
 
-    /// <summary>Reads all check runs for a pinned head and rejects incomplete or truncated lists.</summary>
     private async Task<ImmutableArray<ObservedCheck>> ReadCheckRunsAsync(
         SourceControlOperationContext context,
         string expectedHeadSha,
@@ -778,7 +727,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         return results.ToImmutable();
     }
 
-    /// <summary>Reads all commit statuses for a pinned head and rejects incomplete or truncated lists.</summary>
     private async Task<ImmutableArray<ObservedCheck>> ReadCommitStatusesAsync(
         SourceControlOperationContext context,
         string expectedHeadSha,
@@ -832,7 +780,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         return results.ToImmutable();
     }
 
-    /// <summary>Reads a check run's optional positive GitHub App ID, rejecting malformed app data.</summary>
     private static long? ReadOptionalCheckRunAppId(JsonElement checkRun)
     {
         if (!checkRun.TryGetProperty("app", out var appValue) ||
@@ -847,7 +794,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         return appId;
     }
 
-    /// <summary>Maps a GitHub check-run status and conclusion into a provider check state.</summary>
     private static SourceControlCheckState ParseCheckRunState(string status, string? conclusion)
     {
         if (!string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase))
@@ -873,7 +819,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         };
     }
 
-    /// <summary>Maps a GitHub commit status into a provider check state.</summary>
     private static SourceControlCheckState ParseCommitStatusState(string state) =>
         state.ToLowerInvariant() switch
         {
@@ -884,7 +829,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
             _ => SourceControlCheckState.Unknown
         };
 
-    /// <summary>Requires a successful response for required-check evidence and maps 404 to unknown capability.</summary>
     private static void EnsureMergeEvidenceSuccess(HttpResponseMessage response, string operation)
     {
         if (response.StatusCode == HttpStatusCode.NotFound)
@@ -893,11 +837,9 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         EnsureSuccess(response, operation);
     }
 
-    /// <summary>Creates the fail-closed error used when required merge evidence is unavailable.</summary>
     private static SourceControlOperationException UnavailableMergeEvidence(string message) =>
         new(SourceControlFailureCode.CapabilityUnavailable, message);
 
-    /// <summary>Looks up open pull requests for the requested branches and accepts only an exact revision match.</summary>
     private async Task<SourceControlPullRequest?> FindOpenPullRequestAsync(
         SourceControlOperationContext context,
         SourceControlPullRequestRequest request,
@@ -944,7 +886,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         return null;
     }
 
-    /// <summary>Parses an item from an open pull-request list and requires it to still be open.</summary>
     private static SourceControlPullRequest ParseOpenPullRequestListItem(
         JsonElement root,
         SourceControlRepositoryIdentity expectedRepository)
@@ -959,7 +900,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         return pullRequest;
     }
 
-    /// <summary>Reads repository identity, timestamps, and credential permissions from GitHub.</summary>
     private async Task<RepositoryInfo> ReadRepositoryAsync(
         SourceControlRepositoryIdentity repository,
         SecretCredential credential,
@@ -997,7 +937,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
             ReadOptionalBoolean(root, "has_issues"));
     }
 
-    /// <summary>Derives the capabilities currently granted by repository read/write and issue permissions.</summary>
     private static ImmutableHashSet<string> GetNegotiatedCapabilities(RepositoryInfo info)
     {
         var capabilities = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
@@ -1018,8 +957,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         return capabilities.ToImmutable();
     }
 
-    /// <summary>Sends an authenticated GitHub request without following redirects and maps transport uncertainty.</summary>
-    /// <remarks>Writes that time out or lose transport are reported as uncertain rather than retried.</remarks>
     private async Task<HttpResponseMessage> SendAsync(
         HttpMethod method,
         Uri uri,
@@ -1076,7 +1013,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         return response;
     }
 
-    /// <summary>Maps GitHub status codes to stable failures, marking server-side write outcomes uncertain.</summary>
     private static void EnsureSuccess(
         HttpResponseMessage response,
         string operation,
@@ -1109,14 +1045,12 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
             response.StatusCode);
     }
 
-    /// <summary>Maps an unusable successful write response to an uncertain remote outcome.</summary>
     private static SourceControlOperationException UncertainWriteResponse(Exception exception) =>
         new(
             SourceControlFailureCode.RemoteOutcomeUncertain,
             "GitHub accepted a write request but returned an unusable response.",
             innerException: exception);
 
-    /// <summary>Parses a GitHub JSON response and maps malformed JSON to an invalid-response failure.</summary>
     private static async Task<JsonDocument> ReadJsonAsync(
         HttpResponseMessage response,
         CancellationToken cancellationToken)
@@ -1138,7 +1072,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         }
     }
 
-    /// <summary>Parses a pull request and verifies both head and base repositories match the selected repository.</summary>
     private static SourceControlPullRequest ParsePullRequest(
         JsonElement root,
         SourceControlRepositoryIdentity expectedRepository,
@@ -1178,8 +1111,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
             disposition);
     }
 
-    /// <summary>Requires a pull request's branches and head/base SHAs to equal the request exactly.</summary>
-    /// <exception cref="SourceControlOperationException">The returned pull request references another revision or branch.</exception>
     private static void EnsureExactPullRequest(
         SourceControlPullRequest pullRequest,
         SourceControlPullRequestRequest request)
@@ -1193,7 +1124,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
                 "The GitHub pull request does not match the exact requested head and base.");
     }
 
-    /// <summary>Reads a nested repository identity from a pull-request head/base or a repository object.</summary>
     private static SourceControlRepositoryIdentity ReadRepositoryName(JsonElement pullRequestOrRepository)
     {
         var repository = pullRequestOrRepository.TryGetProperty("repo", out var repo)
@@ -1203,7 +1133,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         return ParseRepositoryIdentity(fullName);
     }
 
-    /// <summary>Converts a GitHub full_name value into a validated provider repository identity.</summary>
     private static SourceControlRepositoryIdentity ParseRepositoryIdentity(string fullName)
     {
         var parts = fullName.Split('/');
@@ -1222,7 +1151,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         }
     }
 
-    /// <summary>Requires owner and repository names to match without case sensitivity.</summary>
     private static void EnsureRepositoryMatches(
         SourceControlRepositoryIdentity expected,
         SourceControlRepositoryIdentity actual)
@@ -1234,7 +1162,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
                 "GitHub returned a different repository than the requested identity.");
     }
 
-    /// <summary>Builds a URL beneath the canonical GitHub repository API path.</summary>
     private static Uri RepositoryUri(SourceControlRepositoryIdentity repository, string relative) =>
         new(
             new Uri("https://api.github.com/"),
@@ -1242,8 +1169,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
             Uri.EscapeDataString(repository.Name) +
             (relative.Length == 0 ? string.Empty : "/" + relative));
 
-    /// <summary>Requires the operation context to contain the GitHub resource, run, credential, and requested capability.</summary>
-    /// <exception cref="SourceControlOperationException">The operation does not match the pinned provider binding.</exception>
     private static void ValidateContext(SourceControlOperationContext context, string capability)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -1261,7 +1186,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
                 "The source-control operation is not bound to the selected GitHub provider, resource, and run.");
     }
 
-    /// <summary>Checks issue title and body bounds before sending a write request.</summary>
     private static void ValidateIssueRequest(SourceControlIssueRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -1273,7 +1197,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
                 "The issue title or body is invalid.");
     }
 
-    /// <summary>Checks pull-request text, branch names, and expected head/base commit IDs.</summary>
     private static void ValidatePullRequestRequest(SourceControlPullRequestRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -1289,7 +1212,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
                 "The pull request title, branch, or expected head is invalid.");
     }
 
-    /// <summary>Checks positive pull-request number, pinned head/base SHAs, and supported merge method.</summary>
     private static void ValidateMergeRequest(SourceControlMergeRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -1302,7 +1224,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
                 "The merge request must contain exact head and base revisions and a supported method.");
     }
 
-    /// <summary>Checks exact pull-request number, branch names, and expected head/base revisions for readiness.</summary>
     private static void ValidateMergeReadinessRequest(SourceControlMergeReadinessRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -1316,7 +1237,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
                 "The merge-readiness request must contain exact branch names and head/base revisions.");
     }
 
-    /// <summary>Checks GitHub branch-name syntax while rejecting unsafe segments and lock suffixes.</summary>
     private static bool IsBranchName(string branch) =>
         !string.IsNullOrWhiteSpace(branch) &&
         branch.Length <= 255 &&
@@ -1329,11 +1249,9 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
                 char.IsAsciiLetterOrDigit(character) ||
                 character is '-' or '_' or '.' ));
 
-    /// <summary>Checks the 40-character hexadecimal form of a Git commit ID.</summary>
     private static bool IsGitSha(string? value) =>
         value is { Length: 40 } && value.All(Uri.IsHexDigit);
 
-    /// <summary>Requires a positive pull-request number.</summary>
     private static void ValidatePullRequestNumber(long number)
     {
         if (number <= 0)
@@ -1342,7 +1260,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
                 "A positive pull request number is required.");
     }
 
-    /// <summary>Reads a required JSON object or reports an invalid GitHub response.</summary>
     private static JsonElement ReadObject(JsonElement source, string property)
     {
         if (source.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Object)
@@ -1350,7 +1267,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         throw InvalidResponse("GitHub returned an incomplete pull request response.");
     }
 
-    /// <summary>Reads a required non-empty string or reports an invalid GitHub response.</summary>
     private static string ReadRequiredString(JsonElement source, string property)
     {
         if (source.TryGetProperty(property, out var value) &&
@@ -1360,14 +1276,12 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         throw InvalidResponse("GitHub returned an incomplete response.");
     }
 
-    /// <summary>Reads a required string nested under a required JSON object.</summary>
     private static string ReadNestedRequiredString(
         JsonElement source,
         string parent,
         string property) =>
         ReadRequiredString(ReadObject(source, parent), property);
 
-    /// <summary>Reads a required positive 64-bit numeric identifier.</summary>
     private static long ReadPositiveInt64(JsonElement source, string property)
     {
         if (source.TryGetProperty(property, out var value) &&
@@ -1377,7 +1291,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         throw InvalidResponse("GitHub returned an invalid numeric identifier.");
     }
 
-    /// <summary>Reads a required JSON boolean and rejects missing or non-boolean values.</summary>
     private static bool ReadRequiredBoolean(JsonElement source, string property)
     {
         if (source.TryGetProperty(property, out var value) &&
@@ -1386,13 +1299,11 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         throw InvalidResponse("GitHub returned an incomplete response.");
     }
 
-    /// <summary>Reads true only when an optional field is the JSON boolean true.</summary>
     private static bool ReadOptionalBoolean(JsonElement source, string property) =>
         source.ValueKind == JsonValueKind.Object &&
         source.TryGetProperty(property, out var value) &&
         value.ValueKind == JsonValueKind.True;
 
-    /// <summary>Parses a required timestamp using invariant culture.</summary>
     private static DateTimeOffset ReadDateTimeOffset(JsonElement source, string property)
     {
         if (source.TryGetProperty(property, out var value) &&
@@ -1406,7 +1317,6 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         throw InvalidResponse("GitHub returned an invalid timestamp.");
     }
 
-    /// <summary>Requires a response URL to be HTTPS on github.com.</summary>
     private static Uri ReadGitHubUrl(JsonElement source, string property)
     {
         if (Uri.TryCreate(ReadRequiredString(source, property), UriKind.Absolute, out var uri) &&
@@ -1416,11 +1326,9 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         throw InvalidResponse("GitHub returned an invalid web URL.");
     }
 
-    /// <summary>Creates the common invalid GitHub response failure.</summary>
     private static SourceControlOperationException InvalidResponse(string message) =>
         new(SourceControlFailureCode.InvalidResponse, message);
 
-    /// <summary>Normalized repository identity and current permissions read from GitHub.</summary>
     private sealed record RepositoryInfo(
         long Id,
         SourceControlRepositoryIdentity Repository,
@@ -1431,10 +1339,8 @@ public sealed class GitHubSourceControlAdapter : ISourceControlAdapter
         bool CanPush,
         bool HasIssues);
 
-    /// <summary>One required check context and optional integration identity from branch rules.</summary>
     private sealed record RequiredCheck(string Context, long? AppId);
 
-    /// <summary>One check result observed for a specific commit revision.</summary>
     private sealed record ObservedCheck(
         string Context,
         long? AppId,

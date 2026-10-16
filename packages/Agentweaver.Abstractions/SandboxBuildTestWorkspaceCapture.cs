@@ -2,10 +2,6 @@ using System.Collections.Immutable;
 
 namespace Agentweaver.Abstractions;
 
-/// <summary>
-/// Read-only receipt for files collected from a BuildTest workspace. Validation binds
-/// the bytes and outputs to the accepted command, exact checkpoint, source seed, and pod.
-/// </summary>
 public sealed record SandboxBuildTestWorkspaceCaptureReference(
     Guid OperationId,
     string ImmutableHash,
@@ -25,8 +21,6 @@ public sealed record SandboxBuildTestWorkspaceCaptureReference(
     long PackageByteLength,
     ImmutableArray<SandboxBuildTestOutputEvidence> Outputs)
 {
-    /// <summary>Checks the capture against the accepted command, request fingerprint, and collector pod.</summary>
-    /// <exception cref="ArgumentException">Any operation, source, pod, hash, size, or output evidence differs.</exception>
     public SandboxBuildTestWorkspaceCaptureReference Validate(
         SandboxBuildTestAcceptedCommand command,
         string requestFingerprint,
@@ -70,8 +64,6 @@ public sealed record SandboxBuildTestWorkspaceCaptureReference(
         return this;
     }
 
-    /// <summary>Requires a durable journal acknowledgment for this exact produced-output proof.</summary>
-    /// <exception cref="ArgumentException">The acknowledgment has no position or does not match the source and capture.</exception>
     public void ValidateAcknowledgment(
         SandboxBuildTestWorkspaceSource source,
         ProducedRunCaptureJournalEntry acknowledgment)
@@ -82,8 +74,6 @@ public sealed record SandboxBuildTestWorkspaceCaptureReference(
         ValidateProof(source, acknowledgment.Capture);
     }
 
-    /// <summary>Checks that a Source Control capture proof matches this workspace's immutable outputs.</summary>
-    /// <exception cref="ArgumentException">The proof belongs to a different source, workspace, or captured output.</exception>
     public void ValidateProof(SandboxBuildTestWorkspaceSource source, ProducedRunCaptureProof proof)
     {
         _ = source.Validate();
@@ -107,12 +97,10 @@ public sealed record SandboxBuildTestWorkspaceCaptureReference(
 
 }
 
-/// <summary>Request from the trusted BuildTest flow to verify a produced-output journal acknowledgment.</summary>
 public sealed record SandboxBuildTestWorkspaceCaptureAcknowledgmentRequest(
     SandboxBuildTestApiRequest Request,
     ProducedRunCaptureJournalEntry Capture);
 
-/// <summary>Verified response combining the workspace capture reference, collector pod, and journal proof.</summary>
 public sealed record SandboxBuildTestWorkspaceCaptureAcknowledgmentVerification(
     SandboxBuildTestWorkspaceCaptureReference Reference,
     SandboxBuildTestPodReference Pod,

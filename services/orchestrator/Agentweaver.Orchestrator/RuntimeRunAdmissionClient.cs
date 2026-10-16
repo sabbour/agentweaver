@@ -4,22 +4,9 @@ using OpenIddict.Abstractions;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Requests an Events-owner receipt that the accepted run is admitted for runtime usage.
-/// The receipt is validated against the exact authorized selection and a short-lived caller bearer.
-/// </summary>
 internal sealed class RuntimeRunAdmissionClient(
     HttpClient client, OrchestratorOptions options, TimeProvider timeProvider)
 {
-    /// <summary>
-    /// Reads and validates run admission for the authorized project and run selection.
-    /// </summary>
-    /// <param name="context">The authenticated request context forwarded to Events.</param>
-    /// <param name="selection">The accepted selection and tenant authority for the run.</param>
-    /// <param name="cancellationToken">Cancels the owner call.</param>
-    /// <returns>The validated runtime run-admission receipt.</returns>
-    /// <exception cref="CoordinationException">Thrown when the caller is expired, the owner denies or fails the request, or the receipt does not match the selection.</exception>
-    /// <remarks>The bearer credential is invalidated after the request, and the owner address is resolved through the trusted Events configuration.</remarks>
     internal async Task<RuntimeRunAdmissionReceipt> ReadAsync(
         HttpContext context, AuthorizedRunSelection selection, CancellationToken cancellationToken)
     {

@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { CoordinatorRunPattern } from '..';
-/** Demonstrates the run review layout with reasoning, artifacts, response history, and steering input. */
 export function CoordinatorRunPatternExample() {
   const [steering, setSteering] = useState('Prioritize the East US remediation and hold the rest until it clears.');
 

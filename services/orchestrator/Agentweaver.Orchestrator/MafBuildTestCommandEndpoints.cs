@@ -5,16 +5,8 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// BuildTest command read and capture-acknowledgement endpoints hosted by the orchestrator.
-/// Each handler rechecks accepted plan authority and checkpoint bindings before returning seed data or a receipt.
-/// </summary>
 public static partial class CoordinationEndpoints
 {
-    /// <summary>
-    /// Verifies that a workspace capture acknowledgment is admitted for the current BuildTest command.
-    /// </summary>
-    /// <remarks>The handler rereads the accepted selection, decision state, checkpoint, and source-control capture before returning a no-store acknowledgment.</remarks>
     private static Task<IResult> VerifyCoordinatorBuildTestCaptureAcknowledgmentAsync(
         string projectId, string runId, string sessionId, string checkpointId, string stepId,
         SandboxBuildTestWorkspaceCaptureAcknowledgmentVerification request,
@@ -90,10 +82,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(acknowledgment);
         }, cancellationToken);
 
-    /// <summary>
-    /// Reads the accepted BuildTest command without its potentially large workspace seed.
-    /// </summary>
-    /// <remarks>Authority, selection, checkpoint, and source-input bindings are checked both before and after reading.</remarks>
     private static Task<IResult> ReadCoordinatorBuildTestCommandAsync(
         string projectId,
         string runId,
@@ -117,10 +105,6 @@ public static partial class CoordinationEndpoints
             checkpointRevision, decisionStateVersion, executionFence, acceptedSelectionHash,
             context, options, projects, decisions, checkpoints, sourceControlOwner, false, cancellationToken);
 
-    /// <summary>
-    /// Reads the admitted workspace seed for a BuildTest command.
-    /// </summary>
-    /// <remarks>The seed is returned as bytes only after the current command and source input have been revalidated.</remarks>
     private static Task<IResult> ReadCoordinatorBuildTestSeedAsync(
         string projectId,
         string runId,
@@ -144,11 +128,6 @@ public static partial class CoordinationEndpoints
             checkpointRevision, decisionStateVersion, executionFence, acceptedSelectionHash,
             context, options, projects, decisions, checkpoints, sourceControlOwner, true, cancellationToken);
 
-    /// <summary>
-    /// Loads the current checkpointed BuildTest command and optionally hydrates its workspace seed.
-    /// </summary>
-    /// <param name="includeSeed">When true, reads the admitted seed and returns it as a byte response.</param>
-    /// <remarks>A changed selection, decision version, execution fence, command hash, or source binding is rejected as stale.</remarks>
     private static Task<IResult> ReadCoordinatorBuildTestCommandCoreAsync(
         string projectId,
         string runId,
@@ -224,15 +203,6 @@ public static partial class CoordinationEndpoints
             return Results.Ok(command);
         }, cancellationToken);
 
-    /// <summary>
-    /// Resolves a BuildTest command only when its accepted decision and checkpoint still match the supplied reference.
-    /// </summary>
-    /// <param name="latest">The latest checkpoint for the session.</param>
-    /// <param name="current">The current owner-confirmed decision state.</param>
-    /// <param name="reference">The expected checkpoint, decision, fence, and selection binding.</param>
-    /// <param name="tenantId">The tenant that must own the expected environment binding.</param>
-    /// <returns>The accepted command without workspace seed bytes.</returns>
-    /// <exception cref="CoordinationException">Thrown when the selection, decision, command, or provider binding has changed.</exception>
     internal static SandboxBuildTestAcceptedCommand ResolveBuildTestCommand(
         MafExecutionCheckpointSnapshot latest,
         CoordinatorDecisionCurrentState current,

@@ -10,34 +10,26 @@ using Npgsql;
 
 namespace Agentweaver.Projects.Config;
 
-/// <summary>Stable client error code, message, and HTTP status for skill-content operations.</summary>
 public sealed class SkillContentServiceException(string code, string message, int statusCode) : Exception(message)
 {
     public string Code { get; } = code;
     public int StatusCode { get; } = statusCode;
 
-    /// <summary>Creates a bad-request error for malformed skill input.</summary>
     public static SkillContentServiceException Invalid(string message) =>
         new("invalid_skill_request", message, StatusCodes.Status400BadRequest);
 
-    /// <summary>Creates a conflict for changed content, revisions, or revocation state.</summary>
     public static SkillContentServiceException Conflict(string message) =>
         new("skill_content_conflict", message, StatusCodes.Status409Conflict);
 
-    /// <summary>Creates a conflict when the same import key is used for different actor-scoped input.</summary>
     public static SkillContentServiceException IdempotencyConflict() =>
         new("skill_import_idempotency_conflict", "The idempotency key was used for a different skill import.",
             StatusCodes.Status409Conflict);
 
-    /// <summary>Creates a service-unavailable response when object storage is not configured.</summary>
     public static SkillContentServiceException Unavailable() =>
         new("skill_content_unavailable", "Skill content storage is not configured.",
             StatusCodes.Status503ServiceUnavailable);
 }
 
-/// <summary>
-/// Owns project skill revision metadata, idempotent imports, assignments, revocation, and accepted-run content reads.
-/// </summary>
 public sealed class SkillContentService(
     ProjectsConfigDbContext db,
     SkillContentObjectStore? objects,
@@ -51,7 +43,6 @@ public sealed class SkillContentService(
     private const string InventoryCursorOrder = "skillId-ascending,revision-descending";
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
-    /// <summary>Validates candidate bytes and returns metadata without writing storage or database state.</summary>
     public SkillContentPreview Preview(SkillContentCandidate candidate)
     {
         ArgumentNullException.ThrowIfNull(candidate);
@@ -64,9 +55,6 @@ public sealed class SkillContentService(
             SemanticByteCount(content));
     }
 
-    /// <summary>
-    /// Returns a stable, bounded revision page and current assignments after rechecking project-owner authority.
-    /// </summary>
     public async Task<SkillContentInventoryPage> ListInventoryAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -167,10 +155,6 @@ public sealed class SkillContentService(
             nextCursor);
     }
 
-    /// <summary>
-    /// Imports an exact-digest candidate into immutable object storage and persists its revision and scoped replay receipt.
-    /// </summary>
-    /// <exception cref="SkillContentServiceException">Input, expected digest/revision, authority, or idempotency key conflicts.</exception>
     public async Task<SkillContentImportReceipt> ImportAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -201,7 +185,6 @@ public sealed class SkillContentService(
             .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
             .ConfigureAwait(false);
 
-        // The digest scope includes project, actor, and key; an existing row is replayed only for identical request data.
         var prior = await db.SkillImportIdempotency.AsNoTracking()
             .SingleOrDefaultAsync(
                 item => item.ProjectId == projectId && item.ScopeDigest == scopeDigest,
@@ -225,7 +208,6 @@ public sealed class SkillContentService(
 
         var revision = checked((current?.Revision ?? 0) + 1);
         var objectKey = MakeObjectKey(projectId, skillId, revision, content.ContentDigest);
-        // The deterministic revision key lets an exact retry verify/reuse a blob if its database transaction did not commit.
         var reference = await store.WriteAsync(objectKey, content, cancellationToken).ConfigureAwait(false);
         if (reference.ContentDigest != content.ContentDigest)
             throw new SkillContentObjectStoreException(
@@ -293,7 +275,6 @@ public sealed class SkillContentService(
         }
     }
 
-    /// <summary>Appends a revocation marker for an existing immutable revision; an already-revoked revision is unchanged.</summary>
     public async Task RevokeAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -346,7 +327,6 @@ public sealed class SkillContentService(
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Updates one skill assignment by appending the next project configuration revision.</summary>
     public async Task<VersionedProjectConfiguration> UpdateAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -400,10 +380,6 @@ public sealed class SkillContentService(
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Returns only content pinned by the accepted run and assigned to the named active agent, rechecking authority and revocation.
-    /// </summary>
-    /// <exception cref="SkillContentServiceException">The accepted binding is inconsistent, content is revoked, or storage is unavailable.</exception>
     public async Task<ImmutableArray<SkillRuntimeContentV1>> ReadAcceptedRunSkillsAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -493,7 +469,6 @@ public sealed class SkillContentService(
         return result.ToImmutable();
     }
 
-    /// <summary>Validates enabled skill pins and assignments against the active cast and non-revoked stored revisions.</summary>
     internal static async Task<ProjectConfiguration> ValidateConfigurationAsync(
         ProjectsConfigDbContext db,
         string projectId,
@@ -527,7 +502,6 @@ public sealed class SkillContentService(
         return normalized;
     }
 
-    /// <summary>Requires current membership, active project state, and an active Owner or tenant-admin assignment.</summary>
     private async Task EnsureWriteAccessAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -561,7 +535,6 @@ public sealed class SkillContentService(
             throw ProjectConfigException.Forbidden();
     }
 
-    /// <summary>Requires current membership and Owner or tenant-admin authority while allowing archived-project inventory reads.</summary>
     private async Task EnsureInventoryAccessAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -591,7 +564,6 @@ public sealed class SkillContentService(
             throw ProjectConfigException.Forbidden();
     }
 
-    /// <summary>Rechecks current Orchestrator role and exact accepted run existence before returning runtime bytes.</summary>
     private async Task EnsureCurrentRunAuthorityAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -654,7 +626,6 @@ public sealed class SkillContentService(
         await FindAvailableRevisionAsync(db, projectId, skillId, revision, contentDigest, cancellationToken)
             .ConfigureAwait(false);
 
-    /// <summary>Loads the exact digest-pinned revision and rejects it if a revocation marker exists.</summary>
     private static async Task<ProjectSkillContentRevisionRecord> FindAvailableRevisionAsync(
         ProjectsConfigDbContext db,
         string projectId,
@@ -677,7 +648,6 @@ public sealed class SkillContentService(
         return stored;
     }
 
-    /// <summary>Returns a saved import receipt only when actor, key, and complete request digest all match.</summary>
     private static SkillContentImportReceipt ReadIdempotentReceipt(
         ProjectSkillImportIdempotencyRecord existing,
         ProjectAuthorizationContext caller,
@@ -716,7 +686,6 @@ public sealed class SkillContentService(
     private static string Hash(ReadOnlySpan<byte> content) =>
         Convert.ToHexString(SHA256.HashData(content)).ToLowerInvariant();
 
-    /// <summary>Encodes versioned page-order, project, size, and last-row values into an opaque URL-safe cursor.</summary>
     private static string EncodeInventoryCursor(string projectId, int pageSize, string skillId, long revision)
     {
         var payload = JsonSerializer.SerializeToUtf8Bytes(
@@ -726,7 +695,6 @@ public sealed class SkillContentService(
         return Convert.ToBase64String(payload).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
 
-    /// <summary>Rejects malformed or cross-project/page-size cursors before applying the stable keyset query.</summary>
     private static SkillInventoryCursor DecodeInventoryCursor(string projectId, int pageSize, string value)
     {
         if (value.Length is 0 or > 2048)

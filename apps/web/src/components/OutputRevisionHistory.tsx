@@ -2,10 +2,6 @@ import { useEffect, useState } from 'react';
 import { apiClient } from '../api/apiClient';
 import type { OutputRevision, OutputRevisionComparison, OutputRevisionFile } from '../api/types';
 
-/**
- * Loads and renders the revision history for the selected run output through the API.
- * The run/output props identify the history; an effect refreshes it and tracks loading and errors.
- */
 export function OutputRevisionHistory({ runId }: { runId: string }) {
   const [history, setHistory] = useState<OutputRevision[]>([]);
   const [selected, setSelected] = useState<OutputRevision | null>(null);

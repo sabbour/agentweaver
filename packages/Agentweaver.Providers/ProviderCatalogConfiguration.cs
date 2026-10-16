@@ -5,20 +5,8 @@ using Microsoft.Extensions.Configuration;
 
 namespace Agentweaver.Providers;
 
-/// <summary>
-/// Translates the catalog owner's configuration snapshot into validated provider contracts.
-/// It does not choose providers itself; <see cref="ProviderCatalog.Create"/> enforces the policy.
-/// </summary>
 public static class ProviderCatalogConfiguration
 {
-    /// <summary>
-    /// Loads the catalog snapshot from configuration and fails startup if it is missing,
-    /// malformed, or rejected by the provider catalog validator.
-    /// </summary>
-    /// <param name="configuration">The configuration source containing the owner's snapshot.</param>
-    /// <param name="sectionPath">The section path holding provider registrations and selections.</param>
-    /// <returns>An immutable catalog ready for resolution.</returns>
-    /// <exception cref="InvalidOperationException">The snapshot is missing or invalid.</exception>
     public static ProviderCatalog Load(
         IConfiguration configuration,
         string sectionPath = "ProjectsConfig:ProviderCatalog")
@@ -71,13 +59,11 @@ public static class ProviderCatalogConfiguration
                 $"The provider catalog owner supplied an invalid snapshot at '{sectionPath}': {result.Error?.Code}: {result.Error?.Message}");
     }
 
-    /// <summary>Parses a defined enum value without depending on configuration letter casing.</summary>
     private static T ParseEnum<T>(string value, string name) where T : struct, Enum =>
         Enum.TryParse<T>(value, ignoreCase: true, out var parsed) && Enum.IsDefined(parsed)
             ? parsed
             : throw new InvalidOperationException($"Provider catalog {name} '{value}' is invalid.");
 
-    /// <summary>Configuration shape for all provider selection categories.</summary>
     private sealed class ProviderCatalogSettings
     {
         public List<ProviderRegistrationSettings> Registrations { get; init; } = [];
@@ -88,7 +74,6 @@ public static class ProviderCatalogConfiguration
         public List<ProviderMeterSourceSelectionSettings> MeterSourceSelections { get; init; } = [];
     }
 
-    /// <summary>Configuration shape for one adapter descriptor and its enabled options revision.</summary>
     private sealed class ProviderRegistrationSettings
     {
         public string Seam { get; init; } = string.Empty;
@@ -101,35 +86,30 @@ public static class ProviderCatalogConfiguration
         public string OptionsRevision { get; init; } = string.Empty;
     }
 
-    /// <summary>Configuration shape for one platform default.</summary>
     private sealed class ProviderSelectionSettings
     {
         public string Seam { get; init; } = string.Empty;
         public string ProviderId { get; init; } = string.Empty;
     }
 
-    /// <summary>Configuration shape for one permitted project override.</summary>
     private sealed class ProviderOverrideSettings
     {
         public string Seam { get; init; } = string.Empty;
         public string ProviderId { get; init; } = string.Empty;
     }
 
-    /// <summary>Configuration shape for an ordered composite provider list.</summary>
     private sealed class ProviderOrderedSelectionSettings
     {
         public string Seam { get; init; } = string.Empty;
         public string[] ProviderIds { get; init; } = [];
     }
 
-    /// <summary>Configuration shape for one network policy layer selection.</summary>
     private sealed class ProviderLayerSelectionSettings
     {
         public string Layer { get; init; } = string.Empty;
         public string ProviderId { get; init; } = string.Empty;
     }
 
-    /// <summary>Configuration shape for a cost provider assigned to one meter source.</summary>
     private sealed class ProviderMeterSourceSelectionSettings
     {
         public string MeterSource { get; init; } = string.Empty;

@@ -2,10 +2,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Configures persistence constraints and relationships for project-owned Remote MCP connections.</summary>
 internal static class RemoteMcpConnectionModel
 {
-    /// <summary>Maps connection heads, immutable configurations, discovery snapshots, and idempotency records.</summary>
     internal static void Configure(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<RemoteMcpConnectionRow>(entity =>
@@ -178,7 +176,6 @@ internal static class RemoteMcpConnectionModel
     }
 }
 
-/// <summary>Mutable head row identifying the current connection, configuration, discovery, and state revisions.</summary>
 internal sealed class RemoteMcpConnectionRow
 {
     public string TenantId { get; set; } = string.Empty;
@@ -192,7 +189,6 @@ internal sealed class RemoteMcpConnectionRow
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
-/// <summary>Immutable versioned endpoint and authentication configuration for a Remote MCP connection.</summary>
 internal sealed class RemoteMcpConnectionConfigurationRow
 {
     public string TenantId { get; set; } = string.Empty;
@@ -212,7 +208,6 @@ internal sealed class RemoteMcpConnectionConfigurationRow
     public DateTimeOffset CreatedAt { get; set; }
 }
 
-/// <summary>Versioned tool catalog snapshot pinned to its configuration and applied network policy.</summary>
 internal sealed class RemoteMcpCatalogSnapshotRow
 {
     public string TenantId { get; set; } = string.Empty;
@@ -234,7 +229,6 @@ internal sealed class RemoteMcpCatalogSnapshotRow
     public DateTimeOffset CreatedAt { get; set; }
 }
 
-/// <summary>Stored mutation result used to replay a Remote MCP operation with the same idempotency key.</summary>
 internal sealed class RemoteMcpConnectionIdempotencyRow
 {
     public string TenantId { get; set; } = string.Empty;

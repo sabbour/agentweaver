@@ -4,10 +4,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity;
 
-/// <summary>
-/// Validated request for restoring a suspended run into a newly placed runtime, with
-/// per-attempt operation IDs and an exact next execution fence.
-/// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeResumeBootstrapRequest(
     int ContractVersion,
@@ -19,7 +15,6 @@ public sealed record RuntimeResumeBootstrapRequest(
 {
     public Guid ResumeAttemptId { get; init; }
 
-    /// <summary>Checks source suspension evidence, placement, operation IDs, and the new registration binding.</summary>
     public RuntimeResumeBootstrapRequest Validate()
     {
         ArgumentNullException.ThrowIfNull(Resume);
@@ -66,7 +61,6 @@ public sealed record RuntimeResumeBootstrapRequest(
         return this;
     }
 
-    /// <summary>Requires the durable configuration material recorded before the suspended cache.</summary>
     public static SessionMaterialAcknowledgment RequireConfigurationAcknowledgment(RuntimeHostSuspendReceipt host)
     {
         ArgumentNullException.ThrowIfNull(host);
@@ -87,7 +81,6 @@ public sealed record RuntimeResumeBootstrapRequest(
         return acknowledgment;
     }
 
-    /// <summary>Checks the restored configuration bytes against the original session material acknowledgment.</summary>
     public SessionMaterialReadResult ValidateConfiguration(SessionMaterialReadResult result)
     {
         Validate();
@@ -104,7 +97,6 @@ public sealed record RuntimeResumeBootstrapRequest(
         return result;
     }
 
-    /// <summary>Checks the delivered grant and placement against this exact resume request.</summary>
     public RuntimeBootstrapDeliveryReceipt ValidateDelivery(RuntimeBootstrapDeliveryReceipt delivery)
     {
         Validate();
@@ -124,14 +116,12 @@ public sealed record RuntimeResumeBootstrapRequest(
     }
 }
 
-/// <summary>Whether recovered native cache remains unavailable until an authorized turn is accepted.</summary>
 public enum RuntimeResumeNativeCacheState
 {
     Unspecified,
     PendingUntilAuthorizedTurn
 }
 
-/// <summary>Evidence binding rebuilt context to the exact flushed journal prefix and resume attempt.</summary>
 public sealed record RuntimeResumeJournalRebuildReceipt(
     SessionSuspendResumeCheckpointReference Checkpoint,
     long ThroughPosition,
@@ -144,7 +134,6 @@ public sealed record RuntimeResumeJournalRebuildReceipt(
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
-    /// <summary>Checks the checkpoint, prefix position, attempt ID, and required pending-cache state.</summary>
     public RuntimeResumeJournalRebuildReceipt ValidateFor(RuntimeResumeBootstrapRequest request)
     {
         request.Validate();
@@ -158,10 +147,6 @@ public sealed record RuntimeResumeJournalRebuildReceipt(
         return this;
     }
 
-    /// <summary>
-    /// Validates an ordered, unique journal prefix containing both cache and configuration
-    /// acknowledgments, then returns its canonical serialized digest.
-    /// </summary>
     public static string ComputeJournalSha256(
         RuntimeResumeBootstrapRequest request, IReadOnlyList<SessionEventEnvelope> prefix)
     {
@@ -214,7 +199,6 @@ public sealed record RuntimeResumeJournalRebuildReceipt(
     }
 }
 
-/// <summary>Host receipt confirming resumed cache source and the selected recovery method.</summary>
 public sealed record RuntimeHostResumeCacheReceipt(
     int ContractVersion,
     Guid OperationId,
@@ -227,7 +211,6 @@ public sealed record RuntimeHostResumeCacheReceipt(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeResumeJournalRebuildReceipt? JournalRebuild { get; init; }
 
-    /// <summary>Checks the saved cache acknowledgment and native-cache or journal-rebuild evidence.</summary>
     public RuntimeHostResumeCacheReceipt ValidateFor(RuntimeResumeBootstrapRequest request)
     {
         request.Validate();
@@ -256,7 +239,6 @@ public sealed record RuntimeHostResumeCacheReceipt(
     }
 }
 
-/// <summary>Combined environment delivery and host readiness receipt for a resumed runtime.</summary>
 public sealed record RuntimeResumeBootstrapReceipt(
     int ContractVersion,
     Guid OperationId,
@@ -265,7 +247,6 @@ public sealed record RuntimeResumeBootstrapReceipt(
     RuntimeBootstrapDeliveryReceipt Delivery,
     RuntimeHostReadinessReceipt HostReceipt)
 {
-    /// <summary>Matches delivery, registration, image, lease, and observe grant against the request.</summary>
     public RuntimeResumeBootstrapReceipt ValidateFor(RuntimeResumeBootstrapRequest request)
     {
         request.Validate();
@@ -300,12 +281,10 @@ public sealed record RuntimeResumeBootstrapReceipt(
     }
 }
 
-/// <summary>Calls the Environment owner to create or confirm the resumed runtime bootstrap.</summary>
 public sealed class RuntimeResumeBootstrapHttpClient(HttpClient client, Uri environmentOwnerAddress)
 {
     private readonly Uri _owner = RuntimeOwnerHttpTransport.RequireOwnerAddress(environmentOwnerAddress);
 
-    /// <summary>Requests a bounded resume bootstrap and distinguishes state loss from successful activation.</summary>
     public async Task<RuntimeResumeBootstrapReceipt> BootstrapAsync(
         RuntimeResumeBootstrapRequest request, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
     {
@@ -324,12 +303,10 @@ public sealed class RuntimeResumeBootstrapHttpClient(HttpClient client, Uri envi
 
 }
 
-/// <summary>Reads the saved runtime configuration from the Events owner for a validated resume.</summary>
 public sealed class RuntimeResumeConfigurationHttpClient(HttpClient client, Uri eventsOwnerAddress)
 {
     private readonly Uri _owner = RuntimeOwnerHttpTransport.RequireOwnerAddress(eventsOwnerAddress);
 
-    /// <summary>Reads and verifies the exact acknowledged configuration bytes for the resume request.</summary>
     public async Task<SessionMaterialReadResult> ReadAsync(
         RuntimeResumeBootstrapRequest request, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
     {

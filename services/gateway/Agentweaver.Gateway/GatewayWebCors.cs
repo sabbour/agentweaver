@@ -3,16 +3,13 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Gateway;
 
-/// <summary>Creates per-route browser policies limited to the configured Web origin and required headers.</summary>
 public static class GatewayWebCors
 {
     public const string OpenApiPolicyName = "GatewayWebOpenApi";
     public const string CopilotConnectionsPolicyName = "GatewayWebCopilotConnections";
 
-    /// <summary>Returns the route-specific CORS policy key used when mapping a catalog route.</summary>
     public static string PolicyName(GatewayRoute route) => $"GatewayWeb:{route.OperationId}";
 
-    /// <summary>Registers narrow CORS policies for OpenAPI, connection flows, and catalogued API operations.</summary>
     public static IServiceCollection AddGatewayWebCors(
         this IServiceCollection services,
         GatewayOptions options)
@@ -49,7 +46,6 @@ public static class GatewayWebCors
         return services;
     }
 
-    /// <summary>Lists the Knowledge writes whose retries require an idempotency key header.</summary>
     private static bool RequiresIdempotencyKey(string operationId) => operationId is
         "createKnowledgeRecord" or
         "updateKnowledgeRecord" or

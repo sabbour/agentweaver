@@ -12,7 +12,6 @@ using WorkloadIdentityCredentialOptions = AzureIdentity::Azure.Identity.Workload
 
 namespace Agentweaver.FoundationProbe;
 
-/// <summary>Connects the acceptance runner to the configured Azure secret, blob, PostgreSQL, and outbox resources.</summary>
 internal sealed class AzureProbeOperations : IProbeOperations, IAsyncDisposable
 {
     private const string PostgresTokenScope = "https://ossrdbms-aad.database.windows.net/.default";
@@ -26,7 +25,6 @@ internal sealed class AzureProbeOperations : IProbeOperations, IAsyncDisposable
     private readonly PostgresOutbox _outbox;
     private readonly PostgresProbe _postgresProbe;
 
-    /// <summary>Creates workload-identity clients bound to the validated target's resource endpoints.</summary>
     public AzureProbeOperations(ProbeTarget target, TokenCredential credential, string tokenFilePath)
     {
         _target = target ?? throw new ArgumentNullException(nameof(target));
@@ -50,7 +48,6 @@ internal sealed class AzureProbeOperations : IProbeOperations, IAsyncDisposable
         _postgresProbe = new PostgresProbe(_dataSource, _outbox);
     }
 
-    /// <summary>Redeems the configured secret for the probe nonce and invalidates the returned credential afterward.</summary>
     public async Task<KeyVaultEvidence> RedeemKeyVaultAsync(
         ProbeTarget target, string nonce, CancellationToken cancellationToken)
     {
@@ -75,7 +72,6 @@ internal sealed class AzureProbeOperations : IProbeOperations, IAsyncDisposable
         }
     }
 
-    /// <summary>Runs the nonce-owned blob write/read/delete check for the exact validated target.</summary>
     public async Task<BlobEvidence> RunBlobRoundTripAsync(
         ProbeTarget target, ProbeSource source, string nonce, CancellationToken cancellationToken)
     {
@@ -83,7 +79,6 @@ internal sealed class AzureProbeOperations : IProbeOperations, IAsyncDisposable
         return await _blobProbe.RunAsync(target, source, nonce, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Writes and verifies the probe's database effect and transactional outbox event.</summary>
     public async Task<PostgresEvidence> WritePostgresEffectsAsync(
         ProbeTarget target, ProbeSource source, string nonce, CancellationToken cancellationToken)
     {
@@ -91,14 +86,12 @@ internal sealed class AzureProbeOperations : IProbeOperations, IAsyncDisposable
         return await _postgresProbe.RunAsync(target, source, nonce, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Disposes the secret-redemption client and PostgreSQL data source.</summary>
     public async ValueTask DisposeAsync()
     {
         _secretRedemption.Dispose();
         await _dataSource.DisposeAsync().ConfigureAwait(false);
     }
 
-    /// <summary>Builds a TLS PostgreSQL data source using workload identity tokens for password requests.</summary>
     internal static NpgsqlDataSource CreatePostgresDataSource(
         ProbeTarget target,
         TokenCredential credential,
@@ -125,7 +118,6 @@ internal sealed class AzureProbeOperations : IProbeOperations, IAsyncDisposable
         return builder.Build();
     }
 
-    /// <summary>Requests the PostgreSQL audience token and rejects an empty credential response.</summary>
     internal static async ValueTask<string> GetPostgresTokenAsync(
         TokenCredential credential, CancellationToken cancellationToken)
     {

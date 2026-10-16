@@ -8,20 +8,11 @@ using Microsoft.Win32.SafeHandles;
 
 namespace Agentweaver.AgentRuntime;
 
-/// <summary>
-/// Performs Linux filesystem durability flushes for the mounted workspace and computes
-/// a deterministic tree digest used by suspend/resume receipts.
-/// </summary>
 internal static class MountedWorkspaceFlush
 {
     private const int ODirectory = 0x10000;
     private const int OCloexec = 0x80000;
 
-    /// <summary>
-    /// Flushes the mounted filesystem with syncfs, hashes its tree, and returns a receipt
-    /// tied to the caller's requested generation and idempotency key.
-    /// </summary>
-    /// <exception cref="PlatformNotSupportedException">The host is not Linux.</exception>
     internal static async Task<WorkspaceVolumeFlushReceipt> FlushAndCreateReceiptAsync(
         string mountedPath, WorkspaceVolumeFlushRequest request, CancellationToken cancellationToken)
     {
@@ -62,7 +53,6 @@ internal static class MountedWorkspaceFlush
         return receipt.ValidateFor(request);
     }
 
-    /// <summary>Hashes normalized paths and file content digests in ordinal path order.</summary>
     internal static async Task<string> ComputeTreeSha256Async(
         string mountedPath, CancellationToken cancellationToken)
     {
@@ -77,7 +67,6 @@ internal static class MountedWorkspaceFlush
         return Convert.ToHexStringLower(hash.GetHashAndReset());
     }
 
-    /// <summary>Recursively hashes sorted entries and records links without following them.</summary>
     private static async Task AppendDirectoryChildrenAsync(
         string directory, string parentPath, IncrementalHash hash, CancellationToken cancellationToken)
     {
@@ -111,7 +100,6 @@ internal static class MountedWorkspaceFlush
         }
     }
 
-    /// <summary>Hashes file bytes and appends a typed record for the relative path.</summary>
     private static async Task AppendFileAsync(
         string path, string relativePath, IncrementalHash hash, CancellationToken cancellationToken)
     {
@@ -122,7 +110,6 @@ internal static class MountedWorkspaceFlush
         AppendRecord(hash, 2, relativePath, contentHash);
     }
 
-    /// <summary>Encodes a typed tree record with length-prefixed path and content bytes.</summary>
     private static void AppendRecord(
         IncrementalHash hash, byte kind, string relativePath, ReadOnlySpan<byte> content)
     {

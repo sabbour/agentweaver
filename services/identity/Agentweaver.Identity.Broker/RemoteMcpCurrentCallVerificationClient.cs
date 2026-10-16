@@ -7,11 +7,6 @@ using OpenIddict.Validation.AspNetCore;
 
 namespace Agentweaver.Identity.Broker;
 
-/// <summary>
-/// Verifies Environment's proof for the current remote MCP call using its pinned mutual-TLS
-/// owner endpoint. It checks the caller token and tenant against the proof, validates the
-/// bounded owner acknowledgment, and invalidates the copied bearer after the call.
-/// </summary>
 public sealed class RemoteMcpCurrentCallVerificationClient(
     HttpClient client,
     [FromKeyedServices(RemoteMcpCredentialUseComposition.RecipientTlsKey)] RuntimeServiceTlsOptions peerOptions,
@@ -21,7 +16,6 @@ public sealed class RemoteMcpCurrentCallVerificationClient(
     private readonly Uri _ownerAddress = new(
         peerOptions.Validate("IdentityBroker", "Environment").PeerOwnerAddress!, UriKind.Absolute);
 
-    /// <summary>Returns a validated acknowledgment or throws when the actor, proof or owner response is not current.</summary>
     public async Task<RemoteMcpCurrentCallVerificationAcknowledgment> VerifyAsync(
         HttpContext context, RemoteMcpCurrentCallVerificationRequest request, CancellationToken cancellationToken)
     {

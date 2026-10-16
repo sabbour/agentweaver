@@ -1,10 +1,6 @@
 import { Text } from '@fluentui/react-components';
 import type { RunTerminalDiagnostic } from '../api/types';
 
-/**
- * Renders the structured failure diagnostic supplied by the run API, including available
- * evidence and explanatory details. It has no independent data request or local state.
- */
 export function FailureDiagnosticDetails({ diagnostic }: { diagnostic: RunTerminalDiagnostic }) {
   return (
     <>

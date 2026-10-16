@@ -1,5 +1,3 @@
-// Create the P1 runtime service identities in the existing cluster and bind
-// each identity to its own Kubernetes ServiceAccount through AKS OIDC.
 targetScope = 'resourceGroup'
 
 @description('The existing approved 1.x resource group naming prefix.')
@@ -20,8 +18,6 @@ resource aks 'Microsoft.ContainerService/managedClusters@2026-07-02-preview' exi
   name: '${namePrefix}-aks'
 }
 
-// Keep service identity names and subjects aligned so federation remains
-// scoped to the exact namespace and workload ServiceAccount.
 var namespace = 'agentweaver-v1-p0'
 var serviceNames = [
   'projects-config'

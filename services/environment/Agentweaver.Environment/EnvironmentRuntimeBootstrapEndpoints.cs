@@ -5,10 +5,8 @@ using Microsoft.AspNetCore.Authentication;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Maps authenticated internal runtime-bootstrap and resume operations to the Environment services.</summary>
 public static class EnvironmentRuntimeBootstrapEndpoints
 {
-    /// <summary>Registers the runtime bootstrap, resume, suspend, and workspace verification routes.</summary>
     public static IEndpointRouteBuilder MapEnvironmentRuntimeBootstrap(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("/internal/runtime/resume/bootstrap", async (

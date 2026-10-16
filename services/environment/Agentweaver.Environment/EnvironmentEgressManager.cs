@@ -7,19 +7,16 @@ using Agentweaver.Providers;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Input for applying an egress policy with a required predecessor generation.</summary>
 public sealed record ApplyEnvironmentEgressRequest(
     EnvironmentGenerationFence Fence,
     long PolicyGeneration,
     long ExpectedPreviousPolicyGeneration,
     string IdempotencyKey);
 
-/// <summary>Input that identifies one reserved egress effect for reconciliation.</summary>
 public sealed record ReconcileEnvironmentEgressRequest(
     EnvironmentGenerationFence Fence,
     Guid OperationId);
 
-/// <summary>Reports policy readiness, revocation, observed state, pinned binding, or a coded failure.</summary>
 public sealed record EnvironmentEgressOperationResult(
     bool ReadyForDispatch,
     bool Revoked,
@@ -28,19 +25,12 @@ public sealed record EnvironmentEgressOperationResult(
     string? FailureCode,
     string? FailureMessage);
 
-/// <summary>
-/// Authorizes each run's egress selection and coordinates generation-fenced policy effects with Cilium.
-/// Readiness is returned only after the exact policy and the caller's current authority are verified.
-/// </summary>
 public sealed class EnvironmentEgressManager(
     IProjectsConfigClient projects,
     CiliumEgressPolicyAdapter cilium,
     CiliumEgressProviderOptions providerOptions,
     IEnvironmentLifecycleStore lifecycleStore)
 {
-    /// <summary>
-    /// Reserves, applies, and verifies a policy generation; provider and authority failures return a not-ready result.
-    /// </summary>
     public async Task<EnvironmentEgressOperationResult> ApplyAndVerifyAsync(
         CurrentCallerRequest caller,
         ApplyEnvironmentEgressRequest request,
@@ -221,7 +211,6 @@ public sealed class EnvironmentEgressManager(
         }
     }
 
-    /// <summary>Checks whether the exact owner-recorded policy generation and current authorization remain valid.</summary>
     public async Task<EnvironmentEgressOperationResult> VerifyAsync(
         CurrentCallerRequest caller,
         ApplyEnvironmentEgressRequest request,
@@ -328,7 +317,6 @@ public sealed class EnvironmentEgressManager(
         }
     }
 
-    /// <summary>Reads lifecycle metadata after checking fresh ReadProjects authority before and after the read.</summary>
     public async Task<EnvironmentLifecycleSnapshot?> InspectLifecycleAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -374,7 +362,6 @@ public sealed class EnvironmentEgressManager(
         return snapshot;
     }
 
-    /// <summary>Writes and verifies a generation-bound deny-all tombstone for the Environment policy.</summary>
     public async Task<EnvironmentEgressOperationResult> RevokeAsync(
         CurrentCallerRequest caller,
         ApplyEnvironmentEgressRequest request,
@@ -541,7 +528,6 @@ public sealed class EnvironmentEgressManager(
         }
     }
 
-    /// <summary>Reconciles only an unresolved effect already recorded for this active Environment owner.</summary>
     public async Task<EnvironmentEgressOperationResult> ReconcileAsync(
         CurrentCallerRequest caller,
         ReconcileEnvironmentEgressRequest request,
@@ -693,7 +679,6 @@ public sealed class EnvironmentEgressManager(
         }
     }
 
-    /// <summary>Reads current project authority and the immutable run selection, then confirms both still match.</summary>
     private async Task<AuthorizedSelection> GetAuthorizedSelectionAsync(
         CurrentCallerRequest caller,
         EnvironmentOwnerIdentity owner,
@@ -728,7 +713,6 @@ public sealed class EnvironmentEgressManager(
         return new AuthorizedSelection(authorization, selection);
     }
 
-    /// <summary>Exposes a checked authorization context and run selection to Environment lifecycle coordinators.</summary>
     internal Task<AuthorizedSelection> GetAuthorizedRunSelectionAsync(
         CurrentCallerRequest caller,
         EnvironmentOwnerIdentity owner,
@@ -750,7 +734,6 @@ public sealed class EnvironmentEgressManager(
             authorization);
     }
 
-    /// <summary>Returns fresh authority for a run-bound Environment control operation after requiring WriteProjects.</summary>
     internal async Task<ProjectAuthorizationContextResponse> GetAuthorizedRunEnvironmentControlContextAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -768,7 +751,6 @@ public sealed class EnvironmentEgressManager(
         return authorization;
     }
 
-    /// <summary>Rechecks that project-control authority is unchanged before an operation is accepted.</summary>
     internal Task EnsureRunEnvironmentControlAuthorizationUnchangedAsync(
         CurrentCallerRequest caller,
         EnvironmentOwnerIdentity owner,
@@ -796,7 +778,6 @@ public sealed class EnvironmentEgressManager(
             authorization);
     }
 
-    /// <summary>Requires the caller's run-bound placement-read grant to remain unchanged after resolving placement.</summary>
     internal async Task EnsureRunEnvironmentPlacementReadAuthorizationUnchangedAsync(
         CurrentCallerRequest caller,
         EnvironmentOwnerIdentity owner,
@@ -812,7 +793,6 @@ public sealed class EnvironmentEgressManager(
                 "The current caller's run-bound read authority changed during placement resolution.");
     }
 
-    /// <summary>Verifies Cilium policy state for Sandbox readiness while respecting an existing owner-lock scope.</summary>
     internal async Task<CiliumPolicyObservation> VerifyNetworkForSandboxAsync(
         CurrentCallerRequest caller,
         EnvironmentGenerationFence fence,
@@ -889,7 +869,6 @@ public sealed class EnvironmentEgressManager(
         return authorization;
     }
 
-    /// <summary>Re-reads current write authority and optional run-selection permission and rejects any change.</summary>
     internal async Task EnsureAuthorizationUnchangedAsync(
         CurrentCallerRequest caller,
         EnvironmentOwnerIdentity owner,
@@ -1008,7 +987,6 @@ public sealed class EnvironmentEgressManager(
             ? "authorization_changed"
             : exception.Code;
 
-    /// <summary>Compares caller identity, tenant, revision, project/run binding, and effective permissions.</summary>
     internal static bool SameAuthorizationContext(
         ProjectAuthorizationContextResponse left,
         ProjectAuthorizationContextResponse right)
@@ -1055,7 +1033,6 @@ public sealed class EnvironmentEgressManager(
         return true;
     }
 
-    /// <summary>Compiles an accepted selection and preserves the compiler's failure code for API handling.</summary>
     private static CompiledEgressIntent Compile(AuthorizedSelection selection)
     {
         var result = EgressIntentCompiler.Compile(selection.RunSelection);
@@ -1064,7 +1041,6 @@ public sealed class EnvironmentEgressManager(
         return result.Intent!;
     }
 
-    /// <summary>Resolves the selected network provider and checks that its options match the configured adapter.</summary>
     private static (ProviderResolver Resolver, NetworkPolicyResolution Resolution) ResolveNetworkProvider(
         AuthorizedSelection selection,
         CiliumEgressProviderOptions options,
@@ -1149,7 +1125,6 @@ public sealed class EnvironmentEgressManager(
         return (resolver, resolution.Value!);
     }
 
-    /// <summary>Returns a provider binding only for an observed object verified against the exact policy generation.</summary>
     private static ProviderResult<PinnedNetworkPolicyBinding> PinNetworkPolicy(
         ProviderResolver resolver,
         NetworkPolicyResolution resolution,
@@ -1183,11 +1158,9 @@ public sealed class EnvironmentEgressManager(
             observed.AppliedIntentGeneration ?? 0);
     }
 
-    /// <summary>Builds a not-ready result with a stable failure code and explanation.</summary>
     private static EnvironmentEgressOperationResult Failure(string code, string message) =>
         new(false, false, null, null, code, message);
 
-    /// <summary>Starts a trace span for an egress operation and records the requested generation when available.</summary>
     private static Activity? TraceOperation(string operation, long? requestedGeneration = null)
     {
         var activity = Activity.Current;
@@ -1239,7 +1212,6 @@ public sealed class EnvironmentEgressManager(
             activity?.SetTag("agentweaver.network_policy.resource_generation", resourceGeneration);
     }
 
-    /// <summary>Checks that an apply request has a valid owner fence and strictly increasing policy generation.</summary>
     private static void ValidateRequest(ApplyEnvironmentEgressRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -1252,14 +1224,12 @@ public sealed class EnvironmentEgressManager(
                 nameof(request.IdempotencyKey));
     }
 
-    /// <summary>Separates idempotency keys by effect kind so apply and revoke cannot alias one another.</summary>
     private static string EffectIdempotencyKey(
         string requestIdempotencyKey,
         EnvironmentNetworkEffectKind kind) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
             $"{kind}\0{requestIdempotencyKey}"))).ToLowerInvariant();
 
-    /// <summary>Pairs the accepted authorization context with the exact authorized run selection.</summary>
     internal sealed record AuthorizedSelection(
         ProjectAuthorizationContextResponse Authorization,
         EffectiveNetworkPolicySelection RunSelection)
@@ -1269,7 +1239,6 @@ public sealed class EnvironmentEgressManager(
         public string RunId => RunSelection.RunId;
     }
 
-    /// <summary>Carries a stable egress compilation code through orchestration to the API result.</summary>
     private sealed class EgressCompilationException(string code, string message) : Exception(message)
     {
         public string Code { get; } = code;

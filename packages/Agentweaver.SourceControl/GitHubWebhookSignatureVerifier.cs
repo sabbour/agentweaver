@@ -5,7 +5,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.SourceControl;
 
-/// <summary>Authenticated GitHub webhook fields admitted for a pinned repository.</summary>
 public sealed record GitHubWebhookEnvelope(
     string DeliveryId,
     string EventName,
@@ -16,19 +15,8 @@ public sealed record GitHubWebhookEnvelope(
     string? HeadSha,
     string? BaseSha);
 
-/// <summary>
-/// Verifies GitHub's HMAC signature over the raw request body and parses its pinned repository identity.
-/// The supplied webhook credential is invalidated after signature verification.
-/// </summary>
 public static class GitHubWebhookSignatureVerifier
 {
-    /// <summary>
-    /// Verifies a sha256 HMAC header against the unmodified body using a one-use webhook secret.
-    /// </summary>
-    /// <param name="rawBody">Exact request bytes received from GitHub.</param>
-    /// <param name="signatureHeader">GitHub's sha256 signature header.</param>
-    /// <param name="webhookSecret">Credential used for HMAC verification; invalidated before return.</param>
-    /// <returns><see langword="true"/> only when the header is well formed and its signature matches.</returns>
     public static bool VerifyRawBody(
         ReadOnlySpan<byte> rawBody,
         string? signatureHeader,
@@ -60,16 +48,6 @@ public static class GitHubWebhookSignatureVerifier
         }
     }
 
-    /// <summary>
-    /// Parses a previously verified payload and requires its repository name and numeric ID to match the pin.
-    /// </summary>
-    /// <param name="rawBody">Signed JSON request bytes.</param>
-    /// <param name="deliveryId">GitHub delivery identifier.</param>
-    /// <param name="eventName">GitHub event header.</param>
-    /// <param name="expectedRepository">Pinned owner and repository name.</param>
-    /// <param name="expectedProviderRepositoryId">Pinned numeric GitHub repository ID.</param>
-    /// <returns>A normalized webhook envelope.</returns>
-    /// <exception cref="SourceControlOperationException">Headers, JSON, repository identity, or pull-request SHAs are invalid.</exception>
     public static GitHubWebhookEnvelope ParseVerifiedPayload(
         ReadOnlySpan<byte> rawBody,
         string? deliveryId,
@@ -137,7 +115,6 @@ public static class GitHubWebhookSignatureVerifier
         }
     }
 
-    /// <summary>Converts GitHub's full_name field to the provider-neutral repository identity.</summary>
     private static SourceControlRepositoryIdentity ParseRepositoryIdentity(string fullName)
     {
         var parts = fullName.Split('/');
@@ -156,7 +133,6 @@ public static class GitHubWebhookSignatureVerifier
         }
     }
 
-    /// <summary>Reads a required non-empty string or rejects the payload.</summary>
     private static string ReadRequiredString(JsonElement source, string property)
     {
         if (source.TryGetProperty(property, out var value) &&
@@ -166,7 +142,6 @@ public static class GitHubWebhookSignatureVerifier
         throw InvalidWebhookPayload();
     }
 
-    /// <summary>Reads a required string nested under a JSON object.</summary>
     private static string ReadNestedRequiredString(
         JsonElement source,
         string parent,
@@ -178,7 +153,6 @@ public static class GitHubWebhookSignatureVerifier
         return ReadRequiredString(parentValue, property);
     }
 
-    /// <summary>Reads a required positive 64-bit integer from the payload.</summary>
     private static long ReadPositiveInt64(JsonElement source, string property)
     {
         if (source.TryGetProperty(property, out var value) &&
@@ -188,11 +162,9 @@ public static class GitHubWebhookSignatureVerifier
         throw InvalidWebhookPayload();
     }
 
-    /// <summary>Checks the 40-character hexadecimal format used for Git commit IDs.</summary>
     private static bool IsGitSha(string value) =>
         value.Length == 40 && value.All(Uri.IsHexDigit);
 
-    /// <summary>Creates the common invalid-payload failure.</summary>
     private static SourceControlOperationException InvalidWebhookPayload() =>
         new(SourceControlFailureCode.InvalidResponse, "The GitHub webhook payload is invalid.");
 }

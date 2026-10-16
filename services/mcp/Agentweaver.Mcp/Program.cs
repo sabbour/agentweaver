@@ -1,5 +1,3 @@
-// Product MCP host: validates bearer tokens, exposes owner APIs as stateless MCP tools,
-// and uses a mounted backend CA for Gateway TLS rather than accepting forwarded certificates.
 using Agentweaver.Abstractions;
 using Agentweaver.Mcp;
 using Agentweaver.Telemetry;

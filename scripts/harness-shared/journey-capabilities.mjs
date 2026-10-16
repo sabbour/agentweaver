@@ -1,4 +1,3 @@
-/** Capability menu requirements for the bounded P1 journeys on each supported surface. */
 const SNAPSHOTS = ['readRunStatus', 'readSessionStatus', 'readDecisions'];
 const JOURNEYS = {
   'gate-answer': {
@@ -28,10 +27,6 @@ const JOURNEYS = {
   },
 };
 
-/**
- * Ensure a live API, MCP, or UI menu contains the operations needed for a named P1 journey.
- * Returns the surface-specific required capability list or throws before the journey can run.
- */
 export function requireJourneyCapabilities({ api, mcp, ui }, journey, surface) {
   const required = Object.hasOwn(JOURNEYS, journey) ? JOURNEYS[journey] : null;
   if (!required) throw new Error('Unknown bounded P1 journey.');

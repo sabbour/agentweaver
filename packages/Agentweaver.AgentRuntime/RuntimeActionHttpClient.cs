@@ -3,15 +3,10 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.AgentRuntime;
 
-/// <summary>
-/// Obtains an owner-issued action admission and verifies the same receipt immediately before
-/// the runtime performs a guarded side effect.
-/// </summary>
 public sealed class RuntimeActionHttpClient(HttpClient client, Uri orchestratorAddress, RuntimeActorAuthorization actor)
 {
     private readonly Uri _address = RuntimeOwnerHttpTransport.RequireOwnerAddress(orchestratorAddress);
 
-    /// <summary>Builds a versioned request bound to registration, execution fence, input hash, and event ID.</summary>
     internal async Task RequireAsync(
         RuntimeRegistration registration, string actionId, ReadOnlyMemory<byte> input,
         Func<CancellationToken, Task> requireCurrentAuthority, CancellationToken cancellationToken,
@@ -27,10 +22,6 @@ public sealed class RuntimeActionHttpClient(HttpClient client, Uri orchestratorA
         await RequireAsync(request, requireCurrentAuthority, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Requires current authority before and after admission, then verifies the exact unchanged
-    /// owner response. A denial, stale receipt, or changed receipt fails closed.
-    /// </summary>
     internal async Task RequireAsync(
         RuntimeActionRequest request, Func<CancellationToken, Task> requireCurrentAuthority,
         CancellationToken cancellationToken)
@@ -57,7 +48,6 @@ public sealed class RuntimeActionHttpClient(HttpClient client, Uri orchestratorA
         cancellationToken.ThrowIfCancellationRequested();
     }
 
-    /// <summary>Convenience overload for a caller that already owns the stable action event ID.</summary>
     internal Task RequireAsync(
         RuntimeRegistration registration, string actionId, Guid eventId, ReadOnlyMemory<byte> input,
         Func<CancellationToken, Task> requireCurrentAuthority, CancellationToken cancellationToken,
@@ -65,7 +55,6 @@ public sealed class RuntimeActionHttpClient(HttpClient client, Uri orchestratorA
         RequireAsync(registration, actionId, input, requireCurrentAuthority, cancellationToken,
             costTurnId: costTurnId, eventId: eventId);
 
-    /// <summary>Retries one transport failure only after confirming the caller's authority remains current.</summary>
     private async Task<RuntimeActionAdmission> SendAdmissionAsync(
         string path, object request, Func<CancellationToken, Task> requireCurrentAuthority,
         CancellationToken cancellationToken)

@@ -1,19 +1,10 @@
 namespace Agentweaver.Identity.Broker;
 
-/// <summary>
-/// Current publication-grant producer boundary. It compares supplied binding candidates
-/// to reject mismatches, then deliberately fails closed because the inputs do not prove a
-/// publisher principal or a fresh Environment publication-operation authorization.
-/// </summary>
 internal sealed class RegistryPublicationGrantProducer
 {
     // Neither argument proves current owner state. This slice can reject inconsistent
     // bindings, but must fail closed until Identity has a real publisher principal and
     // a fresh Environment publication-operation proof.
-    /// <summary>
-    /// Rejects the first unequal binding component. Even equal candidates are denied until
-    /// authenticated publisher and Environment operation evidence are available.
-    /// </summary>
     public void Validate(
         RegistryPublicationGrantCandidate candidate,
         RegistryPublicationGrantCandidate comparison)

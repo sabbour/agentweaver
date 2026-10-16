@@ -9,7 +9,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Capabilities that the Cilium provider can advertise for managed egress policies.</summary>
 public static class CiliumEgressCapabilities
 {
     public const string L3L4 = "networkpolicy.l3l4";
@@ -18,7 +17,6 @@ public static class CiliumEgressCapabilities
     public const string Dns = "networkpolicy.dns";
 }
 
-/// <summary>Versioned Cilium provider settings, including the Kubernetes namespace and exact service selectors.</summary>
 public sealed record CiliumEgressProviderOptions(
     string Namespace,
     Version AdapterVersion,
@@ -26,7 +24,6 @@ public sealed record CiliumEgressProviderOptions(
     string OptionsRevision,
     ImmutableDictionary<string, ImmutableDictionary<string, string>> EndpointSelectors)
 {
-    /// <summary>Validates the namespace, option revision, and pinned Kubernetes service label selectors.</summary>
     public CiliumEgressProviderOptions Validate()
     {
         if (!IsDnsLabel(Namespace) || AdapterVersion is null ||
@@ -57,7 +54,6 @@ public sealed record CiliumEgressProviderOptions(
         return this;
     }
 
-    /// <summary>Returns the provider registration that matches the validated Cilium adapter configuration.</summary>
     public ProviderRegistration CreateRegistration()
     {
         Validate();
@@ -86,7 +82,6 @@ public sealed record CiliumEgressProviderOptions(
         value.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
 }
 
-    /// <summary>Builds hashed labels and a policy name that bind Kubernetes policy objects to one Environment owner.</summary>
 public sealed class EnvironmentEgressSelector
 {
     private EnvironmentEgressSelector(
@@ -113,7 +108,6 @@ public sealed class EnvironmentEgressSelector
             new KeyValuePair<string, string>("agentweaver.dev/environment-owner", OwnerLabel),
         ]);
 
-    /// <summary>Validates owner identifiers and derives stable non-reversible labels for a namespaced policy.</summary>
     public static EnvironmentEgressSelector Create(
         string environmentId,
         string tenantId,
@@ -158,7 +152,6 @@ public sealed class EnvironmentEgressSelector
     }
 }
 
-/// <summary>Metadata fields used when reading or writing a Cilium policy object.</summary>
 public sealed record CiliumPolicyMetadata(
     string Name,
     string Namespace,
@@ -168,42 +161,36 @@ public sealed record CiliumPolicyMetadata(
     long? Generation = null,
     string? Uid = null);
 
-/// <summary>JSON representation of the endpoint label selector in a Cilium policy.</summary>
 public sealed record CiliumEndpointSelector(ImmutableDictionary<string, string> MatchLabels)
 {
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
 }
 
-/// <summary>JSON representation of a Cilium DNS name or wildcard selector.</summary>
 public sealed record CiliumFqdnSelector(string? MatchName = null, string? MatchPattern = null)
 {
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
 }
 
-/// <summary>JSON representation of a Cilium CIDR destination selector.</summary>
 public sealed record CiliumCidrSelector(string Cidr)
 {
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
 }
 
-/// <summary>JSON representation of an egress port and transport protocol.</summary>
 public sealed record CiliumPort(string Port, string Protocol)
 {
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
 }
 
-/// <summary>JSON representation of an allowed DNS query pattern.</summary>
 public sealed record CiliumDnsRule(string MatchPattern)
 {
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
 }
 
-/// <summary>Combines permitted ports with optional DNS query rules for a Cilium egress rule.</summary>
 public sealed record CiliumPortRules(
     ImmutableArray<CiliumPort> Ports,
     CiliumDnsRuleCollection? Rules = null)
@@ -212,14 +199,12 @@ public sealed record CiliumPortRules(
     public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
 }
 
-/// <summary>Wraps the DNS selector collection used by the Cilium policy API.</summary>
 public sealed record CiliumDnsRuleCollection(ImmutableArray<CiliumDnsRule> Dns)
 {
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
 }
 
-/// <summary>JSON shape for one Cilium egress rule targeting endpoints, FQDNs, CIDRs, and ports.</summary>
 public sealed record CiliumEgressRuleDocument(
     ImmutableArray<CiliumEndpointSelector>? ToEndpoints = null,
     [property: JsonPropertyName("toFQDNs")] ImmutableArray<CiliumFqdnSelector>? ToFqDns = null,
@@ -230,14 +215,12 @@ public sealed record CiliumEgressRuleDocument(
     public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
 }
 
-/// <summary>Declares whether the policy enables Cilium's default ingress or egress denial.</summary>
 public sealed record CiliumDefaultDeny(bool Ingress, bool Egress)
 {
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
 }
 
-/// <summary>Policy selectors, allowed egress rules, optional explicit denies, and default-deny behavior.</summary>
 public sealed record CiliumPolicySpec(
     CiliumEndpointSelector EndpointSelector,
     ImmutableArray<CiliumEgressRuleDocument> Egress,
@@ -248,7 +231,6 @@ public sealed record CiliumPolicySpec(
     public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
 }
 
-/// <summary>Serialized Kubernetes CiliumNetworkPolicy object handled by the adapter.</summary>
 public sealed record CiliumNetworkPolicyDocument(
     string ApiVersion,
     string Kind,
@@ -259,13 +241,11 @@ public sealed record CiliumNetworkPolicyDocument(
     public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
 }
 
-/// <summary>Failure code and message for invalid or stale Cilium policy operations.</summary>
 public sealed class CiliumPolicyException(string code, string message) : Exception(message)
 {
     public string Code { get; } = code;
 }
 
-/// <summary>Observed Cilium policy object state and the generation/hash evidence available to the service.</summary>
 public sealed record CiliumPolicyObservation(
     bool Exists,
     bool ObjectVerified,
@@ -276,27 +256,22 @@ public sealed record CiliumPolicyObservation(
     bool DatapathEnforcementVerified,
     bool Revoked = false);
 
-/// <summary>Provides create, read, replace, and delete operations for namespaced Cilium policy objects.</summary>
 public interface ICiliumPolicyResourceStore
 {
-    /// <summary>Reads one policy by namespace and name, returning null when it is absent.</summary>
     Task<CiliumNetworkPolicyDocument?> GetAsync(
         string @namespace,
         string name,
         CancellationToken cancellationToken);
 
-    /// <summary>Creates a new policy object and returns the server's representation.</summary>
     Task<CiliumNetworkPolicyDocument> CreateAsync(
         CiliumNetworkPolicyDocument policy,
         CancellationToken cancellationToken);
 
-    /// <summary>Replaces a policy only at the expected Kubernetes resource version.</summary>
     Task<CiliumNetworkPolicyDocument> ReplaceAsync(
         CiliumNetworkPolicyDocument policy,
         string expectedResourceVersion,
         CancellationToken cancellationToken);
 
-    /// <summary>Deletes a policy only at the expected Kubernetes resource version.</summary>
     Task DeleteAsync(
         string @namespace,
         string name,
@@ -304,7 +279,6 @@ public interface ICiliumPolicyResourceStore
         CancellationToken cancellationToken);
 }
 
-/// <summary>Renders, applies, verifies, and revokes owner-scoped Cilium network policy objects.</summary>
 public sealed class CiliumEgressPolicyAdapter(
     ICiliumPolicyResourceStore store,
     CiliumEgressProviderOptions options)
@@ -320,7 +294,6 @@ public sealed class CiliumEgressPolicyAdapter(
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
-    /// <summary>Requires the selected network provider candidate to match the configured Cilium adapter revision.</summary>
     public CiliumEgressPolicyAdapter ValidateOptions(EffectiveProviderCandidate candidate)
     {
         options.Validate();
@@ -338,10 +311,6 @@ public sealed class CiliumEgressPolicyAdapter(
         return this;
     }
 
-    /// <summary>
-    /// Applies a rendered policy using generation checks and Kubernetes resource-version compare-and-swap.
-    /// A repeated generation is accepted only when its content is identical.
-    /// </summary>
     public async Task<CiliumNetworkPolicyDocument> ApplyAsync(
         EnvironmentEgressSelector selector,
         CompiledEgressIntent intent,
@@ -400,7 +369,6 @@ public sealed class CiliumEgressPolicyAdapter(
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Compares the live policy object with the exact expected generation, hash, labels, and rules.</summary>
     public async Task<CiliumPolicyObservation> VerifyAsync(
         EnvironmentEgressSelector selector,
         CompiledEgressIntent intent,
@@ -433,7 +401,6 @@ public sealed class CiliumEgressPolicyAdapter(
             false);
     }
 
-    /// <summary>Writes a generation-fenced revocation tombstone and reads back the resulting object state.</summary>
     public async Task<CiliumPolicyObservation> RevokeAsync(
         EnvironmentEgressSelector selector,
         long generation,
@@ -488,7 +455,6 @@ public sealed class CiliumEgressPolicyAdapter(
         return ObserveRevocation(selector, generation, afterReplace);
     }
 
-    /// <summary>Reads back and checks that the expected revocation generation is present.</summary>
     public async Task<CiliumPolicyObservation> VerifyRevocationAsync(
         EnvironmentEgressSelector selector,
         long generation,
@@ -503,7 +469,6 @@ public sealed class CiliumEgressPolicyAdapter(
         return ObserveRevocation(selector, generation, actual);
     }
 
-    /// <summary>Returns only the Cilium capabilities required by rules in the compiled intent.</summary>
     public static ImmutableHashSet<string> GetVerifiedCapabilities(CompiledEgressIntent intent)
     {
         var capabilities = ImmutableHashSet.CreateBuilder<string>(StringComparer.Ordinal);
@@ -517,7 +482,6 @@ public sealed class CiliumEgressPolicyAdapter(
         return capabilities.ToImmutable();
     }
 
-    /// <summary>Renders the compiled intent with owner labels, generation/hash annotations, and default-deny behavior.</summary>
     private CiliumNetworkPolicyDocument Render(
         EnvironmentEgressSelector selector,
         CompiledEgressIntent intent,
@@ -620,7 +584,6 @@ public sealed class CiliumEgressPolicyAdapter(
                 new CiliumDefaultDeny(Ingress: false, Egress: true)));
     }
 
-    /// <summary>Creates a generation-pinned deny-all tombstone for this Environment selector.</summary>
     private static CiliumNetworkPolicyDocument RenderRevocation(
         EnvironmentEgressSelector selector,
         long generation)
@@ -659,7 +622,6 @@ public sealed class CiliumEgressPolicyAdapter(
                 new CiliumDefaultDeny(Ingress: false, Egress: true)));
     }
 
-    /// <summary>Verifies that a live policy is the exact owner-scoped revocation tombstone for the requested generation.</summary>
     private static CiliumPolicyObservation ObserveRevocation(
         EnvironmentEgressSelector selector,
         long generation,
@@ -689,11 +651,9 @@ public sealed class CiliumEgressPolicyAdapter(
             verified);
     }
 
-    /// <summary>Checks the explicit revocation annotation on a stored policy object.</summary>
     private static bool IsRevoked(CiliumNetworkPolicyDocument policy) =>
         policy.Metadata.Annotations.GetValueOrDefault(IntentRevokedAnnotation) == "true";
 
-    /// <summary>Resolves an admitted Kubernetes service to the exact configured namespace and pod labels.</summary>
     private CiliumEndpointSelector ServiceSelector(string service)
     {
         if (!options.EndpointSelectors.TryGetValue(service, out var labels))
@@ -708,7 +668,6 @@ public sealed class CiliumEgressPolicyAdapter(
             ? new CiliumFqdnSelector(MatchPattern: name)
             : new CiliumFqdnSelector(MatchName: name);
 
-    /// <summary>Rejects a live policy whose labels or namespace bind it to a different owner selector.</summary>
     private static void EnsureSameOwner(
         EnvironmentEgressSelector selector,
         CiliumNetworkPolicyDocument current)
@@ -727,7 +686,6 @@ public sealed class CiliumEgressPolicyAdapter(
         selector.MatchLabels.All(pair =>
             labels.TryGetValue(pair.Key, out var value) && value == pair.Value);
 
-    /// <summary>Parses the positive intent generation from the policy annotation or fails closed.</summary>
     private static long ReadIntentGeneration(CiliumNetworkPolicyDocument policy)
     {
         var value = policy.Metadata.Annotations.GetValueOrDefault(IntentGenerationAnnotation);
@@ -742,7 +700,6 @@ public sealed class CiliumEgressPolicyAdapter(
                 "The stored Cilium policy has no valid intent generation.");
     }
 
-    /// <summary>Compares canonical policy specs so JSON property ordering does not affect idempotency checks.</summary>
     private static bool SameSpec(CiliumPolicySpec left, CiliumPolicySpec right) =>
         string.Equals(CanonicalJson(left), CanonicalJson(right), StringComparison.Ordinal);
 
@@ -756,7 +713,6 @@ public sealed class CiliumEgressPolicyAdapter(
         return Canonicalize(document.RootElement);
     }
 
-    /// <summary>Sorts JSON object properties recursively while preserving array order for stable policy comparison.</summary>
     private static string Canonicalize(JsonElement element) => element.ValueKind switch
     {
         JsonValueKind.Object => "{" + string.Join(",", element.EnumerateObject()
@@ -767,7 +723,6 @@ public sealed class CiliumEgressPolicyAdapter(
     };
 }
 
-/// <summary>HTTP implementation of Cilium policy resource operations against the Kubernetes API.</summary>
 public sealed class KubernetesCiliumPolicyResourceStore(HttpClient httpClient) : ICiliumPolicyResourceStore
 {
     private const string CollectionPath = "apis/cilium.io/v2/namespaces";
@@ -777,14 +732,12 @@ public sealed class KubernetesCiliumPolicyResourceStore(HttpClient httpClient) :
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
-    /// <summary>Reads the namespaced policy and returns null when Kubernetes reports that it is absent.</summary>
     public Task<CiliumNetworkPolicyDocument?> GetAsync(
         string @namespace,
         string name,
         CancellationToken cancellationToken) =>
         SendAsync(HttpMethod.Get, ItemPath(@namespace, name), null, cancellationToken, allowNotFound: true);
 
-    /// <summary>Creates a policy and requires Kubernetes to return the stored object.</summary>
     public async Task<CiliumNetworkPolicyDocument> CreateAsync(
         CiliumNetworkPolicyDocument policy,
         CancellationToken cancellationToken)
@@ -796,7 +749,6 @@ public sealed class KubernetesCiliumPolicyResourceStore(HttpClient httpClient) :
             "Kubernetes accepted Cilium policy creation without returning the applied object.");
     }
 
-    /// <summary>Replaces a policy only when its resource version matches the version observed by the caller.</summary>
     public async Task<CiliumNetworkPolicyDocument> ReplaceAsync(
         CiliumNetworkPolicyDocument policy,
         string expectedResourceVersion,
@@ -814,7 +766,6 @@ public sealed class KubernetesCiliumPolicyResourceStore(HttpClient httpClient) :
             "Kubernetes accepted Cilium policy replacement without returning the applied object.");
     }
 
-    /// <summary>Deletes a policy with a Kubernetes resource-version precondition; absence is treated as complete.</summary>
     public async Task DeleteAsync(
         string @namespace,
         string name,
@@ -838,7 +789,6 @@ public sealed class KubernetesCiliumPolicyResourceStore(HttpClient httpClient) :
         ThrowForStatus(response.StatusCode);
     }
 
-    /// <summary>Sends one Kubernetes API request, rejects redirects, and validates the returned policy JSON.</summary>
     private async Task<CiliumNetworkPolicyDocument?> SendAsync(
         HttpMethod method,
         string path,
@@ -872,13 +822,11 @@ public sealed class KubernetesCiliumPolicyResourceStore(HttpClient httpClient) :
         }
     }
 
-    /// <summary>Maps Kubernetes conflict and failure statuses to stable Cilium policy error codes.</summary>
     private static void ThrowForStatus(HttpStatusCode statusCode) =>
         throw new CiliumPolicyException(
             statusCode == HttpStatusCode.Conflict ? "kubernetes_conflict" : "kubernetes_api_failure",
             $"Kubernetes Cilium policy operation failed with HTTP {(int)statusCode}.");
 
-    /// <summary>Rejects redirects so authenticated Kubernetes requests cannot be forwarded to another endpoint.</summary>
     private static void RejectRedirect(HttpResponseMessage response)
     {
         if (EnvironmentHttpTransport.IsRedirect(response))

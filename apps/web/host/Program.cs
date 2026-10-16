@@ -12,7 +12,6 @@ var app = builder.Build();
 var webRoot = app.Environment.WebRootPath ?? Path.Combine(app.Environment.ContentRootPath, "wwwroot");
 var indexPath = Path.Combine(webRoot, "index.html");
 
-// Apply baseline browser protections to both static content and application endpoints.
 app.Use(async (context, next) =>
 {
     context.Response.Headers["X-Content-Type-Options"] = "nosniff";
@@ -20,8 +19,6 @@ app.Use(async (context, next) =>
     await next(context);
 });
 
-// Serve deployment-specific public settings without caching; values are base64 encoded so
-// configuration text cannot become executable JavaScript when embedded in the response.
 app.Use(async (context, next) =>
 {
     if (context.Request.Path.Value != "/env-config.js")
@@ -59,8 +56,6 @@ app.Use(async (context, next) =>
         context.RequestAborted);
 });
 
-// Cache static assets under the asset path for a year; the prefix is separately prevented from falling
-// through to the SPA document so missing files remain real 404 responses.
 app.UseStaticFiles(new StaticFileOptions
 {
     OnPrepareResponse = context =>
@@ -80,8 +75,6 @@ app.MapWhen(
         return Task.CompletedTask;
     }));
 
-// OAuth providers redirect to these frontend routes. Avoid caching callback pages or sending
-// callback query values as a referrer to later requests.
 app.MapGet("/auth/github/copilot-app/callback", async context =>
 {
     context.Response.Headers["Cache-Control"] = "no-store";
@@ -98,14 +91,11 @@ app.MapGet("/auth/callback", async context =>
     await context.Response.SendFileAsync(indexPath, context.RequestAborted);
 });
 
-// Liveness reports process availability; readiness also requires the built SPA entry document.
 app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
 app.MapGet("/health/ready", () => File.Exists(indexPath)
     ? Results.Ok(new { status = "ready" })
     : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
-// Let client-side routes resolve through the SPA entry document after explicit API/static routes.
 app.MapFallbackToFile("index.html");
 app.Run();
 
-/// <summary>Exposes the top-level host entry point as a partial type.</summary>
 public partial class Program { }

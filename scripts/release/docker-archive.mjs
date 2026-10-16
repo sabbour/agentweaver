@@ -1,12 +1,7 @@
-/** Reads Docker archive metadata and verifies that it contains the requested image reference. */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 
-/**
- * Extracts the image config from a Docker archive and returns its digest and label metadata.
- * Invalid archives, missing references, or command failures throw.
- */
 export function readDockerArchiveConfig(archive, imageReference) {
   const manifest = JSON.parse(execFileSync('tar', ['-xOf', archive, 'manifest.json'], {
     maxBuffer: 4 * 1024 * 1024,

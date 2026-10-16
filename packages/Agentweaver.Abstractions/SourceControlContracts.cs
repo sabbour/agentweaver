@@ -4,20 +4,14 @@ using System.Text.Json.Serialization;
 
 namespace Agentweaver.Abstractions;
 
-/// <summary>Purpose values used when Source Control requests API, checkout, webhook, or app credentials.</summary>
 public static class SourceControlSecretPurposes
 {
-    /// <summary>Purpose for repository API calls.</summary>
     public const string Api = "source-control.api";
-    /// <summary>Purpose for checkout operations.</summary>
     public const string Checkout = "source-control.checkout";
-    /// <summary>Purpose for webhook signature verification.</summary>
     public const string Webhook = "source-control.webhook";
-    /// <summary>Purpose for a GitHub App private key held by Identity.</summary>
     public const string GitHubAppPrivateKey = "source-control.github-app.private-key";
 }
 
-/// <summary>Credential ownership model configured for a Source Control repository.</summary>
 [JsonConverter(typeof(SourceControlAuthModeJsonConverter))]
 public enum SourceControlAuthMode
 {
@@ -25,11 +19,8 @@ public enum SourceControlAuthMode
     GitHubApp
 }
 
-/// <summary>Maps the stable wire values for Source Control authentication modes.</summary>
 public sealed class SourceControlAuthModeJsonConverter : JsonConverter<SourceControlAuthMode>
 {
-    /// <summary>Reads the supported secret or GitHub App spelling and rejects other JSON values.</summary>
-    /// <exception cref="JsonException">The wire value is not a supported string.</exception>
     public override SourceControlAuthMode Read(
         ref Utf8JsonReader reader,
         Type typeToConvert,
@@ -44,8 +35,6 @@ public sealed class SourceControlAuthModeJsonConverter : JsonConverter<SourceCon
             }
             : throw new JsonException("The SourceControl auth mode must be a string.");
 
-    /// <summary>Writes the canonical lower-camel wire value for the authentication mode.</summary>
-    /// <exception cref="JsonException">The enum value is not supported.</exception>
     public override void Write(
         Utf8JsonWriter writer,
         SourceControlAuthMode value,
@@ -60,7 +49,6 @@ public sealed class SourceControlAuthModeJsonConverter : JsonConverter<SourceCon
     }
 }
 
-/// <summary>Capabilities advertised by a Source Control provider adapter.</summary>
 public static class SourceControlCapabilities
 {
     public const string RepositoryRead = "repository.read";
@@ -72,18 +60,14 @@ public static class SourceControlCapabilities
     public const string Merge = "merge";
 }
 
-/// <summary>Stable provider catalog IDs for Source Control implementations.</summary>
 public static class SourceControlProviderIds
 {
     public const string GitHub = "github";
 }
 
-/// <summary>Owner and repository name pinned by project Source Control settings.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record SourceControlRepositoryIdentity
 {
-    /// <summary>Creates a repository identity with provider-compatible owner and name segments.</summary>
-    /// <exception cref="ArgumentException">Either segment is invalid or exceeds its length limit.</exception>
     public SourceControlRepositoryIdentity(string owner, string name)
     {
         Owner = ValidateSegment(owner, nameof(owner), allowDots: false);
@@ -92,11 +76,9 @@ public sealed record SourceControlRepositoryIdentity
 
     public string Owner { get; }
     public string Name { get; }
-    /// <summary>Canonical owner/name form used for display and provider requests.</summary>
     [JsonIgnore]
     public string FullName => Owner + "/" + Name;
 
-    /// <summary>Checks one repository path segment, allowing dots only in repository names.</summary>
     private static string ValidateSegment(string value, string paramName, bool allowDots)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value, paramName);
@@ -111,16 +93,9 @@ public sealed record SourceControlRepositoryIdentity
     }
 }
 
-/// <summary>
-/// Projects &amp; Config settings that select one repository and its auth mode.
-/// Secret references are versioned identities only; secret bytes remain in Identity.
-/// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record SourceControlProjectSettings
 {
-    /// <summary>Creates repository settings and enforces the selected auth mode's required references.</summary>
-    /// <exception cref="ArgumentException">The auth mode and secret/Identity references are inconsistent.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">The auth mode is unsupported.</exception>
     [JsonConstructor]
     public SourceControlProjectSettings(
         SourceControlRepositoryIdentity repository,
@@ -143,26 +118,21 @@ public sealed record SourceControlProjectSettings
 
     public SourceControlRepositoryIdentity Repository { get; }
 
-    /// <summary>Authentication mode; absent in legacy settings and inferred by consumers as secret-based.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SourceControlAuthMode? AuthMode { get; }
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? IdentityConnectionId { get; }
 
-    /// <summary>Exact Identity-owned API secret reference for secret-based authentication.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SecretRef? ApiSecretReference { get; }
 
-    /// <summary>Optional exact secret reference used by repository checkout.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SecretRef? CheckoutSecretReference { get; }
 
-    /// <summary>Optional exact secret reference used to verify Source Control webhooks.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SecretRef? WebhookSecretReference { get; }
 
-    /// <summary>Enforces mutually exclusive secret-based and Identity GitHub App configuration.</summary>
     private static string? ValidateConnectionBinding(
         SourceControlAuthMode? authMode,
         SecretRef? apiSecretReference,
@@ -196,7 +166,6 @@ public sealed record SourceControlProjectSettings
 
 }
 
-/// <summary>Provider negotiation result for a configured repository and its opaque remote ID.</summary>
 public sealed record SourceControlRepositoryNegotiation(
     SourceControlRepositoryIdentity Repository,
     ResourceNegotiation Resource,
@@ -204,26 +173,19 @@ public sealed record SourceControlRepositoryNegotiation(
     string DefaultBranch,
     bool IsPrivate);
 
-/// <summary>Per-operation adapter input carrying the run-pinned provider, repository, and short-lived credential.</summary>
 public sealed record SourceControlOperationContext(
     PinnedProviderBinding Binding,
     SourceControlRepositoryIdentity Repository,
     SecretCredential Credential);
 
-/// <summary>Input for creating an issue in the selected repository.</summary>
 public sealed record SourceControlIssueRequest(string Title, string? Body);
 
-/// <summary>Provider-returned issue identity, URL, title, and state.</summary>
 public sealed record SourceControlIssue(
     long Number,
     string Title,
     Uri HtmlUrl,
     string State);
 
-/// <summary>
-/// Pull-request creation request pinned to expected head and base commits so the adapter
-/// can reject an unexpected repository state before creating or reusing a PR.
-/// </summary>
 public sealed record SourceControlPullRequestRequest(
     string Title,
     string? Body,
@@ -233,7 +195,6 @@ public sealed record SourceControlPullRequestRequest(
     string ExpectedBaseSha,
     bool Draft);
 
-/// <summary>Reports whether a matching pull request was newly created, reused, or only observed.</summary>
 public enum SourceControlPullRequestDisposition
 {
     Created,
@@ -241,7 +202,6 @@ public enum SourceControlPullRequestDisposition
     Observed
 }
 
-/// <summary>Provider-returned pull request branches, commit pins, state, and disposition.</summary>
 public sealed record SourceControlPullRequest(
     long Number,
     Uri HtmlUrl,
@@ -253,7 +213,6 @@ public sealed record SourceControlPullRequest(
     bool Merged,
     SourceControlPullRequestDisposition Disposition);
 
-/// <summary>Normalized review decisions returned by a Source Control provider.</summary>
 public enum SourceControlReviewState
 {
     Approved,
@@ -264,14 +223,12 @@ public enum SourceControlReviewState
     Unknown
 }
 
-/// <summary>Review identity, reviewer, decision, and optional submission time.</summary>
 public sealed record SourceControlReview(
     long Id,
     string Reviewer,
     SourceControlReviewState State,
     DateTimeOffset? SubmittedAt);
 
-/// <summary>Supported pull-request integration strategies.</summary>
 public enum SourceControlMergeMethod
 {
     Merge,
@@ -279,14 +236,12 @@ public enum SourceControlMergeMethod
     Rebase
 }
 
-/// <summary>Merge request pinned to the exact expected pull-request head and base commits.</summary>
 public sealed record SourceControlMergeRequest(
     long PullRequestNumber,
     string ExpectedHeadSha,
     string ExpectedBaseSha,
     SourceControlMergeMethod Method);
 
-/// <summary>Expected branches and commit IDs against which the provider assesses merge readiness.</summary>
 public sealed record SourceControlMergeReadinessRequest(
     long PullRequestNumber,
     string ExpectedHeadBranch,
@@ -294,7 +249,6 @@ public sealed record SourceControlMergeReadinessRequest(
     string ExpectedBaseBranch,
     string ExpectedBaseSha);
 
-/// <summary>Normalized result state for a required check or commit status.</summary>
 public enum SourceControlCheckState
 {
     Success,
@@ -309,7 +263,6 @@ public enum SourceControlCheckState
     Unknown
 }
 
-/// <summary>Identifies whether check evidence came from a check run or commit status API.</summary>
 public enum SourceControlCheckEvidenceSource
 {
     CheckRun,
@@ -317,7 +270,6 @@ public enum SourceControlCheckEvidenceSource
     Unknown
 }
 
-/// <summary>One required check's exact context, app, commit, state, and evidence source.</summary>
 public sealed record SourceControlRequiredCheckEvidence(
     string Context,
     long? AppId,
@@ -325,18 +277,12 @@ public sealed record SourceControlRequiredCheckEvidence(
     SourceControlCheckState State,
     SourceControlCheckEvidenceSource Source);
 
-/// <summary>
-/// Readiness assessment tied to the requested branch and commit pins. Readiness is false
-/// unless requirements are known, the PR remains open and unmerged, and all required checks
-/// succeeded for the expected head SHA.
-/// </summary>
 public sealed record SourceControlMergeReadiness(
     SourceControlMergeReadinessRequest Request,
     SourceControlPullRequest PullRequest,
     bool RequirementsKnown,
     ImmutableArray<SourceControlRequiredCheckEvidence> RequiredChecks)
 {
-    /// <summary>Whether the exact requested PR state and every required check permit merge.</summary>
     public bool IsReady =>
         RequirementsKnown &&
         string.Equals(PullRequest.State, "open", StringComparison.OrdinalIgnoreCase) &&
@@ -351,67 +297,51 @@ public sealed record SourceControlMergeReadiness(
             string.Equals(check.CommitSha, Request.ExpectedHeadSha, StringComparison.OrdinalIgnoreCase));
 }
 
-/// <summary>Provider-confirmed merge commit and strategy.</summary>
 public sealed record SourceControlMergeOutcome(
     string MergeSha,
     SourceControlMergeMethod Method);
 
-/// <summary>
-/// Provider-neutral operations for repository negotiation, issue/PR access, reviews,
-/// check readiness, and merging. Implementations must honor each run binding and its
-/// required capability before performing external provider calls.
-/// </summary>
 public interface ISourceControlAdapter
 {
-    /// <summary>Stable provider catalog ID for this adapter.</summary>
     string ProviderId { get; }
-    /// <summary>Capabilities this adapter can provide for a selected repository.</summary>
     ImmutableHashSet<string> AdvertisedCapabilities { get; }
 
-    /// <summary>Validates repository access and returns the opaque provider resource negotiation.</summary>
     Task<SourceControlRepositoryNegotiation> NegotiateRepositoryAsync(
         ProviderCandidate candidate,
         SourceControlRepositoryIdentity repository,
         SecretCredential credential,
         CancellationToken cancellationToken);
 
-    /// <summary>Rechecks the current run binding and required capability before an operation.</summary>
     Task VerifyCurrentBindingAsync(
         SourceControlOperationContext context,
         string requiredCapability,
         CancellationToken cancellationToken);
 
-    /// <summary>Creates an issue in the bound repository.</summary>
     Task<SourceControlIssue> CreateIssueAsync(
         SourceControlOperationContext context,
         SourceControlIssueRequest request,
         CancellationToken cancellationToken);
 
-    /// <summary>Creates or reuses a pull request only when the branch and commit pins match.</summary>
     Task<SourceControlPullRequest> CreateOrReusePullRequestAsync(
         SourceControlOperationContext context,
         SourceControlPullRequestRequest request,
         CancellationToken cancellationToken);
 
-    /// <summary>Reads one pull request from the bound repository.</summary>
     Task<SourceControlPullRequest> ReadPullRequestAsync(
         SourceControlOperationContext context,
         long pullRequestNumber,
         CancellationToken cancellationToken);
 
-    /// <summary>Reads reviews for one pull request from the bound repository.</summary>
     Task<ImmutableArray<SourceControlReview>> ReadReviewsAsync(
         SourceControlOperationContext context,
         long pullRequestNumber,
         CancellationToken cancellationToken);
 
-    /// <summary>Reads branch, head/base commit, and required-check evidence for merge eligibility.</summary>
     Task<SourceControlMergeReadiness> ReadMergeReadinessAsync(
         SourceControlOperationContext context,
         SourceControlMergeReadinessRequest request,
         CancellationToken cancellationToken);
 
-    /// <summary>Merges only the pull request whose expected head and base still match the request.</summary>
     Task<SourceControlMergeOutcome> MergePullRequestAsync(
         SourceControlOperationContext context,
         SourceControlMergeRequest request,

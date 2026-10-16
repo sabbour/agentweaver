@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { CodeSnippet, CopilotWorkspacePattern } from '..';
-/** Shows a composed Copilot workspace with navigation, response segments, and an editable prompt. */
 export function CopilotWorkspaceExample() {
   const [prompt, setPrompt] = useState('Draft the remediation comment for the deployment review.');
 

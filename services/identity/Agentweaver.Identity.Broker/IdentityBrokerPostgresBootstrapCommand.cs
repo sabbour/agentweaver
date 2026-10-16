@@ -8,7 +8,6 @@ using AzureCliCredential = AzureIdentity::Azure.Identity.AzureCliCredential;
 
 namespace Agentweaver.Identity.Broker;
 
-/// <summary>Validated connection and role identities for the one-time broker database bootstrap.</summary>
 internal sealed record IdentityBrokerPostgresBootstrapOptions(
     string ConnectionString,
     string PostgresHost,
@@ -19,12 +18,6 @@ internal sealed record IdentityBrokerPostgresBootstrapOptions(
     string MigrationRole,
     string MigrationPrincipalObjectId);
 
-/// <summary>
-/// Creates or verifies the broker's isolated PostgreSQL database and least-privilege
-/// runtime/migration roles. It refuses partial or unexpected state, binds roles to the
-/// configured managed identities, and applies the canonical runtime grants only after
-/// migrations have created the exact expected tables.
-/// </summary>
 internal static class IdentityBrokerPostgresBootstrapCommand
 {
     private const string Argument = "--bootstrap-identity-postgres";
@@ -66,11 +59,6 @@ internal static class IdentityBrokerPostgresBootstrapCommand
     public static bool ContainsArgument(string[] args) =>
         args.Contains(Argument, StringComparer.Ordinal) || args.Contains(VerifyArgument, StringComparer.Ordinal);
 
-    /// <summary>
-    /// Reads and validates the bootstrap configuration, including the approved Entra admin
-    /// tunnel, role names, database name and distinct managed-identity object IDs.
-    /// Invalid or password-bearing connections are rejected before database contact.
-    /// </summary>
     public static IdentityBrokerPostgresBootstrapOptions ReadOptions(IConfiguration configuration)
     {
         var connectionString = Required(configuration.GetConnectionString("IdentityBrokerBootstrap"),
@@ -126,12 +114,6 @@ internal static class IdentityBrokerPostgresBootstrapCommand
             migrationPrincipal);
     }
 
-    /// <summary>
-    /// Obtains an Entra admin token, verifies the connected identity and either creates
-    /// only the initial database/roles or checks the existing state. Verification mode is
-    /// read-only; normal mode applies runtime table privileges only after migration history
-    /// exists and verifies the resulting grants.
-    /// </summary>
     public static async Task RunAsync(
         IConfiguration configuration,
         Func<TokenCredential>? credentialFactory = null,
@@ -196,11 +178,6 @@ internal static class IdentityBrokerPostgresBootstrapCommand
         Console.WriteLine($"IDENTITY_POSTGRES_BOOTSTRAP_OK database={options.DatabaseName} schema=identity_broker");
     }
 
-    /// <summary>
-    /// Applies the embedded canonical runtime grant definition only when the migration
-    /// history and exact migration-owned table set exist. It verifies the narrow privileges
-    /// afterward; returns <see langword="false"/> while migrations are absent.
-    /// </summary>
     internal static async Task<bool> ApplyRuntimeGrantsIfMigratedAsync(
         NpgsqlConnection connection,
         string runtimeRole,
@@ -417,11 +394,6 @@ internal static class IdentityBrokerPostgresBootstrapCommand
         await schemaTransaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Verifies role attributes, managed-identity mappings, admin memberships, role
-    /// separation and database/schema privileges. Any mismatch aborts instead of adopting
-    /// or repairing an unexpected database state.
-    /// </summary>
     internal static async Task VerifyStateAsync(
         NpgsqlConnection adminConnection,
         string adminConnectionString,

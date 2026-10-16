@@ -4,14 +4,12 @@ import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-/** Read one required documentation CI value without silently accepting an empty setting. */
 function required(env, name) {
   const value = env[name];
   if (!value) throw new Error(`Missing ${name}.`);
   return value;
 }
 
-/** Validate the v1 push metadata and create the deterministic documentation artifact identity. */
 export function createArtifactMetadata(env) {
   const repository = required(env, 'DOCS_REPOSITORY');
   const branch = required(env, 'DOCS_BRANCH');
@@ -41,7 +39,6 @@ export function createArtifactMetadata(env) {
   };
 }
 
-/** Copy the built documentation site and its validated CI metadata into the artifact directory. */
 async function stageArtifact(env = process.env, root = repoRoot) {
   const metadata = createArtifactMetadata(env);
   const distPath = path.join(root, 'docs', '.vitepress', 'dist');

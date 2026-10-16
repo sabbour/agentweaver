@@ -7,10 +7,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Orchestrator.Core;
 
-/// <summary>
-/// Implements the bounded Canvas JSON Schema profile used by Core. Unsupported keywords, excessive
-/// nesting or size, duplicate object keys, and numbers outside the exact supported range are rejected.
-/// </summary>
 internal static class CanvasSchemaSubsetValidator
 {
     internal const int MaximumSchemaBytes = 32 * 1024;
@@ -52,7 +48,6 @@ internal static class CanvasSchemaSubsetValidator
         "exclusiveMaximum"
     };
 
-    /// <summary>Validates schema syntax, supported keywords, numeric bounds, and document depth/size.</summary>
     internal static ImmutableArray<CanvasContractValidationIssue> ValidateSchema(
         CanvasJsonSchema? schema,
         string path)
@@ -92,7 +87,6 @@ internal static class CanvasSchemaSubsetValidator
         return issues.ToImmutable();
     }
 
-    /// <summary>Returns the first issue when an instance exceeds bounds or fails the supported schema.</summary>
     internal static CanvasContractValidationIssue? ValidateInstance(
         CanvasJsonSchema schema,
         JsonElement instance,
@@ -603,7 +597,6 @@ internal static class CanvasSchemaSubsetValidator
         string message) =>
         issues.Add(new CanvasContractValidationIssue(code, path, message));
 
-    /// <summary>Exact decimal represented as an integer coefficient and fractional scale.</summary>
     private readonly record struct ExactJsonNumber(BigInteger Coefficient, int Scale)
     {
         public bool IsInteger => Scale == 0;

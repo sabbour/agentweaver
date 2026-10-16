@@ -1,14 +1,9 @@
-/** Browser route that captures the GitHub Copilot callback before mounting the app. */
 export const COPILOT_CALLBACK_PATH = '/auth/github/copilot-app/callback';
-/** Same-origin popup message discriminator for the Copilot authorization result. */
 export const COPILOT_CALLBACK_MESSAGE_TYPE = 'agentweaver.copilot-user.callback';
-/** Maximum accepted OAuth state length. */
 export const COPILOT_CALLBACK_STATE_LIMIT = 512;
-/** Maximum accepted authorization-code length. */
 export const COPILOT_CALLBACK_CODE_LIMIT = 4096;
 const COPILOT_CALLBACK_PARAMETER_NAMES = new Set(['state', 'code', 'error']);
 
-/** Exact success or user-denial payload relayed from the GitHub Copilot callback window. */
 export type CopilotCallbackMessage =
   | { type: typeof COPILOT_CALLBACK_MESSAGE_TYPE; state: string; code: string }
   | { type: typeof COPILOT_CALLBACK_MESSAGE_TYPE; state: string; error: 'access_denied' };
@@ -19,7 +14,6 @@ declare global {
   }
 }
 
-/** Rejects empty, oversized, or control-character callback values before relaying them. */
 function isBoundedParameter(value: unknown, limit: number): value is string {
   return typeof value === 'string' &&
     value.length > 0 &&
@@ -30,13 +24,11 @@ function isBoundedParameter(value: unknown, limit: number): value is string {
     });
 }
 
-/** Ensures callback objects contain only the explicitly allowed fields. */
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   const actual = Object.keys(value);
   return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 }
 
-/** Extracts the unique state only when the authorization URL targets the expected secure callback. */
 export function expectedCopilotCallbackState(
   authorizationUri: string,
   callbackUri: string,
@@ -68,7 +60,6 @@ export function expectedCopilotCallbackState(
   return states[0];
 }
 
-/** Parses the allowed callback query fields and rejects duplicates or unrelated parameters. */
 export function parseCopilotCallbackParameters(search: string): CopilotCallbackMessage | null {
   const parameters = new URLSearchParams(search);
   if ([...parameters.keys()].some((key) => !COPILOT_CALLBACK_PARAMETER_NAMES.has(key))) return null;
@@ -96,7 +87,6 @@ export function parseCopilotCallbackParameters(search: string): CopilotCallbackM
   return null;
 }
 
-/** Validates a relayed popup message against the callback's exact bounded contract. */
 export function isCopilotCallbackMessage(value: unknown): value is CopilotCallbackMessage {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const message = value as Record<string, unknown>;

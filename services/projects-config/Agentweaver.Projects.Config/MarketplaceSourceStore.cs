@@ -3,14 +3,10 @@ using Npgsql;
 
 namespace Agentweaver.Projects.Config;
 
-/// <summary>
-/// Persists project-scoped marketplace sources and translates database uniqueness and revision races into domain conflicts.
-/// </summary>
 public sealed class MarketplaceSourceStore(ProjectsConfigDbContext db) : IProjectMarketplaceSourceStore
 {
     private const string ActiveNameConstraint = "ux_marketplace_sources_project_name_active";
 
-    /// <summary>Lists a project's marketplace sources in stable name order, optionally including removed records.</summary>
     public async Task<IReadOnlyList<ProjectMarketplaceSourceRecord>> ListByProjectAsync(
         string projectId,
         bool includeRemoved,
@@ -26,7 +22,6 @@ public sealed class MarketplaceSourceStore(ProjectsConfigDbContext db) : IProjec
             .ConfigureAwait(false);
     }
 
-    /// <summary>Reads a source only when both its project and source IDs match.</summary>
     public Task<ProjectMarketplaceSourceRecord?> GetAsync(
         string projectId,
         Guid sourceId,
@@ -36,9 +31,6 @@ public sealed class MarketplaceSourceStore(ProjectsConfigDbContext db) : IProjec
                 source => source.ProjectId == projectId && source.SourceId == sourceId,
                 cancellationToken);
 
-    /// <summary>
-    /// Inserts a source at its supplied initial revision; a duplicate active project name becomes a name conflict.
-    /// </summary>
     public async Task<ProjectMarketplaceSourceRecord> CreateAsync(
         ProjectMarketplaceSourceRecord source,
         CancellationToken cancellationToken)
@@ -57,10 +49,6 @@ public sealed class MarketplaceSourceStore(ProjectsConfigDbContext db) : IProjec
         }
     }
 
-    /// <summary>
-    /// Replaces source details only at the expected active revision and advances the revision atomically.
-    /// </summary>
-    /// <exception cref="MarketplaceSourceException">The source is missing, stale, removed, or conflicts by active name.</exception>
     public async Task<ProjectMarketplaceSourceRecord> UpdateAsync(
         string projectId,
         Guid sourceId,
@@ -111,10 +99,6 @@ public sealed class MarketplaceSourceStore(ProjectsConfigDbContext db) : IProjec
         }
     }
 
-    /// <summary>
-    /// Tombstones an active source at the expected revision; source history remains stored for audit and references.
-    /// </summary>
-    /// <exception cref="MarketplaceSourceException">The source is missing, removed, or has a different revision.</exception>
     public async Task<ProjectMarketplaceSourceRecord> RemoveAsync(
         string projectId,
         Guid sourceId,
@@ -155,7 +139,6 @@ public sealed class MarketplaceSourceStore(ProjectsConfigDbContext db) : IProjec
         }
     }
 
-    /// <summary>Recognizes only the active-name unique constraint so unrelated database failures remain visible.</summary>
     private static bool IsActiveNameConflict(DbUpdateException exception) =>
         exception.InnerException is PostgresException
         {

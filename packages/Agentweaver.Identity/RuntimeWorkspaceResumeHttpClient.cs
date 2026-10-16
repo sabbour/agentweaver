@@ -4,10 +4,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity;
 
-/// <summary>
-/// Request to restore a suspended workspace into a fresh environment generation while
-/// preserving the source manifest, cache, and workspace-data identity.
-/// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeWorkspaceResumeRequest(
     int ContractVersion,
@@ -19,7 +15,6 @@ public sealed record RuntimeWorkspaceResumeRequest(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public EnvironmentRuntimeWorkspaceContext? RestoredWorkspace { get; init; }
 
-    /// <summary>Validates the source suspension and optional restored placement/workspace context.</summary>
     public RuntimeWorkspaceResumeRequest Validate()
     {
         ArgumentNullException.ThrowIfNull(SourceManifest);
@@ -53,7 +48,6 @@ public sealed record RuntimeWorkspaceResumeRequest(
         return this;
     }
 
-    /// <summary>Requires the new workspace attachment and placement to match the next environment generation.</summary>
     internal void ValidateWorkspace(EnvironmentRuntimeWorkspaceContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -93,14 +87,12 @@ public sealed record RuntimeWorkspaceResumeRequest(
     }
 }
 
-/// <summary>Owner receipt for the newly prepared sandbox and workspace attachment.</summary>
 public sealed record RuntimeWorkspaceResumePlacementReceipt(
     int ContractVersion,
     Guid OperationId,
     Guid SourceManifestId,
     EnvironmentRuntimeWorkspaceContext Workspace)
 {
-    /// <summary>Matches the prepared placement to the request and validates its workspace invariants.</summary>
     public RuntimeWorkspaceResumePlacementReceipt ValidateFor(RuntimeWorkspaceResumeRequest request)
     {
         request.Validate();
@@ -115,7 +107,6 @@ public sealed record RuntimeWorkspaceResumePlacementReceipt(
     }
 }
 
-/// <summary>Host receipt reporting the restored workspace tree digest.</summary>
 public sealed record RuntimeHostWorkspaceResumeReceipt(
     int ContractVersion,
     Guid OperationId,
@@ -123,7 +114,6 @@ public sealed record RuntimeHostWorkspaceResumeReceipt(
     EnvironmentRuntimeWorkspaceContext Workspace,
     string ActualTreeSha256)
 {
-    /// <summary>Checks that the host restored the requested workspace and exact source tree digest.</summary>
     public RuntimeHostWorkspaceResumeReceipt ValidateFor(RuntimeWorkspaceResumeRequest request)
     {
         request.Validate();
@@ -137,7 +127,6 @@ public sealed record RuntimeHostWorkspaceResumeReceipt(
     }
 }
 
-/// <summary>Owner verification that placement and workspace restoration completed for the new intent generation.</summary>
 public sealed record RuntimeWorkspaceResumeVerificationReceipt(
     int ContractVersion,
     Guid OperationId,
@@ -146,7 +135,6 @@ public sealed record RuntimeWorkspaceResumeVerificationReceipt(
     RuntimeHostWorkspaceResumeReceipt HostReceipt,
     long NetworkIntentGeneration)
 {
-    /// <summary>Checks host receipt, workspace identity, and the next network-intent generation.</summary>
     public RuntimeWorkspaceResumeVerificationReceipt ValidateFor(RuntimeWorkspaceResumeRequest request)
     {
         request.Validate();
@@ -163,13 +151,11 @@ public sealed record RuntimeWorkspaceResumeVerificationReceipt(
     }
 }
 
-/// <summary>Coordinates prepare and verification requests with the Environment owner during workspace resume.</summary>
 public sealed class RuntimeWorkspaceResumeHttpClient(HttpClient client, Uri environmentOwnerAddress)
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly Uri _owner = RuntimeOwnerHttpTransport.RequireOwnerAddress(environmentOwnerAddress);
 
-    /// <summary>Requests a new placement before restored workspace details are supplied.</summary>
     public async Task<RuntimeWorkspaceResumePlacementReceipt> PrepareAsync(
         RuntimeWorkspaceResumeRequest request, RuntimeActorAuthorization actor,
         CancellationToken cancellationToken)
@@ -186,7 +172,6 @@ public sealed class RuntimeWorkspaceResumeHttpClient(HttpClient client, Uri envi
         return result.ValidateFor(request);
     }
 
-    /// <summary>Verifies the new placement and restored workspace against owner evidence.</summary>
     public async Task<RuntimeWorkspaceResumeVerificationReceipt> VerifyAsync(
         RuntimeWorkspaceResumeRequest request, RuntimeActorAuthorization actor,
         CancellationToken cancellationToken)
@@ -203,7 +188,6 @@ public sealed class RuntimeWorkspaceResumeHttpClient(HttpClient client, Uri envi
         return result.ValidateFor(request);
     }
 
-    /// <summary>Compares contracts by their serialized JSON shape.</summary>
     public static bool SameJson<T>(T expected, T actual) =>
         JsonElement.DeepEquals(
             JsonSerializer.SerializeToElement(expected, JsonOptions),

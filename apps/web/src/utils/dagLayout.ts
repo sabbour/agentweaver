@@ -1,11 +1,7 @@
 import Dagre from 'dagre';
 import type { Edge, Node } from '@xyflow/react';
-
-/** Shared node sizing, DAG placement, and orthogonal connector routing for React Flow views. */
 export const NODE_W = 200;
-/** Default node height used when no node-specific sizing hint is available. */
 export const NODE_H = 145;
-/** Default separation between adjacent DAG ranks, in pixels. */
 export const DAG_NODE_SEP = 96;
 
 // Compact "pill" node dimensions for the coordinator topology DAG. Node heights are DIFFERENTIATED
@@ -25,36 +21,26 @@ export const DAG_NODE_SEP = 96;
 // (FIXED_NODE_W) since they only carry an icon + title (+ model caption). Both widths are fed to
 // dagre as per-node hints so columns stay cleanly aligned.
 export const SUBTASK_NODE_W = 250;
-/** Width for compact coordinator, gate, review, merge, and system nodes. */
 export const FIXED_NODE_W = 184;
 // Back-compat alias: existing imports refer to the wide (subtask) pill width.
 export const COMPACT_NODE_W = SUBTASK_NODE_W;
-/** Rendered body height of a subtask card, excluding the model caption below it. */
 export const SUBTASK_CARD_H = 88;
-/** Subtask layout height, including the reserved model-caption area. */
 export const SUBTASK_NODE_H = 112;
-/** Rendered body height of a compact system or gate card. */
 export const FIXED_CARD_H = 48;
-/** Compact node layout height including its reserved model caption. */
 export const FIXED_NODE_H = 56;
 // A compact node that also shows a model caption below the card (Coordinator / RAI): small card +
 // the same caption reserve the subtask node uses (SUBTASK_NODE_H − SUBTASK_CARD_H = 24px).
 export const FIXED_NODE_WITH_CAPTION_H = FIXED_CARD_H + (SUBTASK_NODE_H - SUBTASK_CARD_H);
-/** Height reserved while the human-review card shows its decision controls. */
 export const REVIEW_EXPANDED_NODE_H = 96;
-/** Reserved layout height for a pod status indicator attached to a node. */
 export const POD_INDICATOR_NODE_H = 28;
 // Back-compat aliases: existing imports refer to the subtask (tall) pill dimensions.
 export const COMPACT_CARD_H = SUBTASK_CARD_H;
-/** Backward-compatible alias for the taller subtask node layout height. */
 export const COMPACT_NODE_H = SUBTASK_NODE_H;
 
 // Workflow definitions need more visual mass than the compact runtime stages. The viewer and editor
 // share this footprint so layout hints, edge routing, and the rendered cards stay aligned.
 export const WORKFLOW_DEFINITION_NODE_W = 240;
-/** Shared width alias used by workflow graph pills. */
 export const WORKFLOW_PILL_NODE_W = WORKFLOW_DEFINITION_NODE_W;
-/** Workflow-node layout heights keyed by the canonical node type. */
 export const WORKFLOW_PILL_NODE_H: Record<string, number> = {
   agent: 80,
   subtask: 80,
@@ -62,13 +48,9 @@ export const WORKFLOW_PILL_NODE_H: Record<string, number> = {
   action: 80,
   terminal: 68,
 };
-/** Fallback workflow-node height when a type has no explicit sizing entry. */
 export const WORKFLOW_PILL_DEFAULT_NODE_H = 80;
-/** Vertical space reserved for controls attached to the workflow editor canvas. */
 export const WORKFLOW_EDITOR_ACTIONS_HEIGHT = 44;
-/** Shared React Flow viewport options for workflow diagrams. */
 export const WORKFLOW_FIT_VIEW_OPTIONS = { padding: 0.1, maxZoom: 1.8 } as const;
-/** Minimum rank count before a linear workflow is treated as long for layout selection. */
 export const WORKFLOW_LONG_LINEAR_MIN_RANKS = 5;
 
 // Back-compat export retained for consumers that used the former staircase
@@ -83,7 +65,6 @@ export const NODE_TYPE_W: Record<string, number> = {
   action:   170,
   terminal: 150,
 };
-/** Dagre height hints keyed by each workflow node type. */
 export const NODE_TYPE_H: Record<string, number> = {
   agent:    160,
   subtask:  180,
@@ -102,12 +83,9 @@ export const RENDERED_NODE_TYPE_H: Record<string, number> = {
   terminal: 150,
 };
 
-/** Fallback layout height when a rendered workflow node type is unknown. */
 export const RENDERED_DEFAULT_NODE_H = 220;
-/** Layout height reserved for the larger coordinator topology cards. */
 export const RENDERED_TOPOLOGY_NODE_H = 260;
 
-/** Rank direction and spacing options accepted by the DAG layout functions. */
 export interface LayoutOpts {
   rankdir?: 'LR' | 'TB';
   rankSep?: number;
@@ -115,7 +93,6 @@ export interface LayoutOpts {
   crossAlign?: 'start' | 'center';
 }
 
-/** Grid-specific viewport and rank limits for balanced layouts. */
 export interface BalancedGridLayoutOpts extends LayoutOpts {
   viewportWidth?: number;
   viewportHeight?: number;
@@ -123,7 +100,6 @@ export interface BalancedGridLayoutOpts extends LayoutOpts {
   maxColumns?: number;
 }
 
-/** Banded staircase options for long or branching directed graphs. */
 export interface StaircaseLayoutOpts extends LayoutOpts {
   /** Desired width/height of the graph bounding box (matches the panel's aspect). */
   targetAspect?: number;
@@ -133,26 +109,21 @@ export interface StaircaseLayoutOpts extends LayoutOpts {
   stepOffset?: number;
 }
 
-/** Per-node width and height supplied to layout and routing calculations. */
 export interface NodeSizeHint {
   width: number;
   height: number;
 }
 
-/** A two-dimensional coordinate used by connector geometry helpers. */
 export interface ConnectorPoint {
   x: number;
   y: number;
 }
 
-/** A connector position and direction angle for a rendered arrow marker. */
 export interface ConnectorDirectionMarker extends ConnectorPoint {
   angle: number;
 }
 
-/** Minimum gap between a topology card and its routed connector. */
 export const TOPOLOGY_CONNECTOR_CARD_CLEARANCE = 14;
-/** Minimum connector distance reserved for direction markers. */
 export const TOPOLOGY_CONNECTOR_DIRECTION_MARKER_SPACING = 160;
 
 /**
@@ -182,7 +153,6 @@ export function layoutBBox(
   return { w: Math.max(1, maxX - minX), h: Math.max(1, maxY - minY) };
 }
 
-/** Routed orthogonal connector path with its label position and raw points. */
 export interface SteppedConnectorRoute {
   path: string;
   labelX: number;
@@ -205,7 +175,6 @@ function dedupePoints(points: ConnectorPoint[]): ConnectorPoint[] {
   });
 }
 
-/** Position and orientation of a visual overpass at a connector crossing. */
 export interface ConnectorBridge {
   x: number;
   y: number;
@@ -324,13 +293,11 @@ export function findConnectorBridges(edges: Edge[], nodes: Node[]): Map<string, 
   return bridges;
 }
 
-/** Point where related connector routes split or converge. */
 export interface ConnectorJunction {
   x: number;
   y: number;
 }
 
-/** Graph identity and routed points used to detect logical connector junctions. */
 export interface RoutedConnector {
   id: string;
   source: string;
@@ -338,7 +305,6 @@ export interface RoutedConnector {
   points: ConnectorPoint[];
 }
 
-/** A safe point and approach direction for a loopback joining its forward route. */
 export interface ConnectorContinuationJoin {
   point: ConnectorPoint;
   direction: 'left' | 'right' | 'top' | 'bottom';
@@ -546,7 +512,6 @@ export function findRoutedConnectorJunctions(routes: RoutedConnector[]): Map<str
   return junctions;
 }
 
-/** Routes spine edges and reports their logical shared split/merge points. */
 export function findConnectorJunctions(edges: Edge[], nodes: Node[]): Map<string, ConnectorJunction[]> {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const routes = edges
@@ -559,7 +524,6 @@ export function findConnectorJunctions(edges: Edge[], nodes: Node[]): Map<string
   return findRoutedConnectorJunctions(routes);
 }
 
-/** Converts orthogonal points into a rounded SVG path, removing duplicate vertices. */
 export function roundedOrthogonalPath(points: ConnectorPoint[], radius = 8): string {
   const clean = dedupePoints(points);
   if (clean.length === 0) return '';
@@ -642,7 +606,6 @@ export function buildBridgedOrthogonalPath(
   return commands.join(' ');
 }
 
-/** Computes a two-bend connector route, choosing its main axis from orientation or endpoint distance. */
 export function buildSteppedConnectorRoute(input: {
   sourceX: number;
   sourceY: number;
@@ -676,7 +639,6 @@ export function buildSteppedConnectorRoute(input: {
   };
 }
 
-/** Finds the point halfway along the total length of a routed connector. */
 export function connectorRouteLabelPoint(points: ConnectorPoint[]): ConnectorPoint {
   const clean = dedupePoints(points);
   if (clean.length === 0) return { x: 0, y: 0 };
@@ -702,7 +664,6 @@ export function connectorRouteLabelPoint(points: ConnectorPoint[]): ConnectorPoi
   return clean[clean.length - 1];
 }
 
-/** Places direction arrows along a route at roughly even distance intervals. */
 export function connectorDirectionMarkers(
   points: ConnectorPoint[],
   maxSpacing = TOPOLOGY_CONNECTOR_DIRECTION_MARKER_SPACING,
@@ -743,7 +704,6 @@ export function connectorDirectionMarkers(
   return markers;
 }
 
-/** Returns the workflow-card footprint including optional editor action controls. */
 export function workflowNodeSizeHint(
   nodeType?: string | null,
   opts: { withEditorActions?: boolean } = {},
@@ -756,7 +716,6 @@ export function workflowNodeSizeHint(
   };
 }
 
-/** Structural facts used to choose and size a workflow graph layout. */
 export interface WorkflowLayoutAnalysis {
   rankCount: number;
   hasBranching: boolean;
@@ -764,10 +723,8 @@ export interface WorkflowLayoutAnalysis {
   isLongLinear: boolean;
 }
 
-/** Currently supported layout strategy for a workflow definition graph. */
 export type WorkflowDefinitionLayoutMode = 'balanced-grid';
 
-/** Laid-out workflow nodes, their bounding box, and the analysis used to render them. */
 export interface WorkflowDefinitionLayoutResult {
   nodes: Node[];
   mode: WorkflowDefinitionLayoutMode;
@@ -790,7 +747,6 @@ interface BandedLayoutOptions {
 }
 
 const BANDED_MARGIN = 24;
-/** Vertical separation between parallel connector lanes in a topology graph. */
 export const TOPOLOGY_CONNECTOR_LANE_GAP = 34;
 const BANDED_LANE_STEP = TOPOLOGY_CONNECTOR_LANE_GAP;
 const BANDED_LABEL_CHAR_W = 7;
@@ -1107,7 +1063,6 @@ function layoutBandedLane(
   });
 }
 
-/** Computes stable rank, branch, parallelism, and long-linear-chain information. */
 export function analyzeWorkflowLayout(nodes: Node[], edges: Edge[]): WorkflowLayoutAnalysis {
   if (nodes.length === 0) {
     return { rankCount: 0, hasBranching: false, hasParallelRank: false, isLongLinear: false };
@@ -1177,7 +1132,6 @@ export function analyzeWorkflowLayout(nodes: Node[], edges: Edge[]): WorkflowLay
   return { rankCount, hasBranching, hasParallelRank, isLongLinear };
 }
 
-/** Lays out editor nodes in a bounded balanced grid and returns its measured footprint. */
 export function layoutWorkflowDefinitionNodes(
   nodes: Node[],
   edges: Edge[],
@@ -1199,7 +1153,6 @@ export function layoutWorkflowDefinitionNodes(
   };
 }
 
-/** Selects a readable viewport height from a measured workflow bounding box. */
 export function workflowDefinitionViewportHeight(bbox: { w: number; h: number }): number {
   if (bbox.w === 0 || bbox.h === 0) return 320;
   return Math.min(520, Math.max(300, Math.ceil(bbox.h + 80)));

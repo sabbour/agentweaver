@@ -1,12 +1,10 @@
 namespace Agentweaver.Projects.Config;
 
-/// <summary>Applies current project authority and revision rules to marketplace source persistence operations.</summary>
 public sealed class ProjectMarketplaceSourceService(
     IProjectMarketplaceSourceStore store,
     ProjectsConfigService projects,
     TimeProvider timeProvider)
 {
-    /// <summary>Lists source metadata only for a project the caller can currently read.</summary>
     public async Task<IReadOnlyList<ProjectMarketplaceSourceRecord>> ListAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -21,7 +19,6 @@ public sealed class ProjectMarketplaceSourceService(
             .ConfigureAwait(false);
     }
 
-    /// <summary>Returns an active source only when the expected revision still matches for browsing.</summary>
     public async Task<ProjectMarketplaceSourceRecord> GetForBrowseAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -43,7 +40,6 @@ public sealed class ProjectMarketplaceSourceService(
         return source;
     }
 
-    /// <summary>Returns an active source at the expected revision after checking current project write authority.</summary>
     public async Task<ProjectMarketplaceSourceRecord> GetForImportAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -65,7 +61,6 @@ public sealed class ProjectMarketplaceSourceService(
         return source;
     }
 
-    /// <summary>Normalizes source details and creates revision 1 inside the project's serialized write transaction.</summary>
     public async Task<ProjectMarketplaceSourceRecord> CreateAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -103,7 +98,6 @@ public sealed class ProjectMarketplaceSourceService(
             .ConfigureAwait(false);
     }
 
-    /// <summary>Updates a source at its expected revision inside the project authority transaction.</summary>
     public async Task<ProjectMarketplaceSourceRecord> UpdateAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -133,7 +127,6 @@ public sealed class ProjectMarketplaceSourceService(
             .ConfigureAwait(false);
     }
 
-    /// <summary>Marks a source removed at its expected revision without physically deleting its history.</summary>
     public async Task<ProjectMarketplaceSourceRecord> RemoveAsync(
         ProjectAuthorizationContext caller,
         string projectId,

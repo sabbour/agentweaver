@@ -8,14 +8,12 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.SourceControl;
 
-/// <summary>One path, mode, digest, and byte length in an output manifest.</summary>
 public sealed record GitWorkspaceCapturedOutputFile(
     string Path,
     string Mode,
     string Sha256,
     long ByteLength);
 
-/// <summary>Canonical inventory binding captured output files to a repository workspace generation.</summary>
 public sealed record GitWorkspaceCapturedOutputManifest(
     int ContractVersion,
     string WorkspaceId,
@@ -28,7 +26,6 @@ public sealed record GitWorkspaceCapturedOutputManifest(
     string OutputTreeSha,
     ImmutableArray<GitWorkspaceCapturedOutputFile> Files);
 
-/// <summary>Manifest, patch, file package, and digests for a captured workspace result.</summary>
 public sealed record GitWorkspaceCaptureDocument(
     GitWorkspaceCapturedOutputManifest Manifest,
     byte[] ManifestBytes,
@@ -38,10 +35,6 @@ public sealed record GitWorkspaceCaptureDocument(
     byte[] PackageBytes,
     string PackageSha256);
 
-/// <summary>
-/// Builds and verifies bounded capture documents for Git workspace outputs.
-/// Canonical manifests and per-file hashes bind exported bytes to the exact repository inventory.
-/// </summary>
 public static class GitWorkspaceCapturePackage
 {
     private static readonly byte[] Magic = Encoding.ASCII.GetBytes("AWSCAP01");
@@ -52,10 +45,6 @@ public static class GitWorkspaceCapturePackage
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
     };
 
-    /// <summary>Creates a manifest and bounded package from captured workspace files and patch text.</summary>
-    /// <param name="capture">Workspace identity and captured file content.</param>
-    /// <returns>Canonical manifest, patch, package, and their SHA-256 digests.</returns>
-    /// <exception cref="GitWorkspaceException">The capture is corrupt or exceeds an output limit.</exception>
     public static GitWorkspaceCaptureDocument Create(GitWorkspaceCapture capture)
     {
         ArgumentNullException.ThrowIfNull(capture);
@@ -145,8 +134,6 @@ public static class GitWorkspaceCapturePackage
             Hash(package));
     }
 
-    /// <summary>Serializes a consistent capture document using the versioned binary framing format.</summary>
-    /// <exception cref="ArgumentException">Any provided manifest, digest, patch, or package is inconsistent.</exception>
     public static byte[] SerializeDocument(GitWorkspaceCaptureDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
@@ -175,8 +162,6 @@ public static class GitWorkspaceCapturePackage
         return bytes;
     }
 
-    /// <summary>Determines whether a document has a complete bounded header and all declared sections.</summary>
-    /// <returns><see langword="true"/> when the document is incomplete; a foreign or invalid header throws.</returns>
     public static bool IsIncompleteDocument(ReadOnlySpan<byte> bytes)
     {
         var prefixLength = Math.Min(bytes.Length, DocumentMagic.Length);
@@ -195,8 +180,6 @@ public static class GitWorkspaceCapturePackage
             (ulong)manifestLength + patchLength + packageLength;
     }
 
-    /// <summary>Parses a complete bounded document and verifies its canonical manifest and file package.</summary>
-    /// <exception cref="ArgumentException">The framing, section lengths, manifest, or package is invalid.</exception>
     public static GitWorkspaceCaptureDocument ParseDocument(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length < ProducedRunCaptureLimits.DocumentHeaderBytes ||
@@ -228,7 +211,6 @@ public static class GitWorkspaceCapturePackage
             patchBytes, Hash(patchBytes), packageBytes, packageHash);
     }
 
-    /// <summary>Parses a bounded canonical JSON manifest and validates its bindings and file inventory.</summary>
     public static GitWorkspaceCapturedOutputManifest ParseManifest(ReadOnlySpan<byte> bytes)
     {
         if (bytes.Length is 0 or > ProducedRunCaptureLimits.MaximumManifestBytes)
@@ -242,7 +224,6 @@ public static class GitWorkspaceCapturePackage
         return manifest;
     }
 
-    /// <summary>Checks package framing, declared file lengths, aggregate digest, and every file digest.</summary>
     public static void VerifyPackage(
         byte[] package,
         GitWorkspaceCapturedOutputManifest manifest,
@@ -279,7 +260,6 @@ public static class GitWorkspaceCapturePackage
             throw new ArgumentException("The captured output package contains trailing bytes.", nameof(package));
     }
 
-    /// <summary>Verifies a package and returns one exact file's bytes, or throws when that path is absent.</summary>
     public static byte[] ExtractFile(
         byte[] package,
         GitWorkspaceCapturedOutputManifest manifest,
@@ -300,11 +280,9 @@ public static class GitWorkspaceCapturePackage
         throw new FileNotFoundException("The captured output path does not exist.", path);
     }
 
-    /// <summary>Computes the lower-case SHA-256 digest used in capture metadata.</summary>
     public static string Hash(ReadOnlySpan<byte> bytes) =>
         Convert.ToHexStringLower(SHA256.HashData(bytes));
 
-    /// <summary>Validates manifest identity, path safety, unique files, supported modes, and byte limits.</summary>
     public static void ValidateManifest(GitWorkspaceCapturedOutputManifest manifest)
     {
         ArgumentNullException.ThrowIfNull(manifest);
@@ -341,7 +319,6 @@ public static class GitWorkspaceCapturePackage
         }
     }
 
-    /// <summary>Validates one captured file's safe path, mode, size, content length, and digest.</summary>
     private static void ValidateFileMetadata(GitWorkspaceCapturedFile file)
     {
         if (!IsSafePath(file.Path) ||
@@ -355,7 +332,6 @@ public static class GitWorkspaceCapturePackage
                 "The captured workspace contains an invalid file.");
     }
 
-    /// <summary>Rejects rooted, traversal, metadata, and otherwise unsafe repository-relative paths.</summary>
     private static bool IsSafePath(string? path) =>
         !string.IsNullOrWhiteSpace(path) &&
         path.Length <= 4096 &&
@@ -368,11 +344,9 @@ public static class GitWorkspaceCapturePackage
         !string.Equals(path, ".git", StringComparison.OrdinalIgnoreCase) &&
         !path.StartsWith(".git/", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Checks the 40-hex-character object ID format used for Git commits and trees.</summary>
     private static bool IsSha(string? value) =>
         value is { Length: 40 } && value.All(Uri.IsHexDigit);
 
-    /// <summary>Checks the 64-character lower-case SHA-256 format used for content digests.</summary>
     private static bool IsSha256(string? value) =>
         value is { Length: 64 } &&
         value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');

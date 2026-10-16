@@ -3,27 +3,18 @@ using System.Text.Json;
 
 namespace Agentweaver.Abstractions;
 
-/// <summary>
-/// Immutable descriptor for one managed-gateway check, bound to the applied policy and
-/// reviewed remote-tool snapshot that authorize the target.
-/// </summary>
 public sealed record RemoteMcpManagedGatewayGateDescriptor(
     int ContractVersion,
     RemoteMcpCurrentGatewayPolicyBinding GatewayPolicy,
     RemoteToolResultSnapshotBinding SnapshotBinding)
 {
-    /// <summary>Prevents descriptor details from being emitted by default formatting.</summary>
     public override string ToString() => nameof(RemoteMcpManagedGatewayGateDescriptor) + " [REDACTED]";
 }
 
-/// <summary>Names the state-changing or verification operation performed on a managed gateway.</summary>
 public enum RemoteMcpManagedGatewayOperation { Apply, Verify, Revoke }
-
-/// <summary>Reports whether the in-process managed-gateway handler is active or revoked.</summary>
 public enum RemoteMcpManagedGatewayGateState { Active, Revoked }
 
 // This receipt proves only the state of an in-process handler, not forced network mediation.
-/// <summary>Handler receipt tied to a descriptor hash and one handler instance.</summary>
 public sealed record RemoteMcpManagedGatewayPolicyReceipt(
     int ContractVersion,
     RemoteMcpManagedGatewayOperation Operation,
@@ -31,29 +22,20 @@ public sealed record RemoteMcpManagedGatewayPolicyReceipt(
     Guid HandlerInstanceId,
     RemoteMcpManagedGatewayGateState State);
 
-/// <summary>Owner interface for applying, verifying, and revoking a managed gateway policy.</summary>
 public interface IRemoteMcpManagedGatewayPolicy
 {
-    /// <summary>Activates handling for the supplied exact policy and snapshot descriptor.</summary>
     Task<RemoteMcpManagedGatewayPolicyReceipt> ApplyAsync(
         RemoteMcpManagedGatewayGateDescriptor descriptor, CancellationToken cancellationToken);
-
-    /// <summary>Reports whether the matching handler instance remains active.</summary>
     Task<RemoteMcpManagedGatewayPolicyReceipt> VerifyAsync(
         RemoteMcpManagedGatewayGateDescriptor descriptor, CancellationToken cancellationToken);
-
-    /// <summary>Revokes the matching handler instance and returns its resulting state.</summary>
     Task<RemoteMcpManagedGatewayPolicyReceipt> RevokeAsync(
         RemoteMcpManagedGatewayGateDescriptor descriptor, CancellationToken cancellationToken);
 }
 
-/// <summary>Builds and checks the descriptor hash and operation receipt for managed-gateway policy.</summary>
 public static class RemoteMcpManagedGatewayContract
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    /// <summary>Creates a descriptor only from a validated current-call acknowledgment.</summary>
-    /// <exception cref="ArgumentException">The acknowledgment does not match the request or pins are invalid.</exception>
     public static RemoteMcpManagedGatewayGateDescriptor CreateDescriptor(
         RemoteMcpCurrentCallVerificationRequest request,
         RemoteMcpCurrentCallVerificationAcknowledgment acknowledgment)
@@ -65,8 +47,6 @@ public static class RemoteMcpManagedGatewayContract
         return descriptor;
     }
 
-    /// <summary>Rejects descriptors with missing, stale, noncanonical, or malformed pins.</summary>
-    /// <exception cref="ArgumentException">The descriptor is not an exact current reviewed-call binding.</exception>
     public static void Validate(RemoteMcpManagedGatewayGateDescriptor descriptor)
     {
         ArgumentNullException.ThrowIfNull(descriptor);
@@ -100,15 +80,12 @@ public static class RemoteMcpManagedGatewayContract
             throw new ArgumentException("A canonical target endpoint is required.", nameof(descriptor));
     }
 
-    /// <summary>Computes the stable lowercase SHA-256 hash of a validated serialized descriptor.</summary>
     public static string DescriptorHash(RemoteMcpManagedGatewayGateDescriptor descriptor)
     {
         Validate(descriptor);
         return Hash(JsonSerializer.SerializeToUtf8Bytes(descriptor, JsonOptions));
     }
 
-    /// <summary>Checks that a receipt proves the requested operation on the descriptor's handler instance.</summary>
-    /// <exception cref="ArgumentException">The receipt has a different operation, hash, instance, or state.</exception>
     public static void ValidateReceipt(
         RemoteMcpManagedGatewayGateDescriptor descriptor,
         RemoteMcpManagedGatewayOperation operation,

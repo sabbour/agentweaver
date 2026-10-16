@@ -1,7 +1,5 @@
 import type { Scenario, ScenarioNode } from './types';
 
-/** Computes specialist dispatch waves for the animated landing-page scenario player. */
-
 /** A dispatchable specialist is any `agent` role node. Structural nodes
  *  (coordinator / outcome_plan / work_plan / review) are never dispatched on a
  *  wave — they gate the run around the specialists. */

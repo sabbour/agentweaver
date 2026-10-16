@@ -1,8 +1,6 @@
 import { apiClient } from '../api/apiClient';
 import { useEffect, useState } from 'react';
 import type { RuntimeInfo } from '../api/types';
-
-/** Runtime details exposed to UI components that need to distinguish cluster execution. */
 interface RuntimeInfoState {
   podName: string | null;
   kubernetes: boolean;
@@ -15,7 +13,6 @@ let cachedState: RuntimeInfoState | null = null;
 let fetchPromise: Promise<void> | null = null;
 const listeners: Array<(s: RuntimeInfoState) => void> = [];
 
-/** Starts the single shared runtime request and publishes either its result or defaults. */
 function ensureFetched() {
   if (cachedState !== null || fetchPromise !== null) return;
   fetchPromise = Promise.resolve()

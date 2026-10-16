@@ -2,10 +2,8 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity;
 
-/// <summary>Verifies that stored remote tool-result material matches its owner-issued proof.</summary>
 public static class RemoteToolResultReceiptValidation
 {
-    /// <summary>Checks acknowledgment scope and the exact returned bytes against their recorded digest.</summary>
     public static void ValidateAcknowledgment(
         SessionMaterialAcknowledgment acknowledgment, RemoteToolResultProof proof, ReadOnlySpan<byte> bytes)
     {
@@ -16,7 +14,6 @@ public static class RemoteToolResultReceiptValidation
             throw new RuntimeAuthorizationException("runtime_remote_tool_result_acknowledgment_invalid");
     }
 
-    /// <summary>Validates a read result and returns its stored proof after checking the content acknowledgment.</summary>
     public static RemoteToolResultProof ValidateRead(
         SessionMaterialReadResult result, RemoteToolResultProof template)
     {
@@ -30,7 +27,6 @@ public static class RemoteToolResultReceiptValidation
         return recorded;
     }
 
-    /// <summary>Checks that acknowledged material was produced by the same SDK and model source.</summary>
     public static void ValidateSource(SessionMaterialAcknowledgment acknowledgment, SdkSessionFacts source)
     {
         var material = acknowledgment.Reference.Material
@@ -38,7 +34,6 @@ public static class RemoteToolResultReceiptValidation
         ValidateSource(material, source);
     }
 
-    /// <summary>Checks SDK version, runtime version, selected model, and context limit.</summary>
     public static void ValidateSource(SessionMaterialBinding material, SdkSessionFacts source)
     {
         if (material.SdkVersion != source.SdkVersion || material.RuntimeVersion != source.RuntimeVersion ||
@@ -47,7 +42,6 @@ public static class RemoteToolResultReceiptValidation
             throw new RuntimeAuthorizationException("runtime_remote_tool_result_source_invalid");
     }
 
-    /// <summary>Checks proof-bound identity, event, revision, and execution fence fields.</summary>
     private static void ValidateBinding(SessionMaterialAcknowledgment acknowledgment, RemoteToolResultProof proof)
     {
         SessionMaterialValidation.ValidateRemoteToolResultProof(proof);

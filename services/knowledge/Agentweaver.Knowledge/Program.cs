@@ -12,7 +12,6 @@ using Microsoft.Azure.Cosmos;
 using Npgsql;
 using StackExchange.Redis;
 
-// Starts the migration-only entry point or configures the authenticated Knowledge API and its provider adapters.
 var migrate = args.SequenceEqual(["--migrate"], StringComparer.Ordinal);
 if (args.Contains("--migrate", StringComparer.Ordinal) && !migrate)
     throw new ArgumentException("The --migrate command must be used by itself.", nameof(args));
@@ -178,7 +177,6 @@ app.MapGet("/health/ready", async (CancellationToken cancellationToken) =>
 app.MapKnowledgeEndpoints();
 app.Run();
 
-// Ensures the catalog metadata exactly matches the native provider built from runtime configuration.
 static void VerifyNativeProviderRegistration(
     ProviderCatalog catalog,
     NativePostgresMemoryProvider provider,
@@ -197,7 +195,6 @@ static void VerifyNativeProviderRegistration(
             "The provider catalog owner must register the exact native PostgreSQL Memory descriptor and options revision.");
 }
 
-// Optional adapters are registered only when configured; catalog entries must exactly match their descriptors.
 static void VerifyCosmosProviderRegistration(
     ProviderCatalog catalog,
     CosmosMemoryProvider provider,
@@ -215,7 +212,6 @@ static void VerifyCosmosProviderRegistration(
             "The provider catalog owner must register the exact Cosmos Memory descriptor and options revision.");
 }
 
-// Checks the Redis catalog snapshot before the API accepts requests.
 static void VerifyRedisProviderRegistration(
     ProviderCatalog catalog,
     RedisMemoryProvider provider,

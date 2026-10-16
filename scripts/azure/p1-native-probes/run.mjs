@@ -1,7 +1,3 @@
-/**
- * Runs P1 native recovery and credit-denial probes against injected application dependencies.
- * It validates tenant, request, and evidence bindings and returns results without provisioning Azure resources.
- */
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -798,10 +794,6 @@ function evidenceError(error, secrets) {
   };
 }
 
-/**
- * Executes the P1 native probe set and returns structured observations for each readiness gate.
- * Invalid evidence bindings fail closed; individual probe failures are captured in the result.
- */
 export async function runP1NativeProbes(input, dependencies) {
   const startedAt = new Date().toISOString();
   const probes = [];
@@ -2887,10 +2879,6 @@ function creditReaderOutput(startedAt, cases) {
   };
 }
 
-/**
- * Exercises read-side credit-denial behavior with injected dependencies and returns its evidence.
- * Requests that do not match the configured tenant and credit boundary are rejected.
- */
 export async function runP1NativeCreditDenialReaders(input = {}, dependencies = {}) {
   const fixedZero = input?.fixedZero;
   const positive = input?.positive;

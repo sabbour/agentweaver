@@ -28,7 +28,6 @@ const initialGroups: AzfServiceMenuGroup[] = [
   },
 ];
 
-/** Toggles favorite state for one sample menu item or its immediate nested children. */
 function updateFavorite(groups: AzfServiceMenuGroup[], id: string): AzfServiceMenuGroup[] {
   return groups.map((group) => ({
     ...group,
@@ -49,14 +48,12 @@ function updateFavorite(groups: AzfServiceMenuGroup[], id: string): AzfServiceMe
   }));
 }
 
-/** Flattens the example's groups and one level of child items for selected-item lookup. */
 function flattenGroups(groups: AzfServiceMenuGroup[]) {
   return groups.flatMap((group) =>
     group.items.flatMap((item) => [item, ...(item.items ?? [])]),
   );
 }
 
-/** Demonstrates nested navigation, search, collapse, selection, and locally toggled favorites. */
 export function ServiceMenuExample() {
   const [groups, setGroups] = useState(initialGroups);
   const [selectedId, setSelectedId] = useState('summary');

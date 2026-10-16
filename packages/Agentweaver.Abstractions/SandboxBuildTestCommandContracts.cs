@@ -8,10 +8,6 @@ using System.Text.RegularExpressions;
 
 namespace Agentweaver.Abstractions;
 
-/// <summary>
-/// Immutable MAF checkpoint and accepted-run identity used to authorize a BuildTest command.
-/// The decision version, execution fence, and accepted-selection hash prevent stale work.
-/// </summary>
 public sealed record SandboxBuildTestCheckpointReference(
     string ProjectId,
     string RunId,
@@ -28,8 +24,6 @@ public sealed record SandboxBuildTestCheckpointReference(
         "^[a-fA-F0-9]{64}$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
-    /// <summary>Validates checkpoint identity, positive revisions/fence, and accepted-selection digest.</summary>
-    /// <exception cref="ArgumentException">The checkpoint identity or accepted run pin is invalid.</exception>
     public SandboxBuildTestCheckpointReference Validate()
     {
         ValidateIdentifier(ProjectId, nameof(ProjectId), 256);
@@ -47,7 +41,6 @@ public sealed record SandboxBuildTestCheckpointReference(
         return this;
     }
 
-    /// <summary>Checks a bounded opaque checkpoint identifier.</summary>
     internal static void ValidateIdentifier(string? value, string name, int maximumLength)
     {
         if (string.IsNullOrWhiteSpace(value) ||
@@ -57,15 +50,12 @@ public sealed record SandboxBuildTestCheckpointReference(
     }
 }
 
-/// <summary>One named output path and byte ceiling that a BuildTest command must collect.</summary>
 public sealed record SandboxBuildTestOutputObligation(
     string Name,
     string RelativePath,
     bool Required,
     long MaximumBytes)
 {
-    /// <summary>Validates the output name, workspace-relative path, and maximum file size.</summary>
-    /// <exception cref="ArgumentException">The path escapes the workspace or the size exceeds the contract.</exception>
     public SandboxBuildTestOutputObligation Validate()
     {
         SandboxBuildTestCheckpointReference.ValidateIdentifier(Name, nameof(Name), 128);
@@ -77,10 +67,6 @@ public sealed record SandboxBuildTestOutputObligation(
     }
 }
 
-/// <summary>
-/// Owner-accepted execution profile for an offline BuildTest command and its separate
-/// pinned output collector. Executable allowlist and resource/time bounds constrain the workload.
-/// </summary>
 public sealed record SandboxBuildTestAcceptedExecutionOptions(
     string ProfileId,
     string ImageReference,
@@ -110,8 +96,6 @@ public sealed record SandboxBuildTestAcceptedExecutionOptions(
         "^[1-9][0-9]*(?:Ki|Mi|Gi|Ti)$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
-    /// <summary>Validates image digests/platforms, executable allowlist, budgets, offline egress, and collector pins.</summary>
-    /// <exception cref="ArgumentException">Any execution option falls outside the accepted profile contract.</exception>
     public SandboxBuildTestAcceptedExecutionOptions Validate()
     {
         SandboxBuildTestCheckpointReference.ValidateIdentifier(ProfileId, nameof(ProfileId), 128);
@@ -160,10 +144,6 @@ public sealed record SandboxBuildTestAcceptedExecutionOptions(
 
 }
 
-/// <summary>
-/// Immutable owner-accepted BuildTest command. Its canonical hash binds the checkpoint,
-/// executable, args, outputs, execution options, and for v2 the exact repository seed metadata.
-/// </summary>
 public sealed record SandboxBuildTestAcceptedCommand(
     int ContractVersion,
     Guid OperationId,
@@ -175,11 +155,9 @@ public sealed record SandboxBuildTestAcceptedCommand(
     SandboxBuildTestAcceptedExecutionOptions ExecutionOptions,
     string ImmutableHash)
 {
-    /// <summary>Accepted Source Control workspace identity for version 2 commands; absent for legacy version 1.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SandboxBuildTestWorkspaceSource? WorkspaceSource { get; init; }
 
-    /// <summary>Seed bytes used only by the trusted preparation flow and never serialized into command JSON.</summary>
     [JsonIgnore]
     public ImmutableArray<byte>? WorkspaceSeed { get; init; }
 
@@ -190,14 +168,10 @@ public sealed record SandboxBuildTestAcceptedCommand(
         SkipValidation = false
     };
 
-    /// <summary>Validates the accepted command and requires its version 2 seed bytes when applicable.</summary>
-    /// <exception cref="ArgumentException">Command hash, workspace input, arguments, or outputs are invalid.</exception>
     public SandboxBuildTestAcceptedCommand Validate() => Validate(requireSeed: true);
 
-    /// <summary>Validates command metadata without requiring the provider-preparation seed bytes.</summary>
     public SandboxBuildTestAcceptedCommand ValidateMetadata() => Validate(requireSeed: false);
 
-    /// <summary>Checks contract version, immutable hash, workspace pins, arguments, and output obligations.</summary>
     private SandboxBuildTestAcceptedCommand Validate(bool requireSeed)
     {
         ArgumentNullException.ThrowIfNull(Checkpoint);
@@ -252,11 +226,6 @@ public sealed record SandboxBuildTestAcceptedCommand(
         };
     }
 
-    /// <summary>
-    /// Computes the prefixed SHA-256 over deterministic JSON for all accepted command fields;
-    /// version 2 includes the canonical source binding but not its raw seed bytes.
-    /// </summary>
-    /// <exception cref="ArgumentException">A version 2 command has no accepted workspace source.</exception>
     public string ComputeImmutableHash()
     {
         using var stream = new MemoryStream();
@@ -295,7 +264,6 @@ public sealed record SandboxBuildTestAcceptedCommand(
         return SandboxBuildTestHashes.PrefixSha256(stream.ToArray());
     }
 
-    /// <summary>Writes checkpoint fields in the stable form included in the accepted-command hash.</summary>
     internal static void WriteCheckpoint(
         Utf8JsonWriter writer,
         SandboxBuildTestCheckpointReference checkpoint)
@@ -315,7 +283,6 @@ public sealed record SandboxBuildTestAcceptedCommand(
         writer.WriteEndObject();
     }
 
-    /// <summary>Writes execution-profile fields in the stable form included in the accepted-command hash.</summary>
     internal static void WriteExecutionOptions(
         Utf8JsonWriter writer,
         SandboxBuildTestAcceptedExecutionOptions options)
@@ -351,10 +318,6 @@ public sealed record SandboxBuildTestAcceptedCommand(
     }
 }
 
-/// <summary>
-/// Expected Environment, Sandbox, Storage, network-policy, and data-generation pins used
-/// before command execution. The optional provider binding makes Sandbox options immutable.
-/// </summary>
 public sealed record SandboxBuildTestExpectedBinding(
     EnvironmentGenerationFence Fence,
     Guid SandboxLeaseOperationId,
@@ -364,11 +327,8 @@ public sealed record SandboxBuildTestExpectedBinding(
     long DataGeneration,
     long NetworkPolicyGeneration)
 {
-    /// <summary>Provider/options snapshot for the exact Sandbox resource used by this operation.</summary>
     public SandboxProviderBindingSnapshot? SandboxProviderBinding { get; init; }
 
-    /// <summary>Validates scope and exact positive resource, fencing, and network generations.</summary>
-    /// <exception cref="ArgumentException">The resource does not match the owner scope.</exception>
     public SandboxBuildTestExpectedBinding Validate()
     {
         ArgumentNullException.ThrowIfNull(Fence);
@@ -392,7 +352,6 @@ public sealed record SandboxBuildTestExpectedBinding(
         return this;
     }
 
-    /// <summary>Requires a non-null provider binding that matches the pinned Sandbox resource.</summary>
     internal void ValidateSandboxProviderBinding()
     {
         ArgumentNullException.ThrowIfNull(SandboxProviderBinding);
@@ -400,13 +359,10 @@ public sealed record SandboxBuildTestExpectedBinding(
     }
 }
 
-/// <summary>API input tying a request to a durable MAF checkpoint and current expected Environment binding.</summary>
 public sealed record SandboxBuildTestApiRequest(
     SandboxBuildTestCheckpointReference Checkpoint,
     SandboxBuildTestExpectedBinding ExpectedBinding)
 {
-    /// <summary>Checks checkpoint and provider binding scope before owner calls.</summary>
-    /// <exception cref="ArgumentException">Project/run identity differs between checkpoint and owner.</exception>
     public SandboxBuildTestApiRequest Validate()
     {
         ArgumentNullException.ThrowIfNull(Checkpoint);
@@ -420,8 +376,6 @@ public sealed record SandboxBuildTestApiRequest(
         return this;
     }
 
-    /// <summary>Hashes the accepted command and expected binding into a stable operation request fingerprint.</summary>
-    /// <exception cref="ArgumentException">The accepted command is not the exact referenced checkpoint.</exception>
     public string ComputeRequestFingerprint(SandboxBuildTestAcceptedCommand acceptedCommand)
     {
         ArgumentNullException.ThrowIfNull(acceptedCommand);
@@ -443,7 +397,6 @@ public sealed record SandboxBuildTestApiRequest(
     }
 }
 
-/// <summary>Persisted state of a BuildTest operation from reservation through completion or reconciliation.</summary>
 public enum SandboxBuildTestOperationStatus
 {
     Reserved,
@@ -455,7 +408,6 @@ public enum SandboxBuildTestOperationStatus
     Stale
 }
 
-/// <summary>Provider-observed lifecycle state of a command or collector Pod.</summary>
 public enum SandboxBuildTestPodState
 {
     Pending,
@@ -465,14 +417,12 @@ public enum SandboxBuildTestPodState
     Unknown
 }
 
-/// <summary>Kubernetes namespace/name/UID/resource-version identity for an exact BuildTest Pod.</summary>
 public sealed record SandboxBuildTestPodReference(
     string KubernetesNamespace,
     string Name,
     string Uid,
     string ResourceVersion)
 {
-    /// <summary>Validates all Pod identity fields with their Kubernetes length bounds.</summary>
     public SandboxBuildTestPodReference Validate()
     {
         SandboxBuildTestCheckpointReference.ValidateIdentifier(
@@ -484,17 +434,12 @@ public sealed record SandboxBuildTestPodReference(
     }
 }
 
-/// <summary>
-/// Applied Network Policy identity for a command Pod. Labels bind the policy selector to
-/// one BuildTest operation and the command role.
-/// </summary>
 public sealed record SandboxBuildTestCommandNetworkPolicyBinding(
     string PolicyUid,
     string SpecSha256,
     long NetworkPolicyGeneration,
     ImmutableDictionary<string, string> SelectorLabels)
 {
-    /// <summary>Validates policy UID, exact spec digest, generation, and selector labels.</summary>
     public SandboxBuildTestCommandNetworkPolicyBinding Validate()
     {
         SandboxBuildTestCheckpointReference.ValidateIdentifier(PolicyUid, nameof(PolicyUid), 256);
@@ -511,7 +456,6 @@ public sealed record SandboxBuildTestCommandNetworkPolicyBinding(
         return this with { SelectorLabels = SelectorLabels.ToImmutableDictionary(StringComparer.Ordinal) };
     }
 
-    /// <summary>Requires selector labels to bind this policy to the exact operation and Pod role.</summary>
     internal SandboxBuildTestCommandNetworkPolicyBinding ValidateForOperation(
         Guid operationId,
         string expectedRole)
@@ -527,7 +471,6 @@ public sealed record SandboxBuildTestCommandNetworkPolicyBinding(
     }
 }
 
-/// <summary>Observed resource, fence, workspace, policy, and current Network Policy binding before execution.</summary>
 public sealed record SandboxBuildTestObservedBinding(
     EnvironmentGenerationFence Fence,
     Guid SandboxLeaseOperationId,
@@ -538,8 +481,6 @@ public sealed record SandboxBuildTestObservedBinding(
     long NetworkPolicyGeneration,
     SandboxBuildTestCommandNetworkPolicyBinding CommandPolicy)
 {
-    /// <summary>Checks observed values against the expected binding and exact command policy generation.</summary>
-    /// <exception cref="ArgumentException">Observed provider or policy pins are inconsistent.</exception>
     public SandboxBuildTestObservedBinding Validate()
     {
         ArgumentNullException.ThrowIfNull(Fence);
@@ -561,7 +502,6 @@ public sealed record SandboxBuildTestObservedBinding(
     }
 }
 
-/// <summary>Reason a BuildTest command container stopped.</summary>
 public enum SandboxBuildTestTerminationKind
 {
     Exited,
@@ -570,7 +510,6 @@ public enum SandboxBuildTestTerminationKind
     OutputLimitExceeded
 }
 
-/// <summary>Bounded stdout/stderr bytes and digest, including truncation lower-bound evidence.</summary>
 public sealed record SandboxBuildTestOutputCapture(
     string SourcePodUid,
     string ContainerName,
@@ -580,8 +519,6 @@ public sealed record SandboxBuildTestOutputCapture(
     bool Truncated,
     long AtLeastObservedBytes)
 {
-    /// <summary>Validates byte count, digest, maximum size, and truncation evidence.</summary>
-    /// <exception cref="ArgumentException">The capture bytes or count/digest evidence is inconsistent.</exception>
     public SandboxBuildTestOutputCapture Validate(int maximumOutputBytes)
     {
         SandboxBuildTestCheckpointReference.ValidateIdentifier(SourcePodUid, nameof(SourcePodUid), 256);
@@ -603,7 +540,6 @@ public sealed record SandboxBuildTestOutputCapture(
     }
 }
 
-/// <summary>One collector's evidence for a declared output file, including existence and captured digest.</summary>
 public sealed record SandboxBuildTestOutputEvidence(
     string CollectorPodUid,
     string CollectorContainerName,
@@ -615,14 +551,12 @@ public sealed record SandboxBuildTestOutputEvidence(
     long CapturedBytes,
     string? CapturedSha256);
 
-/// <summary>Applied policy binding for the separate BuildTest output-collector Pod.</summary>
 public sealed record SandboxBuildTestOutputCollectorNetworkPolicyBinding(
     string PolicyUid,
     string SpecSha256,
     long NetworkPolicyGeneration,
     ImmutableDictionary<string, string> SelectorLabels)
 {
-    /// <summary>Validates policy UID, exact spec digest, generation, and collector selector labels.</summary>
     public SandboxBuildTestOutputCollectorNetworkPolicyBinding Validate()
     {
         SandboxBuildTestCheckpointReference.ValidateIdentifier(PolicyUid, nameof(PolicyUid), 256);
@@ -639,7 +573,6 @@ public sealed record SandboxBuildTestOutputCollectorNetworkPolicyBinding(
         return this with { SelectorLabels = SelectorLabels.ToImmutableDictionary(StringComparer.Ordinal) };
     }
 
-    /// <summary>Requires policy labels to target this operation and the collector Pod role.</summary>
     internal SandboxBuildTestOutputCollectorNetworkPolicyBinding ValidateForOperation(Guid operationId)
     {
         _ = Validate();
@@ -653,10 +586,6 @@ public sealed record SandboxBuildTestOutputCollectorNetworkPolicyBinding(
     }
 }
 
-/// <summary>
-/// Bounded, read-only collector request for required output files. Version 2 commands
-/// can use an empty output list because their native workspace capture has separate evidence.
-/// </summary>
 public sealed record SandboxBuildTestOutputCollectorRequest(
     Guid OperationId,
     string ImmutableHash,
@@ -666,12 +595,9 @@ public sealed record SandboxBuildTestOutputCollectorRequest(
     long MaximumTotalBytes,
     ImmutableArray<SandboxBuildTestOutputObligation> Outputs)
 {
-    /// <summary>Accepted command version; null preserves the legacy version 1 behavior.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? AcceptedCommandContractVersion { get; init; }
 
-    /// <summary>Validates operation fingerprints, mount path, size ceiling, and unique output obligations.</summary>
-    /// <exception cref="ArgumentException">The collector request is malformed or exceeds configured bounds.</exception>
     public SandboxBuildTestOutputCollectorRequest Validate()
     {
         ArgumentNullException.ThrowIfNull(Checkpoint);
@@ -697,7 +623,6 @@ public sealed record SandboxBuildTestOutputCollectorRequest(
     }
 }
 
-/// <summary>Collector-produced manifest proving output file observations for one accepted request and Pod.</summary>
 public sealed record SandboxBuildTestOutputCollectorReceipt(
     int ContractVersion,
     Guid OperationId,
@@ -709,8 +634,6 @@ public sealed record SandboxBuildTestOutputCollectorReceipt(
     ImmutableArray<SandboxBuildTestOutputEvidence> Outputs,
     string ManifestSha256)
 {
-    /// <summary>Checks receipt identity, Pod, each output obligation, and canonical manifest digest.</summary>
-    /// <exception cref="ArgumentException">The receipt does not match its exact request or collector Pod.</exception>
     public SandboxBuildTestOutputCollectorReceipt Validate(
         SandboxBuildTestOutputCollectorRequest request,
         SandboxBuildTestPodReference collectorPod)
@@ -759,11 +682,8 @@ public sealed record SandboxBuildTestOutputCollectorReceipt(
     }
 }
 
-/// <summary>Computes the stable digest used to bind an output collector receipt to its evidence.</summary>
 public static class SandboxBuildTestOutputCollectorCanonicalization
 {
-    /// <summary>Serializes receipt fields in canonical order and hashes the resulting manifest bytes.</summary>
-    /// <exception cref="ArgumentNullException">The receipt is null.</exception>
     public static string ComputeManifestSha256(SandboxBuildTestOutputCollectorReceipt receipt)
     {
         ArgumentNullException.ThrowIfNull(receipt);
@@ -802,7 +722,6 @@ public static class SandboxBuildTestOutputCollectorCanonicalization
     }
 }
 
-/// <summary>Command container termination evidence bound to its Pod UID and container name.</summary>
 public sealed record SandboxBuildTestTerminalEvidence(
     string SourcePodUid,
     string ContainerName,
@@ -812,8 +731,6 @@ public sealed record SandboxBuildTestTerminalEvidence(
     DateTimeOffset? FinishedAt,
     string? Reason)
 {
-    /// <summary>Requires a known exit code and chronological start/finish timestamps.</summary>
-    /// <exception cref="ArgumentException">Termination kind, timestamps, or reason is invalid.</exception>
     public SandboxBuildTestTerminalEvidence Validate()
     {
         SandboxBuildTestCheckpointReference.ValidateIdentifier(SourcePodUid, nameof(SourcePodUid), 256);
@@ -830,10 +747,6 @@ public sealed record SandboxBuildTestTerminalEvidence(
     }
 }
 
-/// <summary>
-/// Owner's durable operation snapshot, containing expected/current bindings, Pod and
-/// collector evidence, captured output, and completion or recovery state.
-/// </summary>
 public sealed record SandboxBuildTestOperationSnapshot(
     Guid OperationId,
     string ImmutableHash,
@@ -854,22 +767,14 @@ public sealed record SandboxBuildTestOperationSnapshot(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt)
 {
-    /// <summary>Provider receipt for version 2 repository seed preparation.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SandboxBuildTestBindingPreparation.SandboxBuildTestWorkspacePreparationReceipt? WorkspacePreparation
         { get; init; }
-    /// <summary>Verified immutable output capture for version 2 workspace commands.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SandboxBuildTestWorkspaceCaptureReference? WorkspaceCapture { get; init; }
-    /// <summary>Journal acknowledgment that the produced-output proof was durably recorded.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ProducedRunCaptureJournalEntry? WorkspaceCaptureAcknowledgment { get; init; }
 
-    /// <summary>
-    /// Checks the snapshot against the accepted command and validates all terminal, policy,
-    /// output-collector, workspace-capture, and journal-acknowledgment evidence.
-    /// </summary>
-    /// <exception cref="ArgumentException">The operation state and its required evidence are inconsistent.</exception>
     public SandboxBuildTestOperationSnapshot Validate(
         SandboxBuildTestAcceptedCommand acceptedCommand,
         int maximumOutputBytes)
@@ -980,7 +885,6 @@ public sealed record SandboxBuildTestOperationSnapshot(
         return this;
     }
 
-    /// <summary>Recognizes only terminal states with the separate collector evidence required after interruption.</summary>
     private bool HasInterruptedEvidence(SandboxBuildTestAcceptedCommand acceptedCommand)
     {
         if (Terminal is { Kind: not SandboxBuildTestTerminationKind.Exited })
@@ -1002,7 +906,6 @@ public sealed record SandboxBuildTestOperationSnapshot(
             SandboxBuildTestTerminationKind.OutputLimitExceeded;
     }
 
-    /// <summary>Checks collector evidence according to whether outputs use the v1 collector or v2 native capture.</summary>
     private bool CollectorEvidenceMatches(SandboxBuildTestAcceptedCommand acceptedCommand)
     {
         if (acceptedCommand.WorkspaceSource is not null)
@@ -1039,15 +942,12 @@ public sealed record SandboxBuildTestOperationSnapshot(
     }
 }
 
-/// <summary>Observed Pod state, terminal evidence, and bounded captured output from the provider.</summary>
 public sealed record SandboxBuildTestPodObservation(
     SandboxBuildTestPodReference Pod,
     SandboxBuildTestPodState State,
     SandboxBuildTestTerminalEvidence? Terminal,
     SandboxBuildTestOutputCapture Output)
 {
-    /// <summary>Validates state against terminal evidence and binds output bytes to the same Pod/container.</summary>
-    /// <exception cref="ArgumentException">Pod state, termination evidence, or output binding conflicts.</exception>
     public SandboxBuildTestPodObservation Validate(int maximumOutputBytes)
     {
         ArgumentNullException.ThrowIfNull(Pod);
@@ -1080,17 +980,13 @@ public sealed record SandboxBuildTestPodObservation(
     }
 }
 
-/// <summary>Provider call input with accepted command, exact Environment binding, and command/collector policies.</summary>
 public sealed record SandboxBuildTestProviderRequest(
     SandboxBuildTestAcceptedCommand AcceptedCommand,
     SandboxBuildTestExpectedBinding ExpectedBinding,
     SandboxBuildTestCommandNetworkPolicyBinding CommandPolicy)
 {
-    /// <summary>Separate collector policy, required whenever output collection runs.</summary>
     public SandboxBuildTestOutputCollectorNetworkPolicyBinding? CollectorPolicy { get; init; }
 
-    /// <summary>Validates command, provider binding, operation labels, and exact applied policy generations.</summary>
-    /// <exception cref="ArgumentException">The provider request is not bound to its accepted state.</exception>
     public SandboxBuildTestProviderRequest Validate()
     {
         ArgumentNullException.ThrowIfNull(AcceptedCommand);
@@ -1114,25 +1010,20 @@ public sealed record SandboxBuildTestProviderRequest(
     }
 }
 
-/// <summary>Operation snapshot and whether the BuildTest request was an idempotent replay.</summary>
 public sealed record SandboxBuildTestOperationResult(
     SandboxBuildTestOperationSnapshot Operation,
     bool Replayed);
 
-/// <summary>Trusted owner boundary for resolving, rechecking, and acknowledging accepted BuildTest commands.</summary>
 public interface ISandboxBuildTestAcceptedCommandVerifier
 {
-    /// <summary>Loads the accepted command for the exact durable checkpoint reference.</summary>
     Task<SandboxBuildTestAcceptedCommand> ResolveAsync(
         SandboxBuildTestCheckpointReference checkpoint,
         CancellationToken cancellationToken);
 
-    /// <summary>Rechecks that the accepted command remains current before its effect is committed.</summary>
     Task VerifyCurrentAsync(
         SandboxBuildTestAcceptedCommand acceptedCommand,
         CancellationToken cancellationToken);
 
-    /// <summary>Verifies that produced workspace output was acknowledged by the Sessions owner.</summary>
     Task VerifyWorkspaceCaptureAcknowledgmentAsync(
         SandboxBuildTestAcceptedCommand acceptedCommand,
         SandboxBuildTestWorkspaceCaptureAcknowledgmentVerification verification,
@@ -1140,13 +1031,8 @@ public interface ISandboxBuildTestAcceptedCommandVerifier
         throw new InvalidOperationException("The BuildTest capture acknowledgment verifier is not configured.");
 }
 
-/// <summary>
-/// Provider boundary for gated BuildTest command/collector Pods, observed execution output,
-/// and native version 2 workspace preparation/capture.
-/// </summary>
 public interface ISandboxBuildTestCommandProvider
 {
-    /// <summary>Prepares the accepted repository seed inside the trusted command workspace.</summary>
     Task<SandboxBuildTestBindingPreparation.SandboxBuildTestWorkspacePreparationReceipt?> PrepareWorkspaceAsync(
         SandboxBuildTestProviderRequest request,
         SandboxBuildTestPodReference pod,
@@ -1154,7 +1040,6 @@ public interface ISandboxBuildTestCommandProvider
         throw new SandboxProviderException("buildtest_workspace_provider_unconfigured",
             "The selected provider has no native workspace preparation path.", false);
 
-    /// <summary>Captures immutable output metadata from the prepared workspace after command completion.</summary>
     Task<SandboxBuildTestWorkspaceCaptureReference?> CaptureWorkspaceAsync(
         SandboxBuildTestProviderRequest request,
         SandboxBuildTestPodReference pod,
@@ -1163,7 +1048,6 @@ public interface ISandboxBuildTestCommandProvider
         throw new SandboxProviderException("buildtest_workspace_provider_unconfigured",
             "The selected provider has no complete native workspace capture path.", false);
 
-    /// <summary>Reads the bytes associated with the exact verified native workspace capture.</summary>
     Task<ImmutableArray<byte>> ReadWorkspaceCaptureAsync(
         SandboxBuildTestProviderRequest request,
         SandboxBuildTestPodReference pod,
@@ -1173,103 +1057,70 @@ public interface ISandboxBuildTestCommandProvider
         throw new SandboxProviderException("buildtest_workspace_provider_unconfigured",
             "The selected provider cannot export the complete native workspace bytes.", false);
 
-    /// <summary>Creates the offline command Pod behind its network-policy scheduling gate.</summary>
     Task<SandboxBuildTestPodReference> CreateGatedAsync(
         SandboxBuildTestProviderRequest request,
         CancellationToken cancellationToken);
 
-    /// <summary>Creates the separate read-only output collector Pod behind its own policy gate.</summary>
     Task<SandboxBuildTestPodReference> CreateOutputCollectorGatedAsync(
         SandboxBuildTestProviderRequest request,
         SandboxBuildTestOutputCollectorRequest collectorRequest,
         CancellationToken cancellationToken);
 
-    /// <summary>Reads the command Pod for an operation, or null if it has not been created.</summary>
     Task<SandboxBuildTestPodReference?> GetAsync(
         SandboxBuildTestProviderRequest request,
         CancellationToken cancellationToken);
 
-    /// <summary>Reads the separate output collector Pod, or null if it has not been created.</summary>
     Task<SandboxBuildTestPodReference?> GetOutputCollectorAsync(
         SandboxBuildTestProviderRequest request,
         CancellationToken cancellationToken);
 
-    /// <summary>Releases the scheduling gate only after required policy and owner checks pass.</summary>
     Task<SandboxBuildTestPodReference> ReleaseSchedulingGateAsync(
         SandboxBuildTestProviderRequest request,
         SandboxBuildTestPodReference pod,
         CancellationToken cancellationToken);
 
-    /// <summary>Reads current Pod state and bounded output for the exact provider request.</summary>
     Task<SandboxBuildTestPodObservation> ObserveAsync(
         SandboxBuildTestProviderRequest request,
         SandboxBuildTestPodReference pod,
         int maximumOutputBytes,
         CancellationToken cancellationToken);
 
-    /// <summary>Stops execution in the requested Pod.</summary>
     Task StopAsync(
         SandboxBuildTestProviderRequest request,
         SandboxBuildTestPodReference pod,
         CancellationToken cancellationToken);
 
-    /// <summary>Deletes the requested Pod after its output and terminal evidence have been handled.</summary>
     Task DeleteAsync(
         SandboxBuildTestProviderRequest request,
         SandboxBuildTestPodReference pod,
         CancellationToken cancellationToken);
 }
 
-/// <summary>
-/// Fixed identifiers and resource bounds shared by BuildTest producers, providers,
-/// collector images, and validators.
-/// </summary>
 public static class SandboxBuildTestLimits
 {
-    /// <summary>Only egress profile accepted for command Pods.</summary>
     public const string OfflineEgressProfile = "offline";
-    /// <summary>Network Policy label that binds a Pod to its operation UUID.</summary>
     public const string PolicyOperationLabel = "agentweaver.dev/buildtest-operation";
-    /// <summary>Network Policy label that distinguishes command and collector roles.</summary>
     public const string PolicyRoleLabel = "agentweaver.dev/buildtest-role";
-    /// <summary>Role value for the command Pod policy.</summary>
     public const string CommandPolicyRole = "command";
-    /// <summary>Role value for the collector Pod policy.</summary>
     public const string CollectorPolicyRole = "collector";
-    /// <summary>Approved executable used by the collector image.</summary>
     public const string OutputCollectorExecutable = "dotnet";
-    /// <summary>Approved assembly used by the collector image.</summary>
     public const string OutputCollectorAssembly = "Agentweaver.AgentHost.dll";
-    /// <summary>Legacy output collector mode argument.</summary>
     public const string OutputCollectorMode = "--build-test-output-collector-v1";
-    /// <summary>Native workspace collector mode argument for version 2.</summary>
     public const string WorkspaceCollectorMode = "--build-test-workspace-collector-v2";
-    /// <summary>Container name used to prepare repository seed bytes.</summary>
     public const string WorkspacePreparationContainerName = "buildtest-workspace-prepare";
-    /// <summary>Container name used to capture version 2 workspace output.</summary>
     public const string WorkspaceCaptureContainerName = "buildtest-workspace-collector";
-    /// <summary>Container name used by the legacy output collector.</summary>
     public const string OutputCollectorContainerName = "buildtest-collector";
-    /// <summary>Maximum serialized collector request size in bytes.</summary>
     public const int MaximumCollectorRequestBytes = 65_536;
-    /// <summary>Maximum total file output size in bytes.</summary>
     public const long MaximumFileOutputBytes = 67_108_864;
-    /// <summary>Maximum captured log bytes.</summary>
     public const int MaximumLogOutputBytes = 1_048_576;
-    /// <summary>Maximum command argument count.</summary>
     public const int MaximumArguments = 256;
-    /// <summary>Maximum length of one argument string.</summary>
     public const int MaximumArgumentLength = 4096;
-    /// <summary>Maximum combined UTF-8 bytes across command arguments.</summary>
     public const int MaximumArgumentBytes = 32_768;
-    /// <summary>Maximum requested output-file count.</summary>
     public const int MaximumOutputObligations = 32;
 }
 
-/// <summary>Path-shape checks shared by BuildTest command, workspace, and collector contracts.</summary>
 internal static class SandboxBuildTestPaths
 {
-    /// <summary>Returns whether a path uses safe workspace-relative segments.</summary>
     internal static bool IsWorkspaceRelative(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= 512 &&
@@ -1280,7 +1131,6 @@ internal static class SandboxBuildTestPaths
         (value == "." || value.Split('/').All(segment =>
             segment.Length > 0 && segment is not ("." or "..")));
 
-    /// <summary>Returns whether an executable is a safe absolute POSIX path.</summary>
     internal static bool IsAbsoluteExecutable(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length is > 1 and <= 512 &&
@@ -1291,7 +1141,6 @@ internal static class SandboxBuildTestPaths
         value.Split('/').Skip(1).All(segment =>
             segment.Length > 0 && segment is not ("." or ".."));
 
-    /// <summary>Returns whether a mount path is a safe absolute container path.</summary>
     internal static bool IsAbsoluteContainerPath(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= 512 &&
@@ -1303,33 +1152,26 @@ internal static class SandboxBuildTestPaths
             segment.Length > 0 && segment is not ("." or "..")));
 }
 
-/// <summary>Hash-format checks and canonical SHA-256 helpers for BuildTest contracts.</summary>
 internal static class SandboxBuildTestHashes
 {
-    /// <summary>Checks a canonical lowercase 64-character SHA-256 value.</summary>
     internal static bool IsSha256(string? value) =>
         value is { Length: 64 } && value.All(character =>
             character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
-    /// <summary>Checks a lowercase SHA-256 value with the conventional <c>sha256:</c> prefix.</summary>
     internal static bool IsPrefixedSha256(string? value) =>
         value is { Length: 71 } &&
         value.StartsWith("sha256:", StringComparison.Ordinal) &&
         IsSha256(value[7..]);
 
-    /// <summary>Hashes bytes and returns the digest with a <c>sha256:</c> prefix.</summary>
     internal static string PrefixSha256(ReadOnlySpan<byte> bytes) =>
         "sha256:" + Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 
-    /// <summary>Hashes bytes and returns the lowercase digest without a prefix.</summary>
     internal static string UnprefixedSha256(ReadOnlySpan<byte> bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 }
 
-/// <summary>Canonical JSON writer and exact equality helpers shared by BuildTest owner and provider flows.</summary>
 internal static class SandboxBuildTestCanonicalJson
 {
-    /// <summary>Stable UTF-8 JSON output settings used for BuildTest hashes.</summary>
     internal static readonly JsonWriterOptions WriterOptions = new()
     {
         Encoder = JavaScriptEncoder.Default,
@@ -1337,7 +1179,6 @@ internal static class SandboxBuildTestCanonicalJson
         SkipValidation = false
     };
 
-    /// <summary>Compares every checkpoint identity, version, fence, and accepted-selection pin.</summary>
     internal static bool SameCheckpoint(
         SandboxBuildTestCheckpointReference left,
         SandboxBuildTestCheckpointReference right) =>
@@ -1352,7 +1193,6 @@ internal static class SandboxBuildTestCanonicalJson
         left.ExecutionFence == right.ExecutionFence &&
         string.Equals(left.AcceptedSelectionHash, right.AcceptedSelectionHash, StringComparison.Ordinal);
 
-    /// <summary>Compares expected and observed runtime resources, generations, and command policy.</summary>
     internal static bool Matches(
         SandboxBuildTestExpectedBinding expected,
         SandboxBuildTestObservedBinding observed,
@@ -1366,7 +1206,6 @@ internal static class SandboxBuildTestCanonicalJson
         expected.NetworkPolicyGeneration == observed.NetworkPolicyGeneration &&
         SameCommandPolicy(expectedCommandPolicy, observed.CommandPolicy);
 
-    /// <summary>Compares policy identity, digest, generation, and selector labels.</summary>
     private static bool SameCommandPolicy(
         SandboxBuildTestCommandNetworkPolicyBinding expected,
         SandboxBuildTestCommandNetworkPolicyBinding actual) =>
@@ -1377,7 +1216,6 @@ internal static class SandboxBuildTestCanonicalJson
         expected.SelectorLabels.All(pair =>
             actual.SelectorLabels.TryGetValue(pair.Key, out var value) && value == pair.Value);
 
-    /// <summary>Writes the expected provider and owner binding in deterministic JSON field order.</summary>
     internal static void WriteExpectedBinding(
         Utf8JsonWriter writer,
         SandboxBuildTestExpectedBinding binding)
@@ -1425,7 +1263,6 @@ internal static class SandboxBuildTestCanonicalJson
         writer.WriteEndObject();
     }
 
-    /// <summary>Writes JSON recursively with object properties sorted ordinally.</summary>
     internal static void WriteJsonElement(Utf8JsonWriter writer, JsonElement element)
     {
         switch (element.ValueKind)
@@ -1453,11 +1290,8 @@ internal static class SandboxBuildTestCanonicalJson
     }
 }
 
-/// <summary>Computes stable digests for applied Cilium policy specifications.</summary>
 public static class SandboxBuildTestCommandPolicyCanonicalization
 {
-    /// <summary>Hashes a JSON policy object after recursively sorting its object properties.</summary>
-    /// <exception cref="ArgumentException">The policy specification is not a JSON object.</exception>
     public static string ComputeSpecSha256(JsonElement specification)
     {
         if (specification.ValueKind != JsonValueKind.Object)
@@ -1469,17 +1303,14 @@ public static class SandboxBuildTestCommandPolicyCanonicalization
     }
 }
 
-/// <summary>Public hash helpers for accepted commands and their API requests.</summary>
 public static class SandboxBuildTestCanonicalization
 {
-    /// <summary>Returns the immutable canonical hash of an accepted command.</summary>
     public static string ComputeImmutableHash(SandboxBuildTestAcceptedCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
         return command.ComputeImmutableHash();
     }
 
-    /// <summary>Returns the canonical request fingerprint for an accepted command and expected binding.</summary>
     public static string ComputeRequestFingerprint(
         SandboxBuildTestApiRequest request,
         SandboxBuildTestAcceptedCommand acceptedCommand) =>

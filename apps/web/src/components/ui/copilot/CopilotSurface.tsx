@@ -35,10 +35,6 @@ const DEMO_STEPS: AgentStep[] = [
   },
 ];
 
-/**
- * Renders the full Copilot chat surface from the messages, composer, and callbacks supplied by
- * its parent. Local state controls surface presentation; conversation data is not fetched here.
- */
 export function CopilotSurface() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Array<{ role: "user" | "assistant"; text: string; id: string }>>([

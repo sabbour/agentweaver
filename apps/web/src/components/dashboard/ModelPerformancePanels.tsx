@@ -284,10 +284,6 @@ function PercentilesTable({ rows, emptyLabel }: { rows: MetricPercentilesDto[]; 
   );
 }
 
-/**
- * Renders model-performance panels from the metric series supplied by the dashboard API caller.
- * Local state selects the visible metric view; the component does not load data itself.
- */
 export function ModelPerformancePanels({ metrics }: { metrics: ProjectMetricsDto | null }) {
   const styles = useStyles();
   const invocationTrend = metrics?.invocationTrend ?? [];

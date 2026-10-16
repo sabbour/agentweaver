@@ -1,7 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-/** Version and allowed disposition values for the reviewed diagram inventory. */
 export const INVENTORY_VERSION = 1;
 export const DIAGRAM_DISPOSITIONS = new Set([
   'unreviewed',
@@ -12,7 +11,6 @@ export const DIAGRAM_DISPOSITIONS = new Set([
   'redesign',
 ]);
 
-/** Assign a diagram to its default documentation area using its stable name prefix. */
 export function inferDiagramArea(name) {
   if (name.startsWith('experience-')) return 'experience';
   if (name.startsWith('guide-')) return 'guide';
@@ -22,7 +20,6 @@ export function inferDiagramArea(name) {
   return 'deep-dive';
 }
 
-/** Build stable source, editable-file, render, and stamp paths for one diagram. */
 export function stableDiagramPaths(source) {
   const sourceExtension = source.kind === 'drawio' ? 'drawio' : 'json';
   const relativeDirectory = source.relativeDirectory ? `${source.relativeDirectory}/` : '';
@@ -36,7 +33,6 @@ export function stableDiagramPaths(source) {
   };
 }
 
-/** Rebuild sorted inventory entries while retaining existing review decisions and notes. */
 export function createInventoryEntries(sources, existingEntries = []) {
   const existing = new Map(existingEntries.map((entry) => [entry.name, entry]));
   return [...sources]
@@ -55,7 +51,6 @@ export function createInventoryEntries(sources, existingEntries = []) {
     });
 }
 
-/** Validate unique diagram names, known dispositions, required paths, and source coverage. */
 export function validateInventoryEntries(entries, sources = []) {
   if (!Array.isArray(entries)) throw new Error('Diagram inventory entries must be an array');
   const names = new Set();
@@ -82,7 +77,6 @@ export function validateInventoryEntries(entries, sources = []) {
   return true;
 }
 
-/** Read and validate the versioned inventory index and all of its area documents. */
 export async function loadInventory(inventoryRoot) {
   const indexPath = path.join(inventoryRoot, 'index.json');
   const index = JSON.parse(await readFile(indexPath, 'utf8'));
@@ -102,7 +96,6 @@ export async function loadInventory(inventoryRoot) {
   return { index, entries };
 }
 
-/** Select inventory entries by optional names, areas, and dispositions in stable name order. */
 export function selectInventoryEntries(
   entries,
   { names = [], areas = [], dispositions = [] } = {},
@@ -124,7 +117,6 @@ export function selectInventoryEntries(
   return selected.sort((left, right) => left.name.localeCompare(right.name));
 }
 
-/** Write one validated, sorted inventory area document and return its path. */
 export async function writeInventoryArea(inventoryRoot, area, entries) {
   validateInventoryEntries(entries);
   const areaPath = path.join(inventoryRoot, 'areas', `${area}.json`);

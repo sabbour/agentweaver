@@ -1,5 +1,3 @@
-/** JSON contracts exchanged by the v1 browser, Gateway, and resource owners. */
-/** Problem details returned for failed Gateway requests. */
 export interface Problem {
   type?: string;
   title?: string;
@@ -9,10 +7,8 @@ export interface Problem {
   [key: string]: unknown;
 }
 
-/** Owner-resource scope used when reporting effective project permissions. */
 export type ProjectAuthorityResourceType = 'platform' | 'tenant' | 'project';
 
-/** Permission names the Projects owner can grant to a signed-in actor. */
 export type ProjectAuthorizationPermission =
   | 'readProjects'
   | 'writeProjects'
@@ -23,20 +19,17 @@ export type ProjectAuthorizationPermission =
   | 'readPlatformRuntimeDefaults'
   | 'writePlatformRuntimeDefaults';
 
-/** A permission and the role revision that currently supplies it. */
 export interface ProjectAuthorizationPermissionGrant {
   permission: ProjectAuthorizationPermission;
   roleRevision: number;
 }
 
-/** Effective permissions for one platform, tenant, or project resource. */
 export interface EffectiveProjectAuthorization {
   resourceType: ProjectAuthorityResourceType;
   resourceId: string;
   permissions: ProjectAuthorizationPermissionGrant[];
 }
 
-/** Broker-to-owner context for the actor, tenant, and optional run binding. */
 export interface ProjectAuthorizationContextResponse {
   contractVersion: 1;
   issuer: string;
@@ -48,18 +41,15 @@ export interface ProjectAuthorizationContextResponse {
   effectiveAuthority: EffectiveProjectAuthorization[];
 }
 
-/** Requires an exact object shape so unknown authorization fields fail closed. */
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   const actual = Object.keys(value);
   return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 }
 
-/** True only for a non-empty string after trimming whitespace. */
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-/** Validates the exact versioned authorization context returned by the Projects owner. */
 export function isProjectAuthorizationContextResponse(
   value: unknown,
 ): value is ProjectAuthorizationContextResponse {
@@ -118,7 +108,6 @@ export function isProjectAuthorizationContextResponse(
   });
 }
 
-/** Compact owner-backed project summary used by the browser project picker. */
 export interface ProjectSummary {
   projectId: string;
   name: string;
@@ -129,17 +118,14 @@ export interface ProjectSummary {
   updatedAt: string;
 }
 
-/** Reference to the selected model and its optional credential resource. */
 export interface ModelSelectionSettings {
   reference: string;
   credentialReference?: { id: string; version: string } | null;
   connectionId?: string;
 }
 
-/** Owner scope of a user-managed Copilot connection. */
 export type CopilotConnectionScope = 'project' | 'platform';
 
-/** Lifecycle reported for a managed Copilot authorization. */
 export type CopilotConnectionState =
   | 'pending'
   | 'connected'
@@ -149,7 +135,6 @@ export type CopilotConnectionState =
   | 'revoked'
   | 'refreshIndeterminate';
 
-/** Revisioned, redacted view of a Copilot authorization connection. */
 export interface CopilotConnectionReceipt {
   connectionId: string;
   revision: number;
@@ -159,24 +144,20 @@ export interface CopilotConnectionReceipt {
   freshUntil: string;
 }
 
-/** Result of beginning Copilot authorization, including the checked connection receipt. */
 export interface CopilotConnectionBegin {
   connection: CopilotConnectionReceipt;
   authorizationUri: string;
 }
 
-/** OAuth callback accepted by the Copilot connection completion route. */
 export type CopilotAuthorizationCallback =
   | { state: string; code: string; error?: never }
   | { state: string; error: 'access_denied'; code?: never };
 
-/** Connection identifier and optimistic-concurrency revision for a mutation. */
 export interface CopilotConnectionMutation {
   connectionId: string;
   expectedRevision: number;
 }
 
-/** Lifecycle values for a project's remote MCP OAuth connection. */
 export type RemoteMcpOAuthConnectionState =
   | 'NotConnected'
   | 'PendingConsent'
@@ -186,7 +167,6 @@ export type RemoteMcpOAuthConnectionState =
   | 'Disconnected'
   | 'Revoked';
 
-/** Redacted connection state together with configuration and credential revisions. */
 export interface RemoteMcpOAuthManagementStatus {
   connectionId: string;
   projectId: string;
@@ -199,7 +179,6 @@ export interface RemoteMcpOAuthManagementStatus {
   credentialUseAvailable: boolean;
 }
 
-/** Project configuration identity pinned when registering an OAuth provider. */
 export interface RemoteMcpOAuthConnectionRegistration {
   projectId: string;
   connectionId: string;
@@ -209,7 +188,6 @@ export interface RemoteMcpOAuthConnectionRegistration {
   scopes: string[];
 }
 
-/** One-time OAuth consent preparation bound to state, PKCE, and config revisions. */
 export interface RemoteMcpOAuthConsentPreparation {
   correlationId: string;
   state: string;
@@ -221,12 +199,10 @@ export interface RemoteMcpOAuthConsentPreparation {
   configurationSha256: string;
 }
 
-/** OAuth code or explicit denial submitted to finish the remote MCP callback. */
 export type RemoteMcpOAuthCallbackRequest =
   | { state: string; code: string; error?: never }
   | { state: string; error: 'access_denied'; code?: never };
 
-/** Version-fenced and idempotent disconnect request for a remote MCP connection. */
 export interface RemoteMcpOAuthDisconnectRequest {
   expectedConnectionRevision: number;
   expectedCredentialRevision: number;
@@ -234,14 +210,12 @@ export interface RemoteMcpOAuthDisconnectRequest {
   idempotencyKey: string;
 }
 
-/** Version-fenced request to refresh credentials for a remote MCP connection. */
 export interface RemoteMcpOAuthRefreshRequest {
   expectedConnectionRevision: number;
   expectedCredentialRevision: number;
   expectedConfigurationRevision: number;
 }
 
-/** Expected revisions and digest required before starting provider consent. */
 export interface RemoteMcpOAuthConsentRequest {
   expectedConnectionRevision: number;
   expectedCredentialRevision: number;
@@ -249,7 +223,6 @@ export interface RemoteMcpOAuthConsentRequest {
   expectedConfigurationSha256: string;
 }
 
-/** Validates exact fields, identifiers, revisions, and states in the owner response. */
 export function isRemoteMcpOAuthManagementStatus(
   value: unknown,
 ): value is RemoteMcpOAuthManagementStatus {
@@ -290,7 +263,6 @@ export function isRemoteMcpOAuthManagementStatus(
     typeof status.credentialUseAvailable === 'boolean';
 }
 
-/** Validates the short-lived state, PKCE challenge, expiry, and configuration digest. */
 export function isRemoteMcpOAuthConsentPreparation(
   value: unknown,
 ): value is RemoteMcpOAuthConsentPreparation {
@@ -323,7 +295,6 @@ export function isRemoteMcpOAuthConsentPreparation(
     /^[0-9a-f]{64}$/.test(preparation.configurationSha256);
 }
 
-/** Validates the exact receipt shape before displaying or using connection state. */
 export function isCopilotConnectionReceipt(value: unknown): value is CopilotConnectionReceipt {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const receipt = value as Record<string, unknown>;
@@ -354,7 +325,6 @@ export function isCopilotConnectionReceipt(value: unknown): value is CopilotConn
     Number.isFinite(Date.parse(receipt.freshUntil));
 }
 
-/** Validates the begin response and its embedded connection receipt. */
 export function isCopilotConnectionBegin(value: unknown): value is CopilotConnectionBegin {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const begin = value as Record<string, unknown>;
@@ -363,7 +333,6 @@ export function isCopilotConnectionBegin(value: unknown): value is CopilotConnec
     isNonEmptyString(begin.authorizationUri);
 }
 
-/** Mutable owner configuration, including model, skills, source control, and run limits. */
 export interface ProjectConfiguration {
   modelSelection?: ModelSelectionSettings | null;
   providerOverrides: Array<{ seam: string; providerId: string }>;
@@ -385,7 +354,6 @@ export interface ProjectConfiguration {
   sourceControl?: SourceControlProjectSettings | null;
 }
 
-/** Revision and optional agent scope for one assigned skill. */
 export interface ProjectSkillAssignment {
   skillId: string;
   enabled: boolean;
@@ -395,7 +363,6 @@ export interface ProjectSkillAssignment {
   agentIds?: string[] | null;
 }
 
-/** Revisioned Git-backed source registered as a project's skill marketplace. */
 export interface MarketplaceSource {
   sourceId: string;
   name: string;
@@ -406,7 +373,6 @@ export interface MarketplaceSource {
   state: 'active' | 'removed';
 }
 
-/** Fields used to add a Git-backed skill marketplace source. */
 export interface MarketplaceSourceInput {
   name?: string;
   repository: string;
@@ -414,12 +380,10 @@ export interface MarketplaceSourceInput {
   subpath?: string;
 }
 
-/** Marketplace update request fenced to the source revision being edited. */
 export interface MarketplaceSourceUpdateInput extends MarketplaceSourceInput {
   expectedRevision: number;
 }
 
-/** Search and paging controls pinned to a marketplace source revision. */
 export interface MarketplaceBrowseRequest {
   expectedSourceRevision: number;
   query?: string;
@@ -427,14 +391,12 @@ export interface MarketplaceBrowseRequest {
   pageSize?: number;
 }
 
-/** One skill path available from a marketplace browse result. */
 export interface MarketplaceSkillCandidate {
   location: string;
   name: string;
   description: string | null;
 }
 
-/** Paged browse results pinned to the resolved repository commit. */
 export interface MarketplaceBrowsePage {
   sourceId: string;
   sourceRevision: number;
@@ -447,14 +409,12 @@ export interface MarketplaceBrowsePage {
   hasMore: boolean;
 }
 
-/** Identifies the exact source revision and skill path to preview. */
 export interface MarketplaceSkillContentPreviewRequest {
   expectedSourceRevision: number;
   resolvedCommitSha: string;
   selectedPath: string;
 }
 
-/** Import confirmation with digest, idempotency key, and optional update revision. */
 export interface MarketplaceSkillContentImportRequest extends MarketplaceSkillContentPreviewRequest {
   idempotencyKey: string;
   expectedContentDigest: string;
@@ -462,19 +422,16 @@ export interface MarketplaceSkillContentImportRequest extends MarketplaceSkillCo
   expectedRevision?: number | null;
 }
 
-/** Relative path and text content for a resource packaged with a skill. */
 export interface SkillContentResourceRequest {
   relativePath: string;
   content: string;
 }
 
-/** Markdown plus its relative text resources, before owner-side validation. */
 export interface SkillContentCandidateRequest {
   skillMarkdown: string;
   resources: SkillContentResourceRequest[];
 }
 
-/** Summary returned after validating candidate content without storing it. */
 export interface SkillContentPreview {
   name: string;
   description: string;
@@ -483,7 +440,6 @@ export interface SkillContentPreview {
   totalBytes: number;
 }
 
-/** Project import request pinned to a content digest and optional source revision. */
 export interface SkillContentImportRequest {
   idempotencyKey: string;
   expectedContentDigest: string;
@@ -499,7 +455,6 @@ export interface SkillContentImportRequest {
   candidate: SkillContentCandidateRequest;
 }
 
-/** Receipt confirming an imported skill revision and its content digest. */
 export interface SkillContentImportReceipt {
   skillId: string;
   revision: number;
@@ -510,13 +465,11 @@ export interface SkillContentImportReceipt {
   totalBytes: number;
 }
 
-/** Cursor and page-size controls for skill inventory queries. */
 export interface SkillContentInventoryQuery {
   cursor?: string;
   pageSize?: number;
 }
 
-/** Metadata for a stored skill-content revision, including revocation and source provenance. */
 export interface SkillContentRevisionSummary {
   skillId: string;
   revision: number;
@@ -537,7 +490,6 @@ export interface SkillContentRevisionSummary {
   revokedAt: string | null;
 }
 
-/** Assignment state and the content revision selected for a skill. */
 export interface SkillContentAssignmentSummary {
   skillId: string;
   enabled: boolean;
@@ -547,7 +499,6 @@ export interface SkillContentAssignmentSummary {
   agentIds: string[] | null;
 }
 
-/** One page of skill assignments and revision metadata under a config revision. */
 export interface SkillContentInventoryPage {
   configurationRevision: number;
   assignments: SkillContentAssignmentSummary[];
@@ -556,7 +507,6 @@ export interface SkillContentInventoryPage {
   nextCursor: string | null;
 }
 
-/** Revision-fenced skill assignment update sent to the Projects owner. */
 export interface SkillAssignmentRequest {
   expectedProjectConfigurationRevision: number;
   revision: number;
@@ -566,10 +516,8 @@ export interface SkillAssignmentRequest {
   agentIds: string[];
 }
 
-/** Authentication mechanism used by project source-control settings. */
 export type SourceControlAuthMode = 'secret' | 'githubApp';
 
-/** Project's repository and secret references for source-control access. */
 export interface SourceControlProjectSettings {
   authMode?: SourceControlAuthMode;
   appConnectionId?: string;
@@ -579,26 +527,22 @@ export interface SourceControlProjectSettings {
   webhookSecretReference?: { id: string; version: string } | null;
 }
 
-/** Browser redirect and transaction identifier returned when Repo App auth begins. */
 export interface RepoAppAuthorizationStart {
   authorizationUrl: string;
   transactionId: string;
   expiresAt: string;
 }
 
-/** Redacted connection state for the user's Repo App authorization. */
 export interface RepoAppAuthorizationStatus {
   connected: boolean;
   githubLogin: string | null;
   connectionId: string | null;
 }
 
-/** Current status of one Repo App authorization transaction. */
 export interface RepoAppAuthorizationTransaction {
   status: string;
 }
 
-/** Repository metadata offered for selection from a GitHub installation. */
 export interface RepoAppRepositoryCandidate {
   fullName: string;
   ownerLogin: string;
@@ -607,7 +551,6 @@ export interface RepoAppRepositoryCandidate {
   pushedAt: string | null;
 }
 
-/** GitHub installation account and management destination. */
 export interface RepoAppInstallationCandidate {
   accountLogin: string;
   accountType: string;
@@ -615,19 +558,16 @@ export interface RepoAppInstallationCandidate {
   managementUrl: string;
 }
 
-/** Repositories and installations available to the user's Repo App connection. */
 export interface RepoAppRepositorySelectionList {
   repositories: RepoAppRepositoryCandidate[];
   installations: RepoAppInstallationCandidate[];
 }
 
-/** Expiring code that lets the browser select a repository without sending credentials. */
 export interface RepoAppRepositorySelectionCode {
   selectionCode: string;
   expiresAt: string;
 }
 
-/** Owner-confirmed repository pin and resource generation for a run session. */
 export interface SourceControlRepositoryPinView {
   pinId: string;
   repository: string;
@@ -640,7 +580,6 @@ export interface SourceControlRepositoryPinView {
   pinnedAt: string;
 }
 
-/** Project configuration paired with the owner revision used for compare-and-swap updates. */
 export interface VersionedProjectConfiguration {
   projectId: string;
   revision: number;
@@ -649,7 +588,6 @@ export interface VersionedProjectConfiguration {
   createdAt: string;
 }
 
-/** Provider metadata considered when resolving an effective seam selection. */
 export interface ProviderCandidate {
   seam: string;
   providerId: string;
@@ -662,7 +600,6 @@ export interface ProviderCandidate {
   layer?: string | null;
 }
 
-/** Effective provider candidates and cardinality for one provider seam. */
 export interface EffectiveProviderSelection {
   cardinality: string;
   seam: string;
@@ -670,7 +607,6 @@ export interface EffectiveProviderSelection {
   meterSource?: string | null;
 }
 
-/** Fully resolved project/run model, provider, configuration, and network settings. */
 export interface EffectiveRunSelection {
   projectId: string;
   runId: string;
@@ -688,7 +624,6 @@ export interface EffectiveRunSelection {
   requiredEgress: unknown[];
 }
 
-/** Owner-maintained run state and the fence/version that protects current execution. */
 export interface OwnerRunStatus {
   projectId: string;
   runId: string;
@@ -701,21 +636,16 @@ export interface OwnerRunStatus {
   reference?: string | null;
 }
 
-/** Role of a session in the coordination tree or operator experience. */
 export type SessionKind = 'coordinator' | 'childWork' | 'scribe' | 'operatorChat' | 'childRun';
-/** Owner lifecycle for a coordination session. */
 export type SessionLifecycle = 'active' | 'cancelled' | 'completed' | 'archived';
-/** Whether a session is currently executing work, idle, or not observable. */
 export type SessionActivity = 'busy' | 'idle' | 'unknown';
 
-/** Project, run, and session identifiers used as an exact owner resource key. */
 export interface SessionIdentity {
   projectId: string;
   runId: string;
   sessionId: string;
 }
 
-/** One coordination-tree node with parent, lifecycle, and execution-fence metadata. */
 export interface SessionTreeNode {
   identity: SessionIdentity;
   parentSessionId?: string | null;
@@ -730,20 +660,17 @@ export interface SessionTreeNode {
   archivedAt?: string | null;
 }
 
-/** Owner snapshot of a run's session hierarchy. */
 export interface SessionTreeSnapshot {
   rootSessionId: string;
   nodes: SessionTreeNode[];
 }
 
-/** Kinds of user or owner action currently blocking a session. */
 export type CoordinationBlockerKind =
   | 'awaitingInput'
   | 'awaitingPlanApproval'
   | 'awaitingApproval'
   | 'awaitingOutcomeConfirmation';
 
-/** Pending request and allowed response forms associated with a blocked session. */
 export interface SessionStatusBlocker {
   kind: CoordinationBlockerKind;
   requestId: string;
@@ -752,7 +679,6 @@ export interface SessionStatusBlocker {
   prompt?: string | null;
 }
 
-/** Current session activity, blockers, lifecycle, and owner run-execution state. */
 export interface SessionStatusSnapshot {
   identity: SessionIdentity;
   parentSessionId?: string | null;
@@ -780,7 +706,6 @@ export interface SessionStatusSnapshot {
   };
 }
 
-/** Coordinator decision state and the next gate available to the caller. */
 export interface CoordinatorDecisionStateView {
   stateVersion: number;
   executionFence: number;
@@ -791,14 +716,12 @@ export interface CoordinatorDecisionStateView {
   pendingGate?: CoordinatorGateRequest | null;
 }
 
-/** One workflow validation issue returned by coordinator decision processing. */
 export interface WorkflowValidationIssue {
   code: string;
   path: string;
   message: string;
 }
 
-/** Result of a versioned coordinator decision operation, including rejection issues. */
 export interface CoordinatorDecisionOperationResponse {
   decisionId: string;
   stateVersion: number;
@@ -809,7 +732,6 @@ export interface CoordinatorDecisionOperationResponse {
   transitionValue?: unknown;
 }
 
-/** Accepted coordination-tree command and the execution fence it targeted. */
 export interface CoordinationTreeCommandResult {
   commandId: string;
   command: string;
@@ -819,7 +741,6 @@ export interface CoordinationTreeCommandResult {
   state: string;
 }
 
-/** Gate contract describing the authorized actor, choices, and execution fence. */
 export interface CoordinatorGateRequest {
   requestId: string;
   kind:
@@ -838,7 +759,6 @@ export interface CoordinatorGateRequest {
   resolvesOutcomeClarification?: boolean;
 }
 
-/** Versioned owner event with exact session identity and opaque event payload. */
 export interface SessionEventEnvelope {
   schemaVersion: number;
   eventVersion: number;
@@ -851,14 +771,12 @@ export interface SessionEventEnvelope {
   objectReferences: unknown[];
 }
 
-/** Persisted event page with a cursor for continued replay. */
 export interface SessionEventPage {
   events: SessionEventEnvelope[];
   nextCursor?: string | null;
   hasMore: boolean;
 }
 
-/** Amount and pricing coverage for one usage meter and unit. */
 export interface UsageAmountTotal {
   meterSource: string;
   unit: string;
@@ -867,7 +785,6 @@ export interface UsageAmountTotal {
   unpricedEvents: number;
 }
 
-/** Aggregated usage and priced amounts attributed to one agent. */
 export interface UsageAgentTotals {
   agentId: string;
   events: number;
@@ -882,7 +799,6 @@ export interface UsageAgentTotals {
   amounts: UsageAmountTotal[];
 }
 
-/** Aggregated usage totals for one run, grouped by agent and meter. */
 export interface UsageRunTotals {
   tenantId: string;
   projectId: string;
@@ -893,14 +809,10 @@ export interface UsageRunTotals {
   amounts: UsageAmountTotal[];
 }
 
-/** Knowledge-record category stored by the owner. */
 export type KnowledgeKind = 'memory' | 'proposal' | 'decision' | 'sessionContext';
-/** Lifecycle state of a knowledge record. */
 export type KnowledgeRecordState = 'pending' | 'active' | 'rejected' | 'archived' | 'promoted' | 'superseded';
-/** Trust decision associated with a knowledge record. */
 export type KnowledgeTrustState = 'pending' | 'approved' | 'rejected' | 'legacy';
 
-/** Owner record scoped to one project and agent, with state and revision history. */
 export interface KnowledgeRecord {
   recordId: string;
   projectId: string;
@@ -925,7 +837,6 @@ export interface KnowledgeRecord {
   supersededByRecordId?: string | null;
 }
 
-/** Page of knowledge records matching an exact owner scope and query. */
 export interface KnowledgeRecordPage {
   items: KnowledgeRecord[];
   totalCount: number;
@@ -933,7 +844,6 @@ export interface KnowledgeRecordPage {
   pageSize: number;
 }
 
-/** Immutable snapshot of one knowledge-record revision and its provenance. */
 export interface KnowledgeRecordRevision {
   recordId: string;
   revision: number;
@@ -957,7 +867,6 @@ export interface KnowledgeRecordRevision {
   changeKind?: string | null;
 }
 
-/** Page of historical revisions for one knowledge record. */
 export interface KnowledgeRecordRevisionPage {
   items: KnowledgeRecordRevision[];
   totalCount: number;
@@ -965,7 +874,6 @@ export interface KnowledgeRecordRevisionPage {
   pageSize: number;
 }
 
-/** Versioned transfer envelope constrained to one project and agent. */
 export interface KnowledgeRecordTransferBundle {
   format: 'agentweaver.knowledge-transfer.v1';
   schemaVersion: 1;
@@ -974,19 +882,16 @@ export interface KnowledgeRecordTransferBundle {
   records: KnowledgeRecordTransferEntry[];
 }
 
-/** Record and history included together in a knowledge transfer bundle. */
 export interface KnowledgeRecordTransferEntry {
   record: KnowledgeRecord;
   revisions: KnowledgeRecordRevision[];
 }
 
-/** Import result indicating whether the owner treated the bundle as a duplicate. */
 export interface KnowledgeRecordImportResult {
   records: KnowledgeRecord[];
   isDuplicate: boolean;
 }
 
-/** Owner result for a knowledge mutation, including stale and invalid-state outcomes. */
 export interface KnowledgeRecordWriteResult {
   status:
     | 'created'
@@ -1002,7 +907,6 @@ export interface KnowledgeRecordWriteResult {
   isDuplicate: boolean;
 }
 
-/** Mutable knowledge fields and optional replacement-state explanation. */
 export interface KnowledgeRecordUpdateInput {
   type: string;
   title?: string | null;
@@ -1015,7 +919,6 @@ export interface KnowledgeRecordUpdateInput {
   supersededByRecordId?: string | null;
 }
 
-/** Proposal promotion result with both resulting records and delivery status. */
 export interface KnowledgeProposalPromotionResult extends KnowledgeRecordWriteResult {
   proposal?: KnowledgeRecord | null;
   decision?: KnowledgeRecord | null;
@@ -1027,7 +930,6 @@ export interface KnowledgeProposalPromotionResult extends KnowledgeRecordWriteRe
   deliveryAcknowledgment?: unknown;
 }
 
-/** Broker consent challenge required before authorization can continue. */
 export interface BrokerConsentPrompt {
   consent_required: true;
   consent_handle: string;
@@ -1036,7 +938,6 @@ export interface BrokerConsentPrompt {
   csrf_token: string;
 }
 
-/** Bearer-token response returned by the Identity Broker token endpoint. */
 export interface BrokerTokenResponse {
   access_token: string;
   token_type: string;

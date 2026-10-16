@@ -1,13 +1,10 @@
 namespace Agentweaver.Identity;
 
-/// <summary>Reads current runtime registration state from the Orchestrator owner.</summary>
 public sealed class RuntimeRegistrationHttpClient(
     HttpClient client, Uri orchestratorAddress) : IRuntimeRegistrationOwner
 {
     private readonly Uri _orchestratorAddress = RuntimeOwnerHttpTransport.RequireOwnerAddress(orchestratorAddress);
 
-    /// <summary>Retrieves and validates the exact requested runtime registration.</summary>
-    /// <exception cref="RuntimeAuthorizationException">The ID is invalid or the returned registration does not match.</exception>
     public async Task<RuntimeRegistration> ReadCurrentAsync(
         Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
     {

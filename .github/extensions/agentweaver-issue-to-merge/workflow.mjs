@@ -1,7 +1,5 @@
 import { execFileSync } from "node:child_process";
 
-/** Coordinate scoped issue delivery from preflight through review, publication, and admission. */
-/** Durable phases used to label progress and verify the workflow's recorded execution. */
 const phases = [
   "Scope and classify",
   "Implement, document and record release impact",
@@ -51,18 +49,11 @@ const ownershipSchema = {
     evidence: { type: "string" },
   },
 };
-
-/** Validate full commit IDs and safe repository-relative paths before using them as workflow evidence. */
 const sha = (value) => typeof value === "string" && /^[a-f0-9]{40}$/.test(value);
 const exactPath = (path) => typeof path === "string" && path.length > 0 &&
   !path.startsWith("-") && !path.startsWith("/") && !path.includes("\\") &&
   path.split("/").every((part) => part && part !== "." && part !== "..");
 
-/**
- * Run the issue-to-PR delivery flow in the current isolated worktree.
- * The default is a no-mutation rehearsal; delivery and correction modes require structured inputs and
- * reconcile durable workflow steps with live Git, PR, and review evidence before continuing.
- */
 export async function runIssueToMerge(ctx, cwd, gh = (...args) =>
   execFileSync("gh", args, { cwd, encoding: "utf8", windowsHide: true }).trim(),
   fetchBase = (branch) => execFileSync("git", ["fetch", "--no-tags", "origin", branch], {

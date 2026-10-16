@@ -1,7 +1,3 @@
-/**
- * Frozen run bindings used by the narrowly scoped partial-publication continuation.
- * The continuation verifies these recorded identities before attempting any remaining publication work.
- */
 export const PARTIAL_PUBLICATION = Object.freeze({
   sourceSha: 'c24d0000fe5fc6163e4f38594c39dff782d3a46d',
   runId: '38815873763',

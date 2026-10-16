@@ -2,7 +2,6 @@ import { copyFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** Copy flagship PNGs and generated editable diagrams into the VitePress public asset tree. */
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const diagramsRoot = path.join(repoRoot, 'docs', 'diagrams');
 const publicDir = path.join(repoRoot, 'docs', 'public', 'diagrams', 'flagship');

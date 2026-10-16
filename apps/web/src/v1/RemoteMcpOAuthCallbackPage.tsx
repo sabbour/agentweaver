@@ -3,7 +3,6 @@ import {
   parseRemoteMcpOAuthCallbackParameters,
 } from './remoteMcpOAuthCallback';
 
-/** Sanitizes and relays an OAuth callback to its same-origin opener, then closes the popup. */
 export function RemoteMcpOAuthPopupCallbackPage() {
   const [callback] = useState(() => window.location.hash
     ? null

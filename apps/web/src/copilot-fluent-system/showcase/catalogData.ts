@@ -1,5 +1,3 @@
-// Checked-in design inventory and implementation-status records consumed by the development showcase.
-/** One extracted design reference and its current local implementation mapping. */
 export interface CatalogRow {
   figmaNodeReference: string;
   extractionStatus: string;
@@ -9,7 +7,6 @@ export interface CatalogRow {
   showcase: 'Yes' | 'No' | string;
 };
 
-/** Grouped component inventory metadata used to connect design nodes to library exports and examples. */
 export interface ComponentCatalogGroup {
   id: string;
   status: string;
@@ -32,7 +29,6 @@ export interface ComponentCatalogGroup {
   notes?: string;
 }
 
-/** Complete component inventory snapshot, coverage accounting, and local-consumption notes. */
 export interface ComponentCatalogData {
   catalogKind: 'components';
   sourceFileKey: string;
@@ -75,7 +71,6 @@ export interface ComponentCatalogData {
   inventoryRows: CatalogRow[];
 }
 
-/** One pattern family with representative design references and local implementation guidance. */
 export interface PatternFamily {
   id: string;
   name: string;
@@ -94,7 +89,6 @@ export interface PatternFamily {
   implementationFiles?: string[];
 }
 
-/** Pattern inventory snapshot and summary consumed by the showcase browser. */
 export interface PatternCatalogData {
   catalogKind: 'patterns';
   sourceFile: {
@@ -118,7 +112,6 @@ export interface PatternCatalogData {
   mappingRows: CatalogRow[];
 }
 
-/** Static component catalog data; it records traceability and coverage, not runtime product state. */
 export const componentCatalogData: ComponentCatalogData = {
   "catalogKind": "components",
   "sourceFileKey": "q2TdO4dVcMhNWYp0N6Bc05",
@@ -4601,7 +4594,6 @@ export const componentCatalogData: ComponentCatalogData = {
   ]
 };
 
-/** Static pattern catalog data used to label and group the showcase's pattern examples. */
 export const patternCatalogData: PatternCatalogData = {
   "catalogKind": "patterns",
   "sourceFile": {

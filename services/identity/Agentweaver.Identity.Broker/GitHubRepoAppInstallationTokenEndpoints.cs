@@ -10,14 +10,8 @@ using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace Agentweaver.Identity.Broker;
 
-/// <summary>
-/// Authenticated runtime route that mints a narrowly scoped GitHub App installation
-/// token. It requires single-valued actor/project/run claims, an active run grant, and
-/// current repository-selection and permission evidence before releasing the token.
-/// </summary>
 internal static class GitHubRepoAppInstallationTokenEndpoints
 {
-    /// <summary>Registers the internal installation-token minting route.</summary>
     internal static void MapGitHubRepoAppInstallationTokenEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapPost("/internal/source-control/github-app/installations/token", MintAsync)
@@ -165,7 +159,6 @@ internal static class GitHubRepoAppInstallationTokenEndpoints
         Results.Json(new { error }, statusCode: statusCode).ExecuteAsync(context);
 }
 
-/// <summary>Strict mint request; selection evidence is either one opaque code or an explicit hashed selection.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record GitHubRepoAppInstallationTokenInput(
     string? SelectionCode,
@@ -178,7 +171,6 @@ internal sealed record GitHubRepoAppInstallationTokenInput(
     bool? IssueWriteRequested,
     string? ExpectedRepositoryFullName);
 
-/// <summary>Installation token response with its expiry and the repository and permission binding it represents.</summary>
 internal sealed record GitHubRepoAppInstallationTokenResponse(
     string AccessToken,
     DateTimeOffset ExpiresAt,

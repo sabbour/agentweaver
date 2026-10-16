@@ -9,18 +9,9 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Creates the short-lived executable grant that authorizes an approved Source Control merge and records its issuance in the owner transaction.
-/// </summary>
 internal static class SourceControlMergeGrantProducer
 {
-    /// <summary>
-    /// The executable-action identifier stored in the merge grant.
-    /// </summary>
     public const string ActionId = "source_control.merge";
-    /// <summary>
-    /// The purpose required when the merge grant is checked or redeemed.
-    /// </summary>
     public const string Purpose = "source-control.merge";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -30,9 +21,6 @@ internal static class SourceControlMergeGrantProducer
         MaxDepth = 32
     };
 
-    /// <summary>
-    /// Links a pending approval gate to its source merge intent only when actor, accepted run, fence, and decision version match.
-    /// </summary>
     public static async Task TrackApprovalRequestAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -90,9 +78,6 @@ internal static class SourceControlMergeGrantProducer
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Processes accepted approval receipts in the caller transaction. Rejection closes the intent; approval records the receipt, issues a five-minute merge grant, and writes its outbox event atomically.
-    /// </summary>
     public static async Task IssueApprovedIntentsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -269,9 +254,6 @@ internal static class SourceControlMergeGrantProducer
         }
     }
 
-    /// <summary>
-    /// Locks and reads an approval-pending intent only when its source and approval decisions are accepted, then restores its pinned repository binding.
-    /// </summary>
     private static async Task<PendingMergeIntent?> ReadPendingIntentAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -360,9 +342,6 @@ internal static class SourceControlMergeGrantProducer
             reader.IsDBNull(31) ? null : reader.GetInt64(31));
     }
 
-    /// <summary>
-    /// Checks the intent, actor, selection, state-version chain, receipt, and approved gate before a grant can be issued.
-    /// </summary>
     private static void ValidateIntentBinding(
         PendingMergeIntent intent,
         CoordinationActor actor,
@@ -420,9 +399,6 @@ internal static class SourceControlMergeGrantProducer
                 "source_control_approval_binding_invalid", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Rebuilds the merge request from the saved intent and current legal assembly, then applies the accepted approval receipt.
-    /// </summary>
     private static SourceControlMergeIntent CreateApprovedIntent(
         PendingMergeIntent intent,
         CoordinatorDecisionState state,
@@ -463,9 +439,6 @@ internal static class SourceControlMergeGrantProducer
         return request.Approve(state, receipt);
     }
 
-    /// <summary>
-    /// Changes an approval-pending intent to rejected in the current transaction.
-    /// </summary>
     private static async Task SetRejectedAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -485,9 +458,6 @@ internal static class SourceControlMergeGrantProducer
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Returns the single positive project role revision that authorized run selection, or fails closed when authority is ambiguous.
-    /// </summary>
     private static long CurrentRoleRevision(AuthorizedRunSelection selection, string projectId)
     {
         var revisions = selection.Authorization.EffectiveAuthority
@@ -503,27 +473,18 @@ internal static class SourceControlMergeGrantProducer
         return revisions[0];
     }
 
-    /// <summary>
-    /// Adds project and run parameters used to constrain owner-table commands.
-    /// </summary>
     private static void AddScope(NpgsqlCommand command, SessionIdentity identity)
     {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, identity.ProjectId);
         command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, identity.RunId);
     }
 
-    /// <summary>
-    /// Accepts only bounded ASCII identifiers used to match a pending gate to an intent.
-    /// </summary>
     private static bool IsStableIdentifier(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= 128 &&
         value.All(character =>
             char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-' or ':');
 
-    /// <summary>
-    /// Holds the database fields needed to verify an approval receipt and rebuild its pending merge intent.
-    /// </summary>
     private sealed record PendingMergeIntent(
         string IntentId,
         string SessionId,

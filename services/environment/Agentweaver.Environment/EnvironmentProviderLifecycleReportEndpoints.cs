@@ -2,12 +2,8 @@ using Microsoft.AspNetCore.Authorization;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Registers the internal provider lifecycle report route.</summary>
 public static class EnvironmentProviderLifecycleReportEndpoints
 {
-    /// <summary>
-    /// Maps a fail-closed endpoint while report ingestion is unavailable; it never accepts provider state as applied.
-    /// </summary>
     public static IEndpointRouteBuilder MapProviderLifecycleReportEndpoints(
         this IEndpointRouteBuilder endpoints)
     {

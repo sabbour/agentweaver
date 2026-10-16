@@ -7,14 +7,8 @@ using OpenIddict.Validation.AspNetCore;
 
 namespace Agentweaver.Identity.Broker;
 
-/// <summary>
-/// Maps authenticated internal endpoints for runtime model grants, bootstrap delivery,
-/// source verification, rotation and revocation. Each request is bound to a single
-/// validated bearer subject and tenant selector before authority methods run.
-/// </summary>
 public static class RuntimeCredentialEndpoints
 {
-    /// <summary>Registers the internal routes used by orchestrator and runtime callers.</summary>
     public static void MapIdentityRuntimeCredentialEndpoints(this IEndpointRouteBuilder app)
     {
         var routes = app.MapGroup("/internal/runtime").RequireAuthorization(new AuthorizeAttribute

@@ -11,10 +11,8 @@ using Microsoft.Extensions.Options;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Settings that pin the trusted issuer of Remote MCP actor proofs.</summary>
 public sealed record RemoteMcpCurrentCallVerificationOptions(string ActorIssuer)
 {
-    /// <summary>Requires the configured actor issuer to be a canonical HTTPS URI.</summary>
     public RemoteMcpCurrentCallVerificationOptions Validate()
     {
         if (!Uri.TryCreate(ActorIssuer, UriKind.Absolute, out var issuer) ||
@@ -25,7 +23,6 @@ public sealed record RemoteMcpCurrentCallVerificationOptions(string ActorIssuer)
     }
 }
 
-/// <summary>Verifies that a Remote MCP tool-result proof and call binding are still current.</summary>
 public sealed class RemoteMcpCurrentCallVerificationService(
     IHttpClientFactory clients,
     [FromKeyedServices(RemoteMcpTrustedServiceTlsComposition.OrchestratorTlsKey)]
@@ -42,11 +39,6 @@ public sealed class RemoteMcpCurrentCallVerificationService(
     private readonly HttpClient _orchestratorClient =
         clients.CreateClient(RemoteMcpTrustedServiceTlsComposition.OrchestratorClientName);
 
-    /// <summary>
-    /// Checks the authenticated actor, current runtime registration, owner-issued result proof, and gateway policy.
-    /// The temporary actor credential is invalidated even when verification fails.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">The actor, proof, runtime registration, or managed policy is not current.</exception>
     public async Task<RemoteMcpCurrentCallVerificationAcknowledgment> VerifyAsync(
         HttpContext context,
         RemoteMcpCurrentCallVerificationRequest request,
@@ -136,12 +128,8 @@ public sealed class RemoteMcpCurrentCallVerificationService(
     }
 }
 
-/// <summary>Maps the internal endpoint used by trusted Identity services to request current-call verification.</summary>
 public static class RemoteMcpCurrentCallVerificationEndpoints
 {
-    /// <summary>
-    /// Registers the bounded, no-store verification endpoint behind the required Identity service TLS peer check.
-    /// </summary>
     public static IEndpointRouteBuilder MapRemoteMcpCurrentCallVerification(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost(RemoteMcpCurrentCallContract.VerificationPath, async (

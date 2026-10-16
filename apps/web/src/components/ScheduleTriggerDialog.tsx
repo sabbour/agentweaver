@@ -28,11 +28,6 @@ export interface ScheduleTriggerDialogProps {
   onRemove: () => void | Promise<void>;
 }
 
-/**
- * Renders the schedule-trigger editor dialog for a workflow or automation.
- * The parent supplies the current trigger and save/cancel callbacks; dialog state is local and
- * no API request is made here.
- */
 export function ScheduleTriggerDialog({
   open,
   ...props

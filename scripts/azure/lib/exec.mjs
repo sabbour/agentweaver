@@ -1,7 +1,3 @@
-/**
- * Provides shell-free wrappers for Azure CLI, Git, and related process calls.
- * Captured diagnostics are redacted before they reach callers, and JSON projections limit exposed fields.
- */
 // Dependency-free wrapper around spawnSync for invoking `az` and `git`.
 // Always receives a literal argument array (never a shell string), so no
 // caller input can be interpreted as shell syntax. Captures stdout/stderr
@@ -27,7 +23,6 @@ const SECRET_PATTERNS = [
   /[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
 ];
 
-/** Removes known secret-shaped values from text before diagnostics are surfaced. */
 export function redact(text) {
   if (typeof text !== 'string' || text.length === 0) return text;
   return SECRET_PATTERNS.reduce((value, pattern) => value.replace(pattern, '[redacted]'), text);
@@ -117,10 +112,6 @@ function spawnPlatformSafe(command, args, spawnOptions) {
  * `preserveProjectedJson` retains exact identifiers only after an explicit
  * projection excludes credential-bearing fields. Ordinary output stays redacted.
  */
-/**
- * Runs one executable with a literal argument array and returns its normalized process result.
- * With check enabled, launch or nonzero-exit failures throw with redacted diagnostics.
- */
 export function run(command, args, options = {}) {
   const { check = true, cwd, env, input, timeout, projectJson, preserveProjectedJson = false } = options;
   if (preserveProjectedJson && typeof projectJson !== 'function') {
@@ -175,12 +166,10 @@ export function run(command, args, options = {}) {
   return { status: result.status, stdout, stderr };
 }
 
-/** Invokes Azure CLI through run(), preserving its validation and redaction behavior. */
 export function runAz(args, options = {}) {
   return run('az', args, options);
 }
 
-/** Invokes Git through run(), preserving its validation and redaction behavior. */
 export function runGit(args, options = {}) {
   return run('git', args, options);
 }
@@ -199,15 +188,10 @@ function normalizeLineEndings(content) {
   return normalized.subarray(0, length);
 }
 
-/** Compares source bytes after normalizing CRLF and LF line endings. */
 export function sourceBytesMatch(committed, expected) {
   return normalizeLineEndings(committed).equals(normalizeLineEndings(expected));
 }
 
-/**
- * Reads a file from a Git revision and compares its bytes with the expected content.
- * Git failures throw with redacted diagnostics; line-ending style alone does not cause a mismatch.
- */
 export function gitShowMatches(revision, file, expected, { cwd, env, timeout } = {}) {
   const args = ['show', `${revision}:${file}`];
   const result = spawnPlatformSafe('git', args, { cwd, env, timeout, windowsHide: true });

@@ -7,17 +7,11 @@ using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace Agentweaver.Identity.Broker;
 
-/// <summary>
-/// Exposes the token-protected secret redemption route. It builds the trusted actor from
-/// validated token claims, delegates grant checks to <see cref="AuthorizedSecretRedemption"/>,
-/// and never returns backend diagnostics from this credential-bearing response.
-/// </summary>
 public static class SecretRedemptionEndpoints
 {
     public const string ProjectIdClaim = "project_id";
     public const string RunIdClaim = "run_id";
 
-    /// <summary>Maps the single authenticated secret redemption endpoint.</summary>
     public static void MapIdentitySecretRedemptionEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapPost("/secrets/redeem", RedeemAsync)
@@ -27,11 +21,6 @@ public static class SecretRedemptionEndpoints
             });
     }
 
-    /// <summary>
-    /// Redeems only a secret reference, purpose and run that match the authenticated
-    /// issuer claims and active grant authority. Returns a generic server error for
-    /// unexpected backend failures and invalidates the in-memory credential after writing.
-    /// </summary>
     private static async Task RedeemAsync(
         HttpContext context,
         SecretRedemptionInput input,
@@ -113,7 +102,6 @@ public static class SecretRedemptionEndpoints
     }
 }
 
-/// <summary>Strict request contract containing identifiers only; the caller never supplies secret bytes.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record SecretRedemptionInput(
     string? SecretId,
@@ -121,7 +109,6 @@ public sealed record SecretRedemptionInput(
     string? Purpose,
     string? RunId);
 
-/// <summary>Successful secret-redemption response, including its bounded expiry.</summary>
 public sealed record SecretRedemptionResult(
     string SecretId,
     string SecretVersion,

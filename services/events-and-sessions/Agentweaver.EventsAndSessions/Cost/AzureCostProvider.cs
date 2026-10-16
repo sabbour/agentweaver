@@ -4,7 +4,6 @@ using Agentweaver.Providers;
 
 namespace Agentweaver.EventsAndSessions.Cost;
 
-/// <summary>Capabilities advertised by the Azure token-pricing adapter.</summary>
 public static class AzureCostCapabilities
 {
     public const string PriceUsage = "cost.usage.price";
@@ -13,7 +12,6 @@ public static class AzureCostCapabilities
         ImmutableHashSet.Create(StringComparer.Ordinal, PriceUsage);
 }
 
-/// <summary>Prices supported Azure BYOK token records from an immutable configured rate card.</summary>
 public sealed class AzureCostProvider : ICostProvider
 {
     public const string MeterSource = SdkMeterSources.ByokTokens;
@@ -41,7 +39,6 @@ public sealed class AzureCostProvider : ICostProvider
         ProviderHostingPattern.InProcess,
         AzureCostCapabilities.All);
 
-    /// <summary>Creates the enabled catalog registration after validating the configured rate card.</summary>
     public ProviderRegistration CreateRegistration()
     {
         Options.Validate();
@@ -52,7 +49,6 @@ public sealed class AzureCostProvider : ICostProvider
             Options.OptionsSchemaVersion);
     }
 
-    /// <summary>Negotiates only candidates matching this adapter's options revision and schema.</summary>
     public ProviderResult<ResourceNegotiation> Negotiate(ProviderCandidate candidate)
     {
         ArgumentNullException.ThrowIfNull(candidate);
@@ -79,7 +75,6 @@ public sealed class AzureCostProvider : ICostProvider
             AzureCostCapabilities.All));
     }
 
-    /// <summary>Builds the persisted cost binding from a matching provider pin and rate-card snapshot.</summary>
     public CostBinding CreateBinding(PinnedCostProviderBinding pinned)
     {
         ArgumentNullException.ThrowIfNull(pinned);
@@ -105,7 +100,6 @@ public sealed class AzureCostProvider : ICostProvider
             _rateCard);
     }
 
-    /// <summary>Prices supported uncached token usage; unsupported or incomplete measurements remain unpriced.</summary>
     public CostPrice Price(UsageMeasurement usage, UsageModelBinding model, CostBinding binding)
     {
         ArgumentNullException.ThrowIfNull(usage);
@@ -148,7 +142,6 @@ public sealed class AzureCostProvider : ICostProvider
         return new CostPrice(amount, _rateCard.Unit, CostDisposition.Estimate, _rateCard, null);
     }
 
-    /// <summary>Returns an unpriced result because this adapter does not support BYOK token quotes.</summary>
     public CostPrice Quote(CostQuoteRequest plannedWork, CostBinding binding)
     {
         ArgumentNullException.ThrowIfNull(plannedWork);

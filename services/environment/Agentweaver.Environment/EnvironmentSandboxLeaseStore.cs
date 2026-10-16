@@ -10,10 +10,6 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Environment;
 
-/// <summary>
-/// Persists Sandbox leases, provider attempts, and late-resource cleanup claims under Environment owner locks.
-/// Lease revisions and fencing generations prevent stale provider results from becoming current.
-/// </summary>
 public sealed class EnvironmentSandboxLeaseStore(
     NpgsqlDataSource dataSource,
     TimeProvider timeProvider) : ISandboxLeaseStore
@@ -25,7 +21,6 @@ public sealed class EnvironmentSandboxLeaseStore(
     private const string ProviderAttempts = "\"environment\".\"sandbox_provider_attempts\"";
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
-    /// <summary>Reserves one provision generation, reusing only a matching idempotency key and immutable intent.</summary>
     public async Task<SandboxLeaseReservation> ReserveProvisionAsync(
         EnvironmentGenerationFence fence,
         string idempotencyKey,
@@ -143,7 +138,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return new(lease, Replayed: false);
     }
 
-    /// <summary>Reads the current lease while holding the owner lock and requiring an active lifecycle fence.</summary>
     public async Task<SandboxLeaseSnapshot?> GetCurrentAsync(
         EnvironmentGenerationFence fence,
         CancellationToken cancellationToken)
@@ -160,7 +154,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return lease;
     }
 
-    /// <summary>Runs a callback with the current lease while its owner transaction remains open.</summary>
     public Task<TResult> GetCurrentAsync<TResult>(
         EnvironmentGenerationFence fence,
         Func<SandboxLeaseSnapshot?, CancellationToken, Task<TResult>> callback,
@@ -171,7 +164,6 @@ public sealed class EnvironmentSandboxLeaseStore(
             fence, (lease, _, _, token) => callback(lease, token), cancellationToken);
     }
 
-    /// <summary>Runs a callback with the current lease and workspace snapshot in one owner-locked transaction.</summary>
     public Task<TResult> GetCurrentWithWorkspaceAsync<TResult>(
         EnvironmentGenerationFence fence,
         string volumeId,
@@ -213,7 +205,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return result;
     }
 
-    /// <summary>Reads one Sandbox resource generation for the supplied Environment owner.</summary>
     public async Task<SandboxLeaseSnapshot?> GetAsync(
         EnvironmentGenerationFence fence,
         long resourceGeneration,
@@ -233,7 +224,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return lease;
     }
 
-    /// <summary>Persists the exact provider request before an external Sandbox provisioning attempt.</summary>
     public async Task<SandboxLeaseSnapshot> SaveProviderRequestAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,
@@ -322,7 +312,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return result;
     }
 
-    /// <summary>Reserves a provider attempt with a stable operation key and the current lease fence.</summary>
     public Task<SandboxProviderAttemptReservation> BeginProviderAttemptAsync(
         SandboxProviderAttemptRequest request,
         CancellationToken cancellationToken)
@@ -331,7 +320,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return BeginProviderAttemptAsync(request, request.Fence, cancellationToken);
     }
 
-    /// <summary>Starts or replays a durable provider attempt under the owner lock.</summary>
     public async Task<SandboxProviderAttemptReservation> BeginProviderAttemptAsync(
         SandboxProviderAttemptRequest request,
         EnvironmentGenerationFence currentFence,
@@ -459,7 +447,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return new(attempt, Replayed: false);
     }
 
-    /// <summary>Records a provider attempt result so uncertain calls can be reconciled without losing evidence.</summary>
     public async Task<SandboxProviderAttemptSnapshot> RecordProviderAttemptOutcomeAsync(
         Guid attemptId,
         EnvironmentGenerationFence fence,
@@ -548,7 +535,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return updated.Validate();
     }
 
-    /// <summary>Reads provider attempt history for the exact Environment lease generation.</summary>
     public async Task<ImmutableArray<SandboxProviderAttemptSnapshot>> GetProviderAttemptsAsync(
         EnvironmentGenerationFence currentFence,
         Guid operationId,
@@ -590,7 +576,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return attempts.ToImmutable();
     }
 
-    /// <summary>Lists bounded late-resource cleanup records and indicates when additional records remain.</summary>
     public async Task<(ImmutableArray<SandboxLateResourceCleanupRecord> Items, bool HasMore)>
         GetLateResourceCleanupRecordsAsync(
             EnvironmentGenerationFence currentFence,
@@ -683,7 +668,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return (output.ToImmutable(), hasMore);
     }
 
-    /// <summary>Completes provisioning only when the provider result matches the reserved lease generation and fence.</summary>
     public async Task<SandboxLeaseSnapshot> CompleteProvisionAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,
@@ -1120,7 +1104,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return result;
     }
 
-    /// <summary>Fences the current lease for retirement before any external Sandbox deletion begins.</summary>
     public async Task<SandboxLeaseSnapshot> BeginRetirementAsync(
         EnvironmentGenerationFence fence,
         long resourceGeneration,
@@ -1272,7 +1255,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return result;
     }
 
-    /// <summary>Records full release after the Sandbox resource is confirmed deleted or absent.</summary>
     public async Task<SandboxLeaseSnapshot> CompleteReleaseAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,
@@ -1383,7 +1365,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return result;
     }
 
-    /// <summary>Records partial release and preserves unresolved resource cleanup for later reconciliation.</summary>
     public async Task<SandboxLeaseSnapshot> CompletePartialReleaseAsync(
         SandboxPartialReleaseCompletionRequest request,
         CancellationToken cancellationToken)
@@ -1515,7 +1496,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return result;
     }
 
-    /// <summary>Claims the next due late-resource cleanup with a bounded lease for one worker.</summary>
     public async Task<SandboxLateResourceCleanupClaim?> ClaimNextLateResourceCleanupAsync(
         EnvironmentGenerationFence fence,
         CancellationToken cancellationToken)
@@ -1683,7 +1663,6 @@ public sealed class EnvironmentSandboxLeaseStore(
         return claim;
     }
 
-    /// <summary>Completes a cleanup claim or records its retry state after provider work.</summary>
     public async Task CompleteLateResourceCleanupAsync(
         EnvironmentGenerationFence currentFence,
         SandboxLateResourceCleanupClaim claim,
@@ -2300,7 +2279,6 @@ public sealed class EnvironmentSandboxLeaseStore(
                 "The late Sandbox provider attempt does not match the exact pending resource.");
     }
 
-    /// <summary>Database projection of a late-resource cleanup item while it is being claimed or read.</summary>
     private sealed record CleanupReadRow(
         long ResourceGeneration,
         string Fingerprint,

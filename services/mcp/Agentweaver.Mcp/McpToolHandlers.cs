@@ -6,7 +6,6 @@ using ModelContextProtocol.Protocol;
 
 namespace Agentweaver.Mcp;
 
-/// <summary>Implements MCP tool discovery and dispatch while keeping authorization and effects in Gateway owners.</summary>
 public sealed class McpToolHandlers(
     GatewayToolCatalog catalog,
     GatewayApiClient gateway)
@@ -21,18 +20,12 @@ public sealed class McpToolHandlers(
         ["DELETE"] = HttpMethod.Delete,
     };
 
-    /// <summary>Returns the Gateway's bounded, cached OpenAPI operations as MCP tools.</summary>
     public async ValueTask<ListToolsResult> ListAsync(CancellationToken cancellationToken)
     {
         var operations = await catalog.GetOperationsAsync(cancellationToken).ConfigureAwait(false);
         return new ListToolsResult { Tools = operations.Select(operation => operation.Tool).ToList() };
     }
 
-    /// <summary>
-    /// Validates tool arguments against the advertised schema, forwards one caller-bound request,
-    /// and preserves owner acceptance as distinct from completion.
-    /// </summary>
-    /// <returns>A structured owner result or bounded MCP error; caller cancellation is propagated.</returns>
     public async ValueTask<CallToolResult> CallAsync(
         CallToolRequestParams request,
         HttpContext context,
@@ -221,7 +214,6 @@ public sealed class McpToolHandlers(
         }
     }
 
-    /// <summary>Maps HTTP status and owner acceptance fields without treating accepted-only responses as completion.</summary>
     private static CallToolResult OwnerResult(
         HttpStatusCode statusCode,
         string rawBody,
@@ -268,7 +260,6 @@ public sealed class McpToolHandlers(
             IsError = true,
         };
 
-    /// <summary>Reads at most the configured response limit, regardless of whether Content-Length is present.</summary>
     private static async Task<string> ReadOwnerBodyAsync(
         HttpResponseMessage response,
         CancellationToken cancellationToken)

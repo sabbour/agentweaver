@@ -1,7 +1,3 @@
-/**
- * Creates and verifies source-bound preparation receipts for release-plan application.
- * Receipt verification checks generated files and, when requested, the recorded artifact archives.
- */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -12,7 +8,6 @@ import { validateManifest, WEB_LOCK_PATH, WEB_PROJECT_PATH } from './validate.mj
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const fail = (message) => { throw new Error(`release preparation: ${message}`); };
 
-/** Produces the updated manifest and preparation receipt for an applied draft release plan. */
 export function preparationFiles(manifestText, plan, appliedAt, readSource) {
   const manifest = JSON.parse(manifestText);
   if (manifest.stage !== 'draft') fail('apply only prepares draft compositions; publication and deployment evidence must not carry across version changes');
@@ -85,10 +80,6 @@ export function preparationFiles(manifestText, plan, appliedAt, readSource) {
 }
 
 // Verify from Git source bytes, not from hashes or component claims supplied by a receipt.
-/**
- * Checks that a preparation receipt and its files still match their recorded source and hashes.
- * Returns verified preparation data or throws on a missing, altered, or invalid receipt.
- */
 export function verifyPreparation(root, receipt, { readFile = readFileSync, verifyArchives = true } = {}) {
   if (!receipt || receipt.schemaVersion !== 1 ||
       !/^[a-f0-9]{40}$/.test(receipt.sourceSha ?? '') ||
