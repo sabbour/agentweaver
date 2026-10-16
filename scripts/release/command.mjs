@@ -95,13 +95,14 @@ export function runPublicationCommand(bin, args, input, spawn = spawnSync) {
     const code = result.error?.code === 'ETIMEDOUT' ? 'PROCESS_TIMEOUT'
       : result.error?.code === 'ENOENT' ? 'COMMAND_NOT_FOUND'
       : operation === 'docker.push' && /\bpermission_denied\b.*\bwrite_package\b/i.test(stderr) ? 'REGISTRY_WRITE_DENIED'
+      : operation === 'docker.manifest-read' && /\bmanifest unknown\b|\bname unknown\b|\b404\b/i.test(stderr) ? 'REGISTRY_NOT_FOUND'
       : /\bunauthorized\b|\bauthentication required\b|\baccess denied\b|\bforbidden\b|\bpermission_denied\b/i.test(stderr) ? 'AUTHORIZATION_DENIED'
       : /\bTLS handshake timeout\b|\bconnection refused\b|\bnetwork is unreachable\b/i.test(stderr) ? 'TRANSPORT_FAILED'
       : 'OPERATION_FAILED';
     const exitCode = Number.isInteger(result.status) ? result.status : null;
     const failure = Object.assign(new Error(`manual publication: ${operation} failed (exit=${exitCode ?? 'unknown'}, code=${code}); inspect the target independently before retrying`),
       { operation, exitCode, code });
-    if (operation === 'nuget.push') {
+    if (operation === 'nuget.push' || operation === 'docker.manifest-read') {
       const nativeDiagnostic = sanitizePublicationDiagnostic(result.stdout, rawStderr, args);
       if (nativeDiagnostic)
         Object.defineProperty(failure, 'nativeDiagnostic', { value: nativeDiagnostic });
