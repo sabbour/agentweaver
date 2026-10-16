@@ -230,7 +230,8 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   const receiptName = integrationImagesOnly ? 'integration-publication.json' : 'publication.json';
   const receiptPath = path.join(directory, receiptName);
   if (existsSync(receiptPath)) fail(`receipt already exists at ${receiptName}; inspect prior or partial publication before any retry`);
-  const provenance = JSON.parse(readFileSync(path.join(directory, 'provenance.json'), 'utf8'));
+  const provenanceBytes = readFileSync(path.join(directory, 'provenance.json'));
+  const provenance = JSON.parse(provenanceBytes.toString('utf8'));
   if (provenance.schemaVersion !== 1 || provenance.sourceSha !== sourceSha ||
       provenance.manifestSha256 !== hash(JSON.stringify(manifest))) fail('provenance does not match exact source composition');
   if (integrationImagesOnly &&
@@ -347,7 +348,10 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
       : undefined;
     const agentHost = component.id === AGENTHOST_ID
       ? validateAgentHostArtifact(component, artifact, componentProvenance, root, directory, sourceSha, git,
-        measureAgentHostArchive, integrationImagesOnly)
+        partialContinuation
+          ? (archive, measureRoot) => measureAgentHostArchive(archive, measureRoot, sourceSha)
+          : measureAgentHostArchive,
+        integrationImagesOnly)
       : undefined;
     selected.push({ component, artifact, file, preparedImageConfig,
       localImageReference: integrationImagesOnly
@@ -414,6 +418,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
       originalReceiptPath: receiptPath,
       originalReceiptBytes,
       originalReceipt,
+      provenanceSha256: hash(provenanceBytes),
       runId: env.GITHUB_RUN_ID,
       runAttempt: env.GITHUB_RUN_ATTEMPT,
     });

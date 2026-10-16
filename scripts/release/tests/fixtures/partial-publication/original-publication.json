@@ -1,0 +1,272 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "c24d0000fe5fc6163e4f38594c39dff782d3a46d",
+  "provenanceSha256": "b7c30aa8a13e614d93949b34a4e59d564c8ae4ba70bf0d6c06a0d7bb63e5593f",
+  "planned": [
+    {
+      "id": "Agentweaver.Abstractions",
+      "version": "1.0.0",
+      "kind": "package",
+      "sha256": "db0bb7cdff5b09a895afbfe2c9c080dc2069e897a450ac1ee2ce6767c113299a",
+      "destination": "https://nuget.pkg.github.com/sabbour/index.json"
+    },
+    {
+      "id": "Agentweaver.Providers",
+      "version": "1.0.0",
+      "kind": "package",
+      "sha256": "92ecfcad6d97bdef189274cde54dff5dc8d44b6b68a26272cfab2637d780e6c6",
+      "destination": "https://nuget.pkg.github.com/sabbour/index.json"
+    },
+    {
+      "id": "Agentweaver.SourceControl",
+      "version": "1.0.0",
+      "kind": "package",
+      "sha256": "c8097cab820528f72a2f1bbce456987dc0133a7a85b5a60e8a78af755c524c0e",
+      "destination": "https://nuget.pkg.github.com/sabbour/index.json"
+    },
+    {
+      "id": "Agentweaver.Orchestrator.Core",
+      "version": "1.0.0",
+      "kind": "package",
+      "sha256": "ab1cd3fe90287387480ab4b71bba5bf21980eca610ecd690fba85f1396a53284",
+      "destination": "https://nuget.pkg.github.com/sabbour/index.json"
+    },
+    {
+      "id": "Agentweaver.Persistence.Postgres",
+      "version": "1.0.0",
+      "kind": "package",
+      "sha256": "9f980977677ed8b62236272d68efd1924c65268b1638a6acff7af89ba3d1fe56",
+      "destination": "https://nuget.pkg.github.com/sabbour/index.json"
+    },
+    {
+      "id": "Agentweaver.Secrets.AzureKeyVault",
+      "version": "1.0.0",
+      "kind": "package",
+      "sha256": "74eda958ded01453274a5baf8aaa57046e717e3f59d047884cf2cfedb36cf241",
+      "destination": "https://nuget.pkg.github.com/sabbour/index.json"
+    },
+    {
+      "id": "Agentweaver.Identity",
+      "version": "1.0.0",
+      "kind": "package",
+      "sha256": "ed0a562b8ca944d49ad4ad98a9636bada5037f857c84485fbff202b4a1266558",
+      "destination": "https://nuget.pkg.github.com/sabbour/index.json"
+    },
+    {
+      "id": "Agentweaver.AgentRuntime",
+      "version": "1.0.0",
+      "kind": "package",
+      "sha256": "01c40c18b1b584c6394bf9d113c7856b2a82766480d0b2a23d5372086cc0a81d",
+      "destination": "https://nuget.pkg.github.com/sabbour/index.json"
+    },
+    {
+      "id": "Agentweaver.AgentHost",
+      "version": "1.0.0",
+      "kind": "image",
+      "sha256": "a5f66186272a15e46b33305b80a7cd3e281dbc0d38fed829fe95341a02d0ce79",
+      "destination": "ghcr.io/sabbour/agentweaver-agenthost:1.0.0"
+    },
+    {
+      "id": "Agentweaver.Telemetry",
+      "version": "1.0.0",
+      "kind": "package",
+      "sha256": "9682a2d8580e22525395283f50e30430be48fdc0c06a3b1e0a4074eeb7773000",
+      "destination": "https://nuget.pkg.github.com/sabbour/index.json"
+    },
+    {
+      "id": "Agentweaver.Telemetry.AzureMonitor",
+      "version": "1.0.0",
+      "kind": "package",
+      "sha256": "43d7445df538bfea2fd23ebbb27021d4a0cfc39584cb59c46afe74a53de85795",
+      "destination": "https://nuget.pkg.github.com/sabbour/index.json"
+    },
+    {
+      "id": "Agentweaver.ObjectStore.AzureBlob",
+      "version": "1.0.0",
+      "kind": "package",
+      "sha256": "2ca02b7024e8536a15253e2ae7b33eff741f561d03c98e444199deb071ab165d",
+      "destination": "https://nuget.pkg.github.com/sabbour/index.json"
+    },
+    {
+      "id": "Agentweaver.Identity.Broker",
+      "version": "1.0.0",
+      "kind": "image",
+      "sha256": "255a610b8de6442d9ca8920092e55e9aef642338d23ef808f33c39df54e76f42",
+      "destination": "ghcr.io/sabbour/agentweaver.identity.broker:1.0.0"
+    },
+    {
+      "id": "Agentweaver.EventsAndSessions",
+      "version": "1.0.0",
+      "kind": "image",
+      "sha256": "e8e05c79ea92bf096a7ad01d2759f2b64ef8888acf824703d0ab6a05d63993a9",
+      "destination": "ghcr.io/sabbour/agentweaver.eventsandsessions:1.0.0"
+    },
+    {
+      "id": "Agentweaver.Gateway",
+      "version": "1.0.0",
+      "kind": "image",
+      "sha256": "0ebb12188043d7aa38b499952295b441abc7d16c96301c1f1e33483874278203",
+      "destination": "ghcr.io/sabbour/agentweaver.gateway:1.0.0"
+    },
+    {
+      "id": "Agentweaver.Mcp",
+      "version": "1.0.0",
+      "kind": "image",
+      "sha256": "6fe2dd870acc92dd7d2cef307e6d49db2bed00995e03b5967e51f18c30221af0",
+      "destination": "ghcr.io/sabbour/agentweaver.mcp:1.0.0"
+    },
+    {
+      "id": "Agentweaver.Web",
+      "version": "1.0.0",
+      "kind": "image",
+      "sha256": "04eb3bae8231c12a9a3054a54f47e7afdff55a26bb8550fc015a32c2ad1242b8",
+      "destination": "ghcr.io/sabbour/agentweaver-web:1.0.0"
+    },
+    {
+      "id": "Agentweaver.Orchestrator",
+      "version": "1.0.0",
+      "kind": "image",
+      "sha256": "d41fd84e8b7374a544317f5d844fada204e7c16c40c3d00e50318ff062cf4456",
+      "destination": "ghcr.io/sabbour/agentweaver.orchestrator:1.0.0"
+    },
+    {
+      "id": "Agentweaver.Environment",
+      "version": "1.0.0",
+      "kind": "image",
+      "sha256": "2bf0e0e2d39ed0b32c5ec2f305af0c0b03438b4d543ac7d008a9c3c045da488d",
+      "destination": "ghcr.io/sabbour/agentweaver.environment:1.0.0"
+    },
+    {
+      "id": "Agentweaver.Knowledge",
+      "version": "1.0.0",
+      "kind": "image",
+      "sha256": "641e30225f740011377c120985b0404af1968303764c647331e86c9ffe0dbfbf",
+      "destination": "ghcr.io/sabbour/agentweaver.knowledge:1.0.0"
+    },
+    {
+      "id": "Agentweaver.Projects.Config",
+      "version": "1.0.0",
+      "kind": "image",
+      "sha256": "0aeb713d840cca35502d24d27c4fa6d1451a71a602e388f4e4986abb95051057",
+      "destination": "ghcr.io/sabbour/agentweaver.projects.config:1.0.0"
+    },
+    {
+      "id": "Agentweaver.Providers.Storage.AzureFiles",
+      "version": "1.0.0",
+      "kind": "package",
+      "sha256": "a14bb113a0cca92f923cc4cc1c5347ce204349ed7ba640c38c45c65eaca176a8",
+      "destination": "https://nuget.pkg.github.com/sabbour/index.json"
+    },
+    {
+      "id": "Agentweaver.Providers.Sandbox.AgentSandbox",
+      "version": "1.0.0",
+      "kind": "package",
+      "sha256": "66b69c66a6586d7c6824c018891023c20f6caacb986d316671baae0fda7360f5",
+      "destination": "https://nuget.pkg.github.com/sabbour/index.json"
+    }
+  ],
+  "status": "partial",
+  "published": [
+    {
+      "id": "Agentweaver.Abstractions",
+      "version": "1.0.0",
+      "kind": "package",
+      "feed": "https://nuget.pkg.github.com/sabbour/index.json",
+      "sha256": "db0bb7cdff5b09a895afbfe2c9c080dc2069e897a450ac1ee2ce6767c113299a"
+    },
+    {
+      "id": "Agentweaver.Providers",
+      "version": "1.0.0",
+      "kind": "package",
+      "feed": "https://nuget.pkg.github.com/sabbour/index.json",
+      "sha256": "92ecfcad6d97bdef189274cde54dff5dc8d44b6b68a26272cfab2637d780e6c6"
+    },
+    {
+      "id": "Agentweaver.SourceControl",
+      "version": "1.0.0",
+      "kind": "package",
+      "feed": "https://nuget.pkg.github.com/sabbour/index.json",
+      "sha256": "c8097cab820528f72a2f1bbce456987dc0133a7a85b5a60e8a78af755c524c0e"
+    },
+    {
+      "id": "Agentweaver.Orchestrator.Core",
+      "version": "1.0.0",
+      "kind": "package",
+      "feed": "https://nuget.pkg.github.com/sabbour/index.json",
+      "sha256": "ab1cd3fe90287387480ab4b71bba5bf21980eca610ecd690fba85f1396a53284"
+    },
+    {
+      "id": "Agentweaver.Persistence.Postgres",
+      "version": "1.0.0",
+      "kind": "package",
+      "feed": "https://nuget.pkg.github.com/sabbour/index.json",
+      "sha256": "9f980977677ed8b62236272d68efd1924c65268b1638a6acff7af89ba3d1fe56"
+    },
+    {
+      "id": "Agentweaver.Secrets.AzureKeyVault",
+      "version": "1.0.0",
+      "kind": "package",
+      "feed": "https://nuget.pkg.github.com/sabbour/index.json",
+      "sha256": "74eda958ded01453274a5baf8aaa57046e717e3f59d047884cf2cfedb36cf241"
+    },
+    {
+      "id": "Agentweaver.Identity",
+      "version": "1.0.0",
+      "kind": "package",
+      "feed": "https://nuget.pkg.github.com/sabbour/index.json",
+      "sha256": "ed0a562b8ca944d49ad4ad98a9636bada5037f857c84485fbff202b4a1266558"
+    },
+    {
+      "id": "Agentweaver.AgentRuntime",
+      "version": "1.0.0",
+      "kind": "package",
+      "feed": "https://nuget.pkg.github.com/sabbour/index.json",
+      "sha256": "01c40c18b1b584c6394bf9d113c7856b2a82766480d0b2a23d5372086cc0a81d"
+    },
+    {
+      "id": "Agentweaver.AgentHost",
+      "version": "1.0.0",
+      "kind": "image",
+      "image": "ghcr.io/sabbour/agentweaver-agenthost@sha256:56692eae59483dcae483233423c83fbf0246faf080e45a43615ea0271260b53e",
+      "archiveSha256": "a5f66186272a15e46b33305b80a7cd3e281dbc0d38fed829fe95341a02d0ce79",
+      "ociArchiveSha256": "c3b1f0aff4bcd85c1163daf6ce7a3473f63b969a4d68eb7b583178aca58f874f",
+      "imageConfigDigest": "sha256:015eb98ff0e24ddb76fc289327d66f85fc4cf7819a5f22e558169ec35f5511fd",
+      "preparedOciMeasurement": {
+        "kind": "agenthost-image",
+        "schemaVersion": 1,
+        "sourceSha": "c24d0000fe5fc6163e4f38594c39dff782d3a46d",
+        "sourceTree": "d6c9c1ff14dd71c5e733bb174cec409d4cdea1bf",
+        "image": {
+          "digest": "sha256:56692eae59483dcae483233423c83fbf0246faf080e45a43615ea0271260b53e",
+          "configDigest": "sha256:015eb98ff0e24ddb76fc289327d66f85fc4cf7819a5f22e558169ec35f5511fd",
+          "platform": "linux/amd64",
+          "compressedPullBytes": 321462836,
+          "version": "1.0.0"
+        },
+        "measurement": "platform-manifest plus unique config and gzip-layer blob bytes"
+      }
+    },
+    {
+      "id": "Agentweaver.Telemetry",
+      "version": "1.0.0",
+      "kind": "package",
+      "feed": "https://nuget.pkg.github.com/sabbour/index.json",
+      "sha256": "9682a2d8580e22525395283f50e30430be48fdc0c06a3b1e0a4074eeb7773000"
+    },
+    {
+      "id": "Agentweaver.Telemetry.AzureMonitor",
+      "version": "1.0.0",
+      "kind": "package",
+      "feed": "https://nuget.pkg.github.com/sabbour/index.json",
+      "sha256": "43d7445df538bfea2fd23ebbb27021d4a0cfc39584cb59c46afe74a53de85795"
+    },
+    {
+      "id": "Agentweaver.ObjectStore.AzureBlob",
+      "version": "1.0.0",
+      "kind": "package",
+      "feed": "https://nuget.pkg.github.com/sabbour/index.json",
+      "sha256": "2ca02b7024e8536a15253e2ae7b33eff741f561d03c98e444199deb071ab165d"
+    }
+  ],
+  "claimSha": "117676740c22ade1316fa73dbb4cd637d4885947"
+}

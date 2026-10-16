@@ -1,0 +1,447 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+import {
+  continuePartialPublication,
+  isRegistryAbsent,
+  originalBinding,
+  readRemoteImage,
+  verifyPartialPublicationCompletion,
+} from '../partial-publication.mjs';
+import { PARTIAL_PUBLICATION as P } from '../partial-publication-contract.mjs';
+import { measureAgentHostArchiveSync } from '../measure-agenthost-image.mjs';
+
+const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'partial-publication', 'original-publication.json');
+const originalBytes = readFileSync(fixture);
+const original = JSON.parse(originalBytes.toString('utf8'));
+const sha = value => createHash('sha256').update(value).digest('hex');
+const digest = value => `sha256:${sha(value)}`;
+const HELPER = 'a'.repeat(40);
+const RUN_ID = '40000000001';
+
+function newWorld(overrides = {}) {
+  const tags = new Map();
+  const refs = new Map();
+  const { claimSha, status, published, ...claimFields } = original;
+  const namespace = `agentweaver-publication/${P.sourceSha}`;
+  const addTag = (name, objectSha, message) => {
+    tags.set(objectSha, { sha: objectSha, tag: name, message, object: { type: 'commit', sha: P.sourceSha } });
+    refs.set(`refs/tags/${name}`, { ref: `refs/tags/${name}`, object: { type: 'tag', sha: objectSha } });
+  };
+  addTag(`${namespace}/claim`, P.claimSha, JSON.stringify({ ...claimFields, status: 'claimed', published: [] }));
+  addTag(`${namespace}/result`, P.resultSha, JSON.stringify(original));
+
+  const images = new Map();
+  const packages = new Map();
+  for (const record of original.published) {
+    if (record.kind === 'package') packages.set(record.id, record.sha256);
+    else {
+      const [repository, imageDigest] = record.image.split('@');
+      images.set(`${repository}:${record.version}`, {
+        digest: imageDigest, platformDigest: imageDigest, configDigest: record.imageConfigDigest, layerCount: 3,
+      });
+    }
+  }
+  const artifacts = {
+    [P.packArtifactId]: { name: P.packArtifactName, size: P.packArtifactSize, digest: P.packArtifactDigest },
+    [P.receiptArtifactId]: { name: P.receiptArtifactName, size: P.receiptSize, digest: P.receiptArtifactDigest },
+  };
+  const world = {
+    tags, refs, images, packages, calls: [], tagCounter: 0,
+    artifacts,
+    runs: {
+      [P.runId]: {
+        id: Number(P.runId), path: P.originalWorkflowPath, head_sha: P.sourceSha, head_branch: 'v1',
+        event: 'workflow_dispatch', run_attempt: 1, status: 'completed', conclusion: 'failure',
+      },
+      [RUN_ID]: {
+        id: Number(RUN_ID), path: P.workflowPath, head_sha: HELPER, head_branch: 'v1',
+        event: 'workflow_dispatch', run_attempt: 1, status: 'completed', conclusion: 'success',
+      },
+    },
+    pulls: [{ merged_at: '2026-10-20T00:00:00Z', base: { ref: 'v1', repo: { full_name: P.repository } } }],
+    approvals: [{ state: 'approved', environments: [{ id: P.environmentId, name: P.environmentName }] }],
+    failPush: undefined,
+    failRefCreate: undefined,
+    pushReadback: undefined,
+    ...overrides,
+  };
+  world.run = (bin, args, input) => {
+    world.calls.push([bin, ...args].join(' '));
+    if (bin === 'gh') return JSON.stringify(gh(world, args, input));
+    if (bin === 'docker') return docker(world, args);
+    if (bin === 'dotnet') {
+      const id = path.basename(args[2]);
+      if (world.failPush === id) throw new Error(`push failed for ${id}`);
+      world.packages.set(id, world.selected.find(item => item.component.id === id).artifact.sha256);
+      return '';
+    }
+    throw new Error(`unexpected ${bin}`);
+  };
+  world.selected = original.planned.map(entry => ({
+    component: { id: entry.id, version: entry.version },
+    artifact: { kind: entry.kind, sha256: entry.sha256 },
+    file: `/pack/${entry.id}`,
+    ...(entry.kind === 'image' ? { localImageReference: `local/${entry.id.toLowerCase()}:${entry.version}` } : {}),
+    ...(entry.id === 'Agentweaver.AgentHost' ? { agentHost: {} } : {}),
+  }));
+  world.imageRepositories = new Map(original.planned.filter(entry => entry.kind === 'image')
+    .map(entry => [entry.id, entry.destination.slice(0, -`:${entry.version}`.length)]));
+  return world;
+}
+
+function gh(world, args, input) {
+  const method = args[args.indexOf('--method') + 1];
+  const endpoint = args[args.indexOf('--method') + 2].slice(`repos/${P.repository}/`.length);
+  let match;
+  if (method === 'GET' && (match = /^actions\/artifacts\/(\d+)$/.exec(endpoint))) {
+    const artifact = world.artifacts[match[1]];
+    return {
+      id: Number(match[1]), name: artifact.name, size_in_bytes: artifact.size, expired: false, digest: artifact.digest,
+      workflow_run: { id: Number(P.runId), head_sha: P.sourceSha, head_branch: 'v1' },
+    };
+  }
+  if (method === 'GET' && (match = /^actions\/runs\/(\d+)\/approvals$/.exec(endpoint))) return world.approvals;
+  if (method === 'GET' && (match = /^actions\/runs\/(\d+)$/.exec(endpoint))) return world.runs[match[1]] ?? {};
+  if (method === 'GET' && (match = /^git\/ref\/tags\/(.+)$/.exec(endpoint))) {
+    return world.refs.get(`refs/tags/${decodeURIComponent(match[1])}`) ?? {};
+  }
+  if (method === 'GET' && (match = /^git\/tags\/([a-f0-9]{40})$/.exec(endpoint))) return world.tags.get(match[1]) ?? {};
+  if (method === 'GET' && (match = /^git\/matching-refs\/tags\/(.+)$/.exec(endpoint))) {
+    return [...world.refs.values()].filter(ref => ref.ref.startsWith(`refs/tags/${match[1]}`));
+  }
+  if (method === 'GET' && /^commits\/[a-f0-9]{40}\/pulls$/.test(endpoint)) return world.pulls;
+  const body = JSON.parse(input);
+  if (method === 'POST' && endpoint === 'git/tags') {
+    const objectSha = createHash('sha1').update(`${world.tagCounter++}`).digest('hex');
+    world.tags.set(objectSha, { sha: objectSha, tag: body.tag, message: body.message, object: { type: body.type, sha: body.object } });
+    return world.tags.get(objectSha);
+  }
+  if (method === 'POST' && endpoint === 'git/refs') {
+    if (world.refs.has(body.ref) || world.failRefCreate?.(body.ref)) throw new Error('Reference already exists');
+    world.refs.set(body.ref, { ref: body.ref, object: { type: 'tag', sha: body.sha } });
+    return world.refs.get(body.ref);
+  }
+  throw new Error(`unexpected gh ${method} ${endpoint}`);
+}
+
+function preparedConfig(id) {
+  const version = original.planned.find(entry => entry.id === id).version;
+  return {
+    configDigest: digest(`config:${id}`),
+    config: {
+      os: 'linux', architecture: 'amd64',
+      config: { Labels: { 'org.opencontainers.image.revision': P.sourceSha, 'org.opencontainers.image.version': version } },
+      rootfs: { diff_ids: [digest(`layer1:${id}`), digest(`layer2:${id}`)] },
+    },
+  };
+}
+
+const idForReference = (world, reference) =>
+  world.selected.find(item => item.localImageReference === reference)?.component.id;
+
+function docker(world, args) {
+  if (args[0] === 'login' || args[0] === 'load' || args[0] === 'tag') return '';
+  if (args[0] === 'image' && args[1] === 'inspect') {
+    const id = idForReference(world, args.at(-1));
+    const { config } = preparedConfig(id);
+    return JSON.stringify({
+      Os: 'linux', Architecture: 'amd64', Config: { Labels: config.config.Labels }, RootFS: { Layers: config.rootfs.diff_ids },
+    });
+  }
+  if (args[0] === 'push') {
+    const remote = args[1];
+    const id = [...world.imageRepositories].find(([, repository]) => remote.startsWith(`${repository}:`))[0];
+    if (world.failPush === id) throw new Error(`push failed for ${id}`);
+    const pushed = { digest: digest(`manifest:${remote}`), platformDigest: digest(`manifest:${remote}`),
+      configDigest: preparedConfig(id).configDigest, layerCount: 2 };
+    world.images.set(remote, world.pushReadback?.(id, pushed) ?? pushed);
+    return `1.0.0: digest: ${pushed.digest} size: 1234`;
+  }
+  throw new Error(`unexpected docker ${args.join(' ')}`);
+}
+
+function options(world, directory, overrides = {}) {
+  const receiptPath = path.join(directory, 'original.json');
+  if (!existsSync(receiptPath)) writeFileSync(receiptPath, overrides.originalReceiptBytes ?? originalBytes);
+  return {
+    sourceSha: P.sourceSha,
+    helperSha: HELPER,
+    selected: world.selected,
+    imageRepositories: world.imageRepositories,
+    env: {
+      GH_TOKEN: 'token', GITHUB_REPOSITORY: P.repository, RELEASE_REGISTRY: P.registry,
+      RELEASE_NUGET_SOURCE: P.feed, RELEASE_NUGET_USERNAME: 'sabbour', RELEASE_NUGET_API_KEY: 'key',
+      RELEASE_REGISTRY_USER: 'sabbour', RELEASE_REGISTRY_PASSWORD: 'secret',
+    },
+    run: world.run,
+    readArchiveConfig: (file, reference) => {
+      const id = idForReference(world, reference);
+      assert.equal(file, `/pack/${id}`);
+      return preparedConfig(id);
+    },
+    readPackageSha256: async component => world.packages.get(component.id) ?? null,
+    readImage: async (repository, tag) => world.images.get(`${repository}:${tag}`) ?? null,
+    sleep: async () => {},
+    directory,
+    originalReceiptPath: receiptPath,
+    originalReceiptBytes: originalBytes,
+    originalReceipt: original,
+    provenanceSha256: P.provenanceSha256,
+    runId: RUN_ID,
+    runAttempt: '1',
+    ...overrides,
+  };
+}
+
+function withDirectory(fn) {
+  return async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'partial-publication-test-'));
+    try {
+      await fn(directory);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  };
+}
+
+const continuationRefs = world => [...world.refs.keys()].filter(ref => ref.startsWith(`refs/tags/${P.namespace}/`));
+const mutations = world => world.calls.filter(call => / push |^gh api --method POST /.test(call));
+
+test('the fixture is the exact retained original partial receipt', () => {
+  assert.equal(sha(originalBytes), P.receiptSha256);
+  assert.equal(original.status, 'partial');
+  assert.deepEqual(original.published.map(({ id }) => id), [...P.publishedIds]);
+});
+
+test('continuation publishes only the eleven missing artifacts and deploy verification accepts its proof', withDirectory(async directory => {
+  const world = newWorld();
+  const receipt = await continuePartialPublication(options(world, directory));
+  assert.equal(receipt.status, 'published');
+  assert.equal(receipt.published.length, 23);
+  assert.deepEqual(receipt.published.slice(0, 12), original.published);
+  assert.deepEqual(receipt.published.slice(12).map(({ id }) => id), [...P.missingIds]);
+  for (const record of receipt.published.slice(12).filter(record => record.kind === 'image')) {
+    assert.deepEqual(Object.keys(record).sort(), ['archiveSha256', 'configDigest', 'id', 'image', 'kind', 'version']);
+    assert.equal(record.configDigest, preparedConfig(record.id).configDigest);
+  }
+  assert.deepEqual(receipt.continuation.original, originalBinding());
+  assert.equal(receipt.continuation.originalReceiptText, originalBytes.toString('utf8'));
+  const publication = JSON.parse(readFileSync(path.join(directory, 'publication.json'), 'utf8'));
+  assert.deepEqual(JSON.parse(readFileSync(path.join(directory, 'continuation.json'), 'utf8')), publication);
+  assert.deepEqual(continuationRefs(world), [`refs/tags/${P.namespace}/claim`, `refs/tags/${P.namespace}/result`]);
+  const pushes = world.calls.filter(call => / push /.test(call));
+  assert.equal(pushes.length, 11);
+  assert.ok(!pushes.some(call => P.publishedIds.some(id => call.includes(`/pack/${id} `))));
+  assert.equal(verifyPartialPublicationCompletion(publication, publication, P.sourceSha, world.run), publication);
+
+  rmSync(path.join(directory, 'publication.json'));
+  rmSync(path.join(directory, 'continuation.json'));
+  await assert.rejects(continuePartialPublication(options(world, directory, { runId: '40000000002' })),
+    /recovery is consumed/);
+}));
+
+const preflightRejections = [
+  ['the original run id', { runId: P.runId }, /approved recovery/],
+  ['a second attempt', { runAttempt: '2' }, /approved recovery/],
+  ['the original source as helper', { helperSha: P.sourceSha }, /approved recovery/],
+  ['a different product source', { sourceSha: 'b'.repeat(40) }, /approved recovery/],
+  ['changed provenance', { provenanceSha256: 'c'.repeat(64) }, /provenance/],
+  ['changed receipt bytes', { originalReceiptBytes: Buffer.concat([originalBytes, Buffer.from(' ')]) }, /receipt bytes/],
+];
+for (const [name, override, pattern] of preflightRejections) {
+  test(`preflight rejects ${name} before any mutation`, withDirectory(async directory => {
+    const world = newWorld();
+    await assert.rejects(continuePartialPublication(options(world, directory, override)), pattern);
+    assert.deepEqual(mutations(world), []);
+  }));
+}
+
+const worldRejections = [
+  ['changed pack artifact digest', world => { world.artifacts[P.packArtifactId].digest = digest('other'); }, /Actions artifact/],
+  ['changed receipt artifact size', world => { world.artifacts[P.receiptArtifactId].size += 1; }, /Actions artifact/],
+  ['a changed image destination', world => { world.imageRepositories.set('Agentweaver.Gateway', `${P.registry}/other`); }, /original plan/],
+  ['a changed prepared artifact hash', world => { world.selected[13].artifact.sha256 = 'd'.repeat(64); }, /original plan/],
+  ['a changed original result record', world => {
+    world.tags.get(P.resultSha).message = JSON.stringify({ ...original, status: 'published' });
+  }, /original immutable result/],
+  ['a changed original claim record', world => {
+    const claim = JSON.parse(world.tags.get(P.claimSha).message);
+    world.tags.get(P.claimSha).message = JSON.stringify({ ...claim, planned: claim.planned.slice(1) });
+  }, /original immutable claim/],
+  ['a changed original run', world => { world.runs[P.runId].run_attempt = 2; }, /original release workflow run/],
+  ['a changed previously published package', world => { world.packages.set('Agentweaver.Identity', 'e'.repeat(64)); }, /previously published Agentweaver.Identity/],
+  ['a missing previously published image', world => { world.images.clear(); }, /previously published Agentweaver.AgentHost/],
+  ['a missing output that is already present', world => {
+    world.packages.set('Agentweaver.Providers.Storage.AzureFiles', 'f'.repeat(64));
+  }, /already present; refusing overwrite/],
+  ['an existing continuation claim', world => {
+    world.refs.set(`refs/tags/${P.namespace}/claim`, { ref: `refs/tags/${P.namespace}/claim`, object: { type: 'tag', sha: '1'.repeat(40) } });
+  }, /recovery is consumed/],
+  ['an unmerged helper', world => { world.pulls = [{ merged_at: null, base: { ref: 'v1', repo: { full_name: P.repository } } }]; }, /merged into v1/],
+  ['a helper merged elsewhere', world => { world.pulls[0].base.ref = 'main'; }, /merged into v1/],
+  ['a missing environment approval', world => { world.approvals = []; }, /no recorded approval/],
+  ['a rejected environment approval', world => { world.approvals[0].state = 'rejected'; }, /no recorded approval/],
+  ['a loaded image with different layers', world => {
+    const base = world.run;
+    world.run = (bin, args, input) => bin === 'docker' && args[0] === 'image'
+      ? JSON.stringify({ ...JSON.parse(base(bin, args, input)), RootFS: { Layers: [digest('other')] } })
+      : base(bin, args, input);
+  }, /loaded Agentweaver.Identity.Broker image/],
+];
+for (const [name, mutate, pattern] of worldRejections) {
+  test(`preflight rejects ${name} before any claim or push`, withDirectory(async directory => {
+    const world = newWorld();
+    mutate(world);
+    const refsBefore = continuationRefs(world);
+    await assert.rejects(continuePartialPublication(options(world, directory)), pattern);
+    assert.deepEqual(mutations(world), []);
+    assert.deepEqual(continuationRefs(world), refsBefore);
+  }));
+}
+
+test('a failed push keeps the continuation consumed, records partial state, and cannot deploy', withDirectory(async directory => {
+  const world = newWorld({ failPush: 'Agentweaver.Gateway' });
+  await assert.rejects(continuePartialPublication(options(world, directory)), /push failed for Agentweaver.Gateway/);
+  assert.equal(existsSync(path.join(directory, 'publication.json')), false);
+  const partial = JSON.parse(readFileSync(path.join(directory, 'continuation.json'), 'utf8'));
+  assert.equal(partial.status, 'partial');
+  assert.deepEqual(partial.unknown, ['Agentweaver.Gateway']);
+  assert.deepEqual(partial.unattempted, P.missingIds.slice(3));
+  assert.deepEqual(partial.published.slice(12).map(({ id }) => id), P.missingIds.slice(0, 2));
+  assert.deepEqual(continuationRefs(world), [`refs/tags/${P.namespace}/claim`, `refs/tags/${P.namespace}/result`]);
+  assert.throws(() => verifyPartialPublicationCompletion(partial, partial, P.sourceSha, world.run), /partial/);
+  rmSync(path.join(directory, 'continuation.json'));
+  await assert.rejects(continuePartialPublication(options(world, directory)), /recovery is consumed/);
+}));
+
+test('a pushed image that reads back with another config is partial and unknown', withDirectory(async directory => {
+  const world = newWorld({
+    pushReadback: (id, pushed) => id === 'Agentweaver.Mcp' ? { ...pushed, configDigest: digest('tampered') } : pushed,
+  });
+  await assert.rejects(continuePartialPublication(options(world, directory)), /exact pushed archive image/);
+  const partial = JSON.parse(readFileSync(path.join(directory, 'continuation.json'), 'utf8'));
+  assert.equal(partial.status, 'partial');
+  assert.deepEqual(partial.unknown, ['Agentweaver.Mcp']);
+  assert.equal(existsSync(path.join(directory, 'publication.json')), false);
+}));
+
+test('a package that never reads back after push is unknown', withDirectory(async directory => {
+  const world = newWorld();
+  const base = world.run;
+  world.run = (bin, args, input) => bin === 'dotnet' ? '' : base(bin, args, input);
+  let sleeps = 0;
+  await assert.rejects(continuePartialPublication(options(world, directory, { sleep: async () => { sleeps += 1; } })),
+    /confirmed byte-for-byte/);
+  assert.equal(sleeps, 4);
+  const partial = JSON.parse(readFileSync(path.join(directory, 'continuation.json'), 'utf8'));
+  assert.deepEqual(partial.unknown, ['Agentweaver.Providers.Storage.AzureFiles']);
+  assert.deepEqual(partial.unattempted, ['Agentweaver.Providers.Sandbox.AgentSandbox']);
+}));
+
+test('a claim-only failure is consumed and has no deployable proof', withDirectory(async directory => {
+  const world = newWorld({ failRefCreate: ref => ref.endsWith('/result') });
+  await assert.rejects(continuePartialPublication(options(world, directory)), error =>
+    error instanceof AggregateError && /finalization failed/.test(error.message));
+  assert.deepEqual(continuationRefs(world), [`refs/tags/${P.namespace}/claim`]);
+  assert.equal(existsSync(path.join(directory, 'publication.json')), false);
+  const written = JSON.parse(readFileSync(path.join(directory, 'continuation.json'), 'utf8'));
+  assert.equal(written.status, 'published');
+  assert.throws(() => verifyPartialPublicationCompletion(written, written, P.sourceSha, world.run),
+    /exactly its one-use claim and result/);
+  rmSync(path.join(directory, 'continuation.json'));
+  await assert.rejects(continuePartialPublication(options(world, directory)), /recovery is consumed/);
+}));
+
+test('a pre-existing local receipt stops before any registry or GitHub access', withDirectory(async directory => {
+  const world = newWorld();
+  writeFileSync(path.join(directory, 'continuation.json'), '{}');
+  await assert.rejects(continuePartialPublication(options(world, directory)), /local continuation or publication receipt/);
+  assert.deepEqual(world.calls, []);
+}));
+
+test('completion verification rejects altered, unapproved, or unbacked proofs', withDirectory(async directory => {
+  const world = newWorld();
+  const completion = await continuePartialPublication(options(world, directory));
+  const verify = (value, w = world) => verifyPartialPublicationCompletion(value, value, P.sourceSha, w.run);
+  const clone = () => structuredClone(completion);
+
+  assert.throws(() => verifyPartialPublicationCompletion(completion, { ...clone(), status: 'partial' }, P.sourceSha, world.run),
+    /missing, partial, changed/);
+  assert.throws(() => verifyPartialPublicationCompletion(completion, completion, 'b'.repeat(40), world.run), /another release/);
+  const altered = clone();
+  altered.published[0].sha256 = '0'.repeat(64);
+  assert.throws(() => verify(altered), /original/);
+  const alteredAddition = clone();
+  alteredAddition.published[20].image = alteredAddition.published[20].image.replace(/@sha256:./, '@sha256:0');
+  assert.throws(() => verify(alteredAddition), /immutable continuation result differs/);
+  const extra = clone();
+  extra.unknown = [];
+  assert.throws(() => verify(extra), /missing, partial, changed/);
+  const wrongRun = clone();
+  wrongRun.continuation.runId = '40000000002';
+  assert.throws(() => verify(wrongRun), /continuation claim does not match/);
+
+  const unapproved = newWorld({ ...world, approvals: [] });
+  unapproved.run = (bin, args, input) => bin === 'gh' && args.at(-1).endsWith('/approvals') ? '[]' : world.run(bin, args, input);
+  assert.throws(() => verify(completion, unapproved), /no recorded approval/);
+  const unmerged = { run: (bin, args, input) => bin === 'gh' && args.at(-1).endsWith('/pulls') ? '[]' : world.run(bin, args, input) };
+  assert.throws(() => verify(completion, unmerged), /merged into v1/);
+  world.runs[RUN_ID].conclusion = 'failure';
+  assert.throws(() => verify(completion), /successful first-attempt/);
+  world.runs[RUN_ID].conclusion = 'success';
+  world.runs[RUN_ID].head_sha = 'b'.repeat(40);
+  assert.throws(() => verify(completion), /successful first-attempt/);
+}));
+
+test('registry absence requires an explicit missing-manifest diagnostic', () => {
+  const reference = `${P.registry}/agentweaver-gateway:1.0.0`;
+  const error = nativeDiagnostic => Object.assign(new Error('x'), { operation: 'docker.manifest-read', nativeDiagnostic });
+  assert.equal(isRegistryAbsent(error('MANIFEST_UNKNOWN: manifest unknown'), reference), true);
+  assert.equal(isRegistryAbsent(error(`ERROR: ${reference}: not found`), reference), true);
+  assert.equal(isRegistryAbsent(error('denied: requested access to the resource is denied'), reference), false);
+  assert.equal(isRegistryAbsent(error('unauthorized: authentication required; manifest unknown'), reference), false);
+  assert.equal(isRegistryAbsent(error('dial tcp: i/o timeout'), reference), false);
+  assert.equal(isRegistryAbsent(error(`ERROR: ${P.registry}/other:1.0.0: not found`), reference), false);
+  assert.equal(isRegistryAbsent(Object.assign(new Error('x'), { operation: 'docker.manifest-read', code: 'REGISTRY_NOT_FOUND' }), reference), false);
+  assert.equal(isRegistryAbsent(Object.assign(new Error('x'), { operation: 'gh.api', nativeDiagnostic: 'manifest unknown' }), reference), false);
+});
+
+test('remote image readback verifies manifest bytes and selects the one linux/amd64 image', () => {
+  const repository = `${P.registry}/agentweaver-gateway`;
+  const manifest = JSON.stringify({
+    schemaVersion: 2, mediaType: 'application/vnd.oci.image.manifest.v1+json',
+    config: { digest: digest('config') }, layers: [{ digest: digest('l1') }, { digest: digest('l2') }],
+  });
+  const index = JSON.stringify({
+    schemaVersion: 2, mediaType: 'application/vnd.oci.image.index.v1+json',
+    manifests: [
+      { digest: digest(manifest), platform: { os: 'linux', architecture: 'amd64' } },
+      { digest: digest('attestation'), platform: { os: 'unknown', architecture: 'unknown' },
+        annotations: { 'vnd.docker.reference.type': 'attestation-manifest' } },
+    ],
+  });
+  const blobs = new Map([[digest(index), index], [digest(manifest), manifest]]);
+  const run = top => (bin, args) => {
+    const reference = args[3];
+    if (args.includes('--format')) return JSON.stringify({ digest: top });
+    return blobs.get(reference.slice(repository.length + 1));
+  };
+  assert.deepEqual(readRemoteImage(run(digest(index)), repository, '1.0.0'), {
+    digest: digest(index), platformDigest: digest(manifest), configDigest: digest('config'), layerCount: 2,
+  });
+  blobs.set(digest(manifest), `${manifest} `);
+  assert.throws(() => readRemoteImage(run(digest(index)), repository, '1.0.0'), /do not match their digest/);
+  const absent = () => { throw Object.assign(new Error('x'), { operation: 'docker.manifest-read', nativeDiagnostic: 'manifest unknown' }); };
+  assert.equal(readRemoteImage(absent, repository, '1.0.0'), null);
+  const denied = () => { throw Object.assign(new Error('denied'), { operation: 'docker.manifest-read', nativeDiagnostic: 'denied' }); };
+  assert.throws(() => readRemoteImage(denied, repository, '1.0.0'), /denied/);
+});
+
+test('an explicit AgentHost measurement source must be an exact commit SHA', () => {
+  assert.throws(() => measureAgentHostArchiveSync('archive.tar.gz', '.', 'HEAD'), /exact commit SHA/);
+});

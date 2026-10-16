@@ -16,6 +16,7 @@ import {
 import { validateManifest } from './validate.mjs';
 import { verifyRegistryImage } from './registry.mjs';
 import { verifyPartialPublicationCompletion } from './partial-publication.mjs';
+import { PARTIAL_PUBLICATION } from './partial-publication-contract.mjs';
 import { run as runProcess } from '../azure/lib/exec.mjs';
 import {
   observeExistingP0BrokerRouting, projectIdentityRoutingReadback,
@@ -908,7 +909,12 @@ async function verifyRelease(tag, publication, { root, run }) {
     fail(`${tag} must resolve to the exact clean local source commit ${current}`);
   }
 
-  const resultRefName = `agentweaver-publication/${current}/result`;
+  const resultRefName = publication?.continuation !== undefined
+    ? `${PARTIAL_PUBLICATION.namespace}/result`
+    : `agentweaver-publication/${current}/result`;
+  if (publication?.continuation !== undefined && current !== PARTIAL_PUBLICATION.sourceSha) {
+    fail('a continuation publication receipt is only valid for the one approved partial release source');
+  }
   const resultRef = parseJson(run('gh', ['api', `repos/${REPOSITORY}/git/ref/tags/${encodeURIComponent(resultRefName)}`], { cwd: root }), 'publication result ref');
   if (resultRef.object?.type !== 'tag' || !SHA.test(resultRef.object.sha ?? '')) {
     fail('the immutable publication result for this exact source SHA is missing');
@@ -1403,7 +1409,8 @@ catalog ConfigMap name and reviewed source commit are required. A supplied
 runtime manifest may reference pre-existing objects only; it cannot create
 credentials, identities, routes, policies, namespaces, migrations, or databases.
 Partial-publication receipts also require --completion, which verifies the
-original partial receipt, immutable continuation records, and successful run.
+original partial receipt, immutable continuation records, the successful run,
+its recorded v1-publication environment approval, and the merged helper PR.
 `;
 }
 
