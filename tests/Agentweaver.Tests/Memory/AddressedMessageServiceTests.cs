@@ -138,6 +138,105 @@ public sealed class AddressedMessageServiceTests
     }
 
     [Fact]
+    public async Task OperatorFollowup_RequiresReceipt_AndStaysInTheSameThread()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var operatorAuthor = new VerifiedAuthor("operator", "human", "user:operator", null, false);
+        var original = await fixture.Service.SendAsync(Project, operatorAuthor, NewRequest(), Active, default);
+        var premature = () => fixture.Service.SendAsync(Project, operatorAuthor,
+            NewRequest() with { IdempotencyKey = "followup", ReplyToId = original.Id }, Active, default);
+        (await premature.Should().ThrowAsync<AddressedMessageError>()).Which.Code.Should().Be("reply_unavailable");
+        var claim = (await fixture.Service.ClaimAsync(Project, Target, "Link", "recipient", default))!;
+        await fixture.Service.DeliverAsync(Project, original.Id, Target, "Link", "recipient", claim.Fence, default);
+        await fixture.Service.AcknowledgeAsync(Project, original.Id, Target, "Link", default);
+        var followup = await premature();
+        followup.ThreadId.Should().Be(original.ThreadId);
+        var otherOperator = () => fixture.Service.SendAsync(Project,
+            operatorAuthor with { SourceIdentity = "user:someone-else" },
+            NewRequest() with { IdempotencyKey = "other", ReplyToId = original.Id }, Active, default);
+        (await otherOperator.Should().ThrowAsync<AddressedMessageError>()).Which.Code.Should().Be("reply_unavailable");
+    }
+
+    [Fact]
+    public async Task Retry_FailedReceipt_UsesNewKey_AndCannotCrossSenderOrProject()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var original = await fixture.Service.SendAsync(Project, Sender, NewRequest(), Active, default);
+        var premature = () => fixture.Service.RetryAsync(Project, original.Id, Sender,
+            new RetryAddressedMessage("retry-1"), Active, default);
+        (await premature.Should().ThrowAsync<AddressedMessageError>()).Which.Code.Should().Be("message_not_retryable");
+        await fixture.Service.MarkUndeliverableAsync(Project, original.Id, Target, "Link",
+            "recipient_retired", default);
+        var wrongSender = () => fixture.Service.RetryAsync(Project, original.Id, Recipient,
+            new RetryAddressedMessage("retry-1"), Active, default);
+        (await wrongSender.Should().ThrowAsync<AddressedMessageError>()).Which.Code.Should().Be("message_unavailable");
+        var wrongProject = () => fixture.Service.RetryAsync(Guid.NewGuid().ToString(), original.Id, Sender,
+            new RetryAddressedMessage("retry-1"), Active, default);
+        (await wrongProject.Should().ThrowAsync<AddressedMessageError>()).Which.Code.Should().Be("message_unavailable");
+        var retry = await premature();
+        retry.Id.Should().NotBe(original.Id);
+        retry.Content.Should().Be(original.Content);
+        retry.Status.Should().Be(AddressedMessageStates.Accepted);
+        (await premature()).Id.Should().Be(retry.Id);
+    }
+
+    [Fact]
+    public async Task AcknowledgmentDuringWorkerTurn_IsCommittedWithDelivery_AndClearedOnReclaim()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var original = await fixture.Service.SendAsync(Project, Sender, NewRequest(), Active, default);
+        var claim = (await fixture.Service.ClaimAsync(Project, Target, "Link", "turn:first", default))!;
+        var intent = await fixture.Service.AcknowledgeAsync(Project, original.Id, Target, "Link", default);
+        intent.Status.Should().Be(AddressedMessageStates.Claimed);
+        intent.AcknowledgedAt.Should().NotBeNull();
+        await fixture.Db.AddressedMessages.Where(m => m.Id == original.Id)
+            .ExecuteUpdateAsync(s => s.SetProperty(m => m.ClaimedUntil, DateTimeOffset.UtcNow.AddMinutes(-1)));
+        var recovered = (await fixture.Service.ClaimAsync(Project, Target, "Link", "turn:second", default))!;
+        recovered.Fence.Should().Be(claim.Fence + 1);
+        recovered.AcknowledgedAt.Should().BeNull();
+        (await fixture.Service.AcknowledgeAsync(Project, original.Id, Target, "Link", default))
+            .AcknowledgedAt.Should().NotBeNull();
+        var completed = await fixture.Service.DeliverAsync(Project, original.Id, Target, "Link",
+            "turn:second", recovered.Fence, default);
+        completed.Status.Should().Be(AddressedMessageStates.Acknowledged);
+        completed.AcknowledgedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Retry_ThreadedFollowup_ToReplacementRun_PreservesThread()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var author = new VerifiedAuthor("operator", "human", "operator", null, false);
+        var first = await fixture.Service.SendAsync(Project, author, NewRequest(), Active, default);
+        var claim = (await fixture.Service.ClaimAsync(Project, Target, "Link", "turn:original", default))!;
+        await fixture.Service.DeliverAsync(Project, first.Id, Target, "Link", "turn:original", claim.Fence, default);
+        await fixture.Service.AcknowledgeAsync(Project, first.Id, Target, "Link", default);
+        var followup = await fixture.Service.SendAsync(Project, author,
+            NewRequest() with { IdempotencyKey = "followup", ReplyToId = first.Id }, Active, default);
+        await fixture.Service.MarkUndeliverableAsync(Project, followup.Id, Target, "Link",
+            "target_cancelled", default);
+        const string replacementId = "dddddddd-dddd-4ddd-dddd-dddddddddddd";
+        fixture.Runs[replacementId] = fixture.Runs[Target] with { Id = RunId.Parse(replacementId) };
+        var retry = await fixture.Service.RetryAsync(Project, followup.Id, author,
+            new("retry-followup", replacementId), Active, default);
+        retry.TargetRunId.Should().Be(replacementId);
+        retry.ThreadId.Should().Be(first.ThreadId);
+        retry.ReplyToId.Should().Be(first.Id);
+    }
+
+    [Fact]
+    public async Task RenewClaim_RejectsStaleFence()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        await fixture.Service.SendAsync(Project, Sender, NewRequest(), Active, default);
+        var claim = (await fixture.Service.ClaimAsync(Project, Target, "Link", "owner", default))!;
+        await fixture.Service.RenewClaimAsync(Project, claim.Id, Target, "Link", "owner", claim.Fence, default);
+        var stale = () => fixture.Service.RenewClaimAsync(
+            Project, claim.Id, Target, "Link", "owner", claim.Fence - 1, default);
+        (await stale.Should().ThrowAsync<AddressedMessageError>()).Which.Code.Should().Be("claim_lost");
+    }
+
+    [Fact]
     public async Task ExplicitUndeliverable_RecordsReasonWithoutForgingReceipt()
     {
         await using var fixture = await Fixture.CreateAsync();

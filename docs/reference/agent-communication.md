@@ -31,22 +31,38 @@ target run. They are neither decisions nor coordinator steering. REST
 `reference_kind`, `reference_id`, or `expires_at`. An authenticated source run
 determines the sender; the client does not choose one. A repeated key from the same
 sender returns the original logical message; a conflicting payload is rejected.
+Project contributors can send as themselves from the operator UI without impersonating
+an agent; a reply to their acknowledged message retains its thread. An expired or
+undeliverable message can be retried with a new idempotency key and optionally a
+replacement active target run via `POST /{messageId}/retry`. The original receipt and
+diagnostics remain visible.
 `GET /api/projects/{id}/agent-messages` and `GET /{messageId}` expose project-visible
 history and diagnostics. Native and MCP tools expose corresponding send, list and get
-operations. MCP writes require forwarded, valid run-capability headers; an operator's
-broker token alone cannot impersonate a run, and stdio mode without a run identity
-cannot send. A reply uses the original message ID and preserves its thread.
+operations. MCP run-bound writes require forwarded, valid run-capability headers; an
+operator's broker token alone cannot impersonate a run; stdio under an authorized
+human caller can send as that human, not as an agent run. A reply uses the original
+message ID and preserves its thread.
 
 States are `accepted`, `claimed`, `delivered`, `acknowledged`, `expired`, and
 `undeliverable`. Recipient-run-bound `POST /claim` leases a message;
 `POST /{messageId}/deliver` needs the matching owner and fence;
 `POST /{messageId}/acknowledge` records receipt and can be repeated safely. Their MCP/native
 counterparts follow the same checks. A lease expiry allows reclaim after a crash,
-but callers must only claim and present messages at a safe turn boundary. **No runtime
-turn-boundary injection or scheduled idle wake is connected yet.** A manual claim is
-not proof that the model saw the content, and a delivered mark is only as reliable as
-the caller's presentation. Until that integration lands, use list/get to inspect
-messages and do not interpret `accepted` as delivered. There is no paid wake loop.
+but callers must only claim and present messages at a safe turn boundary. Worker
+model turns automatically claim up to eight messages and pass their stable IDs with
+the untrusted content into the turn prompt. Claims are renewed while the turn is
+active, and marked delivered when the turn succeeds. A recipient acknowledgment
+during that turn is held as an intent until delivery commits; reclaim after a crash
+clears the intent. After a crash before the mark,
+the claim can be reclaimed and presented with the same logical ID, including if the
+model already saw it; physical presentation is not exactly once. **Scheduled idle
+wake is not connected:** heartbeat pickup reserves new coordinator runs, not turns
+on an existing recipient run; interrupted-child restart replays the child's task,
+and the live workflow registry is process-local. The scheduling/recovery owner
+needs a durable, fenced wake-request and same-run safe-turn entry point with
+project/member authorization, concurrency and turn budgets, and observable
+terminal failure/retry. No separate scheduler or paid wake loop is introduced;
+use list/get to inspect accepted messages awaiting a natural turn boundary.
 
 Human notifications surface activity to operators; they are not addressed messages
 or acknowledgment receipts. Backlog/work-plan references link existing tasks without

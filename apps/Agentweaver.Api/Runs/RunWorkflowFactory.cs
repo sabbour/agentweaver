@@ -482,7 +482,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
         // IWorkflowAgentFactory seam. In production this builds a CopilotAIAgent — an AIAgent the
         // MAF checkpoint manager can serialize, so the Copilot SDK session is persisted into the
         // FileSystem checkpoint alongside the workflow state. Tests substitute a fake agent.
-        var copilotAgent = _agentFactory.CreateWorkerAgent();
+        var copilotAgent = AddressedTurnAgent.Wrap(_agentFactory.CreateWorkerAgent(), _scopeFactory);
 
         // Resolve an inline bespoke charter from the effective definition's agent node (if any), so a
         // generated workflow that mints a domain-specific role with an inline `charter` runs the agent
@@ -1216,7 +1216,7 @@ public sealed class RunWorkflowFactory : Agentweaver.Api.Infrastructure.IRevisio
             if (_agentNodes.TryGetValue(node.Id, out var existing))
                 return existing;
 
-            var agent = _factory._agentFactory.CreateWorkerAgent();
+            var agent = AddressedTurnAgent.Wrap(_factory._agentFactory.CreateWorkerAgent(), _factory._scopeFactory);
             ExecutorBinding binding = new AgentTurnExecutor(
                 agent,
                 _factory._worktreeOps,
