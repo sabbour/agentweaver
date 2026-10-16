@@ -10,9 +10,11 @@ import {
   continuePartialPublication,
   isRegistryAbsent,
   originalBinding,
+  readPackageBytes,
   readRemoteImage,
   verifyHelperAdmission,
   verifyPartialPublicationCompletion,
+  verifyRegistryWriteAccess,
 } from '../partial-publication.mjs';
 import { PARTIAL_PUBLICATION as P } from '../partial-publication-contract.mjs';
 import { measureAgentHostArchiveSync } from '../measure-agenthost-image.mjs';
@@ -205,6 +207,10 @@ function options(world, directory, overrides = {}) {
     },
     readPackageSha256: async component => world.packages.get(component.id) ?? null,
     readImage: async (repository, tag) => world.images.get(`${repository}:${tag}`) ?? null,
+    verifyRegistryWrite: async (repositories, credential, fetchImpl) => {
+      world.calls.push(`registry-write-check ${repositories.join(' ')}`);
+      if (world.registryWriteFetch) await verifyRegistryWriteAccess(repositories, credential, world.registryWriteFetch);
+    },
     sleep: async () => {},
     directory,
     originalReceiptPath: receiptPath,
@@ -359,7 +365,7 @@ test('a package that never reads back after push is unknown', withDirectory(asyn
   let sleeps = 0;
   await assert.rejects(continuePartialPublication(options(world, directory, { sleep: async () => { sleeps += 1; } })),
     /confirmed byte-for-byte/);
-  assert.equal(sleeps, 4);
+  assert.equal(sleeps, 9);
   const partial = JSON.parse(readFileSync(path.join(directory, 'continuation.json'), 'utf8'));
   assert.deepEqual(partial.unknown, ['Agentweaver.Providers.Storage.AzureFiles']);
   assert.deepEqual(partial.unattempted, ['Agentweaver.Providers.Sandbox.AgentSandbox']);
@@ -636,3 +642,155 @@ test('continuation workflow extracts both original artifacts at the paths the pu
   assert.match(workflow, /node scripts\/release\/publish\.mjs releases\/foundation\.json artifacts\/release\/pack\n/);
   assert.match(workflow, /--original-receipt artifacts\/release\/original\/publication\.json\n/);
 });
+
+const feedBase = new URL('https://nuget.pkg.github.com/sabbour/download/');
+const feedAuth = 'Basic ZmVlZA==';
+const abstractions = { id: 'Agentweaver.Abstractions', version: '1.0.0' };
+const redirect = (location, status = 302) => new Response(null, { status, headers: location ? { location } : {} });
+
+function scriptedFetch(responses) {
+  const calls = [];
+  return {
+    calls,
+    fetch: async (url, init) => {
+      calls.push({ url: String(url), init });
+      const next = responses.shift();
+      if (!next) throw new Error(`unexpected fetch ${url}`);
+      return typeof next === 'function' ? next(url, init) : next;
+    },
+  };
+}
+
+test('package reads follow a cross-origin redirect without sending the feed credential', async () => {
+  const storage = 'https://pkg-containers.githubusercontent.com/ghcr1/blobs/sha256:abc?sig=1';
+  const { calls, fetch } = scriptedFetch([redirect(storage), new Response(Buffer.from('nupkg'), { status: 200 })]);
+  const bytes = await readPackageBytes(abstractions, { base: feedBase, authorization: feedAuth }, fetch);
+  assert.equal(bytes.toString(), 'nupkg');
+  assert.equal(calls[0].url, 'https://nuget.pkg.github.com/sabbour/download/agentweaver.abstractions/1.0.0/agentweaver.abstractions.1.0.0.nupkg');
+  assert.equal(calls[0].init.headers.authorization, feedAuth);
+  assert.equal(calls[1].url, storage);
+  assert.equal(calls[1].init.headers.authorization, undefined);
+  for (const { init } of calls) {
+    assert.equal(init.cache, 'no-store');
+    assert.equal(init.redirect, 'manual');
+  }
+});
+
+test('package reads keep the credential on same-origin redirects and accept three hops', async () => {
+  const { calls, fetch } = scriptedFetch([
+    redirect('/sabbour/download/a', 301), redirect('b', 307), redirect('https://storage.example/c', 308),
+    new Response(Buffer.from('ok'), { status: 200 }),
+  ]);
+  assert.equal((await readPackageBytes(abstractions, { base: feedBase, authorization: feedAuth }, fetch)).toString(), 'ok');
+  assert.deepEqual(calls.map(({ init }) => init.headers.authorization), [feedAuth, feedAuth, feedAuth, undefined]);
+  assert.equal(calls[2].url, 'https://nuget.pkg.github.com/sabbour/download/b');
+});
+
+test('a package 404 after a redirect is absent', async () => {
+  const { fetch } = scriptedFetch([redirect('https://storage.example/x'), new Response(null, { status: 404 })]);
+  assert.equal(await readPackageBytes(abstractions, { base: feedBase, authorization: feedAuth }, fetch), null);
+});
+
+const packageRedirectFailures = [
+  ['an http Location', [redirect('http://storage.example/x')], /not a plain https URL/],
+  ['a Location with userinfo', [redirect('https://user:pass@storage.example/x')], /not a plain https URL/],
+  ['more than three redirects', [redirect('/1'), redirect('/2'), redirect('/3'), redirect('/4')], /exceeded 3 redirects/],
+  ['a redirect without Location', [redirect(undefined)], /HTTP 302\) from nuget\.pkg\.github\.com has no Location/],
+  ['a storage error', [redirect('https://storage.example/x'), new Response(null, { status: 403 })], /HTTP 403 from storage\.example/],
+];
+for (const [name, responses, pattern] of packageRedirectFailures) {
+  test(`package reads fail on ${name}`, async () => {
+    const { fetch } = scriptedFetch(responses);
+    await assert.rejects(readPackageBytes(abstractions, { base: feedBase, authorization: feedAuth }, fetch), pattern);
+  });
+}
+
+const missingImageRepositories = [
+  'identity.broker', 'eventsandsessions', 'gateway', 'mcp', '-web', 'orchestrator', 'environment', 'knowledge', 'projects.config',
+].map(name => `sabbour/agentweaver${name.startsWith('-') ? name : `.${name}`}`);
+
+function registryWriteFetch({ uploadStatus = () => 202, deleteError = false } = {}) {
+  const calls = [];
+  return {
+    calls,
+    fetch: async (url, init = {}) => {
+      const target = new URL(String(url));
+      calls.push({ method: init.method ?? 'GET', url: target, init });
+      if (target.pathname === '/token') return Response.json({ token: `push-${target.searchParams.get('scope')}` });
+      const repository = target.pathname.replace(/^\/v2\//, '').replace(/\/blobs\/uploads\/.*$/, '');
+      if (init.method === 'POST') {
+        const status = uploadStatus(repository);
+        return new Response(null, {
+          status, headers: status === 202 ? { location: `/v2/${repository}/blobs/uploads/session-1?_state=x` } : {},
+        });
+      }
+      if (init.method === 'DELETE') {
+        if (deleteError) throw new Error('delete failed');
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`unexpected registry ${init.method} ${url}`);
+    },
+  };
+}
+
+test('registry write checks start and cancel one upload session per repository without committing content', async () => {
+  const { calls, fetch } = registryWriteFetch();
+  await verifyRegistryWriteAccess(missingImageRepositories, { username: 'sabbour', password: 'secret' }, fetch);
+  assert.equal(calls.length, missingImageRepositories.length * 3);
+  missingImageRepositories.forEach((repository, index) => {
+    const [token, upload, cancel] = calls.slice(index * 3, index * 3 + 3);
+    assert.equal(token.url.searchParams.get('scope'), `repository:${repository}:pull,push`);
+    assert.equal(token.init.headers.authorization, `Basic ${Buffer.from('sabbour:secret').toString('base64')}`);
+    assert.equal(upload.method, 'POST');
+    assert.equal(upload.url.href, `https://ghcr.io/v2/${repository}/blobs/uploads/`);
+    assert.equal(upload.init.headers.authorization, `Bearer push-repository:${repository}:pull,push`);
+    assert.equal(cancel.method, 'DELETE');
+    assert.equal(cancel.url.href, `https://ghcr.io/v2/${repository}/blobs/uploads/session-1?_state=x`);
+  });
+  assert.ok(calls.every(({ method, url }) => method !== 'PUT' && method !== 'PATCH' && !url.pathname.includes('/manifests/')));
+});
+
+test('registry write checks cancel the session even when cancellation fails', async () => {
+  const { calls, fetch } = registryWriteFetch({ deleteError: true });
+  await verifyRegistryWriteAccess(missingImageRepositories.slice(0, 1), { username: 'u', password: 'p' }, fetch);
+  assert.deepEqual(calls.map(({ method }) => method), ['GET', 'POST', 'DELETE']);
+});
+
+test('a denied registry write check names the repository and stops before the claim', withDirectory(async directory => {
+  const world = newWorld();
+  const registry = registryWriteFetch({ uploadStatus: repository => repository.endsWith('.gateway') ? 403 : 202 });
+  world.registryWriteFetch = registry.fetch;
+  await assert.rejects(continuePartialPublication(options(world, directory)),
+    /GHCR write check for sabbour\/agentweaver\.gateway returned HTTP 403/);
+  assert.deepEqual(mutations(world), []);
+  assert.deepEqual(continuationRefs(world), []);
+  assert.equal(existsSync(path.join(directory, 'continuation.json')), false);
+  const cancelled = registry.calls.filter(({ method }) => method === 'DELETE').map(({ url }) => url.pathname);
+  assert.deepEqual(cancelled, missingImageRepositories.slice(0, 2).map(repository => `/v2/${repository}/blobs/uploads/session-1`));
+}));
+
+test('continuation checks write access to the nine exact missing image repositories before its claim', withDirectory(async directory => {
+  const world = newWorld();
+  await continuePartialPublication(options(world, directory));
+  const check = world.calls.findIndex(call => call.startsWith('registry-write-check '));
+  const claim = world.calls.findIndex(call => /^gh api --method POST .*git\/tags/.test(call));
+  assert.ok(check >= 0 && check < claim);
+  assert.deepEqual(world.calls[check].split(' ').slice(1), missingImageRepositories);
+}));
+
+test('a transient read error after a push is retried before the output is recorded', withDirectory(async directory => {
+  const world = newWorld();
+  let failed = false;
+  const receipt = await continuePartialPublication(options(world, directory, {
+    readPackageSha256: async component => {
+      const value = world.packages.get(component.id) ?? null;
+      if (component.id === 'Agentweaver.Providers.Storage.AzureFiles' && value !== null && !failed) {
+        failed = true;
+        throw new Error('partial publication: transient HTTP 502');
+      }
+      return value;
+    },
+  }));
+  assert.equal(failed, true);
+  assert.equal(receipt.status, 'published');
+}));
