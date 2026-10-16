@@ -1,6 +1,7 @@
 import { ApiError } from './client';
 import type { NoTeamStartOrchestrationError } from './types';
 
+/** Stable categories used to present API and transport errors in the UI. */
 export type ApiErrorKind =
   | 'not-found'
   | 'unauthorized'
@@ -11,6 +12,7 @@ export type ApiErrorKind =
   | 'network'
   | 'unknown';
 
+/** User-facing error details derived from a failed request. */
 export interface FormattedApiError {
   kind: ApiErrorKind;
   status?: number;
@@ -55,6 +57,7 @@ function modelProviderErrorMessage(err: unknown): string | null {
   return code ? MODEL_PROVIDER_ERROR_MESSAGES[code] ?? null : null;
 }
 
+/** Formats model-provider setup failures separately from generic HTTP errors. */
 export function formatModelProviderErrorMessage(err: unknown, fallback?: string): string {
   const providerMessage = modelProviderErrorMessage(err);
   if (providerMessage) return providerMessage;
@@ -87,6 +90,7 @@ export function isGitHubRepoAppConnectionRequired(err: unknown): boolean {
   return !!body.error && GITHUB_CONNECTION_REQUIRED_CODES.has(body.error);
 }
 
+/** Extracts recognized fields from a JSON API error body; plain text stays a message. */
 export function parseApiBody(body: string): { error?: string; message?: string; detail?: string } {
   if (!body) return {};
   try {
@@ -101,6 +105,7 @@ export function parseApiBody(body: string): { error?: string; message?: string; 
   }
 }
 
+/** Returns a typed response only for the API's specific missing-team conflict. */
 export function parseNoTeamStartError(err: unknown): NoTeamStartOrchestrationError | null {
   if (!(err instanceof ApiError) || err.status !== 409) return null;
   const body = parseApiBody(err.body);
@@ -111,6 +116,7 @@ export function parseNoTeamStartError(err: unknown): NoTeamStartOrchestrationErr
   };
 }
 
+/** Reads a run identifier from the structured coordinator-startup failure payload. */
 export function parseCoordinatorStartupError(err: unknown): { runId: string } | null {
   if (!(err instanceof ApiError)
       || typeof err.payload !== 'object'
@@ -123,6 +129,7 @@ export function parseCoordinatorStartupError(err: unknown): { runId: string } | 
     : null;
 }
 
+/** Maps transport status and structured server details to a stable UI error model. */
 export function formatApiError(err: unknown, fallback = 'The request failed.'): FormattedApiError {
   if (err instanceof ApiError) {
     const body = parseApiBody(err.body);
@@ -158,6 +165,7 @@ export function formatApiError(err: unknown, fallback = 'The request failed.'): 
   return { kind: 'unknown', message: String(err || fallback) };
 }
 
+/** Formats an API error, preferring actionable repository or model-provider messages. */
 export function formatApiErrorMessage(err: unknown, fallback?: string): string {
   const githubMessage = githubConnectionErrorMessage(err);
   if (githubMessage) return githubMessage;

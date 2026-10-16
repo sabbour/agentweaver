@@ -4,6 +4,7 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Knowledge;
 
+/// <summary>Request body for creating a Memory, SessionContext, or Proposal record.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record CreateKnowledgeRecordRequest
 {
@@ -16,6 +17,7 @@ public sealed record CreateKnowledgeRecordRequest
     public required ImmutableArray<string> Tags { get; init; }
 }
 
+/// <summary>Request body for a revision-checked update of an existing Knowledge record.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record UpdateKnowledgeRecordRequest
 {
@@ -31,6 +33,7 @@ public sealed record UpdateKnowledgeRecordRequest
     public Guid? SupersededByRecordId { get; init; }
 }
 
+/// <summary>Request body for restoring a record from an immutable historical revision.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RestoreKnowledgeRecordRequest
 {
@@ -39,6 +42,7 @@ public sealed record RestoreKnowledgeRecordRequest
     public string? Reason { get; init; }
 }
 
+/// <summary>Request body for approving a pending Decision at the supplied current revision.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ApproveKnowledgeDecisionRequest
 {
@@ -46,24 +50,28 @@ public sealed record ApproveKnowledgeDecisionRequest
     public string? Reason { get; init; }
 }
 
+/// <summary>Request body for promoting a Proposal only if its expected revision is still current.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record PromoteKnowledgeProposalRequest
 {
     public required int ExpectedRevision { get; init; }
 }
 
+/// <summary>Request body for rejecting a Proposal only if its expected revision is still current.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RejectKnowledgeProposalRequest
 {
     public required int ExpectedRevision { get; init; }
 }
 
+/// <summary>Identifies the immutable revision of a Knowledge item included in compiled context.</summary>
 public sealed record KnowledgeRevisionReference(
     string Kind,
     Guid RecordId,
     int Revision,
     Guid RevisionId);
 
+/// <summary>Compiled context text together with omissions and the source revisions used to build it.</summary>
 public sealed record MemoryContextCompilation(
     string? Text,
     int OmittedMemoryCount,

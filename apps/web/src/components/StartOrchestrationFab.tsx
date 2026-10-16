@@ -63,6 +63,11 @@ export interface StartOrchestrationFabProps {
   buttonRef?: RefObject<HTMLButtonElement | null>;
 }
 
+/**
+ * Renders the floating action that starts an orchestration and its launch dialog.
+ * Provider context comes from `useAiExecutionContext`; API calls start the requested run, while
+ * local state tracks dialog and submission status.
+ */
 export function StartOrchestrationFab({ currentProjectId, buttonRef }: StartOrchestrationFabProps) {
   const styles = useStyles();
   const navigate = useNavigate();

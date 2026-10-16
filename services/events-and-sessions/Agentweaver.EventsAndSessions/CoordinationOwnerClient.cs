@@ -7,13 +7,16 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.EventsAndSessions;
 
+/// <summary>Owner address and expected caller identity for coordination proof requests.</summary>
 public sealed record CoordinationOwnerClientOptions(
     string? OwnerBaseAddress,
     string? Audience,
     string? ExpectedIssuer);
 
+/// <summary>Reads owner-issued coordination bindings, admission receipts, and capture proofs.</summary>
 public interface ICoordinationOwnerClient
 {
+    /// <summary>Validates the sender and recipient binding for an addressed message.</summary>
     Task<MessageRouteBinding> ValidateMessageRouteAsync(
         HttpContext context,
         string projectId,
@@ -21,6 +24,7 @@ public interface ICoordinationOwnerClient
         MessageRouteValidationRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Reads the current owner binding for a session in its project and run.</summary>
     Task<CoordinationSessionBinding> GetSessionBindingAsync(
         HttpContext context,
         string projectId,
@@ -28,24 +32,28 @@ public interface ICoordinationOwnerClient
         string sessionId,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Validates owner admission for a fork and binds the receipt to caller and request fields.</summary>
     Task<SessionForkAdmissionReceipt> ValidateSessionForkAdmissionAsync(
         HttpContext context,
         SessionIdentity source,
         SessionForkRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Reads a policy evaluation receipt and verifies its identity and evidence shape.</summary>
     Task<PolicyEvaluationReceiptView> ReadPolicyEvaluationReceiptAsync(
         HttpContext context,
         SessionIdentity identity,
         Guid receiptId,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Confirms that a policy receipt is admitted for the addressed session.</summary>
     Task ValidatePolicyEvaluationReceiptAdmissionAsync(
         HttpContext context,
         SessionIdentity identity,
         Guid receiptId,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Reads and validates the owner proof for a produced-run capture.</summary>
     Task<ProducedRunCaptureProof> ReadProducedRunCaptureProofAsync(
         HttpContext context,
         SessionIdentity identity,
@@ -54,6 +62,7 @@ public interface ICoordinationOwnerClient
         bool notFoundIsMissing = false);
 }
 
+/// <summary>Represents a denied, unavailable, or invalid coordination-owner response.</summary>
 public sealed class CoordinationOwnerClientException(
     string code,
     int statusCode,
@@ -63,6 +72,7 @@ public sealed class CoordinationOwnerClientException(
     public int StatusCode { get; } = statusCode;
 }
 
+/// <summary>Calls the coordination owner with caller credentials and validates each returned proof.</summary>
 public sealed class CoordinationOwnerClient(
     HttpClient httpClient,
     CoordinationOwnerClientOptions options) : ICoordinationOwnerClient
@@ -76,6 +86,7 @@ public sealed class CoordinationOwnerClient(
         }
     };
 
+    /// <summary>Requests and returns the owner-validated route binding for an addressed message.</summary>
     public Task<MessageRouteBinding> ValidateMessageRouteAsync(
         HttpContext context,
         string projectId,
@@ -89,6 +100,7 @@ public sealed class CoordinationOwnerClient(
             request,
             cancellationToken);
 
+    /// <summary>Reads the owner binding used to validate session-scoped journal operations.</summary>
     public Task<CoordinationSessionBinding> GetSessionBindingAsync(
         HttpContext context,
         string projectId,
@@ -102,6 +114,7 @@ public sealed class CoordinationOwnerClient(
             content: null,
             cancellationToken);
 
+    /// <summary>Checks that the owner admission receipt matches the requested fork and authenticated actor.</summary>
     public async Task<SessionForkAdmissionReceipt> ValidateSessionForkAdmissionAsync(
         HttpContext context,
         SessionIdentity source,
@@ -136,6 +149,7 @@ public sealed class CoordinationOwnerClient(
         return receipt;
     }
 
+    /// <summary>Reads the current policy receipt and verifies actor, session, issuer, and evidence references.</summary>
     public async Task<PolicyEvaluationReceiptView> ReadPolicyEvaluationReceiptAsync(
         HttpContext context,
         SessionIdentity identity,
@@ -173,6 +187,7 @@ public sealed class CoordinationOwnerClient(
         return receipt;
     }
 
+    /// <summary>Confirms the owner admitted the specified policy receipt for this session.</summary>
     public async Task ValidatePolicyEvaluationReceiptAdmissionAsync(
         HttpContext context,
         SessionIdentity identity,
@@ -194,6 +209,7 @@ public sealed class CoordinationOwnerClient(
                 "coordination_owner_receipt_admission_invalid", StatusCodes.Status502BadGateway);
     }
 
+    /// <summary>Reads a capture proof and verifies its contract, scope, and optional tenant selector.</summary>
     public async Task<ProducedRunCaptureProof> ReadProducedRunCaptureProofAsync(
         HttpContext context,
         SessionIdentity identity,
@@ -227,6 +243,7 @@ public sealed class CoordinationOwnerClient(
         return proof;
     }
 
+    /// <summary>Forwards one caller-authenticated owner request and enforces status and no-store requirements.</summary>
     private async Task<T> SendAsync<T>(
         HttpContext context,
         HttpMethod method,

@@ -1,3 +1,5 @@
+// AgentHost executable entry point: routes isolated collector modes before starting the authenticated
+// runtime host, then wires pinned model/runtime settings and owner clients into ASP.NET Core.
 using Agentweaver.AgentHost;
 using Agentweaver.AgentRuntime;
 using Agentweaver.Identity;

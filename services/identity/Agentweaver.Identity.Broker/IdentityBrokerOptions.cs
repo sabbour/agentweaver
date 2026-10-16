@@ -44,6 +44,7 @@ public sealed class IdentityBrokerOptions
     public required IReadOnlyList<BrokerClientOptions> Clients { get; set; }
 }
 
+/// <summary>Optional pinned TLS and audience settings for calls to the Projects run-binding owner.</summary>
 public sealed class BrokerRunBindingOptions
 {
     public string? ProjectsOwnerAddress { get; set; }
@@ -55,6 +56,7 @@ public sealed class BrokerRunBindingOptions
     public string? ProjectsTrustBundleSha256 { get; set; }
 }
 
+/// <summary>Owner addresses and the operator-approved remote OAuth providers for MCP connections.</summary>
 public sealed class RemoteMcpOAuthOptions
 {
     [Required]
@@ -67,6 +69,10 @@ public sealed class RemoteMcpOAuthOptions
     public required IReadOnlyList<RemoteMcpOAuthProviderOptions> Providers { get; set; }
 }
 
+/// <summary>
+/// Allowlist for one remote OAuth issuer, including its client, callback, resources,
+/// metadata endpoints and scopes. Unlisted provider values are rejected by the broker.
+/// </summary>
 public sealed class RemoteMcpOAuthProviderOptions
 {
     [Required]
@@ -88,6 +94,7 @@ public sealed class RemoteMcpOAuthProviderOptions
     public required IReadOnlyList<string> ApprovedScopes { get; set; }
 }
 
+/// <summary>Operator-supplied GitHub OAuth and App identity, with the private key referenced by secret version.</summary>
 public sealed class GitHubRepoAppOptions
 {
     [Required]
@@ -167,6 +174,7 @@ public sealed class ExternalProviderOptions
     public string? MetadataAddress { get; set; }
 }
 
+/// <summary>Whether a seeded OAuth client authenticates with a secret or relies on PKCE as a public client.</summary>
 public enum BrokerClientType
 {
     Confidential,

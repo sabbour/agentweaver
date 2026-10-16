@@ -1,5 +1,9 @@
 import type { NotificationDto } from '../api/types';
 
+/**
+ * Returns the supplied CTA path or derives a project/run route for review and approval notifications.
+ * Returns `null` when neither a server path nor the identifiers needed for a review route exist.
+ */
 export function notificationTargetPath(notification: NotificationDto): string | null {
   const serverPath = notification.cta_path?.trim();
   if (serverPath) return serverPath;
@@ -15,6 +19,7 @@ export function notificationTargetPath(notification: NotificationDto): string | 
   return null;
 }
 
+/** Provides plain-language guidance when a notification has no safe in-app destination. */
 export function unavailableNotificationTargetMessage(notification: NotificationDto): string {
   if (notification.type === 'tool_approval')
     return 'This approval no longer has a run to review.';

@@ -27,6 +27,11 @@ export interface OutputCardProps {
   className?: string;
 }
 
+/**
+ * Renders a Copilot output card in the requested display mode with supplied artifact content.
+ * Local state and effects manage expansion/preview presentation; output data is provided by the
+ * conversation parent rather than fetched here.
+ */
 export function OutputCard({
   isLoading = false,
   mode = "sidecar",

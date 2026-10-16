@@ -1,6 +1,8 @@
 import type { AiExecutionContext, EffectiveModelProvider } from '../api/types';
 import type { RunStreamEvent } from '../api/sse';
 
+/** Converts provider-resolution events and API context into labels shared by execution UI. */
+
 function providerName(provider: EffectiveModelProvider): string {
   if (provider.state === 'unavailable') return 'AI provider unavailable';
   switch (provider.provider_kind) {
@@ -38,6 +40,7 @@ function unavailableReason(reason: string | null): string | null {
   }
 }
 
+/** Maps the API provider scope to a user-facing label, or returns `null` if it is unknown. */
 export function aiExecutionProviderScope(context: AiExecutionContext | null): string | null {
   const scope = context?.effective_model_provider?.provider_scope;
   switch (scope) {
@@ -48,6 +51,10 @@ export function aiExecutionProviderScope(context: AiExecutionContext | null): st
   }
 }
 
+/**
+ * Builds the user-facing provider status from API execution context, including unavailable
+ * reasons and the model name when present.
+ */
 export function aiExecutionProviderLabel(context: AiExecutionContext | null): string {
   const provider = context?.effective_model_provider;
   if (!provider) return 'Provider details not recorded';
@@ -65,6 +72,7 @@ export function aiExecutionProviderLabel(context: AiExecutionContext | null): st
   return provider.model_id ? `${label}. Model: ${provider.model_id}.` : `${label}.`;
 }
 
+/** Builds a stable comparison key from the provider details in an execution context. */
 export function providerIdentity(context: AiExecutionContext | null): string {
   const provider = context?.effective_model_provider;
   if (!provider) return '';
@@ -92,6 +100,10 @@ function providerScope(value: unknown): EffectiveModelProvider['provider_scope']
     : 'none';
 }
 
+/**
+ * Creates execution context from the newest provider-resolution event in a run stream.
+ * Returns `null` when no such event exists and marks unrecognized provider kinds unavailable.
+ */
 export function aiExecutionContextFromEvents(
   events: RunStreamEvent[],
   operation: string,

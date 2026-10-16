@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs';
 
+/** Canonical color, type, card, badge, connector, and layout settings for generated diagrams. */
 export const DESIGN_SYSTEM = JSON.parse(readFileSync(
   new URL('../../docs/diagrams/drawio/design-system.json', import.meta.url), 'utf8',
 ));
 
 const { palette: p, typography: t, cards: c, layout: l } = DESIGN_SYSTEM;
+/** Immutable token names used by the layout and draw.io renderers. */
 export const DESIGN_TOKENS = Object.freeze({
   colors: Object.freeze({
     canvas: p.canvas, surface: p.surface, group1: p.groupTier1, group2: p.groupTier2,
@@ -27,6 +29,7 @@ export const DESIGN_TOKENS = Object.freeze({
   }),
 });
 
+/** Estimate title, subtitle, and metadata block heights for one diagram card. */
 export function cardContentMetrics(node) {
   const lines=(value,capacity)=>String(value).split('\n')
     .reduce((sum,line)=>sum+Math.max(1,Math.ceil(line.length/capacity)),0);

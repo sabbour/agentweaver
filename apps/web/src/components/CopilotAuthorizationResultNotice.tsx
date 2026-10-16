@@ -38,6 +38,11 @@ const AUTHORIZATION_RESULTS = {
   },
 } as const;
 
+/**
+ * Renders the result notice for a GitHub Copilot authorization callback.
+ * The parent supplies the callback outcome and any dismissal behavior; this notice has no API
+ * request or local state.
+ */
 export function CopilotAuthorizationResultNotice({
   code,
   onDismiss,

@@ -1,3 +1,7 @@
+/**
+ * Publishes previously packed artifacts to the configured container and package registries.
+ * Publication requires explicit confirmation and matching source-bound provenance.
+ */
 // Only the manually confirmed publication workflow invokes this script.
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -164,6 +168,10 @@ function parseRegistry(value) {
   return { host, repositoryPath: repositoryPath ?? '' };
 }
 
+/**
+ * Verifies packed artifacts and publishes them to their configured registries and feeds.
+ * Without manual confirmation it refuses publication; command failures are surfaced with sanitized diagnostics.
+ */
 export function publishArtifacts(manifestPath, outDir, sourceSha, {
   root = process.cwd(), confirmed = false, env = process.env, run = command,
   measureAgentHostArchive = measureAgentHostArchiveSync,
@@ -670,6 +678,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   }
 }
 
+/** Extracts a sanitized native NuGet push diagnostic when the error came from that operation. */
 export function findNugetPushDiagnostic(error) {
   if (!error || typeof error !== 'object') return undefined;
   if (error.operation === 'nuget.push' && typeof error.nativeDiagnostic === 'string')

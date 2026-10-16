@@ -685,6 +685,10 @@ interface CompactChangesListProps {
   showHeader?: boolean;
 }
 
+/**
+ * Renders changed workspace files with aggregate added/removed counts and selection handling.
+ * File entries and the click callback are supplied by the artifact-browser parent.
+ */
 export function CompactChangesList({
   files,
   selectedPath = null,
@@ -721,6 +725,11 @@ interface FilesTabPanelProps {
   onFileClick: (path: string, isChanged: boolean) => void;
 }
 
+/**
+ * Renders the loaded workspace file tree with local folder expansion state.
+ * The caller supplies file data, loading/error state, and selection callbacks; this panel does
+ * not load files itself.
+ */
 export function FilesTabPanel({
   workspaceFiles,
   workspaceLoading,
@@ -792,6 +801,11 @@ interface FileTreePanelProps {
   noChangeSubtaskIds?: string[];
 }
 
+/**
+ * Renders the artifact-browser changes/files tabs and the run review/commit actions.
+ * Its `state` is assembled by `useArtifactBrowser` from run/workspace APIs; local state manages
+ * folder/tabs and request-changes input, while callbacks submit reviews and commits.
+ */
 export function FileTreePanel({ state, onFileClick, previewStatusSlot, noChangesProduced, noChangeSubtaskIds }: FileTreePanelProps) {
   const styles = useFileTreeStyles();
   const {
@@ -1081,6 +1095,10 @@ interface DiffPanelProps {
   state: ArtifactBrowserState;
 }
 
+/**
+ * Renders the selected file's diff from `ArtifactBrowserState`, including loading and error
+ * states. Diff content and selection are supplied by the browser hook; this panel does not fetch.
+ */
 export function DiffPanel({ state }: DiffPanelProps) {
   const styles = useDiffPanelStyles();
   const { selectedPath, diff, diffLoading, diffError } = state;
@@ -1125,6 +1143,11 @@ interface ArtifactBrowserProps {
   noChangeSubtaskIds?: string[];
 }
 
+/**
+ * Owns the artifact-browser flow for a run and renders its files, changes, and diff panels.
+ * `useArtifactBrowser` loads run/workspace artifacts and review state from the API; props identify
+ * the run and receive commit outcomes, and the hook manages the corresponding loading/actions.
+ */
 export function ArtifactBrowser({ runId, runStatus, onCommitSuccess, noChangesProduced, noChangeSubtaskIds }: ArtifactBrowserProps) {
   const styles = useStyles();
   const state = useArtifactBrowser(runId, runStatus, undefined, onCommitSuccess);

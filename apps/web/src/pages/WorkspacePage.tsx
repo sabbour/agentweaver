@@ -24,9 +24,8 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import type { Project, ProposedBacklogItem, WorkspaceNode, WorkspaceRef } from '../api/types';
 // Project-scoped, read-only Workspace browser (WORK section). Browses the project
 // repo at its current branch and lets the user switch to active run worktrees or
-// coordinator assembly branches
-// branch. The file tree and syntax-highlighted viewer are reused from the run
-// Files experience; there is no diff, commit, or review chrome here.
+// coordinator assembly branches. The file tree and syntax-highlighted viewer are
+// reused from the run Files experience; there is no diff, commit, or review chrome.
 
 const useStyles = makeStyles({
   root: {
@@ -169,6 +168,7 @@ const useStyles = makeStyles({
 });
 
 // Short, human-readable status badge color for a worktree's owning run.
+/** Maps the owning run's lifecycle to the status badge color used by workspace refs. */
 function runStatusColor(status: string | undefined): 'success' | 'danger' | 'warning' | 'subtle' {
   if (status === 'completed' || status === 'merged') return 'success';
   if (status === 'failed' || status === 'merge_failed') return 'danger';
@@ -177,6 +177,7 @@ function runStatusColor(status: string | undefined): 'success' | 'danger' | 'war
   return 'subtle';
 }
 
+/** Browses files from a project's base branch, run worktrees, or assembly branches. */
 export function WorkspacePage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
@@ -204,6 +205,7 @@ export function WorkspacePage() {
   const [decomposeLoading, setDecomposeLoading] = useState(false);
   const [decomposeError, setDecomposeError] = useState<string | null>(null);
 
+  /** Previews spec decomposition against the selected branch without creating tasks. */
   const handleImport = async () => {
     if (!selectedPath || !projectId) return;
     setDecomposeLoading(true);
@@ -232,6 +234,7 @@ export function WorkspacePage() {
     }
   };
 
+  /** Confirms decomposition by submitting the selected spec for backlog creation. */
   const handleDecomposeConfirm = async () => {
     if (!selectedPath || !projectId) return;
     setDecomposeLoading(true);
@@ -260,6 +263,7 @@ export function WorkspacePage() {
   };
 
   // Load the available refs (base branch + active run worktrees) for the project.
+  // Load the base ref and active run/assembly refs, honoring valid deep-link selections.
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
@@ -295,6 +299,7 @@ export function WorkspacePage() {
   }, [projectId, requestedRef, requestedRun]);
 
   // Load the file tree for the selected ref. Switching refs clears any open file.
+  // Load the selected branch's file tree; cancel stale responses and clear the prior file selection.
   useEffect(() => {
     if (!projectId || selectedRef === undefined) return;
     let cancelled = false;
@@ -338,6 +343,7 @@ export function WorkspacePage() {
         ? 'Run worktree'
         : 'Workspace ref';
 
+  /** Binds the shared file viewer's content loader to the currently selected ref. */
   const getContent = useMemo(
     () => (_id: string, path: string) =>
       apiClient.getProjectWorkspaceFileContent(projectId!, path, selectedRef),

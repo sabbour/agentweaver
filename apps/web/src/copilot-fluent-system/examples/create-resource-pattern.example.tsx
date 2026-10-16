@@ -7,6 +7,7 @@ const createAction: AzfAction = {
   onClick: () => undefined,
 };
 
+/** Demonstrates a two-step create flow with local field state and a review-stage summary. */
 export function CreateResourcePatternExample() {
   const [currentStepId, setCurrentStepId] = useState('basics');
   const [deleteProtection, setDeleteProtection] = useState('Enabled');

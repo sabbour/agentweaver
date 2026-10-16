@@ -3,6 +3,10 @@ using System.Text.Json.Serialization;
 
 namespace Agentweaver.Identity;
 
+/// <summary>
+/// Immutable binding between a runtime instance and its authenticated tenant, run, placement,
+/// accepted selection, execution fence, endpoints, and optional model/run limits.
+/// </summary>
 public sealed record RuntimeBinding(
     string ActorIssuer,
     string ActorId,
@@ -67,8 +71,10 @@ public sealed record RuntimeBinding(
     public Guid? ResumeAttemptId { get; init; }
 }
 
+/// <summary>Whether a runtime registration remains authorized for use.</summary>
 public enum RuntimeRegistrationState { Active, Revoked }
 
+/// <summary>Owner-issued registration revision and expiry wrapping a complete runtime binding.</summary>
 public sealed record RuntimeRegistration(
     Guid RuntimeInstanceId,
     long Revision,
@@ -76,21 +82,26 @@ public sealed record RuntimeRegistration(
     RuntimeRegistrationState State,
     DateTimeOffset ExpiresAt);
 
+/// <summary>Authenticated runtime actor bearer and optional tenant selector; string output is redacted.</summary>
 public sealed class RuntimeActorAuthorization(SecretCredential bearer, string? tenantSelector)
 {
     [JsonIgnore]
     public SecretCredential Bearer { get; } = bearer;
     public string? TenantSelector { get; } = tenantSelector;
+    /// <summary>Returns a redacted label rather than the bearer value.</summary>
     public override string ToString() => nameof(RuntimeActorAuthorization) + " [REDACTED]";
 }
 
+/// <summary>Fresh owner lookup boundary used to validate a runtime registration before privileged work.</summary>
 // The implementation must use fresh authenticated owner credentials, never a saved actor ID.
 public interface IRuntimeRegistrationOwner
 {
+    /// <summary>Reads the authoritative current registration using authenticated owner credentials.</summary>
     Task<RuntimeRegistration> ReadCurrentAsync(
         Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken cancellationToken);
 }
 
+/// <summary>Credential-free evidence that a bootstrap delivery reached the registered placement.</summary>
 public sealed record RuntimeBootstrapDeliveryReceipt(
     Guid OperationId,
     Guid GrantId,
@@ -108,8 +119,10 @@ public sealed record RuntimeBootstrapDeliveryReceipt(
 
 // Only the Environment owner may implement delivery to its exact current placement.
 // Credential values are transient input, not durable request or receipt fields.
+/// <summary>Environment-owner boundary for delivering transient configuration credentials to a placement.</summary>
 public interface IRuntimeBootstrapDelivery
 {
+    /// <summary>Delivers a credential to the exact current registration and returns non-secret receipt data.</summary>
     Task<RuntimeBootstrapDeliveryReceipt> DeliverAsync(
         RuntimeRegistration registration,
         RuntimeActorAuthorization actor,
@@ -120,22 +133,29 @@ public interface IRuntimeBootstrapDelivery
         CancellationToken cancellationToken);
 }
 
+/// <summary>Owner boundary for verifying that an incoming bootstrap delivery is still pending.</summary>
 public interface IRuntimePendingBootstrapVerifier
 {
+    /// <summary>Verifies the exact proof and delivery operation against current owner state.</summary>
     Task<RuntimeGrantReceipt> VerifyPendingBootstrapDeliveryAsync(
         RuntimeCredentialProof proof,
         Guid deliveryOperationId,
         CancellationToken cancellationToken);
 }
 
+/// <summary>Operation permitted by a short-lived runtime credential grant.</summary>
 public enum RuntimeCredentialPurpose { Configure, Observe }
+
+/// <summary>Lifecycle state of an owner-issued runtime credential grant.</summary>
 public enum RuntimeCredentialState { Active, Consumed, Revoked }
 
+/// <summary>Stable secret-purpose name used by model-session redemption.</summary>
 public static class RuntimeSecretPurposes
 {
     public const string ModelSession = "model-session";
 }
 
+/// <summary>Non-secret receipt binding a grant to a registration, purpose, audience, and expiry.</summary>
 public sealed record RuntimeGrantReceipt(
     Guid GrantId,
     Guid RuntimeInstanceId,
@@ -149,6 +169,7 @@ public sealed record RuntimeGrantReceipt(
     DateTimeOffset ExpiresAt,
     DateTimeOffset RecordedAt);
 
+/// <summary>Transient proof carrying a grant and its credential to an authenticated owner endpoint.</summary>
 public sealed class RuntimeCredentialProof(
     Guid grantId,
     Guid runtimeInstanceId,
@@ -166,27 +187,34 @@ public sealed class RuntimeCredentialProof(
     public string ConfigurationHash { get; } = configurationHash;
     [JsonIgnore]
     public SecretCredential Credential { get; } = credential;
+    /// <summary>Returns a redacted label rather than credential material.</summary>
     public override string ToString() => nameof(RuntimeCredentialProof) + " [REDACTED]";
 }
 
+/// <summary>Owner-issued credential receipt paired with the in-memory secret value.</summary>
 public sealed class RuntimeCredentialIssue(RuntimeGrantReceipt receipt, SecretCredential credential)
 {
     public RuntimeGrantReceipt Receipt { get; } = receipt;
     [JsonIgnore]
     public SecretCredential Credential { get; } = credential;
+    /// <summary>Returns a redacted label rather than credential material.</summary>
     public override string ToString() => nameof(RuntimeCredentialIssue) + " [REDACTED]";
 }
 
+/// <summary>Authorization failure carrying a safe stable code and optional fixed-credit evidence.</summary>
 public sealed class RuntimeAuthorizationException : Exception
 {
+    /// <summary>Creates an authorization failure with only a stable code.</summary>
     public RuntimeAuthorizationException(string code) : this(code, null, null) { }
 
+    /// <summary>Creates an authorization failure with a diagnostic detail.</summary>
     public RuntimeAuthorizationException(string code, string diagnosticDetail)
         : base($"{code}: {diagnosticDetail}")
     {
         Code = code;
     }
 
+    /// <summary>Creates an authorization failure with optional guard evidence and cause.</summary>
     public RuntimeAuthorizationException(
         string code, RuntimeFixedCreditGuardReadResult? fixedCreditGuard, Exception? innerException)
         : base(code, innerException)
@@ -199,6 +227,7 @@ public sealed class RuntimeAuthorizationException : Exception
     public RuntimeFixedCreditGuardReadResult? FixedCreditGuard { get; }
 }
 
+/// <summary>Result of exchanging a grant, including whether it was an idempotent replay.</summary>
 public sealed class RuntimeCredentialExchange(
     RuntimeGrantReceipt receipt, SecretCredential? credential, bool isReplay)
 {
@@ -206,5 +235,6 @@ public sealed class RuntimeCredentialExchange(
     [JsonIgnore]
     public SecretCredential? Credential { get; } = credential;
     public bool IsReplay { get; } = isReplay;
+    /// <summary>Returns a redacted label instead of credential material.</summary>
     public override string ToString() => nameof(RuntimeCredentialExchange) + " [REDACTED]";
 }

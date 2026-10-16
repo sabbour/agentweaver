@@ -3,10 +3,14 @@ using Npgsql;
 
 namespace Agentweaver.Projects.Config;
 
+/// <summary>Applies explicit EF migrations and verifies runtime schema and authority permissions before serving traffic.</summary>
 public static class ProjectsConfigMigrator
 {
     private const string LockName = "agentweaver.projects_config.migrate";
 
+    /// <summary>
+    /// Fails startup unless the service schema and migration history exist and no packaged migration is pending.
+    /// </summary>
     public static async Task VerifyMigrationsAppliedAsync(
         NpgsqlDataSource dataSource,
         DbContextOptions<ProjectsConfigDbContext> options,
@@ -37,6 +41,10 @@ public static class ProjectsConfigMigrator
                 $"The Projects & Config database has pending migrations ({string.Join(", ", pending)}). Run the approved Projects & Config migration Job before starting the service.");
     }
 
+    /// <summary>
+    /// Verifies that runtime identity can read authority rows but cannot mutate them or access setup-operation receipts.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The database principal does not match the required grants.</exception>
     public static async Task VerifyRuntimeAuthorityReadOnlyAsync(
         NpgsqlDataSource dataSource,
         CancellationToken cancellationToken = default)
@@ -78,6 +86,9 @@ public static class ProjectsConfigMigrator
                 "The Projects & Config runtime database principal must have SELECT-only access to authority tables, no access to project_setup_operations, EXECUTE on projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean), and no schema CREATE privilege.");
     }
 
+    /// <summary>
+    /// Serializes schema migration with a PostgreSQL advisory lock and always attempts to release that lock.
+    /// </summary>
     public static async Task MigrateAsync(
         NpgsqlDataSource dataSource,
         DbContextOptions<ProjectsConfigDbContext> options,

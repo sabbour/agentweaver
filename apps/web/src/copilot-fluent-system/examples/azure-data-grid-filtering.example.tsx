@@ -19,6 +19,7 @@ const columns: AzfColumn<ResourceRecord>[] = [
   { columnId: 'region', header: 'Region', sortable: true, sortValue: (item) => item.region, renderCell: (item) => item.region },
 ];
 
+/** Demonstrates a searchable, region-filtered grid with host-controlled selection and paging. */
 export function AzureDataGridFilteringExample() {
   const [searchValue, setSearchValue] = useState('');
   const [selectedRegion, setSelectedRegion] = useState<string | undefined>('West US 2');

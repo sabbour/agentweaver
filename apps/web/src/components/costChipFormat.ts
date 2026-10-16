@@ -1,3 +1,6 @@
+/** Formats backend AI-usage values for the shared cost badges and credit popovers. */
+
+/** Converts backend nano-AIU to a compact AIC display value. */
 export function formatAic(nanoAiu: number | null | undefined, digits = 2): string {
   if (nanoAiu == null || !Number.isFinite(nanoAiu)) return '0';
   const value = nanoAiu / 1_000_000_000;
@@ -13,6 +16,10 @@ function formatCompactNumber(value: number): string {
   return value.toLocaleString();
 }
 
+/**
+ * Chooses the visible cost label from nano-AIU usage, falling back to token count.
+ * Returns `null` when neither value is positive so callers can hide an empty badge.
+ */
 export function costChipLabel(totalNanoAiu?: number | null, totalTokens?: number | null): string | null {
   if (totalNanoAiu != null && totalNanoAiu > 0) return `${formatAic(totalNanoAiu)} AIC`;
   if (totalTokens != null && totalTokens > 0) return `${formatCompactNumber(totalTokens)} tok`;

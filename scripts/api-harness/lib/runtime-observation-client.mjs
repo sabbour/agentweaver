@@ -1,15 +1,19 @@
 import { isDeepStrictEqual } from 'node:util';
 
+/** Validate and read bounded Orchestrator runtime and Environment provider-attempt evidence. */
+/** Gateway operation identity and item-count bound for Environment observation reads. */
 const RUNTIME_OBSERVATION_OPERATION = 'readRuntimeObservationV1';
 const MAX_ENVIRONMENT_ITEMS = 100;
 const SHA256 = /^[a-f0-9]{64}$/i;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 
+/** Return whether a value is a non-array JSON object. */
 function isRecord(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+/** Require an object to contain exactly the fields declared by its response contract. */
 function exactKeys(value, keys, label) {
   if (!isRecord(value) || Object.keys(value).length !== keys.length
     || keys.some(key => !Object.hasOwn(value, key))) {
@@ -17,46 +21,54 @@ function exactKeys(value, keys, label) {
   }
 }
 
+/** Require a string that matches the contract's identifier pattern. */
 function requireString(value, label, pattern = IDENTIFIER) {
   if (typeof value !== 'string' || !pattern.test(value)) {
     throw new TypeError(`${label} does not match the runtime observation contract.`);
   }
 }
 
+/** Validate a string only when the contract permits a non-null value. */
 function requireNullableString(value, label, pattern = IDENTIFIER) {
   if (value !== null) requireString(value, label, pattern);
 }
 
+/** Require a safe integer greater than zero for revisions and fences. */
 function requirePositiveInteger(value, label) {
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new TypeError(`${label} does not match the runtime observation contract.`);
   }
 }
 
+/** Require a safe integer of zero or greater for counts and byte lengths. */
 function requireNonNegativeInteger(value, label) {
   if (!Number.isSafeInteger(value) || value < 0) {
     throw new TypeError(`${label} does not match the runtime observation contract.`);
   }
 }
 
+/** Require a parseable timestamp string. */
 function requireDate(value, label) {
   if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) {
     throw new TypeError(`${label} does not match the runtime observation contract.`);
   }
 }
 
+/** Require a 64-character hexadecimal SHA-256 value. */
 function requireHash(value, label) {
   if (typeof value !== 'string' || !SHA256.test(value)) {
     throw new TypeError(`${label} does not match the runtime observation contract.`);
   }
 }
 
+/** Require a UUID-shaped owner or event identifier. */
 function requireUuid(value, label) {
   if (typeof value !== 'string' || !UUID.test(value)) {
     throw new TypeError(`${label} does not match the runtime observation contract.`);
   }
 }
 
+/** Validate the state/value relationship of one independently available observation section. */
 function validateSection(value, label, validateValue) {
   exactKeys(value, ['state', 'value'], label);
   if (!['Available', 'Unknown', 'Unavailable'].includes(value.state)
@@ -66,6 +78,7 @@ function validateSection(value, label, validateValue) {
   if (value.value !== null) validateValue(value.value);
 }
 
+/** Validate the active or revoked registration receipt and its expiry timestamp. */
 function validateRegistration(value) {
   exactKeys(value, ['runtimeInstanceId', 'revision', 'state', 'expiresAt'], 'registration');
   requireUuid(value.runtimeInstanceId, 'registration.runtimeInstanceId');
@@ -76,6 +89,7 @@ function validateRegistration(value) {
   requireDate(value.expiresAt, 'registration.expiresAt');
 }
 
+/** Validate an execution section against the requested session and execution fence. */
 function validateExecution(value, expected) {
   const required = [
     'contractVersion', 'rootSessionId', 'sessionId', 'executionFence', 'workPlanId',
@@ -119,6 +133,7 @@ function validateExecution(value, expected) {
   }
 }
 
+/** Validate the version-two wrapper and parent-checkpoint metadata around an execution snapshot. */
 function validateExecutionV2(value, expected) {
   exactKeys(value, ['contractVersion', 'observation', 'checkpointParent'], 'execution');
   if (value.contractVersion !== 2) {
@@ -135,6 +150,7 @@ function validateExecutionV2(value, expected) {
   }
 }
 
+/** Validate the credit-accounting summary exposed by the runtime observation endpoint. */
 function validateCreditGuard(value) {
   exactKeys(value, [
     'copilotAicFloor', 'accountedThroughLedgerEventCount', 'ledgerDigest', 'guardRevision',
@@ -152,6 +168,7 @@ function validateCreditGuard(value) {
   requireDate(value.updatedAt, 'creditGuard.updatedAt');
 }
 
+/** Validate a bounded, uniquely identified list of dispatch records. */
 function validateDispatches(value) {
   exactKeys(value, ['items', 'truncated'], 'dispatches');
   if (!Array.isArray(value.items) || value.items.length > 100 || typeof value.truncated !== 'boolean'
@@ -187,6 +204,7 @@ function validateDispatches(value) {
   }
 }
 
+/** Validate a bounded list of unique runtime tool-reservation events. */
 function validateToolReservations(value) {
   exactKeys(value, ['items', 'truncated'], 'toolReservations');
   if (!Array.isArray(value.items) || value.items.length > 100 || typeof value.truncated !== 'boolean'
@@ -205,6 +223,10 @@ function validateToolReservations(value) {
   }
 }
 
+/**
+ * Validate the exact observation response and require mandatory sections to be available.
+ * The expected owner identity and fence are compared with the response before it is returned.
+ */
 export function validateRuntimeObservationV1(value, expected) {
   exactKeys(value, [
     'contractVersion', 'registration', 'execution', 'creditGuard', 'dispatches', 'toolReservations',
@@ -239,6 +261,7 @@ function noStore(call, label) {
   }
 }
 
+/** Require the Gateway response to be successful, uncacheable, and a JSON object. */
 function requireHttp(call, label) {
   if (call?.status !== 200) {
     throw new Error(`${label} returned an unexpected HTTP status.`);
@@ -292,6 +315,7 @@ function requireSameFence(actual, expected, label) {
   }
 }
 
+/** Reject fields that could expose credentials, prompt text, or unredacted provider output. */
 function rejectSensitiveFields(value, label = 'Environment evidence') {
   if (Array.isArray(value)) {
     for (const item of value) rejectSensitiveFields(item, label);
@@ -307,6 +331,7 @@ function rejectSensitiveFields(value, label = 'Environment evidence') {
   }
 }
 
+/** Validate a provider attempt and require it to belong to the selected Environment operation. */
 function validateProviderAttempt(attempt, operationId, expectedFence) {
   exactKeys(attempt, [
     'contractVersion', 'attemptId', 'operationId', 'lifecycleGeneration', 'resourceGeneration',
@@ -338,6 +363,7 @@ function validateProviderAttempt(attempt, operationId, expectedFence) {
   }
 }
 
+/** Validate the complete provider-attempt response and ensure its owner fence remained unchanged. */
 function validateProviderAttempts(value, expectedFence, expectedOwner, operationId) {
   exactKeys(value, ['contractVersion', 'currentFence', 'operationId', 'attempts'], 'provider attempts');
   if (value.contractVersion !== 1 || value.operationId !== operationId
@@ -356,6 +382,7 @@ function validateProviderAttempts(value, expectedFence, expectedOwner, operation
   return value;
 }
 
+/** Validate one late-resource cleanup receipt and its exact resource, provider, and lifecycle fences. */
 function validateLateCleanupItem(item, expectedFence, expectedOwner) {
   exactKeys(item, [
     'sourceFence', 'operationId', 'resourceGeneration', 'providerFencingGeneration',
@@ -416,6 +443,7 @@ function validateLateCleanupItem(item, expectedFence, expectedOwner) {
   rejectSensitiveFields(item, 'Late-resource cleanup');
 }
 
+/** Validate late-resource cleanup receipts and reject duplicate operation/resource identities. */
 function validateLateResourceCleanups(value, expectedFence, expectedOwner) {
   exactKeys(value, ['contractVersion', 'currentFence', 'items', 'hasMore'], 'late-resource cleanups');
   if (value.contractVersion !== 1 || !Array.isArray(value.items)
@@ -434,7 +462,12 @@ function validateLateResourceCleanups(value, expectedFence, expectedOwner) {
   return value;
 }
 
+/**
+ * Reads Gateway runtime observations and separately authorized Environment lifecycle evidence.
+ * The two clients stay distinct so Environment reads cannot inherit Gateway authorization by accident.
+ */
 export class RuntimeObservationClient {
+  /** Require a Gateway client and a different, separately authorized Environment API client. */
   constructor({ api, environmentApi }) {
     if (typeof api?.invoke !== 'function') {
       throw new Error('A discovered Gateway API client is required for runtime observation reads.');
@@ -446,6 +479,7 @@ export class RuntimeObservationClient {
     this.environmentApi = environmentApi;
   }
 
+  /** Read and validate the runtime observation for the expected project, run, session, and fence. */
   async readRuntimeObservationV1(expected) {
     const call = await this.api.invoke(RUNTIME_OBSERVATION_OPERATION, {
       pathParameters: {
@@ -464,6 +498,10 @@ export class RuntimeObservationClient {
     );
   }
 
+  /**
+   * Read provider attempts and late cleanup records between two lifecycle reads.
+   * The exact Environment owner and lifecycle fence must be unchanged across all reads.
+   */
   async readEnvironmentEvidence({ environmentCreation, owner, operationId }) {
     if (!isRecord(owner)) throw new TypeError('The selected Environment owner is required.');
     for (const key of ['tenantId', 'projectId', 'runId']) {

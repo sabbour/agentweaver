@@ -11,6 +11,9 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Stores the root execution binding, canonical output set, owner evidence, and proof digest for a completed plan.
+/// </summary>
 internal sealed record MafExecutionOutputWitnessRecord(
     SessionIdentity RootIdentity,
     long ExecutionFence,
@@ -24,6 +27,10 @@ internal sealed record MafExecutionOutputWitnessRecord(
     JsonElement OwnerEvidenceJson,
     string ProofSha256);
 
+/// <summary>
+/// Appends and reads immutable output-witness proofs in the caller's checkpoint transaction.
+/// Each proof is bound to the current completed checkpoint, plan, selection, decision, and execution fence.
+/// </summary>
 internal sealed partial class MafExecutionOutputWitnessStore
 {
     private const short ContractVersion = 1;
@@ -33,6 +40,10 @@ internal sealed partial class MafExecutionOutputWitnessStore
         "^[a-z][a-z0-9_]{0,62}\\z", RegexOptions.CultureInvariant);
     private readonly string _witnesses;
 
+    /// <summary>
+    /// Creates a witness store for a validated non-reserved PostgreSQL schema.
+    /// </summary>
+    /// <exception cref="ArgumentException">Thrown when the schema is invalid or reserved.</exception>
     internal MafExecutionOutputWitnessStore(string schema)
     {
         if (schema is null || !SchemaPattern.IsMatch(schema) ||
@@ -42,6 +53,10 @@ internal sealed partial class MafExecutionOutputWitnessStore
         _witnesses = $"\"{schema}\".maf_execution_output_witnesses";
     }
 
+    /// <summary>
+    /// Persists or reuses the output witness after validating the plan and locking the current checkpoint.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when the plan is incomplete, checkpoint is stale, or an existing witness conflicts.</exception>
     internal async Task<MafExecutionOutputWitnessRecord> AppendOutputWitnessInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -130,6 +145,11 @@ internal sealed partial class MafExecutionOutputWitnessStore
         return saved;
     }
 
+    /// <summary>
+    /// Reads a witness only when its plan, output set, and completed-root checkpoint evidence are current.
+    /// </summary>
+    /// <returns>The matching witness, or <see langword="null"/> when none has been stored.</returns>
+    /// <exception cref="CoordinationException">Thrown when the binding is stale or a stored witness does not match the expected output set.</exception>
     internal async Task<MafExecutionOutputWitnessRecord?> ReadOutputWitnessInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -172,6 +192,10 @@ internal sealed partial class MafExecutionOutputWitnessStore
         return witness;
     }
 
+    /// <summary>
+    /// Requires the supplied checkpoint to be the exact current checkpoint within the given owner transaction.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when root binding, checkpoint identity, revision, or serialized state is stale.</exception>
     private static async Task RequireCurrentCheckpointInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -208,6 +232,10 @@ internal sealed partial class MafExecutionOutputWitnessStore
                 "maf_execution_output_witness_stale", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Reads a witness by its root, fence, work-plan, and checkpoint key and verifies its stored digests.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when the stored witness, canonical bytes, or proof digest is invalid.</exception>
     private async Task<MafExecutionOutputWitnessRecord?> ReadByKeyInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -281,6 +309,10 @@ internal sealed partial class MafExecutionOutputWitnessStore
             proofSha256);
     }
 
+    /// <summary>
+    /// Validates the root, fence, checkpoint, decision, accepted selection hash, and output-set binding.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when any required identity, revision, or hash is invalid or stale.</exception>
     internal static void ValidateBinding(
         SessionIdentity root,
         long executionFence,
@@ -309,6 +341,10 @@ internal sealed partial class MafExecutionOutputWitnessStore
                 "maf_execution_output_witness_stale", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Requires every planned work item, fixed association, and required platform step to have completed successfully.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when expected outputs differ or any plan work remains incomplete or mismatched.</exception>
     internal static void ValidateCompletedPlan(
         SessionIdentity root,
         long executionFence,
@@ -360,6 +396,9 @@ internal sealed partial class MafExecutionOutputWitnessStore
                 "maf_execution_output_witness_plan_incomplete", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Compares output sets by work-plan ID, digest, and ordered obligations.
+    /// </summary>
     private static bool OutputSetsMatch(
         MafBacklogOutputSetSnapshot expected,
         MafBacklogOutputSetSnapshot actual) =>
@@ -367,6 +406,10 @@ internal sealed partial class MafExecutionOutputWitnessStore
         expected.Digest == actual.Digest &&
         expected.Obligations.SequenceEqual(actual.Obligations);
 
+    /// <summary>
+    /// Serializes owner evidence as a bounded canonical JSON array.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when evidence is not an array or exceeds its size limit.</exception>
     private static byte[] SerializeCanonicalOwnerEvidence(JsonElement ownerEvidence)
     {
         if (ownerEvidence.ValueKind != JsonValueKind.Array)
@@ -379,6 +422,9 @@ internal sealed partial class MafExecutionOutputWitnessStore
         return bytes;
     }
 
+    /// <summary>
+    /// Serializes JSON with recursively sorted object properties and stable number representations.
+    /// </summary>
     private static byte[] SerializeCanonicalJson(JsonElement value)
     {
         using var stream = new MemoryStream();
@@ -387,6 +433,9 @@ internal sealed partial class MafExecutionOutputWitnessStore
         return stream.ToArray();
     }
 
+    /// <summary>
+    /// Computes the witness digest over its root, checkpoint, decision, selection, output, and owner evidence.
+    /// </summary>
     private static string ComputeProofSha256(
         SessionIdentity root,
         long executionFence,
@@ -400,6 +449,9 @@ internal sealed partial class MafExecutionOutputWitnessStore
             checkpoint.State.Revision, decisionStateVersion, acceptedSelectionHash,
             outputSetSha256, ownerEvidence);
 
+    /// <summary>
+    /// Computes the proof digest from its explicit immutable binding fields.
+    /// </summary>
     private static string ComputeProofSha256(
         SessionIdentity root,
         long executionFence,
@@ -433,6 +485,10 @@ internal sealed partial class MafExecutionOutputWitnessStore
         return Convert.ToHexStringLower(SHA256.HashData(stream.ToArray()));
     }
 
+    /// <summary>
+    /// Writes JSON recursively with ordinal property ordering and rejects duplicate or unsupported values.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when an object has duplicate names or a JSON number cannot be normalized.</exception>
     private static void WriteCanonicalJson(Utf8JsonWriter writer, JsonElement value)
     {
         switch (value.ValueKind)
@@ -487,9 +543,15 @@ internal sealed partial class MafExecutionOutputWitnessStore
         }
     }
 
+    /// <summary>
+    /// Returns whether a value is a 64-character hexadecimal SHA-256 digest.
+    /// </summary>
     private static bool IsSha256(string? value) =>
         value is { Length: 64 } && value.All(Uri.IsHexDigit);
 
+    /// <summary>
+    /// Returns whether a value is a lowercase 64-character hexadecimal SHA-256 digest.
+    /// </summary>
     private static bool IsLowerSha256(string? value) =>
         value is { Length: 64 } && value.All(character =>
             char.IsAsciiDigit(character) || character is >= 'a' and <= 'f');

@@ -9,19 +9,24 @@ using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.EventsAndSessions.Cost;
 
+/// <summary>Resolves and verifies immutable run-scoped cost-provider bindings.</summary>
 public interface ICostProviderBinder
 {
+    /// <summary>Resolves the current provider configuration and pins it to the run.</summary>
     ProviderResult<CostBinding> ResolveAndPin(string meterSource, string runId);
 
+    /// <summary>Verifies that a persisted binding still matches the exact provider configuration.</summary>
     ProviderResult<CostBinding> VerifyPinned(
         string meterSource, string runId, CostBinding pinnedBinding);
 }
 
+/// <summary>Resolves Copilot cost bindings and records bounded provider-binding diagnostics.</summary>
 public sealed class CopilotCostProviderBinder(
     CopilotCostProvider provider,
     ProviderResolver resolver,
     ILogger<CopilotCostProviderBinder> logger) : ICostProviderBinder
 {
+    /// <summary>Negotiates and persists the provider pin for this meter source and run.</summary>
     public ProviderResult<CostBinding> ResolveAndPin(string meterSource, string runId)
     {
         if (!string.Equals(meterSource, CopilotCostProvider.MeterSource, StringComparison.Ordinal))
@@ -50,6 +55,7 @@ public sealed class CopilotCostProviderBinder(
         return ProviderResult<CostBinding>.Success(binding);
     }
 
+    /// <summary>Revalidates the exact persisted provider, resource, options, capabilities, and rate card.</summary>
     public ProviderResult<CostBinding> VerifyPinned(
         string meterSource, string runId, CostBinding pinnedBinding)
     {

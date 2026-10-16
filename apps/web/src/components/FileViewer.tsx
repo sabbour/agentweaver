@@ -106,6 +106,11 @@ export interface FileViewerProps {
  * Markdown files open in the rendered preview by default; other files open in
  * source. Shows an empty state when `filePath` is null.
  */
+/**
+ * Loads and renders a selected workspace file through the file API, with navigation and request
+ * state managed locally. Props identify the workspace/file and provide callbacks for parent
+ * selection behavior; failed loads remain visible as an error state.
+ */
 export function FileViewer({
   runId,
   filePath,

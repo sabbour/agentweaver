@@ -2,8 +2,19 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.SourceControl;
 
+/// <summary>Validates and parses native BuildTest output against its pinned capture and seed evidence.</summary>
 public static class GitWorkspaceBuildTestOutput
 {
+    /// <summary>
+    /// Checks the complete document and each output obligation against the exact native capture reference.
+    /// </summary>
+    /// <param name="bytes">Serialized capture document returned by the native collector.</param>
+    /// <param name="reference">Pinned lengths, digests, output tree, and per-output evidence.</param>
+    /// <param name="source">Accepted repository source and baseline identity.</param>
+    /// <param name="seedBytes">Accepted seed bytes used to prepare the workspace.</param>
+    /// <param name="outputs">Output obligations fixed when the command was accepted.</param>
+    /// <returns>A validated capture document.</returns>
+    /// <exception cref="ArgumentException">The document, seed, or required-output evidence differs from its accepted binding.</exception>
     public static GitWorkspaceCaptureDocument Parse(
         ReadOnlySpan<byte> bytes,
         SandboxBuildTestWorkspaceCaptureReference reference,

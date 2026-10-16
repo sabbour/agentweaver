@@ -3,12 +3,14 @@ using System.Text.Json;
 
 namespace Agentweaver.Abstractions;
 
+/// <summary>Whether a workspace volume is private to one Environment or shared through an allowlist.</summary>
 public enum WorkspaceVolumeBindingMode
 {
     Environment,
     Shared
 }
 
+/// <summary>Multi-attach access mode requested from a Storage provider.</summary>
 public enum WorkspaceVolumeAccessMode
 {
     ReadWriteOnce,
@@ -16,18 +18,21 @@ public enum WorkspaceVolumeAccessMode
     ReadOnlyMany
 }
 
+/// <summary>Consistency expectation for consumers of a workspace volume.</summary>
 public enum WorkspaceVolumeConsistency
 {
     Strict,
     Eventual
 }
 
+/// <summary>Whether a released provider volume is deleted or retained.</summary>
 public enum WorkspaceVolumeReclaimPolicy
 {
     Delete,
     Retain
 }
 
+/// <summary>Owner-deletion behavior configured for a workspace volume.</summary>
 public enum WorkspaceVolumeOwnerDeletionPolicy
 {
     Delete,
@@ -35,6 +40,7 @@ public enum WorkspaceVolumeOwnerDeletionPolicy
     Unbind
 }
 
+/// <summary>Kind of Agentweaver entity that owns a workspace volume.</summary>
 public enum WorkspaceVolumeOwnerKind
 {
     Run,
@@ -42,6 +48,7 @@ public enum WorkspaceVolumeOwnerKind
     Team
 }
 
+/// <summary>Owner-visible lifecycle phase of a workspace volume.</summary>
 public enum WorkspaceVolumePhase
 {
     Requested,
@@ -54,6 +61,7 @@ public enum WorkspaceVolumePhase
     Attached
 }
 
+/// <summary>Typed state transition supported by the workspace-volume owner.</summary>
 public enum WorkspaceVolumeTransitionKind
 {
     Create,
@@ -67,8 +75,12 @@ public enum WorkspaceVolumeTransitionKind
     Release
 }
 
+/// <summary>Computes generation changes and checks completion evidence for volume operations.</summary>
 public static class WorkspaceVolumeTransitionRules
 {
+    /// <summary>Returns the resource generation expected after the requested operation.</summary>
+    /// <exception cref="ArgumentException">The operation cannot run at the expected generation.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The operation or generation is invalid.</exception>
     public static long GetTargetResourceGeneration(
         WorkspaceVolumeTransitionKind operation,
         long expectedResourceGeneration)
@@ -106,6 +118,8 @@ public static class WorkspaceVolumeTransitionRules
         };
     }
 
+    /// <summary>Returns the data generation, allowing only Flush to advance it by exactly one.</summary>
+    /// <exception cref="ArgumentException">A non-flush operation requests a new generation or Flush skips a generation.</exception>
     public static long GetTargetDataGeneration(
         WorkspaceVolumeTransitionKind operation,
         long expectedDataGeneration,
@@ -135,6 +149,9 @@ public static class WorkspaceVolumeTransitionRules
         return expectedDataGeneration;
     }
 
+    /// <summary>Requires verified provider effect and operation-specific resource or flush evidence.</summary>
+    /// <exception cref="InvalidOperationException">The effect or durable flush was not verified.</exception>
+    /// <exception cref="ArgumentException">The resource or evidence does not match the operation.</exception>
     public static void ValidateEffectCompletion(
         WorkspaceVolumeTransitionKind operation,
         long targetResourceGeneration,
@@ -193,13 +210,18 @@ public sealed record WorkspaceVolumeTransitionRequest(
     string IdempotencyKey,
     WorkspaceVolumeSpec? Specification = null)
 {
+    /// <summary>Resource generation committed by this operation if it completes.</summary>
     public long TargetResourceGeneration =>
         WorkspaceVolumeTransitionRules.GetTargetResourceGeneration(Operation, ExpectedResourceGeneration);
 
+    /// <summary>Data generation committed by this operation; only Flush can advance it.</summary>
     public long TargetDataGeneration =>
         WorkspaceVolumeTransitionRules.GetTargetDataGeneration(
             Operation, ExpectedDataGeneration, NextDataGeneration);
 
+    /// <summary>Checks the operation-specific expected revisions, generations, specification, and idempotency key.</summary>
+    /// <exception cref="ArgumentException">The operation-specific specification or generation invariants fail.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A revision or generation is invalid.</exception>
     public WorkspaceVolumeTransitionRequest Validate()
     {
         _ = WorkspaceVolumeIdentity.Validate(VolumeId, nameof(VolumeId));
@@ -237,6 +259,8 @@ public sealed record WorkspaceVolumeTransitionRequest(
         return this;
     }
 
+    /// <summary>Validates this request and requires it to name the expected transition kind.</summary>
+    /// <exception cref="ArgumentException">The request operation differs from the expected operation.</exception>
     public WorkspaceVolumeTransitionRequest ValidateFor(WorkspaceVolumeTransitionKind expectedOperation)
     {
         if (!Enum.IsDefined(expectedOperation))
@@ -249,8 +273,12 @@ public sealed record WorkspaceVolumeTransitionRequest(
     }
 }
 
+/// <summary>Opaque owner kind and identity used for volume authorization and deletion policy.</summary>
 public sealed record WorkspaceVolumeOwner
 {
+    /// <summary>Creates an owner identity with a defined kind and valid opaque ID.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The owner kind is unsupported.</exception>
+    /// <exception cref="ArgumentException">The owner ID is invalid.</exception>
     public WorkspaceVolumeOwner(WorkspaceVolumeOwnerKind kind, string id)
     {
         if (!Enum.IsDefined(kind))
@@ -263,8 +291,15 @@ public sealed record WorkspaceVolumeOwner
     public string Id { get; }
 }
 
+/// <summary>
+/// Validated workspace volume request. Shared binding requires an explicit consumer allowlist
+/// and a multi-reader access mode; Environment binding requires one Environment identity.
+/// </summary>
 public sealed record WorkspaceVolumeSpec
 {
+    /// <summary>Creates a volume specification and enforces binding, access, and allowlist rules.</summary>
+    /// <exception cref="ArgumentException">The volume settings or shared/environment scope are inconsistent.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Capacity or an enum value is invalid.</exception>
     public WorkspaceVolumeSpec(
         string volumeId,
         string projectId,
@@ -334,12 +369,19 @@ public sealed record WorkspaceVolumeSpec
     public string? EnvironmentId { get; }
     public WorkspaceVolumeBindingMode BindingMode { get; }
     public WorkspaceVolumeAccessMode AccessMode { get; }
+    /// <summary>Requested capacity in GiB; it must be positive.</summary>
     public long CapacityGiB { get; }
     public string StorageClass { get; }
     public WorkspaceVolumeConsistency Consistency { get; }
     public WorkspaceVolumeReclaimPolicy ReclaimPolicy { get; }
     public WorkspaceVolumeOwnerDeletionPolicy OwnerDeletionPolicy { get; }
+    /// <summary>Canonical consumer allowlist required for Shared volumes.</summary>
     public ImmutableArray<string> AuthorizedEnvironmentIds { get; }
+
+    /// <summary>
+    /// Returns Delete only for an Environment-bound volume whose reclaim and owner-deletion
+    /// policies both request deletion; all other combinations retain the provider data.
+    /// </summary>
     public WorkspaceVolumeReclaimPolicy GetEffectiveReleasePolicy() =>
         BindingMode == WorkspaceVolumeBindingMode.Environment &&
         ReclaimPolicy == WorkspaceVolumeReclaimPolicy.Delete &&
@@ -347,6 +389,7 @@ public sealed record WorkspaceVolumeSpec
             ? WorkspaceVolumeReclaimPolicy.Delete
             : WorkspaceVolumeReclaimPolicy.Retain;
 
+    /// <summary>Returns whether the requested project and Environment may use this volume.</summary>
     public bool AllowsEnvironment(string projectId, string environmentId) =>
         string.Equals(ProjectId, projectId, StringComparison.Ordinal) &&
         (BindingMode == WorkspaceVolumeBindingMode.Environment
@@ -354,6 +397,7 @@ public sealed record WorkspaceVolumeSpec
             : AuthorizedEnvironmentIds.Contains(environmentId, StringComparer.Ordinal));
 }
 
+/// <summary>Condition describing one current or historical workspace-volume status fact.</summary>
 public sealed record WorkspaceVolumeCondition(
     string Type,
     bool Status,
@@ -362,8 +406,8 @@ public sealed record WorkspaceVolumeCondition(
     DateTimeOffset LastTransitionAt);
 
 /// <summary>
-/// Tracks the owner transition revision, provider resource generation, and workspace data generation
-/// independently.
+/// Current owner phase, conditions, and provider resource, tracking transition revision,
+/// resource generation, and workspace data generation independently.
 /// </summary>
 public sealed record WorkspaceVolumeStatus(
     WorkspaceVolumePhase Phase,
@@ -373,6 +417,9 @@ public sealed record WorkspaceVolumeStatus(
     ProviderResourceRef? Resource,
     ImmutableArray<WorkspaceVolumeCondition> Conditions)
 {
+    /// <summary>Checks generations, phase, conditions, and any pinned Storage resource.</summary>
+    /// <exception cref="ArgumentException">The status or provider resource is inconsistent.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A transition or data/resource generation is invalid.</exception>
     public WorkspaceVolumeStatus Validate()
     {
         if (TransitionRevision < 1)
@@ -402,8 +449,11 @@ public sealed record WorkspaceVolumeStatus(
     }
 }
 
+/// <summary>Volume specification paired with its validated owner status.</summary>
 public sealed record WorkspaceVolumeRecord(WorkspaceVolumeSpec Spec, WorkspaceVolumeStatus Status)
 {
+    /// <summary>Requires both specification and status and validates the status before returning this record.</summary>
+    /// <exception cref="ArgumentException">A required member is null or status is invalid.</exception>
     public WorkspaceVolumeRecord Validate()
     {
         ArgumentNullException.ThrowIfNull(Spec);
@@ -416,6 +466,9 @@ public sealed record WorkspaceVolumeRecord(WorkspaceVolumeSpec Spec, WorkspaceVo
 /// <summary>References an exact Storage provider resource generation.</summary>
 public sealed record WorkspaceVolumeReference(string ProjectId, string VolumeId, long ResourceGeneration)
 {
+    /// <summary>Validates project and volume IDs and requires a positive resource generation.</summary>
+    /// <exception cref="ArgumentException">An opaque identity is invalid.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The resource generation is not positive.</exception>
     public WorkspaceVolumeReference Validate()
     {
         _ = WorkspaceVolumeIdentity.Validate(ProjectId, nameof(ProjectId));
@@ -426,15 +479,22 @@ public sealed record WorkspaceVolumeReference(string ProjectId, string VolumeId,
     }
 }
 
+/// <summary>Declaration to mount one exact volume generation at a workspace path.</summary>
 public sealed record WorkspaceVolumeMountDeclaration(
     WorkspaceVolumeReference Volume,
     string MountPath,
     bool ReadOnly);
 
+/// <summary>
+/// Collection of volume mounts under the agent workspace root. It rejects duplicate paths,
+/// duplicate volume references, and ancestor/descendant mounts that could shadow each other.
+/// </summary>
 public sealed record WorkspaceVolumeMountManifest(ImmutableArray<WorkspaceVolumeMountDeclaration> Mounts)
 {
     private const string WorkspaceRoot = "/workspace/agentweaver";
 
+    /// <summary>Validates all volume references and non-overlapping paths under the workspace root.</summary>
+    /// <exception cref="ArgumentException">A mount path is unsafe, duplicated, or shadows another path.</exception>
     public WorkspaceVolumeMountManifest Validate()
     {
         if (Mounts.IsDefault || Mounts.Any(mount => mount is null))
@@ -463,6 +523,7 @@ public sealed record WorkspaceVolumeMountManifest(ImmutableArray<WorkspaceVolume
         return this;
     }
 
+    /// <summary>Requires an absolute normalized path below the allowed workspace root.</summary>
     private static string ValidateMountPath(string value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 512 ||
@@ -479,12 +540,14 @@ public sealed record WorkspaceVolumeMountManifest(ImmutableArray<WorkspaceVolume
     }
 }
 
+/// <summary>Mechanism used by Sandbox to expose an existing Storage volume.</summary>
 public enum WorkspaceVolumeAttachmentProtocol
 {
     PersistentVolumeClaim,
     FileMaterialization
 }
 
+/// <summary>Capabilities of a provisioned Sandbox resource for attaching workspace volumes.</summary>
 public sealed record WorkspaceSandboxAttachmentProfile(
     ProviderResourceRef Resource,
     ImmutableHashSet<WorkspaceVolumeAccessMode> SupportedAccessModes,
@@ -492,6 +555,8 @@ public sealed record WorkspaceSandboxAttachmentProfile(
     ImmutableHashSet<string> SupportedStorageProviderIds,
     bool SupportsReadOnlyMounts)
 {
+    /// <summary>Validates the Sandbox resource and normalizes supported modes and provider IDs.</summary>
+    /// <exception cref="ArgumentException">The resource or advertised capability sets are invalid.</exception>
     public WorkspaceSandboxAttachmentProfile Validate()
     {
         ArgumentNullException.ThrowIfNull(Resource);
@@ -515,6 +580,10 @@ public sealed record WorkspaceSandboxAttachmentProfile(
     }
 }
 
+/// <summary>
+/// Negotiated attachment tuple binding the project/run/Environment, volume and data generation,
+/// Sandbox and Storage resources, mount path, access mode, and selected protocol.
+/// </summary>
 public sealed record WorkspaceVolumeAttachmentNegotiation(
     string ProjectId,
     string EnvironmentId,
@@ -528,6 +597,9 @@ public sealed record WorkspaceVolumeAttachmentNegotiation(
     bool ReadOnly,
     WorkspaceVolumeAttachmentProtocol Protocol)
 {
+    /// <summary>Checks scope, provider resources, mount path, and supported protocol metadata.</summary>
+    /// <exception cref="ArgumentException">The scope or resource pins are inconsistent.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Data generation or protocol is invalid.</exception>
     public WorkspaceVolumeAttachmentNegotiation Validate()
     {
         _ = WorkspaceVolumeIdentity.Validate(ProjectId, nameof(ProjectId));
@@ -562,8 +634,15 @@ public sealed record WorkspaceVolumeAttachmentNegotiation(
     }
 }
 
+/// <summary>Selects whether a volume can attach to a specific Sandbox resource and mount declaration.</summary>
 public static class WorkspaceVolumeAttachmentNegotiator
 {
+    /// <summary>
+    /// Verifies Environment and volume authorization, exact resource generations, and both providers'
+    /// negotiated capabilities before producing the attachment binding.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The owner, mount, resource, or capabilities do not allow attachment.</exception>
+    /// <exception cref="ArgumentException">A required input or resource identity is malformed.</exception>
     public static WorkspaceVolumeAttachmentNegotiation Negotiate(
         string projectId,
         string environmentId,
@@ -648,6 +727,7 @@ public static class WorkspaceVolumeAttachmentNegotiator
     }
 }
 
+/// <summary>Request to bind an exact provisioned volume resource to a fenced Environment.</summary>
 public sealed record WorkspaceVolumeBindingRequest(
     WorkspaceVolumeSpec Spec,
     long ResourceGeneration,
@@ -656,6 +736,8 @@ public sealed record WorkspaceVolumeBindingRequest(
     long DataGeneration,
     string IdempotencyKey)
 {
+    /// <summary>Validates volume ownership, Environment scope, resource generation, and idempotency key.</summary>
+    /// <exception cref="ArgumentException">The resource or idempotency binding is inconsistent.</exception>
     public WorkspaceVolumeBindingRequest Validate()
     {
         WorkspaceVolumeOperationValidation.Validate(
@@ -664,6 +746,7 @@ public sealed record WorkspaceVolumeBindingRequest(
     }
 }
 
+/// <summary>Request to remove a volume's binding from its current Environment consumer.</summary>
 public sealed record WorkspaceVolumeUnbindRequest(
     WorkspaceVolumeSpec Spec,
     long ResourceGeneration,
@@ -672,6 +755,7 @@ public sealed record WorkspaceVolumeUnbindRequest(
     long DataGeneration,
     string IdempotencyKey)
 {
+    /// <summary>Validates the exact volume, Storage resource, generation, and Environment scope.</summary>
     public WorkspaceVolumeUnbindRequest Validate()
     {
         WorkspaceVolumeOperationValidation.Validate(
@@ -680,10 +764,13 @@ public sealed record WorkspaceVolumeUnbindRequest(
     }
 }
 
+/// <summary>Request to attach a previously negotiated volume to a Sandbox resource.</summary>
 public sealed record WorkspaceVolumeAttachRequest(
     WorkspaceVolumeAttachmentNegotiation Negotiation,
     string IdempotencyKey)
 {
+    /// <summary>Validates the attachment negotiation and idempotency key.</summary>
+    /// <exception cref="ArgumentException">The negotiation or key is invalid.</exception>
     public WorkspaceVolumeAttachRequest Validate()
     {
         ArgumentNullException.ThrowIfNull(Negotiation);
@@ -693,6 +780,7 @@ public sealed record WorkspaceVolumeAttachRequest(
     }
 }
 
+/// <summary>Request to flush mounted workspace data and advance its data generation.</summary>
 public sealed record WorkspaceVolumeFlushRequest(
     WorkspaceVolumeSpec Spec,
     long ResourceGeneration,
@@ -701,8 +789,11 @@ public sealed record WorkspaceVolumeFlushRequest(
     long ExpectedDataGeneration,
     string IdempotencyKey)
 {
+    /// <summary>Provider binding pinned when the volume was provisioned; it must match the exact resource.</summary>
     public WorkspaceVolumeProviderBindingSnapshot? ProviderBinding { get; init; }
 
+    /// <summary>Validates Environment scope, Storage resource, and expected data-generation capacity.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The data generation cannot be advanced.</exception>
     public WorkspaceVolumeFlushRequest Validate()
     {
         WorkspaceVolumeOperationValidation.Validate(
@@ -714,6 +805,10 @@ public sealed record WorkspaceVolumeFlushRequest(
     }
 }
 
+/// <summary>
+/// Storage provider's proof that one exact volume generation was durably flushed to the
+/// next data generation, using either a tree digest or provider checkpoint identity.
+/// </summary>
 public sealed record WorkspaceVolumeFlushReceipt(
     int ContractVersion,
     EnvironmentGenerationFence EnvironmentFence,
@@ -725,6 +820,8 @@ public sealed record WorkspaceVolumeFlushReceipt(
     string? TreeSha256,
     string? ProviderCheckpointId)
 {
+    /// <summary>Validates the owner fence and requires exactly one supported durability proof.</summary>
+    /// <exception cref="ArgumentException">The resource, generation, proof, or owner binding is invalid.</exception>
     public WorkspaceVolumeFlushReceipt Validate()
     {
         ArgumentNullException.ThrowIfNull(EnvironmentFence);
@@ -753,6 +850,7 @@ public sealed record WorkspaceVolumeFlushReceipt(
         return this;
     }
 
+    /// <summary>Requires the flush receipt to match the exact request and idempotency key.</summary>
     public WorkspaceVolumeFlushReceipt ValidateFor(WorkspaceVolumeFlushRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -770,10 +868,13 @@ public sealed record WorkspaceVolumeFlushReceipt(
     }
 }
 
+/// <summary>Persistable flush proof plus optional bounded runtime-host receipt.</summary>
 public sealed record WorkspaceVolumeFlushEvidence(
     WorkspaceVolumeFlushReceipt Receipt,
     JsonElement? RuntimeHostReceipt)
 {
+    /// <summary>Validates and clones the proof so it does not depend on a caller-owned JSON document.</summary>
+    /// <exception cref="ArgumentException">The receipt or host JSON is invalid or too large.</exception>
     public WorkspaceVolumeFlushEvidence Validate()
     {
         ArgumentNullException.ThrowIfNull(Receipt);
@@ -786,11 +887,13 @@ public sealed record WorkspaceVolumeFlushEvidence(
     }
 }
 
+/// <summary>Request to provision a new Storage resource generation.</summary>
 public sealed record WorkspaceVolumeProvisionRequest(
     WorkspaceVolumeSpec Spec,
     long ResourceGeneration,
     string IdempotencyKey)
 {
+    /// <summary>Requires a valid volume specification, positive generation, and idempotency key.</summary>
     public WorkspaceVolumeProvisionRequest Validate()
     {
         ArgumentNullException.ThrowIfNull(Spec);
@@ -801,6 +904,10 @@ public sealed record WorkspaceVolumeProvisionRequest(
     }
 }
 
+/// <summary>
+/// Non-secret provider/options snapshot and release descriptor pinned with a Storage resource.
+/// Validation rejects credential-like field names so persisted release metadata cannot carry secrets.
+/// </summary>
 public sealed record WorkspaceVolumeProviderBindingSnapshot(
     string ProviderId,
     string AdapterVersion,
@@ -809,6 +916,9 @@ public sealed record WorkspaceVolumeProviderBindingSnapshot(
     JsonElement OptionsSnapshot,
     JsonElement ReleaseDescriptor)
 {
+    /// <summary>Validates adapter/options pins and returns cloned, secret-field-free JSON objects.</summary>
+    /// <exception cref="ArgumentException">The provider differs from the resource or JSON includes secret-bearing fields.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The options schema version is not positive.</exception>
     public WorkspaceVolumeProviderBindingSnapshot ValidateFor(ProviderResourceRef resource)
     {
         ArgumentNullException.ThrowIfNull(resource);
@@ -838,12 +948,14 @@ public sealed record WorkspaceVolumeProviderBindingSnapshot(
         };
     }
 
+    /// <summary>Requires a JSON object for a persisted provider snapshot or release descriptor.</summary>
     private static void ValidateObject(JsonElement value, string name)
     {
         if (value.ValueKind != JsonValueKind.Object)
             throw new ArgumentException("Provider snapshots must be JSON objects.", name);
     }
 
+    /// <summary>Recursively rejects field names that could store credential material.</summary>
     private static void RejectSecretFields(JsonElement value)
     {
         foreach (var property in value.EnumerateObject())
@@ -868,6 +980,7 @@ public sealed record WorkspaceVolumeProviderBindingSnapshot(
     }
 }
 
+/// <summary>Exact request to release or retain one Storage resource after owner lifecycle completion.</summary>
 public sealed record WorkspaceVolumeReleaseRequest(
     WorkspaceVolumeReference Volume,
     ProviderResourceRef Resource,
@@ -877,6 +990,8 @@ public sealed record WorkspaceVolumeReleaseRequest(
     WorkspaceVolumeProviderBindingSnapshot ProviderBinding,
     string IdempotencyKey)
 {
+    /// <summary>Validates the Storage resource, provider snapshot, reclaim policy, and exact operation key.</summary>
+    /// <exception cref="ArgumentException">The requested deletion conflicts with owner/binding policy.</exception>
     public WorkspaceVolumeReleaseRequest Validate()
     {
         ArgumentNullException.ThrowIfNull(Volume);
@@ -908,6 +1023,7 @@ public sealed record WorkspaceVolumeReleaseRequest(
     }
 }
 
+/// <summary>Provider's result when releasing a Storage resource.</summary>
 public enum WorkspaceVolumeReleaseDisposition
 {
     Released,
@@ -915,11 +1031,14 @@ public enum WorkspaceVolumeReleaseDisposition
     Retained
 }
 
+/// <summary>Provider receipt for the exact release request and resulting disposition.</summary>
 public sealed record WorkspaceVolumeReleaseReceipt(
     ProviderResourceRef Resource,
     string IdempotencyKey,
     WorkspaceVolumeReleaseDisposition Disposition)
 {
+    /// <summary>Checks resource, idempotency key, and disposition against the requested reclaim policy.</summary>
+    /// <exception cref="ArgumentException">The receipt does not match the exact request or expected disposition.</exception>
     public WorkspaceVolumeReleaseReceipt ValidateFor(WorkspaceVolumeReleaseRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -941,11 +1060,14 @@ public sealed record WorkspaceVolumeReleaseReceipt(
     }
 }
 
+/// <summary>Provisioned Storage resource, negotiated capabilities, and pinned provider metadata.</summary>
 public sealed record WorkspaceVolumeResource(
     ProviderResourceRef Resource,
     ImmutableHashSet<string> NegotiatedCapabilities,
     WorkspaceVolumeProviderBindingSnapshot ProviderBinding)
 {
+    /// <summary>Validates the Storage identity and binding, returning a normalized capability set.</summary>
+    /// <exception cref="ArgumentException">The provider resource or binding is invalid.</exception>
     public WorkspaceVolumeResource Validate()
     {
         ArgumentNullException.ThrowIfNull(Resource);
@@ -965,16 +1087,23 @@ public sealed record WorkspaceVolumeResource(
     }
 }
 
+/// <summary>Storage provider boundary for provisioning, release, and optionally verified durable flush.</summary>
 public interface IWorkspaceVolumeProvider
 {
+    /// <summary>Creates the requested provider resource generation.</summary>
     Task<WorkspaceVolumeResource> ProvisionAsync(
         WorkspaceVolumeProvisionRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Releases or retains the exact resource according to the validated request.</summary>
     Task<WorkspaceVolumeReleaseReceipt> ReleaseAsync(
         WorkspaceVolumeReleaseRequest request,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Flushes through a trusted mounted-workspace callback; unsupported providers reject
+    /// the operation rather than claiming durable data.
+    /// </summary>
     Task<WorkspaceVolumeFlushReceipt> FlushAsync(
         WorkspaceVolumeFlushRequest request,
         Func<WorkspaceVolumeFlushRequest, CancellationToken, Task<WorkspaceVolumeFlushReceipt>> trustedMountedFlush,
@@ -982,15 +1111,24 @@ public interface IWorkspaceVolumeProvider
         throw new NotSupportedException("The Storage provider has no verified workspace flush operation.");
 }
 
+/// <summary>Capability identifiers negotiated for workspace volume access and durability.</summary>
 public static class WorkspaceVolumeCapabilities
 {
+    /// <summary>Single-node read/write access.</summary>
     public const string ReadWriteOnce = "workspace.access.rwo";
+    /// <summary>Multi-node read/write access.</summary>
     public const string ReadWriteMany = "workspace.access.rwx";
+    /// <summary>Multi-node read-only access.</summary>
     public const string ReadOnlyMany = "workspace.access.rox";
+    /// <summary>Provider guarantees durable flush completion.</summary>
     public const string DurableFlush = "workspace.flush.durable";
+    /// <summary>Provider can attach an already provisioned volume.</summary>
     public const string ExistingVolumeAttach = "workspace.attach.existing-volume";
+    /// <summary>Provider can mount a volume read-only.</summary>
     public const string ReadOnlyMount = "workspace.mount.read-only";
 
+    /// <summary>Maps an access mode to its provider-negotiated capability ID.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The access mode is unsupported.</exception>
     public static string ForAccessMode(WorkspaceVolumeAccessMode accessMode) => accessMode switch
     {
         WorkspaceVolumeAccessMode.ReadWriteOnce => ReadWriteOnce,
@@ -1000,8 +1138,11 @@ public static class WorkspaceVolumeCapabilities
     };
 }
 
+/// <summary>Validates opaque volume and operation identities shared by owner contracts.</summary>
 internal static class WorkspaceVolumeIdentity
 {
+    /// <summary>Returns a bounded supported identifier or rejects it.</summary>
+    /// <exception cref="ArgumentException">The identity is empty, too long, or has unsupported characters.</exception>
     public static string Validate(string value, string name)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 256 ||
@@ -1012,8 +1153,12 @@ internal static class WorkspaceVolumeIdentity
     }
 }
 
+/// <summary>Checks common ownership and provider pins for bind, unbind, and flush requests.</summary>
 internal static class WorkspaceVolumeOperationValidation
 {
+    /// <summary>Requires an authorized Environment and the exact Storage resource generation.</summary>
+    /// <exception cref="InvalidOperationException">The volume is not authorized for this Environment or run.</exception>
+    /// <exception cref="ArgumentException">The Storage resource or idempotency key is invalid.</exception>
     public static void Validate(
         WorkspaceVolumeSpec spec,
         long resourceGeneration,

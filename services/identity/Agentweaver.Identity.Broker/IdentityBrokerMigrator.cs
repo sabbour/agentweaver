@@ -10,6 +10,11 @@ namespace Agentweaver.Identity.Broker;
 /// </summary>
 public static class IdentityBrokerMigrator
 {
+    /// <summary>
+    /// Confirms that the broker schema and migration history exist and that no migration is
+    /// pending. Uses the runtime connection and reports missing grants or history as startup
+    /// failures rather than trying to migrate with runtime privileges.
+    /// </summary>
     public static async Task VerifyMigrationsAppliedAsync(
         NpgsqlDataSource dataSource,
         DbContextOptions<IdentityBrokerDbContext> options,
@@ -57,6 +62,10 @@ public static class IdentityBrokerMigrator
         }
     }
 
+    /// <summary>
+    /// Applies pending migrations while holding a PostgreSQL advisory lock on the same
+    /// connection used by EF Core; releases the lock even when migration fails.
+    /// </summary>
     public static async Task MigrateAsync(
         NpgsqlDataSource dataSource, DbContextOptions<IdentityBrokerDbContext> options,
         CancellationToken cancellationToken = default)

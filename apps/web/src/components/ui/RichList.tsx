@@ -46,6 +46,10 @@ export interface RichListProps {
   'aria-label'?: string;
 }
 
+/**
+ * Renders a list of caller-supplied rows using the shared rich-list layout.
+ * The item collection and row renderer come from props; no API or local state is used.
+ */
 export function RichList({
   children,
   bordered = true,
@@ -217,6 +221,10 @@ export interface ListRowProps {
   [key: string]: unknown;
 }
 
+/**
+ * Renders one rich-list row with its primary content and optional secondary/actions regions.
+ * All row data is passed in props; this component has no local state.
+ */
 export function ListRow({
   media,
   bubble = false,

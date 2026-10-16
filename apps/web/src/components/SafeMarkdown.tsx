@@ -28,6 +28,10 @@ export interface SafeMarkdownProps {
  * timeline text is rendered so tables, task-lists and links stay consistent and safe
  * across run messages and other agent-output surfaces.
  */
+/**
+ * Renders caller-supplied Markdown as sanitized rich text.
+ * Content is the only data input; this presentational component owns no API request or state.
+ */
 export const SafeMarkdown = memo(function SafeMarkdown({ children }: SafeMarkdownProps) {
   return (
     <ReactMarkdown

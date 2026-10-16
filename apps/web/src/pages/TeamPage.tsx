@@ -64,6 +64,7 @@ import type {
   TeamTemplateDto,
 } from '../api/types';
 
+// Project team roster and member-detail surfaces for adding, re-roling, and reviewing agents.
 type FilterTab = 'all' | 'active' | 'retired';
 type PanelTab = 'overview' | 'charter' | 'capabilities';
 
@@ -163,6 +164,7 @@ const useStyles = makeStyles({
   },
 });
 
+/** Confirms removal and reports API failures without changing the parent roster optimistically. */
 function RemoveMemberDialog({
   projectId,
   member,
@@ -235,6 +237,7 @@ function RemoveMemberDialog({
   );
 }
 
+/** Lets a project member adopt a catalog role, then returns the server's updated member record. */
 function ReroleDialog({
   projectId,
   member,
@@ -334,6 +337,7 @@ function ReroleDialog({
   );
 }
 
+/** Loads the role catalog when opened and adds the selected role as a project team member. */
 function AddMemberDialog({
   projectId,
   onAdded,
@@ -425,12 +429,17 @@ function AddMemberDialog({
   );
 }
 
+/** Maps non-active skill states to the warning or error badge used in the member panel. */
 function skillStatusColor(status: SkillStatus): 'warning' | 'danger' | 'subtle' {
   if (status === 'missing') return 'warning';
   if (status === 'malformed') return 'danger';
   return 'subtle';
 }
 
+/**
+ * Shows one member's history, charter, and assigned skills. Each remote section is
+ * fetched lazily when its tab first becomes relevant.
+ */
 function AgentDetailPanel({
   projectId,
   member,
@@ -469,6 +478,7 @@ function AgentDetailPanel({
   const skillsTabActive = panelTab === 'overview' || panelTab === 'capabilities';
   const skillsLoading = skillsTabActive && !skillsLoaded && skillsError === null;
 
+  // History is loaded on first entry to the overview tab; 404 means the member has no history yet.
   useEffect(() => {
     if (panelTab !== 'overview' || historyLoaded || historyError !== null) return;
     let cancelled = false;
@@ -495,6 +505,7 @@ function AgentDetailPanel({
     return () => { cancelled = true; };
   }, [projectId, member.name, panelTab, historyLoaded, historyError]);
 
+  // Load charter content only when requested and keep edits local until an explicit save.
   useEffect(() => {
     if (panelTab !== 'charter' || charterLoaded || charterError !== null) return;
     let cancelled = false;
@@ -518,6 +529,7 @@ function AgentDetailPanel({
     return () => { cancelled = true; };
   }, [projectId, member.name, panelTab, charterLoaded, charterError]);
 
+  // Capabilities reuse the project skill catalog and filter it to this member's assignments.
   useEffect(() => {
     if (!skillsTabActive || skillsLoaded || skillsError !== null) return;
     let cancelled = false;
@@ -540,6 +552,7 @@ function AgentDetailPanel({
     return () => { cancelled = true; };
   }, [projectId, member.name, skillsTabActive, skillsLoaded, skillsError]);
 
+  /** Persists the edited charter and keeps the panel's local copy aligned with the saved text. */
   const handleSaveCharter = async () => {
     setSaving(true);
     try {
@@ -764,6 +777,7 @@ function AgentDetailPanel({
   );
 }
 
+/** Loads the project roster and presents member lifecycle, role, and detail actions. */
 export function TeamPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
@@ -777,6 +791,7 @@ export function TeamPage() {
   const [filterTab, setFilterTab] = useState<FilterTab>('all');
   const [selectedMember, setSelectedMember] = useState<TeamMemberDto | null>(null);
 
+  // The roster, project label, and role templates are independent requests for this route.
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
@@ -822,10 +837,12 @@ export function TeamPage() {
 
   if (!projectId) return null;
 
+  /** Refreshes the authoritative roster after a member is removed. */
   const handleMemberRemoved = () => {
     void apiClient.getTeam(projectId).then(setTeam).catch(() => { setTeam(null); });
   };
 
+  /** Replaces the changed member in local roster state without refetching the whole team. */
   const handleMemberReroled = (updated: TeamMemberDto) => {
     setTeam((prev) => {
       if (!prev) return prev;
@@ -836,6 +853,7 @@ export function TeamPage() {
     });
   };
 
+  /** Appends a successfully created member to the currently loaded team. */
   const handleMemberAdded = (member: TeamMemberDto) => {
     setTeam((prev) => {
       if (!prev) return prev;

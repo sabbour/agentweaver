@@ -1,3 +1,7 @@
+/**
+ * Verifies a pinned Foundation Probe publication artifact and loaded container image for diagnosis.
+ * The report is observational and does not publish, modify, or deploy the artifact.
+ */
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
@@ -7,6 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runPublicationCommand } from './command.mjs';
 
+/** Fixed source, artifact, and image values expected by this diagnostic run. */
 export const diagnosticPins = Object.freeze({
   runId: 37409181340,
   sourceSha: 'f46cff3c65a97b76b78c9ea717ec8b2068d56de5',
@@ -30,6 +35,7 @@ const safeCodes = new Set([
 ]);
 const reject = code => { throw Object.assign(new Error(`Probe diagnostic refused: ${code}`), { code }); };
 
+/** Checks the frozen artifact and its recorded provenance against the expected diagnostic pins. */
 export function verifyFrozenProbeArtifact(directory, {
   env = process.env, spawn = spawnSync, readFile = readFileSync, digest = hash,
 } = {}) {
@@ -76,6 +82,7 @@ export function verifyFrozenProbeArtifact(directory, {
   return { archive, config };
 }
 
+/** Verifies the inspected local image config and labels against the frozen diagnostic contract. */
 export function verifyFrozenLoadedImage(inspected, config) {
   const actualConfig = inspected?.Config;
   if (inspected?.Id !== `sha256:${diagnosticPins.configSha256}` || inspected.Os !== 'linux' ||
@@ -87,6 +94,10 @@ export function verifyFrozenLoadedImage(inspected, config) {
       actualConfig.Labels?.['org.opencontainers.image.version'] !== '0.0.0') reject('LOADED_IMAGE_BINDING_INVALID');
 }
 
+/**
+ * Collects artifact and local-image checks into a structured diagnostic result.
+ * Failed evidence is reported in the result instead of being treated as a successful publication.
+ */
 export function runProbePublicationDiagnostic(directory, {
   env = process.env, spawn = spawnSync, readFile = readFileSync, digest = hash,
 } = {}) {

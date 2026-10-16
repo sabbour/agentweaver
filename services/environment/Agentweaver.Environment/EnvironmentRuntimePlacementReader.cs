@@ -5,11 +5,13 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Builds runtime delivery and workspace contexts from current Sandbox placement and owner evidence.</summary>
 public sealed class EnvironmentRuntimePlacementReader(
     EnvironmentSandboxManager placements,
     EnvironmentRuntimeOwnerContextClient runtimeOwner,
     TimeProvider timeProvider)
 {
+    /// <summary>Resolves the new Sandbox placement for a resume and validates retained source-release evidence.</summary>
     public Task<EnvironmentRuntimeWorkspaceContext?> GetResumeWorkspaceContextAsync(
         RuntimeActorAuthorization actor,
         RuntimeWorkspaceResumeRequest request,
@@ -59,6 +61,7 @@ public sealed class EnvironmentRuntimePlacementReader(
             }, cancellationToken, includeRuntimeReadiness: true, includeRuntimeWorkspace: true);
     }
 
+    /// <summary>Resolves a runtime bootstrap context only for the current owner, profile, and placement.</summary>
     public Task<EnvironmentRuntimeBootstrapContext?> GetBootstrapContextAsync(
         RuntimeActorAuthorization actor, string projectId, string runId, string sessionId, string environmentId,
         string profileId, EnvironmentRuntimeBootstrapProfileRegistry profiles,
@@ -75,6 +78,7 @@ public sealed class EnvironmentRuntimePlacementReader(
                 RequiresReplacementEndpoint(projection, profileId, profiles));
     }
 
+    /// <summary>Combines the current bootstrap context with host readiness evidence for one session.</summary>
     public Task<EnvironmentRuntimeReadinessContext?> GetReadinessContextAsync(
         RuntimeActorAuthorization actor, string projectId, string runId, string sessionId, string environmentId,
         string profileId, EnvironmentRuntimeBootstrapProfileRegistry profiles,
@@ -99,6 +103,7 @@ public sealed class EnvironmentRuntimePlacementReader(
             requireEndpointWhen: projection => RequiresReplacementEndpoint(projection, profileId, profiles));
     }
 
+    /// <summary>Combines current host placement with the persisted workspace binding for one session.</summary>
     public Task<EnvironmentRuntimeWorkspaceContext?> GetWorkspaceContextAsync(
         RuntimeActorAuthorization actor, string projectId, string runId, string sessionId, string environmentId,
         string profileId, EnvironmentRuntimeBootstrapProfileRegistry profiles,
@@ -122,6 +127,10 @@ public sealed class EnvironmentRuntimePlacementReader(
             requireEndpointWhen: projection => RequiresReplacementEndpoint(projection, profileId, profiles));
     }
 
+    /// <summary>
+    /// Replaces a stale profile only after current owner context and live endpoint checks succeed.
+    /// The saved replacement is bound to the accepted actor, selection, and lease version.
+    /// </summary>
     public Task<RuntimeBootstrapProfileResolveReceipt> ResolveCurrentProfileAsync(
         RuntimeActorAuthorization actor,
         string projectId,
@@ -356,6 +365,7 @@ public sealed class EnvironmentRuntimePlacementReader(
         return ProjectBootstrapProfile(placement, profileId, replacement.Registration);
     }
 
+    /// <summary>Projects a registered profile into the current placement context.</summary>
     internal static EnvironmentRuntimeBootstrapContext ProjectBootstrapProfile(
         EnvironmentSandboxPlacementProjectionV1 placement,
         string profileId,
@@ -367,6 +377,7 @@ public sealed class EnvironmentRuntimePlacementReader(
             target.Owner, registration, target.Resource));
     }
 
+    /// <summary>Builds a validated bootstrap context from the matching profile registration and runtime endpoint.</summary>
     private static EnvironmentRuntimeBootstrapContext ProjectBootstrapProfile(
         EnvironmentSandboxPlacementProjectionV1 placement,
         string profileId,
@@ -397,6 +408,7 @@ public sealed class EnvironmentRuntimePlacementReader(
         };
     }
 
+    /// <summary>Identifies the correct owner and resource when resolving an active or resume placement.</summary>
     private static ProfileTarget GetProfileTarget(
         EnvironmentSandboxPlacementProjectionV1 placement,
         string profileId)
@@ -421,6 +433,7 @@ public sealed class EnvironmentRuntimePlacementReader(
         return new(owner, profileResource, endpoint);
     }
 
+    /// <summary>Checks whether the requested profile needs a persisted replacement endpoint before projection.</summary>
     private static bool RequiresReplacementEndpoint(
         EnvironmentSandboxPlacementProjectionV1 placement,
         string profileId,
@@ -431,6 +444,7 @@ public sealed class EnvironmentRuntimePlacementReader(
         return !profiles.TryResolve(owner, profileId, placement.Resource, out _);
     }
 
+    /// <summary>Derives a deterministic replacement profile ID from actor, selection, placement, and endpoint data.</summary>
     internal static string CreateReplacementProfileId(
         EnvironmentOwnerIdentity owner,
         string requestedSourceProfileId,
@@ -466,6 +480,7 @@ public sealed class EnvironmentRuntimePlacementReader(
         return $"{requestedSourceProfileId[..Math.Min(requestedSourceProfileId.Length, 220)]}.r.{hash}";
     }
 
+    /// <summary>Bundles the owner, exact Sandbox resource, and optional runtime endpoint used for profile resolution.</summary>
     private sealed record ProfileTarget(
         EnvironmentOwnerIdentity Owner,
         ProviderResourceRef Resource,

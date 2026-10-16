@@ -4,6 +4,7 @@ using System.Text;
 
 namespace Agentweaver.Abstractions;
 
+/// <summary>Owner-controlled lifecycle states for a project Remote MCP connection.</summary>
 public enum RemoteMcpConnectionState
 {
     Draft,
@@ -12,19 +13,24 @@ public enum RemoteMcpConnectionState
     Removed
 }
 
+/// <summary>Authentication model supported by a Remote MCP connection.</summary>
 public enum RemoteMcpAuthenticationMode
 {
     None,
     DelegatedOAuth
 }
 
+/// <summary>Protocol transport profile that is pinned for Remote MCP discovery and calls.</summary>
 public enum RemoteMcpTransportProfile
 {
     StreamableHttp20250618
 }
 
+/// <summary>Project-scoped identity of a Remote MCP connection.</summary>
 public sealed record RemoteMcpConnectionReference
 {
+    /// <summary>Creates a reference after checking the project ID and non-empty connection ID.</summary>
+    /// <exception cref="ArgumentException">The project ID is blank, unbounded, or contains control characters, or the ID is empty.</exception>
     public RemoteMcpConnectionReference(string projectId, Guid connectionId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectId);
@@ -37,12 +43,17 @@ public sealed record RemoteMcpConnectionReference
         ConnectionId = connectionId;
     }
 
+    /// <summary>Project that owns the connection.</summary>
     public string ProjectId { get; }
+    /// <summary>Stable connection identifier within the project.</summary>
     public Guid ConnectionId { get; }
 }
 
+/// <summary>Exact registry server metadata pin used when a connection originates from a registry.</summary>
 public sealed record RemoteMcpRegistryServerPin
 {
+    /// <summary>Creates a pin for one named server version and its metadata digest.</summary>
+    /// <exception cref="ArgumentException">Text is invalid, the version is mutable, or the digest is malformed.</exception>
     public RemoteMcpRegistryServerPin(
         string serverName,
         string exactVersion,
@@ -59,6 +70,7 @@ public sealed record RemoteMcpRegistryServerPin
     public string ExactVersion { get; }
     public string MetadataSha256 { get; }
 
+    /// <summary>Checks nonempty bounded registry text and rejects control characters.</summary>
     private static string ValidateText(string value, string name, int maximumLength)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value, name);
@@ -68,8 +80,15 @@ public sealed record RemoteMcpRegistryServerPin
     }
 }
 
+/// <summary>
+/// Immutable project-owned endpoint and authentication configuration. The calculated hash
+/// binds all connection settings, including optional registry pins, to this exact revision.
+/// </summary>
 public sealed record RemoteMcpConnectionConfiguration
 {
+    /// <summary>Creates and hashes a canonical connection configuration.</summary>
+    /// <exception cref="ArgumentException">A URI, display name, identity reference, or OAuth resource is invalid.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The revision or enum value is outside its supported range.</exception>
     public RemoteMcpConnectionConfiguration(
         RemoteMcpConnectionReference connection,
         long configurationRevision,
@@ -131,14 +150,22 @@ public sealed record RemoteMcpConnectionConfiguration
     public string EndpointUri { get; }
     public string? ResourceUri { get; }
     public RemoteMcpAuthenticationMode AuthenticationMode { get; }
+    /// <summary>Opaque identity-owner reference; it is not a bearer token or credential value.</summary>
     public string? IdentityBindingReference { get; }
     public RemoteMcpTransportProfile TransportProfile { get; }
     public RemoteMcpRegistryServerPin? RegistryServer { get; }
+    /// <summary>Lowercase SHA-256 digest of the canonical configuration fields and revision.</summary>
     public string ConfigurationSha256 { get; }
 }
 
+/// <summary>
+/// Current owner row for a connection, with row and configuration revisions used to reject
+/// stale writes and snapshots. Discovery revision identifies the currently admitted catalog.
+/// </summary>
 public sealed record RemoteMcpConnectionHead
 {
+    /// <summary>Creates a connection head with positive revisions and a defined state.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">A revision is invalid or the state is undefined.</exception>
     public RemoteMcpConnectionHead(
         RemoteMcpConnectionReference connection,
         long rowRevision,
@@ -164,8 +191,14 @@ public sealed record RemoteMcpConnectionHead
     public long? CurrentDiscoveryRevision { get; }
 }
 
+/// <summary>
+/// Exact metadata and schema digest for one discovered remote tool. The tool revision is
+/// derived from its name, description, and schema hash so altered metadata cannot reuse a pin.
+/// </summary>
 public sealed record RemoteMcpToolSchemaPin
 {
+    /// <summary>Creates a bounded tool pin and verifies both schema and tool revision digests.</summary>
+    /// <exception cref="ArgumentException">Tool metadata is invalid or either supplied digest does not match.</exception>
     public RemoteMcpToolSchemaPin(
         string name,
         string? description,
@@ -206,8 +239,13 @@ public sealed record RemoteMcpToolSchemaPin
     public string ToolRevision { get; }
 }
 
+/// <summary>Reference to the exact Network Policy application admitted for a Remote MCP endpoint.</summary>
 public sealed record RemoteMcpAppliedNetworkPolicyReference
 {
+    /// <summary>Creates an applied-policy pin with a positive generation and valid egress digest.</summary>
+    /// <exception cref="ArgumentException">The reference or digest is invalid.</exception>
+    /// <exception cref="ArgumentNullException">The Environment fence is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The applied generation is not positive.</exception>
     public RemoteMcpAppliedNetworkPolicyReference(
         string reference,
         EnvironmentGenerationFence environmentFence,
@@ -229,11 +267,20 @@ public sealed record RemoteMcpAppliedNetworkPolicyReference
     public string Reference { get; }
     public EnvironmentGenerationFence EnvironmentFence { get; }
     public long AppliedGeneration { get; }
+    /// <summary>Digest of the egress intent whose application this reference identifies.</summary>
     public string EgressIntentSha256 { get; }
 }
 
+/// <summary>
+/// Immutable discovery snapshot for one connection configuration. Catalog digest is
+/// computed from sorted tool revisions; an optional applied-policy reference pins the
+/// egress intent active when discovery was admitted.
+/// </summary>
 public sealed record RemoteMcpDiscoveryCatalogPin
 {
+    /// <summary>Creates a bounded catalog pin and checks the digest against its exact tool revisions.</summary>
+    /// <exception cref="ArgumentException">The tool set is uninitialized, oversized, duplicated, or digest-mismatched.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A configuration or discovery revision is not positive.</exception>
     public RemoteMcpDiscoveryCatalogPin(
         RemoteMcpConnectionReference connection,
         long configurationRevision,
@@ -273,16 +320,21 @@ public sealed record RemoteMcpDiscoveryCatalogPin
     public string CatalogSha256 { get; }
     public string? RegistryMetadataSha256 { get; }
     public ImmutableArray<RemoteMcpToolSchemaPin> Tools { get; }
+    /// <summary>Network Policy application required for discovery when egress enforcement is pinned.</summary>
     public RemoteMcpAppliedNetworkPolicyReference? AppliedNetworkPolicy { get; }
 }
 
+/// <summary>Read model combining the current connection head, immutable configuration, and optional discovery catalog.</summary>
 public sealed record RemoteMcpConnectionSnapshot(
     RemoteMcpConnectionHead Head,
     RemoteMcpConnectionConfiguration Configuration,
     RemoteMcpDiscoveryCatalogPin? Catalog);
 
+/// <summary>Canonicalizes endpoint and OAuth resource URIs to absolute HTTPS DNS URIs.</summary>
 public static class RemoteMcpUri
 {
+    /// <summary>Rejects non-HTTPS, non-DNS, credential-bearing, or fragment-bearing URIs.</summary>
+    /// <exception cref="ArgumentException">The URI is not an allowed absolute HTTPS DNS URI.</exception>
     public static string CanonicalizeHttps(string value, string? parameterName = null)
     {
         if (string.IsNullOrWhiteSpace(value) ||
@@ -305,11 +357,15 @@ public static class RemoteMcpUri
     }
 }
 
+/// <summary>Computes and validates canonical lowercase SHA-256 digests used by Remote MCP pins.</summary>
 public static class RemoteMcpDigest
 {
+    /// <summary>Returns the lowercase hexadecimal SHA-256 digest of the supplied bytes.</summary>
     public static string Sha256(ReadOnlySpan<byte> value) =>
         Convert.ToHexStringLower(SHA256.HashData(value));
 
+    /// <summary>Returns a valid digest unchanged, or rejects malformed hexadecimal input.</summary>
+    /// <exception cref="ArgumentException">The value is not exactly 64 lowercase hexadecimal characters.</exception>
     public static string ValidateSha256(string value, string? parameterName = null)
     {
         if (value.Length != 64 || value.Any(character =>

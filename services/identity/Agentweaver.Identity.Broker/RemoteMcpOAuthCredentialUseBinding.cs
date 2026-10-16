@@ -4,10 +4,16 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Identity.Broker;
 
+/// <summary>
+/// Builds a secret-redemption request only from a current authorized remote OAuth record
+/// that exactly matches Environment's current-call proof. The before/after check prevents
+/// credential use when the identity, configuration, connection or token revision changes.
+/// </summary>
 internal static class RemoteMcpOAuthCredentialUseBinding
 {
     public const string AccessTokenPurpose = "remote-mcp-tools-call-access-token";
 
+    /// <summary>Rejects any change to the connection or redemption reference across the authorization check.</summary>
     public static void RequireSameIdentityAuthority(
         RemoteMcpOAuthConnectionRecord before,
         RemoteMcpOAuthConnectionRecord after,
@@ -44,6 +50,11 @@ internal static class RemoteMcpOAuthCredentialUseBinding
             throw Denied();
     }
 
+    /// <summary>
+    /// Validates owner, project, Environment snapshot, connection revision, authorized
+    /// state and token expiry, then returns the exact access-token reference and run-bound
+    /// redemption purpose. Invalid bindings throw an authorization exception.
+    /// </summary>
     public static SecretRedemptionRequest CreateRedemptionRequest(
         RemoteMcpOAuthConnectionRecord row,
         RemoteMcpCurrentCallVerificationRequest request,

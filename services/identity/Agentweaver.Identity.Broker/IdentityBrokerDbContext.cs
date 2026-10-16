@@ -43,6 +43,7 @@ public sealed class IdentityBrokerDbContext : DbContext
     public DbSet<RemoteMcpOAuthConsentRecord> RemoteMcpOAuthConsents =>
         Set<RemoteMcpOAuthConsentRecord>();
 
+    /// <summary>Registers broker-owned entities and the OpenIddict stores under the isolated broker schema.</summary>
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema(Schema);

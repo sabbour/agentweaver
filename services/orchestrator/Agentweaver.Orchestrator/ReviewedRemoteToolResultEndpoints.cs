@@ -8,6 +8,9 @@ using Microsoft.AspNetCore.Http.Features;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Verifies that a remote-tool result proof matches current registration, selection, reviewed snapshot, and policy state.
+/// </summary>
 internal sealed class ReviewedRemoteToolResultVerifier(
     RuntimeRegistrationOwner registrations,
     ProjectsRunSelectionClient projects,
@@ -20,6 +23,11 @@ internal sealed class ReviewedRemoteToolResultVerifier(
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
     };
 
+    /// <summary>
+    /// Verifies a result proof against current owner state and returns its receipt for durable Events handling.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when proof, registration, selection, snapshot, call, or policy evidence is invalid or stale.</exception>
+    /// <exception cref="CoordinationException">Thrown when a required reviewed snapshot is unavailable or the Projects contract is invalid.</exception>
     internal async Task<RemoteToolResultVerificationReceipt> VerifyAsync(
         HttpContext context, RemoteToolResultProof proof, CancellationToken cancellationToken)
     {
@@ -104,6 +112,10 @@ internal sealed class ReviewedRemoteToolResultVerifier(
             SessionMaterialValidation.RemoteToolResultProofHash(proof));
     }
 
+    /// <summary>
+    /// Requires the proof and authenticated actor to match every relevant runtime registration binding.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when any actor, runtime, session, selection, or snapshot binding differs.</exception>
     private static void RequireProofBinding(
         HttpContext context,
         RemoteToolResultProof proof,
@@ -134,6 +146,10 @@ internal sealed class ReviewedRemoteToolResultVerifier(
             throw new RuntimeAuthorizationException("runtime_remote_tool_result_binding_invalid");
     }
 
+    /// <summary>
+    /// Requires accepted selection revisions and hash to match the runtime binding.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when accepted selection has changed.</exception>
     private static void RequireCurrentSelection(EffectiveRunSelection selection, RuntimeBinding binding)
     {
         if (selection.ProjectId != binding.ProjectId ||
@@ -146,6 +162,11 @@ internal sealed class ReviewedRemoteToolResultVerifier(
             throw new RuntimeAuthorizationException("runtime_remote_tool_result_selection_changed");
     }
 
+    /// <summary>
+    /// Requires the exact reviewed snapshot reference to appear in accepted project configuration.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the snapshot was not selected.</exception>
+    /// <exception cref="CoordinationException">Thrown when the accepted snapshot-reference contract is malformed.</exception>
     private static void RequireSelectedSnapshot(
         JsonElement selection, ReviewedRemoteToolSnapshotReference expected)
     {
@@ -184,6 +205,10 @@ internal sealed class ReviewedRemoteToolResultVerifier(
         throw new RuntimeAuthorizationException("runtime_remote_tool_result_snapshot_not_selected");
     }
 
+    /// <summary>
+    /// Requires the resolved snapshot to match the proof's complete immutable snapshot binding.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the snapshot reference or binding differs.</exception>
     private static void RequireSnapshotBinding(ReviewedRemoteToolSnapshot snapshot, RemoteToolResultProof proof)
     {
         if (!SameReference(snapshot.Reference, proof.Snapshot) ||
@@ -191,6 +216,10 @@ internal sealed class ReviewedRemoteToolResultVerifier(
             throw new RuntimeAuthorizationException("runtime_remote_tool_result_snapshot_binding_invalid");
     }
 
+    /// <summary>
+    /// Requires the reconstructed tool call to match all call fields and digests in the proof.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when any reconstructed call property differs.</exception>
     private static void RequireExactCall(ReviewedRemoteToolCall call, RemoteToolResultProof proof)
     {
         if (!SameReference(call.Snapshot, proof.Snapshot) ||
@@ -206,6 +235,9 @@ internal sealed class ReviewedRemoteToolResultVerifier(
             throw new RuntimeAuthorizationException("runtime_remote_tool_result_call_invalid");
     }
 
+    /// <summary>
+    /// Compares all identity fields in two reviewed snapshot references.
+    /// </summary>
     private static bool SameReference(
         ReviewedRemoteToolSnapshotReference first, ReviewedRemoteToolSnapshotReference second) =>
         first.ProjectId == second.ProjectId &&
@@ -215,8 +247,14 @@ internal sealed class ReviewedRemoteToolResultVerifier(
         first.NodeId == second.NodeId;
 }
 
+/// <summary>
+/// Maps the protected HTTPS endpoint for verifying reviewed remote-tool results.
+/// </summary>
 public static class ReviewedRemoteToolResultEndpoints
 {
+    /// <summary>
+    /// Adds the result-verification endpoint with service TLS identity and request-size checks.
+    /// </summary>
     public static IEndpointRouteBuilder MapReviewedRemoteToolResultEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost(
@@ -269,6 +307,9 @@ public static class ReviewedRemoteToolResultEndpoints
         return endpoints;
     }
 
+    /// <summary>
+    /// Executes verification and maps expected authorization, contract, and owner failures to no-store responses.
+    /// </summary>
     private static async Task<IResult> ExecuteAsync(
         HttpContext context, Func<Task<RemoteToolResultVerificationReceipt>> action)
     {

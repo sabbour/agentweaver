@@ -1,3 +1,5 @@
+// Bind each managed identity to one exact Kubernetes ServiceAccount subject
+// using the AKS OIDC issuer and Azure token-exchange audience.
 @description('Dedicated P0 naming prefix.')
 param namePrefix string
 

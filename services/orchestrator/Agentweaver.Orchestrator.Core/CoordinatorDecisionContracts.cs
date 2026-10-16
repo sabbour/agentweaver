@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 
 namespace Agentweaver.Orchestrator.Core;
 
+/// <summary>Bounded user outcome, scope, assumptions, and clarification questions accepted by the coordinator.</summary>
 public sealed record CoordinatorOutcomeSpecification(
     string Id,
     string Goal,
@@ -10,6 +11,7 @@ public sealed record CoordinatorOutcomeSpecification(
     string Assumptions,
     ImmutableArray<string> ClarifyingQuestions);
 
+/// <summary>Validated outcome specification that can be stored in coordinator decision state.</summary>
 public sealed class CoordinatorOutcomeSpecSnapshot
 {
     internal CoordinatorOutcomeSpecSnapshot(CoordinatorOutcomeSpecification specification) =>
@@ -18,8 +20,10 @@ public sealed class CoordinatorOutcomeSpecSnapshot
     public CoordinatorOutcomeSpecification Specification { get; }
 }
 
+/// <summary>Validates outcome identity and bounded non-empty text before a decision gate is created.</summary>
 public static class CoordinatorOutcomeSpecValidator
 {
+    /// <summary>Returns a snapshot only when every outcome field and clarification question is valid.</summary>
     public static WorkflowValidationResult<CoordinatorOutcomeSpecSnapshot> ValidateAndSnapshot(
         CoordinatorOutcomeSpecification? specification)
     {
@@ -90,6 +94,7 @@ public sealed record AuthorizedWorkflowCatalog(
     WorkflowDefinition DefaultWorkflow,
     ImmutableArray<WorkflowDefinition> AvailableWorkflows);
 
+/// <summary>Resolved workflow selection, whether the authorized default was used, and any fallback reasons.</summary>
 public sealed record WorkflowSelectionResolution(
     WorkflowDefinitionSnapshot? SelectedWorkflow,
     bool UsedAuthorizedDefault,
@@ -98,8 +103,10 @@ public sealed record WorkflowSelectionResolution(
     public bool IsValid => SelectedWorkflow is not null;
 }
 
+/// <summary>Chooses only from the authorized project catalog and safely falls back to its validated default.</summary>
 public static class WorkflowSelectionResolver
 {
+    /// <summary>Resolves a requested workflow without synthesizing or trusting an unlisted definition.</summary>
     public static WorkflowSelectionResolution Resolve(
         AuthorizedWorkflowCatalog? catalog,
         string? requestedWorkflowId)
@@ -182,6 +189,7 @@ public static class WorkflowSelectionResolver
             [new WorkflowValidationIssue(code, path, message)]);
 }
 
+/// <summary>Coordinator confirmation or question boundary requiring a typed actor response.</summary>
 public enum CoordinatorGateKind
 {
     OutcomeConfirmation,
@@ -192,12 +200,14 @@ public enum CoordinatorGateKind
     Approval
 }
 
+/// <summary>Canonical explicit choices for approve/reject gates.</summary>
 public static class CoordinatorGateChoices
 {
     public const string Approve = "approve";
     public const string Reject = "reject";
 }
 
+/// <summary>Request identity, actor, fence, and permitted response shape for one pending gate.</summary>
 public sealed record CoordinatorGateRequest(
     string RequestId,
     CoordinatorGateKind Kind,
@@ -209,6 +219,7 @@ public sealed record CoordinatorGateRequest(
     string? Prompt = null,
     bool ResolvesOutcomeClarification = false);
 
+/// <summary>Typed response to one exact request ID and execution fence.</summary>
 public sealed record CoordinatorGateAnswer(
     string RequestId,
     string ActorId,
@@ -216,11 +227,13 @@ public sealed record CoordinatorGateAnswer(
     string? ChoiceId,
     string? FreeformAnswer);
 
+/// <summary>Delivery acknowledgment for a gate message; it is not a decision or transition authorization.</summary>
 public sealed record CoordinatorMessageAcknowledgment(
     string RequestId,
     string ActorId,
     long Fence);
 
+/// <summary>Outcome of verifying a gate-message acknowledgment.</summary>
 public sealed class CoordinatorMessageAcknowledgmentResult
 {
     internal CoordinatorMessageAcknowledgmentResult(
@@ -232,9 +245,11 @@ public sealed class CoordinatorMessageAcknowledgmentResult
     public bool IsAcknowledged { get; }
     public CoordinatorDecisionState State { get; }
     public ImmutableArray<WorkflowValidationIssue> Issues { get; }
+    /// <summary>Always false: delivery acknowledgment does not answer a gate.</summary>
     public bool AuthorizesTransition => false;
 }
 
+/// <summary>Immutable record of an accepted typed answer to a coordinator gate.</summary>
 public sealed record CoordinatorGateDecisionReceipt(
     string RequestId,
     CoordinatorGateKind Kind,
@@ -244,6 +259,7 @@ public sealed record CoordinatorGateDecisionReceipt(
     string? ChoiceId,
     string? FreeformAnswer);
 
+/// <summary>Whether a gate answer was newly accepted, replayed exactly, or rejected.</summary>
 public enum CoordinatorGateAnswerStatus
 {
     Accepted,
@@ -251,6 +267,7 @@ public enum CoordinatorGateAnswerStatus
     Rejected
 }
 
+/// <summary>Answer result containing updated state only for an accepted or exact replayed decision.</summary>
 public sealed record CoordinatorGateAnswerResult(
     CoordinatorGateAnswerStatus Status,
     CoordinatorDecisionState State,
@@ -258,29 +275,35 @@ public sealed record CoordinatorGateAnswerResult(
     ImmutableArray<WorkflowValidationIssue> Issues,
     bool AuthorizesTransition)
 {
+    /// <summary>True for a newly accepted answer or an exact idempotent replay.</summary>
     public bool IsAccepted =>
         Status is CoordinatorGateAnswerStatus.Accepted or CoordinatorGateAnswerStatus.AlreadyApplied;
 }
 
+/// <summary>State transition result with an accepted payload or structured validation issues.</summary>
 public sealed record CoordinatorDecisionTransition<T>(
     CoordinatorDecisionState? State,
     T? Value,
     ImmutableArray<WorkflowValidationIssue> Issues)
     where T : class
 {
+    /// <summary>True when both next state and transition value are present.</summary>
     public bool IsSuccess => State is not null && Value is not null;
 }
 
+/// <summary>Selected workflow together with fallback diagnostics for the coordinator.</summary>
 public sealed record CoordinatorWorkflowSelection(
     WorkflowDefinitionSnapshot Workflow,
     bool UsedAuthorizedDefault,
     ImmutableArray<WorkflowValidationIssue> Reasons);
 
+/// <summary>Accepted candidate plan and the scope difference that determines confirmation needs.</summary>
 public sealed record CoordinatorWorkPlanRevision(
     WorkPlanSnapshot Candidate,
     WorkPlanScopeDiff ScopeDiff,
     bool RequiresConfirmation);
 
+/// <summary>Typed request to execute one platform gate from the confirmed workflow and plan.</summary>
 public sealed record CoordinatorAssemblyRequest(
     string RequestId,
     string WorkflowId,
@@ -289,6 +312,7 @@ public sealed record CoordinatorAssemblyRequest(
     string WorkflowStepId,
     WorkflowPlatformGate Gate);
 
+/// <summary>Assembly request resolved to the exact validated workflow, plan, and platform step snapshots.</summary>
 public sealed class CoordinatorAssemblyRequestSnapshot
 {
     internal CoordinatorAssemblyRequestSnapshot(
@@ -304,6 +328,10 @@ public sealed class CoordinatorAssemblyRequestSnapshot
     public WorkflowStepDefinition Step { get; }
 }
 
+/// <summary>
+/// Immutable coordinator state for outcome, workflow, plan, gate, and fence decisions.
+/// Confirmation is explicit; a message acknowledgment never authorizes a transition.
+/// </summary>
 public sealed class CoordinatorDecisionState
 {
     internal CoordinatorDecisionState(
@@ -339,14 +367,17 @@ public sealed class CoordinatorDecisionState
     public CoordinatorGateRequest? PendingGate { get; }
     public ImmutableArray<CoordinatorGateDecisionReceipt> DecisionReceipts { get; }
 
+    /// <summary>True when outcome and workflow are confirmed and no gate is pending.</summary>
     public bool CanDecompose =>
         OutcomeConfirmed && OutcomeSpec is not null &&
         WorkflowConfirmed && SelectedWorkflow is not null &&
         PendingGate is null;
 
+    /// <summary>True when decomposition is allowed and one confirmed plan has no unconfirmed candidate.</summary>
     public bool CanDispatch =>
         CanDecompose && ConfirmedWorkPlan is not null && CandidateWorkPlan is null;
 
+    /// <summary>Creates an empty decision state under a positive run fence.</summary>
     public static CoordinatorDecisionState Create(long fence)
     {
         if (fence <= 0)
@@ -356,6 +387,8 @@ public sealed class CoordinatorDecisionState
             fence, null, false, 0, null, false, null, null, null, null, []);
     }
 
+    /// <summary>Restores persisted state only when its transitions, receipts, and pending gate are consistent.</summary>
+    /// <returns>Structured issues instead of a state when persisted data violates any invariant.</returns>
     public static WorkflowValidationResult<CoordinatorDecisionState> Restore(
         long fence,
         CoordinatorOutcomeSpecSnapshot? outcomeSpec,
@@ -496,6 +529,7 @@ public sealed class CoordinatorDecisionState
                 workPlanRevisionAttempts));
     }
 
+    /// <summary>Advances to a newer owner fence and clears a pending request and unconfirmed candidate plan.</summary>
     public CoordinatorDecisionState AdvanceFence(long fence)
     {
         if (fence <= Fence)
@@ -509,6 +543,8 @@ public sealed class CoordinatorDecisionState
             clearPendingGate: true);
     }
 
+    /// <summary>Applies the exact authorized typed answer, treating identical request replays as idempotent.</summary>
+    /// <remarks>Stale IDs, actors, fences, choices, or free-form answers are rejected without changing state.</remarks>
     public CoordinatorGateAnswerResult ApplyGateAnswer(CoordinatorGateAnswer? answer)
     {
         var issues = ImmutableArray.CreateBuilder<WorkflowValidationIssue>();
@@ -574,6 +610,7 @@ public sealed class CoordinatorDecisionState
             authorizes);
     }
 
+    /// <summary>Validates message delivery acknowledgment without granting decision or execution authority.</summary>
     public CoordinatorMessageAcknowledgmentResult AcknowledgeMessage(
         CoordinatorMessageAcknowledgment? acknowledgment)
     {
@@ -604,6 +641,10 @@ public sealed class CoordinatorDecisionState
         string message) =>
         new(false, this, [Issue(code, path, message)]);
 
+    /// <summary>
+    /// Creates a state copy, using the set/clear flags to distinguish an intentional null from
+    /// an omitted update for nullable decisions and pending gates.
+    /// </summary>
     internal CoordinatorDecisionState Copy(
         long? fence = null,
         CoordinatorOutcomeSpecSnapshot? outcomeSpec = null,
@@ -642,6 +683,7 @@ public sealed class CoordinatorDecisionState
         CoordinatorGateDecisionReceipt receipt)
     {
         var receipts = DecisionReceipts.Add(receipt);
+        // Keep replay protection bounded while retaining the newest accepted request IDs.
         if (receipts.Length > WorkflowDomainLimits.MaximumDecisionReceipts)
             receipts = receipts.RemoveAt(0);
 
@@ -809,8 +851,10 @@ public sealed class CoordinatorDecisionState
         };
 }
 
+/// <summary>Pure transitions that validate coordinator proposals and create request-ID-bound gates.</summary>
 public static class CoordinatorDecisionFlow
 {
+    /// <summary>Validates an outcome draft and opens its first clarification or explicit confirmation gate.</summary>
     public static CoordinatorDecisionTransition<CoordinatorOutcomeSpecSnapshot> ProposeOutcomeSpec(
         CoordinatorDecisionState? state,
         CoordinatorOutcomeSpecification? specification,
@@ -868,6 +912,7 @@ public static class CoordinatorDecisionFlow
         return Success(next, snapshot);
     }
 
+    /// <summary>Selects an authorized workflow after outcome confirmation and gates generated workflows on first use.</summary>
     public static CoordinatorDecisionTransition<CoordinatorWorkflowSelection> SelectWorkflow(
         CoordinatorDecisionState? state,
         AuthorizedWorkflowCatalog? catalog,
@@ -928,6 +973,7 @@ public static class CoordinatorDecisionFlow
             resolution.Reasons);
     }
 
+    /// <summary>Validates a proposed plan against the selected workflow and opens an explicit confirmation gate.</summary>
     public static CoordinatorDecisionTransition<WorkPlanSnapshot> ProposeWorkPlan(
         CoordinatorDecisionState? state,
         WorkPlan? plan,
@@ -984,6 +1030,8 @@ public static class CoordinatorDecisionFlow
         return Success(next, candidate);
     }
 
+    /// <summary>Validates a replacement plan and requests confirmation only when its effective scope changed.</summary>
+    /// <remarks>Only a valid accepted revision increments the revision-attempt count.</remarks>
     public static CoordinatorDecisionTransition<CoordinatorWorkPlanRevision> ReviseWorkPlan(
         CoordinatorDecisionState? state,
         WorkPlan? revisedPlan,
@@ -1058,6 +1106,7 @@ public static class CoordinatorDecisionFlow
             new CoordinatorWorkPlanRevision(candidate, diff, diff.RequiresConfirmation));
     }
 
+    /// <summary>Binds assembly to a confirmed plan's exact platform step; owner readiness and grants remain separate checks.</summary>
     public static CoordinatorDecisionTransition<CoordinatorAssemblyRequestSnapshot> RequestAssembly(
         CoordinatorDecisionState? state,
         CoordinatorAssemblyRequest? request)
@@ -1110,6 +1159,7 @@ public static class CoordinatorDecisionFlow
             new CoordinatorAssemblyRequestSnapshot(request, workflow, plan, step!));
     }
 
+    /// <summary>Creates a typed question gate with the supplied allowed choices or bounded free-form answer option.</summary>
     public static CoordinatorDecisionTransition<CoordinatorGateRequest> AskQuestion(
         CoordinatorDecisionState? state,
         string? requestId,
@@ -1140,6 +1190,7 @@ public static class CoordinatorDecisionFlow
         return Success(next, gate.Value);
     }
 
+    /// <summary>Creates the next predeclared clarification question for the current outcome specification.</summary>
     public static CoordinatorDecisionTransition<CoordinatorGateRequest> AskNextOutcomeClarifyingQuestion(
         CoordinatorDecisionState? state,
         string? requestId,
@@ -1176,6 +1227,7 @@ public static class CoordinatorDecisionFlow
         return Success(next, gate.Value);
     }
 
+    /// <summary>Creates an explicit approve/reject gate bound to one actor, subject, request ID, and fence.</summary>
     public static CoordinatorDecisionTransition<CoordinatorGateRequest> RequestApproval(
         CoordinatorDecisionState? state,
         string? requestId,
@@ -1231,6 +1283,7 @@ public static class CoordinatorDecisionFlow
             : WorkflowValidationResult<CoordinatorGateRequest>.Failure(issues);
     }
 
+    /// <summary>Checks gate identity, actor, fence, choice set, prompt bounds, and response mode.</summary>
     internal static ImmutableArray<WorkflowValidationIssue> ValidateGate(CoordinatorGateRequest gate)
     {
         var issues = ImmutableArray.CreateBuilder<WorkflowValidationIssue>();

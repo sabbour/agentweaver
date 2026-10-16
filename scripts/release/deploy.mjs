@@ -1,3 +1,7 @@
+/**
+ * Verifies published release evidence and deploys its images to the explicit Azure P0 target.
+ * The flow checks runtime contracts and live resources before rollout, then verifies the resulting state.
+ */
 import { createHash, X509Certificate } from 'node:crypto';
 import {
   mkdirSync, readFileSync, rmSync, writeFileSync,
@@ -74,6 +78,7 @@ const TARGET = Object.freeze({
   nodeMax: 3,
 });
 const GATEWAY_NAMESPACE = 'agentweaver-v1-gateway';
+/** Maps manifest component IDs to Kubernetes deployment names used by release verification. */
 export const SERVICE_NAMES = Object.freeze({
   'Agentweaver.AgentHost': 'agenthost',
   'Agentweaver.Identity.Broker': 'identity-broker',
@@ -97,6 +102,7 @@ const BACKEND_TLS_HOSTNAMES = Object.freeze({
 const PROJECTS_CONFIG_HOSTNAME = 'projects-config.agentweaver-v1-p0.svc.cluster.local';
 const SERVER_AUTH_EKU = '1.3.6.1.5.5.7.3.1';
 const BACKEND_TLS_CA_CONFIGMAP = 'service-backend-ca';
+/** Maps services to the expected Kubernetes network-policy names. */
 export const SERVICE_NETWORK_POLICY_NAMES = Object.freeze({
   'identity-broker': 'identity-broker-egress',
   'events-and-sessions': 'events-and-sessions-network',
@@ -150,6 +156,7 @@ function runCommand(file, args, options = {}) {
   return runProcess(file, args, options).stdout.trim();
 }
 
+/** Parses deployment CLI options, including the explicit flag required for mutating execution. */
 export function parseArgs(argv = []) {
   const values = {};
   let releaseTag;
@@ -243,6 +250,7 @@ export function parseArgs(argv = []) {
   };
 }
 
+/** Validates the exact Azure subscription, tenant, resource group, cluster, and namespace contract. */
 export function validateTarget(target) {
   if (!target || typeof target !== 'object' || Array.isArray(target)) fail('explicit P0 target is required');
   for (const key of ['subscriptionId', 'tenantId', 'resourceGroup', 'clusterName', 'namespace']) {
@@ -260,6 +268,7 @@ export function validateTarget(target) {
   return TARGET;
 }
 
+/** Validates that the release manifest is published, source-bound, and consistent with repository files. */
 export function validatePublishedManifest(manifest, { root, sourceSha }) {
   if (!SHA.test(sourceSha ?? '')) fail('release source SHA must be a lowercase full Git commit SHA');
   validateManifest(manifest, { root });
@@ -302,6 +311,7 @@ function expectedRepository(componentId) {
   return `${REGISTRY}/${componentImageRepository(componentId)}`;
 }
 
+/** Checks publication receipt schema, source, provenance hash, and component artifact coverage. */
 export function validatePublicationReceipt(receipt, manifest, sourceSha) {
   if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) ||
       receipt.schemaVersion !== 1 || receipt.sourceSha !== sourceSha ||
@@ -387,6 +397,7 @@ export function validatePublicationReceipt(receipt, manifest, sourceSha) {
   });
 }
 
+/** Validates generated Kubernetes resources against the selected immutable images and namespace. */
 export function validateRuntimeManifest(document, images, namespace, brokerRunBinding) {
   const binding = brokerRunBinding === undefined
     ? undefined
@@ -703,6 +714,7 @@ function verifyBackendCertificates(target, { root, run }) {
   }
 }
 
+/** Reads existing broker routing resources and rejects settings outside the approved P0 contract. */
 export function verifyExistingP0BrokerRouting(target, { root, run }) {
   function read(resource, name, namespace = target.namespace) {
     return parseJson(run('kubectl', [
@@ -770,6 +782,7 @@ function clearCheckpoint(key, io) {
   }
 }
 
+/** Reads registry manifests and verifies that the AgentHost image digest and platform are consistent. */
 export async function verifyAgentHostRegistryImage(image, fetchImpl = globalThis.fetch) {
   const referenceSeparator = image.image.lastIndexOf('@');
   const repository = image.image.slice('ghcr.io/'.length, referenceSeparator);
@@ -965,6 +978,7 @@ function projectKubeconfigReadback(value) {
   };
 }
 
+/** Confirms the active Azure account and target resource metadata match the explicit deployment target. */
 export function verifyAzureTarget(target, { root, run }) {
   const account = parseJson(run('az', ['account', 'show', '--subscription', target.subscriptionId, '--output', 'json'], { cwd: root }), 'Azure account');
   if (account.id?.toLowerCase() !== target.subscriptionId.toLowerCase() ||
@@ -1006,6 +1020,7 @@ export function verifyAzureTarget(target, { root, run }) {
   return { cluster, contextName, server };
 }
 
+/** Checks referenced cluster resources and their source-bound configuration before deployment begins. */
 export function verifyRuntimePrerequisites(runtimeManifest, target, { root, run, brokerRunBinding }) {
   for (const reference of resolvePodReferences(runtimeManifest)) {
     const plural = reference.kind === 'serviceaccount' ? 'serviceaccount'
@@ -1205,6 +1220,7 @@ function readBrokerClientSecretKeys(target, { root, run }) {
   return output.split(/\r?\n/).filter(Boolean);
 }
 
+/** Verifies the broker run-binding configuration and its paired Kubernetes ingress/egress controls. */
 export function verifyBrokerRunBindingConfiguration(binding, target, { root, run, runRaw = run }) {
   const descriptor = validateBrokerRunBinding(binding);
   const brokerConfig = readRuntimeConfigMap('identity-broker-runtime-config', target, { root, run });
@@ -1340,6 +1356,7 @@ function verifyMeasuredAgentHostDigest(images, acceptedDigests) {
   }
 }
 
+/** Waits for service rollouts and verifies that running pods use accepted immutable image digests. */
 export function verifyLiveDeployment(images, target, acceptedDigests, { root, run }) {
   const agentHost = images.find((image) => image.id === 'Agentweaver.AgentHost');
   for (const image of images.filter((entry) => entry.id !== 'Agentweaver.AgentHost')) {
@@ -1414,6 +1431,10 @@ its recorded v1-publication environment approval, and the merged helper PR.
 `;
 }
 
+/**
+ * Validates release inputs and prerequisites, then optionally deploys and verifies the live workloads.
+ * Without explicit execution approval it performs verification only; mismatches stop the release flow.
+ */
 export async function deployRelease(options = {}, dependencies = {}) {
   const parsed = options.argv ? parseArgs(options.argv) : options;
   if (parsed.help) return { ok: true, help: true, text: helpText() };

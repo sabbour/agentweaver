@@ -7,6 +7,7 @@ using Npgsql;
 
 namespace Agentweaver.Projects.Config;
 
+/// <summary>Serializable proposal view used by project casting review and transition routes.</summary>
 public sealed record ProjectCastingProposal(
     Guid ProposalId,
     string ProjectId,
@@ -22,10 +23,12 @@ public sealed record ProjectCastingProposal(
     string UpdatedByActorId,
     DateTimeOffset UpdatedAt);
 
+/// <summary>Implements revision-fenced casting proposal review using serialized PostgreSQL transactions.</summary>
 public sealed partial class ProjectsConfigService
 {
     private const int CastingProposalTransactionAttempts = 3;
 
+    /// <summary>Stages a complete validated draft at the current expected project configuration revision.</summary>
     public Task<ProjectCastingProposal> CreateCastingProposalAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -43,6 +46,7 @@ public sealed partial class ProjectsConfigService
             cancellationToken);
     }
 
+    /// <summary>Creates a pending proposal from a built-in template without replacing unrelated project settings.</summary>
     public Task<ProjectCastingProposal> CreateScenarioCastingProposalAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -59,6 +63,7 @@ public sealed partial class ProjectsConfigService
             cancellationToken);
     }
 
+    /// <summary>Creates a pending proposal from catalog role IDs without replacing unrelated project settings.</summary>
     public Task<ProjectCastingProposal> CreateManualCastingProposalAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -90,6 +95,7 @@ public sealed partial class ProjectsConfigService
             cancellationToken,
             transferProvenance);
 
+    /// <summary>Locks current authority and configuration, merges the draft with current settings, and stores a pending proposal.</summary>
     private Task<ProjectCastingProposal> CreateCastingProposalFromCurrentConfigurationAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -126,6 +132,7 @@ public sealed partial class ProjectsConfigService
         }, cancellationToken);
     }
 
+    /// <summary>Lists recent proposals after checking the current project read role.</summary>
     public Task<IReadOnlyList<ProjectCastingProposal>> ListCastingProposalsAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -151,6 +158,7 @@ public sealed partial class ProjectsConfigService
         }, cancellationToken);
     }
 
+    /// <summary>Reads one proposal under a project lock after checking current read authority.</summary>
     public Task<ProjectCastingProposal> GetCastingProposalAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -170,6 +178,7 @@ public sealed partial class ProjectsConfigService
         }, cancellationToken);
     }
 
+    /// <summary>Replaces a pending draft only when both its draft and base configuration revisions remain current.</summary>
     public Task<ProjectCastingProposal> UpdateCastingProposalAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -213,6 +222,10 @@ public sealed partial class ProjectsConfigService
         }, cancellationToken);
     }
 
+    /// <summary>
+    /// Atomically appends the proposed configuration and marks the proposal confirmed; an exact retry returns the same result.
+    /// </summary>
+    /// <exception cref="ProjectConfigException">The proposal is stale, rejected, the project is archived, or authority is missing.</exception>
     public Task<ProjectCastingProposal> ConfirmCastingProposalAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -280,6 +293,7 @@ public sealed partial class ProjectsConfigService
         }, cancellationToken);
     }
 
+    /// <summary>Marks a pending proposal rejected without changing configuration or accepted run selections.</summary>
     public Task<ProjectCastingProposal> RejectCastingProposalAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -310,6 +324,7 @@ public sealed partial class ProjectsConfigService
         }, cancellationToken);
     }
 
+    /// <summary>Runs a serializable proposal transaction and retries only bounded PostgreSQL serialization failures.</summary>
     private async Task<T> ExecuteCastingProposalTransactionAsync<T>(
         Func<ProjectsConfigDbContext, CancellationToken, Task<T>> operation,
         CancellationToken cancellationToken)
@@ -338,6 +353,7 @@ public sealed partial class ProjectsConfigService
         }
     }
 
+    /// <summary>Commits one proposal operation only after its complete authority and revision checks succeed.</summary>
     private static async Task<T> RunCastingProposalTransactionAsync<T>(
         ProjectsConfigDbContext context,
         Func<ProjectsConfigDbContext, CancellationToken, Task<T>> operation,
@@ -351,6 +367,7 @@ public sealed partial class ProjectsConfigService
         return result;
     }
 
+    /// <summary>Locks the project and current membership/role authority, concealing foreign project existence.</summary>
     private static async Task<ProjectRecord> LockCastingProjectAndAuthorityAsync(
         ProjectsConfigDbContext context,
         ProjectAuthorizationContext caller,
@@ -411,6 +428,7 @@ public sealed partial class ProjectsConfigService
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Locks one proposal row within its owning project before a transition or draft update.</summary>
     private static async Task<ProjectCastingProposalRecord> LockCastingProposalAsync(
         ProjectsConfigDbContext context,
         string projectId,
@@ -439,6 +457,7 @@ public sealed partial class ProjectsConfigService
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Checks any proposed project runtime narrowing against the currently configured platform defaults.</summary>
     private static async Task EnsureCastingProjectNarrowingAsync(
         ProjectsConfigDbContext context,
         ProjectConfiguration configuration,
@@ -474,6 +493,7 @@ public sealed partial class ProjectsConfigService
         _ = ProjectConfigurationValidator.ResolveLimits(defaults, limits);
     }
 
+    /// <summary>Deserializes the stored draft/result and reconstructs any retained transfer provenance.</summary>
     private static ProjectCastingProposal ToCastingProposal(ProjectCastingProposalRecord proposal) =>
         new(
             proposal.ProposalId,
@@ -496,6 +516,7 @@ public sealed partial class ProjectsConfigService
             proposal.UpdatedByActorId,
             proposal.UpdatedAt);
 
+    /// <summary>Persists a new pending proposal and optional transfer provenance in the caller's transaction.</summary>
     private async Task<ProjectCastingProposal> AddCastingProposalAsync(
         ProjectsConfigDbContext context,
         ProjectAuthorizationContext caller,

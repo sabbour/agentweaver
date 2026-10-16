@@ -138,6 +138,11 @@ function SendButton({
   );
 }
 
+/**
+ * Renders the Copilot message composer with text entry, attachments, and submission controls.
+ * Props supply send behavior and current appearance; effects manage submit-key handling and
+ * callbacks while attachment operations remain owned by the parent.
+ */
 export function Composer({
   value = "",
   onChange,

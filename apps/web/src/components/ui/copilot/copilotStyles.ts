@@ -2,6 +2,7 @@ import { makeStyles, tokens } from "@fluentui/react-components";
 
 // ─── Composer (mirrors @1js/fai-react-chat-input ChatInput slots) ────────────
 
+/** Styles the shared Copilot message composer. */
 export const useComposerStyles = makeStyles({
   root: {
     display: "flex",
@@ -124,6 +125,7 @@ export const useComposerStyles = makeStyles({
 
 // ─── SendButton (mirrors @1js/fai-react-send-button SendButton) ──────────────
 
+/** Styles the composer send and stop controls. */
 export const useSendButtonStyles = makeStyles({
   root: {
     display: "flex",
@@ -195,6 +197,7 @@ export const useSendButtonStyles = makeStyles({
 
 // ─── Attachment (mirrors @1js/fai-react-attachments Attachment) ──────────────
 
+/** Styles attachment chips shown in the Copilot composer and transcript. */
 export const useAttachmentStyles = makeStyles({
   root: {
     display: "inline-flex",
@@ -247,6 +250,7 @@ export const useAttachmentStyles = makeStyles({
 
 // ─── CopilotChat feed container ───────────────────────────────────────────────
 
+/** Styles the conversation surface and its message list. */
 export const useCopilotChatStyles = makeStyles({
   root: {
     display: "flex",
@@ -260,6 +264,7 @@ export const useCopilotChatStyles = makeStyles({
 
 // ─── UserMessage (mirrors @1js/fai-react-copilot-chat UserMessage) ───────────
 
+/** Styles user-authored message bubbles and their attachment layout. */
 export const useUserMessageStyles = makeStyles({
   root: {
     display: "flex",
@@ -311,6 +316,7 @@ export const useUserMessageStyles = makeStyles({
 
 // ─── CopilotMessage (mirrors @1js/fai-react-copilot-chat CopilotMessage) ─────
 
+/** Styles assistant response content and message actions. */
 export const useCopilotMessageStyles = makeStyles({
   root: {
     display: "flex",
@@ -407,6 +413,7 @@ export const useCopilotMessageStyles = makeStyles({
 
 // ─── OutputCard (mirrors @1js/fai-react-output-card OutputCard) ──────────────
 
+/** Styles the artifact/output card modes used in assistant messages. */
 export const useOutputCardStyles = makeStyles({
   root: {
     display: "flex",
@@ -435,6 +442,7 @@ export const useOutputCardStyles = makeStyles({
 
 // ─── FeedbackButtons (mirrors @1js/fai-react-feedback-buttons FeedbackButtons)
 
+/** Styles the feedback controls attached to an assistant response. */
 export const useFeedbackButtonStyles = makeStyles({
   root: {
     display: "flex",

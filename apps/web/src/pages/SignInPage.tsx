@@ -1,6 +1,10 @@
 import { Button, MessageBar, MessageBarBody, MessageBarTitle, Spinner, Text, makeStyles, tokens } from '@fluentui/react-components';
 import { ENTRA_AUTHORIZE_URL } from '../config';
 
+/**
+ * Entra sign-in screen for unauthenticated users. It explains server-side OAuth
+ * failures from the URL separately from client-side session-check failures.
+ */
 const useStyles = makeStyles({
   page: {
     minHeight: '100vh',
@@ -76,6 +80,7 @@ const useStyles = makeStyles({
   },
 });
 
+/** Optional session-check error supplied by the application auth gate. */
 export interface SignInPageProps {
   /**
    * A session-check failure surfaced by AuthGate (apps/web/src/App.tsx) — e.g. `/api/auth/session`
@@ -87,6 +92,10 @@ export interface SignInPageProps {
   sessionError?: string | null;
 }
 
+/**
+ * Presents a fresh sign-in action and translates known OAuth callback reasons into
+ * actionable copy; it does not retry authentication automatically.
+ */
 export function SignInPage({ sessionError = null }: SignInPageProps) {
   const styles = useStyles();
 
@@ -153,6 +162,7 @@ export function SignInPage({ sessionError = null }: SignInPageProps) {
   );
 }
 
+/** Compact loading surface used while authentication options are being checked. */
 export function SignInPageLoading() {
   const styles = useStyles();
   return (

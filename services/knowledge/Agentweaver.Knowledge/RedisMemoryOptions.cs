@@ -2,6 +2,7 @@ using StackExchange.Redis;
 
 namespace Agentweaver.Knowledge;
 
+/// <summary>Validated connection and immutable resource identity for the Redis Memory namespace.</summary>
 public sealed record RedisMemoryOptions(
     Uri Endpoint,
     string ResourceId,
@@ -15,6 +16,8 @@ public sealed record RedisMemoryOptions(
 {
     public const int CurrentOptionsSchemaVersion = 1;
 
+    /// <summary>Reads the optional Redis provider section and validates it when present.</summary>
+    /// <returns><see langword="null"/> when Redis is not configured; otherwise the validated options.</returns>
     public static RedisMemoryOptions? ReadOptional(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -41,6 +44,8 @@ public sealed record RedisMemoryOptions(
         return options;
     }
 
+    /// <summary>Builds the TLS connection settings used by the Redis command client.</summary>
+    /// <exception cref="ArgumentException">The options do not satisfy the Redis provider contract.</exception>
     public ConfigurationOptions CreateConnectionOptions()
     {
         Validate();
@@ -61,6 +66,7 @@ public sealed record RedisMemoryOptions(
         return connection;
     }
 
+    /// <summary>Checks endpoint, identity, namespace, database, and paired credential values.</summary>
     public void Validate()
     {
         if (!Endpoint.IsAbsoluteUri ||
@@ -82,6 +88,7 @@ public sealed record RedisMemoryOptions(
             throw new ArgumentException("Redis Memory options are invalid.");
     }
 
+    /// <summary>Formats non-secret connection identity; the configured password is never included.</summary>
     public override string ToString() =>
         $"RedisMemoryOptions {{ Endpoint = {Endpoint.Host}:{Endpoint.Port}, Database = {Database}, " +
         $"KeyPrefix = {KeyPrefix}, ResourceId = {ResourceId}, ResourceGeneration = {ResourceGeneration}, " +

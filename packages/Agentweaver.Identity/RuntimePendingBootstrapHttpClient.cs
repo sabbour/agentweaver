@@ -1,5 +1,6 @@
 namespace Agentweaver.Identity;
 
+/// <summary>Verifies a pending configure grant with the broker over the authenticated owner channel.</summary>
 public sealed class RuntimePendingBootstrapHttpClient(
     HttpClient client,
     Uri brokerAddress,
@@ -7,6 +8,7 @@ public sealed class RuntimePendingBootstrapHttpClient(
 {
     private readonly Uri _brokerAddress = RuntimeOwnerHttpTransport.RequireOwnerAddress(brokerAddress);
 
+    /// <summary>Checks that the exact configure proof and delivery operation remain active and unexpired.</summary>
     public async Task<RuntimeGrantReceipt> VerifyPendingBootstrapDeliveryAsync(
         RuntimeCredentialProof proof, Guid deliveryOperationId, CancellationToken cancellationToken)
     {

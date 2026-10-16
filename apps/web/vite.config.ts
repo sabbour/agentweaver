@@ -1,6 +1,8 @@
+/** Vite build and local-server settings for the Agentweaver web application. */
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+/** Adds the host-served runtime settings script to built HTML before application bundles run. */
 function injectRuntimeConfigScript() {
   return {
     name: 'inject-runtime-config-script',

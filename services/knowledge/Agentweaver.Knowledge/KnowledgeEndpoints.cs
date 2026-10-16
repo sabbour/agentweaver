@@ -4,8 +4,10 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Knowledge;
 
+/// <summary>Maps authenticated Knowledge routes to application operations and stable HTTP error responses.</summary>
 public static class KnowledgeEndpoints
 {
+    /// <summary>Registers project/run/agent record routes and internal accepted-effect receipt routes.</summary>
     public static void MapKnowledgeEndpoints(this IEndpointRouteBuilder app)
     {
         var agents = app.MapGroup("/api/projects/{projectId}/runs/{runId}/agents/{agentId}")
@@ -32,6 +34,7 @@ public static class KnowledgeEndpoints
             .RequireAuthorization();
     }
 
+    /// <summary>Creates a record and returns 201, or 200 when the idempotency receipt is reused.</summary>
     private static Task<IResult> CreateAsync(
         string projectId,
         string runId,
@@ -54,6 +57,7 @@ public static class KnowledgeEndpoints
                 statusCode: result.IsDuplicate ? StatusCodes.Status200OK : StatusCodes.Status201Created);
         });
 
+    /// <summary>Searches records using defaults for omitted page and filter values.</summary>
     private static Task<IResult> SearchAsync(
         string projectId,
         string runId,
@@ -80,6 +84,7 @@ public static class KnowledgeEndpoints
             return Results.Ok(result);
         });
 
+    /// <summary>Reads one record in the route's project and agent scope.</summary>
     private static Task<IResult> ReadAsync(
         string projectId,
         string runId,
@@ -90,6 +95,7 @@ public static class KnowledgeEndpoints
         ExecuteAsync(async () => Results.Ok(await service.ReadAsync(
             projectId, runId, agentId, recordId, cancellationToken).ConfigureAwait(false)));
 
+    /// <summary>Applies an idempotent, revision-checked record update.</summary>
     private static Task<IResult> UpdateAsync(
         string projectId,
         string runId,
@@ -108,6 +114,7 @@ public static class KnowledgeEndpoints
             IdempotencyKey(httpContext),
             cancellationToken).ConfigureAwait(false)));
 
+    /// <summary>Returns a page of revisions after the application service verifies record ownership.</summary>
     private static Task<IResult> ReadRevisionsAsync(
         string projectId,
         string runId,
@@ -121,6 +128,7 @@ public static class KnowledgeEndpoints
             projectId, runId, agentId, recordId, page ?? 1, pageSize ?? 50, cancellationToken)
             .ConfigureAwait(false)));
 
+    /// <summary>Restores one historical revision through the application service.</summary>
     private static Task<IResult> RestoreAsync(
         string projectId,
         string runId,
@@ -139,6 +147,7 @@ public static class KnowledgeEndpoints
             IdempotencyKey(httpContext),
             cancellationToken).ConfigureAwait(false)));
 
+    /// <summary>Approves a Decision and maps provider write outcomes to HTTP status codes.</summary>
     private static Task<IResult> ApproveDecisionAsync(
         string projectId,
         string runId,
@@ -157,6 +166,7 @@ public static class KnowledgeEndpoints
             IdempotencyKey(httpContext),
             cancellationToken).ConfigureAwait(false)));
 
+    /// <summary>Exports the agent's Knowledge bundle and disables response caching.</summary>
     private static Task<IResult> ExportAsync(
         string projectId,
         string runId,
@@ -170,6 +180,7 @@ public static class KnowledgeEndpoints
             projectId, runId, agentId, cancellationToken).ConfigureAwait(false)));
     }
 
+    /// <summary>Imports a validated bundle and returns 200 for duplicate idempotent submissions.</summary>
     private static Task<IResult> ImportAsync(
         string projectId,
         string runId,
@@ -192,6 +203,7 @@ public static class KnowledgeEndpoints
                 : StatusCodes.Status201Created);
         });
 
+    /// <summary>Promotes a Proposal and maps stale, invalid-state, and not-found results to problem responses.</summary>
     private static Task<IResult> PromoteAsync(
         string projectId,
         string runId,
@@ -222,6 +234,7 @@ public static class KnowledgeEndpoints
             };
         });
 
+    /// <summary>Rejects a Proposal through the current run's provider and idempotency receipt.</summary>
     private static Task<IResult> RejectAsync(
         string projectId,
         string runId,
@@ -240,6 +253,7 @@ public static class KnowledgeEndpoints
             IdempotencyKey(httpContext),
             cancellationToken).ConfigureAwait(false)));
 
+    /// <summary>Returns bounded structured context and its source-revision references.</summary>
     private static Task<IResult> CompileContextAsync(
         string projectId,
         string runId,
@@ -252,6 +266,7 @@ public static class KnowledgeEndpoints
         ExecuteAsync(async () => Results.Ok(await service.CompileContextAsync(
             projectId, runId, agentId, q, maxItems, maxTokens, cancellationToken).ConfigureAwait(false)));
 
+    /// <summary>Reads a receipt by ID and disables caching of the authorization-sensitive response.</summary>
     private static Task<IResult> ReadAcceptedEffectReceiptAsync(
         Guid receiptId,
         HttpContext httpContext,
@@ -263,6 +278,7 @@ public static class KnowledgeEndpoints
             await service.ReadAcceptedEffectReceiptAsync(receiptId, cancellationToken).ConfigureAwait(false)));
     }
 
+    /// <summary>Reads a receipt within a project/run route and disables caching of the response.</summary>
     private static Task<IResult> ReadScopedAcceptedEffectReceiptAsync(
         string projectId,
         string runId,
@@ -277,6 +293,7 @@ public static class KnowledgeEndpoints
                 projectId, runId, receiptId, cancellationToken).ConfigureAwait(false)));
     }
 
+    /// <summary>Converts known application and provider failures to stable RFC problem responses.</summary>
     private static async Task<IResult> ExecuteAsync(Func<Task<IResult>> action)
     {
         try
@@ -330,6 +347,7 @@ public static class KnowledgeEndpoints
         }
     }
 
+    /// <summary>Maps record-write statuses to success, not-found, or conflict HTTP results.</summary>
     private static IResult ToWriteResult(KnowledgeRecordWriteResult result) =>
         result.Status switch
         {
@@ -348,6 +366,7 @@ public static class KnowledgeEndpoints
             _ => throw new InvalidOperationException("Unexpected Knowledge write status.")
         };
 
+    /// <summary>Builds the scoped not-found response without revealing whether another agent owns the record.</summary>
     private static IResult NotFound() =>
         Results.Problem(
             title: "record_not_found",
@@ -355,6 +374,7 @@ public static class KnowledgeEndpoints
             statusCode: StatusCodes.Status404NotFound,
             extensions: new Dictionary<string, object?> { ["code"] = "record_not_found" });
 
+    /// <summary>Builds a 409 response and includes the current revision only when the provider returned one.</summary>
     private static IResult Conflict(string code, int? currentRevision) =>
         Results.Problem(
             title: code,
@@ -368,6 +388,7 @@ public static class KnowledgeEndpoints
                 ["currentRevision"] = currentRevision
             });
 
+    /// <summary>Requires exactly one non-empty idempotency key for every write endpoint.</summary>
     private static string IdempotencyKey(HttpContext context)
     {
         var values = context.Request.Headers["Idempotency-Key"];

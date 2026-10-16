@@ -1,7 +1,13 @@
 namespace Agentweaver.Projects.Config;
 
+/// <summary>Maps authenticated marketplace source management, commit-pinned browse, preview, and import routes.</summary>
 public static class SkillMarketplaceEndpoints
 {
+    /// <summary>
+    /// Registers source CRUD and selected-content endpoints; re-resolves current actor and project authority around upstream reads.
+    /// </summary>
+    /// <param name="app">The application route builder.</param>
+    /// <returns>The same route builder for endpoint composition.</returns>
     public static IEndpointRouteBuilder MapSkillMarketplaceEndpoints(this IEndpointRouteBuilder app)
     {
         var sources = app.MapGroup("/api/projects/{projectId}/skill-marketplaces/sources")
@@ -292,11 +298,13 @@ public static class SkillMarketplaceEndpoints
         return app;
     }
 
+    /// <summary>Parses a source identifier, mapping malformed values to the source's non-disclosing not-found response.</summary>
     private static Guid ParseSourceId(string sourceId) =>
         Guid.TryParse(sourceId, out var parsed)
             ? parsed
             : throw MarketplaceSourceException.NotFound();
 
+    /// <summary>Resolves the current caller from the bearer principal and optional tenant selector.</summary>
     private static Task<ProjectAuthorizationContext> ResolveCallerAsync(
         HttpContext context,
         ProjectAuthorizationOwner authorizationOwner,
@@ -306,6 +314,7 @@ public static class SkillMarketplaceEndpoints
             context.Request.Headers[ProjectAuthorizationOwner.TenantSelectorHeader].ToArray(),
             cancellationToken);
 
+    /// <summary>Ensures a repeated authority check still resolves to the same issuer, subject, tenant, and membership revision.</summary>
     private static bool SameActor(
         ProjectAuthorizationContext original,
         ProjectAuthorizationContext current) =>
@@ -315,6 +324,7 @@ public static class SkillMarketplaceEndpoints
         original.MembershipId == current.MembershipId &&
         original.MembershipRevision == current.MembershipRevision;
 
+    /// <summary>Builds an authority callback for rechecking the original actor and project permission during source reads.</summary>
     private static Func<CancellationToken, Task> CreateAuthorityVerifier(
         HttpContext context,
         ProjectAuthorizationOwner authorizationOwner,
@@ -333,12 +343,14 @@ public static class SkillMarketplaceEndpoints
                 .ConfigureAwait(false);
         };
 
+    /// <summary>Rejects query parameters on preview/import operations whose selection is carried in the JSON body.</summary>
     private static void RejectBodyQuery(HttpContext context)
     {
         if (context.Request.Query.Count != 0)
             throw MarketplaceSourceException.InvalidRequest("Query parameters are not supported for this operation.");
     }
 
+    /// <summary>Converts a project authorization or lookup error into its stable problem response.</summary>
     private static IResult ToProblem(ProjectConfigException exception) =>
         Results.Problem(
             title: exception.Code,

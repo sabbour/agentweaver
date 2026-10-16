@@ -14,6 +14,7 @@ const serviceMenuGroups: AzfServiceMenuGroup[] = [
   },
 ];
 
+/** Demonstrates one compact provider scope around a service menu and route-like content. */
 export function ProviderLayoutExample() {
   const [selectedId, setSelectedId] = useState('overview');
 

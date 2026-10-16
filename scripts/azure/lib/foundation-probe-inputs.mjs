@@ -1,3 +1,7 @@
+/**
+ * Resolves Azure and Kubernetes inputs needed by the Foundation Probe acceptance workload.
+ * The bootstrap validates the fixed P0 target and limits returned resource data to approved fields.
+ */
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -10,6 +14,10 @@ const OPTIONS = { check: false, timeout: 35_000 };
 const GUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const hash = value => createHash('sha256').update(value).digest('hex');
 
+/**
+ * Reads and validates the probe's Azure, identity, network, and Kubernetes prerequisites.
+ * Failed lookups or a resource outside the dedicated target are rejected before workload creation.
+ */
 export function bootstrapFoundationProbeInputs(config, {
   execAz = runAz, execKubectl = (args, options) => run('kubectl', args, options),
   withKubeconfig = withP0UserKubeconfig,

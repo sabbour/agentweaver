@@ -2,6 +2,7 @@ import type { RunStreamEvent } from '../api/sse';
 import type { PortForwardSessionDto } from '../api/types';
 import { readStr } from '../utils/readStr';
 
+/** Preview lifecycle visible to a run's artifact and review surfaces. */
 export type RunPreviewState =
   | { status: 'none' }
   | { status: 'ready'; previewUrl: string; targetPort?: string; eventSequence: number }
@@ -14,6 +15,11 @@ export type RunPreviewState =
     approvalRequestId?: string;
   };
 
+/**
+ * Finds the latest preview state for the current assembly pass.
+ * A ready URL is accepted only when its tree, runner, and port-forward session
+ * match the current server session; stale preview events therefore stay hidden.
+ */
 export function latestPreviewStateFromEvents(
   events: RunStreamEvent[],
   sessions: PortForwardSessionDto[],

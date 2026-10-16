@@ -123,6 +123,11 @@ function parseApiError400(err: unknown): { message: string; line: number | null 
   }
 }
 
+/**
+ * Renders the text-based workflow editor for the selected workflow.
+ * Props supply workflow identity and callbacks; API client calls load/save workflow content while
+ * local state tracks edits, pending operations, and errors.
+ */
 export function WorkflowEditor({ projectId, workflowId, initialYaml, onSave, onClose }: WorkflowEditorProps) {
   const styles = useStyles();
 

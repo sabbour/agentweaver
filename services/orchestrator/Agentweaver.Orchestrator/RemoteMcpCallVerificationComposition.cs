@@ -3,6 +3,10 @@ using Microsoft.AspNetCore.Server.Kestrel.Https;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Configures the isolated TLS listener and reviewed-remote-tool transport used for remote MCP verification.
+/// Registration is opt-in and fails startup when its service identity or dedicated HTTPS endpoint is inconsistent.
+/// </summary>
 public static class RemoteMcpCallVerificationComposition
 {
     public const string TlsKey = "remote-mcp-call-verification-environment";
@@ -10,6 +14,13 @@ public static class RemoteMcpCallVerificationComposition
     public const string ListenerName = "RemoteMcpCallVerification";
     public const string ReviewedToolTransportEnabledSetting = SectionName + ":EnableReviewedToolTransport";
 
+    /// <summary>
+    /// Registers the reviewed-tool HTTPS client when the corresponding setting is enabled.
+    /// </summary>
+    /// <param name="builder">The application builder receiving the typed client and transport registration.</param>
+    /// <param name="runtimeRegistrationEnabled">Whether the runtime registration owner is configured.</param>
+    /// <returns><see langword="true"/> when the transport was registered, or <see langword="false"/> when disabled.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when transport is enabled without the required runtime owner or keyed TLS identity.</exception>
     public static bool AddReviewedRemoteToolTransport(
         this WebApplicationBuilder builder, bool runtimeRegistrationEnabled)
     {
@@ -33,6 +44,13 @@ public static class RemoteMcpCallVerificationComposition
         return true;
     }
 
+    /// <summary>
+    /// Validates and registers the Environment mTLS profile and its dedicated Kestrel listener.
+    /// </summary>
+    /// <param name="builder">The application builder receiving TLS services and listener configuration.</param>
+    /// <param name="runtimeRegistrationEnabled">Whether the runtime registration owner is configured.</param>
+    /// <returns><see langword="true"/> when the profile exists and is registered, or <see langword="false"/> when absent.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when service identities, certificate pins, or the dedicated HTTPS port are invalid.</exception>
     public static bool AddRemoteMcpCallVerificationTls(
         this WebApplicationBuilder builder, bool runtimeRegistrationEnabled)
     {

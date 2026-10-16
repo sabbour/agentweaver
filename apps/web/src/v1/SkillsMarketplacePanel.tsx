@@ -23,11 +23,13 @@ import type {
   VersionedProjectConfiguration,
 } from './contracts';
 
+/** Agent choices shown when assigning an imported skill. */
 export interface SkillsMarketplaceAgent {
   agentId: string;
   displayName: string;
 }
 
+/** Owner operations supplied by the project's configuration route. */
 export interface SkillsMarketplaceActions {
   listSources(projectId: string): Promise<MarketplaceSource[]>;
   createSource(projectId: string, request: MarketplaceSourceInput): Promise<MarketplaceSource>;
@@ -72,6 +74,7 @@ export interface SkillsMarketplaceActions {
   ): Promise<VersionedProjectConfiguration>;
 }
 
+/** Inputs and callbacks required to edit one project's marketplace and skill inventory. */
 interface SkillsMarketplacePanelProps {
   projectId: string;
   configurationRevision: number | null;
@@ -112,6 +115,7 @@ type SkillInventoryView = {
   error: string | null;
 };
 
+/** Formats owner and transport errors without hiding Gateway status codes. */
 function messageForError(reason: unknown): string {
   if (reason instanceof GatewayError) {
     const code = reason.code ? ` (${reason.code})` : '';
@@ -120,6 +124,7 @@ function messageForError(reason: unknown): string {
   return reason instanceof Error ? reason.message : 'The request failed unexpectedly.';
 }
 
+/** Creates an editable draft from a source or the default values for a new one. */
 function sourceDraft(source?: MarketplaceSource): SourceDraft {
   return {
     name: source?.name ?? '',
@@ -129,6 +134,7 @@ function sourceDraft(source?: MarketplaceSource): SourceDraft {
   };
 }
 
+/** Trims the editor draft and omits optional blank source fields. */
 function sourceInput(draft: SourceDraft): MarketplaceSourceInput {
   const request: MarketplaceSourceInput = { repository: draft.repository.trim() };
   if (draft.name.trim()) request.name = draft.name.trim();
@@ -137,6 +143,7 @@ function sourceInput(draft: SourceDraft): MarketplaceSourceInput {
   return request;
 }
 
+/** Rejects stale or malformed source results before changing the editor state. */
 function validateSource(
   source: MarketplaceSource,
   expectedState: MarketplaceSource['state'],
@@ -151,6 +158,7 @@ function validateSource(
   }
 }
 
+/** Loads source records and validates the owner response shape. */
 async function listMarketplaceSources(
   actions: SkillsMarketplaceActions,
   projectId: string,
@@ -163,6 +171,7 @@ async function listMarketplaceSources(
   return result;
 }
 
+/** Validates the summary returned by a non-mutating skill preview. */
 function validateSkillPreview(result: SkillContentPreview): void {
   if (!result || typeof result.name !== 'string' || !result.name ||
       typeof result.description !== 'string' ||
@@ -173,6 +182,7 @@ function validateSkillPreview(result: SkillContentPreview): void {
   }
 }
 
+/** Confirms the import receipt matches the exact content preview the user approved. */
 function validateSkillImportReceipt(
   result: SkillContentImportReceipt,
   preview: SkillContentPreview,
@@ -190,6 +200,7 @@ function validateSkillImportReceipt(
   }
 }
 
+/** Validates inventory revisions, assignments, paging bounds, and revocation metadata. */
 function validateSkillInventoryPage(result: SkillContentInventoryPage): void {
   const nullableString = (value: unknown) => value === null || typeof value === 'string';
   const validRevision = (value: unknown) =>
@@ -233,14 +244,17 @@ function validateSkillInventoryPage(result: SkillContentInventoryPage): void {
   }
 }
 
+/** Gets the folder-relative path when available, otherwise the selected filename. */
 function relativeFilePath(file: File): string {
   return file.webkitRelativePath || file.name;
 }
 
+/** Returns the final segment of a normalized file path. */
 function fileName(path: string): string {
   return path.replaceAll('\\', '/').split('/').at(-1) ?? '';
 }
 
+/** Encodes file bytes as base64 in bounded chunks to avoid argument-size overflow. */
 async function fileToBase64(file: File): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let binary = '';
@@ -249,6 +263,7 @@ async function fileToBase64(file: File): Promise<string> {
   return globalThis.btoa(binary);
 }
 
+/** Builds one skill candidate, requiring one manifest and unique same-folder resources. */
 async function buildCandidate(files: readonly File[]): Promise<SkillContentCandidateRequest> {
   const manifests = files.filter((file) => fileName(relativeFilePath(file)) === 'SKILL.md');
   if (manifests.length !== 1)
@@ -277,12 +292,17 @@ async function buildCandidate(files: readonly File[]): Promise<SkillContentCandi
   };
 }
 
+/** Creates a fresh idempotency key or rejects browsers without a secure UUID source. */
 function makeIdempotencyKey(): string {
   if (!globalThis.crypto?.randomUUID)
     throw new Error('This browser cannot create a safe import request ID.');
   return globalThis.crypto.randomUUID();
 }
 
+/**
+ * Manages project marketplace sources, skill previews/imports, inventory paging,
+ * and revision-fenced assignments while rejecting stale responses from prior scopes.
+ */
 export function SkillsMarketplacePanel({
   projectId,
   configurationRevision,

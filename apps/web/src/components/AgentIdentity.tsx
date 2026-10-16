@@ -17,6 +17,7 @@ import {
 import type { ResolvedAgentIdentity } from '../utils/agentIdentity';
 import type { FluentIcon } from '@fluentui/react-icons';
 
+/** Resolves agent labels into a compact avatar, display name, and role for run and agent views. */
 const ROLE_ICON_BY_KEY: Readonly<Record<string, FluentIcon>> = {
   agent: BotRegular,
   rai: ShieldRegular,
@@ -109,6 +110,11 @@ function renderAvatar(identity: ResolvedAgentIdentity, avatarSize: number) {
   return null;
 }
 
+/**
+ * Renders a resolved agent name and role beside an avatar or role icon.
+ * `label` and optional `roleByAgent` are passed to `resolveAgentIdentity`; `avatarSize` and
+ * `className` control display. It reads no API data and owns no state.
+ */
 export function AgentIdentity({
   label,
   roleByAgent,

@@ -1,7 +1,9 @@
 import type { ReactElement, ReactNode } from 'react';
 
+/** Display status values supported by the agentic workflow-step components. */
 export type AgentStepStatus = 'pending' | 'running' | 'complete' | 'warning' | 'blocked';
 
+/** Artifact metadata attached to an agent step or session. */
 export interface AgentArtifact {
   id: string;
   title: ReactNode;
@@ -13,6 +15,7 @@ export interface AgentArtifact {
   onDownload?: () => void;
 }
 
+/** One agent activity step and its presentation data. */
 export interface AgentStep {
   id: string;
   title: ReactNode;
@@ -46,6 +49,7 @@ export interface AgentStep {
   children?: AgentStep[];
 }
 
+/** Tool-call record displayed in an agent activity session. */
 export interface ToolCall {
   id: string;
   name: string;

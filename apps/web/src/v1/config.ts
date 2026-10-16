@@ -1,5 +1,7 @@
+/** Reads runtime Gateway and Identity Broker settings for the v1 browser client. */
 const environment = import.meta.env;
 
+/** Environment and runtime-injected keys that may be supplied by the static host. */
 type RuntimeConfigKey =
   | 'GATEWAY_URL'
   | 'IDENTITY_BROKER_URL'
@@ -14,6 +16,7 @@ declare global {
   }
 }
 
+/** Decodes one base64-encoded host setting without exposing runtime config parsing to callers. */
 function runtimeSetting(key: RuntimeConfigKey): string | undefined {
   const encoded = typeof window === 'undefined'
     ? undefined
@@ -24,10 +27,12 @@ function runtimeSetting(key: RuntimeConfigKey): string | undefined {
   return new TextDecoder().decode(bytes) || undefined;
 }
 
+/** Removes trailing separators so callers can append API paths consistently. */
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, '');
 }
 
+/** Accepts only a canonical HTTPS Broker URL as a default OIDC issuer. */
 function defaultBrokerIssuer(value: string): string {
   if (!value) return '';
   try {
@@ -49,24 +54,31 @@ function defaultBrokerIssuer(value: string): string {
 const brokerUrlSetting =
   runtimeSetting('IDENTITY_BROKER_URL') ?? environment.VITE_IDENTITY_BROKER_URL ?? '';
 
+/** Gateway origin/path, preferring host-injected settings over build-time values. */
 export const gatewayBaseUrl = trimTrailingSlash(
   runtimeSetting('GATEWAY_URL') ?? environment.VITE_GATEWAY_URL ?? '/api/v1',
 );
+/** Identity Broker base URL used by the OAuth client. */
 export const brokerBaseUrl = trimTrailingSlash(brokerUrlSetting);
+/** OIDC issuer from explicit configuration or a validated HTTPS Broker URL. */
 export const brokerIssuer =
   runtimeSetting('IDENTITY_BROKER_ISSUER') ??
   (environment.VITE_IDENTITY_BROKER_ISSUER || defaultBrokerIssuer(brokerUrlSetting));
+/** Registered OAuth client identifier configured by the host or build. */
 export const oauthClientId =
   runtimeSetting('OAUTH_CLIENT_ID') ?? environment.VITE_OAUTH_CLIENT_ID ?? '';
+/** Registered callback URI, defaulting to this browser origin's callback route. */
 export const oauthRedirectUri =
   runtimeSetting('OAUTH_REDIRECT_URI') ??
   environment.VITE_OAUTH_REDIRECT_URI ??
   (typeof window === 'undefined' ? '' : `${window.location.origin}/auth/callback`);
+/** Whitespace-separated OAuth scopes normalized to individual values. */
 export const oauthScopes = (runtimeSetting('OAUTH_SCOPES') ?? environment.VITE_OAUTH_SCOPES ?? '')
   .split(/\s+/)
   .map((scope: string) => scope.trim())
   .filter(Boolean);
 
+/** Lists required Broker and OAuth settings that are absent from this browser configuration. */
 export function missingAuthConfiguration(): string[] {
   return [
     ['Identity Broker URL', brokerBaseUrl],

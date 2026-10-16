@@ -4,6 +4,10 @@ import { readFile } from "node:fs/promises";
 const html = new URL("./renderer.html", import.meta.url);
 const script = new URL("./renderer.js", import.meta.url);
 
+/**
+ * Start a loopback-only HTTP panel that serves the canvas renderer and observer state.
+ * Refresh requests are origin-checked; responses disable caching and expose only a generic failure.
+ */
 export async function startPanel(observer) {
   const [page, javascript] = await Promise.all([readFile(html), readFile(script)]);
   const server = createServer(async (req, res) => {

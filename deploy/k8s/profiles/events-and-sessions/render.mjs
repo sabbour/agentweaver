@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+/** Render the Events and Sessions deployment profile after validating its exact approved inputs. */
 const namespace = 'agentweaver-v1-p0';
 const service = 'events-and-sessions';
 const tenantId = '72f988bf-86f1-41af-91ab-2d7cd011db47';
@@ -43,11 +44,13 @@ function exactFields(value, fields, location) {
   }
 }
 
+/** Require a bounded positive integer, such as an image UID or GID. */
 function positiveInteger(value, maximum, location) {
   if (!Number.isSafeInteger(value) || value < 1 || value > maximum)
     throw new Error(`${location} must be an explicit positive integer no greater than ${maximum}.`);
 }
 
+/** Validate a root HTTPS URI without credentials, escapes, query, or fragment. */
 function httpsRoot(value, location) {
   if (typeof value !== 'string' || !/^https:\/\/[^/]+\/$/.test(value))
     throw new Error(`${location} must be an explicit HTTPS root URI.`);
@@ -61,6 +64,7 @@ function httpsRoot(value, location) {
   return uri;
 }
 
+/** Require an owner endpoint to be the named private Kubernetes service on an explicit port. */
 function owner(value, name, location) {
   const uri = httpsRoot(value, location);
   if (uri.hostname !== `${name}.${namespace}.svc.cluster.local` ||
@@ -69,6 +73,10 @@ function owner(value, name, location) {
   return { name, hostname: uri.hostname, port: uri.port };
 }
 
+/**
+ * Build the Kubernetes List for the Events service, including its runtime config and network policy.
+ * Rejects non-pinned cluster inputs, mutable images, mismatched owner endpoints, and unsafe configuration.
+ */
 export function renderEventsProfile(input) {
   exactFields(input, ['subscriptionId', 'resourceGroup', 'clusterName', 'image',
     'imageUser', 'imageGroup', 'tlsSecretName', 'configuration'], 'Events profile');

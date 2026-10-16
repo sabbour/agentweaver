@@ -9,8 +9,10 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Stores durable receipts for a runtime resume bootstrap operation.</summary>
 public interface IEnvironmentRuntimeResumeBootstrapStore
 {
+    /// <summary>Reserves or reuses an operation, reconciles its receipt, and saves it under current placement authority.</summary>
     Task<RuntimeResumeBootstrapReceipt> ExecuteAsync(
         RuntimeResumeBootstrapRequest request,
         Func<CancellationToken, Task> requireCurrent,
@@ -18,6 +20,9 @@ public interface IEnvironmentRuntimeResumeBootstrapStore
         CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// Coordinates idempotent resume-bootstrap work with the current owner, lifecycle, lease, and runtime placement.
+/// </summary>
 public sealed class EnvironmentRuntimeResumeBootstrapStore(
     NpgsqlDataSource dataSource, TimeProvider timeProvider) : IEnvironmentRuntimeResumeBootstrapStore
 {
@@ -28,6 +33,11 @@ public sealed class EnvironmentRuntimeResumeBootstrapStore(
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
+    /// <summary>
+    /// Serializes work for an operation ID, reconciles the host receipt, and persists a stable result.
+    /// Current authority and placement are checked before and after the external reconciliation.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">The operation, placement, request, or saved receipt is invalid or stale.</exception>
     public async Task<RuntimeResumeBootstrapReceipt> ExecuteAsync(
         RuntimeResumeBootstrapRequest request,
         Func<CancellationToken, Task> requireCurrent,
@@ -72,6 +82,7 @@ public sealed class EnvironmentRuntimeResumeBootstrapStore(
         }
     }
 
+    /// <summary>Locks the current placement, reuses a matching reservation, or inserts a new operation reservation.</summary>
     private async Task<RuntimeResumeBootstrapReceipt?> ReadOrReserveAsync(
         NpgsqlConnection connection, RuntimeResumeBootstrapRequest request, string json, string fingerprint,
         CancellationToken cancellationToken)
@@ -139,6 +150,7 @@ public sealed class EnvironmentRuntimeResumeBootstrapStore(
         return null;
     }
 
+    /// <summary>Stores a completed receipt only when its reservation and request fingerprint still match.</summary>
     private async Task SaveAsync(
         NpgsqlConnection connection, RuntimeResumeBootstrapRequest request, string json, string fingerprint,
         RuntimeResumeBootstrapReceipt receipt, CancellationToken cancellationToken)
@@ -175,6 +187,7 @@ public sealed class EnvironmentRuntimeResumeBootstrapStore(
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Reads and validates the durable operation row while holding its transaction lock.</summary>
     private static async Task<(bool Exists, RuntimeResumeBootstrapReceipt? Receipt)> ReadAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeResumeBootstrapRequest request,
         string json, string fingerprint, CancellationToken cancellationToken)
@@ -214,6 +227,7 @@ public sealed class EnvironmentRuntimeResumeBootstrapStore(
         }
     }
 
+    /// <summary>Locks the owner and confirms every current lease generation, fence, revision, and expiry value.</summary>
     private async Task RequirePlacementAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction,
         RuntimeResumeBootstrapRequest request, CancellationToken cancellationToken)
@@ -265,6 +279,7 @@ public sealed class EnvironmentRuntimeResumeBootstrapStore(
             throw new RuntimeAuthorizationException("runtime_resume_bootstrap_placement_changed");
     }
 
+    /// <summary>Adds the owner keys from the accepted runtime registration to a database command.</summary>
     private static void AddOwner(NpgsqlCommand command, RuntimeResumeBootstrapRequest request)
     {
         var binding = request.Registration.Binding;
@@ -274,6 +289,7 @@ public sealed class EnvironmentRuntimeResumeBootstrapStore(
         command.Parameters.AddWithValue("environment_id", NpgsqlDbType.Text, binding.EnvironmentId);
     }
 
+    /// <summary>Compares receipt values by their JSON representation.</summary>
     private static bool SameJson<T>(T left, T right) =>
         JsonElement.DeepEquals(JsonSerializer.SerializeToElement(left, JsonOptions),
             JsonSerializer.SerializeToElement(right, JsonOptions));

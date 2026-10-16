@@ -1,3 +1,7 @@
+/**
+ * Shared Azure deployment guardrails for target ownership, source outputs, images, and role assignments.
+ * Entry points use these checks before issuing Azure mutations or trusting resource readbacks.
+ */
 // Shared guardrails for every tool in scripts/azure: dedicated-target
 // validation, image digest validation, and plan/deploy request shaping.
 // No tool in this directory calls `az` with a mutating verb unless the
@@ -36,6 +40,7 @@ const AKS_WORKLOAD_IDENTITIES = [
   ['identity-broker-migration', 'identity-broker-migration-workload-identity'],
 ];
 
+/** Rejects a resource-group or target name that is not the explicitly approved dedicated P0 name. */
 export function assertDedicatedTarget(name, kind = 'resource group') {
   if (typeof name !== 'string' || !DEDICATED_NAME_PATTERN.test(name)) {
     throw new Error(
@@ -46,6 +51,7 @@ export function assertDedicatedTarget(name, kind = 'resource group') {
   return name;
 }
 
+/** Requires an immutable SHA-256 image digest instead of a mutable tag. */
 export function assertImageDigest(digest, imageRef = 'image') {
   if (typeof digest !== 'string' || !IMAGE_DIGEST_PATTERN.test(digest)) {
     throw new Error(
@@ -56,6 +62,7 @@ export function assertImageDigest(digest, imageRef = 'image') {
   return digest;
 }
 
+/** Ensures the selected subscription is the exact authorized subscription. */
 export function assertSubscription(subscriptionId, allowedSubscriptionId) {
   if (!allowedSubscriptionId) {
     throw new Error('No allowed subscription ID configured; refusing to target any subscription.');
@@ -68,6 +75,7 @@ export function assertSubscription(subscriptionId, allowedSubscriptionId) {
   return subscriptionId;
 }
 
+/** Ensures the selected tenant is the exact authorized tenant. */
 export function assertTenant(tenantId, allowedTenantId) {
   if (!allowedTenantId) {
     throw new Error('No allowed tenant ID configured; refusing to target any tenant.');
@@ -79,6 +87,7 @@ export function assertTenant(tenantId, allowedTenantId) {
 }
 
 // Null tags are an untagged existing resource, never permission to create.
+/** Checks resource-group ownership tags and rejects a group owned by another deployment. */
 export function assertDedicatedResourceGroupOwnership(resourceGroup, existingTags) {
   if (!existingTags || existingTags['agentweaver:environment'] !== 'v1-p0' ||
       existingTags['agentweaver:managed-by'] !== 'bicep' ||
@@ -129,6 +138,7 @@ function projectInventory(resources, expectedTags) {
 }
 
 // Deployment outputs select configuration, never prove a workload ran.
+/** Validates infrastructure outputs against the configured target and returns normalized deployment values. */
 export function readFoundationOutputs(outputs, { resourceGroup, subscriptionId, appRoutingDnsZoneResourceIds = [] }) {
   const zoneIds = validateAppRoutingDnsZoneResourceIds(appRoutingDnsZoneResourceIds, subscriptionId);
   const groupId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}`;
@@ -217,6 +227,7 @@ export function readFoundationOutputs(outputs, { resourceGroup, subscriptionId, 
   };
 }
 
+/** Reads the existing identity PostgreSQL resource and verifies its immutable target metadata. */
 export function readExistingIdentityPostgresMetadata(source, execAz) {
   const {
     resourceGroup, subscriptionId, tenantId, location,
@@ -306,6 +317,7 @@ export function readExistingIdentityPostgresMetadata(source, execAz) {
 }
 
 // ARM guid() uses UUID v5 with this namespace and hyphen-joined arguments.
+/** Derives a stable ARM-compatible GUID from the supplied identity values. */
 export function armGuid(...values) {
   const namespace = Buffer.from('11fb06fb712d4ddd98c7e71bbd588830', 'hex');
   const bytes = createHash('sha1').update(namespace).update(values.join('-')).digest().subarray(0, 16);
@@ -315,6 +327,7 @@ export function armGuid(...values) {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+/** Resolves the unique cluster-admin assignment name for the configured operator and target. */
 export function resolveClusterAdminRoleAssignmentName({ resourceGroup, subscriptionId, operatorObjectId }, execAz) {
   if (!GUID_PATTERN.test(operatorObjectId ?? '')) throw new Error('Kubernetes operator object ID is invalid.');
   const clusterId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${resourceGroup}-aks`;
@@ -350,6 +363,7 @@ function readRoleAssignment(assignmentId, execAz) {
     { check: false });
 }
 
+/** Confirms that the named cluster-admin role assignment belongs to the intended operator and cluster. */
 export function verifyClusterAdminRoleAssignment({ resourceGroup, subscriptionId, operatorObjectId }, assignmentName, execAz) {
   if (!GUID_PATTERN.test(assignmentName ?? '') || !GUID_PATTERN.test(operatorObjectId ?? '')) {
     throw new Error('AKS Cluster Admin assignment name or operator object ID is invalid.');
@@ -377,6 +391,7 @@ export function verifyClusterAdminRoleAssignment({ resourceGroup, subscriptionId
   return assignmentId;
 }
 
+/** Detects stale AKS subnet role assignments that could conflict with deployment ownership. */
 export function findDanglingAksSubnetRoleAssignment({ resourceGroup, subscriptionId }, execAz) {
   const clusterId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${resourceGroup}-aks`;
   const subnetId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Network/virtualNetworks/${resourceGroup}-vnet/subnets/aks`;
@@ -469,6 +484,10 @@ function assertExistingAksFederatedCredentials({ resourceGroup }, execAz) {
 }
 
 // Shared by plan, deploy and acceptance. A caller's ID is not account evidence.
+/**
+ * Validates the Azure account, dedicated resource group, and expected existing-resource metadata.
+ * Returns the verified group and a target-bound Azure executor; unsafe or ambiguous targets throw.
+ */
 export function guardAzureTarget(config, execAz) {
   const { resourceGroup, subscriptionId, tenantId, allowedSubscriptionId, allowedTenantId } = config;
   const appRoutingDnsZoneResourceIds = validateAppRoutingDnsZoneResourceIds(

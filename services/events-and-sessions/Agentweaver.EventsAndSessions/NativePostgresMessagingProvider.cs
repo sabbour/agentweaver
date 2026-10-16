@@ -9,6 +9,7 @@ using Npgsql;
 
 namespace Agentweaver.EventsAndSessions;
 
+/// <summary>Names the durable addressed-message operations supported by the PostgreSQL adapter.</summary>
 public static class AddressedMessageCapabilities
 {
     public const string Send = "messaging.addressed.send";
@@ -44,6 +45,7 @@ public sealed record NativePostgresMessagingProviderOptions(
     int MaximumMessageLifetimeDays = 1,
     int OptionsSchemaVersion = 1)
 {
+    /// <summary>Rejects unsupported options versions and out-of-range claim and message lifetimes.</summary>
     public void Validate()
     {
         if (string.IsNullOrWhiteSpace(OptionsRevision) ||
@@ -70,6 +72,7 @@ public sealed class NativePostgresMessagingProvider
         ProviderHostingPattern.RemoteService,
         AddressedMessageCapabilities.All);
 
+    /// <summary>Creates an enabled catalog registration from validated messaging options.</summary>
     public ProviderRegistration CreateRegistration(NativePostgresMessagingProviderOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -81,6 +84,8 @@ public sealed class NativePostgresMessagingProvider
             OptionsSchemaVersion);
     }
 
+    /// <summary>Resolves and pins the Messaging provider after verifying the shared PostgreSQL resource identity.</summary>
+    /// <returns>The immutable run binding, or a typed error when selection or resource negotiation fails.</returns>
     public async Task<ProviderResult<PinnedProviderBinding>> ResolveNegotiateAndPinAsync(
         ProviderResolver resolver,
         ProviderResolutionRequest request,
@@ -148,6 +153,7 @@ public sealed class NativePostgresMessagingProvider
         }
     }
 
+    /// <summary>Records non-sensitive provider identity and a hash of the resource name for diagnostics.</summary>
     private static void RecordPinnedBinding(ProviderCandidate candidate, PinnedProviderBinding binding)
     {
         try

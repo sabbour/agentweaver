@@ -7,8 +7,20 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Builds the canonical set of outputs a completed plan must provide and its content digest.
+/// This contract combines plan-declared outputs with fixed-work activations and BuildTest receipts.
+/// </summary>
 internal static class MafExecutionOutputWitness
 {
+    /// <summary>
+    /// Creates the complete output obligation set and identifies fixed or BuildTest work that has not yet been checkpointed.
+    /// </summary>
+    /// <param name="plan">The accepted work plan and workflow definition.</param>
+    /// <param name="checkpoint">The latest checkpoint, if execution has started.</param>
+    /// <param name="root">The root session identity used to derive deterministic association IDs.</param>
+    /// <returns>The canonical output set plus missing association IDs, sorted ordinally.</returns>
+    /// <exception cref="CoordinationException">Thrown when output paths are invalid, duplicated, or the checkpoint does not match the plan.</exception>
     internal static (
         MafBacklogOutputSetSnapshot OutputSet,
         ImmutableArray<string> MissingFixedAssociationIds) CreateCompletePlanOutputSet(
@@ -131,6 +143,12 @@ internal static class MafExecutionOutputWitness
         }
     }
 
+    /// <summary>
+    /// Serializes a canonical output set and verifies that its stored digest matches the serialized bytes.
+    /// </summary>
+    /// <param name="outputSet">The output obligations in canonical order.</param>
+    /// <returns>The compact JSON bytes whose digest identifies this output contract.</returns>
+    /// <exception cref="CoordinationException">Thrown when the obligations or digest are not canonical.</exception>
     internal static byte[] SerializeCanonicalOutputSet(MafBacklogOutputSetSnapshot outputSet)
     {
         ArgumentNullException.ThrowIfNull(outputSet);
@@ -152,6 +170,9 @@ internal static class MafExecutionOutputWitness
         return bytes;
     }
 
+    /// <summary>
+    /// Writes the stable JSON representation used to compute an output-set digest.
+    /// </summary>
     private static byte[] SerializeOutputSet(
         string workPlanId,
         ImmutableArray<MafBacklogOutputObligation> obligations)
@@ -176,6 +197,9 @@ internal static class MafExecutionOutputWitness
         return stream.ToArray();
     }
 
+    /// <summary>
+    /// Compares fixed-work specifications field by field, including the declared output order.
+    /// </summary>
     private static bool FixedWorkSpecificationsMatch(
         FixedWorkSpecification expected,
         FixedWorkSpecification actual) =>
@@ -186,6 +210,9 @@ internal static class MafExecutionOutputWitness
         expected.IsolationChoice == actual.IsolationChoice &&
         expected.DeclaredOutputs.SequenceEqual(actual.DeclaredOutputs, StringComparer.Ordinal);
 
+    /// <summary>
+    /// Creates the conflict response used when a plan's output-set contract is inconsistent.
+    /// </summary>
     private static CoordinationException InvalidOutputSet() =>
         new("maf_execution_output_set_invalid", StatusCodes.Status409Conflict);
 }

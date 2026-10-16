@@ -1,5 +1,6 @@
 import { AddRegular, ArrowClockwiseRegular, DeleteRegular, EditRegular } from '@fluentui/react-icons';
 import { AzureToolbar } from '..';
+/** Shows a toolbar with primary, secondary, and destructive resource commands. */
 export function AzureToolbarExample() {
   return (
     <AzureToolbar

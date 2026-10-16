@@ -7,15 +7,28 @@ using OpenIddict.Abstractions;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Configures the runtime-usage broker owner used for source grants and cost snapshots.
+/// </summary>
 internal sealed record RuntimeUsageSourceOptions(Uri BrokerOwnerAddress);
 
+/// <summary>
+/// Verifies source grants and reads usage-cost snapshots from their owning services.
+/// </summary>
 internal sealed class RuntimeUsageBrokerClient(HttpClient client, RuntimeUsageSourceOptions options)
 {
+    /// <summary>
+    /// Verifies the credential proof with the broker owner.
+    /// </summary>
     internal Task<RuntimeGrantReceipt> VerifyAsync(
         RuntimeActorAuthorization actor, RuntimeCredentialHttpRequest proof, CancellationToken cancellationToken) =>
         RuntimeOwnerHttpTransport.SendAsync<RuntimeGrantReceipt>(
             client, options.BrokerOwnerAddress, "/internal/runtime/source/verify", actor, proof, cancellationToken);
 
+    /// <summary>
+    /// Reads the current Copilot cost snapshot for a registered runtime source.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the configured Events owner address is invalid.</exception>
     internal Task<RuntimeUsageCostSnapshotReceipt> ReadCostSnapshotAsync(
         RuntimeActorAuthorization actor, string eventsOwnerAddress, RuntimeUsageCostSnapshotRequest request,
         CancellationToken cancellationToken)
@@ -30,11 +43,19 @@ internal sealed class RuntimeUsageBrokerClient(HttpClient client, RuntimeUsageSo
     }
 }
 
+/// <summary>
+/// Authorizes runtime usage-source operations and writes their grant-backed evidence transactionally.
+/// It revalidates registration and grant state around writes and limits observations to the current accepted selection.
+/// </summary>
 internal sealed class RuntimeUsageSourceOwner(
     RuntimeUsageSourceStore store, RuntimeRegistrationOwner registrations,
     RuntimeUsageBrokerClient broker, ProjectsRunSelectionClient projects,
     OrchestratorOptions options, TimeProvider timeProvider)
 {
+    /// <summary>
+    /// Registers a source for the specified runtime after validating its observation credential.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the source request is malformed or its authorization proof is invalid.</exception>
     internal Task<RuntimeSdkSourceReceipt> RegisterAsync(
         HttpContext context, Guid runtimeInstanceId, RuntimeSdkSourceRequest request,
         CancellationToken cancellationToken)
@@ -49,6 +70,9 @@ internal sealed class RuntimeUsageSourceOwner(
                     connection, transaction, registration, grant, request.Source, token), cancellationToken);
     }
 
+    /// <summary>
+    /// Appends one usage observation for the current registered source and grant.
+    /// </summary>
     internal Task<RuntimeUsageSourceReceipt> AppendAsync(
         HttpContext context, RuntimeUsageObservationRequest request, CancellationToken cancellationToken)
     {
@@ -60,6 +84,9 @@ internal sealed class RuntimeUsageSourceOwner(
                     connection, transaction, registration, grant, request.Observation, token), cancellationToken);
     }
 
+    /// <summary>
+    /// Admits a native model turn and stores its cost snapshot and dispatch evidence before the turn is sent.
+    /// </summary>
     internal Task<RuntimeNativeTurnBeginResult> BeginNativeTurnAsync(
         HttpContext context, RuntimeNativeTurnBeginRequest request, CancellationToken cancellationToken)
     {
@@ -74,6 +101,10 @@ internal sealed class RuntimeUsageSourceOwner(
                         new(1, registration, source), currentToken), token), cancellationToken);
     }
 
+    /// <summary>
+    /// Reads the current native credit-denial receipt and any associated no-send evidence.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when no matching denial evidence exists.</exception>
     internal Task<RuntimeNativeCreditDenialReadResult> ReadNativeCreditDenialAsync(
         HttpContext context, RuntimeNativeCreditDenialReadRequest request, CancellationToken cancellationToken)
     {
@@ -98,6 +129,10 @@ internal sealed class RuntimeUsageSourceOwner(
             }, cancellationToken);
     }
 
+    /// <summary>
+    /// Records host pre-queue fixed-credit guard evidence after verifying its registration, source, and grant tuple.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the receipt is not a valid host pre-queue guard for this registration.</exception>
     internal Task<RuntimeFixedCreditGuardReceipt> RecordFixedCreditGuardAsync(
         HttpContext context, RuntimeFixedCreditGuardRecordRequest request,
         CancellationToken cancellationToken)
@@ -124,6 +159,9 @@ internal sealed class RuntimeUsageSourceOwner(
             }, cancellationToken);
     }
 
+    /// <summary>
+    /// Records fixed-credit no-send evidence for a denied host pre-queue dispatch.
+    /// </summary>
     internal Task<RuntimeFixedCreditNoSendReceipt> RecordFixedCreditNoSendAsync(
         HttpContext context, RuntimeFixedCreditNoSendEvidenceRequest request,
         CancellationToken cancellationToken)
@@ -146,6 +184,10 @@ internal sealed class RuntimeUsageSourceOwner(
             }, cancellationToken);
     }
 
+    /// <summary>
+    /// Reads and validates the fixed-credit guard and its supporting evidence for a runtime dispatch.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when the requested guard is not recorded.</exception>
     internal Task<RuntimeFixedCreditGuardReadResult> ReadFixedCreditGuardAsync(
         HttpContext context, RuntimeFixedCreditGuardReadRequest request,
         CancellationToken cancellationToken)
@@ -172,6 +214,10 @@ internal sealed class RuntimeUsageSourceOwner(
             }, cancellationToken);
     }
 
+    /// <summary>
+    /// Reads the current persisted credit-guard snapshot for the specified dispatch intent.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when the requested guard snapshot is unknown.</exception>
     internal Task<RuntimeCreditGuardSnapshot> ReadCreditGuardAsync(
         HttpContext context, RuntimeCreditGuardReadRequest request, CancellationToken cancellationToken)
     {
@@ -192,6 +238,9 @@ internal sealed class RuntimeUsageSourceOwner(
             }, cancellationToken);
     }
 
+    /// <summary>
+    /// Records evidence that a denied native model turn was not sent.
+    /// </summary>
     internal Task<RuntimeNativeTurnNoSendReceipt> RecordNativeTurnNoSendAsync(
         HttpContext context, RuntimeNativeTurnNoSendEvidenceRequest request,
         CancellationToken cancellationToken)
@@ -206,6 +255,11 @@ internal sealed class RuntimeUsageSourceOwner(
                     connection, transaction, registration, grant, request, token), cancellationToken);
     }
 
+    /// <summary>
+    /// Persists native-turn admission and cost evidence before the host submits the native model request.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when actor credentials, registration, grant, owner state, or cost admission is invalid.</exception>
+    /// <remarks>The caller's owner recheck runs before and after the transaction work; any denial is surfaced after the lock is released.</remarks>
     internal async Task PrepareNativeTurnAsync(
         HttpContext context, RuntimeRegistration expected, SessionIdentity root,
         MafExecutionCheckpointSnapshot checkpoint, MafExecutionDispatchIntent intent,
@@ -251,6 +305,9 @@ internal sealed class RuntimeUsageSourceOwner(
             throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
     }
 
+    /// <summary>
+    /// Requires the native turn to have been accounted before the caller treats its result as complete.
+    /// </summary>
     internal Task RequireNativeTurnAccountedAsync(
         HttpContext context, RuntimeRegistration expected, RuntimeA2ASendRequest message, string answer,
         Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task> requireCurrentOwner,
@@ -267,6 +324,9 @@ internal sealed class RuntimeUsageSourceOwner(
                     return true;
                 }, token), cancellationToken);
 
+    /// <summary>
+    /// Records the usage observation for an admitted native turn.
+    /// </summary>
     internal Task<RuntimeNativeTurnRecordedReceipt> RecordNativeTurnAsync(
         HttpContext context, RuntimeNativeTurnObservationRequest request, CancellationToken cancellationToken)
     {
@@ -279,6 +339,10 @@ internal sealed class RuntimeUsageSourceOwner(
                     connection, transaction, registration, grant, request, token), cancellationToken);
     }
 
+    /// <summary>
+    /// Completes native-turn accounting using a fresh cost snapshot and the required usage receipts.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the caller, source grant, or recorded-turn accounting is stale or invalid.</exception>
     internal async Task<RuntimeNativeTurnAccountingReceipt> CompleteNativeTurnAsync(
         HttpContext context, RuntimeNativeTurnAccountingRequest request, CancellationToken cancellationToken)
     {
@@ -320,6 +384,10 @@ internal sealed class RuntimeUsageSourceOwner(
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Reads a recorded native turn and confirms its registration is still current.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the recorded turn's registration is no longer current.</exception>
     internal async Task<RuntimeNativeTurnRecordedReceipt> ReadNativeTurnAsync(
         HttpContext context, RuntimeNativeTurnRecordedReceipt expected, CancellationToken cancellationToken)
     {
@@ -338,6 +406,10 @@ internal sealed class RuntimeUsageSourceOwner(
         return recorded;
     }
 
+    /// <summary>
+    /// Reads the current runtime source and verifies its canonical payload hash against the current registration.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the source is inconsistent with current registration state.</exception>
     internal async Task<RuntimeSdkSourceReceipt> ReadCurrentSourceAsync(
         HttpContext context, Guid runtimeInstanceId, CancellationToken cancellationToken)
     {
@@ -353,6 +425,10 @@ internal sealed class RuntimeUsageSourceOwner(
         return receipt;
     }
 
+    /// <summary>
+    /// Validates the observation proof and performs a locked write after checking live credentials, grant, and registration.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the proof, credential, grant, registration, or audience is invalid or expires.</exception>
     private async Task<T> ExecuteWriteAsync<T>(
         HttpContext context, RuntimeCredentialHttpRequest proof,
         Func<NpgsqlConnection, NpgsqlTransaction, RuntimeRegistration, RuntimeGrantReceipt, RuntimeActorAuthorization,
@@ -404,6 +480,11 @@ internal sealed class RuntimeUsageSourceOwner(
         }
     }
 
+    /// <summary>
+    /// Reads a usage receipt only when the caller's current accepted selection still matches its registration scope.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when the requested receipt does not exist.</exception>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when tenant, selection revisions, or accepted selection hash differs.</exception>
     internal async Task<RuntimeUsageSourceReceipt> ReadReceiptAsync(
         HttpContext context, string projectId, string runId, string sessionId,
         Guid receiptId, CancellationToken cancellationToken)
@@ -429,6 +510,11 @@ internal sealed class RuntimeUsageSourceOwner(
         return receipt;
     }
 
+    /// <summary>
+    /// Reads a native source-completion manifest after confirming the accepted selection stayed unchanged.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when source-completion evidence is unavailable.</exception>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when request identifiers or manifest scope are invalid.</exception>
     internal async Task<UsageDispatchSourceCompletionManifest> ReadSourceCompletionAsync(
         HttpContext context, string projectId, string runId, string sessionId, Guid dispatchId,
         CancellationToken cancellationToken)
@@ -458,6 +544,10 @@ internal sealed class RuntimeUsageSourceOwner(
         return proof.Manifest;
     }
 
+    /// <summary>
+    /// Requires the broker receipt to match the exact active grant and registration proof.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when grant identity, scope, state, audience, or validity interval differs.</exception>
     private void RequireGrant(
         RuntimeGrantReceipt grant, RuntimeRegistration registration, RuntimeCredentialHttpRequest proof)
     {
@@ -470,6 +560,10 @@ internal sealed class RuntimeUsageSourceOwner(
             throw new RuntimeAuthorizationException("runtime_source_proof_invalid");
     }
 
+    /// <summary>
+    /// Requires the bearer and observation credential to remain valid within the active registration lifetime.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the registration or either credential has expired.</exception>
     private void RequireLive(
         RuntimeRegistration registration, SecretCredential bearer, SecretCredential credential)
     {

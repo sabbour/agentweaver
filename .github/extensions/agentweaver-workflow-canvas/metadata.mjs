@@ -12,6 +12,7 @@ const stamp = (value) => Number.isFinite(value) && value > 0 ? value : null;
 const positive = (value) => Number.isSafeInteger(value) && value > 0 ? value : null;
 const sha = (value) => typeof value === "string" && /^[0-9a-f]{40}$/i.test(value) ? value.toLowerCase() : null;
 
+/** Parse GitHub.com HTTPS, SSH, or SCP remotes into a normalized owner/repository identity. */
 export function parseRepository(remote) {
   if (typeof remote !== "string") throw new Error("Git remote is missing");
   const match = remote.trim().match(/^(?:https:\/\/(?:[^@/]+@)?github\.com\/|git@github\.com:|ssh:\/\/git@github\.com\/)([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i);
@@ -19,6 +20,7 @@ export function parseRepository(remote) {
   return `${match[1]}/${match[2]}`.toLowerCase();
 }
 
+/** Resolve the current repository and its per-repository observation directory. */
 export async function repositoryContext(workspace, home = process.env.COPILOT_HOME || join(homedir(), ".copilot")) {
   if (!workspace) throw new Error("No workspace path supplied by the session");
   const { stdout } = await exec("git", ["-C", workspace, "config", "--get", "remote.origin.url"], { timeout: 5000 });
@@ -30,6 +32,10 @@ export async function repositoryContext(workspace, home = process.env.COPILOT_HO
   };
 }
 
+/**
+ * Project one owner's workflow summary into a bounded run record with validated GitHub references.
+ * Only selected phase and direct-agent fields are retained from workflow data.
+ */
 export function projectRun(summary, detail, outcome, refs = {}) {
   // Resumed phases can share timestamps; reversing lets stable sort prefer the later phase.
   const phase = summary.currentPhase
@@ -71,6 +77,7 @@ export function projectRun(summary, detail, outcome, refs = {}) {
   };
 }
 
+/** Remove unknown or malformed fields before accepting a stored run projection. */
 function sanitizePublishedRun(run) {
   if (!run || typeof run !== "object" || !text(run.runId, 80)) throw new Error("invalid run");
   const sources = Object.fromEntries(["issue", "pr", "head"].map((key) => [
@@ -95,6 +102,7 @@ function sanitizePublishedRun(run) {
   };
 }
 
+/** Atomically publish one session's repository projection using a private temporary file. */
 export async function publish(context, sessionId, snapshot) {
   if (!/^[A-Za-z0-9._-]{1,128}$/.test(sessionId)) throw new Error("Invalid session ID");
   await mkdir(context.directory, { recursive: true });
@@ -113,6 +121,7 @@ export async function publish(context, sessionId, snapshot) {
   }
 }
 
+/** Read bounded per-session projections, marking stale or malformed entries without exposing contents. */
 export async function readRepository(context, now = Date.now()) {
   let files;
   try {
@@ -147,6 +156,7 @@ export async function readRepository(context, now = Date.now()) {
   return { sessions, errors };
 }
 
+/** Fetch and validate one GitHub issue or pull request using an injected fetcher or the GitHub CLI. */
 export async function githubReference(repository, kind, number, fetcher) {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) || !["issues", "pulls"].includes(kind) || !positive(number)) {
     throw new Error("Invalid GitHub reference");

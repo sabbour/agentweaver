@@ -5,12 +5,15 @@ using NpgsqlTypes;
 
 namespace Agentweaver.EventsAndSessions;
 
+/// <summary>Applies explicit Events &amp; Sessions schema migrations and verifies current owner tables and guards.</summary>
 public static class EventsAndSessionsMigrator
 {
     private const int CurrentSchemaVersion = 8;
     private static readonly Regex SchemaPattern = new(
         "^[a-z][a-z0-9_]{0,62}\\z", RegexOptions.CultureInvariant);
 
+    /// <summary>Applies every missing embedded migration under a schema-specific PostgreSQL advisory lock.</summary>
+    /// <exception cref="InvalidOperationException">The stored version chain or legacy migration layout is unsupported.</exception>
     public static async Task MigrateAsync(
         NpgsqlDataSource dataSource,
         string schema,
@@ -60,6 +63,7 @@ public static class EventsAndSessionsMigrator
             (applied.Contains(8) && !applied.Contains(7)))
             throw new InvalidOperationException("Unsupported Events & Sessions schema version.");
 
+        // Version 2 was used by two historical source layouts, so table presence must disambiguate version 3.
         var legacyProjectFactsV2 = false;
         if (applied.Contains(2))
         {
@@ -134,6 +138,8 @@ public static class EventsAndSessionsMigrator
         await transaction.CommitAsync(cancellationToken);
     }
 
+    /// <summary>Checks the migration chain, expected tables, outbox schema, and immutable-row update guards.</summary>
+    /// <exception cref="InvalidOperationException">The database does not match the current Events &amp; Sessions schema.</exception>
     public static async Task VerifyAsync(
         NpgsqlDataSource dataSource,
         string schema,
@@ -228,6 +234,7 @@ public static class EventsAndSessionsMigrator
                 "Events & Sessions schema is not current; run the explicit --migrate command.");
     }
 
+    /// <summary>Rejects public or system schemas and identifiers that cannot be safely quoted.</summary>
     private static void ValidateSchema(string schema)
     {
         ArgumentNullException.ThrowIfNull(schema);
@@ -236,5 +243,6 @@ public static class EventsAndSessionsMigrator
             throw new ArgumentException("A non-reserved lowercase schema identifier is required.", nameof(schema));
     }
 
+    /// <summary>Quotes the schema identifier after validation.</summary>
     private static string Quote(string schema) => $"\"{schema}\"";
 }

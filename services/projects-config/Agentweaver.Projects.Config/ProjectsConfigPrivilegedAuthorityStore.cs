@@ -10,8 +10,12 @@ using Npgsql;
 
 namespace Agentweaver.Projects.Config;
 
+/// <summary>Signals a revision or uniqueness race in a privileged authority mutation.</summary>
 public sealed class ProjectAuthorityConcurrencyException(string message) : Exception(message);
 
+/// <summary>
+/// Provides the privileged membership, role-assignment, and idempotent project-setup operations outside public routes.
+/// </summary>
 public sealed class ProjectsConfigPrivilegedAuthorityStore(
     DbContextOptions<ProjectsConfigDbContext> options,
     TimeProvider timeProvider)
@@ -23,6 +27,11 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         "SELECT pg_advisory_unlock(hashtextextended(@invocation_id::text, 0))";
     private static readonly JsonSerializerOptions ProjectSetupJsonOptions = CreateProjectSetupJsonOptions();
 
+    /// <summary>
+    /// Executes setup or cleanup for one invocation while serializing retries and rechecking current tenant-admin authority.
+    /// </summary>
+    /// <exception cref="ProjectConfigException">The caller lacks current scope/role, or the invocation input conflicts with its receipt.</exception>
+    /// <exception cref="ProjectAuthorityConcurrencyException">Setup-owned state no longer matches the original cleanup receipt.</exception>
     public async Task<ProjectSetupCommandResult> ExecuteProjectSetupOperationAsync(
         ProjectAuthorizationContext caller,
         ProjectSetupOperationRequest request,
@@ -60,6 +69,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                 invocationLockAcquired = true;
             }
 
+            // The connection-level lock gives one invocation a stable replay/cleanup ordering across concurrent callers.
             for (var attempt = 0; ; attempt++)
             {
                 await using var transaction = await db.Database
@@ -114,6 +124,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         }
     }
 
+    /// <summary>Hashes all operation inputs and actor identity so an invocation ID cannot be reused for changed intent.</summary>
     internal static string ComputeProjectSetupRequestHash(
         ProjectSetupOperationRequest request,
         string issuer,
@@ -136,6 +147,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         return Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
     }
 
+    /// <summary>Replays an exact receipt or dispatches the first setup/cleanup operation after ownership checks.</summary>
     private async Task<ProjectSetupCommandResult> ExecuteProjectSetupOperationInTransactionAsync(
         ProjectsConfigDbContext db,
         ProjectAuthorizationContext caller,
@@ -196,6 +208,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             db, caller, request, requestHash, setup, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Creates a project, initial configuration, Orchestrator/Owner grants, audit events, and setup receipt atomically.</summary>
     private async Task<ProjectSetupCommandResult> CreateProjectSetupAsync(
         ProjectsConfigDbContext db,
         ProjectAuthorizationContext caller,
@@ -353,6 +366,9 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             Cleanup: null);
     }
 
+    /// <summary>
+    /// Revokes setup-owned grants and archives the project only when no run selection exists; otherwise records RetainedPending.
+    /// </summary>
     private async Task<ProjectSetupCommandResult> CleanupProjectSetupAsync(
         ProjectsConfigDbContext db,
         ProjectAuthorizationContext caller,
@@ -431,6 +447,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             .AnyAsync(selection => selection.ProjectId == setup.ProjectId, cancellationToken)
             .ConfigureAwait(false);
         var now = timeProvider.GetUtcNow();
+        // Existing run selections make cleanup non-destructive: retain the project and both setup-owned grants for review.
         var resultState = hasAnySelection
             ? ProjectSetupOperationResultState.RetainedPending
             : ProjectSetupOperationResultState.Cleaned;
@@ -538,6 +555,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             receipt);
     }
 
+    /// <summary>Verifies the immutable setup receipt against current rows and returns a readback without repeating setup effects.</summary>
     private async Task<ProjectSetupCommandResult> ReadSetupReplayAsync(
         ProjectsConfigDbContext db,
         ProjectSetupOperationRecord operation,
@@ -633,6 +651,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             Cleanup: null);
     }
 
+    /// <summary>Verifies cleanup receipt bindings and required rows before returning an idempotent cleanup replay.</summary>
     private async Task<ProjectSetupCommandResult> ReadCleanupReplayAsync(
         ProjectsConfigDbContext db,
         ProjectSetupOperationRecord operation,
@@ -701,6 +720,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             receipt);
     }
 
+    /// <summary>Locks membership authority and confirms the exact tenant-admin assignment and revision remain active.</summary>
     private async Task LockCurrentTenantAdminAsync(
         ProjectsConfigDbContext db,
         ProjectAuthorizationContext caller,
@@ -760,6 +780,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         string.Equals(operation.Subject, caller.ActorId, StringComparison.Ordinal) &&
         string.Equals(operation.TenantId, caller.TenantId, StringComparison.Ordinal);
 
+    /// <summary>Checks the versioned operation shape and requires cleanup-only expected revisions when appropriate.</summary>
     private static void ValidateProjectSetupRequest(ProjectSetupOperationRequest request)
     {
         if (request.Version != 1 || request.InvocationId == Guid.Empty ||
@@ -800,6 +821,8 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         return json;
     }
 
+    /// <summary>Creates one active issuer/subject/tenant membership and its grant audit event.</summary>
+    /// <exception cref="ProjectAuthorityConcurrencyException">An active membership already exists for this identity and tenant.</exception>
     public async Task<ProjectTenantMembershipRecord> GrantMembershipAsync(
         string issuer,
         string subject,
@@ -838,6 +861,9 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         }
     }
 
+    /// <summary>Assigns a supported platform, tenant, or same-tenant project role and records the audit event.</summary>
+    /// <exception cref="ProjectConfigException">The membership is inactive or the resource/role scope is unsupported.</exception>
+    /// <exception cref="ProjectAuthorityConcurrencyException">The active role assignment already exists.</exception>
     public async Task<ProjectRoleAssignmentRecord> AssignRoleAsync(
         Guid membershipId,
         ProjectAuthorityResourceType resourceType,
@@ -900,6 +926,10 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         }
     }
 
+    /// <summary>
+    /// Revokes an active assignment at its expected revision and refuses to remove the last active explicit project Owner.
+    /// </summary>
+    /// <exception cref="ProjectAuthorityConcurrencyException">The revision is stale or the grant is the project's last Owner.</exception>
     public async Task RevokeRoleAssignmentAsync(
         Guid assignmentId,
         long expectedRevision,
@@ -971,6 +1001,10 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         }
     }
 
+    /// <summary>
+    /// Revokes a membership at its expected revision only if every project it owns has another active explicit Owner.
+    /// </summary>
+    /// <exception cref="ProjectAuthorityConcurrencyException">The revision is stale or revocation would orphan a project.</exception>
     public async Task RevokeMembershipAsync(
         Guid membershipId,
         long expectedRevision,
@@ -1062,6 +1096,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         }
     }
 
+    /// <summary>Ensures each supported role is assigned only to the platform, member's tenant, or a project in that tenant.</summary>
     private async Task ValidateAssignmentScopeAsync(
         ProjectsConfigDbContext db,
         ProjectTenantMembershipRecord membership,
@@ -1087,6 +1122,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             throw ProjectConfigException.Forbidden();
     }
 
+    /// <summary>Checks for another active Owner grant backed by an active membership before revocation.</summary>
     private async Task<bool> HasOtherActiveProjectOwnerAsync(
         ProjectsConfigDbContext db,
         ProjectRoleAssignmentRecord assignment,
@@ -1105,6 +1141,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             .AnyAsync(cancellationToken)
             .ConfigureAwait(false);
 
+    /// <summary>Serializes concurrent owner mutations for one project within the database transaction.</summary>
     private async Task LockProjectOwnersAsync(
         ProjectsConfigDbContext db,
         string projectId,
@@ -1115,6 +1152,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Creates the grant and membership audit row used by privileged authority changes.</summary>
     private ProjectAuthorityAuditRecord ToAudit(
         ProjectTenantMembershipRecord membership,
         string eventType,
@@ -1131,6 +1169,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         CreatedAt = timeProvider.GetUtcNow(),
     };
 
+    /// <summary>Creates the role-assignment audit row with exact resource, role, and assignment revision.</summary>
     private ProjectAuthorityAuditRecord ToAudit(
         ProjectTenantMembershipRecord membership,
         ProjectRoleAssignmentRecord assignment,
@@ -1152,6 +1191,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         CreatedAt = timeProvider.GetUtcNow(),
     };
 
+    /// <summary>Recognizes PostgreSQL serialization failures through nested provider exceptions.</summary>
     private static bool IsSerializationFailure(Exception exception)
     {
         for (Exception? current = exception; current is not null; current = current.InnerException)
@@ -1160,6 +1200,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         return false;
     }
 
+    /// <summary>Recognizes PostgreSQL unique-constraint failures through nested provider exceptions.</summary>
     private static bool IsUniqueViolation(Exception exception)
     {
         for (Exception? current = exception; current is not null; current = current.InnerException)
@@ -1168,6 +1209,7 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         return false;
     }
 
+    /// <summary>Validates opaque authority identifiers before using them in database operations.</summary>
     private static void ValidateIdentifier(string value, string parameterName)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 512 ||

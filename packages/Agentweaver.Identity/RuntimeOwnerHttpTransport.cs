@@ -7,6 +7,10 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity;
 
+/// <summary>
+/// Sends authenticated, bounded JSON requests to a fixed HTTPS owner endpoint. Redirects,
+/// caching, oversized payloads, malformed contracts, and authorization failures are rejected.
+/// </summary>
 public static class RuntimeOwnerHttpTransport
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -16,8 +20,10 @@ public static class RuntimeOwnerHttpTransport
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
+    /// <summary>Creates an HTTP handler that refuses owner redirects.</summary>
     public static HttpClientHandler CreateHandler() => new() { AllowAutoRedirect = false };
 
+    /// <summary>Requires an absolute HTTPS owner origin with no path, query, or fragment.</summary>
     public static Uri RequireOwnerAddress(Uri address)
     {
         if (!RuntimeContractValidation.IsHttpsEndpoint(address) || address.AbsolutePath != "/")
@@ -25,6 +31,8 @@ public static class RuntimeOwnerHttpTransport
         return address;
     }
 
+    /// <summary>Sends a JSON request and requires a valid non-null JSON response.</summary>
+    /// <exception cref="RuntimeAuthorizationException">The owner response is denied, redirected, cached, or malformed.</exception>
     public static async Task<TResponse> SendAsync<TResponse>(
         HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
         object? body, CancellationToken cancellationToken) where TResponse : class
@@ -32,12 +40,17 @@ public static class RuntimeOwnerHttpTransport
             allowNotFound: false, cancellationToken).ConfigureAwait(false)
             ?? throw new RuntimeAuthorizationException("runtime_owner_contract_invalid");
 
+    /// <summary>Reads a JSON response and returns null only when the owner reports not found.</summary>
     public static Task<TResponse?> ReadOptionalAsync<TResponse>(
         HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
         CancellationToken cancellationToken) where TResponse : class =>
         SendCoreAsync<TResponse>(client, ownerAddress, path, actor, null,
             allowNotFound: true, cancellationToken);
 
+    /// <summary>
+    /// Sends a bounded JSON request, optionally bound to a validated sandbox endpoint, and
+    /// enforces response size while streaming rather than trusting Content-Length.
+    /// </summary>
     public static async Task<TResponse?> SendBoundedAsync<TResponse>(
         HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
         object? body, int maximumBytes, bool allowNotFound, CancellationToken cancellationToken,
@@ -135,6 +148,7 @@ public static class RuntimeOwnerHttpTransport
         }
     }
 
+    /// <summary>Reads seed bytes and verifies exact length and digest against owner metadata.</summary>
     public static async Task<byte[]> ReadBuildTestSeedAsync(
         HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
         SandboxBuildTestWorkspaceSource source, CancellationToken cancellationToken)
@@ -144,6 +158,7 @@ public static class RuntimeOwnerHttpTransport
             source.SeedByteLength, source.SeedSha256, "buildtest_seed", cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Reads a bounded capture document and verifies its exact length and digest.</summary>
     public static Task<byte[]> ReadBuildTestCaptureAsync(
         HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
         SandboxBuildTestWorkspaceCaptureReference capture, CancellationToken cancellationToken)
@@ -156,6 +171,7 @@ public static class RuntimeOwnerHttpTransport
             capture.DocumentByteLength, capture.DocumentSha256, "buildtest_capture", cancellationToken);
     }
 
+    /// <summary>Reads one exact byte range from the fixed owner origin and checks its SHA-256 digest.</summary>
     private static async Task<byte[]> ReadBuildTestBytesAsync(
         HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
         long byteLength, string sha256, string codePrefix, CancellationToken cancellationToken)
@@ -205,6 +221,7 @@ public static class RuntimeOwnerHttpTransport
         return bytes;
     }
 
+    /// <summary>Implements the standard authenticated JSON request with no-store and redirect checks.</summary>
     private static async Task<TResponse?> SendCoreAsync<TResponse>(
         HttpClient client, Uri ownerAddress, string path, RuntimeActorAuthorization actor,
         object? body, bool allowNotFound, CancellationToken cancellationToken) where TResponse : class

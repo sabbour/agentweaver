@@ -9,10 +9,13 @@ using Microsoft.AspNetCore.WebUtilities;
 
 namespace Agentweaver.Identity.Broker;
 
+/// <summary>Start of a GitHub OAuth redirect plus its browser callback-cookie value.</summary>
 internal sealed record GitHubRepoAppAuthorizationStart(Uri RedirectUri, string CallbackCookie);
 
+/// <summary>One-time OAuth state, browser cookie and PKCE verifier for a Repo App callback.</summary>
 internal sealed record CreatedGitHubRepoAppAuthorization(string State, string CallbackCookie, string Verifier);
 
+/// <summary>Repository option confirmed by GitHub and associated with its installation.</summary>
 internal sealed record GitHubRepoAppRepositoryOption(
     long InstallationId,
     long RepositoryId,
@@ -21,6 +24,7 @@ internal sealed record GitHubRepoAppRepositoryOption(
     bool IsPrivate,
     string DefaultBranch);
 
+/// <summary>Owner connection revision and current repository options shown to the browser.</summary>
 internal sealed record GitHubRepoAppRepositoryBrowser(
     string ConnectionId,
     long ConnectionRevision,
@@ -28,6 +32,7 @@ internal sealed record GitHubRepoAppRepositoryBrowser(
     string GitHubLogin,
     IReadOnlyList<GitHubRepoAppRepositoryOption> Repositories);
 
+/// <summary>Safe connection status and local token readiness, without token values.</summary>
 internal sealed record GitHubRepoAppConnectionStatus(
     string State,
     string LocalReadiness,
@@ -38,6 +43,7 @@ internal sealed record GitHubRepoAppConnectionStatus(
     DateTimeOffset? AccessTokenExpiresAt,
     DateTimeOffset? UpdatedAt);
 
+/// <summary>Short-lived repository selection code and the connection snapshot it is bound to.</summary>
 internal sealed record GitHubRepoAppRepositorySelection(
     string Code,
     string ConnectionId,
@@ -46,6 +52,7 @@ internal sealed record GitHubRepoAppRepositorySelection(
     long RepositoryId,
     string RepositoryFullName);
 
+/// <summary>Selection and permission evidence required by a runtime installation-token request.</summary>
 internal sealed record GitHubRepoAppInstallationTokenRequest(
     string? SelectionCode,
     string? SelectionHash,
@@ -57,6 +64,7 @@ internal sealed record GitHubRepoAppInstallationTokenRequest(
     bool IssueWriteRequested,
     string ExpectedRepositoryFullName);
 
+/// <summary>Minted installation credential paired with the exact repository and selection metadata.</summary>
 internal sealed record GitHubRepoAppInstallationTokenResult(
     GitHubAppInstallationCredential Credential,
     string ConnectionId,
@@ -68,6 +76,7 @@ internal sealed record GitHubRepoAppInstallationTokenResult(
     bool IsPrivate,
     string SelectionHash);
 
+/// <summary>Safe connection failure categories mapped to browser or runtime HTTP errors.</summary>
 internal enum GitHubRepoAppConnectionFailure
 {
     NotConnected,
@@ -82,6 +91,7 @@ internal enum GitHubRepoAppConnectionFailure
     PermissionsChanged
 }
 
+/// <summary>Connection failure that exposes only a stable category to the endpoint layer.</summary>
 internal sealed class GitHubRepoAppConnectionException(
     GitHubRepoAppConnectionFailure failure)
     : Exception($"GitHub Repo App connection failed ({failure}).")
@@ -89,6 +99,12 @@ internal sealed class GitHubRepoAppConnectionException(
     public GitHubRepoAppConnectionFailure Failure { get; } = failure;
 }
 
+/// <summary>
+/// Owns the user's GitHub Repo App connection, installation snapshot and repository
+/// selection lifecycle. Refreshes use a database lease and credential revision; token
+/// minting rechecks run grants, connection state, repository selection and permission
+/// digests before returning a credential.
+/// </summary>
 internal sealed class GitHubRepoAppConnectionService
 {
     private static readonly TimeSpan AuthorizationLifetime = TimeSpan.FromMinutes(10);
@@ -131,6 +147,7 @@ internal sealed class GitHubRepoAppConnectionService
 
     internal const string CallbackCookie = CallbackCookieName;
 
+    /// <summary>Starts a PKCE-protected GitHub user authorization and persists only state/cookie hashes.</summary>
     internal async Task<GitHubRepoAppAuthorizationStart> BeginUserAuthorizationAsync(
         Guid ownerId,
         CancellationToken cancellationToken)
@@ -151,6 +168,7 @@ internal sealed class GitHubRepoAppConnectionService
         return new(new Uri(authorizationUri), transaction.CallbackCookie);
     }
 
+    /// <summary>Starts installation setup only for an existing connected user account.</summary>
     internal async Task<GitHubRepoAppAuthorizationStart> BeginInstallationSetupAsync(
         Guid ownerId,
         CancellationToken cancellationToken)
@@ -168,6 +186,11 @@ internal sealed class GitHubRepoAppConnectionService
         return new(new Uri(setupUri), transaction.CallbackCookie);
     }
 
+    /// <summary>
+    /// Validates and atomically claims one unexpired callback transaction, then completes
+    /// exactly its expected user-authorization or installation-setup flow. Failed callbacks
+    /// are marked failed and cannot be replayed.
+    /// </summary>
     internal async Task CompleteCallbackAsync(
         Guid ownerId,
         string? state,
@@ -250,6 +273,7 @@ internal sealed class GitHubRepoAppConnectionService
         }
     }
 
+    /// <summary>Lists repositories from GitHub and synchronizes the current installation snapshot.</summary>
     internal async Task<GitHubRepoAppRepositoryBrowser> ListRepositoriesAsync(
         Guid ownerId,
         CancellationToken cancellationToken)
@@ -290,6 +314,7 @@ internal sealed class GitHubRepoAppConnectionService
         }
     }
 
+    /// <summary>Returns the owner's persisted connection state without exposing secret values.</summary>
     internal async Task<GitHubRepoAppConnectionStatus> GetStatusAsync(
         Guid ownerId,
         CancellationToken cancellationToken)
@@ -303,6 +328,10 @@ internal sealed class GitHubRepoAppConnectionService
         return ToStatus(connection, _timeProvider.GetUtcNow());
     }
 
+    /// <summary>
+    /// Revokes the owner connection only at the expected revision, advances its credential
+    /// revision and marks known installations revoked in the same database transaction.
+    /// </summary>
     internal async Task<GitHubRepoAppConnectionStatus> DisconnectAsync(
         Guid ownerId,
         string connectionId,
@@ -375,6 +404,10 @@ internal sealed class GitHubRepoAppConnectionService
         return ToStatus(connection, now);
     }
 
+    /// <summary>
+    /// Confirms the selected repository against a fresh GitHub listing and stores a
+    /// short-lived, hashed selection code tied to the current connection revision.
+    /// </summary>
     internal async Task<GitHubRepoAppRepositorySelection> CreateRepositorySelectionAsync(
         Guid ownerId,
         long installationId,
@@ -437,6 +470,12 @@ internal sealed class GitHubRepoAppConnectionService
         }
     }
 
+    /// <summary>
+    /// Requires an active project/run grant and validates an owner-bound selection against
+    /// the current GitHub account, installation, repository and permission digest. It then
+    /// redeems the App key, mints a scoped installation token, and repeats the authority and
+    /// revision checks before returning it.
+    /// </summary>
     internal async Task<GitHubRepoAppInstallationTokenResult> MintInstallationTokenAsync(
         Guid ownerId,
         string projectId,
@@ -714,6 +753,11 @@ internal sealed class GitHubRepoAppConnectionService
         }
     }
 
+    /// <summary>
+    /// Exchanges the claimed callback code, validates the GitHub login, stores token
+    /// versions in the secret backend and updates the connection revision. Reauthorization
+    /// invalidates installation snapshots from the prior connection revision.
+    /// </summary>
     private async Task CompleteUserAuthorizationAsync(
         RepoAppAuthorizationTransaction transaction,
         string code,
@@ -869,6 +913,11 @@ internal sealed class GitHubRepoAppConnectionService
         return new(state, callbackCookie, verifier);
     }
 
+    /// <summary>
+    /// Returns a fresh access token or claims the refresh lease before rotating credentials.
+    /// If rotation may have consumed the provider token but cannot be committed, the
+    /// connection becomes <c>RotationUncertain</c> instead of retrying that refresh token.
+    /// </summary>
     private async Task<SecretCredential> GetUsableAccessTokenAsync(
         RepoAppConnectionRecord connection,
         CancellationToken cancellationToken)
@@ -1011,6 +1060,10 @@ internal sealed class GitHubRepoAppConnectionService
             new SecretRedemptionRequest(new SecretRef(secretId, secretVersion), purpose, connectionId),
             cancellationToken).ConfigureAwait(false);
 
+    /// <summary>
+    /// Updates the installation snapshot only if the connection revision still matches;
+    /// installations missing from the fresh provider listing are marked revoked.
+    /// </summary>
     private async Task<RepoAppConnectionRecord> SynchronizeInstallationsAsync(
         RepoAppConnectionRecord connection,
         IReadOnlyList<GitHubRepoAppInstallationMetadata> installations,

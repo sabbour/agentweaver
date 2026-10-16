@@ -12,6 +12,9 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Owns accepted runs, session-tree state, messages, logical turns, and execution fencing in PostgreSQL.
+/// </summary>
 internal sealed partial class CoordinationOwnerStore
 {
     private const string IngressConsumer = "orchestrator.addressed-message-ingress";
@@ -36,6 +39,10 @@ internal sealed partial class CoordinationOwnerStore
     private readonly TimeProvider _timeProvider;
     private readonly CoordinatorDecisionOwnerStore? _decisionStore;
 
+    /// <summary>
+    /// Creates the owner store for one validated schema and its optional decision-state collaborator.
+    /// </summary>
+    /// <exception cref="ArgumentException">The schema name is invalid or reserved.</exception>
     public CoordinationOwnerStore(
         NpgsqlDataSource dataSource,
         string schema,
@@ -58,6 +65,10 @@ internal sealed partial class CoordinationOwnerStore
         _decisionStore = decisionStore;
     }
 
+    /// <summary>
+    /// Accepts the run's root session, preserving an existing identical binding and rejecting a conflicting one.
+    /// </summary>
+    /// <remarks>Admission and authority are rechecked in the transaction before its accepted run and root are committed.</remarks>
     public async Task<AcceptedRoot> AcceptRootAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -78,6 +89,10 @@ internal sealed partial class CoordinationOwnerStore
         return accepted;
     }
 
+    /// <summary>
+    /// Accepts a root session using a caller-owned transaction so other owner changes can commit atomically with it.
+    /// </summary>
+    /// <exception cref="CoordinationException">The run is already bound to a different selection, actor, tenant, or root.</exception>
     internal async Task<AcceptedRoot> AcceptRootInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -194,6 +209,11 @@ internal sealed partial class CoordinationOwnerStore
             acceptedRun.ExecutionState);
     }
 
+    /// <summary>
+    /// Reads and locks the accepted root and latest decision envelope for a prerequisite claim.
+    /// </summary>
+    /// <returns>The current root, owner actor, tenant, accepted selection, hash, and decision version.</returns>
+    /// <exception cref="CoordinationException">The root binding, accepted selection, or persisted decision envelope is missing, stale, or corrupt.</exception>
     internal async Task<(
         AcceptedRoot Root,
         CoordinationActor Actor,
@@ -358,6 +378,10 @@ internal sealed partial class CoordinationOwnerStore
         return (root, actor, tenantId, selection, selectionHash, decisionStateVersion);
     }
 
+    /// <summary>
+    /// Checks that Projects granted this actor permission to accept the exact project and run selection.
+    /// </summary>
+    /// <exception cref="CoordinationException">The authorization context or accepted selection is invalid.</exception>
     private static void ValidateAcceptRootInput(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -388,6 +412,9 @@ internal sealed partial class CoordinationOwnerStore
         _ = RequiresRunAdmission(effectiveSelection.Snapshot);
     }
 
+    /// <summary>
+    /// Registers an already-created child session under its parent, subject to owner and capacity checks.
+    /// </summary>
     public async Task<RegisteredChild> RegisterChildAsync(
         CoordinationActor actor,
         SessionIdentity parent,
@@ -405,6 +432,10 @@ internal sealed partial class CoordinationOwnerStore
         return result.Registered;
     }
 
+    /// <summary>
+    /// Registers a child and persists its idempotent spawn request for later dispatch.
+    /// </summary>
+    /// <exception cref="CoordinationException">The request is invalid, capacity is exhausted, or the spawn cannot be persisted.</exception>
     public async Task<SpawnedSession> SpawnSessionAsync(
         CoordinationActor actor,
         SessionIdentity parent,
@@ -427,6 +458,11 @@ internal sealed partial class CoordinationOwnerStore
             ?? throw new CoordinationException("session_spawn_unavailable", StatusCodes.Status503ServiceUnavailable);
     }
 
+    /// <summary>
+    /// Validates an Events fork result against a pending, selection-bound owner command.
+    /// </summary>
+    /// <remarks>The receipt binds the fork event and cursor, target, source, actor, idempotency key, and accepted selection.</remarks>
+    /// <exception cref="CoordinationException">The pending fork is absent, stale, inconsistent, or no longer admissible.</exception>
     public async Task<SessionForkAdmissionReceipt> ValidateSessionForkAdmissionAsync(
         CoordinationActor actor,
         SessionIdentity source,
@@ -543,6 +579,10 @@ internal sealed partial class CoordinationOwnerStore
         return receipt;
     }
 
+    /// <summary>
+    /// Creates an idempotent pending fork command after checking the source session, target reservation, and capacity.
+    /// </summary>
+    /// <remarks>The Events owner completes source-event creation separately; this transaction reserves the target and records the pending intent.</remarks>
     public async Task<CoordinationSessionForkResult> PrepareSessionForkAsync(
         CoordinationActor actor,
         SessionIdentity source,
@@ -683,6 +723,9 @@ internal sealed partial class CoordinationOwnerStore
         return pending;
     }
 
+    /// <summary>
+    /// Finalizes a pending fork as unregistered after its admission step fails.
+    /// </summary>
     public async Task<CoordinationSessionForkResult> FinalizeSessionForkAdmissionFailureAsync(
         CoordinationActor actor,
         SessionIdentity source,
@@ -748,6 +791,10 @@ internal sealed partial class CoordinationOwnerStore
         return unregistered;
     }
 
+    /// <summary>
+    /// Completes a pending fork by recording the Events result and registering the target when current authority permits.
+    /// </summary>
+    /// <remarks>Duplicate command results are returned as duplicates; stale authority or selection prevents registration.</remarks>
     public async Task<CoordinationSessionForkResult> CompleteSessionForkAsync(
         CoordinationActor actor,
         SessionIdentity source,
@@ -951,6 +998,10 @@ internal sealed partial class CoordinationOwnerStore
         return result with { IsDuplicate = isDuplicate };
     }
 
+    /// <summary>
+    /// Performs the shared child registration transaction for direct registration and spawn requests.
+    /// </summary>
+    /// <remarks>It verifies the parent writer, run fence, capacity, optional work-plan association, and idempotency before inserting a child.</remarks>
     private async Task<SessionRegistrationResult> RegisterChildCoreAsync(
         CoordinationActor actor,
         SessionIdentity parent,
@@ -1265,6 +1316,9 @@ internal sealed partial class CoordinationOwnerStore
         return new SessionRegistrationResult(registeredChild, spawned);
     }
 
+    /// <summary>
+    /// Reads a prior spawn result by the caller's idempotency key and request hash.
+    /// </summary>
     private async Task<SpawnedSession?> ReadExistingSpawnAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1304,6 +1358,9 @@ internal sealed partial class CoordinationOwnerStore
         }
     }
 
+    /// <summary>
+    /// Checks whether a session is already an ancestor of another session in the same run.
+    /// </summary>
     private async Task<bool> IsAncestorSessionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1335,6 +1392,9 @@ internal sealed partial class CoordinationOwnerStore
         return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? false);
     }
 
+    /// <summary>
+    /// Validates a spawn request's identifiers, idempotency key, and bounded kickoff content.
+    /// </summary>
     internal static void ValidateSpawnRequest(SpawnSessionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -1354,6 +1414,9 @@ internal sealed partial class CoordinationOwnerStore
             CoordinationIdentity.ValidateIdentity(workPlanItemId, nameof(request.WorkPlanItemId));
     }
 
+    /// <summary>
+    /// Validates a fork request's source, target, event, cursor, and idempotency fields.
+    /// </summary>
     internal static void ValidateForkRequest(CoordinationSessionForkRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -1371,6 +1434,9 @@ internal sealed partial class CoordinationOwnerStore
             throw new CoordinationException("session_fork_invalid", StatusCodes.Status400BadRequest);
     }
 
+    /// <summary>
+    /// Hashes the accepted selection snapshot for immutable owner bindings.
+    /// </summary>
     internal static string HashSelection(EffectiveRunSelection selection)
     {
         ArgumentNullException.ThrowIfNull(selection);
@@ -1378,6 +1444,9 @@ internal sealed partial class CoordinationOwnerStore
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(selection.Snapshot.GetRawText())));
     }
 
+    /// <summary>
+    /// Hashes every fork-command input that must remain fixed for idempotent retries.
+    /// </summary>
     private static string HashForkCommand(
         SessionIdentity source,
         CoordinationSessionForkRequest request) =>
@@ -1396,6 +1465,9 @@ internal sealed partial class CoordinationOwnerStore
                 request.Kind
             }, JsonOptions))));
 
+    /// <summary>
+    /// Requires an accepted selection hash to be a 64-character hexadecimal digest.
+    /// </summary>
     private static void ValidateAcceptedSelectionHash(string acceptedSelectionHash)
     {
         if (string.IsNullOrWhiteSpace(acceptedSelectionHash) ||
@@ -1405,12 +1477,18 @@ internal sealed partial class CoordinationOwnerStore
                 "accepted_run_selection_invalid", StatusCodes.Status400BadRequest);
     }
 
+    /// <summary>
+    /// Checks that child-count limits are within the supported ranges.
+    /// </summary>
     private static void ValidateChildLimits(int maxChildren, int maxConcurrentChildren)
     {
         if (maxChildren is < 0 or > 100 || maxConcurrentChildren is < 1 or > 32)
             throw new CoordinationException("run_child_limit_invalid", StatusCodes.Status502BadGateway);
     }
 
+    /// <summary>
+    /// Returns the conflict code that prevents a fork from registering against current run or session state.
+    /// </summary>
     private static string? GetForkUnavailableCode(
         AcceptedRunRow run,
         SessionRow sourceSession,
@@ -1429,10 +1507,16 @@ internal sealed partial class CoordinationOwnerStore
         return null;
     }
 
+    /// <summary>
+    /// Hashes a spawn request so the same idempotency key cannot be reused for different content.
+    /// </summary>
     private static string HashSpawnRequest(SpawnSessionRequest request) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
             JsonSerializer.Serialize(request, JsonOptions))));
 
+    /// <summary>
+    /// Reads the accepted root and all registered session nodes in a stable tree order.
+    /// </summary>
     public async Task<SessionTreeSnapshot> ReadSessionTreeAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -1456,6 +1540,10 @@ internal sealed partial class CoordinationOwnerStore
         return new SessionTreeSnapshot(session.RootSessionId, nodes);
     }
 
+    /// <summary>
+    /// Reads current work-plan children for MAF dispatch, including explicitly associated fixed-work children.
+    /// </summary>
+    /// <exception cref="CoordinationException">The caller is not the active root owner or child associations are ambiguous.</exception>
     internal async Task<ImmutableArray<MafExecutionChildSnapshot>> ReadMafExecutionChildrenAsync(
         CoordinationActor actor,
         SessionIdentity parent,
@@ -1526,6 +1614,9 @@ internal sealed partial class CoordinationOwnerStore
         return children.ToImmutable();
     }
 
+    /// <summary>
+    /// Counts registered children and pending forks while confirming the active coordinator owns the run.
+    /// </summary>
     internal async Task<(int RegisteredChildren, int ActiveChildren)> ReadMafExecutionCapacityAsync(
         CoordinationActor actor,
         SessionIdentity parent,
@@ -1565,6 +1656,10 @@ internal sealed partial class CoordinationOwnerStore
         return (registeredChildren, activeChildren);
     }
 
+    /// <summary>
+    /// Reads the current session and run state, including turn activity and interruption intent.
+    /// </summary>
+    /// <remarks>Runtime effects are reported as unavailable here; this owner store does not infer them from session rows.</remarks>
     public async Task<SessionStatusSnapshot> ReadSessionStatusAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -1608,6 +1703,9 @@ internal sealed partial class CoordinationOwnerStore
                 run.ExecutionReference));
     }
 
+    /// <summary>
+    /// Reads the current run state for its accepted owner and requires the root to match the current execution fence.
+    /// </summary>
     public async Task<OwnerRunStatus> ReadOwnerRunStatusAsync(
         CoordinationActor actor,
         string projectId,
@@ -1639,6 +1737,9 @@ internal sealed partial class CoordinationOwnerStore
             run.ExecutionReference);
     }
 
+    /// <summary>
+    /// Reads a run's execution state and rejects missing or unsupported persisted state values.
+    /// </summary>
     internal async Task<string> ReadCurrentExecutionStateAsync(
         string projectId,
         string runId,
@@ -1663,6 +1764,9 @@ internal sealed partial class CoordinationOwnerStore
         return state;
     }
 
+    /// <summary>
+    /// Reads the active child-work binding required for an authenticated runtime observation.
+    /// </summary>
     public async Task<SessionRuntimeOwnerState> ReadRuntimeOwnerStateAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -1670,6 +1774,9 @@ internal sealed partial class CoordinationOwnerStore
         => await ReadRuntimeOwnerStateAsync(actor, identity, allowTerminalChild: false, cancellationToken)
             .ConfigureAwait(false);
 
+    /// <summary>
+    /// Reads a current child-work binding while allowing a terminal turn for final runtime observations.
+    /// </summary>
     public async Task<SessionRuntimeOwnerState> ReadRuntimeOwnerStateForObservationAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -1677,6 +1784,9 @@ internal sealed partial class CoordinationOwnerStore
         => await ReadRuntimeOwnerStateAsync(actor, identity, allowTerminalChild: true, cancellationToken)
             .ConfigureAwait(false);
 
+    /// <summary>
+    /// Enforces actor, run-fence, child-work, turn, and version checks before returning runtime owner context.
+    /// </summary>
     private async Task<SessionRuntimeOwnerState> ReadRuntimeOwnerStateAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -1717,6 +1827,9 @@ internal sealed partial class CoordinationOwnerStore
         return result;
     }
 
+    /// <summary>
+    /// Allows an observation only for a current-fence session whose run has not been superseded.
+    /// </summary>
     private static void RequireCurrentObservationSession(SessionRow session, AcceptedRunRow run)
     {
         if (session.ExecutionFence != run.Fence)
@@ -1727,6 +1840,9 @@ internal sealed partial class CoordinationOwnerStore
             throw new CoordinationException("session_unavailable", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Checks that a persisted coordinator decision authorizes the requested work-plan item.
+    /// </summary>
     private static bool RuntimeDecisionAllowsWorkPlanItem(
         string decisionJson,
         CoordinationActor actor,
@@ -1797,6 +1913,9 @@ internal sealed partial class CoordinationOwnerStore
             property.ValueKind == JsonValueKind.Null;
     }
 
+    /// <summary>
+    /// Reads the current interruption intent associated with the supplied session fence.
+    /// </summary>
     private async Task<SessionInterruptionIntentSnapshot> ReadInterruptionIntentAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1838,6 +1957,9 @@ internal sealed partial class CoordinationOwnerStore
                 : "operator_stop_message_acknowledged");
     }
 
+    /// <summary>
+    /// Maps a persisted turn state to public activity, preserving unknown states as unavailable.
+    /// </summary>
     private static (CoordinationActivityState Activity, string? UnavailableCode) ToActivity(string turnState) =>
         turnState switch
         {
@@ -1848,6 +1970,9 @@ internal sealed partial class CoordinationOwnerStore
             _ => (CoordinationActivityState.Unknown, "coordination_turn_state_unavailable")
         };
 
+    /// <summary>
+    /// Detaches a child using an idempotent tree command guarded by the execution fence.
+    /// </summary>
     public async Task<CoordinationTreeCommandResult> DetachSessionAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -1918,6 +2043,9 @@ internal sealed partial class CoordinationOwnerStore
         return result;
     }
 
+    /// <summary>
+    /// Archives a child using an idempotent tree command guarded by the execution fence.
+    /// </summary>
     public async Task<CoordinationTreeCommandResult> ArchiveChildAsync(
         CoordinationActor actor,
         SessionIdentity parent,
@@ -1986,6 +2114,10 @@ internal sealed partial class CoordinationOwnerStore
         return result;
     }
 
+    /// <summary>
+    /// Creates or updates an idle-notification subscription after checking the subscriber and target session bindings.
+    /// </summary>
+    /// <remarks>The stored subscription is fenced and uses an idempotency key to make retries stable.</remarks>
     public async Task<IdleSubscriptionResult> SubscribeToIdleAsync(
         CoordinationActor actor,
         SessionIdentity target,
@@ -2106,6 +2238,9 @@ internal sealed partial class CoordinationOwnerStore
         return result;
     }
 
+    /// <summary>
+    /// Reads and validates an existing session-tree command for an idempotent retry.
+    /// </summary>
     private async Task<CoordinationTreeCommandResult?> ReadExistingTreeCommandAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2146,6 +2281,9 @@ internal sealed partial class CoordinationOwnerStore
         }
     }
 
+    /// <summary>
+    /// Reads a fork command only when the stored command hash matches the retried request.
+    /// </summary>
     private async Task<CoordinationSessionForkResult?> ReadExistingForkCommandAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2190,6 +2328,9 @@ internal sealed partial class CoordinationOwnerStore
         }
     }
 
+    /// <summary>
+    /// Stores a terminal unregistered fork result and releases its target reservation.
+    /// </summary>
     private async Task<CoordinationSessionForkResult> FinalizeUnregisteredForkAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2231,6 +2372,9 @@ internal sealed partial class CoordinationOwnerStore
         return result;
     }
 
+    /// <summary>
+    /// Updates the persisted fork command result and registration state.
+    /// </summary>
     private async Task UpdateForkCommandAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2255,6 +2399,9 @@ internal sealed partial class CoordinationOwnerStore
                 "session_fork_operation_unavailable", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Enqueues the owner event describing a completed fork registration.
+    /// </summary>
     private async Task EnqueueForkOutboxAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2288,6 +2435,9 @@ internal sealed partial class CoordinationOwnerStore
             _timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Checks whether a pending fork command already reserves the requested target session identifier.
+    /// </summary>
     private async Task<bool> IsForkTargetReservedAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2310,6 +2460,9 @@ internal sealed partial class CoordinationOwnerStore
         return (bool)(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) ?? false);
     }
 
+    /// <summary>
+    /// Counts fork commands that still reserve child capacity.
+    /// </summary>
     private async Task<int> ReadPendingForkCountAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2330,6 +2483,9 @@ internal sealed partial class CoordinationOwnerStore
             System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    /// <summary>
+    /// Returns a conflict code when registered children and pending forks exceed either run capacity limit.
+    /// </summary>
     private async Task<string?> ReadForkCapacityErrorAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2366,6 +2522,9 @@ internal sealed partial class CoordinationOwnerStore
         return null;
     }
 
+    /// <summary>
+    /// Ensures the Events fork result is bound to the expected source, target, event, cursor, and fork kind.
+    /// </summary>
     private static void ValidateEventsForkResult(
         SessionIdentity source,
         CoordinationSessionForkRequest request,
@@ -2388,6 +2547,9 @@ internal sealed partial class CoordinationOwnerStore
                 "session_fork_contract_invalid", StatusCodes.Status502BadGateway);
     }
 
+    /// <summary>
+    /// Persists a session-tree command and its deterministic hash for safe retries.
+    /// </summary>
     private async Task PersistTreeCommandAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2442,6 +2604,9 @@ internal sealed partial class CoordinationOwnerStore
             _timeProvider.GetUtcNow()), cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Hashes the tree-command kind, actor, source, target, fence, and idempotency key.
+    /// </summary>
     private static string HashTreeCommand(
         string command,
         SessionIdentity source,
@@ -2459,6 +2624,9 @@ internal sealed partial class CoordinationOwnerStore
                 request.IdempotencyKey
             }, JsonOptions))));
 
+    /// <summary>
+    /// Validates the positive execution fence and bounded idempotency key for a tree command.
+    /// </summary>
     private static void ValidateTreeCommandRequest(SessionTreeCommandRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -2467,6 +2635,9 @@ internal sealed partial class CoordinationOwnerStore
             throw new CoordinationException("session_tree_command_invalid", StatusCodes.Status400BadRequest);
     }
 
+    /// <summary>
+    /// Reads and maps the nodes belonging to one root session.
+    /// </summary>
     private async Task<ImmutableArray<SessionTreeNode>> ReadTreeNodesAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2500,6 +2671,9 @@ internal sealed partial class CoordinationOwnerStore
         return nodes.ToImmutable();
     }
 
+    /// <summary>
+    /// Reads work-plan item associations for children of a root in the caller's transaction.
+    /// </summary>
     internal async Task<ImmutableArray<(string SessionId, string WorkPlanItemId)>>
         ReadBacklogWorkPlanChildBindingsInTransactionAsync(
             NpgsqlConnection connection,
@@ -2550,6 +2724,10 @@ internal sealed partial class CoordinationOwnerStore
         return bindings.ToImmutable();
     }
 
+    /// <summary>
+    /// Validates a message route against current owner membership and returns the pinned delivery binding.
+    /// </summary>
+    /// <exception cref="CoordinationException">The sender, recipient, run fence, or message purpose is not permitted.</exception>
     public async Task<MessageRouteBinding> ValidateMessageRouteAsync(
         CoordinationActor actor,
         SessionIdentity sender,
@@ -2643,6 +2821,9 @@ internal sealed partial class CoordinationOwnerStore
             replyToMessageId);
     }
 
+    /// <summary>
+    /// Returns the owner-verified parent, root, lifecycle, and execution-fence binding for one session.
+    /// </summary>
     public async Task<CoordinationSessionBinding> GetSessionBindingAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -2668,6 +2849,9 @@ internal sealed partial class CoordinationOwnerStore
             CoordinationIdentity.ClaimOwner(actor));
     }
 
+    /// <summary>
+    /// Claims the next outbound coordination event for delivery.
+    /// </summary>
     public async Task<OutboxDelivery?> ClaimOutboundAsync(
         CoordinationActor actor,
         Guid ownerMessageId,
@@ -2694,6 +2878,9 @@ internal sealed partial class CoordinationOwnerStore
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Loads the owner message referenced by an outbox delivery.
+    /// </summary>
     public async Task<OwnerOutboundMessage> ReadOutboundMessageAsync(
         Guid ownerMessageId,
         CancellationToken cancellationToken)
@@ -2719,12 +2906,19 @@ internal sealed partial class CoordinationOwnerStore
         }
     }
 
+    /// <summary>
+    /// Acknowledges a claimed outbound event using the outbox lease fence.
+    /// </summary>
     public Task<bool> AcknowledgeOutboundAsync(
         OutboxDelivery delivery,
         CancellationToken cancellationToken) =>
         _outbox.AcknowledgeAsync(
             delivery.Event.Message.Id, delivery.LeaseToken, cancellationToken);
 
+    /// <summary>
+    /// Creates an owner-addressed message and outbox event after validating the bound route and request.
+    /// </summary>
+    /// <remarks>Idempotent retries return the stored result; reusing a key for different message content is rejected.</remarks>
     public async Task<CoordinationMessageResult> SendMessageAsync(
         CoordinationActor actor,
         SessionIdentity sender,
@@ -2894,6 +3088,10 @@ internal sealed partial class CoordinationOwnerStore
         return new CoordinationMessageResult(messageId, recipient.SessionId, "pending", draft.RequestId);
     }
 
+    /// <summary>
+    /// Records an Events admission receipt and updates the corresponding owner message delivery state.
+    /// </summary>
+    /// <remarks>The consumer receipt and local message update share a transaction so duplicate delivery is safe.</remarks>
     public async Task AdmitDeliveryAsync(
         CoordinationActor actor,
         DeliveryIngressRequest request,
@@ -2997,6 +3195,9 @@ internal sealed partial class CoordinationOwnerStore
         await transaction.CommitAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Reads an already completed turn-boundary operation for an idempotent retry.
+    /// </summary>
     public async Task<TurnBoundaryResult?> ReadCompletedTurnBoundaryAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -3033,6 +3234,10 @@ internal sealed partial class CoordinationOwnerStore
         return result with { RuntimeTurnId = runtimeTurnId };
     }
 
+    /// <summary>
+    /// Advances a session to its next logical turn under state-version and execution-fence checks.
+    /// </summary>
+    /// <remarks>The transaction records duplicate-safe operation state and presents at most one pending message.</remarks>
     public async Task<TurnBoundaryResult> AdvanceTurnBoundaryAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -3108,6 +3313,9 @@ internal sealed partial class CoordinationOwnerStore
         return result;
     }
 
+    /// <summary>
+    /// Completes the current turn boundary and applies the requested idle, blocked, or completed state.
+    /// </summary>
     public async Task<TurnBoundaryResult> CompleteTurnBoundaryAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -3176,6 +3384,10 @@ internal sealed partial class CoordinationOwnerStore
         return result;
     }
 
+    /// <summary>
+    /// Records a failed or indeterminate run transition and advances the fence to stop stale sessions.
+    /// </summary>
+    /// <remarks>Expected run and session versions plus an idempotency key make the transition conflict-safe and retryable.</remarks>
     public async Task<RunExecutionTransitionResult> ReportRunFailureAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -3354,6 +3566,9 @@ internal sealed partial class CoordinationOwnerStore
         return result;
     }
 
+    /// <summary>
+    /// Recovers an eligible run and advances its execution fence so previous session work cannot continue.
+    /// </summary>
     public async Task<RunExecutionTransitionResult> RecoverRunExecutionAsync(
         CoordinationActor actor,
         string projectId,
@@ -3520,6 +3735,9 @@ internal sealed partial class CoordinationOwnerStore
         return result;
     }
 
+    /// <summary>
+    /// Advances the coordinator decision fence in the same transaction as the run transition.
+    /// </summary>
     private Task AdvanceCurrentDecisionFenceAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -3553,6 +3771,9 @@ internal sealed partial class CoordinationOwnerStore
             cancellationToken);
     }
 
+    /// <summary>
+    /// Finishes a session turn and creates any required parent idle notifications in the owner transaction.
+    /// </summary>
     public async Task<TurnBoundaryResult> FinishTurnAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -3627,6 +3848,9 @@ internal sealed partial class CoordinationOwnerStore
         return result;
     }
 
+    /// <summary>
+    /// Creates idempotent notifications for subscribers whose target session has just become idle.
+    /// </summary>
     private async Task EnqueueIdleNotificationsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -3706,6 +3930,9 @@ internal sealed partial class CoordinationOwnerStore
         }
     }
 
+    /// <summary>
+    /// Records that a message was presented to its addressed session at a particular turn boundary.
+    /// </summary>
     public async Task RecordPresentationAsync(
         CoordinationActor actor,
         SessionIdentity recipient,
@@ -3759,6 +3986,9 @@ internal sealed partial class CoordinationOwnerStore
         await transaction.CommitAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Records a recipient's acknowledgment of a previously presented owner message.
+    /// </summary>
     public async Task RecordAcknowledgementAsync(
         CoordinationActor actor,
         SessionIdentity recipient,
@@ -3812,6 +4042,9 @@ internal sealed partial class CoordinationOwnerStore
         await transaction.CommitAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Reads pending notifications addressed to the authenticated parent session.
+    /// </summary>
     public async Task<IReadOnlyList<ParentNotification>> ReadParentNotificationsAsync(
         CoordinationActor actor,
         SessionIdentity parent,
@@ -3838,6 +4071,9 @@ internal sealed partial class CoordinationOwnerStore
         return notifications;
     }
 
+    /// <summary>
+    /// Reads pending parent notifications through the supplied owner transaction.
+    /// </summary>
     private async Task<ImmutableArray<ParentNotification>> ReadParentNotificationsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -3880,6 +4116,9 @@ internal sealed partial class CoordinationOwnerStore
         return notifications.ToImmutable();
     }
 
+    /// <summary>
+    /// Acknowledges a parent notification only for its addressed parent session.
+    /// </summary>
     public async Task AcknowledgeParentNotificationAsync(
         CoordinationActor actor,
         SessionIdentity parent,
@@ -3926,6 +4165,9 @@ internal sealed partial class CoordinationOwnerStore
         await transaction.CommitAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Loads a prior run transition by operation identity and request hash.
+    /// </summary>
     private async Task<RunExecutionTransitionResult?> ReadRunExecutionOperationAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -3961,6 +4203,9 @@ internal sealed partial class CoordinationOwnerStore
         return result with { IsDuplicate = true };
     }
 
+    /// <summary>
+    /// Stores a run transition result for safe idempotent retries.
+    /// </summary>
     private async Task SaveRunExecutionOperationAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -3991,6 +4236,9 @@ internal sealed partial class CoordinationOwnerStore
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Hashes the operation kind, run identity, and request fields used for run-transition idempotency.
+    /// </summary>
     private static string HashRunExecutionOperation(string operationKind, SessionIdentity identity, object request)
     {
         var requestBytes = JsonSerializer.SerializeToUtf8Bytes(
@@ -3998,6 +4246,9 @@ internal sealed partial class CoordinationOwnerStore
         return Convert.ToHexString(SHA256.HashData(requestBytes));
     }
 
+    /// <summary>
+    /// Validates the versions, cause, reference, and idempotency key for a reported run failure.
+    /// </summary>
     private static void ValidateRunFailureRequest(ReportRunFailureRequest request)
     {
         if (request.ExecutionFence < 1 || request.ExpectedRunStateVersion < 1 ||
@@ -4006,6 +4257,9 @@ internal sealed partial class CoordinationOwnerStore
         ValidateExecutionOperationIdentity(request.IdempotencyKey, request.CauseCode, request.Reference);
     }
 
+    /// <summary>
+    /// Validates the versions, cause, reference, and idempotency key for run recovery.
+    /// </summary>
     private static void ValidateRunRecoveryRequest(RecoverRunExecutionRequest request)
     {
         if (request.ExecutionFence < 1 || request.ExpectedRunStateVersion < 1)
@@ -4013,6 +4267,9 @@ internal sealed partial class CoordinationOwnerStore
         ValidateExecutionOperationIdentity(request.IdempotencyKey, request.CauseCode, request.Reference);
     }
 
+    /// <summary>
+    /// Checks that a run-transition request uses a valid operation key and cause reference.
+    /// </summary>
     private static void ValidateExecutionOperationIdentity(
         string idempotencyKey,
         string causeCode,
@@ -4027,6 +4284,9 @@ internal sealed partial class CoordinationOwnerStore
         CoordinationIdentity.ValidateIdentity(reference, "reference");
     }
 
+    /// <summary>
+    /// Counts sessions still bound to the specified execution fence before a recovery transition.
+    /// </summary>
     private async Task<int> ReadRunSessionCountAtFenceAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -4049,6 +4309,10 @@ internal sealed partial class CoordinationOwnerStore
         return checked((int)reader.GetInt64(0));
     }
 
+    /// <summary>
+    /// Reads the accepted run binding and optionally locks it for a coordinated mutation.
+    /// </summary>
+    /// <exception cref="CoordinationException">The accepted run does not exist.</exception>
     private async Task<AcceptedRunRow> ReadAcceptedRunAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -4082,6 +4346,9 @@ internal sealed partial class CoordinationOwnerStore
             reader.IsDBNull(9) ? null : reader.GetString(9));
     }
 
+    /// <summary>
+    /// Reads one session row and optionally locks it, returning not found when it is absent.
+    /// </summary>
     private async Task<SessionRow> ReadSessionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -4095,6 +4362,9 @@ internal sealed partial class CoordinationOwnerStore
         return session ?? throw new CoordinationException("session_not_found", StatusCodes.Status404NotFound);
     }
 
+    /// <summary>
+    /// Maps the selected database columns into the internal session state record.
+    /// </summary>
     private static SessionRow ReadSessionRow(NpgsqlDataReader reader) =>
         new(
             reader.GetString(0),
@@ -4116,6 +4386,9 @@ internal sealed partial class CoordinationOwnerStore
             reader.IsDBNull(16) ? null : reader.GetFieldValue<DateTimeOffset>(16),
             reader.IsDBNull(17) ? null : reader.GetString(17));
 
+    /// <summary>
+    /// Looks up a session by project, run, and identifier, with an optional row lock.
+    /// </summary>
     private async Task<SessionRow?> FindSessionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -4160,6 +4433,9 @@ internal sealed partial class CoordinationOwnerStore
             : null;
     }
 
+    /// <summary>
+    /// Reads the unique root session row for a run, with an optional row lock.
+    /// </summary>
     private async Task<SessionRow?> ReadRootSessionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -4202,6 +4478,9 @@ internal sealed partial class CoordinationOwnerStore
             : null;
     }
 
+    /// <summary>
+    /// Finds the most recent pending request between a sender and recipient.
+    /// </summary>
     private async Task<string?> FindRequestIdAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -4224,6 +4503,9 @@ internal sealed partial class CoordinationOwnerStore
         return (string?)await command.ExecuteScalarAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Checks whether a matching request exists and has not been cancelled.
+    /// </summary>
     private async Task<bool> HasActiveRequestAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -4249,6 +4531,9 @@ internal sealed partial class CoordinationOwnerStore
         return (bool)(await command.ExecuteScalarAsync(cancellationToken) ?? false);
     }
 
+    /// <summary>
+    /// Reads the thread identifier for an eligible reply target and locks the matched message row.
+    /// </summary>
     private async Task<Guid?> ReadReverseMessageThreadIdAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -4281,6 +4566,9 @@ internal sealed partial class CoordinationOwnerStore
         return await reader.ReadAsync(cancellationToken) ? reader.GetGuid(0) : null;
     }
 
+    /// <summary>
+    /// Checks whether an eligible reverse-direction message exists for a reply or correlation.
+    /// </summary>
     private async Task<bool> HasReverseMessageAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -4312,6 +4600,9 @@ internal sealed partial class CoordinationOwnerStore
         return (bool)(await command.ExecuteScalarAsync(cancellationToken) ?? false);
     }
 
+    /// <summary>
+    /// Reads the Events message identifier for an acknowledged reply matching the requested correlation.
+    /// </summary>
     private async Task<Guid?> ReadAcknowledgedReplyMessageIdAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -4342,6 +4633,9 @@ internal sealed partial class CoordinationOwnerStore
         return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) as Guid?;
     }
 
+    /// <summary>
+    /// Reads a message previously submitted with the same sender, actor, and idempotency key.
+    /// </summary>
     private async Task<ExistingMessage?> ReadExistingMessageAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -4374,6 +4668,9 @@ internal sealed partial class CoordinationOwnerStore
             : null;
     }
 
+    /// <summary>
+    /// Reads the owner-side message fields needed to verify an admission receipt or outbound delivery.
+    /// </summary>
     private async Task<StoredMessage?> ReadMessageAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -4405,6 +4702,9 @@ internal sealed partial class CoordinationOwnerStore
             : null;
     }
 
+    /// <summary>
+    /// Verifies that an Events admission receipt matches the owner message and both session fences.
+    /// </summary>
     private static bool ReceiptMatches(StoredMessage stored, MessageAdmissionReceipt receipt) =>
         receipt.OwnerMessageId != Guid.Empty &&
         stored.ProjectId == receipt.Sender.ProjectId &&
@@ -4423,6 +4723,9 @@ internal sealed partial class CoordinationOwnerStore
         receipt.ThreadSequence > 0 &&
         receipt.Claim is null;
 
+    /// <summary>
+    /// Compares all immutable fields before accepting an outbound message supplied by a delivery worker.
+    /// </summary>
     private static bool SameOutboundMessage(
         OwnerOutboundMessage persisted,
         OwnerOutboundMessage supplied) =>
@@ -4443,6 +4746,9 @@ internal sealed partial class CoordinationOwnerStore
         persisted.UserQuote == supplied.UserQuote &&
         persisted.CoordinatorInstructions == supplied.CoordinatorInstructions;
 
+    /// <summary>
+    /// Projects a stored session row into the public tree-node contract.
+    /// </summary>
     private static SessionTreeNode ToSessionTreeNode(SessionRow session, SessionIdentity identity) =>
         new(
             identity,
@@ -4457,6 +4763,9 @@ internal sealed partial class CoordinationOwnerStore
             session.CreatedAt,
             session.ArchivedAt);
 
+    /// <summary>
+    /// Maps a stored session kind and fails closed for values outside the contract.
+    /// </summary>
     private static CoordinationSessionKind ParseSessionKind(string value) => value switch
     {
         "coordinator" => CoordinationSessionKind.Coordinator,
@@ -4468,6 +4777,9 @@ internal sealed partial class CoordinationOwnerStore
             "session_tree_state_unavailable", StatusCodes.Status503ServiceUnavailable)
     };
 
+    /// <summary>
+    /// Maps a stored lifecycle state and rejects unknown values as unavailable.
+    /// </summary>
     private static CoordinationLifecycleState ParseLifecycle(string value) => value switch
     {
         "active" => CoordinationLifecycleState.Active,
@@ -4478,6 +4790,9 @@ internal sealed partial class CoordinationOwnerStore
             "session_tree_state_unavailable", StatusCodes.Status503ServiceUnavailable)
     };
 
+    /// <summary>
+    /// Maps a supported child kind to its persisted representation.
+    /// </summary>
     private static string ToDatabaseSessionKind(CoordinationSessionKind kind) => kind switch
     {
         CoordinationSessionKind.ChildWork => "child_work",
@@ -4488,6 +4803,9 @@ internal sealed partial class CoordinationOwnerStore
             "session_node_kind_invalid", StatusCodes.Status400BadRequest)
     };
 
+    /// <summary>
+    /// Maps a stored idle-notification mode and rejects unknown values as unavailable.
+    /// </summary>
     private static IdleNotificationMode ParseIdleMode(string value) => value switch
     {
         "once" => IdleNotificationMode.Once,
@@ -4496,6 +4814,9 @@ internal sealed partial class CoordinationOwnerStore
             "idle_subscription_unavailable", StatusCodes.Status503ServiceUnavailable)
     };
 
+    /// <summary>
+    /// Maps a supported idle-notification mode to its persisted representation.
+    /// </summary>
     private static string ToDatabaseIdleMode(IdleNotificationMode mode) => mode switch
     {
         IdleNotificationMode.Once => "once",
@@ -4504,18 +4825,29 @@ internal sealed partial class CoordinationOwnerStore
             "idle_subscription_invalid", StatusCodes.Status400BadRequest)
     };
 
+    /// <summary>
+    /// Requires the actor to match the issuer and subject that own the session row.
+    /// </summary>
+    /// <exception cref="CoordinationException">The actor does not own the session.</exception>
     private static void RequireWriter(SessionRow session, CoordinationActor actor)
     {
         if (session.WriterIssuer != actor.Issuer || session.WriterSubject != actor.Subject)
             throw new CoordinationException("session_writer_mismatch", StatusCodes.Status403Forbidden);
     }
 
+    /// <summary>
+    /// Requires the actor to match the issuer and subject that accepted the run.
+    /// </summary>
     private static void RequireRunOwner(AcceptedRunRow run, CoordinationActor actor)
     {
         if (run.AcceptedIssuer != actor.Issuer || run.AcceptedSubject != actor.Subject)
             throw new CoordinationException("run_owner_mismatch", StatusCodes.Status403Forbidden);
     }
 
+    /// <summary>
+    /// Rejects stale-fence, failed-run, or non-active session state before active work proceeds.
+    /// </summary>
+    /// <exception cref="CoordinationException">The session is stale, inactive, or requires run recovery.</exception>
     private static void RequireCurrentActiveSession(SessionRow session, AcceptedRunRow run)
     {
         if (session.ExecutionFence != run.Fence)
@@ -4526,6 +4858,9 @@ internal sealed partial class CoordinationOwnerStore
             throw new CoordinationException("session_unavailable", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Requires positive accepted revisions, a context revision, and an object-valued selection snapshot.
+    /// </summary>
     private static void ValidateSelection(EffectiveRunSelection selection)
     {
         if (selection.ProjectRevision < 1 || selection.ProjectConfigurationRevision < 1 ||
@@ -4536,12 +4871,18 @@ internal sealed partial class CoordinationOwnerStore
         CoordinationIdentity.ValidateIdentity(selection.RunId, "run_id");
     }
 
+    /// <summary>
+    /// Adds the project and run parameters shared by owner-scoped SQL commands.
+    /// </summary>
     private static void AddRunScope(NpgsqlCommand command, string projectId, string runId)
     {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, projectId);
         command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, runId);
     }
 
+    /// <summary>
+    /// Derives a stable opaque runtime turn identifier from the session, execution fence, and turn ordinal.
+    /// </summary>
     private static string CreateRuntimeTurnId(
         SessionIdentity identity,
         long executionFence,
@@ -4561,6 +4902,9 @@ internal sealed partial class CoordinationOwnerStore
         return $"turn-{Convert.ToHexStringLower(SHA256.HashData(bytes))}";
     }
 
+    /// <summary>
+    /// Rejects invalid and system-reserved PostgreSQL schema names.
+    /// </summary>
     private static void ValidateSchema(string schema)
     {
         if (string.IsNullOrWhiteSpace(schema) || schema.Length > 63 ||
@@ -4571,6 +4915,9 @@ internal sealed partial class CoordinationOwnerStore
             throw new ArgumentException("A non-reserved lowercase schema identifier is required.", nameof(schema));
     }
 
+    /// <summary>
+    /// Holds the accepted run binding and its current execution state as read from PostgreSQL.
+    /// </summary>
     private sealed record AcceptedRunRow(
         string SelectionHash,
         string AcceptedIssuer,
@@ -4583,6 +4930,9 @@ internal sealed partial class CoordinationOwnerStore
         string? ExecutionCauseCode,
         string? ExecutionReference);
 
+    /// <summary>
+    /// Holds persisted session-tree, turn, fencing, and work-plan association state.
+    /// </summary>
     private sealed record SessionRow(
         string SessionId,
         string? ParentSessionId,
@@ -4603,15 +4953,24 @@ internal sealed partial class CoordinationOwnerStore
         DateTimeOffset? ArchivedAt,
         string? WorkPlanItemId);
 
+    /// <summary>
+    /// Returns the registered child together with a spawn result when the command requested one.
+    /// </summary>
     private sealed record SessionRegistrationResult(
         RegisteredChild Registered,
         SpawnedSession? Spawned);
 
+    /// <summary>
+    /// Holds the persisted subscriber and notification mode for an idle subscription.
+    /// </summary>
     private sealed record IdleSubscriptionRow(
         Guid SubscriptionId,
         string SubscriberSessionId,
         IdleNotificationMode Mode);
 
+    /// <summary>
+    /// Holds the stored result needed to determine whether a message retry is an exact duplicate.
+    /// </summary>
     private sealed record ExistingMessage(
         Guid MessageId,
         string RecipientSessionId,
@@ -4619,6 +4978,9 @@ internal sealed partial class CoordinationOwnerStore
         string? RequestId,
         bool CanonicalRequestMatches);
 
+    /// <summary>
+    /// Holds immutable message identity, routing, writer, fence, and delivery fields from the owner store.
+    /// </summary>
     private sealed record StoredMessage(
         string ProjectId,
         string RunId,

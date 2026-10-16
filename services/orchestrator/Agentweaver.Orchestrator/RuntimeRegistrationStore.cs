@@ -9,8 +9,14 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Persists immutable runtime-registration revisions and locks each registration head during state changes.
+/// </summary>
 internal sealed class RuntimeRegistrationStore
 {
+    /// <summary>
+    /// Maximum page size when looking up registration candidates for a session.
+    /// </summary>
     internal const int MaximumCandidateIdPageSize = 32;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -23,6 +29,10 @@ internal sealed class RuntimeRegistrationStore
     private readonly string _heads;
     private readonly string _revisions;
 
+    /// <summary>
+    /// Creates a registration store for the validated non-reserved PostgreSQL schema.
+    /// </summary>
+    /// <exception cref="ArgumentException">Thrown when the schema name is invalid or reserved.</exception>
     public RuntimeRegistrationStore(NpgsqlDataSource dataSource, string schema, TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(dataSource);
@@ -39,6 +49,10 @@ internal sealed class RuntimeRegistrationStore
     }
 
     // Only the authenticated owner adapter may supply this server-derived binding.
+    /// <summary>
+    /// Inserts or reuses the active registration for a binding, revalidating authority before commit.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when an existing binding conflicts, expires, or becomes stale.</exception>
     internal async Task<RuntimeRegistration> RegisterAsync(
         RuntimeBinding serverDerivedBinding, DateTimeOffset ownerBoundExpiresAt,
         CancellationToken cancellationToken,
@@ -91,6 +105,10 @@ internal sealed class RuntimeRegistrationStore
         return registered;
     }
 
+    /// <summary>
+    /// Revokes the expected active registration and creates a deterministic replacement for a resume operation.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the released registration is not current or the replacement conflicts.</exception>
     internal async Task<RuntimeRegistration> ReplaceAsync(
         RuntimeRegistration expected,
         Guid operationId,
@@ -210,6 +228,10 @@ internal sealed class RuntimeRegistrationStore
         return replacement;
     }
 
+    /// <summary>
+    /// Reads the current revision, optionally holding a shared head lock while authority is revalidated.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the registration is invalid or unavailable during revalidation.</exception>
     internal async Task<RuntimeRegistration?> ReadAsync(
         Guid runtimeInstanceId, CancellationToken cancellationToken,
         Func<RuntimeRegistration, CancellationToken, Task>? revalidateCurrentAuthority = null)
@@ -258,6 +280,10 @@ internal sealed class RuntimeRegistrationStore
         return registration;
     }
 
+    /// <summary>
+    /// Reads an ordered page of runtime IDs whose current binding names the requested session.
+    /// </summary>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when the page size exceeds the configured maximum.</exception>
     internal async Task<IReadOnlyList<Guid>> ReadCandidateRuntimeIdsPageAsync(
         string projectId,
         string runId,
@@ -295,6 +321,10 @@ internal sealed class RuntimeRegistrationStore
         return ids;
     }
 
+    /// <summary>
+    /// Revokes the current active revision, treating an already completed matching revocation as an idempotent replay.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the ID, revision, or current state is invalid or stale.</exception>
     internal async Task<RuntimeRegistration> RevokeAsync(
         Guid runtimeInstanceId, long expectedRevision, CancellationToken cancellationToken)
     {
@@ -343,6 +373,9 @@ internal sealed class RuntimeRegistrationStore
         return revoked;
     }
 
+    /// <summary>
+    /// Locks a registration head and reads the revision it identifies within the same transaction.
+    /// </summary>
     private async Task<(RuntimeRegistration Registration, string BindingJson, string BindingHash)?>
         ReadCurrentAfterHeadLockAsync(
             NpgsqlConnection connection,
@@ -376,6 +409,9 @@ internal sealed class RuntimeRegistrationStore
         return (ReadRegistration(reader), reader.GetString(2), reader.GetString(3));
     }
 
+    /// <summary>
+    /// Appends one immutable registration revision within the caller's transaction.
+    /// </summary>
     private async Task InsertRevisionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         string bindingJson, string bindingHash, CancellationToken cancellationToken)
@@ -395,6 +431,9 @@ internal sealed class RuntimeRegistrationStore
         await insert.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// Derives the stable replacement ID from the released runtime and resume operation IDs.
+    /// </summary>
     private static Guid CreateReplacementId(Guid releasedRuntimeInstanceId, Guid operationId)
     {
         var input = Encoding.UTF8.GetBytes(
@@ -402,6 +441,10 @@ internal sealed class RuntimeRegistrationStore
         return new Guid(SHA256.HashData(input).AsSpan(0, 16));
     }
 
+    /// <summary>
+    /// Deserializes and verifies a registration revision read from PostgreSQL.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown when stored binding JSON or its hash is invalid.</exception>
     internal static RuntimeRegistration ReadRegistration(NpgsqlDataReader reader)
     {
         var binding = JsonSerializer.Deserialize<RuntimeBinding>(reader.GetString(2), JsonOptions)
@@ -417,6 +460,10 @@ internal sealed class RuntimeRegistrationStore
         return registration;
     }
 
+    /// <summary>
+    /// Requires a registration to be active and unexpired at the store's current time.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the registration is revoked or expired.</exception>
     private void RequireAvailable(RuntimeRegistration registration)
     {
         if (registration.State != RuntimeRegistrationState.Active ||

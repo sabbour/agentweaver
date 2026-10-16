@@ -24,6 +24,10 @@ import {
 
 type TimeRange = '7d' | '30d' | '90d';
 
+/**
+ * Project agent usage view. It joins project metrics with team roles and adapts the
+ * aggregate rows to the shared per-run token breakdown component.
+ */
 const useStyles = makeStyles({
   tileGrid: {
     display: 'grid',
@@ -34,6 +38,7 @@ const useStyles = makeStyles({
   },
 });
 
+/** Builds UTC date boundaries for the selected observability metrics range. */
 function timeRangeDates(range: TimeRange): { from: string; to: string } {
   const to = new Date();
   const from = new Date(to);
@@ -44,6 +49,7 @@ function timeRangeDates(range: TimeRange): { from: string; to: string } {
   return { from: from.toISOString(), to: to.toISOString() };
 }
 
+/** Formats API and other metrics errors for the observability page. */
 function formatError(error: unknown): string {
   return error instanceof ApiError
     ? `API error ${error.status}: ${error.body}`
@@ -52,6 +58,7 @@ function formatError(error: unknown): string {
       : String(error);
 }
 
+/** Uses locale-aware compact notation for high-volume usage totals. */
 function compactNumber(value: number): string {
   return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 }
@@ -67,6 +74,8 @@ export function ObservabilityAgentsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Resolve roles for active and retired members; do not overwrite newer route state
+  // when the project changes while the team request is pending.
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
@@ -89,6 +98,8 @@ export function ObservabilityAgentsPage() {
     return () => { cancelled = true; };
   }, [projectId]);
 
+  // Refresh project and metrics together for the selected time range. Project
+  // metadata is optional; metrics errors remain visible and stale requests are ignored.
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
@@ -109,6 +120,8 @@ export function ObservabilityAgentsPage() {
     return () => { cancelled = true; };
   }, [projectId, range, reloadKey]);
 
+  // Adapt aggregate project rows to the shared breakdown contract; the project id is
+  // used as the display context because this page summarizes multiple runs.
   const breakdown = useMemo<RunAgentTokenBreakdownDto | null>(() => {
     if (!metrics) return null;
     const rows = metrics.agentBreakdown ?? [];
@@ -122,6 +135,7 @@ export function ObservabilityAgentsPage() {
     };
   }, [metrics, projectId]);
 
+  /** Totals agent rows, invocations, tokens, and credits for the summary tiles. */
   const summary = useMemo(() => {
     const rows = breakdown?.breakdown ?? [];
     return {

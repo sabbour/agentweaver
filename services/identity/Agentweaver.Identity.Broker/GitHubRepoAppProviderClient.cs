@@ -6,11 +6,13 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity.Broker;
 
+/// <summary>OAuth client settings required for GitHub Repo App authorization-code exchanges.</summary>
 internal sealed record GitHubRepoAppProviderOptions(
     string ClientId,
     string ClientSecret,
     Uri CallbackUri);
 
+/// <summary>Normalized upstream failure classes used to decide whether token rotation can safely continue.</summary>
 internal enum GitHubRepoAppProviderFailure
 {
     PermissionDenied,
@@ -22,6 +24,7 @@ internal enum GitHubRepoAppProviderFailure
     OutcomeUncertain
 }
 
+/// <summary>Provider failure with a safe category and optional HTTP status, never a credential-bearing response body.</summary>
 internal sealed class GitHubRepoAppProviderException(
     GitHubRepoAppProviderFailure failure,
     string message,
@@ -33,16 +36,19 @@ internal sealed class GitHubRepoAppProviderException(
     public HttpStatusCode? StatusCode { get; } = statusCode;
 }
 
+/// <summary>New access and refresh credentials returned by GitHub; callers must invalidate both after use.</summary>
 internal sealed record GitHubRepoAppTokenSet(
     SecretCredential AccessToken,
     SecretCredential RefreshToken);
 
+/// <summary>GitHub App installation identity and repository-selection mode returned by the API.</summary>
 internal sealed record GitHubRepoAppInstallationMetadata(
     long InstallationId,
     string AccountLogin,
     string AccountType,
     string RepositorySelection);
 
+/// <summary>Repository metadata tied to the installation through which it was discovered.</summary>
 internal sealed record GitHubRepoAppRepository(
     long InstallationId,
     long RepositoryId,
@@ -51,10 +57,16 @@ internal sealed record GitHubRepoAppRepository(
     bool IsPrivate,
     string DefaultBranch);
 
+/// <summary>Complete, paginated repository and installation snapshot for a connected GitHub user.</summary>
 internal sealed record GitHubRepoAppBrowseResult(
     IReadOnlyList<GitHubRepoAppRepository> Repositories,
     IReadOnlyList<GitHubRepoAppInstallationMetadata> Installations);
 
+/// <summary>
+/// Calls GitHub's OAuth and REST endpoints without following redirects, bounds response
+/// sizes, validates returned token and repository fields, and classifies uncertain refresh
+/// outcomes so callers do not replay a possibly consumed refresh token.
+/// </summary>
 internal sealed class GitHubRepoAppProviderClient
 {
     private const int PageSize = 100;
@@ -84,6 +96,7 @@ internal sealed class GitHubRepoAppProviderClient
             throw new ArgumentException("Repo App OAuth configuration is invalid.", nameof(options));
     }
 
+    /// <summary>Exchanges an authorization code and PKCE verifier for short-lived credentials.</summary>
     public Task<GitHubRepoAppTokenSet> ExchangeCodeAsync(
         string code,
         string codeVerifier,
@@ -99,6 +112,7 @@ internal sealed class GitHubRepoAppProviderClient
             },
             cancellationToken);
 
+    /// <summary>Rotates credentials with the current refresh token, classifying ambiguous outcomes as uncertain.</summary>
     public Task<GitHubRepoAppTokenSet> RefreshAsync(
         SecretCredential refreshToken,
         CancellationToken cancellationToken)
@@ -115,6 +129,7 @@ internal sealed class GitHubRepoAppProviderClient
             cancellationToken);
     }
 
+    /// <summary>Reads the login associated with the supplied access token and rejects an incomplete response.</summary>
     public async Task<string> ReadLoginAsync(
         SecretCredential accessToken,
         CancellationToken cancellationToken)
@@ -132,6 +147,10 @@ internal sealed class GitHubRepoAppProviderClient
             : throw InvalidResponse("GitHub did not return a user login.");
     }
 
+    /// <summary>
+    /// Reads every page of installations and their repositories, rejecting conflicting
+    /// IDs or malformed metadata before returning an ordered snapshot.
+    /// </summary>
     public async Task<GitHubRepoAppBrowseResult> BrowseAsync(
         SecretCredential accessToken,
         CancellationToken cancellationToken)

@@ -5,6 +5,7 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity;
 
+/// <summary>Environment-owner evidence that the registered placement is ready for runtime execution.</summary>
 public sealed record EnvironmentRuntimeReadinessContext(
     int ContractVersion,
     EnvironmentRuntimeBootstrapContext Placement,
@@ -13,15 +14,18 @@ public sealed record EnvironmentRuntimeReadinessContext(
     SandboxStartupTimeBudgets StartupBudgets,
     string WorkspaceMountPath);
 
+/// <summary>Environment-owner workspace attachment and transition context for a runtime.</summary>
 public sealed record EnvironmentRuntimeWorkspaceContext(
     int ContractVersion,
     EnvironmentRuntimeBootstrapContext Placement,
     WorkspaceVolumeAttachmentNegotiation Workspace,
     long TransitionRevision);
 
+/// <summary>Versioned request to resolve an environment profile for runtime bootstrap.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeBootstrapProfileResolveRequest(int ContractVersion)
 {
+    /// <summary>Requires the supported profile-resolution contract version.</summary>
     public RuntimeBootstrapProfileResolveRequest Validate()
     {
         if (ContractVersion != 1)
@@ -30,12 +34,14 @@ public sealed record RuntimeBootstrapProfileResolveRequest(int ContractVersion)
     }
 }
 
+/// <summary>Receipt linking the requested profile to the profile selected by the owner.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeBootstrapProfileResolveReceipt(
     int ContractVersion,
     string SourceProfileId,
     string ProfileId)
 {
+    /// <summary>Checks the receipt against the profile requested by the caller.</summary>
     public RuntimeBootstrapProfileResolveReceipt ValidateFor(string sourceProfileId)
     {
         if (ContractVersion != 1 ||
@@ -46,6 +52,7 @@ public sealed record RuntimeBootstrapProfileResolveReceipt(
     }
 }
 
+/// <summary>Request to configure the runtime with a registration, operation IDs, and settings payload.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeHostConfigureRequest(
     int ContractVersion,
@@ -61,6 +68,7 @@ public sealed record RuntimeHostConfigureRequest(
     public RuntimeResumeBootstrapRequest? ResumeBootstrap { get; init; }
 }
 
+/// <summary>Proof that identifies the runtime registration and source grant for an owner operation.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeHostSessionProof(
     int ContractVersion,
@@ -70,9 +78,11 @@ public sealed record RuntimeHostSessionProof(
     [property: JsonConverter(typeof(JsonStringEnumConverter<RuntimeCredentialPurpose>))]
     RuntimeCredentialPurpose Purpose);
 
+/// <summary>Request to refresh a source grant using a session proof and idempotent operation ID.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeHostRefreshRequest(RuntimeHostSessionProof Proof, Guid OperationId);
 
+/// <summary>Request to suspend a runtime and persist its manifest and optional workspace flush evidence.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeHostSuspendRequest(
     RuntimeHostSessionProof Proof, Guid OperationId, Guid ManifestId, long PhaseVersion)
@@ -81,6 +91,7 @@ public sealed record RuntimeHostSuspendRequest(
     public WorkspaceVolumeFlushRequest? WorkspaceFlush { get; init; }
 }
 
+/// <summary>Owner receipt for a suspended runtime, durable turn, cache, and optional flushed workspace.</summary>
 public sealed record RuntimeHostSuspendReceipt(
     int ContractVersion,
     Guid OperationId,
@@ -97,6 +108,7 @@ public sealed record RuntimeHostSuspendReceipt(
     public SessionMaterialAcknowledgment? ConfigurationAcknowledgment { get; init; }
 }
 
+/// <summary>Receipt confirming image and startup observations for one registered runtime.</summary>
 public sealed record RuntimeHostReadinessReceipt(
     int ContractVersion,
     Guid RuntimeInstanceId,
@@ -113,6 +125,7 @@ public sealed record RuntimeHostReadinessReceipt(
     public RuntimeHostRecoveryReceipt? Recovery { get; init; }
 }
 
+/// <summary>Recovery source used to recreate a native SDK conversation.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter<RuntimeHostRecoveryMode>))]
 public enum RuntimeHostRecoveryMode
 {
@@ -121,9 +134,11 @@ public enum RuntimeHostRecoveryMode
     JournalRebuild
 }
 
+/// <summary>Hash and journal position evidence used when rebuilding native context from owner history.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeHostJournalRecoveryEvidence(long ThroughPosition, string JournalSha256);
 
+/// <summary>Authenticated evidence describing how the runtime recovered its native SDK session.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeHostRecoveryReceipt(
     int ContractVersion,
@@ -139,6 +154,7 @@ public sealed record RuntimeHostRecoveryReceipt(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeHostJournalRecoveryEvidence? Journal { get; init; }
 
+    /// <summary>Validates recovery evidence against the registration and matching SDK source.</summary>
     public RuntimeHostRecoveryReceipt ValidateFor(RuntimeRegistration registration)
     {
         ArgumentNullException.ThrowIfNull(registration);
@@ -186,14 +202,18 @@ public sealed record RuntimeHostRecoveryReceipt(
     }
 }
 
+/// <summary>Small health response describing the runtime host status.</summary>
 public sealed record RuntimeHostLivenessReceipt(string Status);
 
+/// <summary>Text content part in the runtime's A2A message representation.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeA2ATextPart(string Kind, string Text);
 
+/// <summary>Runtime proof and delivery mode attached to an A2A message.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeA2AMetadata(RuntimeHostSessionProof Runtime, AddressedMessageDeliveryMode DeliveryMode);
 
+/// <summary>Validated A2A text message shape sent to the runtime.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeA2AMessage(
     string Kind,
@@ -203,8 +223,10 @@ public sealed record RuntimeA2AMessage(
     ImmutableArray<RuntimeA2ATextPart> Parts,
     RuntimeA2AMetadata Metadata);
 
+/// <summary>Envelope for submitting one A2A message to a runtime host.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeA2ASendRequest(RuntimeA2AMessage Message);
 
+/// <summary>Runtime response containing the resulting A2A message content.</summary>
 public sealed record RuntimeA2AResponse(
     string Kind, Guid MessageId, string ContextId, string Role, ImmutableArray<RuntimeA2ATextPart> Parts);

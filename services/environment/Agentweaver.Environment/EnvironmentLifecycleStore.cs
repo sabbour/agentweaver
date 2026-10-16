@@ -7,6 +7,7 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Reports a coded Environment lifecycle rejection and may include a Sandbox provider attempt receipt.</summary>
 public sealed class EnvironmentLifecycleException(
     string code,
     string message,
@@ -16,6 +17,10 @@ public sealed class EnvironmentLifecycleException(
     public SandboxProviderAttemptReceipt? ProviderAttempt { get; } = providerAttempt;
 }
 
+/// <summary>
+/// Persists Environment lifecycle generations, provider-effect reservations, Sandbox leases, and workspace-volume state.
+/// Owner-scoped transactions serialize conflicting changes and make completed operations replayable.
+/// </summary>
 public sealed class EnvironmentLifecycleStore(
     NpgsqlDataSource dataSource,
     TimeProvider timeProvider) : IEnvironmentLifecycleStore
@@ -30,6 +35,7 @@ public sealed class EnvironmentLifecycleStore(
     private const string SandboxProviderAttempts = $"{Schema}.\"sandbox_provider_attempts\"";
     private const string SandboxLateResourceCleanups = $"{Schema}.\"sandbox_late_resource_cleanups\"";
 
+    /// <summary>Reads the lifecycle snapshot for the complete tenant/project/run/Environment owner key.</summary>
     public async Task<EnvironmentLifecycleSnapshot?> GetAsync(
         EnvironmentOwnerIdentity owner,
         CancellationToken cancellationToken)
@@ -39,6 +45,8 @@ public sealed class EnvironmentLifecycleStore(
         return await ReadOwnerAsync(connection, null, owner, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Requires the exact Environment owner to be active at the supplied lifecycle generation.</summary>
+    /// <exception cref="EnvironmentLifecycleException">The owner is missing, released, or at a different generation.</exception>
     public async Task<EnvironmentLifecycleSnapshot> RequireActiveAsync(
         EnvironmentGenerationFence fence,
         CancellationToken cancellationToken)
@@ -60,6 +68,10 @@ public sealed class EnvironmentLifecycleStore(
         return current;
     }
 
+    /// <summary>
+    /// Applies a lifecycle transition under an owner lock and records its idempotency result in the same transaction.
+    /// The optional authority check runs before commit, including on exact replays.
+    /// </summary>
     public async Task<EnvironmentLifecycleTransitionResult> TransitionAsync(
         EnvironmentLifecycleTransitionRequest request,
         CancellationToken cancellationToken,
@@ -196,6 +208,7 @@ public sealed class EnvironmentLifecycleStore(
         return new(snapshot, Replayed: false);
     }
 
+    /// <summary>Reserves one generation-fenced network effect, replaying only an identical idempotency request.</summary>
     public async Task<EnvironmentNetworkEffectReservation> ReserveNetworkEffectAsync(
         EnvironmentGenerationFence fence,
         string resourceId,
@@ -316,6 +329,7 @@ public sealed class EnvironmentLifecycleStore(
         }
     }
 
+    /// <summary>Reads a network reservation only when its operation ID and Environment owner match.</summary>
     public async Task<EnvironmentNetworkEffectReservation> GetNetworkEffectAsync(
         Guid operationId,
         EnvironmentGenerationFence currentFence,
@@ -341,6 +355,7 @@ public sealed class EnvironmentLifecycleStore(
         return reservation;
     }
 
+    /// <summary>Requires the latest verified policy generation for a resource while taking the owner lock.</summary>
     public Task RequireVerifiedNetworkPolicyGenerationAsync(
         EnvironmentGenerationFence fence,
         string resourceId,
@@ -349,6 +364,7 @@ public sealed class EnvironmentLifecycleStore(
         VerifyNetworkPolicyGenerationAsync(fence, resourceId, policyGeneration,
             acquireOwnerLock: true, cancellationToken);
 
+    /// <summary>Reads the verified policy generation without reacquiring a lock already held by the caller.</summary>
     public Task ReadVerifiedNetworkPolicyGenerationAsync(
         EnvironmentGenerationFence fence,
         string resourceId,
@@ -357,6 +373,7 @@ public sealed class EnvironmentLifecycleStore(
         VerifyNetworkPolicyGenerationAsync(fence, resourceId, policyGeneration,
             acquireOwnerLock: false, cancellationToken);
 
+    /// <summary>Checks the latest completed policy effect and rejects unresolved effects before trusting a generation.</summary>
     private async Task VerifyNetworkPolicyGenerationAsync(
         EnvironmentGenerationFence fence,
         string resourceId,
@@ -409,6 +426,7 @@ public sealed class EnvironmentLifecycleStore(
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Records whether a reserved network effect completed, may have applied, or requires reconciliation.</summary>
     public async Task<EnvironmentNetworkEffectReservation> CompleteNetworkEffectAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,
@@ -474,6 +492,7 @@ public sealed class EnvironmentLifecycleStore(
         };
     }
 
+    /// <summary>Marks a provider effect reconciled after its external policy state is checked against the reservation.</summary>
     public async Task<EnvironmentNetworkEffectReservation> MarkNetworkEffectReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence currentFence,
@@ -531,6 +550,7 @@ public sealed class EnvironmentLifecycleStore(
         value is { Length: 64 } &&
         value.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
+    /// <summary>Reads the current workspace-volume snapshot for one owner and volume identifier.</summary>
     public async Task<EnvironmentWorkspaceVolumeSnapshot?> GetWorkspaceVolumeAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -548,6 +568,7 @@ public sealed class EnvironmentLifecycleStore(
         return snapshot;
     }
 
+    /// <summary>Reads a volume snapshot on the caller's connection after checking its owner lifecycle fence.</summary>
     internal static async Task<EnvironmentWorkspaceVolumeSnapshot?> ReadWorkspaceVolumeInTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction,
         EnvironmentGenerationFence environmentFence, string volumeId, CancellationToken cancellationToken)
@@ -625,6 +646,7 @@ public sealed class EnvironmentLifecycleStore(
         return snapshot;
     }
 
+    /// <summary>Creates the initial volume row and stores its serialized specification under the owner fence.</summary>
     public async Task<EnvironmentWorkspaceVolumeSnapshot> CreateWorkspaceVolumeAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -660,6 +682,7 @@ public sealed class EnvironmentLifecycleStore(
             reservation.CurrentProviderBinding);
     }
 
+    /// <summary>Reserves a provision operation against the current volume revision before calling the storage provider.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeProvisionAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -680,6 +703,7 @@ public sealed class EnvironmentLifecycleStore(
             specificationJson: null,
             cancellationToken);
 
+    /// <summary>Records the provider resource after checking the provision reservation and owner fence.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeProvisionAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -699,6 +723,7 @@ public sealed class EnvironmentLifecycleStore(
             durableFlushVerified: false,
             cancellationToken);
 
+    /// <summary>Reconciles a provision reservation with the resource observed from the storage provider.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeProvisionReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -709,6 +734,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Provision,
             cancellationToken);
 
+    /// <summary>Reserves a replacement generation before provisioning the replacement storage resource.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeReplaceAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -729,6 +755,7 @@ public sealed class EnvironmentLifecycleStore(
             specificationJson: null,
             cancellationToken);
 
+    /// <summary>Records the replacement resource and tracks cleanup of the resource it superseded.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeReplaceAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -748,6 +775,7 @@ public sealed class EnvironmentLifecycleStore(
             durableFlushVerified: false,
             cancellationToken);
 
+    /// <summary>Reconciles a replacement operation against provider state after an uncertain result.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeReplaceReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -758,6 +786,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Replace,
             cancellationToken);
 
+    /// <summary>Reserves binding of a provisioned volume to the Environment workspace.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeBindAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -778,6 +807,7 @@ public sealed class EnvironmentLifecycleStore(
             specificationJson: null,
             cancellationToken);
 
+    /// <summary>Completes a volume bind only when its reservation and expected provider binding still match.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeBindAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -796,6 +826,7 @@ public sealed class EnvironmentLifecycleStore(
             durableFlushVerified: false,
             cancellationToken);
 
+    /// <summary>Reconciles a bind reservation against the provider's observed attachment state.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeBindReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -806,6 +837,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Bind,
             cancellationToken);
 
+    /// <summary>Reserves unbinding of the volume from its current workspace attachment.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeUnbindAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -826,6 +858,7 @@ public sealed class EnvironmentLifecycleStore(
             specificationJson: null,
             cancellationToken);
 
+    /// <summary>Records that the exact workspace volume attachment has been removed.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeUnbindAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -844,6 +877,7 @@ public sealed class EnvironmentLifecycleStore(
             durableFlushVerified: false,
             cancellationToken);
 
+    /// <summary>Reconciles an unbind reservation against the provider's observed attachment state.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeUnbindReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -854,6 +888,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Unbind,
             cancellationToken);
 
+    /// <summary>Reserves attachment of the workspace volume to a particular Sandbox placement.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeAttachAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -874,6 +909,7 @@ public sealed class EnvironmentLifecycleStore(
             specificationJson: null,
             cancellationToken);
 
+    /// <summary>Completes an attachment only when the expected volume and Sandbox generations match.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeAttachAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -892,6 +928,7 @@ public sealed class EnvironmentLifecycleStore(
             durableFlushVerified: false,
             cancellationToken);
 
+    /// <summary>Reconciles an attachment reservation against the provider's actual state.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeAttachReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -902,6 +939,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Attach,
             cancellationToken);
 
+    /// <summary>Reserves detachment from the current Sandbox placement.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeDetachAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -922,6 +960,7 @@ public sealed class EnvironmentLifecycleStore(
             specificationJson: null,
             cancellationToken);
 
+    /// <summary>Records successful detachment for the exact Sandbox and volume generations.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeDetachAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -942,6 +981,7 @@ public sealed class EnvironmentLifecycleStore(
             cancellationToken,
             beforeCommitCheck: beforeCommitCheck);
 
+    /// <summary>Reconciles a detach reservation against the provider's actual state.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeDetachReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -952,6 +992,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Detach,
             cancellationToken);
 
+    /// <summary>Reserves a workspace data flush before external work and binds it to the current data generation.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeFlushAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -973,6 +1014,7 @@ public sealed class EnvironmentLifecycleStore(
             specificationJson: null,
             cancellationToken);
 
+    /// <summary>Completes a flush after recording provider verification and advancing the volume data generation.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeFlushAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -992,6 +1034,7 @@ public sealed class EnvironmentLifecycleStore(
             durableFlushVerified,
             cancellationToken);
 
+    /// <summary>Completes a flush and stores its validated runtime-host evidence for later resume checks.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeFlushAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1010,6 +1053,7 @@ public sealed class EnvironmentLifecycleStore(
             effectVerified, durableFlushVerified: effectVerified, cancellationToken, evidence, beforeCommitCheck);
     }
 
+    /// <summary>Reconciles a flush after checking retained provider evidence and the expected data generation.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeFlushReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1020,6 +1064,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Flush,
             cancellationToken);
 
+    /// <summary>Reserves release only after the caller has satisfied the volume's detach and flush requirements.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeReleaseAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -1040,6 +1085,7 @@ public sealed class EnvironmentLifecycleStore(
             specificationJson: null,
             cancellationToken);
 
+    /// <summary>Reads the flush evidence recorded for a particular volume transition revision.</summary>
     public Task<WorkspaceVolumeFlushEvidence?> GetWorkspaceVolumeFlushEvidenceAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -1048,6 +1094,7 @@ public sealed class EnvironmentLifecycleStore(
         GetRetainedWorkspaceVolumeFlushEvidenceAsync(
             environmentFence, environmentFence, volumeId, targetTransitionRevision, cancellationToken);
 
+    /// <summary>Reads retained flush evidence from a source Environment after its workspace has been released.</summary>
     public async Task<WorkspaceVolumeFlushEvidence?> GetRetainedWorkspaceVolumeFlushEvidenceAsync(
         EnvironmentGenerationFence currentFence,
         EnvironmentGenerationFence sourceFence,
@@ -1099,6 +1146,7 @@ public sealed class EnvironmentLifecycleStore(
         return operation?.FlushEvidence;
     }
 
+    /// <summary>Completes release after verifying the reservation and recording provider cleanup state.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeReleaseAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1116,6 +1164,7 @@ public sealed class EnvironmentLifecycleStore(
             durableFlushVerified: false,
             cancellationToken);
 
+    /// <summary>Reconciles a release operation against the storage provider's observed resource state.</summary>
     public Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeReleaseReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -1126,6 +1175,7 @@ public sealed class EnvironmentLifecycleStore(
             EnvironmentWorkspaceVolumeOperation.Release,
             cancellationToken);
 
+    /// <summary>Claims one pending cleanup with a bounded lease so only one worker processes it at a time.</summary>
     public async Task<EnvironmentWorkspaceVolumeCleanupLease?> ClaimWorkspaceVolumeCleanupAsync(
         EnvironmentGenerationFence environmentFence,
         Guid? sourceReplaceOperationId,
@@ -1242,6 +1292,7 @@ public sealed class EnvironmentLifecycleStore(
         return lease;
     }
 
+    /// <summary>Completes or records failure for the cleanup item held by the supplied cleanup lease.</summary>
     public async Task<EnvironmentWorkspaceVolumeCleanupStatus> CompleteWorkspaceVolumeCleanupAsync(
         EnvironmentWorkspaceVolumeCleanupLease lease,
         WorkspaceVolumeReleaseReceipt receipt,
@@ -1301,6 +1352,7 @@ public sealed class EnvironmentLifecycleStore(
         return status;
     }
 
+    /// <summary>Returns a cleanup claim to the pending queue when its worker cannot finish processing it.</summary>
     public async Task ReleaseWorkspaceVolumeCleanupLeaseAsync(
         EnvironmentWorkspaceVolumeCleanupLease lease,
         CancellationToken cancellationToken)
@@ -1341,6 +1393,7 @@ public sealed class EnvironmentLifecycleStore(
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Reads cleanup status for one owner, returning null when no cleanup is pending.</summary>
     public async Task<EnvironmentWorkspaceVolumeCleanupStatus?> GetWorkspaceVolumeCleanupStatusAsync(
         EnvironmentGenerationFence environmentFence,
         Guid sourceReplaceOperationId,
@@ -1380,6 +1433,7 @@ public sealed class EnvironmentLifecycleStore(
             : null;
     }
 
+    /// <summary>Builds the transition command and reserves it under the current Environment owner fence.</summary>
     private Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeOperationAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -1404,6 +1458,7 @@ public sealed class EnvironmentLifecycleStore(
                 specificationJson),
             cancellationToken);
 
+    /// <summary>Locks the owner, validates expected volume revisions, and records an idempotent provider reservation.</summary>
     private async Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeTransitionCoreAsync(
         WorkspaceVolumeTransitionCommand request,
         CancellationToken cancellationToken)
@@ -1509,6 +1564,7 @@ public sealed class EnvironmentLifecycleStore(
         return ToVolumeReservation(operation, replayed: false);
     }
 
+    /// <summary>Completes or fences a reserved volume operation and updates owner effects in the same transaction.</summary>
     private async Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeTransitionCoreAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,
@@ -1676,6 +1732,7 @@ public sealed class EnvironmentLifecycleStore(
             replayed: false);
     }
 
+    /// <summary>Reconciles a reserved volume effect after comparing the provider's actual state with its target.</summary>
     private async Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeTransitionReconciledCoreAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,
@@ -2207,6 +2264,7 @@ public sealed class EnvironmentLifecycleStore(
                 "The owner-fenced workspace-volume operation changed before its result was recorded.");
     }
 
+    /// <summary>Computes the target volume phase and revisions allowed for the requested operation.</summary>
     private static WorkspaceVolumeTarget ValidateWorkspaceVolumeTransition(
         WorkspaceVolumeTransitionCommand request,
         WorkspaceVolumeState? current)
@@ -2426,6 +2484,7 @@ public sealed class EnvironmentLifecycleStore(
             FlushEvidence = operation.FlushEvidence
         };
 
+    /// <summary>Blocks Environment release while any Sandbox lease or workspace-volume resource remains active.</summary>
     private static async Task EnsureOwnerResourcesReleasedAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2496,6 +2555,7 @@ public sealed class EnvironmentLifecycleStore(
                 "Environment release requires every owner-recorded provider effect to be released or reconciled first.");
     }
 
+    /// <summary>Blocks a lifecycle generation advance until the prior Sandbox lease is released.</summary>
     private static async Task EnsureSandboxReleasedBeforeFenceAdvanceAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2548,6 +2608,7 @@ public sealed class EnvironmentLifecycleStore(
             : null;
     }
 
+    /// <summary>Checks owner state and generation within the caller's transaction before committing an effect.</summary>
     private static async Task RequireActiveInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2570,6 +2631,7 @@ public sealed class EnvironmentLifecycleStore(
                 "The Environment lifecycle fence is stale.");
     }
 
+    /// <summary>Reports whether a failed insert/update reflects a missing, released, or stale owner fence.</summary>
     private static async Task ThrowOwnerConflictAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2591,6 +2653,10 @@ public sealed class EnvironmentLifecycleStore(
             "The expected Environment lifecycle generation is stale.");
     }
 
+    /// <summary>
+    /// Takes a transaction-scoped advisory lock derived from all length-prefixed owner fields.
+    /// Callers use it to serialize independent lifecycle and provider mutations for the same Environment.
+    /// </summary>
     internal static async Task AcquireOwnerLockAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -2866,6 +2932,7 @@ public sealed class EnvironmentLifecycleStore(
         }
     }
 
+    /// <summary>Validated request fields used to reserve or complete one workspace-volume transition.</summary>
     private sealed record WorkspaceVolumeTransitionCommand(
         EnvironmentGenerationFence EnvironmentFence,
         string VolumeId,
@@ -2880,6 +2947,7 @@ public sealed class EnvironmentLifecycleStore(
         public long TargetDataGeneration => NextDataGeneration ?? ExpectedDataGeneration;
     }
 
+    /// <summary>Current persisted volume lifecycle, resource, transition revision, and data generation.</summary>
     private sealed record WorkspaceVolumeState(
         long TransitionRevision,
         long ResourceGeneration,
@@ -2889,12 +2957,14 @@ public sealed class EnvironmentLifecycleStore(
         ProviderResourceRef? Resource,
         WorkspaceVolumeProviderBindingSnapshot? ProviderBinding);
 
+    /// <summary>Target volume state computed for a transition before it is written to storage.</summary>
     private sealed record WorkspaceVolumeTarget(
         long TransitionRevision,
         long ResourceGeneration,
         long DataGeneration,
         EnvironmentWorkspaceVolumeState State);
 
+    /// <summary>Persisted result fields for an in-flight workspace-volume provider operation.</summary>
     private sealed record WorkspaceVolumeOperation(
         Guid OperationId,
         EnvironmentOwnerIdentity Owner,
@@ -2919,7 +2989,10 @@ public sealed class EnvironmentLifecycleStore(
         WorkspaceVolumeProviderBindingSnapshot? ExpectedProviderBinding,
         WorkspaceVolumeProviderBindingSnapshot? TargetProviderBinding)
     {
+        /// <summary>Combines the owner identity and lifecycle generation used to fence this operation.</summary>
         public EnvironmentGenerationFence Fence => new(Owner, LifecycleGeneration);
+
+        /// <summary>Verified provider receipt retained for a flush so reconciliation can check the exact result.</summary>
         public WorkspaceVolumeFlushEvidence? FlushEvidence { get; init; }
     }
 }

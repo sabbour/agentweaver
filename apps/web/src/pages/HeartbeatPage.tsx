@@ -35,6 +35,7 @@ import {
 // catalog (exactly two: Coordinator Heartbeat + Checkpoint GC), and the recent
 // tick activity timeline (acted/errors/duration). Real data only — no invented rows.
 
+/** Global interval for the optional service-status refresh loop. */
 const REFRESH_MS = 15000;
 
 const useStyles = makeStyles({
@@ -57,6 +58,7 @@ const useStyles = makeStyles({
   },
 });
 
+/** Converts an ISO timestamp to a compact age label, preserving invalid input. */
 function relativeTime(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
   const seconds = Math.floor(diffMs / 1000);
@@ -69,6 +71,7 @@ function relativeTime(iso: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+/** Maps known heartbeat service states to their badge severity. */
 function heartbeatStatusColor(status: string): 'success' | 'warning' | 'danger' | 'subtle' {
   if (status === 'running' || status === 'idle') return 'success';
   if (status === 'waiting_first_tick') return 'warning';
@@ -76,6 +79,7 @@ function heartbeatStatusColor(status: string): 'success' | 'warning' | 'danger' 
   return 'danger';
 }
 
+/** Shows one automation's service-reported state, cadence, and last run. */
 function AutomationCard({
   automation,
   styles,
@@ -105,6 +109,8 @@ function AutomationCard({
 
 export function HeartbeatPage() {
   const styles = useStyles();
+  // The latest server snapshot is kept separate from refresh state so prior status
+  // remains visible if a later refresh fails.
   const [data, setData] = useState<HeartbeatStatusDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -118,6 +124,7 @@ export function HeartbeatPage() {
         ? err.message
         : String(err);
 
+  /** Fetches heartbeat status and ignores state updates after effect cleanup. */
   const load = useCallback(async (signal: { cancelled: boolean }) => {
     try {
       const dto = await apiClient.getHeartbeatStatus();
@@ -129,6 +136,7 @@ export function HeartbeatPage() {
     }
   }, []);
 
+  // Fetch on entry; when enabled, reuse the same cancellation signal for the poll.
   useEffect(() => {
     const signal = { cancelled: false };
     const runLoad = () => {

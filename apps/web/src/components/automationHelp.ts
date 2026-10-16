@@ -1,3 +1,4 @@
+/** Shared help text for automation controls on orchestration, pickup, and run surfaces. */
 // Shared, verbatim help copy for the automation toggles (Autopilot / Auto-approve
 // tools). Centralized so the explanation stays consistent across the coordinator
 // orchestration toolbar, the per-run header, and the project pickup defaults. Only
@@ -9,6 +10,7 @@ const AUTOPILOT_BASE =
 const AUTO_APPROVE_BASE =
   "Automatically approves tool calls so agents don't pause for each one — except tools blocked by sandbox policy (destructive shell / network), which always require explicit approval.";
 
+/** Per-surface copy assembled from the shared descriptions and their scope clauses. */
 export const AUTOMATION_HELP = {
   // Coordinator orchestration toolbar (cascades to child runs).
   autopilotOrchestration: `${AUTOPILOT_BASE} Applies to this orchestration and its child runs.`,

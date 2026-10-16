@@ -27,6 +27,7 @@ import {
   StatTile,
 } from '../../components/ui';
 
+/** Project-level trace index for recent coordinator runs and their terminal diagnostics. */
 const useStyles = makeStyles({
   tileGrid: {
     display: 'grid',
@@ -75,6 +76,7 @@ const useStyles = makeStyles({
 
 const TRACE_PROMPT_COLLAPSED_LINES = 2;
 
+/** Formats trace-list failures for the page's status message. */
 function formatError(error: unknown): string {
   return error instanceof ApiError
     ? `API error ${error.status}: ${error.body}`
@@ -83,6 +85,7 @@ function formatError(error: unknown): string {
       : String(error);
 }
 
+/** Chooses a compact badge color from the run or orchestration status text. */
 function badgeColor(status: string): 'success' | 'warning' | 'danger' | 'subtle' {
   if (/(complete|merged)/i.test(status)) return 'success';
   if (/(failed|declined|blocked)/i.test(status)) return 'danger';
@@ -90,10 +93,12 @@ function badgeColor(status: string): 'success' | 'warning' | 'danger' | 'subtle'
   return 'subtle';
 }
 
+/** Treats any status outside the known terminal set as active for summary counts. */
 function isActiveStatus(status: string): boolean {
   return !/(complete|merged|failed|declined|blocked)/i.test(status);
 }
 
+/** Defers the trace tree mount briefly so expanding a run does not block the list interaction. */
 function TracePreview({ runId, roleByAgent }: { runId: string; roleByAgent: Record<string, string> }) {
   const [loading, setLoading] = useState(true);
 
@@ -114,6 +119,10 @@ function TracePreview({ runId, roleByAgent }: { runId: string; roleByAgent: Reco
   );
 }
 
+/**
+ * Shows the run prompt in a two-line preview when it overflows and remeasures after
+ * prompt, viewport, or container-size changes.
+ */
 function TraceCardPrompt({ prompt, runId }: { prompt: string; runId: string }) {
   const styles = useStyles();
   const [expandedPrompt, setExpandedPrompt] = useState<string>();
@@ -186,6 +195,10 @@ function TraceCardPrompt({ prompt, runId }: { prompt: string; runId: string }) {
   );
 }
 
+/**
+ * Loads a failed run's persisted diagnostic and exposes only validated correlation IDs
+ * and safe cause categories in the trace summary.
+ */
 function FailureDiagnosticPanel({
   projectId,
   runId,
@@ -196,6 +209,7 @@ function FailureDiagnosticPanel({
   const [diagnostic, setDiagnostic] = useState<RunTerminalDiagnostic | null>(null);
   const [availability, setAvailability] = useState<'loading' | 'unavailable' | 'expired' | 'unauthorized'>('loading');
 
+  // Ignore late responses after the panel switches to a different run or unmounts.
   useEffect(() => {
     let cancelled = false;
     apiClient.getRunTerminalDiagnostic(runId)
@@ -255,6 +269,7 @@ function FailureDiagnosticPanel({
   );
 }
 
+/** Lists recent coordinator traces, supports run/correlation deep links, and filters failures. */
 export function ObservabilityTracesPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
@@ -272,6 +287,7 @@ export function ObservabilityTracesPage() {
   const [error, setError] = useState<string | null>(null);
   const [failedOnly, setFailedOnly] = useState(false);
 
+  // Resolve agent role labels once per project for the trace span detail panel.
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
@@ -288,6 +304,7 @@ export function ObservabilityTracesPage() {
     return () => { cancelled = true; };
   }, [projectId]);
 
+  // Fetch the project's recent runs and label data; a refresh replaces the full snapshot.
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;

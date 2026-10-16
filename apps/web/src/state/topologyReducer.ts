@@ -7,6 +7,7 @@ import type {
   TopologyNode,
   WorkPlanResponse,
 } from '../api/types';
+
 /**
  * Pure reducer for the coordinator dynamic topology view (Feature 008 Phase 2).
  *
@@ -16,6 +17,7 @@ import type {
  * and `coordinator.steering` directives — all keyed by node id. Components render
  * purely from the accumulated state; they never derive dependencies or status.
  */
+/** Steering directive associated with the node it currently targets. */
 export interface NodeSteering {
   directiveId: string;
   kind: SteerKind;
@@ -23,8 +25,10 @@ export interface NodeSteering {
   instruction?: string;
 }
 
+/** Server-authored topology node with its most recently observed steering state. */
 export type TopologyNodeState = TopologyNode & { steering?: NodeSteering };
 
+/** Accumulated server topology plus ordering and work-plan data for the view. */
 export interface CoordinatorTopologyState {
   hasSnapshot: boolean;
   version: number;
@@ -37,6 +41,7 @@ export interface CoordinatorTopologyState {
   workPlan?: CoordinatorWorkPlan;
 }
 
+/** Empty topology before a server snapshot or REST work-plan seed is applied. */
 export const initialTopologyState: CoordinatorTopologyState = {
   hasSnapshot: false,
   version: 0,
@@ -57,10 +62,12 @@ const SUBTASK_STATUS_FROM_TYPE: Record<string, string> = {
   'subtask.pending_capacity': 'pending_capacity',
 };
 
+/** Returns a string representation only when the incoming value is present. */
 function str(value: unknown): string | undefined {
   return value != null ? String(value) : undefined;
 }
 
+/** Maps child-run progress to the topology's live running state when applicable. */
 function normalizeChildRunStatus(status: string | undefined): string | undefined {
   const normalized = status?.toLowerCase().replace(/[^a-z_]/g, '');
   switch (normalized) {
@@ -76,6 +83,7 @@ function normalizeChildRunStatus(status: string | undefined): string | undefined
 // Read a node's display fields, tolerating both the field names in the Phase 2
 // brief (title/assignedAgent/selectedModelId) and the names the backend actually
 // emits (label/agent/model). Thin client — we surface whatever the server sends.
+/** Reads supported server node fields while tolerating both documented wire aliases. */
 function readNodeFields(raw: Record<string, unknown>): Partial<TopologyNodeState> {
   return {
     kind: raw['kind'] === 'coordinator' ? 'coordinator' : raw['kind'] === 'subtask' ? 'subtask' : undefined,
@@ -127,6 +135,7 @@ function mergeNode(
   return { ...state, nodeOrder, nodes: { ...state.nodes, [id]: merged } };
 }
 
+/** Parses a topology node payload and ignores nodes without an identifier. */
 function nodeFromPayload(raw: Record<string, unknown>): { id: string; node: Partial<TopologyNodeState> } | null {
   const id = str(raw['id']);
   if (!id) return null;
@@ -155,6 +164,10 @@ function resolveSubtaskNodeId(
   });
 }
 
+/**
+ * Folds one coordinator stream event into topology state without creating nodes
+ * from subtask status alone; snapshots and topology deltas define node membership.
+ */
 export function topologyReducer(
   state: CoordinatorTopologyState,
   evt: RunStreamEvent,
@@ -289,7 +302,7 @@ export function topologyReducer(
   }
 }
 
-/** Fold the accumulated SSE event list into topology state, starting from `seed`. */
+/** Folds SSE events into topology state, starting from an optional REST seed. */
 export function buildTopologyState(
   events: RunStreamEvent[],
   seed: CoordinatorTopologyState = initialTopologyState,

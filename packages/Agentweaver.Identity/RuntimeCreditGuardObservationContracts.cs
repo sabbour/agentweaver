@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace Agentweaver.Identity;
 
+/// <summary>Run-bound inputs that define the credit guard's root-run accounting intent.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeCreditGuardIntent(
     int ContractVersion,
@@ -17,6 +18,7 @@ public sealed record RuntimeCreditGuardIntent(
     decimal? SoftCreditLimit,
     decimal? HardCreditLimit);
 
+/// <summary>Authenticated request to read a guard snapshot for one exact credit intent.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeCreditGuardReadRequest(
     RuntimeCredentialHttpRequest Authorization,
@@ -25,6 +27,7 @@ public sealed record RuntimeCreditGuardReadRequest(
     public override string ToString() => nameof(RuntimeCreditGuardReadRequest) + " [REDACTED]";
 }
 
+/// <summary>Owner snapshot of accounted cost, ledger position, warning/cap state, and canonical hash.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeCreditGuardSnapshot(
     int ContractVersion,
@@ -42,8 +45,10 @@ public sealed record RuntimeCreditGuardSnapshot(
     DateTimeOffset UpdatedAt,
     string CanonicalPayloadHash);
 
+/// <summary>Creates and verifies credit-guard observation contracts against registration state.</summary>
 public static class RuntimeCreditGuardObservationContract
 {
+    /// <summary>Builds the immutable intent directly from the current registration binding.</summary>
     public static RuntimeCreditGuardIntent CreateIntent(
         RuntimeRegistration registration, string rootSessionId)
     {
@@ -56,6 +61,7 @@ public static class RuntimeCreditGuardObservationContract
             binding.CopilotSoftCreditLimit, binding.CopilotHardCreditLimit);
     }
 
+    /// <summary>Validates a read request and its run-bound intent shape.</summary>
     public static void ValidateReadRequest(RuntimeCreditGuardReadRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -63,12 +69,14 @@ public static class RuntimeCreditGuardObservationContract
         ValidateIntentShape(request.Intent);
     }
 
+    /// <summary>Returns a snapshot with a canonical hash over all other snapshot fields.</summary>
     public static RuntimeCreditGuardSnapshot Seal(RuntimeCreditGuardSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         return snapshot with { CanonicalPayloadHash = SnapshotHash(snapshot) };
     }
 
+    /// <summary>Checks a snapshot's intent, registration hash, accounting bounds, and canonical digest.</summary>
     public static void ValidateSnapshot(
         RuntimeCreditGuardSnapshot snapshot, RuntimeRegistration registration, RuntimeCreditGuardIntent intent)
     {
@@ -94,6 +102,7 @@ public static class RuntimeCreditGuardObservationContract
             throw new RuntimeAuthorizationException("runtime_credit_guard_observation_invalid");
     }
 
+    /// <summary>Requires exact agreement between a credit intent and the current registration.</summary>
     public static void RequireIntent(RuntimeCreditGuardIntent intent, RuntimeRegistration registration)
     {
         ArgumentNullException.ThrowIfNull(intent);

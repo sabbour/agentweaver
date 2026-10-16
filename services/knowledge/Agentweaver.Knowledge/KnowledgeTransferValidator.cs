@@ -5,6 +5,7 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Knowledge;
 
+/// <summary>Enforces the size, scope, payload, revision-chain, and replacement-link rules for transfers.</summary>
 internal static class KnowledgeTransferValidator
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -12,6 +13,8 @@ internal static class KnowledgeTransferValidator
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
+    /// <summary>Validates a complete transfer before export or import can use its contents.</summary>
+    /// <exception cref="KnowledgeApiException">The bundle is unsupported, malformed, out of scope, or too large.</exception>
     public static void Validate(
         KnowledgeRecordTransferBundle bundle,
         string projectId,
@@ -90,6 +93,8 @@ internal static class KnowledgeTransferValidator
                 errorStatusCode);
     }
 
+    /// <summary>Checks sequential revision numbers, immutable links, record-head agreement, and unique revision IDs.</summary>
+    /// <exception cref="KnowledgeApiException">A revision is invalid or the chain does not end at the record head.</exception>
     public static void ValidateRevisionChain(
         KnowledgeRecordTransferEntry entry,
         HashSet<Guid>? allRevisionIds = null,
@@ -199,6 +204,7 @@ internal static class KnowledgeTransferValidator
         (sourceRunId is null || sourceRunId.Length <= 256) &&
         (sourceSessionId is null || sourceSessionId.Length <= 256);
 
+    /// <summary>Requires a replacement link only for superseded Decisions.</summary>
     public static void ValidateSupersessionState(
         KnowledgeRecordKind kind,
         KnowledgeRecordState state,
@@ -212,6 +218,7 @@ internal static class KnowledgeTransferValidator
             throw Invalid(errorCode, "Superseded Decisions require exactly one replacement link.", errorStatusCode);
     }
 
+    /// <summary>Creates the standard payload-too-large response for transfer bounds.</summary>
     public static KnowledgeApiException TooLarge(string detail) =>
         new("knowledge_transfer_too_large", detail, StatusCodes.Status413PayloadTooLarge);
 

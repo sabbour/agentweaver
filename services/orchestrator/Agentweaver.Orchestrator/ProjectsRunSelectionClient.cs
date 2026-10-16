@@ -10,6 +10,10 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Reads accepted run selection and authorization from the Projects owner.
+/// It also resolves pinned remote-tool snapshots and verifies the runtime skill projection against accepted pins.
+/// </summary>
 internal sealed class ProjectsRunSelectionClient(
     HttpClient httpClient,
     OrchestratorOptions options,
@@ -20,6 +24,9 @@ internal sealed class ProjectsRunSelectionClient(
         UnmappedMemberHandling = System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow
     };
 
+    /// <summary>
+    /// Reads the run selection after requiring the caller's project-level accept-selection permission.
+    /// </summary>
     public async Task<EffectiveRunSelection> ReadAcceptedSelectionAsync(
         HttpContext context,
         string projectId,
@@ -28,6 +35,9 @@ internal sealed class ProjectsRunSelectionClient(
         (await ReadSelectionWithAuthorityAsync(
             context, projectId, runId, "acceptRunSelection", cancellationToken).ConfigureAwait(false)).Selection;
 
+    /// <summary>
+    /// Reads the run selection after requiring the caller's project-level read-selection permission.
+    /// </summary>
     public async Task<EffectiveRunSelection> ReadSelectionForReadAsync(
         HttpContext context,
         string projectId,
@@ -36,6 +46,9 @@ internal sealed class ProjectsRunSelectionClient(
         (await ReadSelectionWithAuthorityAsync(
             context, projectId, runId, "readRunSelection", cancellationToken).ConfigureAwait(false)).Selection;
 
+    /// <summary>
+    /// Reads accepted selection and refreshed authorization evidence for a dispatch or owner write.
+    /// </summary>
     public Task<AuthorizedRunSelection> ReadAcceptedSelectionWithAuthorityAsync(
         HttpContext context,
         string projectId,
@@ -44,11 +57,23 @@ internal sealed class ProjectsRunSelectionClient(
         ReadSelectionWithAuthorityAsync(
             context, projectId, runId, "acceptRunSelection", cancellationToken, refreshAuthority: true);
 
+    /// <summary>
+    /// Reads a run selection for a read-only operation and refreshes its authorization evidence.
+    /// </summary>
     internal Task<AuthorizedRunSelection> ReadSelectionForReadWithAuthorityAsync(
         HttpContext context, string projectId, string runId, CancellationToken cancellationToken) =>
         ReadSelectionWithAuthorityAsync(
             context, projectId, runId, "readRunSelection", cancellationToken, refreshAuthority: true);
 
+    /// <summary>
+    /// Reads the agent's run skills and verifies their revisions and digests against accepted configuration pins.
+    /// </summary>
+    /// <param name="context">The authenticated request context forwarded to Projects.</param>
+    /// <param name="registration">The runtime registration whose actor, agent, selection, and fence must match.</param>
+    /// <param name="cancellationToken">Cancels the Projects and authorization calls.</param>
+    /// <returns>The ordered, validated skill content for the assigned agent.</returns>
+    /// <exception cref="CoordinationException">Thrown when caller authority, selection, owner response, or skill pins are invalid or stale.</exception>
+    /// <remarks>Authorization is reread after the skill response, so an intervening role change rejects the projection.</remarks>
     public async Task<ImmutableArray<SkillRuntimeContentV1>> ReadAcceptedRunSkillsAsync(
         HttpContext context,
         RuntimeRegistration registration,
@@ -128,6 +153,10 @@ internal sealed class ProjectsRunSelectionClient(
         return skills;
     }
 
+    /// <summary>
+    /// Requires the Projects authorization context to grant this runtime binding read-selection access.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when actor, tenant, project, run, membership, or permission binding differs.</exception>
     private static void RequireSkillReadAuthority(
         ProjectsAuthorizationContext authority,
         RuntimeBinding binding)
@@ -147,6 +176,10 @@ internal sealed class ProjectsRunSelectionClient(
             throw new CoordinationException("run_selection_permission_denied", StatusCodes.Status403Forbidden);
     }
 
+    /// <summary>
+    /// Extracts enabled skill revision and digest pins assigned to the selected agent.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when accepted skill configuration is missing or malformed.</exception>
     private static ImmutableArray<(string SkillId, long Revision, string ContentDigest)> ReadAssignedSkillPins(
         JsonElement selection,
         string agentId)
@@ -200,9 +233,19 @@ internal sealed class ProjectsRunSelectionClient(
             .Select(pin => (pin.SkillId, pin.Revision, pin.ContentDigest)).ToImmutableArray();
     }
 
+    /// <summary>
+    /// Creates the bad-gateway error used for an invalid runtime skill response or pin set.
+    /// </summary>
     private static CoordinationException InvalidRuntimeSkillContent() =>
         new("runtime_skill_content_invalid", StatusCodes.Status502BadGateway);
 
+    /// <summary>
+    /// Reads and validates the current run selection using the requested permission and authority policy.
+    /// </summary>
+    /// <param name="requiredPermission">The project permission required before selection access.</param>
+    /// <param name="refreshAuthority">Whether authorization is reread after resolving selection references.</param>
+    /// <returns>The effective selection and the Projects authorization context that admitted it.</returns>
+    /// <exception cref="CoordinationException">Thrown when caller scope, owner response, selection contract, or permission is invalid.</exception>
     private async Task<AuthorizedRunSelection> ReadSelectionWithAuthorityAsync(
         HttpContext context,
         string projectId,
@@ -315,6 +358,10 @@ internal sealed class ProjectsRunSelectionClient(
         }
     }
 
+    /// <summary>
+    /// Resolves every reviewed remote-tool snapshot reference before accepting the selection contract.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when references are malformed, duplicated, outside the project, or unavailable.</exception>
     private async Task ResolveReviewedRemoteToolSnapshotsAsync(
         JsonElement selection,
         string projectId,
@@ -375,9 +422,16 @@ internal sealed class ProjectsRunSelectionClient(
         }
     }
 
+    /// <summary>
+    /// Creates the bad-gateway error used for a malformed reviewed-tool snapshot selection.
+    /// </summary>
     private static CoordinationException InvalidReviewedRemoteToolSelection() =>
         new("projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
 
+    /// <summary>
+    /// Reads the Projects authorization context with the caller's bearer and optional tenant selector.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when Projects denies the call or returns an invalid no-store contract.</exception>
     private async Task<ProjectsAuthorizationContext> ReadAuthorizationAsync(
         Uri owner,
         AuthenticationHeaderValue bearer,
@@ -408,6 +462,9 @@ internal sealed class ProjectsRunSelectionClient(
         }
     }
 
+    /// <summary>
+    /// Sends a Projects request without following redirects and maps transport failures to an owner-unavailable error.
+    /// </summary>
     private async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)
@@ -427,6 +484,10 @@ internal sealed class ProjectsRunSelectionClient(
         }
     }
 
+    /// <summary>
+    /// Resolves the configured Projects owner only when it is an absolute HTTPS origin without credentials or extra URI parts.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when the configured owner address is not a trusted origin.</exception>
     private static Uri RequireOwnerUri(string address)
     {
         if (!Uri.TryCreate(address, UriKind.Absolute, out var uri) ||
@@ -438,6 +499,9 @@ internal sealed class ProjectsRunSelectionClient(
         return uri;
     }
 
+    /// <summary>
+    /// Checks whether the caller's claims include the requested audience.
+    /// </summary>
     private static bool HasAudience(System.Security.Claims.ClaimsPrincipal principal, string expected) =>
         principal.FindAll("aud").Any(claim => claim.Value == expected);
 }
