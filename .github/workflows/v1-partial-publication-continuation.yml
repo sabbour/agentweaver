@@ -57,12 +57,16 @@ jobs:
           run-id: 38815873763
           artifact-ids: 12010379447
           path: artifacts/release/pack/
+          # By-ID downloads extract into path/<artifact-name>/ unless merged.
+          # The publisher reads provenance.json and archives at the path root.
+          merge-multiple: true
       - uses: actions/download-artifact@v4
         with:
           github-token: ${{ github.token }}
           run-id: 38815873763
           artifact-ids: 12010899427
           path: artifacts/release/original/
+          merge-multiple: true
       - name: Set up product Docker engine
         uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
         with:

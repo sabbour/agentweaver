@@ -595,3 +595,19 @@ test('remote image readback verifies manifest bytes and selects the one linux/am
 test('an explicit AgentHost measurement source must be an exact commit SHA', () => {
   assert.throws(() => measureAgentHostArchiveSync('archive.tar.gz', '.', 'HEAD'), /exact commit SHA/);
 });
+
+// actions/download-artifact@v4 extracts a by-ID download into path/<artifact-name>/
+// unless merge-multiple is set; the publisher reads both artifacts at their path roots.
+test('continuation workflow extracts both original artifacts at the paths the publisher reads', () => {
+  const workflow = readFileSync(path.join(root, P.workflowPath), 'utf8').replaceAll('\r\n', '\n');
+  for (const [artifactId, directory] of [
+    [P.packArtifactId, 'artifacts/release/pack/'],
+    [P.receiptArtifactId, 'artifacts/release/original/'],
+  ]) {
+    const step = new RegExp(
+      `run-id: ${P.runId}\\n\\s+artifact-ids: ${artifactId}\\n\\s+path: ${directory.replaceAll('/', '\\/')}\\n(?:\\s+#[^\\n]*\\n)*\\s+merge-multiple: true\\n`);
+    assert.match(workflow, step);
+  }
+  assert.match(workflow, /node scripts\/release\/publish\.mjs releases\/foundation\.json artifacts\/release\/pack\n/);
+  assert.match(workflow, /--original-receipt artifacts\/release\/original\/publication\.json\n/);
+});
