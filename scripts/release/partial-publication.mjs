@@ -184,11 +184,18 @@ function verifyOriginalWorkflowRun(run) {
 // The helper commit is admitted by a merged pull request into v1; the protected
 // environment approval on the continuation run is the human admission of that exact commit.
 export function verifyHelperAdmission(run, helperSha) {
-  const pulls = runGh(run, 'GET', `commits/${helperSha}/pulls`);
-  if (!Array.isArray(pulls) || !pulls.some(pull => typeof pull?.merged_at === 'string' && pull.merged_at &&
-      pull.base?.ref === P.branch && pull.base?.repo?.full_name === P.repository)) {
-    fail('the helper commit is not part of a pull request merged into v1');
+  if (!shaPattern.test(helperSha ?? '')) fail('the helper commit must be an exact SHA');
+  for (let page = 1; ; page += 1) {
+    const pulls = runGh(run, 'GET',
+      `pulls?state=closed&base=${encodeURIComponent(P.branch)}&sort=updated&direction=desc&per_page=100&page=${page}`);
+    if (!Array.isArray(pulls)) fail('the merged helper pull request lookup returned an invalid response');
+    if (pulls.some(pull => pull?.state === 'closed' &&
+        typeof pull.merged_at === 'string' && pull.merged_at &&
+        pull.merge_commit_sha === helperSha &&
+        pull.base?.ref === P.branch && pull.base?.repo?.full_name === P.repository)) return;
+    if (pulls.length < 100) break;
   }
+  fail('the helper commit is not the exact result of a pull request merged into v1');
 }
 
 export function verifyProtectedAdmission(run, runId) {

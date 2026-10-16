@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -10,12 +10,16 @@ import {
   isRegistryAbsent,
   originalBinding,
   readRemoteImage,
+  verifyHelperAdmission,
   verifyPartialPublicationCompletion,
 } from '../partial-publication.mjs';
 import { PARTIAL_PUBLICATION as P } from '../partial-publication-contract.mjs';
 import { measureAgentHostArchiveSync } from '../measure-agenthost-image.mjs';
+import { deployRelease, validatePublicationReceipt } from '../deploy.mjs';
+import { WEB_LOCK_PATH } from '../validate.mjs';
 
-const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'partial-publication', 'original-publication.json');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const fixture = path.join(root, 'scripts', 'release', 'tests', 'fixtures', 'partial-publication', 'original-publication.json');
 const originalBytes = readFileSync(fixture);
 const original = JSON.parse(originalBytes.toString('utf8'));
 const sha = value => createHash('sha256').update(value).digest('hex');
@@ -63,7 +67,8 @@ function newWorld(overrides = {}) {
         event: 'workflow_dispatch', run_attempt: 1, status: 'completed', conclusion: 'success',
       },
     },
-    pulls: [{ merged_at: '2026-10-20T00:00:00Z', base: { ref: 'v1', repo: { full_name: P.repository } } }],
+    pulls: [{ state: 'closed', merged_at: '2026-10-20T00:00:00Z', merge_commit_sha: HELPER,
+      base: { ref: 'v1', repo: { full_name: P.repository } } }],
     approvals: [{ state: 'approved', environments: [{ id: P.environmentId, name: P.environmentName }] }],
     failPush: undefined,
     failRefCreate: undefined,
@@ -114,7 +119,15 @@ function gh(world, args, input) {
   if (method === 'GET' && (match = /^git\/matching-refs\/tags\/(.+)$/.exec(endpoint))) {
     return [...world.refs.values()].filter(ref => ref.ref.startsWith(`refs/tags/${match[1]}`));
   }
-  if (method === 'GET' && /^commits\/[a-f0-9]{40}\/pulls$/.test(endpoint)) return world.pulls;
+  if (method === 'GET' && endpoint.startsWith('commits/') && endpoint.endsWith('/pulls')) return [];
+  if (method === 'GET' && endpoint.startsWith('pulls?')) {
+    const query = new URLSearchParams(endpoint.slice('pulls?'.length));
+    assert.equal(query.get('state'), 'closed');
+    assert.equal(query.get('base'), 'v1');
+    assert.equal(query.get('per_page'), '100');
+    const start = (Number(query.get('page')) - 1) * 100;
+    return world.pulls.slice(start, start + 100);
+  }
   const body = JSON.parse(input);
   if (method === 'POST' && endpoint === 'git/tags') {
     const objectSha = createHash('sha1').update(`${world.tagCounter++}`).digest('hex');
@@ -284,6 +297,9 @@ const worldRejections = [
   }, /recovery is consumed/],
   ['an unmerged helper', world => { world.pulls = [{ merged_at: null, base: { ref: 'v1', repo: { full_name: P.repository } } }]; }, /merged into v1/],
   ['a helper merged elsewhere', world => { world.pulls[0].base.ref = 'main'; }, /merged into v1/],
+  ['a helper merged in another repository', world => { world.pulls[0].base.repo.full_name = 'elsewhere/agentweaver'; }, /merged into v1/],
+  ['another merged helper SHA', world => { world.pulls[0].merge_commit_sha = 'b'.repeat(40); }, /merged into v1/],
+  ['an open helper PR', world => { world.pulls[0].state = 'open'; }, /merged into v1/],
   ['a missing environment approval', world => { world.approvals = []; }, /no recorded approval/],
   ['a rejected environment approval', world => { world.approvals[0].state = 'rejected'; }, /no recorded approval/],
   ['a loaded image with different layers', world => {
@@ -389,7 +405,7 @@ test('completion verification rejects altered, unapproved, or unbacked proofs', 
   const unapproved = newWorld({ ...world, approvals: [] });
   unapproved.run = (bin, args, input) => bin === 'gh' && args.at(-1).endsWith('/approvals') ? '[]' : world.run(bin, args, input);
   assert.throws(() => verify(completion, unapproved), /no recorded approval/);
-  const unmerged = { run: (bin, args, input) => bin === 'gh' && args.at(-1).endsWith('/pulls') ? '[]' : world.run(bin, args, input) };
+  const unmerged = { run: (bin, args, input) => bin === 'gh' && args.at(-1).includes('/pulls?') ? '[]' : world.run(bin, args, input) };
   assert.throws(() => verify(completion, unmerged), /merged into v1/);
   world.runs[RUN_ID].conclusion = 'failure';
   assert.throws(() => verify(completion), /successful first-attempt/);
@@ -397,6 +413,140 @@ test('completion verification rejects altered, unapproved, or unbacked proofs', 
   world.runs[RUN_ID].head_sha = 'b'.repeat(40);
   assert.throws(() => verify(completion), /successful first-attempt/);
 }));
+
+test('helper admission finds the exact merged result on non-default v1 without commit-associated pulls', () => {
+  const world = newWorld();
+  assert.deepEqual(JSON.parse(world.run('gh', [
+    'api', '--method', 'GET', `repos/${P.repository}/commits/${HELPER}/pulls`,
+  ])), []);
+  world.calls.length = 0;
+  verifyHelperAdmission(world.run, HELPER);
+  assert.equal(world.calls.length, 1);
+  assert.match(world.calls[0], /\/pulls\?state=closed&base=v1&/);
+});
+
+test('helper deploy CLI uses a separate original product cwd and accepts its valid continuation', withDirectory(async directory => {
+  const world = newWorld();
+  const completion = await continuePartialPublication(options(world, directory));
+  const productRoot = path.join(directory, 'original-product');
+  const manifest = JSON.parse(readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8'));
+  manifest.stage = 'release';
+  manifest.evidence = {
+    sourceSha: P.sourceSha, deploymentSha: P.sourceSha,
+    personaRuns: ['api', 'ui', 'mcp'].map(surface => ({
+      surface, sourceSha: P.sourceSha, runUrl: `https://github.com/${P.repository}/actions/runs/${RUN_ID}`,
+    })),
+  };
+  for (const component of manifest.components) {
+    const published = completion.published.find(item => item.id === component.id);
+    if (published?.kind === 'image') component.imageDigest = published.image.split('@')[1];
+  }
+  for (const relative of [...manifest.components.map(component => component.project), WEB_LOCK_PATH]) {
+    const destination = path.join(productRoot, relative);
+    mkdirSync(path.dirname(destination), { recursive: true });
+    writeFileSync(destination, readFileSync(path.join(root, relative)));
+  }
+  const manifestPath = path.join(directory, 'release-manifest.json');
+  const publicationPath = path.join(directory, 'publication.json');
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  const target = {
+    subscriptionId: '90ab3701-83f0-4ba1-a90a-f2e68683adab',
+    tenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47',
+    resourceGroup: 'aw-v1-p0', clusterName: 'aw-v1-p0-aks', namespace: 'agentweaver-v1-p0',
+    nodeMin: 2, nodeMax: 3,
+  };
+  const argv = ['v1.0.0', '--manifest', manifestPath, '--publication', publicationPath,
+    '--completion', publicationPath, '--provider-catalog-configmap', 'reviewed-provider-catalog',
+    '--provider-catalog-source-commit', P.sourceSha,
+    '--subscription-id', target.subscriptionId, '--tenant-id', target.tenantId,
+    '--resource-group', target.resourceGroup, '--cluster', target.clusterName,
+    '--namespace', target.namespace, '--node-min', '2', '--node-max', '3'];
+  let head = P.sourceSha;
+  let dirty = '';
+  let rendered = 0;
+  const releaseTagSha = 'e'.repeat(40);
+  const dependencies = {
+    verifyImages: async () => new Map(validatePublicationReceipt(completion, manifest, P.sourceSha)
+      .map(image => [image.name, new Set([image.image.split('@')[1], image.sandboxImageDigest].filter(Boolean))])),
+    verifyTarget: async () => ({ exact: true }),
+    verifyPrerequisites: () => {},
+    run: (file, args, opts = {}) => {
+      if (file === 'git') {
+        assert.equal(opts.cwd, productRoot);
+        if (args[0] === 'rev-parse') return head;
+        if (args[0] === 'status') return dirty;
+      }
+      if (file === 'gh' && !args.includes('--method')) {
+        assert.equal(opts.cwd, productRoot);
+        const endpoint = args.at(-1);
+        if (endpoint.endsWith('/releases/tags/v1.0.0')) {
+          return JSON.stringify({ tag_name: 'v1.0.0', draft: false, prerelease: false });
+        }
+        if (endpoint.endsWith('/git/ref/tags/v1.0.0')) {
+          return JSON.stringify({ object: { type: 'tag', sha: releaseTagSha } });
+        }
+        if (endpoint.endsWith(`/git/tags/${releaseTagSha}`)) {
+          return JSON.stringify({ tag: 'v1.0.0', object: { type: 'commit', sha: P.sourceSha } });
+        }
+        return JSON.stringify(gh(world, ['api', '--method', 'GET', endpoint]));
+      }
+      if (file === 'gh') return world.run(file, args, opts.input);
+      if (file === 'kubectl') {
+        assert.deepEqual(args, ['apply', '--dry-run=client', '--filename', '-']);
+        assert.equal(opts.cwd, productRoot);
+        rendered += 1;
+        return '';
+      }
+      assert.fail(`unexpected command ${file} ${args.join(' ')}`);
+    },
+  };
+  const previousCwd = process.cwd();
+  process.chdir(productRoot);
+  try {
+    // No root or release-verification override: the helper module uses the product cwd.
+    assert.notEqual(productRoot, root);
+    const result = await deployRelease({ argv }, dependencies);
+    assert.equal(result.ok, true);
+    assert.equal(result.dryRun, true);
+    assert.equal(result.sourceSha, P.sourceSha);
+    assert.equal(result.services.length, 9);
+    assert.equal(rendered, 1);
+    head = HELPER;
+    await assert.rejects(deployRelease({ argv }, dependencies), /exact clean local source commit/);
+    head = P.sourceSha;
+    dirty = ' M product.csproj';
+    await assert.rejects(deployRelease({ argv }, dependencies), /checkout must be clean/);
+    dirty = '';
+    const noCompletion = argv.filter((_, index) => index !== 5 && index !== 6);
+    await assert.rejects(deployRelease({ argv: noCompletion }, dependencies), /requires an explicit --completion/);
+    head = HELPER;
+    await assert.rejects(deployRelease({
+      releaseTag: 'v1.0.0', target, manifest, publication: original, dryRun: true,
+    }, dependencies), /exact clean local source commit/);
+    assert.equal(rendered, 1);
+  } finally {
+    process.chdir(previousCwd);
+  }
+}));
+
+test('helper admission paginates closed v1 PRs and rejects an absent exact merge result', () => {
+  const world = newWorld();
+  const admitted = world.pulls[0];
+  world.pulls = [...Array.from({ length: 100 }, () => ({ ...admitted, merge_commit_sha: 'b'.repeat(40) })), admitted];
+  verifyHelperAdmission(world.run, HELPER);
+  assert.equal(world.calls.length, 2);
+  assert.match(world.calls[1], /&page=2$/);
+  world.pulls.pop();
+  assert.throws(() => verifyHelperAdmission(world.run, HELPER), /exact result.*merged into v1/);
+});
+
+test('helper admission fails closed on malformed responses and API failures', () => {
+  assert.throws(() => verifyHelperAdmission(() => '{}', HELPER), /invalid response/);
+  assert.throws(() => verifyHelperAdmission(() => { throw new Error('GitHub unavailable'); }, HELPER),
+    /GitHub unavailable/);
+  assert.throws(() => verifyHelperAdmission(() => { throw new Error('must not query'); }, 'v1'),
+    /exact SHA/);
+});
 
 test('registry absence requires an explicit missing-manifest diagnostic', () => {
   const reference = `${P.registry}/agentweaver-gateway:1.0.0`;
