@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  HELPER_ADMISSION_PULL_FIELDS,
   continuePartialPublication,
   isRegistryAbsent,
   originalBinding,
@@ -126,7 +127,12 @@ function gh(world, args, input) {
     assert.equal(query.get('base'), 'v1');
     assert.equal(query.get('per_page'), '100');
     const start = (Number(query.get('page')) - 1) * 100;
-    return world.pulls.slice(start, start + 100);
+    // Helper admission must project each page inside gh; mirror that projection here.
+    assert.equal(args[args.indexOf('--jq') + 1], HELPER_ADMISSION_PULL_FIELDS);
+    return world.pulls.slice(start, start + 100).map(pull => ({
+      state: pull?.state ?? null, merged_at: pull?.merged_at ?? null, merge_commit_sha: pull?.merge_commit_sha ?? null,
+      base: { ref: pull?.base?.ref ?? null, repo: { full_name: pull?.base?.repo?.full_name ?? null } },
+    }));
   }
   const body = JSON.parse(input);
   if (method === 'POST' && endpoint === 'git/tags') {
@@ -405,7 +411,7 @@ test('completion verification rejects altered, unapproved, or unbacked proofs', 
   const unapproved = newWorld({ ...world, approvals: [] });
   unapproved.run = (bin, args, input) => bin === 'gh' && args.at(-1).endsWith('/approvals') ? '[]' : world.run(bin, args, input);
   assert.throws(() => verify(completion, unapproved), /no recorded approval/);
-  const unmerged = { run: (bin, args, input) => bin === 'gh' && args.at(-1).includes('/pulls?') ? '[]' : world.run(bin, args, input) };
+  const unmerged = { run: (bin, args, input) => bin === 'gh' && args.some(arg => arg.includes('/pulls?')) ? '[]' : world.run(bin, args, input) };
   assert.throws(() => verify(completion, unmerged), /merged into v1/);
   world.runs[RUN_ID].conclusion = 'failure';
   assert.throws(() => verify(completion), /successful first-attempt/);
@@ -535,9 +541,28 @@ test('helper admission paginates closed v1 PRs and rejects an absent exact merge
   world.pulls = [...Array.from({ length: 100 }, () => ({ ...admitted, merge_commit_sha: 'b'.repeat(40) })), admitted];
   verifyHelperAdmission(world.run, HELPER);
   assert.equal(world.calls.length, 2);
-  assert.match(world.calls[1], /&page=2$/);
+  assert.match(world.calls[1], /&page=2 --jq /);
   world.pulls.pop();
   assert.throws(() => verifyHelperAdmission(world.run, HELPER), /exact result.*merged into v1/);
+});
+
+test('helper admission keeps a full page of large closed pull requests under the 1 MiB command buffer', () => {
+  // Run 38966094647 failed when a raw 100-PR page (about 1.8 MB) overflowed spawnSync's 1 MiB default.
+  const large = Array.from({ length: 100 }, (_, index) => ({
+    state: 'closed', merged_at: '2026-10-20T00:00:00Z', merge_commit_sha: index.toString(16).padStart(40, '0'),
+    base: { ref: 'v1', repo: { full_name: P.repository } }, body: 'x'.repeat(20_000),
+  }));
+  assert.ok(JSON.stringify(large).length > 1024 * 1024);
+  const world = newWorld();
+  world.pulls = large;
+  let largest = 0;
+  const run = (bin, args, input) => {
+    const output = world.run(bin, args, input);
+    largest = Math.max(largest, Buffer.byteLength(output));
+    return output;
+  };
+  assert.throws(() => verifyHelperAdmission(run, HELPER), /merged into v1/);
+  assert.ok(largest < 64 * 1024, `projected page was ${largest} bytes`);
 });
 
 test('helper admission fails closed on malformed responses and API failures', () => {

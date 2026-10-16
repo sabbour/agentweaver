@@ -617,7 +617,11 @@ Admission has two parts:
   helper must differ from the original source and equal the `merge_commit_sha`
   of a closed, merged pull request into this repository's `v1` branch. The
   check paginates closed PRs filtered by that base, independently of the
-  repository's default `dev` branch. Dispatch at that exact merged result,
+  repository's default `dev` branch. Each page uses `gh api --jq` to return
+  only the admission fields before Node.js buffers the output. Full PR pages
+  exceed the command runner's default 1 MiB buffer. The projection preserves
+  the page length for pagination and is shared with completion verification.
+  Dispatch at that exact merged result,
   not a pre-merge head or an arbitrary later `v1` commit.
   It deliberately avoids `GET /repos/{owner}/{repo}/commits/{sha}/pulls`.
   [GitHub's docs](https://docs.github.com/en/rest/commits/commits#list-pull-requests-associated-with-a-commit)

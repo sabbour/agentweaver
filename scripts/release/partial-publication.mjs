@@ -124,8 +124,10 @@ export function validateOriginalReceipt(receipt, receiptBytes, plan, helperSha) 
   return receipt;
 }
 
-function runGh(run, method, endpoint, body) {
+// Project inside gh before runPublicationCommand buffers the response.
+function runGh(run, method, endpoint, body, jq) {
   const args = ['api', '--method', method, `repos/${P.repository}/${endpoint}`];
+  if (jq !== undefined) args.push('--jq', jq);
   if (body !== undefined) args.push('--input', '-');
   return JSON.parse(run('gh', args, body === undefined ? undefined : JSON.stringify(body)));
 }
@@ -183,11 +185,16 @@ function verifyOriginalWorkflowRun(run) {
 
 // The helper commit is admitted by a merged pull request into v1; the protected
 // environment approval on the continuation run is the human admission of that exact commit.
+// Keep admission fields and page length without exceeding spawnSync's 1 MiB buffer.
+export const HELPER_ADMISSION_PULL_FIELDS =
+  '[.[] | {state, merged_at, merge_commit_sha, base: {ref: .base.ref, repo: {full_name: .base.repo.full_name}}}]';
+
 export function verifyHelperAdmission(run, helperSha) {
   if (!shaPattern.test(helperSha ?? '')) fail('the helper commit must be an exact SHA');
   for (let page = 1; ; page += 1) {
     const pulls = runGh(run, 'GET',
-      `pulls?state=closed&base=${encodeURIComponent(P.branch)}&sort=updated&direction=desc&per_page=100&page=${page}`);
+      `pulls?state=closed&base=${encodeURIComponent(P.branch)}&sort=updated&direction=desc&per_page=100&page=${page}`,
+      undefined, HELPER_ADMISSION_PULL_FIELDS);
     if (!Array.isArray(pulls)) fail('the merged helper pull request lookup returned an invalid response');
     if (pulls.some(pull => pull?.state === 'closed' &&
         typeof pull.merged_at === 'string' && pull.merged_at &&
