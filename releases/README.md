@@ -614,8 +614,12 @@ re-signs, or substitutes artifacts, and it never rewrites the original records.
 Admission has two parts:
 
 - The workflow runs from a separately reviewed helper commit on `v1`. The
-  helper must differ from the original source and belong to a pull request
-  merged into `v1`. It must not change the original release manifest or any
+  helper must differ from the original source and equal the `merge_commit_sha`
+  of a closed, merged pull request into this repository's `v1` branch. The
+  check paginates closed PRs filtered by that base, independently of the
+  repository's default `dev` branch. Dispatch at that exact merged result,
+  not a pre-merge head or an arbitrary later `v1` commit.
+  It must not change the original release manifest or any
   product input; the publisher still compares the manifest, provenance, and
   every artifact hash with the original source.
 - The run must have a recorded approval of the protected `v1-publication`
@@ -660,7 +664,7 @@ Known limits:
 - Image layer identity relies on the config digest, which pins
   `rootfs.diff_ids`, plus the pushed manifest digest and layer count.
 
-`npm run release:deploy` accepts a continuation receipt only with
+The helper's deployment CLI accepts a continuation receipt only with
 `--completion <publication.json>`. The completion must be identical to the
 publication receipt and contain the embedded original receipt. Deploy verifies:
 
@@ -671,6 +675,53 @@ publication receipt and contain the embedded original receipt. Deploy verifies:
 
 Deploy reads the continuation result ref instead of the ordinary
 `agentweaver-publication/<sourceSha>/result` ref.
+
+The original `v1.0.0` checkout predates `--completion`; do **not** run its
+`npm run release:deploy` for this recovery. Keep two separate clean checkouts:
+the helper at the exact `continuation.helperSha` in the successful receipt,
+and the product at `c24d0000fe5fc6163e4f38594c39dff782d3a46d`, the unchanged
+annotated `v1.0.0` tag target. Invoke the helper's script by absolute path
+with the product checkout as the working directory. The script takes its
+source root from `process.cwd()`, not its own file location, so release,
+manifest, Git cleanliness, and source validation still use the original
+product. All imported helper modules come from the pinned helper checkout.
+Keep downloaded receipts and operator inputs outside both source checkouts.
+
+For example, after preparing and independently verifying those two checkouts
+and the successful receipt, use these PowerShell commands (replace the example
+paths and provider-catalog values with the reviewed inputs):
+
+```powershell
+$Helper = 'C:\agentweaver-helper'
+$Product = 'C:\agentweaver-v1.0.0'
+$Receipt = 'C:\release-inputs\publication.json'
+$Completion = Get-Content -Raw $Receipt | ConvertFrom-Json
+$HelperHead = git -C $Helper rev-parse HEAD
+if ($LASTEXITCODE -ne 0 -or $HelperHead -cne $Completion.continuation.helperSha) {
+  throw 'Helper HEAD must equal the successful continuation helper SHA'
+}
+$HelperStatus = git -C $Helper status --porcelain
+if ($LASTEXITCODE -ne 0 -or $HelperStatus) { throw 'Helper checkout must be clean' }
+Set-Location $Product
+node "$Helper\scripts\release\deploy.mjs" v1.0.0 `
+  --manifest 'C:\release-inputs\published-release-manifest.json' `
+  --publication $Receipt `
+  --completion $Receipt `
+  --subscription-id 90ab3701-83f0-4ba1-a90a-f2e68683adab `
+  --tenant-id 72f988bf-86f1-41af-91ab-2d7cd011db47 `
+  --resource-group aw-v1-p0 `
+  --cluster aw-v1-p0-aks `
+  --namespace agentweaver-v1-p0 `
+  --node-min 2 `
+  --node-max 3 `
+  --provider-catalog-configmap <existing-configmap-name> `
+  --provider-catalog-source-commit <40-character-source-sha>
+```
+
+This invocation is a read-only dry-run, not release or deployment evidence.
+An actual rollout requires separate authorization and adding `--execute` to
+the same invocation. Do not check out the helper in the product directory,
+relax the exact-tag check, move a release tag, or rebuild the release.
 
 ## Changeset authoring
 

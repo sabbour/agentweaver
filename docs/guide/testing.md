@@ -20,6 +20,15 @@ verification uses the registry HTTP API without Docker/Podman, and resume still
 repeats target, provenance, and live health checks. These local contract tests
 do not contact GitHub, GHCR, Azure, or Kubernetes or prove
 that a published release or complete runtime manifest currently exists.
+Continuation tests admit only the exact merge result of a closed PR into
+non-default `v1`, including pagination, and reject missing or changed admission.
+A separate-product-directory fixture invokes the helper deployment CLI parser
+with a valid continuation and the default release verifier. Controlled Git,
+GitHub, registry, and Kubernetes transports prove it reaches the read-only
+render using the original product working directory. The fixture rejects a
+helper HEAD in that product directory, dirty source, and a missing completion
+proof; ordinary publication still rejects a mismatched release HEAD.
+These tests do not execute a live deployment or grant release approval.
 Workflow source checks verify job-local package permission, the approved GitHub
 Packages feed, and the exact `ghcr.io/sabbour` destination guard. They execute
 both destination guards locally with accepted and rejected values. They do not
