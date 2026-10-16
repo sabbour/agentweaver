@@ -222,6 +222,9 @@ jobs:
   publish:
     needs: pack
     if: ${{ inputs.publish && !inputs.foundation_probe_sampler_replacement && !inputs.agenthost_archive_diagnostic }}
+    concurrency:
+      group: v1-product-publication-${{ github.repository }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -289,6 +292,9 @@ jobs:
           retention-days: 30
   publish-probe-sampler:
     if: ${{ inputs.publish && inputs.foundation_probe_sampler_replacement && !inputs.agenthost_archive_diagnostic }}
+    concurrency:
+      group: v1-product-publication-${{ github.repository }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: write

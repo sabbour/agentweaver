@@ -15,6 +15,7 @@ import {
 } from './runtime-list.mjs';
 import { validateManifest } from './validate.mjs';
 import { verifyRegistryImage } from './registry.mjs';
+import { verifyPartialPublicationCompletion } from './partial-publication.mjs';
 import { run as runProcess } from '../azure/lib/exec.mjs';
 import {
   observeExistingP0BrokerRouting, projectIdentityRoutingReadback,
@@ -159,6 +160,7 @@ export function parseArgs(argv = []) {
   const options = new Map([
     ['--manifest', 'manifestPath'],
     ['--publication', 'publicationPath'],
+    ['--completion', 'completionPath'],
     ['--runtime-manifest', 'runtimeManifestPath'],
     ['--provider-catalog-configmap', 'providerCatalogConfigMapName'],
     ['--provider-catalog-source-commit', 'providerCatalogSourceCommit'],
@@ -1400,6 +1402,8 @@ shared workloads from the verified publication receipt. The Projects provider
 catalog ConfigMap name and reviewed source commit are required. A supplied
 runtime manifest may reference pre-existing objects only; it cannot create
 credentials, identities, routes, policies, namespaces, migrations, or databases.
+Partial-publication receipts also require --completion, which verifies the
+original partial receipt, immutable continuation records, and successful run.
 `;
 }
 
@@ -1423,6 +1427,9 @@ export async function deployRelease(options = {}, dependencies = {}) {
   };
   const manifest = options.manifest ?? parseJson(readFile(path.resolve(root, parsed.manifestPath), 'utf8'), 'release manifest');
   const publication = options.publication ?? parseJson(readFile(path.resolve(root, parsed.publicationPath), 'utf8'), 'publication receipt');
+  const completion = parsed.completionPath
+    ? options.completion ?? parseJson(readFile(path.resolve(root, parsed.completionPath), 'utf8'), 'completion receipt')
+    : undefined;
   const runtimeDocument = options.runtimeManifest ??
     (parsed.runtimeManifestPath
       ? parseJson(readFile(path.resolve(root, parsed.runtimeManifestPath), 'utf8'), 'runtime manifest')
@@ -1430,6 +1437,11 @@ export async function deployRelease(options = {}, dependencies = {}) {
 
   const sourceSha = await (dependencies.verifyRelease ?? verifyRelease)(parsed.releaseTag, publication, { root, run });
   validatePublishedManifest(manifest, { root, sourceSha });
+  if (completion || publication.continuation !== undefined) {
+    if (!completion) fail('a continuation publication receipt requires an explicit --completion proof');
+    verifyPartialPublicationCompletion(completion, publication, sourceSha,
+      (file, args, input) => run(file, args, input === undefined ? {} : { input }));
+  }
   const images = validatePublicationReceipt(publication, manifest, sourceSha);
   const verifyImages = dependencies.verifyImages ?? (async (refs) => {
     const result = new Map();

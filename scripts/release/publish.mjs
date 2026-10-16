@@ -20,6 +20,9 @@ import {
 } from './agenthost-image.mjs';
 import { measureAgentHostArchiveSync } from './measure-agenthost-image.mjs';
 import { readDockerArchiveConfig } from './docker-archive.mjs';
+import { createNugetConfig } from './nuget-config.mjs';
+import { continuePartialPublication } from './partial-publication.mjs';
+import { PARTIAL_PUBLICATION } from './partial-publication-contract.mjs';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const fail = (message) => { throw new Error(`manual publication: ${message}`); };
@@ -32,29 +35,6 @@ const samplerProbeClaim = 'agentweaver-publication/foundation-probe-0.0.0-sample
 const contentHashPattern = /^[a-f0-9]{64}$/;
 const imageIdPattern = /^sha256:[a-f0-9]{64}$/;
 const nugetSourceName = 'agentweaver-publication';
-
-function xmlAttribute(value) {
-  return String(value).replace(/[<>&'"]/g, character => ({
-    '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;',
-  })[character]);
-}
-
-function nugetConfig(feed, username, token) {
-  return `<?xml version="1.0" encoding="utf-8"?>
-<configuration>
-  <packageSources>
-    <clear />
-    <add key="${nugetSourceName}" value="${xmlAttribute(feed)}" />
-  </packageSources>
-  <packageSourceCredentials>
-    <${nugetSourceName}>
-      <add key="Username" value="${xmlAttribute(username)}" />
-      <add key="ClearTextPassword" value="${xmlAttribute(token)}" />
-    </${nugetSourceName}>
-  </packageSourceCredentials>
-</configuration>
-`;
-}
 
 function validBuildOutput(output) {
   return Array.isArray(output?.files) && output.files.length > 0 &&
@@ -193,14 +173,25 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   platformOnly = false,
   integrationImagesOnly = false,
   integrationConfirmed = false,
+  partialContinuation = false,
+  originalReceiptPath,
   confirmFoundationProbeInitialReplacement,
   confirmFoundationProbeSamplerReplacement,
   expectedFoundationProbeSamplerDigest,
 } = {}) {
   root = path.resolve(root);
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '') ||
-      (integrationImagesOnly ? (!integrationConfirmed || confirmed) : (!confirmed || integrationConfirmed))) {
+      (partialContinuation
+        ? (sourceSha !== PARTIAL_PUBLICATION.sourceSha || !platformOnly || confirmed || integrationConfirmed ||
+          !originalReceiptPath)
+        : (integrationImagesOnly ? (!integrationConfirmed || confirmed) : (!confirmed || integrationConfirmed)))) {
     fail('explicit confirmation for the selected publication mode and an exact source SHA are required');
+  }
+  if (partialContinuation && (packagesOnly || foundationProbeOnly || integrationImagesOnly ||
+      confirmFoundationProbeInitialReplacement !== undefined ||
+      confirmFoundationProbeSamplerReplacement !== undefined ||
+      expectedFoundationProbeSamplerDigest !== undefined)) {
+    fail('partial continuation cannot combine with another publication mode or Probe replacement');
   }
   if (integrationImagesOnly && (packagesOnly || foundationProbeOnly || platformOnly ||
       confirmFoundationProbeInitialReplacement !== undefined ||
@@ -212,7 +203,15 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   if (platformOnly && (packagesOnly || foundationProbeOnly))
     fail('platform-only publication cannot combine with package-only or Foundation Probe-only publication');
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  if (git('rev-parse', 'HEAD') !== sourceSha || git('status', '--porcelain')) fail('publication requires a clean exact source HEAD');
+  const headSha = git('rev-parse', 'HEAD');
+  if ((!partialContinuation && headSha !== sourceSha) ||
+      (partialContinuation && (headSha !== env.GITHUB_SHA || env.GITHUB_REF !== 'refs/heads/v1' ||
+        env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || env.GITHUB_RUN_ATTEMPT !== '1' ||
+        env.GITHUB_REPOSITORY !== 'sabbour/agentweaver' ||
+        env.EXPECTED_SOURCE !== PARTIAL_PUBLICATION.sourceSha)) ||
+      git('status', '--porcelain')) {
+    fail('publication requires a clean exact source HEAD and approved dispatch context');
+  }
   const manifest = validateFile(path.resolve(root, manifestPath), { root });
   const sourceManifest = JSON.parse(execFileSync('git', ['show', `${sourceSha}:${path.relative(root, path.resolve(root, manifestPath)).replaceAll('\\', '/')}`],
     { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
@@ -395,6 +394,30 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.GITHUB_REPOSITORY ?? '') || !env.GH_TOKEN) {
     fail('configure the GitHub repository and scoped publication token for durable claims');
   }
+  if (partialContinuation) {
+    const receiptPath = path.resolve(root, originalReceiptPath);
+    const originalReceiptBytes = readFileSync(receiptPath);
+    let originalReceipt;
+    try {
+      originalReceipt = JSON.parse(originalReceiptBytes.toString('utf8'));
+    } catch (error) {
+      fail(`the retained original publication receipt is invalid: ${error.message}`);
+    }
+    return continuePartialPublication({
+      sourceSha,
+      helperSha: headSha,
+      selected,
+      imageRepositories,
+      env,
+      run,
+      directory,
+      originalReceiptPath: receiptPath,
+      originalReceiptBytes,
+      originalReceipt,
+      runId: env.GITHUB_RUN_ID,
+      runAttempt: env.GITHUB_RUN_ATTEMPT,
+    });
+  }
   const namespace = integrationImagesOnly
     ? `agentweaver-integration/${sourceSha}`
     : `agentweaver-publication/${sourceSha}`;
@@ -496,7 +519,9 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
       nugetConfigDirectory = mkdtempSync(path.join(tmpdir(), 'agentweaver-nuget-'));
       chmodSync(nugetConfigDirectory, 0o700);
       nugetConfigFile = path.join(nugetConfigDirectory, 'NuGet.Config');
-      writeFileSync(nugetConfigFile, nugetConfig(env.RELEASE_NUGET_SOURCE, env.RELEASE_NUGET_USERNAME, env.RELEASE_NUGET_API_KEY), {
+      writeFileSync(nugetConfigFile, createNugetConfig(
+        env.RELEASE_NUGET_SOURCE, env.RELEASE_NUGET_USERNAME, env.RELEASE_NUGET_API_KEY,
+      ), {
         encoding: 'utf8', flag: 'wx', mode: 0o600,
       });
     }
@@ -654,42 +679,54 @@ export function findNugetPushDiagnostic(error) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try {
-    const args = process.argv.slice(2);
-    const [manifest, output, sourceSha] = args;
-    const replacementIndex = args.indexOf('--confirm-foundation-probe-initial-replacement');
-    const samplerIndex = args.indexOf('--confirm-foundation-probe-sampler-replacement');
-    const expectedDigestIndex = args.indexOf('--expected-foundation-probe-sampler-digest');
-    if (replacementIndex >= 0 && !/^[a-f0-9]{40}$/.test(args[replacementIndex + 1] ?? '')) {
-      fail('the one-time initial Probe replacement requires its exact source SHA confirmation');
+  void (async () => {
+    try {
+      const args = process.argv.slice(2);
+      const [manifest, output, sourceSha] = args;
+      const replacementIndex = args.indexOf('--confirm-foundation-probe-initial-replacement');
+      const samplerIndex = args.indexOf('--confirm-foundation-probe-sampler-replacement');
+      const expectedDigestIndex = args.indexOf('--expected-foundation-probe-sampler-digest');
+      const originalReceiptIndex = args.indexOf('--original-receipt');
+      const partialContinuation = args.includes('--continue-partial-publication');
+      if (replacementIndex >= 0 && !/^[a-f0-9]{40}$/.test(args[replacementIndex + 1] ?? '')) {
+        fail('the one-time initial Probe replacement requires its exact source SHA confirmation');
+      }
+      if (samplerIndex >= 0 && !/^[a-f0-9]{40}$/.test(args[samplerIndex + 1] ?? '')) {
+        fail('the one-time sampler Probe replacement requires its exact source SHA confirmation');
+      }
+      if (expectedDigestIndex >= 0 && args[expectedDigestIndex + 1] !== samplerProbeDigest) {
+        fail('sampler Probe replacement requires the exact approved current digest');
+      }
+      if ((partialContinuation && (originalReceiptIndex < 0 || !args[originalReceiptIndex + 1])) ||
+          (!partialContinuation && originalReceiptIndex >= 0)) {
+        fail('--original-receipt is required only for partial-continuation mode');
+      }
+      await publishArtifacts(manifest, output, sourceSha, {
+        confirmed: args.includes('--confirm-publication'),
+        packagesOnly: args.includes('--packages-only'),
+        foundationProbeOnly: args.includes('--foundation-probe-only'),
+        platformOnly: args.includes('--platform-only'),
+        integrationImagesOnly: args.includes('--integration-images-only'),
+        integrationConfirmed: args.includes('--confirm-integration-publication'),
+        partialContinuation,
+        originalReceiptPath: originalReceiptIndex >= 0 ? args[originalReceiptIndex + 1] : undefined,
+        confirmFoundationProbeInitialReplacement: replacementIndex >= 0 ? args[replacementIndex + 1] : undefined,
+        confirmFoundationProbeSamplerReplacement: samplerIndex >= 0 ? args[samplerIndex + 1] : undefined,
+        expectedFoundationProbeSamplerDigest: expectedDigestIndex >= 0 ? args[expectedDigestIndex + 1] : undefined,
+      });
+      console.log(partialContinuation
+        ? 'The one-use partial publication continuation finished; inspect continuation.json and publication.json.'
+        : args.includes('--integration-images-only')
+          ? 'Manual integration image publication completed; see integration-publication.json. No package, release, or deployment was performed.'
+          : 'Manual artifact publication completed; see publication.json. No platform release or deployment was performed.');
+    } catch (error) {
+      console.error(`Publication failed: ${error.message}`);
+      const nativeDiagnostic = findNugetPushDiagnostic(error);
+      if (nativeDiagnostic) {
+        const diagnostic = nativeDiagnostic.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+        console.error(`::error title=NuGet push response::${diagnostic}`);
+      }
+      process.exitCode = 1;
     }
-    if (samplerIndex >= 0 && !/^[a-f0-9]{40}$/.test(args[samplerIndex + 1] ?? '')) {
-      fail('the one-time sampler Probe replacement requires its exact source SHA confirmation');
-    }
-    if (expectedDigestIndex >= 0 && args[expectedDigestIndex + 1] !== samplerProbeDigest) {
-      fail('sampler Probe replacement requires the exact approved current digest');
-    }
-    publishArtifacts(manifest, output, sourceSha, {
-      confirmed: args.includes('--confirm-publication'),
-      packagesOnly: args.includes('--packages-only'),
-      foundationProbeOnly: args.includes('--foundation-probe-only'),
-      platformOnly: args.includes('--platform-only'),
-      integrationImagesOnly: args.includes('--integration-images-only'),
-      integrationConfirmed: args.includes('--confirm-integration-publication'),
-      confirmFoundationProbeInitialReplacement: replacementIndex >= 0 ? args[replacementIndex + 1] : undefined,
-      confirmFoundationProbeSamplerReplacement: samplerIndex >= 0 ? args[samplerIndex + 1] : undefined,
-      expectedFoundationProbeSamplerDigest: expectedDigestIndex >= 0 ? args[expectedDigestIndex + 1] : undefined,
-    });
-    console.log(args.includes('--integration-images-only')
-      ? 'Manual integration image publication completed; see integration-publication.json. No package, release, or deployment was performed.'
-      : 'Manual artifact publication completed; see publication.json. No platform release or deployment was performed.');
-  } catch (error) {
-    console.error(`Publication failed: ${error.message}`);
-    const nativeDiagnostic = findNugetPushDiagnostic(error);
-    if (nativeDiagnostic) {
-      const diagnostic = nativeDiagnostic.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
-      console.error(`::error title=NuGet push response::${diagnostic}`);
-    }
-    process.exitCode = 1;
-  }
+  })();
 }
