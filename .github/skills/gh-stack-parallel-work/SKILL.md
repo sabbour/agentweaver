@@ -85,23 +85,40 @@ the versioned finding ledger at `admission/findings/<repository>/<pr>.json` in
 authoritative external Squad state. The coordinator hands Ralph the PR number, live
 `headRefOid`, required review findings, ceremony evidence, and any RFD decision that
 governed the change. Before ready and immediately before manual squash merge, Ralph
-fetches `origin/dev`, gets the live head SHA, and runs:
+uses the candidate's absolute worktree, fetches `origin/dev`, gets the live head SHA,
+and runs the complete materialize-to-preflight sequence:
 
 ```bash
+cd <absolute-worktree>
+git fetch origin dev
+live_head_sha="$(gh pr view <pr-number> --json headRefOid --jq .headRefOid)"
+node scripts/ci/squad-admission-ledger.mjs materialize <owner/repository> <pr-number> \
+  --head-sha "$live_head_sha" --input-file <absolute-complete-ledger-json>
 node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> \
-  --head-sha <live-head-sha>
-gh pr merge <number> --squash --match-head-commit <validated-sha>
+  --head-sha "$live_head_sha"
+gh pr ready <pr-number>
+git fetch origin dev
+live_head_sha="$(gh pr view <pr-number> --json headRefOid --jq .headRefOid)"
+node scripts/ci/squad-admission-ledger.mjs materialize <owner/repository> <pr-number> \
+  --head-sha "$live_head_sha" --input-file <absolute-complete-ledger-json>
+node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> \
+  --head-sha "$live_head_sha"
+gh pr merge <pr-number> --squash --match-head-commit "$live_head_sha"
 ```
 
-The preflight resolves the declared external state with the pinned Squad SDK and applies
-a closed policy: every finding is advisory or required, and every required finding must
-be owned, corrected or waived, freshly validated/reviewed at the current SHA, and
-resolved. Record the output, ledger path, review/ceremony evidence, and RFD handoff with
-the candidate SHA before proceeding. Coordinator/Ralph and authoritative external Squad
-state are trusted operational components. GitHub is evidence and CI only; repository
-code is not a tamper-proof sandbox and cannot provide adversarially immutable
-`origin/dev` execution. Post admission and reviewer revalidation comments under the PR
-Comment Writing Policy. PR comments preserve evidence but do not decide admission.
+If the second complete ledger differs, pass
+`--replace-existing-head <previous-live-head-sha>`. The pinned SDK resolves the external
+root from static config. The materializer accepts no caller-selected root or destination.
+It validates and persists the supplied complete ledger but never constructs findings,
+adjudicates waivers, or decides admission. The preflight applies the closed policy:
+every finding is advisory or required, and every required finding must be owned,
+corrected or waived, freshly revalidated at the current SHA, and resolved. Record the
+redacted output, ledger key, review evidence, and RFD handoff with the candidate SHA.
+Coordinator/Ralph and authoritative external Squad state are trusted operational
+components. GitHub is evidence and CI only. Repository code constrains this writer but
+is not a tamper-proof sandbox and cannot provide adversarially immutable `origin/dev`
+execution. Post admission and reviewer revalidation comments under the PR Comment
+Writing Policy. PR comments preserve evidence but do not decide admission.
 
 ## Temporary integration branch queue
 
