@@ -84,24 +84,39 @@ GitHub is the PR, CI, and evidence record only; it is not an admission gate. Ral
 the versioned finding ledger at `admission/findings/<repository>/<pr>.json` in
 authoritative external Squad state. The coordinator hands Ralph the PR number, live
 `headRefOid`, required review findings, ceremony evidence, and any RFD decision that
-governed the change. Before ready and immediately before manual squash merge, Ralph
-fetches `origin/dev`, gets the live head SHA, and runs:
+governed the change. Before ready and immediately before manual squash merge, Ralph fetches `origin/dev`,
+gets the live head and base SHAs, extracts the launcher from that base commit, and runs it
+from a private temporary directory:
 
 ```bash
-node scripts/ci/squad-admission-preflight.mjs <owner/repository> <pr-number> \
-  --head-sha <live-head-sha>
+node <ephemeral>/scripts/ci/squad-admission-launcher.mjs preflight \
+  --launcher-path <ephemeral>/scripts/ci/squad-admission-launcher.mjs \
+  --base-ref refs/remotes/origin/dev \
+  --repository <owner/repository> --pr-number <number> \
+  --worktree <absolute-worktree> --head-sha <live-head-sha> \
+  --base-sha <trusted-live-base-sha> --team-root <absolute-team-root> \
+  --state-backend <backend>
 gh pr merge <number> --squash --match-head-commit <validated-sha>
 ```
 
-The preflight resolves the declared external state with the pinned Squad SDK and applies
-a closed policy: every finding is advisory or required, and every required finding must
-be owned, corrected or waived, freshly validated/reviewed at the current SHA, and
-resolved. Record the output, ledger path, review/ceremony evidence, and RFD handoff with
-the candidate SHA before proceeding. Coordinator/Ralph and authoritative external Squad
-state are trusted operational components. GitHub is evidence and CI only; repository
-code is not a tamper-proof sandbox and cannot provide adversarially immutable
-`origin/dev` execution. Post admission and reviewer revalidation comments under the PR
-Comment Writing Policy. PR comments preserve evidence but do not decide admission.
+Before this command, use the exact PowerShell 7 fetch/archive/`try`/`finally` procedure in
+`CONTRIBUTING.md`; `materialize` uses the same arguments plus `--input <absolute-json>`.
+Never execute admission code from the candidate checkout. The launcher refetches the base,
+verifies its own fetched Git object, extracts and verifies the trusted policy modules by
+Git object ID, records every object ID/digest and their aggregate digest with the exact
+source ref/commit and base SHA, resolves authoritative external state, and applies the
+closed v3 policy. Every required finding must be corrected or explicitly waived, freshly
+validated/reviewed at the current SHA, and resolved. Record the output, ledger path,
+review/ceremony evidence, and RFD handoff with the candidate SHA before proceeding.
+Coordinator/Ralph and authoritative external Squad state are trusted operational
+components. GitHub is evidence and CI only; repository code is not a tamper-proof sandbox
+and cannot provide adversarially immutable execution. A concurrent same-user process that
+can change Git objects or trusted temporary files is a compromised host outside this
+boundary. PR #1504 alone uses the pre-existing v1/manual exact-head bootstrap; afterward,
+every invocation uses exact fetched `origin/dev` bytes and v3 is mandatory for subsequent
+PRs, with no install step. Post admission and reviewer revalidation
+comments under the PR Comment Writing Policy. PR comments preserve evidence but do not
+decide admission.
 
 ## Temporary integration branch queue
 
