@@ -44,6 +44,10 @@
          GHSA-2m69-gcr7-jv3q (NU1903). The lib.e_sqlite3 package is intentionally separable from the
          managed core/provider, so bumping only the native binary is the supported way to patch. -->
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
+    <!-- Security override: Microsoft.Data.SqlClient (via EF Core SqlServer) pulls the vulnerable
+         System.Security.Cryptography.Pkcs 9.0.4. Pin the patched release for GHSA-846f-f764-76mx
+         and GHSA-2fmv-rv2c-59x7 (NU1902/NU1903). -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
     <PackageReference Include="Microsoft.Extensions.AI" Version="10.9.0" />
     <PackageReference Include="Microsoft.Extensions.AI.OpenAI" Version="10.9.0" />
     <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.19.2" />
