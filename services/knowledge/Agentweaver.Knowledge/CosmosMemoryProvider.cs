@@ -3,7 +3,6 @@ using Microsoft.Azure.Cosmos;
 
 namespace Agentweaver.Knowledge;
 
-/// <summary>Negotiates the Cosmos adapter and supplies document operations to the shared Memory contract.</summary>
 public sealed class CosmosMemoryProvider : KnowledgeDocumentMemoryProviderCore
 {
     public const string ProviderId = "cosmos.memory";
@@ -12,7 +11,6 @@ public sealed class CosmosMemoryProvider : KnowledgeDocumentMemoryProviderCore
     private readonly ICosmosMemoryDocumentStore _store;
     private readonly CosmosMemoryOptions _options;
 
-    /// <summary>Creates an adapter over the configured Cosmos document store.</summary>
     public CosmosMemoryProvider(
         ICosmosMemoryDocumentStore store,
         CosmosMemoryOptions options,
@@ -26,9 +24,6 @@ public sealed class CosmosMemoryProvider : KnowledgeDocumentMemoryProviderCore
         _options = options;
     }
 
-    /// <summary>Confirms that the selected catalog entry and live container match the configured contract.</summary>
-    /// <returns>The pinned Cosmos resource and its supported Memory capabilities.</returns>
-    /// <exception cref="KnowledgeProviderUnavailableException">The selection or container is incompatible.</exception>
     public override async Task<ResourceNegotiation> NegotiateAsync(
         ProviderCandidate candidate,
         CancellationToken cancellationToken = default)

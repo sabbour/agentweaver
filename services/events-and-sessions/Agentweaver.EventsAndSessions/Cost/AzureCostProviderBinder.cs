@@ -4,12 +4,10 @@ using Agentweaver.Providers;
 
 namespace Agentweaver.EventsAndSessions.Cost;
 
-/// <summary>Resolves and verifies Azure cost-provider pins for run-scoped meter sources.</summary>
 public sealed class AzureCostProviderBinder(
     AzureCostProvider provider,
     ProviderResolver resolver) : ICostProviderBinder
 {
-    /// <summary>Resolves the exact Azure provider configuration and pins it to the run.</summary>
     public ProviderResult<CostBinding> ResolveAndPin(string meterSource, string runId)
     {
         if (!string.Equals(meterSource, AzureCostProvider.MeterSource, StringComparison.Ordinal))
@@ -40,7 +38,6 @@ public sealed class AzureCostProviderBinder(
         }
     }
 
-    /// <summary>Revalidates the exact persisted provider, resource, options, capabilities, and rate card.</summary>
     public ProviderResult<CostBinding> VerifyPinned(
         string meterSource, string runId, CostBinding pinnedBinding)
     {

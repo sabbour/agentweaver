@@ -10,12 +10,10 @@ using WorkloadIdentityCredentialOptions = AzureIdentity::Azure.Identity.Workload
 
 namespace Agentweaver.FoundationProbe;
 
-/// <summary>Command-line entry point for safe planning and explicit target-bound acceptance execution.</summary>
 internal static class Program
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
 
-    /// <summary>Runs the selected command and emits stable JSON failure codes without printing credential values.</summary>
     public static async Task<int> Main(string[] args)
     {
         try
@@ -44,7 +42,6 @@ internal static class Program
         }
     }
 
-    /// <summary>Sets up cancellation, source/target checks, Azure clients, tracing, and the probe runner.</summary>
     private static async Task<int> RunAsync(string[] args)
     {
         var command = ProbeCommand.Parse(args);
@@ -121,7 +118,6 @@ internal static class Program
         }
     }
 
-    /// <summary>Samples every trace so the probe can require a recorded span and confirm export.</summary>
     internal static void ConfigureTracing(TracerProviderBuilder tracing)
         => tracing.SetSampler(new AlwaysOnSampler());
 }

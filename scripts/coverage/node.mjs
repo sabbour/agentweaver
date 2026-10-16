@@ -8,7 +8,6 @@ const output = path.join(root, 'artifacts', 'coverage', 'node');
 const lcov = path.join(output, 'lcov.info');
 const spec = path.join(output, 'summary.txt');
 
-/** Return whether LCOV reports at least one executed line in the release validator. */
 export function hasValidatorCoverage(report) {
   const section = report.split(/^end_of_record\s*$/m).find((record) =>
     record.split(/\r?\n/).some((line) => {
@@ -19,7 +18,6 @@ export function hasValidatorCoverage(report) {
   return section !== undefined && /^DA:\d+,[1-9]\d*(?:,|$)/m.test(section);
 }
 
-/** Run the focused Node test suites and require their release-validator coverage receipt. */
 async function main() {
   rmSync(output, { recursive: true, force: true });
   mkdirSync(output, { recursive: true });

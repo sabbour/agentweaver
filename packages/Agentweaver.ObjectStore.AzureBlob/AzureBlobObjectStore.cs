@@ -5,18 +5,11 @@ using Azure.Storage.Blobs.Models;
 
 namespace Agentweaver.ObjectStore.AzureBlob;
 
-/// <summary>
-/// Stores platform artifacts in a supplied Azure Blob container. Container provisioning and
-/// authorization remain the responsibility of the hosting service.
-/// </summary>
+/// <summary>A platform-owned container; provisioning and authorization are outside this adapter.</summary>
 public sealed class AzureBlobObjectStore : IObjectStore
 {
     private readonly BlobContainerClient _container;
 
-    /// <summary>Creates an adapter for an already provisioned, named Blob container.</summary>
-    /// <param name="container">The Azure SDK container client used for all object operations.</param>
-    /// <exception cref="ArgumentNullException">The client is null.</exception>
-    /// <exception cref="ArgumentException">The client has no container name.</exception>
     public AzureBlobObjectStore(BlobContainerClient container)
     {
         _container = container ?? throw new ArgumentNullException(nameof(container));
@@ -24,12 +17,6 @@ public sealed class AzureBlobObjectStore : IObjectStore
             throw new ArgumentException("A named Blob container is required.", nameof(container));
     }
 
-    /// <summary>Creates a blob only if the key does not already exist.</summary>
-    /// <param name="key">The object key, used as the blob name.</param>
-    /// <param name="content">Readable object content.</param>
-    /// <param name="cancellationToken">Cancels the Azure request.</param>
-    /// <exception cref="ArgumentException">The key is invalid or the stream is unreadable.</exception>
-    /// <exception cref="RequestFailedException">Azure rejects the upload, including an existing key.</exception>
     public async Task WriteAsync(ObjectKey key, Stream content, CancellationToken cancellationToken = default)
     {
         ValidateKey(key);
@@ -41,11 +28,6 @@ public sealed class AzureBlobObjectStore : IObjectStore
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Opens an object stream, or returns null only when the blob does not exist.</summary>
-    /// <param name="key">The object key to read.</param>
-    /// <param name="cancellationToken">Cancels the Azure request.</param>
-    /// <returns>A disposable stream and its length, or null when the blob is absent.</returns>
-    /// <exception cref="RequestFailedException">Azure fails for a reason other than a missing blob.</exception>
     public async Task<ObjectRead?> ReadAsync(ObjectKey key, CancellationToken cancellationToken = default)
     {
         ValidateKey(key);
@@ -63,11 +45,6 @@ public sealed class AzureBlobObjectStore : IObjectStore
         }
     }
 
-    /// <summary>Deletes an object and reports whether the blob existed.</summary>
-    /// <param name="key">The object key to delete.</param>
-    /// <param name="cancellationToken">Cancels the Azure request.</param>
-    /// <returns>True when Azure deleted the blob; false when it was already absent.</returns>
-    /// <exception cref="RequestFailedException">Azure fails for a reason other than a missing blob.</exception>
     public async Task<bool> DeleteAsync(ObjectKey key, CancellationToken cancellationToken = default)
     {
         ValidateKey(key);

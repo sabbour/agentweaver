@@ -3,11 +3,6 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Identity.Broker;
 
-/// <summary>
-/// Persisted project and Environment identity binding for a remote MCP OAuth connection.
-/// It stores provider-approved configuration and versioned secret references, never token
-/// values; connection and credential revisions fence management operations.
-/// </summary>
 public sealed class RemoteMcpOAuthConnectionRecord
 {
     public Guid Id { get; set; }
@@ -46,10 +41,6 @@ public sealed class RemoteMcpOAuthConnectionRecord
     public required DateTimeOffset UpdatedAt { get; set; }
 }
 
-/// <summary>
-/// One pending or completed user-consent attempt bound to a connection revision. The
-/// callback state is hashed and the PKCE verifier is stored only as a secret reference.
-/// </summary>
 public sealed class RemoteMcpOAuthConsentRecord
 {
     public Guid Id { get; set; }
@@ -71,10 +62,8 @@ public sealed class RemoteMcpOAuthConsentRecord
     public DateTimeOffset? CompletedAt { get; set; }
 }
 
-/// <summary>Maps remote OAuth lifecycle records and their state, revision, digest and reference constraints.</summary>
 internal static class RemoteMcpOAuthModel
 {
-    /// <summary>Maps OAuth connection and consent rows with lifecycle, revision, hash and secret-reference constraints.</summary>
     public static void Configure(ModelBuilder model)
     {
         model.Entity<RemoteMcpOAuthConnectionRecord>(entity =>

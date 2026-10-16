@@ -1,13 +1,11 @@
 namespace Agentweaver.Identity.Broker;
 
-/// <summary>Whether an OAuth transaction is for user authorization or App installation setup.</summary>
 public enum RepoAppAuthorizationPurpose
 {
     UserAuthorization,
     InstallationSetup
 }
 
-/// <summary>One-time lifecycle states for a browser authorization callback.</summary>
 public enum RepoAppAuthorizationState
 {
     Pending,
@@ -16,7 +14,6 @@ public enum RepoAppAuthorizationState
     Failed
 }
 
-/// <summary>Connection lifecycle, including the fail-closed state for an uncertain token rotation.</summary>
 public enum RepoAppConnectionState
 {
     Connected,
@@ -24,10 +21,6 @@ public enum RepoAppConnectionState
     RotationUncertain
 }
 
-/// <summary>
-/// Persisted, short-lived OAuth callback transaction. State and cookie are stored as hashes;
-/// the PKCE verifier is protected for the callback exchange.
-/// </summary>
 public sealed class RepoAppAuthorizationTransaction
 {
     public required string StateHash { get; set; }
@@ -44,10 +37,6 @@ public sealed class RepoAppAuthorizationTransaction
     public long? InstallationId { get; set; }
 }
 
-/// <summary>
-/// Current owner-linked GitHub account and versioned secret references. Connection revision
-/// changes authorization state; credential revision fences concurrent refresh operations.
-/// </summary>
 public sealed class RepoAppConnectionRecord
 {
     public required string ConnectionId { get; set; }
@@ -68,7 +57,6 @@ public sealed class RepoAppConnectionRecord
     public required DateTimeOffset UpdatedAt { get; set; }
 }
 
-/// <summary>Last-known active GitHub App installation metadata bound to a connection revision.</summary>
 public sealed class RepoAppInstallationRecord
 {
     public required string ConnectionId { get; set; }
@@ -81,10 +69,6 @@ public sealed class RepoAppInstallationRecord
     public DateTimeOffset? RevokedAt { get; set; }
 }
 
-/// <summary>
-/// Short-lived, single-use selection of one repository and installation. The code is stored
-/// as a hash and later bound to project and permission evidence before minting an installation token.
-/// </summary>
 public sealed class RepoAppRepositorySelectionRecord
 {
     public required string CodeHash { get; set; }

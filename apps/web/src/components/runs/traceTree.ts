@@ -1,5 +1,4 @@
 import type { PersistedRunEvent, RunTraceSpanDto } from '../../api/types';
-/** Normalized trace span categories used by the transaction trace view. */
 export type SpanType = 'invoke-agent' | 'llm' | 'tool';
 
 /** Arguments/output pulled from the persisted tool.call/tool.result/tool.error event log,
@@ -19,7 +18,6 @@ export interface ToolCallDetail {
   };
 }
 
-/** Safe display result for a tool payload after redaction and size checks. */
 export interface SafeToolValue {
   state: 'available' | 'redacted' | 'truncated' | 'unavailable';
   text?: string;
@@ -28,7 +26,6 @@ export interface SafeToolValue {
 const REDACTED = '***REDACTED***';
 const maxStringLength = 8_192;
 const maxRenderedLength = 16_384;
-/** Maximum tool error text length displayed by the trace panel. */
 export const maxToolErrorDetailLength = 2_048;
 const maxCollectionEntries = 100;
 const maxDepth = 8;
@@ -187,7 +184,6 @@ export function getTraceTimeline(spans: RunTraceSpanDto[]): TraceTimeline | null
   return { startedAtMs, endedAtMs, durationMs: Math.max(0, endedAtMs - startedAtMs) };
 }
 
-/** Resolves a span category from its type and available operation/agent attributes. */
 export function normalizeType(span: RunTraceSpanDto): SpanType {
   const raw = (span.spanType ?? '').toLowerCase();
   if (raw === 'tool' || span.toolName) return 'tool';
@@ -316,7 +312,6 @@ export function buildTraceTree(spans: RunTraceSpanDto[]): TraceNode[] {
   return roots;
 }
 
-/** Collects every trace node key whose children can be expanded in the tree view. */
 export function collectExpandableKeys(nodes: TraceNode[], acc: Set<string>): Set<string> {
   for (const node of nodes) {
     if (node.children.length) {
@@ -327,7 +322,6 @@ export function collectExpandableKeys(nodes: TraceNode[], acc: Set<string>): Set
   return acc;
 }
 
-/** Finds a trace node by key in a nested span forest, returning `null` when absent. */
 export function findNode(nodes: TraceNode[], key: string | null): TraceNode | null {
   if (!key) return null;
   for (const node of nodes) {
@@ -352,13 +346,11 @@ function ownNanoAiu(node: TraceNode): number {
  * recursively. For an invoke-agent node this sums every model turn nested beneath it; for a root
  * span this sums every turn in the whole run.
  */
-/** Sums the AI usage recorded on one node and its descendants. */
 export function aggregateNanoAiu(node: TraceNode): number {
   return node.children.reduce((sum, child) => sum + aggregateNanoAiu(child), ownNanoAiu(node));
 }
 
 /** Total AIC cost across an entire trace forest — the run-level rollup (issue #852). */
-/** Sums the AI usage across all roots in a trace forest. */
 export function totalNanoAiu(nodes: TraceNode[]): number {
   return nodes.reduce((sum, node) => sum + aggregateNanoAiu(node), 0);
 }

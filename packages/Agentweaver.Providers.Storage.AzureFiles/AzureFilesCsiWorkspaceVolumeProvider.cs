@@ -6,10 +6,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Providers.Storage.AzureFiles;
 
-/// <summary>
-/// Provisions and retires Azure Files-backed Kubernetes workspace volumes.
-/// It verifies the selected StorageClass, exact claim/PV identities, and pinned release metadata before effects.
-/// </summary>
 public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvider
 {
     private static readonly JsonSerializerOptions BindingJsonOptions = new(JsonSerializerDefaults.Web);
@@ -29,10 +25,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
     private readonly IAzureFilesCsiClient _client;
     private readonly TimeProvider _timeProvider;
 
-    /// <summary>Creates a provider using validated options and a Kubernetes CSI client.</summary>
-    /// <param name="options">Pinned namespace, StorageClass, and provider limits.</param>
-    /// <param name="client">Kubernetes API adapter for claims and persistent volumes.</param>
-    /// <param name="timeProvider">Optional clock used for bounded claim polling.</param>
     public AzureFilesCsiWorkspaceVolumeProvider(
         AzureFilesCsiOptions options,
         IAzureFilesCsiClient client,
@@ -43,14 +35,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    /// <summary>
-    /// Ensures the requested claim is bound, applies the requested reclaim policy, and returns a pinned resource binding.
-    /// </summary>
-    /// <param name="request">Validated volume specification and generation.</param>
-    /// <param name="cancellationToken">Cancels Kubernetes calls and polling.</param>
-    /// <returns>The claim resource, verified capabilities, and immutable recovery descriptor.</returns>
-    /// <exception cref="AzureFilesCsiException">The StorageClass, claim, PV, capacity, or requested policy is invalid or unavailable.</exception>
-    /// <remarks>Kubernetes claim and reclaim-policy changes may have applied if a later verification fails.</remarks>
     public async Task<WorkspaceVolumeResource> ProvisionAsync(
         WorkspaceVolumeProvisionRequest request,
         CancellationToken cancellationToken = default)
@@ -179,14 +163,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
                     BindingJsonOptions))).Validate();
     }
 
-    /// <summary>
-    /// Runs the trusted mounted-volume flush only while the exact environment claim and PV remain valid.
-    /// </summary>
-    /// <param name="request">Flush request with a pinned provider binding.</param>
-    /// <param name="trustedMountedFlush">Owner callback that performs the mounted-volume flush.</param>
-    /// <param name="cancellationToken">Cancels reads and the trusted flush callback.</param>
-    /// <returns>The validated flush receipt from the trusted mounted-volume owner.</returns>
-    /// <exception cref="AzureFilesCsiException">The binding or exact mounted resource fails validation.</exception>
     public async Task<WorkspaceVolumeFlushReceipt> FlushAsync(
         WorkspaceVolumeFlushRequest request,
         Func<WorkspaceVolumeFlushRequest, CancellationToken, Task<WorkspaceVolumeFlushReceipt>> trustedMountedFlush,
@@ -229,8 +205,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
         return receipt;
     }
 
-    /// <summary>Rereads and verifies the exact claim, PV, and StorageClass before or after a flush.</summary>
-    /// <remarks>Failures after the callback are marked as possibly applied so callers do not assume the flush was rolled back.</remarks>
     private async Task RequireFlushResourceAsync(
         WorkspaceVolumeFlushRequest request,
         AzureFilesReleaseDescriptor descriptor,
@@ -272,13 +246,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
         }
     }
 
-    /// <summary>
-    /// Retains or deletes the exact claim and PV according to the pinned release policy, then verifies the outcome.
-    /// </summary>
-    /// <param name="request">Release intent and provider binding for one volume generation.</param>
-    /// <param name="cancellationToken">Cancels Kubernetes calls.</param>
-    /// <returns>A receipt confirming the retained or released disposition.</returns>
-    /// <exception cref="AzureFilesCsiException">The pinned identities or requested release outcome cannot be confirmed.</exception>
     public async Task<WorkspaceVolumeReleaseReceipt> ReleaseAsync(
         WorkspaceVolumeReleaseRequest request,
         CancellationToken cancellationToken = default)
@@ -372,10 +339,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
         return CreateReleaseReceipt(request, WorkspaceVolumeReleaseDisposition.Released);
     }
 
-    /// <summary>
-    /// Deserializes and validates the provider options and release descriptor pinned to a volume generation.
-    /// </summary>
-    /// <exception cref="AzureFilesCsiException">The binding is unsupported, malformed, or not for the exact resource.</exception>
     private static AzureFilesReleaseDescriptor ReadReleaseBinding(WorkspaceVolumeReleaseRequest request)
     {
         var binding = request.ProviderBinding;
@@ -443,7 +406,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
         return descriptor;
     }
 
-    /// <summary>Changes a PV to Retain when needed, then rereads and confirms its UID-bound policy.</summary>
     private async Task EnsureRetainedAsync(
         AzureFilesPersistentVolumeSnapshot persistentVolume,
         AzureFilesReleaseDescriptor descriptor,
@@ -470,7 +432,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
         }
     }
 
-    /// <summary>Builds and validates the release receipt for the supplied disposition.</summary>
     private static WorkspaceVolumeReleaseReceipt CreateReleaseReceipt(
         WorkspaceVolumeReleaseRequest request,
         WorkspaceVolumeReleaseDisposition disposition) =>
@@ -479,14 +440,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
             request.IdempotencyKey,
             disposition).ValidateFor(request);
 
-    /// <summary>
-    /// Derives the deterministic Kubernetes claim name from project, volume, generation, and optional environment.
-    /// </summary>
-    /// <param name="projectId">Owning project identifier.</param>
-    /// <param name="volumeId">Workspace volume identifier.</param>
-    /// <param name="generation">Immutable volume resource generation.</param>
-    /// <param name="environmentId">Optional environment scope that separates environment-bound claims.</param>
-    /// <returns>A stable name containing a truncated SHA-256 digest.</returns>
     public static string GetClaimName(
         string projectId,
         string volumeId,
@@ -502,7 +455,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
         return $"aw-{Convert.ToHexString(bytes).ToLowerInvariant()[..40]}";
     }
 
-    /// <summary>Checks the bounded character set used for an opaque environment identifier.</summary>
     private static string ValidateEnvironmentId(string environmentId)
     {
         if (string.IsNullOrWhiteSpace(environmentId) || environmentId.Length > 256 ||
@@ -512,8 +464,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
         return environmentId;
     }
 
-    /// <summary>Polls the exact claim until Bound, Failed, an unsupported phase, or the configured deadline.</summary>
-    /// <exception cref="AzureFilesCsiException">The claim disappears, fails, has an invalid phase, or times out.</exception>
     private async Task<AzureFilesClaimSnapshot> WaitForBoundClaimAsync(
         AzureFilesClaimRequest request,
         CancellationToken cancellationToken)
@@ -555,7 +505,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
         }
     }
 
-    /// <summary>Requires the named StorageClass to use Azure Files CSI and exactly the approved mount options.</summary>
     private static void ValidateStorageClass(
         AzureFilesStorageClassSnapshot storageClass,
         string expectedName)
@@ -579,7 +528,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
                 effectMayHaveApplied: false);
     }
 
-    /// <summary>Checks the claim's identity, generation annotations, owner, capacity, StorageClass, and access mode.</summary>
     private static void ValidateClaim(AzureFilesClaimSnapshot claim, AzureFilesClaimRequest request)
     {
         ValidateClaimIdentity(
@@ -600,7 +548,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
                 "The Azure Files claim does not match the requested storage class, capacity, or access mode.");
     }
 
-    /// <summary>Checks claim name, namespace, UID presence, and annotations for the exact workspace generation.</summary>
     private static void ValidateClaimIdentity(
         AzureFilesClaimSnapshot claim,
         string kubernetesNamespace,
@@ -621,12 +568,10 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
                 "The Kubernetes claim is not owned by the requested workspace volume generation.");
     }
 
-    /// <summary>Checks whether a claim has the expected value for one ownership annotation.</summary>
     private static bool HasAnnotation(AzureFilesClaimSnapshot claim, string name, string expected) =>
         claim.Annotations.TryGetValue(name, out var actual) &&
         string.Equals(actual, expected, StringComparison.Ordinal);
 
-    /// <summary>Requires the environment annotation to match, or to be absent for a shared claim.</summary>
     private static bool HasExpectedEnvironmentAnnotation(
         AzureFilesClaimSnapshot claim,
         string? environmentId) =>
@@ -634,7 +579,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
             ? !claim.Annotations.ContainsKey("agentweaver.dev/environment-id")
             : HasAnnotation(claim, "agentweaver.dev/environment-id", environmentId);
 
-    /// <summary>Verifies that the bound PV references the exact claim and requested StorageClass.</summary>
     private static void ValidatePersistentVolume(
         AzureFilesPersistentVolumeSnapshot persistentVolume,
         AzureFilesClaimRequest request,
@@ -649,7 +593,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
                 "The bound persistent volume does not match the Azure Files claim.");
     }
 
-    /// <summary>Verifies a PV's identity and claim UID reference against the current claim.</summary>
     private static void ValidatePersistentVolumeIdentity(
         AzureFilesPersistentVolumeSnapshot persistentVolume,
         AzureFilesClaimSnapshot claim)
@@ -664,7 +607,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
                 "The persistent volume claim reference does not match the current claim UID.");
     }
 
-    /// <summary>Matches a PV and its claim reference to the immutable release descriptor.</summary>
     private static void ValidatePersistentVolumeDescriptor(
         AzureFilesPersistentVolumeSnapshot persistentVolume,
         AzureFilesReleaseDescriptor descriptor,
@@ -690,7 +632,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
                 "The persistent volume identity differs from the exact saved generation descriptor.");
     }
 
-    /// <summary>Maps supported workspace release policies to Kubernetes reclaim-policy values.</summary>
     private static string ToKubernetesReclaimPolicy(WorkspaceVolumeReclaimPolicy policy) => policy switch
     {
         WorkspaceVolumeReclaimPolicy.Delete => "Delete",
@@ -698,7 +639,6 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
         _ => throw new ArgumentOutOfRangeException(nameof(policy))
     };
 
-    /// <summary>Immutable provider-owned identities needed to recover or release a volume generation.</summary>
     private sealed record AzureFilesReleaseDescriptor(
         string Namespace,
         string ClaimName,

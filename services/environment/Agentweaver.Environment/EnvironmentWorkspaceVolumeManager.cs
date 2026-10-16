@@ -3,22 +3,16 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Environment;
 
-/// <summary>HTTP input for creating a volume with its provider specification and idempotency key.</summary>
 public sealed record CreateWorkspaceVolumeApiRequest(
     WorkspaceVolumeSpec Specification,
     string IdempotencyKey);
 
-/// <summary>
-/// Applies caller authorization and runtime host evidence to workspace-volume lifecycle operations.
-/// The underlying service and lifecycle store perform generation-fenced provider effects.
-/// </summary>
 public sealed class EnvironmentWorkspaceVolumeManager(
     IProjectsConfigClient projects,
     IEnvironmentLifecycleStore lifecycleStore,
     WorkspaceVolumeService workspaceVolumes,
     EnvironmentRuntimeBootstrapDelivery? runtimeDelivery = null)
 {
-    /// <summary>Resolves the exact active volume flush request for a current suspend operation.</summary>
     public async Task<WorkspaceVolumeApiFlushRequest> ResolveSuspendAsync(
         CurrentCallerRequest caller,
         RuntimeHostSuspendRequest request,
@@ -54,7 +48,6 @@ public sealed class EnvironmentWorkspaceVolumeManager(
         return resolved;
     }
 
-    /// <summary>Flushes a workspace only after host evidence, project authority, and the Environment fence are rechecked.</summary>
     public async Task<WorkspaceVolumeLifecycleResult> FlushAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -88,7 +81,6 @@ public sealed class EnvironmentWorkspaceVolumeManager(
             }).ConfigureAwait(false);
     }
 
-    /// <summary>Creates a volume after requiring WriteProjects authority for its project and run.</summary>
     public async Task<EnvironmentWorkspaceVolumeSnapshot> CreateAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -120,7 +112,6 @@ public sealed class EnvironmentWorkspaceVolumeManager(
             checkAuthorization).ConfigureAwait(false);
     }
 
-    /// <summary>Provisioning wrapper that applies current authorization around the provider operation.</summary>
     public Task<WorkspaceVolumeLifecycleResult> ProvisionAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -136,7 +127,6 @@ public sealed class EnvironmentWorkspaceVolumeManager(
                 service.ProvisionAsync(fence, transition, token, check),
             cancellationToken);
 
-    /// <summary>Replacement wrapper that applies current authorization around the provider operation.</summary>
     public Task<WorkspaceVolumeLifecycleResult> ReplaceAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -152,7 +142,6 @@ public sealed class EnvironmentWorkspaceVolumeManager(
                 service.ReplaceAsync(fence, transition, token, check),
             cancellationToken);
 
-    /// <summary>Binding wrapper that applies current authorization around the provider operation.</summary>
     public Task<WorkspaceVolumeLifecycleResult> BindVolumeAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -168,7 +157,6 @@ public sealed class EnvironmentWorkspaceVolumeManager(
                 service.BindAsync(fence, transition, token, check),
             cancellationToken);
 
-    /// <summary>Unbinding wrapper that applies current authorization around the provider operation.</summary>
     public Task<WorkspaceVolumeLifecycleResult> UnbindAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -184,7 +172,6 @@ public sealed class EnvironmentWorkspaceVolumeManager(
                 service.UnbindAsync(fence, transition, token, check),
             cancellationToken);
 
-    /// <summary>Release wrapper that applies current authorization around the provider operation.</summary>
     public Task<WorkspaceVolumeLifecycleResult> ReleaseAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -200,7 +187,6 @@ public sealed class EnvironmentWorkspaceVolumeManager(
                 service.ReleaseAsync(fence, transition, token, check),
             cancellationToken);
 
-    /// <summary>Retries pending provider cleanup after rechecking the current Environment owner authority.</summary>
     public async Task<EnvironmentWorkspaceVolumeCleanupStatus?> RetryCleanupAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -214,7 +200,6 @@ public sealed class EnvironmentWorkspaceVolumeManager(
             fence, cancellationToken, checkAuthorization).ConfigureAwait(false);
     }
 
-    /// <summary>Reconciles cleanup created by a specific replacement operation after checking current authority.</summary>
     public async Task<EnvironmentWorkspaceVolumeCleanupStatus?> ReconcileCleanupAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -234,7 +219,6 @@ public sealed class EnvironmentWorkspaceVolumeManager(
             checkAuthorization).ConfigureAwait(false);
     }
 
-    /// <summary>Reads volume metadata after checking fresh ReadProjects authority before and after the read.</summary>
     public async Task<EnvironmentWorkspaceVolumeSnapshot?> InspectAsync(
         CurrentCallerRequest caller,
         string projectId,
@@ -265,7 +249,6 @@ public sealed class EnvironmentWorkspaceVolumeManager(
         return snapshot;
     }
 
-    /// <summary>Dispatches a validated transition to the matching provider-backed workspace-volume operation.</summary>
     private async Task<WorkspaceVolumeLifecycleResult> ApplyAsync(
         CurrentCallerRequest caller,
         string projectId,

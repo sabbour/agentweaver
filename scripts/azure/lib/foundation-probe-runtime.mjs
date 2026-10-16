@@ -1,7 +1,3 @@
-/**
- * Collects Azure and Kubernetes evidence for the one-shot Foundation Probe acceptance job.
- * It checks exact source, deployment, identity, image, and receipt bindings before accepting probe results.
- */
 import { run } from './exec.mjs';
 import { verifyPublishedFoundationProbeImage } from '../build-foundation-probe-image.mjs';
 
@@ -107,10 +103,6 @@ function normalizeImageId(imageId) {
   return imageId.replace(/^(?:docker-pullable|containerd|docker):\/\//, '');
 }
 
-/**
- * Confirms the selected kubeconfig contains one HTTPS endpoint matching the observed AKS cluster.
- * Returns a configuration check; a mismatched endpoint blocks all subsequent cluster observations.
- */
 function checkKubernetesTarget(kubeConfig, kubeContext, cluster) {
   const name = 'kubernetes-target';
   if (!isObject(kubeConfig) || !Array.isArray(kubeConfig.clusters) || kubeConfig.clusters.length !== 1 ||
@@ -190,10 +182,6 @@ function targetMatchesSourceAndDeployment(target, imageSource, deployment) {
     });
 }
 
-/**
- * Validates the exact target schema and binds it to the admitted image source and deployment receipt.
- * Unknown fields, unsupported runtime settings, or any source/resource mismatch throw.
- */
 function validateTarget(target, imageSource, deployment) {
   if (!hasExactKeys(target, targetKeys) ||
       !hasExactKeys(target.infrastructure, infrastructureKeys) ||
@@ -240,7 +228,6 @@ function validateTarget(target, imageSource, deployment) {
   return target;
 }
 
-/** Validates the immutable target ConfigMap and returns either its parsed target or a blocked check. */
 function checkTargetConfigMap(configMap, imageSource, deployment) {
   try {
     if (configMap?.apiVersion !== 'v1' || configMap.kind !== 'ConfigMap' ||
@@ -271,10 +258,6 @@ function checkTargetConfigMap(configMap, imageSource, deployment) {
   }
 }
 
-/**
- * Verifies the one-shot Job and its only pod, including ownership, security settings, and bounded timing.
- * Returns the pod only when it is unambiguously owned by that Job; contract failures become blocked evidence.
- */
 function checkJobAndPod(job, pods, target, now) {
   const name = 'foundation-probe-job-pod';
   try {
@@ -429,10 +412,6 @@ function podHasTerminalProbeContainer(pod) {
     isObject(pod.status.containerStatuses[0].state?.terminated);
 }
 
-/**
- * Checks that the pod uses the intended service account and one projected token with the expected audience.
- * Missing, duplicate, or inconsistent identity fields produce a blocked configuration check.
- */
 function checkWorkloadIdentityProjection(pod, serviceAccount, target) {
   const name = 'foundation-probe-workload-identity';
   const identity = target.foundationProbeIdentity;
@@ -491,10 +470,6 @@ function checkWorkloadIdentityProjection(pod, serviceAccount, target) {
   }
 }
 
-/**
- * Binds the Job and pod image IDs to one registry digest in the verified image receipt.
- * A missing, duplicated, or changed digest is reported as a blocked integration check.
- */
 function checkProbeJobImage(job, pod, verifiedReceipt, imageReference, imageSource) {
   const name = 'foundation-probe-registry-image';
   try {
@@ -566,10 +541,6 @@ const postgresKeys = [
 ];
 const telemetryKeys = ['name', 'traceId', 'spanId', 'startedAt'];
 
-/**
- * Validates the native probe receipt against source, runtime target, resource effects, and execution times.
- * The receipt is accepted only when every exact field and owned-effect check passes.
- */
 function checkProbeReceipt(receipt, target, imageSource, execution) {
   const name = 'foundation-probe-receipt';
   try {
@@ -689,7 +660,6 @@ function checkProbeReceipt(receipt, target, imageSource, execution) {
   }
 }
 
-/** Runs a bounded kubectl observation and throws a redacted error for failed reads. */
 function runKubectl(args, execKubectl) {
   const result = execKubectl(args, { check: false, timeout: 30_000 });
   if (result?.status !== 0) throw new Error(`kubectl observation failed: ${redactDiagnostic(result?.stderr || result?.stdout)}`);
@@ -708,7 +678,6 @@ function observePods(args, execKubectl) {
   return output.items;
 }
 
-/** Parses the single bounded JSON receipt line emitted by a successfully completed probe container. */
 function parseProbeLog(text) {
   if (typeof text !== 'string' || text.length === 0 || text.length > 64 * 1024) {
     throw new Error('Completed probe pod did not return a bounded receipt.');
@@ -745,10 +714,6 @@ function summarizeFailedProbeLog(text) {
   return { logBytes: text.length, logLines: lines.length, unstructuredLines, failures };
 }
 
-/**
- * Collects configuration and integration checks for the source-bound Foundation Probe deployment.
- * Returns structured pass/block evidence; it performs read-only Kubernetes observations and image verification.
- */
 export function collectFoundationProbeEvidence({
   imageSource,
   deployment,
@@ -778,7 +743,6 @@ export function collectFoundationProbeEvidence({
     return collected;
   }
 
-  // Refuse to query workload objects unless the explicit context resolves to the independently observed cluster.
   const contextArgs = ['config', 'view', '--minify', '--context', kubeContext, '-o', 'json'];
   let kubeConfig;
   try {

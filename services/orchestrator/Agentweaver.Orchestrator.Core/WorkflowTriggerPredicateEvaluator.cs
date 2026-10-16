@@ -2,13 +2,11 @@ using System.Collections.Immutable;
 
 namespace Agentweaver.Orchestrator.Core;
 
-/// <summary>Validates and evaluates bounded, structured predicates for supported GitHub webhook events.</summary>
 public static class WorkflowTriggerPredicateEvaluator
 {
     public const int MaximumPredicateDepth = 8;
     public const int MaximumPredicateCount = 128;
 
-    /// <summary>Validates all predicates, including nesting limits and event-specific field compatibility.</summary>
     public static WorkflowTriggerPredicateValidationResult ValidateAll(
         IReadOnlyList<WorkflowTriggerPredicate>? predicates,
         string? eventName)
@@ -170,8 +168,6 @@ public static class WorkflowTriggerPredicateEvaluator
         return new WorkflowTriggerPredicateValidationResult(issues.ToImmutable());
     }
 
-    /// <summary>Returns true only when every valid predicate matches the supplied event context.</summary>
-    /// <remarks>Invalid shapes, unsupported events, regex failures, and runtime matching errors fail closed.</remarks>
     public static WorkflowTriggerPredicateEvaluation EvaluateAll(
         IReadOnlyList<WorkflowTriggerPredicate>? predicates,
         WorkflowTriggerEventContext? context)

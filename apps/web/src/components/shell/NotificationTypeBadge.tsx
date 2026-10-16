@@ -43,10 +43,6 @@ interface NotificationTypeBadgeProps {
   type: NotificationDto['type'];
 }
 
-/**
- * Renders a compact label for a notification type from API notification data.
- * The type is supplied by the caller; no lookup request or local state is used.
- */
 export const NotificationTypeBadge = memo(function NotificationTypeBadge({
   type,
 }: NotificationTypeBadgeProps) {

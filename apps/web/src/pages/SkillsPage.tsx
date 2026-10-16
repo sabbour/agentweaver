@@ -69,10 +69,6 @@ import type {
 } from '../api/types';
 import type { DroppedSkillFile } from '../utils/skillDrop';
 
-/**
- * Project skill catalog and assignment page. It coordinates server-backed skill
- * imports, marketplace discovery, generated drafts, and blueprint-default previews.
- */
 const useStyles = makeStyles({
   breadcrumbLink: {
     color: tokens.colorNeutralForeground2,
@@ -173,7 +169,6 @@ const useStyles = makeStyles({
   sourceFormRow: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
 });
 
-/** Converts API and runtime failures into text suitable for the page's error surfaces. */
 function formatApiError(err: unknown): string {
   if (err instanceof ApiError) return `API error ${err.status}: ${err.body || 'Request failed'}`;
   return err instanceof Error ? err.message : String(err);
@@ -181,10 +176,6 @@ function formatApiError(err: unknown): string {
 
 // Friendlier messages for the add-marketplace-source form's known failure modes (400/409/422),
 // falling back to the generic API error formatting for anything else.
-/**
- * Explains common repository-source validation and conflict responses; other failures
- * use the generic API formatter.
- */
 function formatAddSourceError(err: unknown): string {
   if (err instanceof ApiError) {
     const payloadError = (err.payload && typeof err.payload === 'object' && 'error' in err.payload)
@@ -200,7 +191,6 @@ function formatAddSourceError(err: unknown): string {
 const FALLBACK_DEFAULTS_BLUEPRINT_ID = 'blueprint-software-development';
 const MARKETPLACE_PAGE_SIZE = 25;
 
-/** Extracts a typed 422 preview when defaults are blocked but the server returned usable detail. */
 function structuredBlockedPreview(err: unknown): BlueprintSkillDefaultsPreviewResponse | null {
   if (err instanceof ApiError
     && err.status === 422
@@ -218,7 +208,6 @@ function statusColor(status: string): 'success' | 'warning' | 'danger' | 'subtle
   return 'subtle';
 }
 
-/** Summarizes the server's per-skill acquisition outcomes for a completion notice. */
 function summarizeAcquisition(res: SkillAcquisitionResponse): string {
   const counts = { Added: 0, Updated: 0, Unchanged: 0, Rejected: 0 } as Record<string, number>;
   const normalize = (kind: string) => kind.charAt(0).toUpperCase() + kind.slice(1).toLowerCase();
@@ -232,10 +221,6 @@ function summarizeAcquisition(res: SkillAcquisitionResponse): string {
   return parts.length ? parts.join(', ') : 'No changes.';
 }
 
-/**
- * Maps apply failures to actionable text and indicates whether the preview must be
- * regenerated before another apply attempt.
- */
 function defaultApplyError(err: unknown): {
   message: string;
   requiresRepreview: boolean;
@@ -275,7 +260,6 @@ function defaultApplyError(err: unknown): {
   return { message: formatApiError(err), requiresRepreview: false, preview: null };
 }
 
-/** Returns the defaults source for supported project blueprints, or null for custom sources. */
 function defaultsBlueprintId(project: Project): string | null {
   if (project.source_blueprint_type === 'inline'
     || project.source_blueprint_type === 'custom'
@@ -285,7 +269,6 @@ function defaultsBlueprintId(project: Project): string | null {
   return project.source_blueprint_id ?? FALLBACK_DEFAULTS_BLUEPRINT_ID;
 }
 
-/** Explains why a project's inline or custom blueprint cannot supply catalog defaults. */
 function defaultsUnsupportedReason(project: Project | null): string | null {
   if (project?.source_blueprint_type === 'inline' || project?.source_blueprint_id === 'inline') {
     return 'Blueprint skill defaults are unavailable because this project uses an inline blueprint.';
@@ -296,7 +279,6 @@ function defaultsUnsupportedReason(project: Project | null): string | null {
   return null;
 }
 
-/** Loads a project's skills and provides guarded import, assignment, generation, and defaults flows. */
 export function SkillsPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
@@ -308,7 +290,6 @@ export function SkillsPage() {
     false,
   );
 
-  // Catalog data and mutation feedback are keyed to this project and refreshed after writes.
   const [selectedTab, setSelectedTab] = useState<'catalog' | 'assignments'>('catalog');
   const [skills, setSkills] = useState<SkillDto[] | null>(null);
   const [members, setMembers] = useState<TeamMemberDto[]>([]);
@@ -322,7 +303,6 @@ export function SkillsPage() {
   const [detail, setDetail] = useState<SkillDetailDto | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
 
-  // Marketplace browsing tracks pagination and AI-provider retry state separately from direct imports.
   const [importOpen, setImportOpen] = useState(false);
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
   const [marketplaces, setMarketplaces] = useState<SkillMarketplaceDto[]>([]);
@@ -359,8 +339,6 @@ export function SkillsPage() {
   const [defaultsRequiresRepreview, setDefaultsRequiresRepreview] = useState(false);
   const [defaultsProject, setDefaultsProject] = useState<Project | null>(null);
   const [defaultsProjectResolved, setDefaultsProjectResolved] = useState(false);
-  // Defaults requests are pinned to a project and generation so stale responses cannot
-  // overwrite a newly opened dialog or a route change while an apply is still in flight.
   const defaultsDialogGeneration = useRef(0);
   const currentProjectId = useRef(projectId);
   const defaultsPreviewTransports = useRef(new Map<string, number>());
@@ -376,7 +354,6 @@ export function SkillsPage() {
   const mdFileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
-  /** Clears the current list and asks the project-scoped loader to fetch it again. */
   const reload = useCallback(() => {
     setSkills(null);
     setReloadKey((k) => k + 1);
@@ -386,7 +363,6 @@ export function SkillsPage() {
     currentProjectId.current = projectId;
   }, [projectId]);
 
-  // Load catalog and roster together; roster failure does not prevent skill browsing.
   useEffect(() => {
     if (!projectId) return;
     const loadSkills = async () => {
@@ -409,7 +385,6 @@ export function SkillsPage() {
     void loadSkills();
   }, [projectId, reloadKey]);
 
-  /** Runs a sync/upload acquisition, reports its result, and refreshes the catalog. */
   const runAcquisition = async (label: string, action: () => Promise<SkillAcquisitionResponse>) => {
     if (!projectId || busy) return;
     const requestProjectId = projectId;
@@ -429,7 +404,6 @@ export function SkillsPage() {
 
   const onSync = () => void runAcquisition('Sync', () => apiClient.syncSkills(projectId!));
 
-  /** Invalidates pending preview work, resets the dialog, and optionally restores focus. */
   const closeDefaults = useCallback((restoreFocus = true) => {
     defaultsDialogGeneration.current += 1;
     setDefaultsDialogKey((key) => key + 1);
@@ -464,7 +438,6 @@ export function SkillsPage() {
 
   // This layout effect reconciles the modal with route-driven project changes before paint so
   // navigating between projects cannot flash stale defaults UI or lose an in-flight apply restore.
-  // Reconcile the defaults dialog before paint when the route changes projects.
   useLayoutEffect(() => {
     if (lastDefaultsProjectId.current === projectId) return;
     lastDefaultsProjectId.current = projectId;
@@ -481,7 +454,6 @@ export function SkillsPage() {
     }
   }, [closeDefaults, projectId]);
 
-  // The project metadata determines which blueprint can provide defaults.
   useEffect(() => {
     if (!projectId) return;
     let current = true;
@@ -501,10 +473,6 @@ export function SkillsPage() {
     return () => { current = false; };
   }, [projectId]);
 
-  /**
-   * Fetches a fresh project snapshot and defaults preview. Project, transport, and
-   * dialog-generation checks discard responses from requests that are no longer current.
-   */
   const previewDefaults = useCallback(async () => {
     const defaultsBusyForAnotherProject = (busy === 'defaults-preview' || busy === 'defaults-apply')
       && defaultsBusyProject.current !== projectId;
@@ -579,10 +547,6 @@ export function SkillsPage() {
     void previewDefaults();
   };
 
-  /**
-   * Applies only the preview's blueprint and digest; stale previews are retained for
-   * context but marked for re-preview before another apply.
-   */
   const applyDefaults = async () => {
     if (!projectId
       || !defaultsPreview
@@ -641,7 +605,6 @@ export function SkillsPage() {
     }
   };
 
-  /** Previews a direct repository import and selects only valid candidates by default. */
   const onPreview = async () => {
     if (!projectId || !sourceUrl.trim()) return;
     setBusy('preview');
@@ -658,7 +621,6 @@ export function SkillsPage() {
     }
   };
 
-  /** Loads one marketplace page, optionally appending results and binding AI context. */
   const browseMarketplace = async (
     marketplace: string,
     query = '',
@@ -716,7 +678,6 @@ export function SkillsPage() {
     } finally { setBusy(null); }
   };
 
-  /** Refreshes the configured marketplace sources without blocking the rest of the page. */
   const refreshMarketplaces = async () => {
     if (!projectId) return;
     try { setMarketplaces(await apiClient.listSkillMarketplaces(projectId)); } catch (err) { setMarketplaceError(formatApiError(err)); }
@@ -733,7 +694,6 @@ export function SkillsPage() {
     await refreshMarketplaces();
   };
 
-  /** Adds a repository-backed marketplace and starts browsing its candidates. */
   const addMarketplaceSource = async () => {
     if (!projectId || !newSourceRepo.trim()) return;
     setBusy('marketplace-add-source');
@@ -756,7 +716,6 @@ export function SkillsPage() {
     } catch (err) { setSourceAddError(formatAddSourceError(err)); } finally { setBusy(null); }
   };
 
-  /** Removes a source and clears its candidates when it was the active selection. */
   const removeMarketplaceSource = async (name: string) => {
     if (!projectId) return;
     setBusy(`marketplace-remove-${name}`);
@@ -771,7 +730,6 @@ export function SkillsPage() {
     } catch (err) { setMarketplaceError(formatApiError(err)); } finally { setBusy(null); }
   };
 
-  /** Imports the selected marketplace locations and refreshes the visible skill list. */
   const importMarketplace = async () => {
     if (!projectId || !selectedMarketplace || selectedLocations.size === 0) return;
     setBusy('marketplace-import');
@@ -784,7 +742,6 @@ export function SkillsPage() {
     } catch (err) { setMarketplaceError(formatApiError(err)); } finally { setBusy(null); }
   };
 
-  /** Imports selected candidates from a direct source, or lets the server choose when none were previewed. */
   const onImport = async () => {
     if (!projectId || !sourceUrl.trim()) return;
     const requestProjectId = projectId;
@@ -806,7 +763,6 @@ export function SkillsPage() {
     }
   };
 
-  /** Uploads selected files and resets native file inputs so the same files can be reselected. */
   const onUploadFiles = async (files: FileList | null) => {
     if (!projectId || !files || files.length === 0) return;
     await runAcquisition('Upload', () => apiClient.uploadSkills(projectId, Array.from(files)));
@@ -814,7 +770,6 @@ export function SkillsPage() {
     if (folderInputRef.current) folderInputRef.current.value = '';
   };
 
-  /** Collects folder entries when supported, preserving relative paths, then uploads the files. */
   const onDropUpload = async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     if (!projectId || busy) return;
@@ -844,7 +799,6 @@ export function SkillsPage() {
     setSkillInstructions('');
   };
 
-  /** Creates a skill from the form and clears the draft after a successful server write. */
   const onCreateSkill = async () => {
     if (!projectId) return;
     const requestProjectId = projectId;
@@ -870,7 +824,6 @@ export function SkillsPage() {
     }
   };
 
-  /** Generates a skill draft with the selected provider; generation does not persist it. */
   const onGenerateSkill = async () => {
     if (!projectId || !generatePrompt.trim()) return;
     setBusy('Generate skill');
@@ -895,7 +848,6 @@ export function SkillsPage() {
     }
   };
 
-  /** Deletes a project skill and reloads the catalog after success. */
   const onDelete = async (skill: SkillDto) => {
     if (!projectId || busy) return;
     setBusy(`delete:${skill.id}`);
@@ -910,7 +862,6 @@ export function SkillsPage() {
     }
   };
 
-  /** Opens the detail drawer only after the requested skill record loads successfully. */
   const openDetail = async (skill: SkillDto) => {
     if (!projectId) return;
     setDetailOpen(true);
@@ -923,7 +874,6 @@ export function SkillsPage() {
     }
   };
 
-  /** Assigns or unassigns one skill for one agent, then reloads authoritative assignments. */
   const toggleAssignment = async (skill: SkillDto, agentName: string, assign: boolean) => {
     if (!projectId || busy) return;
     setBusy(`assign:${skill.id}:${agentName}`);

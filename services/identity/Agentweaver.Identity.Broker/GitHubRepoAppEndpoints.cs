@@ -5,14 +5,8 @@ using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace Agentweaver.Identity.Broker;
 
-/// <summary>
-/// Maps browser-facing GitHub Repo App connection, status, repository and selection routes.
-/// Mutating browser calls require the local session and antiforgery validation; OAuth
-/// callbacks are bound to a short-lived HTTP-only cookie and transaction.
-/// </summary>
 internal static class GitHubRepoAppEndpoints
 {
-    /// <summary>Registers the browser callback and source-control API routes.</summary>
     internal static void MapGitHubRepoAppEndpoints(this IEndpointRouteBuilder app, Uri webOrigin)
     {
         app.MapPost("/auth/github/repo-app/connect", BeginUserAuthorizationAsync);
@@ -319,10 +313,8 @@ internal static class GitHubRepoAppEndpoints
     }
 }
 
-/// <summary>Chosen installation and repository IDs; the service verifies both against a live GitHub listing.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record GitHubRepoAppRepositorySelectionInput(long InstallationId, long RepositoryId);
 
-/// <summary>Request to disconnect the specified owner connection at its expected revision.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record GitHubRepoAppDisconnectInput(string ConnectionId, long ExpectedConnectionRevision);

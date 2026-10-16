@@ -6,7 +6,6 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.AgentRuntime;
 
-/// <summary>Network, image, and queue limits that bind one runtime host to its deployment.</summary>
 public sealed record RuntimeAgentHostOptions(
     Uri ConfigureEndpoint,
     Uri BrokerAddress,
@@ -16,7 +15,6 @@ public sealed record RuntimeAgentHostOptions(
     SandboxImageIdentity Image,
     int MaximumPendingTurns)
 {
-    /// <summary>Validates endpoint audiences, image identity, and bounded turn capacity.</summary>
     public RuntimeAgentHostOptions Validate()
     {
         if (!RuntimeContractValidation.IsHttpsEndpoint(ConfigureEndpoint) ||
@@ -31,21 +29,13 @@ public sealed record RuntimeAgentHostOptions(
     }
 }
 
-/// <summary>Reports a startup failure with a stable code and optional failed budget evidence.</summary>
 public sealed class RuntimeStartupException(string code, SandboxStartupBudgetFailure? failure = null)
     : Exception(code)
 {
-    /// <summary>The stable failure code returned by the host endpoint.</summary>
     public string Code { get; } = code;
-
-    /// <summary>The startup budget that failed, when one was measured.</summary>
     public SandboxStartupBudgetFailure? Failure { get; } = failure;
 }
 
-/// <summary>
-/// Owns one runtime registration, receives bootstrap configuration, serializes and dispatches
-/// A2A turns, and serves readiness, refresh, suspend, and resume operations.
-/// </summary>
 public sealed class RuntimeAgentHost : IAsyncDisposable
 {
     private readonly RuntimeAgentHostOptions _options;
@@ -82,7 +72,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     private int _disposed;
     private int _usageFailed;
 
-    /// <summary>Creates a host with its owner, session factory, network client, and clock.</summary>
     public RuntimeAgentHost(
         RuntimeAgentHostOptions options,
         HttpClient http,
@@ -93,7 +82,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
     {
     }
 
-    /// <summary>Creates a host with an injectable workspace flusher for controlled execution.</summary>
     internal RuntimeAgentHost(
         RuntimeAgentHostOptions options,
         HttpClient http,
@@ -111,10 +99,8 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         _dispatcher = DispatchAsync();
     }
 
-    /// <summary>The configured HTTPS audience for bootstrap and activation requests.</summary>
     public Uri ConfigureEndpoint => _options.ConfigureEndpoint;
 
-    /// <summary>Accepts a matching bootstrap delivery and stores its configuration for activation.</summary>
     public async Task<RuntimeBootstrapDeliveryReceipt> ReceiveAsync(
         RuntimeBootstrapDeliveryRequest request, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -136,10 +122,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Validates bootstrap or resume authority, creates the authorized SDK session, persists
-    /// its configuration acknowledgment, and returns placement readiness.
-    /// </summary>
     public async Task<RuntimeHostReadinessReceipt> ConfigureAsync(
         RuntimeHostConfigureRequest request, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -308,7 +290,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         }
     }
 
-    /// <summary>Rotates the current observation credential for the supplied session proof.</summary>
     public async Task<RuntimeSessionRefreshReceipt> RefreshAsync(
         RuntimeHostRefreshRequest request, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -318,7 +299,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             .ConfigureAwait(false);
     }
 
-    /// <summary>Reads host pre-queue credit evidence after validating the session proof.</summary>
     internal async Task<RuntimeFixedCreditGuardReadResult> ReadFixedCreditGuardAsync(
         RuntimeHostFixedCreditGuardReadRequest request, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -343,7 +323,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         return result;
     }
 
-    /// <summary>Reads native denial evidence for a dispatch and denial stage.</summary>
     internal async Task<RuntimeNativeCreditDenialReadResult> ReadNativeCreditDenialAsync(
         RuntimeHostNativeCreditDenialReadRequest request, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -368,10 +347,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         return result;
     }
 
-    /// <summary>
-    /// Validates and admits one user A2A message, deduplicates exact retries by message ID,
-    /// then waits for the serialized native turn response.
-    /// </summary>
     public async Task<RuntimeA2AResponse> SendAsync(
         RuntimeA2ASendRequest request, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -423,10 +398,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         return await pending.Completion.Task.WaitAsync(token).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Stops turn admission, drains admitted work, flushes usage and native state, and flushes
-    /// the mounted workspace before returning suspend evidence.
-    /// </summary>
     public async Task<RuntimeHostSuspendReceipt> SuspendAsync(
         RuntimeHostSuspendRequest request, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -491,7 +462,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         return completed;
     }
 
-    /// <summary>Hashes the restored workspace and returns evidence bound to the resume request.</summary>
     public async Task<RuntimeHostWorkspaceResumeReceipt> VerifyWorkspaceResumeAsync(
         RuntimeWorkspaceResumeRequest request, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -513,7 +483,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             treeHash).ValidateFor(request);
     }
 
-    /// <summary>Reports whether the requested resume bootstrap is absent, present, or activated.</summary>
     public async Task<RuntimeResumeHostStateReceipt> ReadResumeBootstrapStateAsync(
         RuntimeResumeBootstrapRequest request, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -543,7 +512,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         }
     }
 
-    /// <summary>Requires the resume registration to still be the owner's exact current registration.</summary>
     private async Task RequireCurrentResumeRegistrationAsync(
         RuntimeResumeBootstrapRequest request, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -554,7 +522,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
 
-    /// <summary>Classifies local bootstrap state and rejects inconsistent partially initialized state.</summary>
     private RuntimeResumeHostState ReadResumeBootstrapState(RuntimeResumeBootstrapRequest request)
     {
         if (_registration is null || _registration != request.Registration)
@@ -592,7 +559,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         }
     }
 
-    /// <summary>Rechecks suspend authority with the owner and rejects any changed request.</summary>
     private async Task RequireCurrentSuspendAsync(
         RuntimeHostSuspendRequest request, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -604,7 +570,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         token.ThrowIfCancellationRequested();
     }
 
-    /// <summary>Rechecks workspace-resume authority with the owner before accepting workspace evidence.</summary>
     private async Task RequireCurrentResumeAsync(
         RuntimeWorkspaceResumeRequest request, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -616,7 +581,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         token.ThrowIfCancellationRequested();
     }
 
-    /// <summary>Rechecks resume-bootstrap authority by exact serialized request identity.</summary>
     private async Task RequireCurrentResumeBootstrapAsync(
         RuntimeResumeBootstrapRequest request, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -628,11 +592,9 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         token.ThrowIfCancellationRequested();
     }
 
-    /// <summary>Returns readiness using the actor captured during configuration.</summary>
     public Task<RuntimeHostReadinessReceipt> ReadinessAsync(CancellationToken token) =>
         ReadinessAsyncCore(null, token);
 
-    /// <summary>Returns readiness after verifying the caller against the current registration.</summary>
     public Task<RuntimeHostReadinessReceipt> ReadinessAsync(
         RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -640,7 +602,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         return ReadinessAsyncCore(actor, token);
     }
 
-    /// <summary>Builds readiness from the current registration and placement observations.</summary>
     private async Task<RuntimeHostReadinessReceipt> ReadinessAsyncCore(
         RuntimeActorAuthorization? requestActor, CancellationToken token)
     {
@@ -665,7 +626,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         };
     }
 
-    /// <summary>Maps session recovery mode and evidence into a registration-bound receipt.</summary>
     private static RuntimeHostRecoveryReceipt CreateRecoveryReceipt(AuthorizedRuntimeSession session)
     {
         var recoveryMode = session.RecoveryMode switch
@@ -690,7 +650,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         }.ValidateFor(session.Registration);
     }
 
-    /// <summary>Checks that persisted configuration matches the registration and SDK facts.</summary>
     private static void ValidateConfigurationAcknowledgment(
         SessionMaterialAcknowledgment acknowledgment, AuthorizedRuntimeSession session)
     {
@@ -716,7 +675,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             throw new RuntimeAuthorizationException("runtime_configuration_acknowledgment_invalid");
     }
 
-    /// <summary>Validates the observe proof, caller, and current source grant before returning the session.</summary>
     private async Task<AuthorizedRuntimeSession> RequireSessionAsync(
         RuntimeHostSessionProof proof, RuntimeActorAuthorization actor, CancellationToken token,
         bool allowRefreshReplay = false)
@@ -734,7 +692,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         return session;
     }
 
-    /// <summary>Requires the caller and owner registration to still match this host.</summary>
     private async Task RequireCallerAsync(
         RuntimeRegistration expected, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -747,7 +704,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
 
-    /// <summary>Checks registration freshness, actor authority, image identity, and configure audience.</summary>
     private void RequireRegistration(RuntimeRegistration registration, RuntimeActorAuthorization actor)
     {
         RuntimeSessionBootstrap.RequireCurrent(registration, actor, _time);
@@ -757,10 +713,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             throw new RuntimeAuthorizationException("runtime_image_or_endpoint_mismatch");
     }
 
-    /// <summary>
-    /// Reads placement and startup evidence, compares every pinned binding, and enforces
-    /// startup time budgets before returning phase observations.
-    /// </summary>
     private async Task<ImmutableArray<SandboxStartupPhaseObservation>> ReadPlacementAsync(
         RuntimeRegistration registration, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -861,7 +813,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
 
     private sealed record CapturedMcpServer(RuntimeMcpServerEndpoint? Endpoint);
 
-    /// <summary>Persists SDK usage receipts and stops the stream on any owner mismatch.</summary>
     private async Task PersistUsageAsync(
         AuthorizedRuntimeSession session, RuntimeUsageSourceHttpClient source, RuntimeActorAuthorization actor)
     {
@@ -895,7 +846,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         }
     }
 
-    /// <summary>Processes immediate turns before queued turns and completes each admitted request once.</summary>
     private async Task DispatchAsync()
     {
         try
@@ -961,7 +911,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
         }
     }
 
-    /// <summary>Rejects use after disposal or after usage persistence has failed.</summary>
     private void RequireAvailable()
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
@@ -969,7 +918,6 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             throw new RuntimeAuthorizationException("runtime_usage_persistence_failed");
     }
 
-    /// <summary>Stops dispatch and usage processing, then disposes the receiver and active session.</summary>
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)

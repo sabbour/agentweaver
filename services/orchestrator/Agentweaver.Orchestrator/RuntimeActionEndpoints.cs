@@ -6,9 +6,6 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Authorizes runtime actions and verifies their grants and policy receipts before the host performs native effects.
-/// </summary>
 internal sealed class RuntimeActionOwner(
     RuntimeRegistrationOwner registrations,
     ProjectsRunSelectionClient projects,
@@ -21,15 +18,6 @@ internal sealed class RuntimeActionOwner(
     IServiceProvider services,
     OrchestratorOptions options)
 {
-    /// <summary>
-    /// Evaluates and admits a runtime action against the current registration, selection, grant, and policy.
-    /// </summary>
-    /// <param name="context">The authenticated runtime request context.</param>
-    /// <param name="request">The action ID, event ID, and registration binding to authorize.</param>
-    /// <param name="cancellationToken">Cancels owner, database, and policy-journal work.</param>
-    /// <returns>An admission containing the allow decision, grant reference, and policy receipt ID.</returns>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when registration, cost budget, selection, grant, or policy does not allow the action.</exception>
-    /// <remarks>For tool invocations, the guarded callback writes the durable reservation before the SDK effect is performed by AgentHost.</remarks>
     internal async Task<RuntimeActionAdmission> AuthorizeAsync(
         HttpContext context, RuntimeActionRequest request, CancellationToken cancellationToken)
     {
@@ -68,14 +56,6 @@ internal sealed class RuntimeActionOwner(
             evaluated.Outcome, evaluated.ReasonCode);
     }
 
-    /// <summary>
-    /// Revalidates an admission against current registration, grant, receipt, selection, and policy state.
-    /// </summary>
-    /// <param name="context">The authenticated runtime request context.</param>
-    /// <param name="admission">The previously returned runtime action admission.</param>
-    /// <param name="cancellationToken">Cancels owner and journal reads.</param>
-    /// <returns>The same admission after current authority is confirmed.</returns>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when the admission or any current grant, receipt, selection, or policy check is invalid.</exception>
     internal async Task<RuntimeActionAdmission> VerifyAsync(
         HttpContext context, RuntimeActionAdmission admission, CancellationToken cancellationToken)
     {
@@ -134,9 +114,6 @@ internal sealed class RuntimeActionOwner(
         return admission;
     }
 
-    /// <summary>
-    /// Rejects the action when its runtime registration changed between authorization steps.
-    /// </summary>
     private async Task RequireCurrentAsync(
         HttpContext context, RuntimeRegistration expected, CancellationToken cancellationToken)
     {
@@ -145,10 +122,6 @@ internal sealed class RuntimeActionOwner(
             throw new RuntimeAuthorizationException("runtime_action_registration_changed");
     }
 
-    /// <summary>
-    /// Requires the request revision and execution fence to match the current registration.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when the request uses a stale registration or fence.</exception>
     private static void RequireRequest(RuntimeRegistration registration, RuntimeActionRequest request)
     {
         if (registration.Revision != request.RegistrationRevision ||
@@ -156,10 +129,6 @@ internal sealed class RuntimeActionOwner(
             throw new RuntimeAuthorizationException("runtime_action_binding_invalid");
     }
 
-    /// <summary>
-    /// Reads the current fixed-credit denial receipt for a verified registration.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the requested guard record is unknown.</exception>
     internal async Task<RuntimeFixedCreditGuardReadResult> ReadFixedCreditGuardAsync(
         HttpContext context, RuntimeFixedCreditGuardReadRequest request, CancellationToken cancellationToken)
     {
@@ -189,10 +158,6 @@ internal sealed class RuntimeActionOwner(
                 }, token), cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Prevents hosted model turns when the hard-credit limit is zero and records the denial when a store is available.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when the action is not admitted or the configured cost budget is exhausted.</exception>
     internal async Task RequireCostTurnEnabledAsync(
         HttpContext context, RuntimeRegistration registration, RuntimeActionRequest request,
         RuntimeFixedCreditGuardStage stage, CancellationToken cancellationToken)
@@ -227,24 +192,13 @@ internal sealed class RuntimeActionOwner(
         throw new RuntimeAuthorizationException("runtime_cost_budget_exhausted");
     }
 
-    /// <summary>
-    /// Returns the usage store required to persist fixed-credit guard evidence.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when usage support is not configured.</exception>
     internal static RuntimeUsageSourceStore RequireFixedCreditGuardStore(IServiceProvider services) =>
         services.GetService<RuntimeUsageSourceStore>()
         ?? throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_unavailable");
 }
 
-/// <summary>
-/// Maps authenticated endpoints for runtime action admission, verification, and fixed-credit denial reads.
-/// </summary>
 public static class RuntimeActionEndpoints
 {
-    /// <summary>
-    /// Adds the protected runtime action routes to the endpoint builder.
-    /// </summary>
-    /// <param name="endpoints">The endpoint route builder.</param>
     public static void MapRuntimeActionEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("/internal/runtime/actions/authorize",
@@ -262,9 +216,6 @@ public static class RuntimeActionEndpoints
             .RequireAuthorization();
     }
 
-    /// <summary>
-    /// Executes an action-owner call and maps expected authorization, coordination, and transport failures to no-store responses.
-    /// </summary>
     private static async Task<IResult> ExecuteAsync<T>(HttpContext context, Func<Task<T>> action)
     {
         context.Response.Headers.CacheControl = "no-store";

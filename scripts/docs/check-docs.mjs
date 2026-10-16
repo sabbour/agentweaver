@@ -3,14 +3,12 @@ import { access, readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** Check documentation source links, generated site links, and mapped source-to-doc updates. */
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const docsRoot = path.join(repoRoot, 'docs');
 const distRoot = path.join(docsRoot, '.vitepress', 'dist');
 const mapPath = path.join(docsRoot, 'docs-source-map.json');
 const siteBase = '/agentweaver/v1/';
 
-/** Decode the small HTML entity set used in generated link attributes. */
 function htmlDecode(value) {
   return value
     .replaceAll('&amp;', '&')
@@ -20,7 +18,6 @@ function htmlDecode(value) {
     .replaceAll('&gt;', '>');
 }
 
-/** Collect Markdown links and HTML href/src targets from a documentation page. */
 function linkTargets(markdown) {
   const targets = [];
   for (const match of markdown.matchAll(/!?\[[^\]]*\]\(([^)\s]+)(?:\s+["'][^)]*["'])?\)/g)) {
@@ -35,7 +32,6 @@ function linkTargets(markdown) {
   return targets;
 }
 
-/** Convert a Markdown heading into the anchor slug used by the site generator. */
 function slugHeading(value) {
   return value
     .replace(/`([^`]*)`/g, '$1')
@@ -47,7 +43,6 @@ function slugHeading(value) {
     .replace(/\s+/g, '-');
 }
 
-/** Build the anchors declared by Markdown headings and explicit HTML IDs. */
 function markdownAnchors(markdown) {
   const anchors = new Set();
   const counts = new Map();
@@ -65,7 +60,6 @@ function markdownAnchors(markdown) {
   return anchors;
 }
 
-/** Resolve a local link against the docs source tree, including the published site prefix. */
 function localSourcePath(pagePath, targetPath, siteRoot) {
   let resolved;
   if (targetPath.startsWith(siteBase)) {
@@ -78,7 +72,6 @@ function localSourcePath(pagePath, targetPath, siteRoot) {
   return resolved;
 }
 
-/** Resolve a source page path using its exact path or supported Markdown index forms. */
 async function resolvePageFile(candidate) {
   const possibilities = path.extname(candidate)
     ? [candidate]
@@ -93,7 +86,6 @@ async function resolvePageFile(candidate) {
   return null;
 }
 
-/** Find missing local targets and Markdown anchors in one source page. */
 export async function inspectMarkdownPage(repoRelativePage, contents, root = repoRoot) {
   const pagePath = path.resolve(root, repoRelativePage);
   const siteRoot = path.resolve(root, 'docs');
@@ -117,7 +109,6 @@ export async function inspectMarkdownPage(repoRelativePage, contents, root = rep
   return errors;
 }
 
-/** Report rules whose affected implementation files changed without their required docs. */
 export function findMissingDocumentation(changedPaths, rules) {
   const changed = new Set(changedPaths);
   const failures = [];
@@ -141,7 +132,6 @@ async function walk(directory) {
   return files;
 }
 
-/** Resolve an in-site URL to a built file and optional anchor, rejecting paths outside the site base. */
 function builtTargetPath(url, pageUrl, dist) {
   const parsed = new URL(htmlDecode(url), `https://docs.invalid${pageUrl}`);
   if (parsed.origin !== 'https://docs.invalid') return null;
@@ -155,7 +145,6 @@ function builtTargetPath(url, pageUrl, dist) {
   return { target, anchor: decodeURIComponent(parsed.hash.slice(1)) };
 }
 
-/** Check every generated HTML page for missing local targets and empty image alt text. */
 async function inspectBuiltSite() {
   const pages = (await walk(distRoot)).filter((file) => file.endsWith('.html'));
   const errors = [];
@@ -196,7 +185,6 @@ async function inspectBuiltSite() {
   return errors;
 }
 
-/** Run source-map checks and inspect the built VitePress site; throw when any check fails. */
 async function checkLinks() {
   const sourceMap = JSON.parse(await readFile(mapPath, 'utf8'));
   const errors = [];

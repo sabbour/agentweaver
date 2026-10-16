@@ -677,11 +677,6 @@ function FitWorkflowView({
   return null;
 }
 
-/**
- * Renders the visual workflow graph editor, using React Flow for graph interaction and API
- * client operations to load or save workflow data. Props select the workflow and callbacks;
- * local state/effects manage the editing session and graph synchronization.
- */
 export function VisualWorkflowEditor({
   projectId,
   workflowId,

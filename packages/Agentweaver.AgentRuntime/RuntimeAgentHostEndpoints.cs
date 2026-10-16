@@ -11,26 +11,16 @@ using Microsoft.Extensions.Logging;
 
 namespace Agentweaver.AgentRuntime;
 
-/// <summary>Strict request body for the host's fixed-credit guard read endpoint.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record RuntimeHostFixedCreditGuardReadRequest(
     RuntimeHostSessionProof? Proof, Guid RequestId, string RequestHash);
 
-/// <summary>Strict request body for the host's native credit denial read endpoint.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record RuntimeHostNativeCreditDenialReadRequest(
     RuntimeHostSessionProof? Proof, Guid DispatchId, RuntimeCreditLimitDenialStage Stage);
 
-/// <summary>
-/// Maps authenticated HTTP routes for bootstrap, runtime turns, readiness, refresh,
-/// and workspace suspend/resume operations.
-/// </summary>
 public static class RuntimeAgentHostEndpoints
 {
-    /// <summary>
-    /// Adds host routes. Protected routes require a live bearer matching the configure
-    /// audience; health routes return only liveness or readiness.
-    /// </summary>
     public static IEndpointRouteBuilder MapRuntimeAgentHost(
         this IEndpointRouteBuilder endpoints, RuntimeAgentHost host, TimeProvider timeProvider)
     {
@@ -97,7 +87,6 @@ public static class RuntimeAgentHostEndpoints
         return endpoints;
     }
 
-    /// <summary>Authenticates one request, invokes its host operation, and maps failures to safe status codes.</summary>
     private static async Task<IResult> ExecuteAsync<T>(
         HttpContext context, Uri audience, TimeProvider time, Func<RuntimeActorAuthorization, Task<T>> action)
     {

@@ -10,9 +10,6 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Identifies the durable task claim and the accepted run state that owns its execution.
-/// </summary>
 internal sealed record BacklogTaskClaimReceipt(
     BacklogTaskReference Task,
     long TaskRevision,
@@ -24,9 +21,6 @@ internal sealed record BacklogTaskClaimReceipt(
     long ExecutionFence,
     long DecisionStateVersion);
 
-/// <summary>
-/// Stores project backlog graphs and performs task claims in the Orchestrator PostgreSQL schema.
-/// </summary>
 internal sealed class BacklogOwnerStore
 {
     private static readonly Regex SchemaPattern = new(
@@ -37,10 +31,6 @@ internal sealed class BacklogOwnerStore
     private readonly string _tasks;
     private readonly string _dependencies;
 
-    /// <summary>
-    /// Creates a backlog store for a validated, non-reserved PostgreSQL schema.
-    /// </summary>
-    /// <exception cref="ArgumentException">The schema is not a safe application schema name.</exception>
     public BacklogOwnerStore(NpgsqlDataSource dataSource, string schema)
     {
         ArgumentNullException.ThrowIfNull(dataSource);
@@ -57,9 +47,6 @@ internal sealed class BacklogOwnerStore
         _dependencies = $"{quotedSchema}.backlog_dependencies";
     }
 
-    /// <summary>
-    /// Reads and validates a consistent project graph from PostgreSQL.
-    /// </summary>
     public async Task<BacklogCoreResult<BacklogDependencyGraph>> ReadGraphAsync(
         string projectId,
         CancellationToken cancellationToken)
@@ -78,10 +65,6 @@ internal sealed class BacklogOwnerStore
         return graph;
     }
 
-    /// <summary>
-    /// Adds a task if the project graph still has the caller's expected revision.
-    /// </summary>
-    /// <remarks>The graph row is locked while the graph and task are written atomically.</remarks>
     public async Task<BacklogCoreResult<BacklogDependencyGraph>> AddTaskAsync(
         BacklogTaskReference task,
         long expectedGraphRevision,
@@ -114,9 +97,6 @@ internal sealed class BacklogOwnerStore
         return BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
     }
 
-    /// <summary>
-    /// Adds a dependency after the core graph validates the edge and expected revision.
-    /// </summary>
     public Task<BacklogCoreResult<BacklogDependencyGraph>> AddDependencyAsync(
         BacklogTaskReference task,
         BacklogTaskReference prerequisite,
@@ -124,9 +104,6 @@ internal sealed class BacklogOwnerStore
         CancellationToken cancellationToken) =>
         MutateDependencyAsync(task, prerequisite, expectedGraphRevision, add: true, cancellationToken);
 
-    /// <summary>
-    /// Removes a dependency after the core graph validates the edge and expected revision.
-    /// </summary>
     public Task<BacklogCoreResult<BacklogDependencyGraph>> RemoveDependencyAsync(
         BacklogTaskReference task,
         BacklogTaskReference prerequisite,
@@ -134,9 +111,6 @@ internal sealed class BacklogOwnerStore
         CancellationToken cancellationToken) =>
         MutateDependencyAsync(task, prerequisite, expectedGraphRevision, add: false, cancellationToken);
 
-    /// <summary>
-    /// Updates a task state using graph and task revisions, persisting only a validated change.
-    /// </summary>
     public async Task<BacklogCoreResult<BacklogDependencyGraph>> SetTaskStateAsync(
         BacklogTaskReference task,
         BacklogTaskState state,
@@ -171,9 +145,6 @@ internal sealed class BacklogOwnerStore
         return BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
     }
 
-    /// <summary>
-    /// Archives a task using graph and task revisions, persisting only a validated change.
-    /// </summary>
     public async Task<BacklogCoreResult<BacklogDependencyGraph>> ArchiveTaskAsync(
         BacklogTaskReference task,
         long expectedGraphRevision,
@@ -203,14 +174,6 @@ internal sealed class BacklogOwnerStore
         return BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
     }
 
-    /// <summary>
-    /// Atomically verifies readiness, accepts the run root, initializes its decision state, and records the task claim.
-    /// </summary>
-    /// <remarks>
-    /// Evidence that may require a remote read is prepared before the transaction, then re-read from local owner state
-    /// while graph rows are locked. The idempotency key is bound to the full claim request and accepted selection.
-    /// </remarks>
-    /// <exception cref="CoordinationException">The request conflicts with an existing claim or the accepted run binding.</exception>
     public async Task<BacklogCoreResult<BacklogTaskClaimReceipt>> ClaimTaskAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -391,11 +354,6 @@ internal sealed class BacklogOwnerStore
             initializedRoot.StateVersion));
     }
 
-    /// <summary>
-    /// Reads persisted claim tuples for prerequisite tasks in the caller's transaction.
-    /// </summary>
-    /// <exception cref="ArgumentException">The transaction does not belong to the connection or prerequisite references are invalid.</exception>
-    /// <exception cref="CoordinationException">A stored claim tuple is incomplete or inconsistent.</exception>
     internal async Task<ImmutableArray<MafBacklogTaskClaimTuple>> ReadPrerequisiteClaimTuplesInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -488,9 +446,6 @@ internal sealed class BacklogOwnerStore
         return claims.ToImmutable();
     }
 
-    /// <summary>
-    /// Applies an add or remove edge through core graph validation and a single database transaction.
-    /// </summary>
     private async Task<BacklogCoreResult<BacklogDependencyGraph>> MutateDependencyAsync(
         BacklogTaskReference task,
         BacklogTaskReference prerequisite,
@@ -526,10 +481,6 @@ internal sealed class BacklogOwnerStore
         return BacklogDependencyGraph.Create(edit.Value.Graph.Snapshot);
     }
 
-    /// <summary>
-    /// Loads the graph and optionally locks its project, task, and dependency rows for a mutation.
-    /// </summary>
-    /// <returns>A validated graph, or a core issue when persisted rows cannot form a valid graph.</returns>
     private async Task<BacklogCoreResult<BacklogDependencyGraph>> ReadGraphInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -597,9 +548,6 @@ internal sealed class BacklogOwnerStore
             projectId, revision, tasks.ToImmutable(), dependencies.ToImmutable()));
     }
 
-    /// <summary>
-    /// Finds an earlier task claim by its project-scoped idempotency key.
-    /// </summary>
     private async Task<StoredBacklogClaim?> ReadClaimByIdempotencyKeyAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -631,10 +579,6 @@ internal sealed class BacklogOwnerStore
             reader.GetInt64(8));
     }
 
-    /// <summary>
-    /// Persists the claim's preparing phase only if the task remains claimable at the expected revision.
-    /// </summary>
-    /// <exception cref="CoordinationException">The guarded update did not affect exactly one task row.</exception>
     private async Task UpdateClaimedTaskAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -688,9 +632,6 @@ internal sealed class BacklogOwnerStore
             throw new CoordinationException("backlog_claim_conflict", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Creates the project graph row if it has not been created yet.
-    /// </summary>
     private async Task EnsureProjectAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -706,9 +647,6 @@ internal sealed class BacklogOwnerStore
         await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Writes the new graph revision inside the same transaction as the graph mutation.
-    /// </summary>
     private async Task UpdateGraphRevisionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -727,9 +665,6 @@ internal sealed class BacklogOwnerStore
         await update.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Inserts a newly validated task snapshot.
-    /// </summary>
     private async Task InsertTaskAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -745,10 +680,6 @@ internal sealed class BacklogOwnerStore
         await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Writes the validated snapshot for an existing task.
-    /// </summary>
-    /// <exception cref="CoordinationException">The task row disappeared before it could be updated.</exception>
     private async Task UpdateTaskAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -768,10 +699,6 @@ internal sealed class BacklogOwnerStore
             throw new CoordinationException("backlog_task_unavailable", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Inserts or deletes one dependency row to match the validated graph edit.
-    /// </summary>
-    /// <exception cref="CoordinationException">The persisted edge did not change exactly once.</exception>
     private async Task PersistDependencyAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -796,9 +723,6 @@ internal sealed class BacklogOwnerStore
             throw new CoordinationException("backlog_graph_conflict", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Adds the task snapshot fields using the database types expected by the backlog schema.
-    /// </summary>
     private static void AddTaskParameters(NpgsqlCommand command, BacklogTaskSnapshot task)
     {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, task.Reference.ProjectId);
@@ -810,18 +734,12 @@ internal sealed class BacklogOwnerStore
             "pending", NpgsqlDbType.Boolean, task.IsAutomationInvocationPending);
     }
 
-    /// <summary>
-    /// Hashes the accepted selection snapshot used to bind a task claim to its run inputs.
-    /// </summary>
     private static string HashSelection(EffectiveRunSelection selection)
     {
         var snapshot = selection.Snapshot.GetRawText();
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(snapshot)));
     }
 
-    /// <summary>
-    /// Returns a core validation issue for persisted rows that cannot be represented as a graph.
-    /// </summary>
     private static BacklogCoreResult<BacklogDependencyGraph> InvalidPersistedGraph(string path) =>
         BacklogCoreResult<BacklogDependencyGraph>.Failure(
         [
@@ -831,9 +749,6 @@ internal sealed class BacklogOwnerStore
                 "Persisted backlog data is not a valid graph.")
         ]);
 
-    /// <summary>
-    /// Validates a task reference using the same graph rules used for persisted backlog operations.
-    /// </summary>
     private static BacklogCoreResult<BacklogDependencyGraph> ValidateTaskReference(
         BacklogTaskReference? task)
     {
@@ -848,9 +763,6 @@ internal sealed class BacklogOwnerStore
             : BacklogCoreResult<BacklogDependencyGraph>.Failure(taskValidation.Issues);
     }
 
-    /// <summary>
-    /// Rolls back a failed graph operation and returns its core validation issues.
-    /// </summary>
     private static BacklogCoreResult<TOut> RollbackFailure<TOut>(
         NpgsqlTransaction transaction,
         ImmutableArray<BacklogIssue> issues) where TOut : class
@@ -859,9 +771,6 @@ internal sealed class BacklogOwnerStore
         return BacklogCoreResult<TOut>.Failure(issues);
     }
 
-    /// <summary>
-    /// Asynchronously rolls back a failed graph operation and returns its core validation issues.
-    /// </summary>
     private static async Task<BacklogCoreResult<TOut>> RollbackFailureAsync<TOut>(
         NpgsqlTransaction transaction,
         ImmutableArray<BacklogIssue> issues) where TOut : class
@@ -870,9 +779,6 @@ internal sealed class BacklogOwnerStore
         return BacklogCoreResult<TOut>.Failure(issues);
     }
 
-    /// <summary>
-    /// Holds a stored idempotent claim and projects it into the public claim receipt.
-    /// </summary>
     private sealed record StoredBacklogClaim(
         Guid ClaimId,
         string Phase,
@@ -884,9 +790,6 @@ internal sealed class BacklogOwnerStore
         long ExecutionFence,
         long DecisionStateVersion)
     {
-        /// <summary>
-        /// Returns the persisted claim details with the task reference supplied by the caller.
-        /// </summary>
         public BacklogTaskClaimReceipt ToReceipt(BacklogTaskReference task) =>
             new(
                 task,

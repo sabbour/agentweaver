@@ -3,13 +3,11 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.EventsAndSessions;
 
-/// <summary>Calls the fixed Orchestrator owner to verify a remote-tool call against current runtime authority.</summary>
 internal sealed class ReviewedRemoteToolResultOwnerClient(HttpClient client, RuntimeServiceTlsOptions tlsOptions)
 {
     private readonly Uri _address = RuntimeOwnerHttpTransport.RequireOwnerAddress(
         new Uri(tlsOptions.Validate("EventsAndSessions", "Orchestrator").PeerOwnerAddress!));
 
-    /// <summary>Reads the exact active registration for the proof's runtime instance.</summary>
     internal async Task<RuntimeRegistration> ReadCurrentAsync(
         Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -23,7 +21,6 @@ internal sealed class ReviewedRemoteToolResultOwnerClient(HttpClient client, Run
         return registration;
     }
 
-    /// <summary>Reads and verifies the source receipt bound to the registration revision.</summary>
     internal async Task<RuntimeSdkSourceReceipt> ReadSourceAsync(
         RuntimeRegistration registration, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -39,7 +36,6 @@ internal sealed class ReviewedRemoteToolResultOwnerClient(HttpClient client, Run
         return source;
     }
 
-    /// <summary>Requires the owner to confirm that a saved call proof remains current.</summary>
     internal async Task VerifyAsync(RemoteToolResultProof proof, RuntimeActorAuthorization actor, CancellationToken token)
     {
         var receipt = await RuntimeOwnerHttpTransport.SendBoundedAsync<RemoteToolResultVerificationReceipt>(
@@ -52,15 +48,11 @@ internal sealed class ReviewedRemoteToolResultOwnerClient(HttpClient client, Run
     }
 }
 
-/// <summary>
-/// Admits private result bytes only after repeated Projects, provider, registration, source, and action-proof checks.
-/// </summary>
 internal sealed class ReviewedRemoteToolResultMaterialService(
     ReviewedRemoteToolResultOwnerClient runtime, IProjectsAuthorizationContextClient projects,
     SessionMaterialStore material, PostgresSessionsJournal journal, ISessionsProviderBinder bindings,
     TimeProvider timeProvider)
 {
-    /// <summary>Stores result bytes before the journal reference and verifies the exact call proof on acknowledgment.</summary>
     internal Task<SessionMaterialAcknowledgment> WriteAsync(
         HttpContext context, string sessionId, SessionMaterialWriteRequest request, CancellationToken token)
     {
@@ -78,7 +70,6 @@ internal sealed class ReviewedRemoteToolResultMaterialService(
         }, token);
     }
 
-    /// <summary>Reads a committed private result and revalidates the saved proof and current owner bindings.</summary>
     internal Task<SessionMaterialReadResult> ReadAsync(
         HttpContext context, string sessionId, RemoteToolResultProof proof, CancellationToken token)
     {
@@ -102,7 +93,6 @@ internal sealed class ReviewedRemoteToolResultMaterialService(
         }, token);
     }
 
-    /// <summary>Runs one protected read/write operation with authority rechecks around storage waits.</summary>
     private async Task<T> ExecuteAsync<T>(
         HttpContext context, string sessionId, RemoteToolResultProof proof,
         Func<RuntimeRegistration, RuntimeSdkSourceReceipt, Func<RemoteToolResultProof, CancellationToken, Task>, Task<T>> action,
@@ -150,7 +140,6 @@ internal sealed class ReviewedRemoteToolResultMaterialService(
         }
     }
 
-    /// <summary>Requires the current Projects context to match the signed actor and exact proof scope.</summary>
     private static void RequireScope(ProjectsAuthorizationContextResponse current, RemoteToolResultProof proof)
     {
         if (current.ContractVersion != 1 || current.EffectiveAuthority.IsDefault ||

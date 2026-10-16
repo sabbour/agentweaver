@@ -1,11 +1,9 @@
-/** Browser bootstrap for the v1 app, including development focus support and a top-level render fallback. */
 import './index.css';
 import App from './App.tsx';
 import { Component, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { ErrorInfo, ReactNode } from 'react';
 if (import.meta.env.DEV) {
-  // Load the live-preview focus guard only in development so it stays out of production startup.
   const focusGuardModule = '/src/dev/impeccableLiveFocusGuard.ts';
   void import(/* @vite-ignore */ focusGuardModule).then((module: typeof import('./dev/impeccableLiveFocusGuard')) => {
     const { installImpeccableLiveFocusGuard } = module;
@@ -14,7 +12,6 @@ if (import.meta.env.DEV) {
   });
 }
 
-/** Replaces a failed React tree with a reload prompt while keeping render errors inside the app. */
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null };
 
@@ -42,7 +39,6 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
   }
 }
 
-// Mount the application in strict mode and keep uncaught component errors at the UI boundary.
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>

@@ -6,7 +6,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Projects.Config;
 
-/// <summary>Model selection reference and optional exact credential or hosted-connection binding.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ModelSelectionSettings(
     string Reference, SecretRef? CredentialReference = null,
@@ -17,29 +16,23 @@ public sealed record ModelSelectionSettings(
     public RuntimeModelBindingPin? ModelBindingPin { get; init; }
 }
 
-/// <summary>Project-level provider choice for an exclusive or singleton provider seam.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ProjectProviderOverride(ProviderSeam Seam, string ProviderId);
 
-/// <summary>Ordered project-level provider choices for a composite provider seam.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ProjectOrderedProviderOverride(
     ProviderSeam Seam,
     ImmutableArray<string> ProviderIds);
 
-/// <summary>Project-defined agent name, role, and instructions.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ProjectAgentCharter(string AgentId, string Name, string Role, string Charter);
 
-/// <summary>Project agent's role and stable order in the project cast.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ProjectAgentCast(string AgentId, string Role, int Order);
 
-/// <summary>Project reference connecting a blueprint to one workflow identifier.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record BlueprintWorkflowReference(string BlueprintId, string WorkflowId);
 
-/// <summary>Skill enablement and order, optionally pinned to imported bytes and assigned project agents.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record SkillCatalogSetting(string SkillId, bool Enabled, int Order)
 {
@@ -53,7 +46,6 @@ public sealed record SkillCatalogSetting(string SkillId, bool Enabled, int Order
     public ImmutableArray<string>? AgentIds { get; init; }
 }
 
-/// <summary>Optional project overrides that may only narrow platform run budgets.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record CopilotRunLimitOverrides
 {
@@ -71,7 +63,6 @@ public sealed record CopilotRunLimitOverrides
     public decimal? CopilotHardCreditLimit { get; init; }
 }
 
-/// <summary>Validated effective runtime limits after project overrides are bounded by platform defaults.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record CopilotRunLimits
 {
@@ -90,7 +81,6 @@ public sealed record CopilotRunLimits
     public decimal? CopilotHardCreditLimit { get; init; }
 }
 
-/// <summary>Versioned project runtime settings, team, provider choices, skills, and optional source-control references.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ProjectConfiguration
 {
@@ -112,7 +102,6 @@ public sealed record ProjectConfiguration
     public ImmutableArray<ReviewedRemoteToolSnapshotReference>? ReviewedRemoteToolSnapshots { get; init; }
 }
 
-/// <summary>Platform-wide model, egress, and run-limit defaults inherited by projects.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record PlatformRuntimeDefaults
 {
@@ -121,7 +110,6 @@ public sealed record PlatformRuntimeDefaults
     public CopilotRunLimits RunLimits { get; init; } = new();
 }
 
-/// <summary>Provider seam, adapter/options versions, and capability requirements supplied for run selection.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ProviderRequirement
 {
@@ -137,7 +125,6 @@ public sealed record ProviderRequirement
         ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal);
 }
 
-/// <summary>Immutable owner-provided candidates and run needs used to resolve a run's effective configuration.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RunSelectionContext
 {
@@ -148,7 +135,6 @@ public sealed record RunSelectionContext
     public ImmutableArray<NetworkEgressRule> RequiredEgress { get; init; } = [];
 }
 
-/// <summary>Revision-fenced request for accepting one run's immutable effective selection.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record AcceptRunSelectionRequest
 {
@@ -157,13 +143,8 @@ public sealed record AcceptRunSelectionRequest
     public required RunSelectionContext Context { get; init; }
 }
 
-/// <summary>
-/// Validates project and platform configuration and resolves project limits and egress without widening platform policy.
-/// </summary>
 public static class ProjectConfigurationValidator
 {
-    /// <summary>Validates and normalizes a project configuration, rejecting invalid references and inconsistent pins.</summary>
-    /// <exception cref="ProjectConfigException">A field, collection, role projection, or runtime setting violates the contract.</exception>
     public static ProjectConfiguration Validate(ProjectConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -302,10 +283,6 @@ public static class ProjectConfigurationValidator
         return configuration with { EgressNarrowing = normalizedEgress };
     }
 
-    /// <summary>
-    /// Validates a new project configuration against the previous revision, preserving only unchanged legacy unpinned skills.
-    /// </summary>
-    /// <exception cref="ProjectConfigException">A legacy skill is changed without a content pin or the new configuration is invalid.</exception>
     public static ProjectConfiguration ValidateTransition(
         ProjectConfiguration previous,
         ProjectConfiguration configuration)
@@ -324,7 +301,6 @@ public static class ProjectConfigurationValidator
                     "Enabled skills without imported pins may only be preserved unchanged from the previous configuration.");
         }
 
-        // Treat newly introduced legacy-shaped enabled entries as disabled for validation, then preserve old bytes only when unchanged.
         var strictSkills = configuration.Skills
             .Select(skill => skill is { Enabled: true } && IsUnpinned(skill)
                 ? skill with { Enabled = false }
@@ -422,8 +398,6 @@ public static class ProjectConfigurationValidator
         connectionId.All(character =>
             char.IsAsciiLetterOrDigit(character) || character is '-' or '_');
 
-    /// <summary>Validates platform defaults and returns normalized egress rules.</summary>
-    /// <exception cref="ProjectConfigException">A default model, egress rule, or runtime limit is invalid.</exception>
     public static PlatformRuntimeDefaults Validate(PlatformRuntimeDefaults defaults)
     {
         ArgumentNullException.ThrowIfNull(defaults);
@@ -443,8 +417,6 @@ public static class ProjectConfigurationValidator
         return defaults with { EgressBaseline = normalizedEgress };
     }
 
-    /// <summary>Inherits omitted project limits and rejects any override above its configured platform cap.</summary>
-    /// <exception cref="ProjectConfigException">An override is outside its supported range or widens a platform limit.</exception>
     public static CopilotRunLimits ResolveLimits(
         PlatformRuntimeDefaults platform,
         CopilotRunLimitOverrides project)
@@ -474,8 +446,6 @@ public static class ProjectConfigurationValidator
         return resolved;
     }
 
-    /// <summary>Returns the effective allow list after checking project narrowing and all required run destinations.</summary>
-    /// <exception cref="ProjectConfigException">Project egress widens the baseline or required egress is not allowed.</exception>
     public static ImmutableArray<NetworkEgressRule> ResolveEgress(
         ImmutableArray<NetworkEgressRule> baseline,
         ImmutableArray<NetworkEgressRule>? projectNarrowing,
@@ -494,7 +464,6 @@ public static class ProjectConfigurationValidator
         return requested;
     }
 
-    /// <summary>Validates and canonicalizes a set of egress rules without applying a platform subset check.</summary>
     public static ImmutableArray<NetworkEgressRule> ValidateEgressRules(
         ImmutableArray<NetworkEgressRule> rules) =>
         ValidateAndNormalizeRules(rules, "egress");

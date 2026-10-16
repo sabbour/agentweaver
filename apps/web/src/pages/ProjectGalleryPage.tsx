@@ -45,12 +45,6 @@ import type {
 } from '../api/types';
 import type { BlueprintSelection } from '../components/BlueprintPicker.helpers';
 import type { ReactElement, ReactNode } from 'react';
-
-/**
- * Project directory and creation entry point. It pages project records, loads
- * workspace and GitHub setup data, and coordinates blank or repository-backed
- * creation dialogs with the shared project list.
- */
 const useStyles = makeStyles({
   // One-time entrance for a freshly-created project card: a brand ring that
   // fades out with a slight rise. Purely a "this is the new one" cue.
@@ -228,10 +222,6 @@ const useStyles = makeStyles({
   githubMark: { width: '28px', height: '28px', borderRadius: tokens.borderRadiusCircular, backgroundColor: tokens.colorNeutralForeground1, color: tokens.colorNeutralBackground1, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: tokens.fontSizeBase100, fontWeight: tokens.fontWeightBold, flexShrink: 0 },
 });
 
-/**
- * Shared create flow for blank and GitHub projects. GitHub creation first obtains
- * a short-lived repository selection code from the authorized repository list.
- */
 function useCreateProjectDialog(
   origin: 'blank' | 'github',
   onCreated: (p: Project) => void,
@@ -245,7 +235,6 @@ function useCreateProjectDialog(
   const [error, setError] = useState<string | null>(null);
   const [blueprint, setBlueprint] = useState<BlueprintSelection>(NO_BLUEPRINT);
 
-  /** Clears dialog input and blueprint selection after cancel or successful create. */
   const reset = () => {
     setName('');
     setWorkingDirectory('');
@@ -255,10 +244,6 @@ function useCreateProjectDialog(
     setBlueprint(NO_BLUEPRINT);
   };
 
-  /**
-   * Validates required input, resolves GitHub access when needed, applies blueprint
-   * selection, and creates the project. API failures remain in the dialog.
-   */
   const handleSubmit = async () => {
     if (!name.trim() || !workingDirectory.trim()) return;
     if (origin === 'github' && !sourceRepository.trim()) return;
@@ -302,7 +287,6 @@ function useCreateProjectDialog(
   };
 }
 
-/** Converts a project name to a filesystem-friendly workspace folder component. */
 function slugify(name: string): string {
   return name
     .toLowerCase()
@@ -310,18 +294,15 @@ function slugify(name: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
-/** Displays the current character count beside a bounded text field. */
 function Counter({ value, max }: { value: string; max: number }) {
   const styles = useStyles();
   return <Text className={styles.charCounter}>{value.length} / {max}</Text>;
 }
 
-/** Builds the workspace path according to whether the server supplies a data root. */
 function workspacePath(dataDir: string | null, slug: string) {
   return dataDir ? `${dataDir}/${slug}` : slug;
 }
 
-/** Shared two-column dialog frame and action footer for project creation flows. */
 function CreateProjectDialogShell({
   open,
   onOpenChange,
@@ -410,7 +391,6 @@ function CreateProjectDialogShell({
   );
 }
 
-/** Blank-project form with optional project description and blueprint generation. */
 function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCreated: (p: Project) => void; dataDir: string | null; workspaceAutoAssigned: boolean }) {
   const styles = useStyles();
   const d = useCreateProjectDialog('blank', onCreated);
@@ -421,7 +401,6 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
   const generation = useBlueprintGeneration(d.setBlueprint);
   const canCreate = Boolean(d.name.trim() && d.workingDirectory.trim() && !d.saving);
 
-  /** Resets both shared create fields and this dialog's local generation inputs. */
   const resetLocal = () => { d.reset(); setDescription(''); setGoal(''); setFolderName(''); setFolderEdited(false); generation.setGenerated(null); };
   const setWorkspaceSlug = (slug: string) => {
     setFolderName(slug);
@@ -499,7 +478,6 @@ function CreateBlankDialog({ onCreated, dataDir, workspaceAutoAssigned }: { onCr
   );
 }
 
-/** Repository fields needed by the picker without exposing unrelated API metadata. */
 type RepoBrowserRepo = {
   fullName: string;
   private: boolean;
@@ -507,10 +485,6 @@ type RepoBrowserRepo = {
   pushedAt: string | null;
 };
 
-/**
- * Loads repository choices only while the GitHub dialog is open; a generation key
- * supports retry without closing the dialog, and stale responses are ignored.
- */
 function useGitHubData(open: boolean) {
   const [repos, setRepos] = useState<RepoBrowserRepo[]>([]);
   const [installations, setInstallations] = useState<GitHubRepositoryInstallation[] | null>(null);
@@ -551,7 +525,6 @@ function useGitHubData(open: boolean) {
     return () => { cancelled = true; };
   }, [open, reposKey]);
 
-  /** Retriggers the repository lookup after a recoverable connection or API error. */
   const reloadRepos = useCallback(() => setReposKey((k) => k + 1), []);
 
   return {
@@ -559,10 +532,6 @@ function useGitHubData(open: boolean) {
   };
 }
 
-/**
- * GitHub-backed project form. It combines Repo App authorization, an authorized
- * repository picker, workspace naming, and optional blueprint generation.
- */
 function CreateFromGitHubDialog({
   onCreated,
   dataDir,
@@ -581,7 +550,6 @@ function CreateFromGitHubDialog({
   const styles = useStyles();
   const location = useLocation();
   const navigate = useNavigate();
-  /** Removes transient authorization/create query state after the return flow. */
   const cleanupReturnQuery = useCallback(() => {
     const next = new URLSearchParams(location.search);
     next.delete('create');
@@ -610,7 +578,6 @@ function CreateFromGitHubDialog({
   const [repoAppConnectionError, setRepoAppConnectionError] = useState<string | null>(null);
   const generation = useBlueprintGeneration(d.setBlueprint, d.sourceRepository);
 
-  /** Starts the GitHub Repo App handoff and returns to this project-creation route. */
   const connectRepoApp = async () => {
     setConnectingRepoApp(true);
     setRepoAppConnectionError(null);
@@ -635,7 +602,6 @@ function CreateFromGitHubDialog({
     d.setWorkingDirectory(workspaceAutoAssigned ? slug : workspacePath(dataDir, slug));
   };
 
-  /** Normalizes a repository reference and seeds project name and folder defaults. */
   const applyRepo = (ownerRepoOrUrl: string) => {
     const normalized = ownerRepoOrUrl.startsWith('https://github.com/')
       ? ownerRepoOrUrl.slice('https://github.com/'.length)
@@ -665,7 +631,6 @@ function CreateFromGitHubDialog({
       const nameB = (b.fullName?.split('/').pop() ?? '').toLowerCase();
       return nameA.localeCompare(nameB);
     });
-  /** Clears GitHub selection and blueprint draft state when the dialog closes. */
   const resetLocal = () => {
     d.reset(); setRepoFilter(''); setPasteRepo(''); setFolderName(''); setFolderEdited(false); setGenerateDescription(''); generation.setGenerated(null);
   };
@@ -818,12 +783,10 @@ function CreateFromGitHubDialog({
   );
 }
 
-/** Removes the canonical GitHub host from a stored source repository for display. */
 function formatSourceRepository(url: string): string {
   return url.replace(/^https:\/\/github\.com\//, '');
 }
 
-/** Project tile with source, workspace availability, and a navigation action. */
 function ProjectCard({ project, onOpen, highlight }: { project: Project; onOpen: () => void; highlight?: boolean }) {
   const styles = useStyles();
   const isGitHub = project.origin === 'github';
@@ -866,8 +829,6 @@ export function ProjectGalleryPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { appendProject, refetch } = useProjectList();
-  // Keep the current server page for the gallery; the project-list hook is updated
-  // separately so other navigation surfaces see newly-created projects as well.
   const [projectPage, setProjectPage] = useState<PagedResult<Project> | null>(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState(false);
@@ -884,8 +845,6 @@ export function ProjectGalleryPage() {
   const toasterId = useId('project-gallery-toaster');
   const { dispatchToast } = useToastController(toasterId);
 
-  // Load the requested page with abort-on-change behavior and distinguish auth
-  // failure from other list errors for the sign-in recovery path.
   useEffect(() => {
     const controller = new AbortController();
     const loadProjects = async () => {
@@ -915,8 +874,6 @@ export function ProjectGalleryPage() {
     return () => controller.abort();
   }, [page, pageSize, reloadKey]);
 
-  // Server capabilities determine workspace defaults and whether Repo App install
-  // management can be offered; this optional request must not block project listing.
   useEffect(() => {
     let cancelled = false;
     const loadServerInfo = async () => {
@@ -935,10 +892,6 @@ export function ProjectGalleryPage() {
     return () => { cancelled = true; };
   }, []);
 
-  /**
-   * Adds a created project to the shared list and current page, returns to page one,
-   * and announces/highlights the new card without waiting for a full reload.
-   */
   const handleCreated = (project: Project) => {
     const isFirstProject = (projectPage?.total_count ?? 0) === 0;
     appendProject(project);
@@ -996,7 +949,6 @@ export function ProjectGalleryPage() {
   const showGalleryActions = !loading && !authError && totalProjects > 0;
   const copilotAuthorizationResult = searchParams.get('copilot_app_auth');
 
-  /** Removes the OAuth result from the URL after the user dismisses its notice. */
   const dismissCopilotAuthorizationResult = () => {
     const next = new URLSearchParams(searchParams);
     next.delete('copilot_app_auth');
@@ -1007,8 +959,6 @@ export function ProjectGalleryPage() {
   const repoAppAuth = searchParams.get('repo_app_auth');
   const openCreateFromGitHub = createFromGitHubIntent || repoAppAuth !== null;
 
-  // Convert the Repo App callback marker into the explicit create-dialog intent,
-  // but only while on the projects route.
   useEffect(() => {
     if (!repoAppAuth) return;
     queueMicrotask(() => {

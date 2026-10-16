@@ -2,20 +2,17 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { redact } from './redaction.mjs';
 
-/** Create invocation-bound API and Projects Config fixtures for a bounded P1 surface journey. */
 const SERVICE_COMPONENT = 'Agentweaver.Projects.Config';
 const SERVICE_NAME = 'projects-config';
 const COMMAND_DLL = 'Agentweaver.Projects.Config.dll';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const runnerOwnedFixtureInputs = new WeakSet();
 
-/** Require a nonempty string field before using it in owner or setup requests. */
 function requireString(value, label) {
   if (typeof value !== 'string' || !value.trim()) throw new Error(`The ${label} is required.`);
   return value;
 }
 
-/** Derive a stable, valid UUID from the persisted invocation and a resource purpose. */
 function stableUuid(invocationId, purpose) {
   const bytes = createHash('sha256').update(`${invocationId}:${purpose}`).digest().subarray(0, 16);
   bytes[6] = (bytes[6] & 0x0f) | 0x50;
@@ -24,12 +21,10 @@ function stableUuid(invocationId, purpose) {
   return `${value.slice(0, 8)}-${value.slice(8, 12)}-${value.slice(12, 16)}-${value.slice(16, 20)}-${value.slice(20)}`;
 }
 
-/** Generate a stable idempotency key scoped to one setup invocation. */
 export function createP1IdempotencyKey(invocationId) {
   return stableUuid(invocationId, 'surface-idempotency');
 }
 
-/** Return whether the exact input object was created by this runner's fixture setup. */
 export function isP1RunnerOwnedFixtureInput(input) {
   return runnerOwnedFixtureInputs.has(input);
 }
@@ -42,7 +37,6 @@ function requireResponse(api, operationId, call, statuses) {
   return call.transientResponseBody;
 }
 
-/** Derive only the path parameter names advertised by the discovered owner operation. */
 function parametersFor(api, operationId, values) {
   const operation = api.operations.get(operationId);
   if (!operation?.path) throw new Error(`The P1 owner operation is missing: ${operationId}.`);
@@ -57,7 +51,6 @@ function parametersFor(api, operationId, values) {
   return parameters;
 }
 
-/** Invoke one discovered owner operation and validate its actual status receipt. */
 async function invoke(api, operationId, values, body, statuses) {
   const call = await api.invoke(operationId, {
     pathParameters: parametersFor(api, operationId, values),
@@ -66,7 +59,6 @@ async function invoke(api, operationId, values, body, statuses) {
   return { call, value: requireResponse(api, operationId, call, statuses) };
 }
 
-/** Require privileged setup and readback receipts to agree on the invocation and every created owner revision. */
 function requireSetupResult(result, request, actor) {
   const setup = result?.setup;
   const readback = result?.setupReadback;
@@ -100,7 +92,6 @@ function requireSetupResult(result, request, actor) {
   return setup;
 }
 
-/** Require a single source-attested Projects Config Deployment, ReplicaSet, and Pod receipt. */
 function sourceProjectsConfigEvidence(sourceEvidence, sourceReceipt) {
   const services = sourceEvidence?.services?.services;
   const matches = services?.filter(service => service.componentId === SERVICE_COMPONENT) ?? [];
@@ -119,13 +110,11 @@ function sourceProjectsConfigEvidence(sourceEvidence, sourceReceipt) {
   return { service, pod };
 }
 
-/** Find controller references that bind a workload object to the expected owner UID. */
 function ownerReference(resource, kind, uid) {
   return (resource?.metadata?.ownerReferences ?? []).filter(reference =>
     reference.kind === kind && reference.uid === uid && reference.controller === true);
 }
 
-/** Parse a successful kubectl list response and reject missing or malformed item arrays. */
 function requireListResult(result, label) {
   if (result.error || result.status !== 0) throw new Error(`Could not attest the current Projects Config ${label}.`);
   let value;
@@ -138,7 +127,6 @@ function requireListResult(result, label) {
   return value.items;
 }
 
-/** Run one bounded kubectl read or pod-exec command with the selected cluster and namespace. */
 function kubectl({ executable, spawnSyncImpl, context, namespace, args }) {
   return spawnSyncImpl(executable, [
     '--context', context,
@@ -154,7 +142,6 @@ function kubectl({ executable, spawnSyncImpl, context, namespace, args }) {
   });
 }
 
-/** Match the attested Projects Config Deployment, ReplicaSet, and sole Pod to a fresh Kubernetes list. */
 function verifyLiveProjectsConfig(items, expected) {
   const deployments = items.filter(item =>
     item.kind === 'Deployment' && item.metadata?.name === SERVICE_NAME);
@@ -183,7 +170,6 @@ function verifyLiveProjectsConfig(items, expected) {
   return { deployment, replicaSet, pod };
 }
 
-/** Require a fresh Pod read to preserve its identity, owner, readiness, and image ID. */
 function verifyFreshPod(pod, expected, replicaSet) {
   const container = pod?.spec?.containers?.[0];
   const containerStatus = pod?.status?.containerStatuses?.[0];
@@ -198,10 +184,6 @@ function verifyFreshPod(pod, expected, replicaSet) {
   }
 }
 
-/**
- * Verify the attested Projects Config workload, then send a setup or cleanup request to its pod.
- * A command or receipt failure after execution begins is marked indeterminate so callers reconcile it.
- */
 export async function executePrivilegedProjectSetup({
   context,
   namespace,
@@ -287,7 +269,6 @@ export async function executePrivilegedProjectSetup({
   }
 }
 
-/** Retry an operation once only when its result is indeterminate and invocation-bound reconciliation is safe. */
 async function runIdempotentOperation(operation, runCommand) {
   let lastError;
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -301,7 +282,6 @@ async function runIdempotentOperation(operation, runCommand) {
   throw lastError;
 }
 
-/** Require a live Projects authorization context for the exact actor and optional run binding. */
 function requireContext(context, actor, binding = null) {
   if (context?.contractVersion !== 1 || context.issuer !== actor.issuer
     || context.actorId !== actor.actorId || context.tenantId !== actor.tenantId
@@ -320,7 +300,6 @@ function requireContext(context, actor, binding = null) {
   }
 }
 
-/** Verify that an accepted and observed run selection has the exact resource revisions. */
 function requireSelection(selection, projectId, runId, projectRevision, platformRevision, contextRevision) {
   if (selection?.projectId !== projectId || selection.runId !== runId
     || selection.projectConfigurationRevision !== projectRevision
@@ -331,7 +310,6 @@ function requireSelection(selection, projectId, runId, projectRevision, platform
   return selection;
 }
 
-/** Match the accepted root-session receipt to the expected run and positive execution fence. */
 function requireRoot(root, projectId, runId, rootSessionId) {
   if (root?.projectId !== projectId || root.runId !== runId
     || root.rootSessionId !== rootSessionId || !Number.isSafeInteger(root.executionFence)
@@ -341,7 +319,6 @@ function requireRoot(root, projectId, runId, rootSessionId) {
   return root;
 }
 
-/** Read run and root-session status concurrently and verify the new owner fence. */
 async function readRootEvidence(api, projectId, runId, rootSessionId, executionFence) {
   const [runResult, sessionResult] = await Promise.all([
     invoke(api, 'readRunStatus', { projectId, runId }, undefined, [200]),
@@ -358,7 +335,6 @@ async function readRootEvidence(api, projectId, runId, rootSessionId, executionF
   return { run, session };
 }
 
-/** Read the owner session tree and require each named fixture session to be active exactly once. */
 async function readTree(api, projectId, runId, rootSessionId, requiredSessionIds) {
   const { value: tree } = await invoke(
     api, 'readSessionTree', { projectId, runId, sessionId: rootSessionId }, undefined, [200]);
@@ -371,7 +347,6 @@ async function readTree(api, projectId, runId, rootSessionId, requiredSessionIds
   return tree;
 }
 
-/** Create or recognize the planned pending gate and verify its exact request and owner readback. */
 async function createGate(api, plan, input, root, actor, createId) {
   const gatePlan = plan.fixturePlan.gate;
   const { value: currentDecisions } = await invoke(api, 'readDecisions', {
@@ -468,7 +443,6 @@ async function createGate(api, plan, input, root, actor, createId) {
   };
 }
 
-/** Bind a resource creation receipt and its owner readback to an invocation and fence. */
 function creationReceipt(resourceType, resourceId, invocationId, ownerFence, creationReceipt, observedReceipt) {
   return {
     resourceType,
@@ -480,10 +454,6 @@ function creationReceipt(resourceType, resourceId, invocationId, ownerFence, cre
   };
 }
 
-/**
- * Create a setup project, accepted run selection, root session, and journey-specific owned resources.
- * Returns a runner-marked input and cleanup handle; setup failures retain enough state for reconciliation.
- */
 export async function createP1Fixture(plan, {
   api,
   invocationId,
@@ -754,7 +724,6 @@ export async function createP1Fixture(plan, {
   }
 }
 
-/** Redact and summarize fixture ownership, setup, selection, dispatch fence, and cleanup outcome. */
 export function summarizeP1FixtureCleanup(state, cleanup, nativeFence) {
   return redact({
     invocationId: state?.invocationId ?? null,

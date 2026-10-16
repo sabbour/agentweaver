@@ -7,9 +7,6 @@ using Agentweaver.Orchestrator.Core;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Describes one native reviewed remote-tool call received from a runtime.
-/// </summary>
 internal sealed record ReviewedRemoteToolInvocation(
     Guid RuntimeInstanceId,
     string AgentId,
@@ -18,16 +15,10 @@ internal sealed record ReviewedRemoteToolInvocation(
     string ToolName,
     string ArgumentsJson);
 
-/// <summary>
-/// Contains the remote tool's returned bytes and their classified content type.
-/// </summary>
 internal sealed record ReviewedRemoteToolTransportResult(
     ReadOnlyMemory<byte> Content,
     SessionMaterialResultContentClass ContentClass);
 
-/// <summary>
-/// Contains the durable Events references and result payload for a completed remote-tool invocation.
-/// </summary>
 internal sealed record ReviewedRemoteToolExecutionResult(
     Guid CallEventId,
     Guid ResultEventId,
@@ -35,22 +26,13 @@ internal sealed record ReviewedRemoteToolExecutionResult(
     ReadOnlyMemory<byte> Content,
     SessionMaterialResultContentClass ContentClass);
 
-/// <summary>
-/// Serializes a reviewed tool call and sends it to its pinned remote endpoint.
-/// </summary>
 internal interface IReviewedRemoteToolTransport
 {
-    /// <summary>
-    /// Serializes a call using the reviewed snapshot's wire contract.
-    /// </summary>
     byte[] SerializeCall(ReviewedRemoteToolSnapshot snapshot, ReviewedRemoteToolCall call);
 
     // The receiving host authenticates this original context and repeats current-owner checks.
     // Neither serialized MCP metadata nor the proof alone establishes actor or network authority.
     // Implementations also enforce the snapshot's HTTPS endpoint, transport, and server identity pin.
-    /// <summary>
-    /// Sends the call while preserving the authenticated request context and rechecking remote authority.
-    /// </summary>
     Task<ReviewedRemoteToolTransportResult> SendAsync(
         HttpContext context,
         RemoteToolResultProof proof,
@@ -59,99 +41,56 @@ internal interface IReviewedRemoteToolTransport
         CancellationToken cancellationToken);
 }
 
-/// <summary>
-/// Writes a remote-tool result to Events and reads an existing result by its proof.
-/// </summary>
 internal interface IReviewedRemoteToolResultWriter
 {
     // Return only after the result bytes and their Events reference have been durably acknowledged.
-    /// <summary>
-    /// Persists the result and returns only after its Events reference is durably acknowledged.
-    /// </summary>
     Task<SessionMaterialAcknowledgment> WriteAndAcknowledgeAsync(
         HttpContext context,
         RemoteToolResultProof proof,
         ReadOnlyMemory<byte> resultBytes,
         CancellationToken cancellationToken);
 
-    /// <summary>
-    /// Reads a previously persisted result when one exists.
-    /// </summary>
     Task<SessionMaterialReadResult?> ReadOptionalAsync(
         HttpContext context, RemoteToolResultProof proof, CancellationToken cancellationToken);
 }
 
-/// <summary>
-/// Supplies current runtime registration, accepted selection, and action-admission authority for remote tool calls.
-/// </summary>
 internal interface IReviewedRemoteToolExecutionAuthority
 {
-    /// <summary>
-    /// Reads a current runtime registration.
-    /// </summary>
     Task<RuntimeRegistration> ReadCurrentRegistrationAsync(
         HttpContext context, Guid runtimeInstanceId, CancellationToken cancellationToken);
 
-    /// <summary>
-    /// Reads accepted selection and refreshed authorization for a project and run.
-    /// </summary>
     Task<AuthorizedRunSelection> ReadAcceptedSelectionWithAuthorityAsync(
         HttpContext context, string projectId, string runId, CancellationToken cancellationToken);
 
-    /// <summary>
-    /// Requests runtime action admission for the given call.
-    /// </summary>
     Task<RuntimeActionAdmission> AuthorizeAsync(
         HttpContext context, RuntimeActionRequest request, CancellationToken cancellationToken);
 
-    /// <summary>
-    /// Revalidates an earlier runtime action admission against current owner state.
-    /// </summary>
     Task<RuntimeActionAdmission> VerifyAsync(
         HttpContext context, RuntimeActionAdmission admission, CancellationToken cancellationToken);
 }
 
-/// <summary>
-/// Adapts the orchestrator's current owner services to remote-tool execution authority.
-/// </summary>
 internal sealed class OrchestratorReviewedRemoteToolExecutionAuthority(
     RuntimeRegistrationOwner registrations,
     ProjectsRunSelectionClient projects,
     RuntimeActionOwner actions) : IReviewedRemoteToolExecutionAuthority
 {
-    /// <summary>
-    /// Reads the current runtime registration from the orchestrator owner.
-    /// </summary>
     public Task<RuntimeRegistration> ReadCurrentRegistrationAsync(
         HttpContext context, Guid runtimeInstanceId, CancellationToken cancellationToken) =>
         registrations.ReadCurrentAsync(context, runtimeInstanceId, cancellationToken);
 
-    /// <summary>
-    /// Reads accepted selection and authorization evidence from Projects.
-    /// </summary>
     public Task<AuthorizedRunSelection> ReadAcceptedSelectionWithAuthorityAsync(
         HttpContext context, string projectId, string runId, CancellationToken cancellationToken) =>
         projects.ReadAcceptedSelectionWithAuthorityAsync(context, projectId, runId, cancellationToken);
 
-    /// <summary>
-    /// Requests current runtime action admission from the policy owner.
-    /// </summary>
     public Task<RuntimeActionAdmission> AuthorizeAsync(
         HttpContext context, RuntimeActionRequest request, CancellationToken cancellationToken) =>
         actions.AuthorizeAsync(context, request, cancellationToken);
 
-    /// <summary>
-    /// Revalidates runtime action admission against current owner state.
-    /// </summary>
     public Task<RuntimeActionAdmission> VerifyAsync(
         HttpContext context, RuntimeActionAdmission admission, CancellationToken cancellationToken) =>
         actions.VerifyAsync(context, admission, cancellationToken);
 }
 
-/// <summary>
-/// Executes a selected reviewed remote tool with repeated registration, selection, snapshot, and action checks.
-/// Results are persisted and acknowledged before their bytes are returned to the runtime.
-/// </summary>
 internal sealed class ReviewedRemoteToolAgent(
     IReviewedRemoteToolExecutionAuthority authority,
     IReviewedRemoteToolSnapshotResolver snapshots,
@@ -164,11 +103,6 @@ internal sealed class ReviewedRemoteToolAgent(
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
         };
 
-    /// <summary>
-    /// Resolves and invokes one currently selected reviewed tool, or replays its already persisted result.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when invocation binding, snapshot selection, action admission, or result evidence is invalid or stale.</exception>
-    /// <remarks>Current authority is checked before transport, after transport, after persistence, and before returning the result.</remarks>
     internal async Task<ReviewedRemoteToolExecutionResult> InvokeAsync(
         HttpContext context,
         ReviewedRemoteToolInvocation invocation,
@@ -297,10 +231,6 @@ internal sealed class ReviewedRemoteToolAgent(
             transportResult.ContentClass);
     }
 
-    /// <summary>
-    /// Rechecks the registration, selected snapshot, and action admission against current owner state.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when registration, accepted selection, snapshot, or admission changed.</exception>
     private async Task RequireCurrentAuthorityAsync(
         HttpContext context,
         RuntimeRegistration expectedRegistration,
@@ -328,10 +258,6 @@ internal sealed class ReviewedRemoteToolAgent(
         RequireAdmission(currentAdmission, request);
     }
 
-    /// <summary>
-    /// Resolves exactly one snapshot selected for the invocation's project, agent, node, and tool.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when the selection is malformed, missing, ambiguous, or unavailable.</exception>
     private async Task<ReviewedRemoteToolSnapshot> ResolveSelectedSnapshotAsync(
         EffectiveRunSelection selection,
         ReviewedRemoteToolInvocation invocation,
@@ -382,10 +308,6 @@ internal sealed class ReviewedRemoteToolAgent(
             ?? throw new RuntimeAuthorizationException("runtime_remote_tool_snapshot_not_selected");
     }
 
-    /// <summary>
-    /// Requires the registration and invocation to identify the same active runtime and assigned agent.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when the runtime, workflow step, or agent binding is invalid.</exception>
     private static void RequireInvocationBinding(
         RuntimeRegistration registration, ReviewedRemoteToolInvocation invocation)
     {
@@ -397,10 +319,6 @@ internal sealed class ReviewedRemoteToolAgent(
             throw new RuntimeAuthorizationException("runtime_remote_tool_binding_invalid");
     }
 
-    /// <summary>
-    /// Requires the effective selection revisions and hash to match the runtime binding.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when the accepted selection has changed.</exception>
     private static void RequireCurrentSelection(EffectiveRunSelection selection, RuntimeBinding binding)
     {
         if (selection.ProjectId != binding.ProjectId ||
@@ -413,10 +331,6 @@ internal sealed class ReviewedRemoteToolAgent(
             throw new RuntimeAuthorizationException("runtime_remote_tool_selection_changed");
     }
 
-    /// <summary>
-    /// Requires the snapshot's connection, permission, and endpoints to be safe for dispatch.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when the connection is disabled or its action, purpose, or endpoint is invalid.</exception>
     private static void RequireDispatchableSnapshot(ReviewedRemoteToolSnapshot snapshot)
     {
         if (snapshot.ConnectionState != "Enabled" ||
@@ -427,19 +341,12 @@ internal sealed class ReviewedRemoteToolAgent(
             throw new RuntimeAuthorizationException("runtime_remote_tool_snapshot_not_dispatchable");
     }
 
-    /// <summary>
-    /// Checks that an endpoint is an absolute HTTPS URI without user information or a fragment.
-    /// </summary>
     private static bool IsHttpsEndpoint(string value) =>
         Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
         uri.Scheme == Uri.UriSchemeHttps &&
         uri.UserInfo.Length == 0 &&
         uri.Fragment.Length == 0;
 
-    /// <summary>
-    /// Requires the action admission to match this call and contain the expected allow receipt.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when the admission contract or allow decision differs.</exception>
     private static void RequireAdmission(RuntimeActionAdmission admission, RuntimeActionRequest request)
     {
         if (admission.ContractVersion != 1 ||
@@ -452,9 +359,6 @@ internal sealed class ReviewedRemoteToolAgent(
             throw new RuntimeAuthorizationException("runtime_remote_tool_action_admission_invalid");
     }
 
-    /// <summary>
-    /// Creates a result proof carrying the reviewed snapshot, call, runtime binding, and policy admission.
-    /// </summary>
     private static RemoteToolResultProof CreateProof(
         ReviewedRemoteToolCall call,
         ReviewedRemoteToolSnapshot snapshot,
@@ -499,9 +403,6 @@ internal sealed class ReviewedRemoteToolAgent(
             contentClass);
     }
 
-    /// <summary>
-    /// Projects the reviewed snapshot into the immutable result-proof binding contract.
-    /// </summary>
     internal static RemoteToolResultSnapshotBinding SnapshotBinding(ReviewedRemoteToolSnapshot snapshot)
     {
         var pin = snapshot.RegistryServerPin;
@@ -532,17 +433,11 @@ internal sealed class ReviewedRemoteToolAgent(
             snapshot.Permission.Digest);
     }
 
-    /// <summary>
-    /// Compares two resolved snapshots by reference and canonical snapshot digest.
-    /// </summary>
     private static bool SameSnapshot(
         ReviewedRemoteToolSnapshot first, ReviewedRemoteToolSnapshot second) =>
         SameReference(first.Reference, second.Reference) &&
         first.SnapshotDigest == second.SnapshotDigest;
 
-    /// <summary>
-    /// Compares all identity fields in two reviewed snapshot references.
-    /// </summary>
     private static bool SameReference(
         ReviewedRemoteToolSnapshotReference first, ReviewedRemoteToolSnapshotReference second) =>
         first.ProjectId == second.ProjectId &&

@@ -12,18 +12,12 @@ using OpenIddict.Abstractions;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// The durable lifecycle operation owned by the suspend/resume coordinator.
-/// </summary>
 internal enum SessionSuspendResumeOperationKind
 {
     Suspend,
     Resume
 }
 
-/// <summary>
-/// Persisted checkpoints in the ordered suspend and resume state machines.
-/// </summary>
 internal enum SessionSuspendResumeOperationPhase
 {
     NotApplicable,
@@ -43,10 +37,6 @@ internal enum SessionSuspendResumeOperationPhase
     Interrupted
 }
 
-/// <summary>
-/// Defines legal suspend/resume phase transitions and stable persistence encodings.
-/// These rules prevent a retry from skipping a fence, flush, manifest, or readiness check.
-/// </summary>
 internal static class SessionSuspendResumePhaseMachine
 {
     internal static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -55,9 +45,6 @@ internal static class SessionSuspendResumePhaseMachine
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
-    /// <summary>
-    /// Checks whether a transition is valid for the operation kind and current phase.
-    /// </summary>
     internal static bool CanAdvance(
         SessionSuspendResumeOperationKind kind,
         SessionSuspendResumeOperationPhase current,
@@ -100,10 +87,6 @@ internal static class SessionSuspendResumePhaseMachine
         };
     }
 
-    /// <summary>
-    /// Requires a legal phase transition or raises a conflict response.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the operation cannot advance to the requested phase.</exception>
     internal static void RequireValidAdvance(
         SessionSuspendResumeOperationKind kind,
         SessionSuspendResumeOperationPhase current,
@@ -114,18 +97,12 @@ internal static class SessionSuspendResumePhaseMachine
                 "suspend_resume_operation_transition_invalid", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Identifies phases that cannot be advanced further.
-    /// </summary>
     internal static bool IsTerminal(SessionSuspendResumeOperationPhase phase) =>
         phase is SessionSuspendResumeOperationPhase.NotApplicable
             or SessionSuspendResumeOperationPhase.PlacementReleased
             or SessionSuspendResumeOperationPhase.Dispatched
             or SessionSuspendResumeOperationPhase.Interrupted;
 
-    /// <summary>
-    /// Checks that owner and claimed manifest fences match the expected pair.
-    /// </summary>
     internal static bool MatchesManifestFencePair(
         long ownerExecutionFence,
         long? claimedExecutionFence,
@@ -134,10 +111,6 @@ internal static class SessionSuspendResumePhaseMachine
         ownerExecutionFence == expectedOwnerExecutionFence &&
         claimedExecutionFence == expectedClaimedExecutionFence;
 
-    /// <summary>
-    /// Maps an operation kind to its persisted lowercase value.
-    /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown for an unknown operation kind.</exception>
     internal static string ToPersistenceValue(SessionSuspendResumeOperationKind kind) =>
         kind switch
         {
@@ -146,10 +119,6 @@ internal static class SessionSuspendResumePhaseMachine
             _ => throw new ArgumentOutOfRangeException(nameof(kind))
         };
 
-    /// <summary>
-    /// Maps a phase to its persisted snake-case value.
-    /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown for an unknown phase.</exception>
     internal static string ToPersistenceValue(SessionSuspendResumeOperationPhase phase) =>
         phase switch
         {
@@ -171,10 +140,6 @@ internal static class SessionSuspendResumePhaseMachine
             _ => throw new ArgumentOutOfRangeException(nameof(phase))
         };
 
-    /// <summary>
-    /// Parses a persisted phase name using the known state-machine values.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the stored phase is not recognized.</exception>
     internal static SessionSuspendResumeOperationPhase ParsePhase(string value) =>
         value switch
         {
@@ -197,10 +162,6 @@ internal static class SessionSuspendResumePhaseMachine
                 "suspend_resume_operation_phase_invalid", StatusCodes.Status503ServiceUnavailable)
         };
 
-    /// <summary>
-    /// Hashes the operation kind, session identity, and request into an idempotency fingerprint.
-    /// </summary>
-    /// <exception cref="ArgumentNullException">Thrown when the request is missing.</exception>
     internal static string HashRequest(
         SessionSuspendResumeOperationKind kind,
         SessionIdentity identity,
@@ -215,19 +176,11 @@ internal static class SessionSuspendResumePhaseMachine
         return Convert.ToHexString(SHA256.HashData(serialized)).ToLowerInvariant();
     }
 
-    /// <summary>
-    /// Compares two values using the phase machine's strict JSON serialization settings.
-    /// </summary>
     internal static bool SameJson<T>(T left, T right) =>
         JsonElement.DeepEquals(
             JsonSerializer.SerializeToElement(left, JsonOptions),
             JsonSerializer.SerializeToElement(right, JsonOptions));
 
-    /// <summary>
-    /// Derives distinct stable bootstrap, consume, and exchange operation IDs from a resume operation.
-    /// </summary>
-    /// <exception cref="ArgumentException">Thrown when the source operation ID is empty.</exception>
-    /// <exception cref="CoordinationException">Thrown if the derived IDs are empty or collide.</exception>
     internal static (Guid Bootstrap, Guid Consume, Guid Exchange) ResumeBootstrapOperationIds(Guid operationId)
     {
         if (operationId == Guid.Empty)
@@ -254,10 +207,6 @@ internal static class SessionSuspendResumePhaseMachine
     }
 }
 
-/// <summary>
-/// Durable progress material needed to resume a suspended operation after a process restart.
-/// It retains the registration, checkpoint, flush, placement, and bootstrap receipts relevant to completed phases.
-/// </summary>
 internal sealed record SessionSuspendResumeProgress(
     RuntimeRegistration? Registration,
     EnvironmentGenerationFence? EnvironmentFence,
@@ -276,9 +225,6 @@ internal sealed record SessionSuspendResumeProgress(
     RuntimeResumeBootstrapRequest? ResumeBootstrapRequest = null,
     RuntimeResumeBootstrapReceipt? ResumeBootstrapReceipt = null)
 {
-    /// <summary>
-    /// Empty initial progress before either operation has resolved owner or environment state.
-    /// </summary>
     internal static SessionSuspendResumeProgress Empty => new(
         Registration: null,
         EnvironmentFence: null,
@@ -298,41 +244,15 @@ internal sealed record SessionSuspendResumeProgress(
         ResumeBootstrapReceipt: null);
 }
 
-/// <summary>
-/// Drives durable suspend and resume operations across the coordination, runtime, environment, Events, and checkpoint owners.
-/// Each remote side effect is fenced by the persisted operation phase and revalidated against current authority.
-/// </summary>
 internal sealed class SessionSuspendResumeCoordinator
 {
     private readonly CoordinationOwnerStore? _ownerStore;
 
-    /// <summary>
-    /// Creates a coordinator with the durable owner store used to reserve and advance operations.
-    /// </summary>
     public SessionSuspendResumeCoordinator(CoordinationOwnerStore? ownerStore = null)
     {
         _ownerStore = ownerStore;
     }
 
-    /// <summary>
-    /// Suspends a session by fencing the runtime, flushing Events and workspace state, committing a manifest, and releasing placement.
-    /// </summary>
-    /// <param name="context">The authenticated HTTP context used for owner and runtime-host calls.</param>
-    /// <param name="actor">The authenticated coordinator actor.</param>
-    /// <param name="selection">The accepted run selection and authority.</param>
-    /// <param name="identity">The session being suspended.</param>
-    /// <param name="idempotencyKey">The caller's operation idempotency key.</param>
-    /// <param name="options">Orchestrator configuration for runtime owner calls.</param>
-    /// <param name="registrations">The runtime registration owner.</param>
-    /// <param name="decisions">The coordinator decision owner.</param>
-    /// <param name="checkpoints">The MAF checkpoint owner.</param>
-    /// <param name="events">The Events client used to verify the acknowledged SDK cache.</param>
-    /// <param name="environment">The environment client used to flush and release placement.</param>
-    /// <param name="timeProvider">The clock used to validate registration and readiness expiry.</param>
-    /// <param name="cancellationToken">Cancels the current operation.</param>
-    /// <returns>An accepted response for the current suspension phase or a service-unavailable response for interruption.</returns>
-    /// <exception cref="CoordinationException">Thrown when owner state, runtime registration, checkpoint, readiness, cache, or flush evidence is stale or invalid.</exception>
-    /// <remarks>The operation advances durably; retries resume from the saved phase rather than repeating completed phases blindly.</remarks>
     internal async Task<IResult> SuspendAsync(
         HttpContext context,
         CoordinationActor actor,
@@ -644,10 +564,6 @@ internal sealed class SessionSuspendResumeCoordinator
         }
     }
 
-    /// <summary>
-    /// Deserializes persisted operation progress with strict JSON settings.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when stored progress is absent or malformed.</exception>
     private static SessionSuspendResumeProgress DeserializeProgress(JsonElement value)
     {
         try
@@ -664,10 +580,6 @@ internal sealed class SessionSuspendResumeCoordinator
         }
     }
 
-    /// <summary>
-    /// Loads progress only after the owner has advanced the resume execution fence.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the operation phase, version, or saved fence is not the expected resume state.</exception>
     internal static SessionSuspendResumeProgress ReadFenceAdvancedProgress(
         SessionSuspendResumeOperationRecord operation)
     {
@@ -683,10 +595,6 @@ internal sealed class SessionSuspendResumeCoordinator
         return progress;
     }
 
-    /// <summary>
-    /// Reserves or replays a resume operation for the source manifest.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when durable suspend/resume schema is unavailable.</exception>
     internal async Task<SessionSuspendResumeOperationRecord> BeginResumeAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -711,10 +619,6 @@ internal sealed class SessionSuspendResumeCoordinator
         }
     }
 
-    /// <summary>
-    /// Requires that a workspace-resume request remains the current persisted operation request.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the owner rejects the request as stale or its schema is unavailable.</exception>
     internal async Task<RuntimeWorkspaceResumeRequest> RequireCurrentResumeAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -738,10 +642,6 @@ internal sealed class SessionSuspendResumeCoordinator
         return request;
     }
 
-    /// <summary>
-    /// Requires that a resume bootstrap request remains current for the accepted operation and selection.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the owner rejects the request as stale or its schema is unavailable.</exception>
     internal async Task<RuntimeResumeBootstrapRequest> RequireCurrentResumeBootstrapAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -765,10 +665,6 @@ internal sealed class SessionSuspendResumeCoordinator
         return request;
     }
 
-    /// <summary>
-    /// Requires that a placement-release request matches the committed suspend operation.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the owner rejects the request as stale or its schema is unavailable.</exception>
     internal async Task<RuntimeSuspendPlacementReleaseRequest> RequireCurrentSuspendReleaseAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -792,24 +688,6 @@ internal sealed class SessionSuspendResumeCoordinator
         return request;
     }
 
-    /// <summary>
-    /// Resumes a session by validating its manifest, restoring and verifying the workspace, advancing the fence, and bootstrapping runtime.
-    /// </summary>
-    /// <param name="context">The authenticated HTTP context used for owner and runtime-host calls.</param>
-    /// <param name="actor">The authenticated coordinator actor.</param>
-    /// <param name="selection">The accepted run selection and authority.</param>
-    /// <param name="identity">The session being resumed.</param>
-    /// <param name="idempotencyKey">The caller's operation idempotency key.</param>
-    /// <param name="sourceManifestId">The committed suspend manifest to restore.</param>
-    /// <param name="options">Orchestrator configuration for runtime owner calls.</param>
-    /// <param name="environment">The environment client used to restore and verify placement.</param>
-    /// <param name="bootstrap">The runtime bootstrap client used after fence advancement.</param>
-    /// <param name="registrations">The runtime registration owner.</param>
-    /// <param name="timeProvider">The clock used for token and registration expiry checks.</param>
-    /// <param name="cancellationToken">Cancels the current operation.</param>
-    /// <returns>An accepted response for the persisted resume phase.</returns>
-    /// <exception cref="CoordinationException">Thrown when source manifest, placement, network, fence, registration, or bootstrap evidence is invalid or stale.</exception>
-    /// <remarks>Placement and egress are verified before advancing the execution fence; bootstrap uses IDs derived from the durable operation ID.</remarks>
     internal async Task<IResult> ResumeAsync(
         HttpContext context,
         CoordinationActor actor,
@@ -969,10 +847,6 @@ internal sealed class SessionSuspendResumeCoordinator
         }
     }
 
-    /// <summary>
-    /// Advances the resume registration to the new fence and builds deterministic runtime bootstrap operation IDs.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when persisted phase receipts do not describe one verified resume.</exception>
     private static async Task<RuntimeResumeBootstrapRequest> CreateResumeBootstrapRequestAsync(
         HttpContext context,
         SessionSuspendResumeOperationRecord operation,
@@ -1006,10 +880,6 @@ internal sealed class SessionSuspendResumeCoordinator
             1, resume, registration, ids.Bootstrap, ids.Consume, ids.Exchange).Validate();
     }
 
-    /// <summary>
-    /// Rechecks registration, bootstrap operation, and accepted selection before and after a runtime bootstrap call.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the registration or accepted selection changed.</exception>
     private async Task RequireResumeBootstrapCurrentAsync(
         HttpContext context,
         CoordinationActor actor,
@@ -1037,10 +907,6 @@ internal sealed class SessionSuspendResumeCoordinator
                 "runtime_registration_stale", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Requires a dispatched resume operation to have a valid bootstrap completion receipt.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when dispatch phase or bootstrap receipt is incomplete.</exception>
     private static void ValidateDispatchedResume(
         SessionSuspendResumeOperationRecord operation, SessionSuspendResumeProgress progress)
     {
@@ -1050,10 +916,6 @@ internal sealed class SessionSuspendResumeCoordinator
                 "runtime_resume_bootstrap_receipt_missing", StatusCodes.Status503ServiceUnavailable);
     }
 
-    /// <summary>
-    /// Validates the saved resume requests, placement and egress receipts, advanced fence, registration, and bootstrap receipt.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when any durable resume binding or receipt is inconsistent.</exception>
     internal static void ValidateResumeBootstrapCompletion(
         SessionSuspendResumeOperationRecord operation, SessionSuspendResumeProgress progress)
     {
@@ -1095,11 +957,6 @@ internal sealed class SessionSuspendResumeCoordinator
         }
     }
 
-    /// <summary>
-    /// Validates the committed suspend manifest and all progress records required to release placement.
-    /// </summary>
-    /// <returns>The validated persisted progress for the committed suspend.</returns>
-    /// <exception cref="CoordinationException">Thrown when manifest, flush, checkpoint, fence, or release receipts are inconsistent.</exception>
     internal static SessionSuspendResumeProgress RequireCommittedProgress(
         SessionSuspendResumeOperationRecord operation)
     {
@@ -1177,10 +1034,6 @@ internal sealed class SessionSuspendResumeCoordinator
         return saved;
     }
 
-    /// <summary>
-    /// Creates the current placement-release request from the host suspend receipt and flush transition revision.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the host receipt or flush transition revision is missing or invalid.</exception>
     internal static RuntimeSuspendPlacementReleaseRequest CreatePlacementReleaseRequest(
         SessionSuspendResumeProgress progress)
     {
@@ -1201,10 +1054,6 @@ internal sealed class SessionSuspendResumeCoordinator
         }
     }
 
-    /// <summary>
-    /// Checks that the session registration is active, unexpired, and bound to the actor, selection, and operation fence.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the registration no longer matches the operation.</exception>
     private static void ValidateSuspendRegistration(
         RuntimeRegistration registration,
         SessionIdentity identity,
@@ -1227,10 +1076,6 @@ internal sealed class SessionSuspendResumeCoordinator
                 "runtime_registration_stale", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Creates a short-lived runtime actor from the current authenticated bearer and tenant selector.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when authentication, expiry, or actor identity is invalid.</exception>
     private static async Task<RuntimeActorAuthorization> CreateRuntimeActorAsync(
         HttpContext context,
         CoordinationActor actor,
@@ -1250,10 +1095,6 @@ internal sealed class SessionSuspendResumeCoordinator
             CoordinationIdentity.ReadTenantSelector(context));
     }
 
-    /// <summary>
-    /// Reads environment readiness and verifies placement, runtime owner, lease, isolation, attachment, and network bindings.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the environment is unavailable or readiness does not match the registration.</exception>
     private static async Task<EnvironmentRuntimeReadinessContext> ReadEnvironmentReadinessAsync(
         HttpContext context,
         RuntimeRegistration registration,
@@ -1310,10 +1151,6 @@ internal sealed class SessionSuspendResumeCoordinator
         return readiness;
     }
 
-    /// <summary>
-    /// Reads runtime-host readiness from the registered HTTPS endpoint and validates its observation grant.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the host is unavailable or readiness is invalid.</exception>
     private static async Task<RuntimeHostReadinessReceipt> ReadHostReadinessAsync(
         HttpContext context,
         RuntimeRegistration registration,
@@ -1333,10 +1170,6 @@ internal sealed class SessionSuspendResumeCoordinator
         return readiness;
     }
 
-    /// <summary>
-    /// Reserves or replays a suspend operation for the session and idempotency key.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the durable suspend/resume schema is unavailable.</exception>
     internal async Task<SessionSuspendResumeOperationRecord> BeginSuspendAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -1359,10 +1192,6 @@ internal sealed class SessionSuspendResumeCoordinator
         }
     }
 
-    /// <summary>
-    /// Persists the next validated phase and progress snapshot for an operation.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the owner rejects the transition or required schema is unavailable.</exception>
     internal async Task<SessionSuspendResumeOperationRecord> AdvanceAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -1386,10 +1215,6 @@ internal sealed class SessionSuspendResumeCoordinator
         }
     }
 
-    /// <summary>
-    /// Advances the resume operation's execution fence and captures its new owner state.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the fence transition is stale or required schema is unavailable.</exception>
     internal async Task<SessionSuspendResumeOperationRecord> AdvanceResumeFenceAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -1412,10 +1237,6 @@ internal sealed class SessionSuspendResumeCoordinator
         }
     }
 
-    /// <summary>
-    /// Commits the validated suspended manifest and its progress to the coordination owner.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when manifest commitment fails or required schema is unavailable.</exception>
     internal async Task<SessionSuspendResumeOperationRecord> CommitManifestAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -1439,10 +1260,6 @@ internal sealed class SessionSuspendResumeCoordinator
         }
     }
 
-    /// <summary>
-    /// Requires that the host suspend request is still current for the operation.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the persisted request or owner schema is stale or unavailable.</exception>
     internal async Task<RuntimeHostSuspendRequest> RequireCurrentSuspendAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -1466,18 +1283,11 @@ internal sealed class SessionSuspendResumeCoordinator
         return request;
     }
 
-    /// <summary>
-    /// Creates a service-unavailable response for an unconfigured suspend/resume owner.
-    /// </summary>
     internal IResult Unavailable() =>
         Results.Json(
             new { error = "suspend_resume_owner_unavailable" },
             statusCode: StatusCodes.Status503ServiceUnavailable);
 
-    /// <summary>
-    /// Records that the suspend/resume owner is unavailable and returns an interrupted-operation response.
-    /// </summary>
-    /// <exception cref="InvalidOperationException">Thrown when no owner store was configured.</exception>
     internal async Task<IResult> RecordUnavailableAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -1522,10 +1332,6 @@ internal sealed class SessionSuspendResumeCoordinator
             statusCode: StatusCodes.Status503ServiceUnavailable);
     }
 
-    /// <summary>
-    /// Returns the configured owner store or fails when suspend/resume persistence is not available.
-    /// </summary>
-    /// <exception cref="InvalidOperationException">Thrown when no coordination owner store was configured.</exception>
     private CoordinationOwnerStore RequireOwnerStore() =>
         _ownerStore ?? throw new InvalidOperationException(
             "The coordination owner store is not configured.");

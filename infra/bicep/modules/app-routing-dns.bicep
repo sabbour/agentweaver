@@ -1,5 +1,3 @@
-// Grant the AKS Application Routing identity DNS record permissions on
-// exactly one supplied zone, selecting the matching public or private role.
 @description('Exact existing public or private DNS zone resource ID.')
 param zoneResourceId string
 

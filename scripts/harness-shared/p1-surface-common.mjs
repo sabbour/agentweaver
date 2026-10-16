@@ -1,16 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { redact } from './redaction.mjs';
 
-/** Error used when the requested surface cannot prove a required P1 precondition. */
 export class P1BlockedError extends Error {
-  /** Create a recognizable blocked result while preserving the supplied reason. */
   constructor(message) {
     super(message);
     this.name = 'P1BlockedError';
   }
 }
 
-/** Convert the injected runner clock to an ISO timestamp or reject an invalid clock value. */
 export function p1Timestamp(clock) {
   const value = clock();
   const date = value instanceof Date ? value : new Date(value);
@@ -18,7 +15,6 @@ export function p1Timestamp(clock) {
   return date.toISOString();
 }
 
-/** Require an API evidence record to identify one operation and an allowed HTTP status. */
 export function requireP1Http(call, expected, operationId) {
   if (!call || call.operationId !== operationId || !expected.includes(call.status)) {
     throw new Error(`The live ${operationId} operation returned an unexpected HTTP result.`);
@@ -26,10 +22,6 @@ export function requireP1Http(call, expected, operationId) {
   return call.transientResponseBody;
 }
 
-/**
- * Confirm deployment, provider, and image observations match every exact source and artifact pin.
- * Returns only redacted evidence; any missing or mismatched receipt blocks the journey.
- */
 export function summarizeP1SourceEvidence(sourceEvidence, pins) {
   if (!sourceEvidence || sourceEvidence.services?.status !== 'passed'
     || sourceEvidence.agentHostImageMeasurement?.status !== 'passed') {
@@ -74,7 +66,6 @@ export function summarizeP1SourceEvidence(sourceEvidence, pins) {
   });
 }
 
-/** Fail closed unless every client is bound to the selected environment and intended actor. */
 export function validateP1AdapterBindings({ api, deniedApi, mcp, ui }, environment, fixtureScope, surface) {
   const origin = new URL(environment.baseUrl).origin;
   const deniedIdentity = fixtureScope.deniedActor;
@@ -105,7 +96,6 @@ export function validateP1AdapterBindings({ api, deniedApi, mcp, ui }, environme
   }
 }
 
-/** Read run, session, and decision snapshots concurrently and verify their shared execution fence. */
 export async function readP1OwnerSnapshots(api, fences) {
   const [runCall, sessionCall, decisionsCall] = await Promise.all([
     api.invoke('readRunStatus', { pathParameters: { projectId: fences.projectId, runId: fences.runId } }),
@@ -132,7 +122,6 @@ export async function readP1OwnerSnapshots(api, fences) {
   return { run, session, decisions };
 }
 
-/** Match the pending owner gate and blocker to the runner-owned request and current actor. */
 export function requireP1OwnedGate(snapshot, input) {
   const gate = snapshot.decisions.pendingGate;
   const blocker = snapshot.session.blockers?.find(item => item.requestId === input.pins.fixtureScope.gate?.requestId);
@@ -155,7 +144,6 @@ export function requireP1OwnedGate(snapshot, input) {
   return { gate, blocker };
 }
 
-/** Accept only a typed, accepted decision receipt for the next state version and same execution fence. */
 export function requireP1DecisionReceipt(receipt, expectedStateVersion, executionFence) {
   if (typeof receipt?.accepted !== 'boolean' || typeof receipt.decisionId !== 'string'
     || !receipt.decisionId || !Number.isSafeInteger(receipt.stateVersion)
@@ -172,7 +160,6 @@ export function requireP1DecisionReceipt(receipt, expectedStateVersion, executio
   return receipt;
 }
 
-/** Generate one nonempty idempotency key for a mutating P1 request. */
 export function newP1IdempotencyKey(createIdempotencyKey = randomUUID) {
   const key = createIdempotencyKey();
   if (typeof key !== 'string' || !key.trim()) {
@@ -181,10 +168,6 @@ export function newP1IdempotencyKey(createIdempotencyKey = randomUUID) {
   return key;
 }
 
-/**
- * Poll decision snapshots until the exact gate resolves or the bounded timeout expires.
- * A changed execution fence or regressed state version stops the wait instead of accepting stale data.
- */
 export async function waitForP1GateResolution(api, fences, requestId, expectedVersion, {
   clock = () => Date.now(),
   sleep = delay => new Promise(resolve => setTimeout(resolve, delay)),
@@ -209,7 +192,6 @@ export async function waitForP1GateResolution(api, fences, requestId, expectedVe
   throw new Error('The owner did not confirm the fixture-owned gate resolution before the bounded wait expired.');
 }
 
-/** Pair a captured MCP tools/call request with its JSON-RPC response and return the request ID. */
 function requireMcpCorrelation(mcp, toolName, protocolStart) {
   const records = mcp.protocol.slice(protocolStart);
   const request = records.find(record => record.direction === 'request'
@@ -223,10 +205,6 @@ function requireMcpCorrelation(mcp, toolName, protocolStart) {
   return request.message.id;
 }
 
-/**
- * Validate arguments against the discovered MCP schema, call the tool, and verify captured protocol evidence.
- * Returns the owner's structured result with its matching JSON-RPC correlation ID.
- */
 export async function callP1McpTool(mcp, toolName, arguments_) {
   const tool = mcp.tools.get(toolName);
   if (!tool) throw new P1BlockedError(`The live MCP menu is missing ${toolName}.`);
@@ -272,7 +250,6 @@ const P1_JOURNAL_PAGE_LIMIT = 100;
 const P1_JOURNAL_PAGE_LIMIT_MAX = 20;
 const P1_EVENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Read successive owner pages and enforce bounded, ordered, unique event IDs and positions. */
 async function replayP1JournalPages(readPage, fences, surface) {
   const eventIds = new Set();
   const positions = new Set();
@@ -324,7 +301,6 @@ async function replayP1JournalPages(readPage, fences, surface) {
   throw new Error('The actual owner replay exceeded the 20-page bound.');
 }
 
-/** Replay and verify the bounded event cursor chain through the live API endpoint. */
 export async function replayP1ApiJournal(api, fences) {
   return replayP1JournalPages(async cursor => {
     const call = await api.invoke('replayRunEvents', {
@@ -339,7 +315,6 @@ export async function replayP1ApiJournal(api, fences) {
   }, fences, 'API');
 }
 
-/** Replay and verify the bounded event cursor chain through the live MCP tool. */
 export async function replayP1Journal(mcp, fences, tenantId) {
   return replayP1JournalPages(async cursor => {
     const call = await callP1McpTool(mcp, 'agentweaver_replayRunEvents', {
@@ -358,7 +333,6 @@ export async function replayP1Journal(mcp, fences, tenantId) {
   }, fences, 'MCP');
 }
 
-/** Prove the selected distinct actor is authorized but denied access to the pinned run. */
 export async function requireP1DeniedApiActor(deniedApi, input) {
   const identity = input.pins.fixtureScope.deniedActor;
   if (!identity || typeof identity.actorId !== 'string' || !identity.actorId
@@ -379,7 +353,6 @@ export async function requireP1DeniedApiActor(deniedApi, input) {
   return { operationId: 'readRunStatus', status: call.status };
 }
 
-/** Redact a thrown value before including it in durable P1 result evidence. */
 export function sanitizeP1Failure(error) {
   const safe = redact(error);
   return typeof safe === 'string' ? { message: safe } : safe;

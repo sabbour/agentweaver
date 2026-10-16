@@ -254,11 +254,6 @@ export interface KanbanBoardProps {
 // (Backlog, Ready, Active, Done) plus Human Review and Problems grouped in a
 // separate Needs attention / review section. Drag is constrained to Backlog<->Ready
 // by the column drop handlers and the server (workflow columns never accept a task move).
-/**
- * Loads and renders a project task board through `useBoard`, with columns and task cards.
- * Project/API state comes from the board hook; local state and callbacks handle board interactions,
- * and `useCtrlScrollZoom` adds horizontal trackpad zoom behavior.
- */
 export function KanbanBoard({ projectId, pollIntervalMs }: KanbanBoardProps) {
   const styles = useStyles();
   const providerContext = useAiExecutionContext('backlog_decomposition', projectId);

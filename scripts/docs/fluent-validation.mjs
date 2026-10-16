@@ -1,7 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-/** Run the local draw.io source validator and return its parsed semantic/style report. */
 export function inspectFluentSource(contents, { execute=spawnSync }={}) {
   const result=execute(process.env.PYTHON??'python',
     ['-B',fileURLToPath(new URL('./normalize-drawio.py',import.meta.url)),'-','--json'],
@@ -11,7 +10,6 @@ export function inspectFluentSource(contents, { execute=spawnSync }={}) {
   return JSON.parse(result.stdout);
 }
 
-/** Reject diagram source that fails the publication gate and return its report when valid. */
 export function requireFluentSource(contents, name) {
   const result=inspectFluentSource(contents);
   if(result.status!=='passed') {

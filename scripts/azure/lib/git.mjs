@@ -1,7 +1,3 @@
-/**
- * Verifies exact Git source identity before Azure deployment or acceptance tooling runs.
- * A dirty tree, incomplete SHA, or source content that differs from the commit is rejected.
- */
 // Git-tree verification used before any deploy/acceptance tooling runs.
 // Exact-SHA proof requires a clean working tree and a full 40-character
 // commit SHA; anything else is rejected rather than silently normalized.
@@ -17,7 +13,6 @@ const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const POSTGRES_ADMIN_TYPES = new Set(['User', 'Group', 'ServicePrincipal']);
 
-/** Returns whether a value is a full lowercase-or-uppercase 40-character Git SHA. */
 export function isFullSha(value) {
   return typeof value === 'string' && FULL_SHA_PATTERN.test(value);
 }
@@ -25,10 +20,6 @@ export function isFullSha(value) {
 /**
  * Returns { sha, branch } for HEAD in `cwd`, or throws if the tree is dirty
  * or HEAD cannot be resolved to a full 40-character SHA.
- */
-/**
- * Resolves HEAD only when the working tree is clean and the commit is a full SHA.
- * Returns the SHA and branch name; Git errors or uncommitted changes throw.
  */
 export function resolveCleanHead(cwd, { execGit = runGit } = {}) {
   const status = execGit(['status', '--porcelain'], { cwd });
@@ -48,10 +39,6 @@ export function resolveCleanHead(cwd, { execGit = runGit } = {}) {
   return { sha, branch };
 }
 
-/**
- * Validates the deployment inputs against an exact source commit and returns its ownership metadata.
- * It checks ancestry and committed file bytes; invalid paths, parameters, or source evidence throw.
- */
 export function resolveSource({ repoRoot, template, parametersFile, resourceGroup, subscriptionId, tenantId, expectedSha,
   operatorObjectId: rawOperatorObjectId },
   { execGit = runGit, compareGitShow = gitShowMatches, readFile = readFileSync,

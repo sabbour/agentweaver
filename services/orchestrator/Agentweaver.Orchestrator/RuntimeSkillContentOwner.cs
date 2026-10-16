@@ -3,22 +3,10 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Projects the current accepted run skills into a registration-bound runtime response.
-/// Registration ownership and accepted selection are rechecked around the skills read.
-/// </summary>
 internal sealed class RuntimeSkillContentOwner(
     RuntimeRegistrationOwner registrations,
     ProjectsRunSelectionClient projects)
 {
-    /// <summary>
-    /// Reads and validates the skill content projection for the current runtime registration.
-    /// </summary>
-    /// <param name="context">The authenticated runtime request context.</param>
-    /// <param name="runtimeInstanceId">The runtime registration whose skills are requested.</param>
-    /// <param name="cancellationToken">Cancels registration and project-owner reads.</param>
-    /// <returns>The validated skill projection bound to the current registration and accepted selection.</returns>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when registration or skill content is stale or invalid.</exception>
     public Task<SkillRuntimeContentProjectionV1> ReadCurrentAsync(
         HttpContext context,
         Guid runtimeInstanceId,

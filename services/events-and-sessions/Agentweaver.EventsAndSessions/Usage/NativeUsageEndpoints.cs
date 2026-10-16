@@ -6,14 +6,12 @@ using OpenIddict.Abstractions;
 
 namespace Agentweaver.EventsAndSessions;
 
-/// <summary>Reads owner-held native usage, runtime source, and verified native-turn evidence.</summary>
 internal sealed class NativeUsageReceiptClient(HttpClient client, CoordinationOwnerClientOptions options)
 {
     private Uri OwnerAddress => Uri.TryCreate(options.OwnerBaseAddress, UriKind.Absolute, out var address)
         ? RuntimeOwnerHttpTransport.RequireOwnerAddress(address)
         : throw new RuntimeAuthorizationException("runtime_usage_owner_configuration_invalid");
 
-    /// <summary>Reads a source receipt addressed to the requested session.</summary>
     internal Task<RuntimeUsageSourceReceipt> ReadAsync(
         RuntimeActorAuthorization actor, string projectId, string runId, string sessionId,
         Guid receiptId, CancellationToken cancellationToken)
@@ -25,7 +23,6 @@ internal sealed class NativeUsageReceiptClient(HttpClient client, CoordinationOw
             actor, null, cancellationToken);
     }
 
-    /// <summary>Reads and cross-validates the current registration and granted SDK source receipt.</summary>
     internal async Task<NativeRuntimeUsageSourceSnapshot> ReadCurrentSourceAsync(
         Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
     {
@@ -45,7 +42,6 @@ internal sealed class NativeUsageReceiptClient(HttpClient client, CoordinationOw
         return new(registration, receipt);
     }
 
-    /// <summary>Reads owner-recorded turn evidence and validates its accounting snapshot.</summary>
     internal async Task<RuntimeNativeTurnRecordedReceipt> ReadNativeTurnAsync(
         RuntimeActorAuthorization actor, RuntimeUsageCostSnapshotRequest request, CancellationToken cancellationToken)
     {
@@ -59,17 +55,14 @@ internal sealed class NativeUsageReceiptClient(HttpClient client, CoordinationOw
     }
 }
 
-/// <summary>A current runtime registration paired with its owner-issued source receipt.</summary>
 internal sealed record NativeRuntimeUsageSourceSnapshot(
     RuntimeRegistration Registration,
     RuntimeSdkSourceReceipt Receipt);
 
-/// <summary>Authorizes source accounting operations and rechecks authority around owner and ledger reads.</summary>
 internal sealed class NativeUsageApplicationService(
     NativeUsageReceiptClient source, IProjectsAuthorizationContextClient projects,
     NativeUsageReceiptConsumer consumer, PostgresUsageLedger ledger, TimeProvider timeProvider)
 {
-    /// <summary>Consumes an immutable native source receipt after validating session scope and current authority.</summary>
     internal async Task<RuntimeUsageAccountingAcknowledgment> AppendAsync(
         HttpContext context, string sessionId, RuntimeUsageReceiptReferenceRequest reference,
         CancellationToken cancellationToken)
@@ -107,7 +100,6 @@ internal sealed class NativeUsageApplicationService(
         }
     }
 
-    /// <summary>Prices the current runtime model selection only if its registration and authority stay unchanged.</summary>
     internal async Task<RuntimeUsageCostPreflightReceipt> PreflightAsync(
         HttpContext context, Guid runtimeInstanceId, RuntimeUsageCostPreflightRequest request,
         CancellationToken cancellationToken)
@@ -164,7 +156,6 @@ internal sealed class NativeUsageApplicationService(
         }
     }
 
-    /// <summary>Reconciles cost-turn receipts for the currently authorized project and run.</summary>
     internal async Task<RuntimeUsageCostReconciliationReceipt> ReconcileCostTurnAsync(
         HttpContext context, string projectId, string runId,
         RuntimeUsageCostReconciliationRequest request, CancellationToken cancellationToken)
@@ -205,7 +196,6 @@ internal sealed class NativeUsageApplicationService(
             throw new RuntimeAuthorizationException("runtime_cost_preflight_source_scope_invalid");
     }
 
-    /// <summary>Reads run totals only when project/run authority is unchanged across the ledger query.</summary>
     internal async Task<UsageRunTotals> GetTotalsAsync(
         HttpContext context, string projectId, string runId, CancellationToken cancellationToken)
     {
@@ -222,7 +212,6 @@ internal sealed class NativeUsageApplicationService(
         return result;
     }
 
-    /// <summary>Builds a cost snapshot from required receipts and revalidates any supplied native-turn proof.</summary>
     internal async Task<RuntimeUsageCostSnapshotReceipt> ReadCostSnapshotAsync(
         HttpContext context, string projectId, string runId, RuntimeUsageCostSnapshotRequest request,
         CancellationToken cancellationToken)
@@ -270,7 +259,6 @@ internal sealed class NativeUsageApplicationService(
         }
     }
 
-    /// <summary>Creates a short-lived bearer credential from the authenticated request's forwarded token.</summary>
     internal static async Task<SecretCredential> BearerAsync(HttpContext context, TimeProvider timeProvider)
     {
         var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
@@ -282,7 +270,6 @@ internal sealed class NativeUsageApplicationService(
         return new(value, expiry.Value, timeProvider);
     }
 
-    /// <summary>Requires a bound project/run and a current readRunSelection permission.</summary>
     internal static void RequireReadAuthority(ProjectsAuthorizationContextResponse authority)
     {
         if (authority.BoundProjectId is null || authority.BoundRunId is null ||
@@ -294,10 +281,8 @@ internal sealed class NativeUsageApplicationService(
     }
 }
 
-/// <summary>Registers and maps authenticated endpoints for native usage accounting and cost snapshots.</summary>
 public static class NativeUsageEndpoints
 {
-    /// <summary>Registers usage services only when native usage accounting is enabled.</summary>
     public static bool AddNativeUsageConsumer(this IServiceCollection services, IConfiguration configuration)
     {
         if (!configuration.GetValue<bool>("EventsAndSessions:RuntimeUsage:Enabled"))
@@ -320,7 +305,6 @@ public static class NativeUsageEndpoints
         return true;
     }
 
-    /// <summary>Maps authenticated routes for admission, receipt ingestion, preflight, totals, and reconciliation.</summary>
     public static IEndpointRouteBuilder MapNativeUsageEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("/internal/projects/{projectId}/runs/{runId}/usage/copilot-run-admission",
@@ -354,7 +338,6 @@ public static class NativeUsageEndpoints
         return endpoints;
     }
 
-    /// <summary>Maps expected authorization, contract, conflict, and owner failures to stable HTTP responses.</summary>
     private static async Task<IResult> ExecuteAsync<T>(HttpContext context, Func<Task<T>> action)
     {
         context.Response.Headers.CacheControl = "no-store";

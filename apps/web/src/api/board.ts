@@ -2,11 +2,8 @@ import { apiClient } from './apiClient';
 import { ApiError } from './client';
 import { useCallback, useEffect, useState } from 'react';
 import type { BoardDto } from './types';
-
-/** Lifecycle state for loading the server-materialized project board. */
 export type BoardStatus = 'loading' | 'ready' | 'error';
 
-/** Current board snapshot and controls returned by {@link useBoard}. */
 export interface UseBoardResult {
   board: BoardDto | null;
   status: BoardStatus;
@@ -14,7 +11,6 @@ export interface UseBoardResult {
   refetch: () => Promise<void>;
 }
 
-/** Polling and history options accepted by {@link useBoard}. */
 export interface UseBoardOptions {
   intervalMs?: number;
   includeTerminalHistory?: boolean;
@@ -25,11 +21,6 @@ export interface UseBoardOptions {
 // No fakes — the board reflects fully materialized server state every few seconds.
 const DEFAULT_INTERVAL_MS = 3000;
 
-/**
- * Loads a project's materialized board and refreshes it on a fixed interval.
- * Fetch failures are exposed as an error state; callers can request an immediate
- * refresh after a mutation with the returned `refetch` function.
- */
 export function useBoard(projectId: string, options?: UseBoardOptions): UseBoardResult {
   const intervalMs = options?.intervalMs ?? DEFAULT_INTERVAL_MS;
   const includeTerminalHistory = options?.includeTerminalHistory ?? false;

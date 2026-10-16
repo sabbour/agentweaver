@@ -13,7 +13,6 @@ using Npgsql;
 
 namespace Agentweaver.Projects.Config;
 
-/// <summary>Project metadata and current configuration revision returned to authorized callers.</summary>
 public sealed record ProjectSummary(
     string ProjectId,
     string Name,
@@ -23,7 +22,6 @@ public sealed record ProjectSummary(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
 
-/// <summary>One immutable project configuration revision with its author and creation time.</summary>
 public sealed record VersionedProjectConfiguration(
     string ProjectId,
     long Revision,
@@ -31,14 +29,12 @@ public sealed record VersionedProjectConfiguration(
     string UpdatedByActorId,
     DateTimeOffset CreatedAt);
 
-/// <summary>Current platform runtime defaults, or an empty revision-zero head before the first configuration.</summary>
 public sealed record VersionedPlatformRuntimeDefaults(
     long Revision,
     PlatformRuntimeDefaults? Defaults,
     string? UpdatedByActorId,
     DateTimeOffset? CreatedAt);
 
-/// <summary>Effective run configuration resolved from immutable project, platform, and owner-provided context.</summary>
 public sealed record EffectiveRunSelection(
     string ProjectId,
     string RunId,
@@ -55,9 +51,6 @@ public sealed record EffectiveRunSelection(
     ImmutableArray<NetworkEgressRule>? ProjectEgressNarrowing,
     ImmutableArray<NetworkEgressRule> RequiredEgress);
 
-/// <summary>
-/// Owns project configuration revisions and the immutable run-selection snapshot stored in the Projects schema.
-/// </summary>
 public sealed partial class ProjectsConfigService
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
@@ -66,7 +59,6 @@ public sealed partial class ProjectsConfigService
     private readonly TimeProvider timeProvider;
     private readonly IDbContextFactory<ProjectsConfigDbContext>? dbContextFactory;
 
-    /// <summary>Creates the service over the request context, provider catalog, clock, and optional transaction factory.</summary>
     public ProjectsConfigService(
         ProjectsConfigDbContext db,
         ProviderCatalog providerCatalog,
@@ -79,7 +71,6 @@ public sealed partial class ProjectsConfigService
         this.dbContextFactory = dbContextFactory;
     }
 
-    /// <summary>Loads a project after checking current read or write authority for marketplace operations.</summary>
     internal async Task<ProjectRecord> GetMarketplaceProjectAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -99,10 +90,6 @@ public sealed partial class ProjectsConfigService
         return project;
     }
 
-    /// <summary>
-    /// Serializes a source write with membership, project, and role locks, then rechecks active project authority before commit.
-    /// </summary>
-    /// <exception cref="MarketplaceSourceException">A serialization race becomes a source revision conflict.</exception>
     internal async Task<T> ExecuteMarketplaceWriteAsync<T>(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -150,7 +137,6 @@ public sealed partial class ProjectsConfigService
         }
     }
 
-    /// <summary>Locks membership, project, and eligible role rows so a concurrent revoke cannot cross the source write.</summary>
     private async Task LockMarketplaceWriteInputsAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -213,8 +199,6 @@ public sealed partial class ProjectsConfigService
         }
     }
 
-    /// <summary>Creates a project and its initial empty configuration revision for a current tenant administrator.</summary>
-    /// <exception cref="ProjectConfigException">The caller lacks current scope/role or the project name is invalid.</exception>
     public async Task<ProjectSummary> CreateProjectAsync(
         ProjectAuthorizationContext caller,
         string name,
@@ -258,7 +242,6 @@ public sealed partial class ProjectsConfigService
         return ToSummary(project);
     }
 
-    /// <summary>Lists projects in the active tenant, filtering non-admin results to projects with a current read role.</summary>
     public async Task<ImmutableArray<ProjectSummary>> ListProjectsAsync(
         ProjectAuthorizationContext caller,
         CancellationToken cancellationToken)
@@ -297,14 +280,12 @@ public sealed partial class ProjectsConfigService
         return visible.ToImmutable();
     }
 
-    /// <summary>Returns an authorized project summary without a run binding.</summary>
     public async Task<ProjectSummary> GetProjectAsync(
         ProjectAuthorizationContext caller,
         string projectId,
         CancellationToken cancellationToken)
         => await GetProjectAsync(caller, projectId, runId: null, cancellationToken).ConfigureAwait(false);
 
-    /// <summary>Returns an authorized project summary and, when supplied, requires the exact signed run binding.</summary>
     public async Task<ProjectSummary> GetProjectAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -322,8 +303,6 @@ public sealed partial class ProjectsConfigService
         return ToSummary(project);
     }
 
-    /// <summary>Updates project metadata at an expected revision and advances the mutable project head.</summary>
-    /// <exception cref="ProjectConfigException">The caller lacks write authority, state is invalid, or the revision is stale.</exception>
     public async Task<ProjectSummary> UpdateProjectAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -356,7 +335,6 @@ public sealed partial class ProjectsConfigService
         return ToSummary(project);
     }
 
-    /// <summary>Reads the current or a retained immutable configuration revision for an authorized project.</summary>
     public async Task<VersionedProjectConfiguration> GetProjectConfigurationAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -380,10 +358,6 @@ public sealed partial class ProjectsConfigService
             configuration.CreatedAt);
     }
 
-    /// <summary>
-    /// Validates and appends a project configuration revision after checking skill pins and platform narrowing.
-    /// </summary>
-    /// <exception cref="ProjectConfigException">The project is archived, the expected revision is stale, or configuration is invalid.</exception>
     public async Task<VersionedProjectConfiguration> UpdateProjectConfigurationAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -441,7 +415,6 @@ public sealed partial class ProjectsConfigService
         return new VersionedProjectConfiguration(project.ProjectId, nextRevision, normalized, caller.ActorId, now);
     }
 
-    /// <summary>Returns the current platform defaults to a caller with a current platform-admin role.</summary>
     public async Task<VersionedPlatformRuntimeDefaults> GetPlatformRuntimeDefaultsAsync(
         ProjectAuthorizationContext caller,
         CancellationToken cancellationToken)
@@ -451,8 +424,6 @@ public sealed partial class ProjectsConfigService
         return await ReadPlatformDefaultsAsync(head, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Validates and appends platform runtime defaults only when the supplied revision is current.</summary>
-    /// <exception cref="ProjectConfigException">The caller is not a platform administrator or the head revision changed.</exception>
     public async Task<VersionedPlatformRuntimeDefaults> UpdatePlatformRuntimeDefaultsAsync(
         ProjectAuthorizationContext caller,
         long expectedRevision,
@@ -488,10 +459,6 @@ public sealed partial class ProjectsConfigService
         return new VersionedPlatformRuntimeDefaults(nextRevision, normalized, caller.ActorId, now);
     }
 
-    /// <summary>
-    /// Resolves and persists an immutable selection once per run ID; exact retries replay, while changed requests conflict.
-    /// </summary>
-    /// <exception cref="ProjectConfigException">Authority, project state, expected revisions, or selection requirements are invalid.</exception>
     public async Task<EffectiveRunSelection> AcceptRunSelectionAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -508,7 +475,6 @@ public sealed partial class ProjectsConfigService
         await using var transaction = await db.Database
             .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
             .ConfigureAwait(false);
-        // Lock mutable authority and revision heads before computing the snapshot, and serialize all writers for this run ID.
         await LockRunSelectionInputsAsync(caller, projectId, runId, cancellationToken).ConfigureAwait(false);
         if (!await HasCurrentRoleAsync(
             caller,
@@ -525,7 +491,6 @@ public sealed partial class ProjectsConfigService
             .ConfigureAwait(false);
         if (existing is not null)
         {
-            // The fingerprint makes an identical request replay-safe without reopening mutable configuration inputs.
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return ReadExistingSelection(existing, project.ProjectId, fingerprint);
         }
@@ -609,7 +574,6 @@ public sealed partial class ProjectsConfigService
         }
         catch (DbUpdateException exception) when (IsUniqueViolation(exception))
         {
-            // A concurrent accept may win the run-ID insert; replay only its exact fingerprint after rollback.
             await transaction.RollbackAsync(cancellationToken).ConfigureAwait(false);
             await transaction.DisposeAsync().ConfigureAwait(false);
             db.Entry(record).State = EntityState.Detached;
@@ -621,7 +585,6 @@ public sealed partial class ProjectsConfigService
         }
     }
 
-    /// <summary>Locks project and platform heads and obtains a transaction-scoped advisory lock for the run ID.</summary>
     private async Task LockRunSelectionInputsAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -660,7 +623,6 @@ public sealed partial class ProjectsConfigService
         await runLock.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Reads the saved immutable selection after current Orchestrator authority and exact resource binding checks.</summary>
     public async Task<EffectiveRunSelection> GetRunSelectionAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -685,10 +647,6 @@ public sealed partial class ProjectsConfigService
         return DeserializeRunSelection(selection.SnapshotJson);
     }
 
-    /// <summary>
-    /// Builds a bounded proof for the exact signed Broker request from current authority and the stored selection hash.
-    /// </summary>
-    /// <exception cref="ProjectConfigException">The caller, active project, assignment, or selection binding is no longer valid.</exception>
     public async Task<BrokerRunBindingProofResponse> GetBrokerRunBindingProofAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -765,7 +723,6 @@ public sealed partial class ProjectsConfigService
             Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(record.SnapshotJson))));
     }
 
-    /// <summary>Enforces current membership, tenant ownership, token bindings, and the requested project access level.</summary>
     private async Task<ProjectRecord> FindProjectAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -819,7 +776,6 @@ public sealed partial class ProjectsConfigService
         throw ProjectConfigException.NotFound();
     }
 
-    /// <summary>Loads a tenant-owned project without disclosing foreign-project existence.</summary>
     private async Task<ProjectRecord> FindTenantProjectAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -838,7 +794,6 @@ public sealed partial class ProjectsConfigService
         return project;
     }
 
-    /// <summary>Checks project egress and run-limit overrides against the current configured platform defaults.</summary>
     private async Task EnsureProjectNarrowingAsync(
         ProjectConfiguration configuration,
         CancellationToken cancellationToken)
@@ -888,7 +843,6 @@ public sealed partial class ProjectsConfigService
             revision.CreatedAt);
     }
 
-    /// <summary>Selects the explicit project model or platform default and fails closed if the immutable context lacks it.</summary>
     private static ModelSelectionSettings ResolveModelSelection(
         ProjectConfiguration project,
         PlatformRuntimeDefaults platform,
@@ -908,7 +862,6 @@ public sealed partial class ProjectsConfigService
         return selected;
     }
 
-    /// <summary>Resolves provider candidates by seam cardinality and preserves all selected candidate/version metadata.</summary>
     private ImmutableArray<EffectiveProviderSelection> ResolveProviders(
         ProjectConfiguration project,
         RunSelectionContext context)
@@ -1030,7 +983,6 @@ public sealed partial class ProjectsConfigService
             candidate.RequiredCapabilities.Order(StringComparer.Ordinal).ToImmutableArray(),
             layer);
 
-    /// <summary>Rejects malformed, duplicated, or cardinality-inconsistent owner selection requirements before resolution.</summary>
     private static void ValidateSelectionContext(RunSelectionContext context)
     {
         if (context is null)
@@ -1095,7 +1047,6 @@ public sealed partial class ProjectsConfigService
         _ = ProjectConfigurationValidator.ValidateEgressRules(context.RequiredEgress);
     }
 
-    /// <summary>Allows an existing run ID only when its stored project and request fingerprint exactly match.</summary>
     private static EffectiveRunSelection ReadExistingSelection(
         ProjectRunSelectionRecord existing,
         string projectId,
@@ -1106,7 +1057,6 @@ public sealed partial class ProjectsConfigService
         return DeserializeRunSelection(existing.SnapshotJson);
     }
 
-    /// <summary>Reads current snapshots and safely upgrades the supported legacy egress shape in memory.</summary>
     internal static EffectiveRunSelection DeserializeRunSelection(string value)
     {
         var selection = Deserialize<EffectiveRunSelection>(value);
@@ -1139,7 +1089,6 @@ public sealed partial class ProjectsConfigService
         };
     }
 
-    /// <summary>Builds a stable digest from sorted request inputs so set ordering does not change idempotency identity.</summary>
     private static string Fingerprint(string projectId, string runId, AcceptRunSelectionRequest request)
     {
         var requiredEgress = ProjectConfigurationValidator
@@ -1220,7 +1169,6 @@ public sealed partial class ProjectsConfigService
     private static bool IsUniqueViolation(DbUpdateException exception) =>
         exception.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
 
-    /// <summary>Requires ordinary API/admin scopes and a current platform-admin assignment.</summary>
     private async Task EnsurePlatformAdminAsync(
         ProjectAuthorizationContext caller,
         CancellationToken cancellationToken)
@@ -1237,7 +1185,6 @@ public sealed partial class ProjectsConfigService
             throw ProjectConfigException.Forbidden();
     }
 
-    /// <summary>Rejects stale or revoked membership revisions before project operations.</summary>
     private async Task EnsureCurrentMembershipAsync(
         ProjectAuthorizationContext caller,
         CancellationToken cancellationToken)
@@ -1319,14 +1266,12 @@ public sealed partial class ProjectsConfigService
                 StatusCodes.Status400BadRequest);
     }
 
-    /// <summary>Validates and trims a project name before persistence.</summary>
     internal static string NormalizeProjectName(string name)
     {
         ValidateProjectName(name);
         return name.Trim();
     }
 
-    /// <summary>Serializes project configuration with the same strict wire settings used for stored snapshots.</summary>
     internal static string SerializeProjectConfiguration(ProjectConfiguration configuration) =>
         Serialize(configuration);
 

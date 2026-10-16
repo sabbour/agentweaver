@@ -3,25 +3,15 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.EventsAndSessions;
 
-/// <summary>Reads the authenticated actor and exact project/run scope used by Events &amp; Sessions.</summary>
 public static class SessionIdentityClaims
 {
     public const string Subject = "sub";
     public const string ProjectId = "project_id";
     public const string RunId = "run_id";
 
-    /// <summary>Returns the unique authenticated project/run scope, or false for missing or duplicate claims.</summary>
-    /// <param name="principal">The authenticated caller.</param>
-    /// <param name="scope">The validated project/run scope when successful.</param>
-    /// <returns>True only when the caller has one valid subject, project, and run claim.</returns>
     public static bool TryGetScope(ClaimsPrincipal principal, out SessionRunScope? scope) =>
         TryGetScope(principal, out scope, out _);
 
-    /// <summary>Returns the validated project/run scope and actor subject from one unambiguous identity.</summary>
-    /// <param name="principal">The authenticated caller.</param>
-    /// <param name="scope">The validated project/run scope when successful.</param>
-    /// <param name="actorId">The subject claim when successful.</param>
-    /// <returns>False when authentication or any required claim is missing, repeated, or invalid.</returns>
     public static bool TryGetScope(
         ClaimsPrincipal principal,
         out SessionRunScope? scope,
@@ -58,7 +48,6 @@ public readonly record struct SessionRunScope
     public string ProjectId { get; }
     public string RunId { get; }
 
-    /// <summary>Validates and stores a project/run pair using the same identifier rules as a session identity.</summary>
     public SessionRunScope(string projectId, string runId)
     {
         var identity = new SessionIdentity(projectId, runId, "_");
@@ -66,10 +55,8 @@ public readonly record struct SessionRunScope
         RunId = identity.RunId;
     }
 
-    /// <summary>Creates a complete session identity within this project/run scope.</summary>
     public SessionIdentity ForSession(string sessionId) => new(ProjectId, RunId, sessionId);
 }
 
-/// <summary>Signals that the caller lacks one valid project/run identity.</summary>
 public sealed class SessionAuthenticationException()
     : Exception("Exactly one valid project_id and run_id claim are required.");

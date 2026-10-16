@@ -75,10 +75,6 @@ export interface PageSectionProps {
   className?: string;
 }
 
-/**
- * Groups related page content under an optional section heading and description.
- * Props provide the text and children; it does not fetch data or manage state.
- */
 export function PageSection({
   title,
   description,

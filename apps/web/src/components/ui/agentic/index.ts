@@ -1,4 +1,3 @@
-/** Public exports for the reusable agent-activity and workflow-step UI. */
 export type { AgentStep, AgentArtifact, AgentStepStatus, ToolCall } from './types';
 export {
   ArtifactChip,

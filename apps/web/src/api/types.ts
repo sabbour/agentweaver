@@ -1,10 +1,6 @@
-/** REST request and response contracts shared by the browser API client and UI. */
-/** Model source selected for an Agentweaver execution. */
 export type ModelSource = 'github-copilot' | 'byok';
-/** Authentication mode advertised by the Agentweaver server. */
 export type AuthMode = 'entra';
 
-/** Resolved provider identity and availability returned with AI execution context. */
 export interface EffectiveModelProvider {
   state: 'resolved' | 'unavailable';
   provider_kind:
@@ -22,7 +18,6 @@ export interface EffectiveModelProvider {
   unavailable_reason: string | null;
 }
 
-/** Short-lived provider confirmation bound to a requested operation. */
 export interface AiExecutionContext {
   ai_required: boolean;
   operation: string;
@@ -32,7 +27,6 @@ export interface AiExecutionContext {
   effective_model_provider: EffectiveModelProvider | null;
 }
 
-/** Server capabilities and authentication configuration exposed to the web app. */
 export interface ServerInfo {
   data_directory: string;
   workspace_auto_assigned?: boolean;
@@ -42,7 +36,6 @@ export interface ServerInfo {
   repo_app_install_url?: string | null;
 }
 
-/** Lifecycle values used by the run detail API. */
 export type RunStatus =
   | 'pending'
   | 'in_progress'
@@ -56,7 +49,6 @@ export type RunStatus =
   | 'merge_failed'
   | 'assemble_ready';
 
-/** One pending tool or shell action requiring operator approval. */
 export interface PendingApprovalDto {
   root_run_id: string;
   owning_run_id: string;
@@ -71,14 +63,12 @@ export interface PendingApprovalDto {
   is_shell: boolean;
 }
 
-/** Pending approval list and count for one run. */
 export interface PendingApprovalsResponse {
   run_id: string;
   count: number;
   approvals: PendingApprovalDto[];
 }
 
-/** Sandbox backend and current ownership evidence associated with a run. */
 export interface RunSandboxInfo {
   backend: string;
   isRealIsolation: boolean;
@@ -105,7 +95,6 @@ export interface RunSandboxInfo {
   } | null;
 }
 
-/** Configured shell, network, and repository-root restrictions for a sandbox. */
 export interface SandboxPolicy {
   repository_path: string;
   shell_enabled: boolean;
@@ -115,7 +104,6 @@ export interface SandboxPolicy {
   destructive_command_patterns: string[];
 }
 
-/** Permission-policy inspection, including launch binding, revocation, and last denial. */
 export interface EffectivePermissionInspection {
   run_id: string;
   binding: {
@@ -166,7 +154,6 @@ export interface EffectivePermissionInspection {
   } | null;
 }
 
-/** Execution principal, backend evidence, permission bindings, and recorded decisions. */
 export interface ExecutionIdentityProjection {
   evidence_state: 'complete' | 'partial' | 'missing_legacy_descriptor';
   descriptor: {
@@ -216,7 +203,6 @@ export interface ExecutionIdentityProjection {
   }>;
 }
 
-/** Effective permission controls summarized without exposing full policy internals. */
 export interface EffectivePermissionPolicySummary {
   version: string;
   shell_enabled: boolean;
@@ -230,13 +216,11 @@ export interface EffectivePermissionPolicySummary {
   allowed_operations: string[];
 }
 
-/** Identifier and initial status returned after a run is submitted. */
 export interface SubmitRunResponse {
   run_id: string;
   status: RunStatus;
 }
 
-/** Retry result, including whether a coordinator resumed under its existing run ID. */
 export interface RetryRunResponse {
   run_id: string;
   retried_from: string | null;
@@ -245,7 +229,6 @@ export interface RetryRunResponse {
   resumed?: boolean;
 }
 
-/** Complete run detail used by run surfaces, including optional coordinator metadata. */
 export interface RunDetail {
   run_id: string;
   project_id?: string | null;
@@ -294,7 +277,6 @@ export interface RunDetail {
   autopilot?: boolean;
 }
 
-/** Terminal run failure with evidence, interpretations, unknowns, and safe next actions. */
 export interface RunTerminalDiagnostic {
   code: string;
   message: string;
@@ -318,7 +300,6 @@ export interface RunTerminalDiagnostic {
   execution_identity_evidence_state?: string | null;
 }
 
-/** Availability and observation metadata for one diagnostic evidence source. */
 export interface DiagnosticEvidenceSource {
   name: string;
   availability: string;
@@ -327,7 +308,6 @@ export interface DiagnosticEvidenceSource {
   detail?: string | null;
 }
 
-/** Reference to a source event or trace used to support a diagnostic statement. */
 export interface DiagnosticEvidenceReference {
   id: string;
   source: string;
@@ -338,14 +318,12 @@ export interface DiagnosticEvidenceReference {
   synthetic: boolean;
 }
 
-/** One diagnostic observation or interpretation linked to supporting evidence IDs. */
 export interface DiagnosticStatement {
   code: string;
   summary: string;
   evidence_reference_ids: string[];
 }
 
-/** Permission or policy gate that denied a recorded operation. */
 export interface DiagnosticDenialGate {
   gate: string;
   outcome: string;
@@ -359,7 +337,6 @@ export interface DiagnosticDenialGate {
   evidence_reference_id: string;
 }
 
-/** Non-mutating next step suggested by a terminal diagnostic. */
 export interface DiagnosticNextAction {
   kind: 'safe_retry' | 'authorization_or_configuration_repair' | 'investigate_unknown';
   label: string;
@@ -415,13 +392,11 @@ const TERMINAL_CAUSE_TYPES = new Set([
 
 const SAFE_TERMINAL_CAUSE = /^(?:code|phase|reason|step|tool):[A-Za-z0-9_.:-]{1,112}$/;
 
-/** True only when a terminal cause matches the server's bounded safe format. */
 export function isSafeTerminalCause(cause: string): boolean {
   return cause.length <= 128
     && (TERMINAL_CAUSE_TYPES.has(cause) || SAFE_TERMINAL_CAUSE.test(cause));
 }
 
-/** Creates a terminal failure summary from an allowlisted code and retry state. */
 export function safeTerminalFailureMessage(_message: string, code: string, retryable: boolean | null): string {
   const safeCode = TERMINAL_FAILURE_CODES.has(code) ? code : 'agent_turn_internal_error';
   const retrySummary = retryable === true
@@ -442,7 +417,6 @@ export interface PersistedRunEventPayload extends Record<string, unknown> {
   timestamp?: string;
 }
 
-/** Durable run event used to seed a timeline after the live stream has closed. */
 export interface PersistedRunEvent {
   sequence: number;
   type: string;
@@ -455,25 +429,21 @@ export interface PersistedRunEvent {
   payload: PersistedRunEventPayload;
 }
 
-/** Approval decision sent to the run review endpoint. */
 export interface ReviewRequest {
   approved: boolean;
 }
 
-/** Run status and merge result returned after review. */
 export interface ReviewResponse {
   run_id: string;
   status: string;
   merge_result: string | null;
 }
 
-/** Structured server response when a review action can be retried. */
 export interface RetriableReviewErrorBody {
   error: string;
   status: string;
 }
 
-/** Immutable output snapshot and digest metadata recorded for a run revision. */
 export interface OutputRevision {
   revision_id: string;
   schema_version: number;
@@ -492,7 +462,6 @@ export interface OutputRevision {
   files?: Array<{ path: string; mode: number; size: number; sha256: string }> | null;
 }
 
-/** File bytes and integrity digest from one output revision. */
 export interface OutputRevisionFile {
   revision_id: string;
   path: string;
@@ -501,14 +470,12 @@ export interface OutputRevisionFile {
   content_base64: string;
 }
 
-/** File-level digest changes between two output revisions. */
 export interface OutputRevisionComparison {
   before_revision_id: string;
   after_revision_id: string;
   changes: Array<{ path: string; before_sha256: string | null; after_sha256: string | null }>;
 }
 
-/** One changed workspace path with its status and line counts. */
 export interface WorkspaceFileEntry {
   path: string;
   status: 'added' | 'modified' | 'deleted';
@@ -517,7 +484,6 @@ export interface WorkspaceFileEntry {
   removed_lines: number;
 }
 
-/** Text or binary content for one workspace file. */
 export interface WorkspaceFileContent {
   path: string;
   content: string | null;
@@ -525,7 +491,6 @@ export interface WorkspaceFileContent {
   language: string | null;
 }
 
-/** Unified diff for one workspace path. */
 export interface WorkspaceFileDiff {
   path: string;
   diff: string | null;
@@ -533,7 +498,6 @@ export interface WorkspaceFileDiff {
   is_binary: boolean;
 }
 
-/** One file or folder in a workspace tree. */
 export interface WorkspaceNode {
   path: string;
   is_folder: boolean;
@@ -551,13 +515,11 @@ export interface WorkspaceRef {
   originating_branch?: string;
 }
 
-/** Available project and run workspace references plus the current branch. */
 export interface WorkspaceRefsResponse {
   current_branch: string;
   refs: WorkspaceRef[];
 }
 
-/** Result of committing or merging a run's changes. */
 export interface CommitResponse {
   run_id: string;
   status: string;
@@ -565,19 +527,15 @@ export interface CommitResponse {
   conflicting_files: string[] | null;
 }
 
-/** Updated run state after requesting changes from an agent. */
 export interface RequestChangesResponse {
   run_id: string;
   status: string;
 }
 
 // Projects
-/** Project creation source. */
 export type ProjectOrigin = 'blank' | 'github';
-/** Project provisioning lifecycle. */
 export type ProjectState = 'creating' | 'active' | 'failed' | 'deleting';
 
-/** Project metadata and default execution settings returned by the API. */
 export interface Project {
   project_id: string;
   name: string;
@@ -604,7 +562,6 @@ export interface Project {
   allowed_workflow_ids?: string[] | null;
 }
 
-/** Blueprint definition with its bundled workflows and optional skill bindings. */
 export interface Blueprint {
   id: string;
   name: string;
@@ -625,25 +582,21 @@ export interface Blueprint {
   skill_bindings?: BlueprintSkillBindingDto[];
 }
 
-/** Skill names grouped under one blueprint role. */
 export interface BlueprintSkillBindingDto {
   role_id: string;
   skills: string[];
 }
 
-/** Wrapper used by the legacy blueprint-list response shape. */
 export interface ListBlueprintsResponse {
   blueprints: Blueprint[];
 }
 
-/** Input for creating a blueprint from a natural-language description. */
 export interface GenerateBlueprintRequest {
   description: string;
   project_id?: string | null;
   target_repository?: string | null;
 }
 
-/** Provider and model snapshot captured when blueprint generation starts. */
 export interface BlueprintGenerationProviderSnapshot {
   provider_kind: string;
   provider_type?: string | null;
@@ -655,21 +608,18 @@ export interface BlueprintGenerationProviderSnapshot {
   credential_binding_version?: string | null;
 }
 
-/** Stored identifier and version of a generated blueprint artifact. */
 export interface BlueprintGenerationArtifact {
   artifact_id: string;
   logical_id: string;
   version: number;
 }
 
-/** Generation failure code, safe message, and retry availability. */
 export interface BlueprintGenerationFailure {
   code: string;
   message: string;
   retryable: boolean;
 }
 
-/** Pollable lifecycle, provider snapshot, and URLs for an asynchronous generation job. */
 export interface BlueprintGenerationJob {
   job_id: string;
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
@@ -688,7 +638,6 @@ export interface BlueprintGenerationJob {
   ai_execution_context?: AiExecutionContext | null;
 }
 
-/** Completed blueprint generation payload and any generated workflow text. */
 export interface GenerateBlueprintResponse {
   job_id: string;
   artifact_id: string;
@@ -699,7 +648,6 @@ export interface GenerateBlueprintResponse {
   warnings: string[];
 }
 
-/** Suggested blueprint and the evidence summary used to choose it. */
 export interface SuggestBlueprintResponse {
   recommended_blueprint?: Blueprint | null;
   rationale?: string | null;
@@ -708,7 +656,6 @@ export interface SuggestBlueprintResponse {
   fallback: boolean;
 }
 
-/** Project creation payload, including optional repository and blueprint setup. */
 export interface CreateProjectRequest {
   name: string;
   origin: ProjectOrigin;
@@ -722,7 +669,6 @@ export interface CreateProjectRequest {
   generated_workflow_yaml?: string | null;
 }
 
-/** Optional project provider defaults and generation model settings. */
 export interface UpdateProjectProviderSettingsRequest {
   default_provider?: ModelSource;
   default_model_github_copilot?: string | null;
@@ -732,21 +678,18 @@ export interface UpdateProjectProviderSettingsRequest {
   outcome_spec_generation_model?: string | null;
 }
 
-/** Preview policy values that can be changed for a project. */
 export interface UpdateProjectPreviewSettingsRequest {
   approval_timeout_minutes: number;
   lifetime_minutes: number;
   dns_convergence_timeout_seconds: number;
 }
 
-/** Effective preview policy returned after a project update. */
 export interface ProjectPreviewSettingsResponse {
   approval_timeout_minutes: number;
   lifetime_minutes: number;
   dns_convergence_timeout_seconds: number;
 }
 
-/** Task and optional model or base branch used to start a project run. */
 export interface CreateProjectRunRequest {
   task: string;
   model_source?: ModelSource;
@@ -754,7 +697,6 @@ export interface CreateProjectRunRequest {
   base_branch?: string;
 }
 
-/** Compact project run record for run history lists. */
 export interface ProjectRunSummary {
   run_id: string;
   status: string;
@@ -765,7 +707,6 @@ export interface ProjectRunSummary {
   ended_at: string | null;
 }
 
-/** Workflow execution entry, with optional coordinator lifecycle metadata. */
 export interface WorkflowRunDto {
   workflow_run_id: string;
   execution_id: string;
@@ -807,7 +748,6 @@ export interface PagedRequestOptions {
   signal?: AbortSignal;
 }
 
-/** Decision record stored for an agent in the project knowledge system. */
 export interface DecisionDto {
   id: string;
   agent_name: string;
@@ -825,7 +765,6 @@ export interface DecisionDto {
   updated_at: string;
 }
 
-/** Proposal inbox entry awaiting review or disposition. */
 export interface DecisionInboxEntryDto {
   id: string;
   agent_name: string;
@@ -839,7 +778,6 @@ export interface DecisionInboxEntryDto {
   updated_at: string;
 }
 
-/** Addressed inter-agent message and its delivery lifecycle. */
 export interface AddressedMessageDto {
   id: string;
   projectId: string;
@@ -861,7 +799,6 @@ export interface AddressedMessageDto {
   failureReason: string | null;
 }
 
-/** Current agent-memory record, including trust and revision metadata. */
 export interface AgentMemoryDto {
   id: string;
   agent_name: string;
@@ -878,7 +815,6 @@ export interface AgentMemoryDto {
   updated_at: string;
 }
 
-/** Immutable historical version of an agent-memory record. */
 export interface AgentMemoryRevisionDto {
   revision_id: string;
   memory_id: number;
@@ -899,7 +835,6 @@ export interface AgentMemoryRevisionDto {
   created_at: string;
 }
 
-/** Immutable historical version of a decision record. */
 export interface DecisionRevisionDto {
   revision_id: string;
   decision_id: number;
@@ -921,7 +856,6 @@ export interface DecisionRevisionDto {
   created_at: string;
 }
 
-/** Saved summary and serialized state for one agent session. */
 export interface SessionHistoryDto {
   id: string;
   session_id: string;
@@ -933,7 +867,6 @@ export interface SessionHistoryDto {
   ended_at?: string | null;
 }
 
-/** Compact run record used by project history and activity surfaces. */
 export interface RunDto {
   run_id: string;
   status: string;
@@ -954,18 +887,14 @@ export interface RunDto {
 // lists. The client renders it as-is; node ids equal the logical
 // step keys already used by the status reducer (agent/rai/review/merge/scribe/assemble-ready).
 
-/** Distinguishes a coordinator node backed by a run from a planned task node. */
 export type GraphNodeKind = 'live' | 'planned';
-/** Relationship cardinality used when rendering graph edges. */
 export type GraphEdgeCardinality = 'direct' | 'fanout' | 'fanin';
-/** Graph projection tailored to a full run, child run, or coordinator view. */
 export type GraphVariant = 'full' | 'child' | 'coordinator';
 
 // node_type — self-declared structural category separate from `role` and `kind`.
 // Drives card shape and size in the generic renderer.
 export type GraphNodeType = 'agent' | 'action' | 'gate' | 'terminal' | 'subtask';
 
-/** Node in the coordinator graph, with either live-run or planned-task identity. */
 export interface GraphNode {
   id: string;              // logical step key; also the status reducer lookup key
   label: string;           // display label shown on the card
@@ -986,7 +915,6 @@ export interface GraphNode {
   data?: Record<string, unknown>;
 }
 
-/** Dependency edge connecting two coordinator graph nodes. */
 export interface GraphEdge {
   from: string;
   to: string;
@@ -994,7 +922,6 @@ export interface GraphEdge {
   loopback: boolean;       // true = back-edge excluded from dagre input, drawn as loopback arc
 }
 
-/** Server-authored workflow graph with node and dependency descriptors. */
 export interface GraphDescriptor {
   graph_id: string;
   variant: GraphVariant;
@@ -1003,7 +930,6 @@ export interface GraphDescriptor {
   edges: GraphEdge[];
 }
 
-/** Signed-in browser session summary returned by the API. */
 export interface AuthSessionResponse {
   authenticated: boolean;
   auth_mode: AuthMode;
@@ -1016,7 +942,6 @@ export interface AuthSessionResponse {
   ai_configured: boolean;
 }
 
-/** Entra settings needed to construct the administration link. */
 export interface AuthConfigResponse {
   mode: 'Entra';
   entra: {
@@ -1027,10 +952,8 @@ export interface AuthConfigResponse {
   } | null;
 }
 
-/** Supported BYOK provider families. */
 export type ByokProviderType = 'openai' | 'azure' | 'anthropic';
 
-/** Stored BYOK endpoint configuration with redacted key-presence metadata. */
 export interface ByokProviderConfig {
   id: string;
   name: string;
@@ -1044,13 +967,11 @@ export interface ByokProviderConfig {
   is_active: boolean;
 }
 
-/** User or platform BYOK provider choices and current active provider. */
 export interface ByokProviderListResponse {
   active_provider_id: string | null;
   providers: ByokProviderConfig[];
 }
 
-/** BYOK provider input; an omitted key on edit preserves the saved secret. */
 export interface ByokProviderRequest {
   name: string;
   type: ByokProviderType;
@@ -1063,7 +984,6 @@ export interface ByokProviderRequest {
   azure_api_version?: string | null;
 }
 
-/** Effective AI source and per-user/platform connection state. */
 export interface UserAiAccessStatus {
   effective_source: 'platform_byok' | 'user_byok' | 'user_github_copilot' | 'none';
   platform_byok: Pick<ByokProviderConfig, 'name' | 'type' | 'model'> | null;
@@ -1076,7 +996,6 @@ export interface UserAiAccessStatus {
   };
 }
 
-/** GitHub repository shown as available to connect to a project. */
 export interface GitHubRepositorySelectionCandidate {
   full_name: string;
   owner_login: string;
@@ -1085,7 +1004,6 @@ export interface GitHubRepositorySelectionCandidate {
   pushed_at: string | null;
 }
 
-/** GitHub App installation and repository-selection policy. */
 export interface GitHubRepositoryInstallation {
   account_login: string;
   account_type: 'user' | 'organization';
@@ -1093,13 +1011,11 @@ export interface GitHubRepositoryInstallation {
   management_url: string;
 }
 
-/** Available repositories and installations for project repository selection. */
 export interface GitHubRepositorySelectionListResponse {
   repositories: GitHubRepositorySelectionCandidate[];
   installations: GitHubRepositoryInstallation[];
 }
 
-/** Short-lived server code used to bind a selected repository to a project. */
 export interface GitHubRepositorySelectionCodeResponse {
   selection_code: string;
   expires_at: string;
@@ -1112,25 +1028,21 @@ export interface RepositoryOwner {
   type: 'user' | 'org';
 }
 
-/** Optional repository name and visibility when creating a project repository. */
 export interface CreateProjectRepositoryRequest {
   owner: string;
   name?: string;
   private?: boolean;
 }
 
-/** Expiring selection code required to connect a repository to a project. */
 export interface ConnectProjectRepositoryRequest {
   repository_selection_code: string;
 }
 
-/** GitHub repository attached to a project, including its default branch. */
 export interface ConnectedRepository {
   source_repository: string;
   html_url: string;
 }
 
-/** Project role assignment returned for a principal. */
 export interface ProjectRoleAssignment {
   assignment_id: string;
   principal_id: string;
@@ -1140,7 +1052,6 @@ export interface ProjectRoleAssignment {
   scope: string;
 }
 
-/** Principal, role, and optional display metadata for a project role grant. */
 export interface CreateProjectRoleAssignmentRequest {
   principal_id: string;
   role: string;
@@ -1148,7 +1059,6 @@ export interface CreateProjectRoleAssignmentRequest {
   email?: string | null;
 }
 
-/** Effective authentication and project-role permissions visible to the current user. */
 export interface ProjectAccessOverview {
   auth_mode: AuthMode;
   platform_roles: string[];
@@ -1165,7 +1075,6 @@ export interface ProjectAccessOverview {
   effective_github_login?: string | null;
 }
 
-/** Readiness split across interactive AI, unattended AI, and repository access. */
 export interface UnattendedReadiness {
   status: 'interactive_ready' | 'unattended_ready' | 'repository_ready' | 'reauthorization_required' | 'unavailable';
   reason_code: string;
@@ -1214,13 +1123,11 @@ export interface ProjectCopilotConnection {
   byok_configured?: boolean;
 }
 
-/** Deployment-wide Copilot connection state exposed to authorized administrators. */
 export interface PlatformDefaultCopilotConnection {
   connected: boolean;
   github_login: string | null;
 }
 
-/** Redacted connection state for repository access through the GitHub App. */
 export interface RepoAppConnectionStatus {
   connected: boolean;
   github_login: string | null;
@@ -1229,7 +1136,6 @@ export interface RepoAppConnectionStatus {
 
 // --- Casting / Team types ---
 
-/** Named casting template with roles that can be proposed for a project. */
 export interface TeamTemplateDto {
   id: string;
   title: string;
@@ -1237,7 +1143,6 @@ export interface TeamTemplateDto {
   roles: RoleDto[];
 }
 
-/** Role definition and its default model used by casting. */
 export interface RoleDto {
   id: string;
   title: string;
@@ -1245,7 +1150,6 @@ export interface RoleDto {
   default_model: string;
 }
 
-/** One proposed project team member and the rationale for the suggestion. */
 export interface ProposedMemberDto {
   proposed_name: string;
   role: RoleDto;
@@ -1255,7 +1159,6 @@ export interface ProposedMemberDto {
   justification: string | null;
 }
 
-/** Draft cast proposal before the project team is changed. */
 export interface CastProposalDto {
   proposal_id: string;
   mode: 'scenario' | 'free_text' | 'analysis' | 'manual';
@@ -1268,7 +1171,6 @@ export interface CastProposalDto {
   ai_execution_context?: AiExecutionContext | null;
 }
 
-/** Inputs used to generate a cast proposal from a goal, template, or roles. */
 export interface CreateProposalRequest {
   mode: 'scenario' | 'free_text' | 'analysis' | 'manual';
   template_id?: string;
@@ -1279,18 +1181,15 @@ export interface CreateProposalRequest {
   team_size?: number;
 }
 
-/** Optional revised members or universe for an existing cast proposal. */
 export interface AmendProposalRequest {
   members?: ProposedMemberDto[];
   universe?: string;
 }
 
-/** Intent selecting whether a confirmed cast creates, augments, or recasts the team. */
 export interface ConfirmProposalRequest {
   intent?: 'new' | 'augment' | 'recast';
 }
 
-/** Current or retired team member and its charter location. */
 export interface TeamMemberDto {
   name: string;
   role_title: string;
@@ -1303,13 +1202,11 @@ export interface TeamMemberDto {
   charter_updated_at?: string | null;
 }
 
-/** Saved session history content for one team member. */
 export interface HistoryDto {
   member_name: string;
   content: string;
 }
 
-/** Project team roster, retired members, and migration state. */
 export interface TeamDto {
   project_name: string;
   universe: string;
@@ -1319,51 +1216,43 @@ export interface TeamDto {
   migration_available: boolean;
 }
 
-/** Markdown charter for one named team member. */
 export interface CharterDto {
   member_name: string;
   content: string;
 }
 
-/** Role and optional model used to add a team member. */
 export interface AddMemberRequest {
   role_id: string;
   custom_role_title?: string;
   model_id?: string;
 }
 
-/** Replacement role and optional custom title for an existing team member. */
 export interface ReroleRequest {
   new_role_id: string;
   custom_role_title?: string;
 }
 
-/** One repository synchronization change and its operation. */
 export interface SyncChangeDto {
   path: string;
   kind: 'added' | 'modified' | 'removed';
 }
 
-/** Current repository synchronization preview and its stable change-set hash. */
 export interface SyncStatusDto {
   changes: SyncChangeDto[];
   change_set_hash: string;
   nothing_to_sync: boolean;
 }
 
-/** Commit request pinned to the change set last previewed by the caller. */
 export interface SyncCommitRequest {
   expected_change_set_hash: string;
   message?: string;
 }
 
-/** Commit identifier returned after repository synchronization. */
 export interface SyncCommitResponseDto {
   commit_id: string;
 }
 
 // Feature 008 — Squad Coordinator Agent (orchestration / outcome spec)
-/** Coordinator outcome-spec lifecycle before decomposition and execution. */
 export type OutcomeSpecStatus = 'drafting' | 'awaiting_confirmation' | 'confirmed' | 'declined';
 
 // Server-authored outcome spec. Scope/assumptions/clarifyingQuestions may arrive
@@ -1380,10 +1269,8 @@ export interface OutcomeSpec {
   allowTaskPromotion?: boolean;
 }
 
-/** Whether a new orchestration first confirms an outcome or starts directly. */
 export type StartOrchestrationMode = 'define_outcome' | 'direct';
 
-/** Goal and optional live tool-approval controls for a new orchestration. */
 export interface StartOrchestrationRequest {
   goal: string;
   start_mode?: StartOrchestrationMode;
@@ -1391,34 +1278,28 @@ export interface StartOrchestrationRequest {
   autopilot?: boolean;
 }
 
-/** Tool auto-approval and question autopilot switches for a run. */
 export interface RunApprovalPolicy {
   auto_approve_tools: boolean;
   autopilot: boolean;
 }
 
-/** Coordinator run identifier returned after orchestration starts. */
 export interface StartOrchestrationResponse {
   runId: string;
 }
 
-/** Typed conflict response when a project has no team to execute the request. */
 export interface NoTeamStartOrchestrationError {
   error: 'no_team';
   message: string;
 }
 
-/** RAI verdict labels emitted while checking coordinator work. */
 export type RaiVerdictToken = 'green' | 'yellow' | 'red' | 'revise';
 
-/** Verdict payload associated with a run and optional rationale. */
 export interface RaiVerdictEventPayload {
   verdict: RaiVerdictToken;
   runId?: string;
   rationale?: string;
 }
 
-/** Operator feedback used to revise a drafted outcome specification. */
 export interface ReviseOutcomeSpecRequest {
   feedback: string;
 }
@@ -1427,7 +1308,6 @@ export interface ReviseOutcomeSpecRequest {
 // All of these mirror server event contracts. The client renders them as-is
 // (Principle III — thin client, no topology computation).
 
-/** Lifecycle labels emitted for a coordinator subtask. */
 export type SubtaskStatus =
   | 'pending'
   | 'dispatched'
@@ -1441,7 +1321,6 @@ export type SubtaskStatus =
   | 'pending_capacity';
 
 // coordinator.work_plan event payload.
-/** Subtask proposal included in a coordinator's server-authored work plan. */
 export interface WorkPlanSubtask {
   id: string | number;
   title: string;
@@ -1452,7 +1331,6 @@ export interface WorkPlanSubtask {
   dependsOn?: number[];
 }
 
-/** Coordinator work-plan event payload used to seed the topology view. */
 export interface CoordinatorWorkPlan {
   workPlanId: string;
   status: string;
@@ -1460,7 +1338,6 @@ export interface CoordinatorWorkPlan {
   subtasks: WorkPlanSubtask[];
 }
 
-/** Node roles in the server-authored coordinator topology. */
 export type TopologyNodeKind = 'coordinator' | 'subtask';
 
 // A node in the coordinator.topology graph (snapshot node or delta-changed node).
@@ -1526,13 +1403,11 @@ export interface WorkPlanSubtaskResponse {
   workflowBranchOrdinal?: number;
 }
 
-/** Dependency edge where one planned subtask must finish before another starts. */
 export interface WorkPlanDependencyResponse {
   subtaskId: number;
   dependsOnSubtaskId: number;
 }
 
-/** Persisted coordinator work plan and any parent workflow or assembly result. */
 export interface WorkPlanResponse {
   workPlanId: number;
   coordinatorRunId: string;
@@ -1560,7 +1435,6 @@ export interface WorkPlanResponse {
 }
 
 // GET /api/runs/{coordinatorRunId}/children — dispatched child runs paired with subtask status.
-/** Child execution paired with the work-plan subtask and current workflow branch. */
 export interface CoordinatorChildResponse {
   subtaskId: number;
   childRunId: string;
@@ -1579,7 +1453,6 @@ export interface CoordinatorChildResponse {
   parentJoinNodeId?: string | null;
 }
 
-/** Operator action applied to a coordinator or one of its child runs. */
 export type SteerKind = 'send' | 'redirect' | 'amend' | 'stop';
 
 // POST /api/runs/{coordinatorRunId}/steer body.
@@ -1622,7 +1495,6 @@ export interface CreateAssistantRunRequest {
   resume_from_run_id?: string | null;
 }
 
-/** Identifier and initial state returned when an operator-assistant run is created. */
 export interface CreateAssistantRunResponse {
   /** Run id — bind to the run-stream (SSE) transcript. */
   run_id: string;
@@ -1635,12 +1507,10 @@ export interface CreateAssistantRunResponse {
   effective_model_provider?: EffectiveModelProvider | null;
 }
 
-/** User message posted to an existing operator assistant run. */
 export interface SendAssistantMessageRequest {
   message: string;
 }
 
-/** Assistant response to a posted message and any tools invoked for the turn. */
 export interface SendAssistantMessageResponse {
   run_id: string;
   /** Always "assistant" from the backend. */
@@ -1661,13 +1531,11 @@ export interface AssistantRunSummary {
   created_at: string;
 }
 
-/** Newest-first operator assistant run list returned to the caller. */
 export interface ListAssistantRunsResponse {
   runs: AssistantRunSummary[];
 }
 
 // coordinator.steering event payload — steering directive state surfaced on a node.
-/** Server steering directive projected onto a coordinator topology node. */
 export interface SteeringDirective {
   directiveId: string;
   kind: SteerKind;
@@ -1680,7 +1548,6 @@ export interface SteeringDirective {
 export type AssemblyReviewDecision = 'approve' | 'request_changes' | 'decline';
 
 // POST /api/runs/{coordinatorRunId}/assembly/review body — backend contract.
-/** Human decision and optional targeted feedback for collective assembly review. */
 export interface AssemblyReviewRequest {
   approved: boolean;
   request_changes?: boolean;
@@ -1688,7 +1555,6 @@ export interface AssemblyReviewRequest {
   target_files?: string[];
 }
 
-/** Review gate response indicating acceptance or a deferred transition. */
 export interface AssemblyReviewResponse {
   runId: string;
   accepted: boolean;
@@ -1711,7 +1577,6 @@ export interface AutoApproveResponse {
   auto_approve_tools: boolean;
 }
 
-/** Current per-run autopilot setting after a live toggle. */
 export interface AutopilotResponse {
   run_id: string;
   autopilot: boolean;
@@ -1753,7 +1618,6 @@ export interface BacklogTaskDto {
   blocking_dependencies?: BlockingDependencyDto[];
 }
 
-/** One prerequisite task and the run state currently blocking its dependent task. */
 export interface BlockingDependencyDto {
   task_id: string;
   title: string;
@@ -1763,7 +1627,6 @@ export interface BlockingDependencyDto {
   is_satisfied?: boolean;
 }
 
-/** Snapshot of prerequisite output and revision pinned when a task was claimed. */
 export interface BacklogClaimedPrerequisite {
   TaskId: string;
   RunId: string;
@@ -1774,7 +1637,6 @@ export interface BacklogClaimedPrerequisite {
   ExecutableWorkflowContentDigest: string | null;
 }
 
-/** Dependency graph update result, including the revision and changed task IDs. */
 export interface BacklogDependenciesResponse {
   revision: number;
   prerequisites: string[];
@@ -1829,7 +1691,6 @@ export interface RunCardDto {
   total_nano_aiu?: number | null;
 }
 
-/** Discriminated task or run card returned by the project board. */
 export type BoardCardDto = TaskCardDto | RunCardDto;
 
 // A board column with its cards. Columns are server-ordered; the Web never
@@ -1854,7 +1715,6 @@ export interface AgentOrchestrationQueueDto {
   sample_titles: string[];   // up to 3 subtask titles for THIS orchestration
 }
 
-/** Per-agent active, queued, blocked, and completed work across orchestrations. */
 export interface AgentQueueDto {
   agent_name:    string;
   active:        number;
@@ -1867,7 +1727,6 @@ export interface AgentQueueDto {
 }
 
 // Response body for GET /api/projects/{projectId}/board.
-/** Server-ordered project board columns and optional agent activity summary. */
 export interface BoardDto {
   project_id: string;
   workflow_stages_available: boolean;
@@ -1883,7 +1742,6 @@ export interface BacklogSettingsDto {
 }
 
 // A single workflow-stage column descriptor.
-/** Workflow column identifier and label returned by the project API. */
 export interface WorkflowStageDto {
   id: string;
   label: string;
@@ -1896,14 +1754,12 @@ export interface WorkflowStagesResponse {
 }
 
 // GET /api/system/runtime — Kubernetes execution context for the running API pod.
-/** Whether the API is running in Kubernetes and its optional pod name. */
 export interface RuntimeInfo {
   kubernetes: boolean;
   podName: string | null;
 }
 
 // A single executed diagnostic probe with its outcome (FR-016). snake_case wire.
-/** Result of one system or project diagnostic check. */
 export interface DiagnosticsCheckDto {
   name: string;
   status: string; // "pass" | "warn" | "fail"
@@ -1944,7 +1800,6 @@ export interface DetailedHealthCheckDto {
   pendingCount?: number | null;
 }
 
-/** Kubernetes agent-host pod and its optional ownership details. */
 export interface AgentPodInfoDto {
   claim_name: string;
   run_id?: string | null;
@@ -1954,7 +1809,6 @@ export interface AgentPodInfoDto {
   details?: TopologyResourceDetailsDto | null;
 }
 
-/** Coordinator child waiting for execution capacity. */
 export interface PendingCapacityRunDto {
   subtask_id: number;
   work_plan_id: number;
@@ -1964,7 +1818,6 @@ export interface PendingCapacityRunDto {
   age_seconds: number;
 }
 
-/** Desired and observed state for a warm sandbox pool. */
 export interface WarmPoolStatusDto {
   name: string;
   desired_replicas: number;
@@ -1976,7 +1829,6 @@ export interface WarmPoolStatusDto {
   details?: TopologyResourceDetailsDto | null;
 }
 
-/** One reusable warm-pool sandbox and its current claim, if any. */
 export interface WarmPoolInstanceDto {
   name: string;
   status: string; // 'available' | 'claimed' | 'warming'
@@ -1988,7 +1840,6 @@ export interface WarmPoolInstanceDto {
   details?: TopologyResourceDetailsDto | null;
 }
 
-/** Sandbox claim lifecycle with its bound run and warm-pool references. */
 export interface SandboxClaimObjectDto {
   name: string;
   phase: string; // 'bound' | 'pending' | 'unknown'
@@ -2000,7 +1851,6 @@ export interface SandboxClaimObjectDto {
   details?: TopologyResourceDetailsDto | null;
 }
 
-/** Shared ownership, capacity, runtime, and navigation data for a cluster resource. */
 export interface TopologyResourceDetailsDto {
   resource_id: string;
   resource_type: 'cluster' | 'warm_pool' | 'warm_instance' | 'sandbox_claim' | 'agent_host_pod';
@@ -2016,7 +1866,6 @@ export interface TopologyResourceDetailsDto {
   deep_links?: TopologyResourceDeepLinksDto | null;
 }
 
-/** Run and project identities associated with a cluster resource. */
 export interface TopologyResourceOwnershipDto {
   run_id?: string | null;
   project_id?: string | null;
@@ -2027,7 +1876,6 @@ export interface TopologyResourceOwnershipDto {
   run_ended_utc?: string | null;
 }
 
-/** Desired, available, and used capacity values for a cluster resource. */
 export interface TopologyResourceCapacityDto {
   desired?: number | null;
   ready?: number | null;
@@ -2038,7 +1886,6 @@ export interface TopologyResourceCapacityDto {
   unit?: string | null;
 }
 
-/** Runtime placement and image metadata for a topology resource. */
 export interface TopologyResourceRuntimeDto {
   pod_name?: string | null;
   node_name?: string | null;
@@ -2046,7 +1893,6 @@ export interface TopologyResourceRuntimeDto {
   runtime_class?: string | null;
 }
 
-/** Resource identifiers needed to open related project, run, or pod views. */
 export interface TopologyResourceDeepLinksDto {
   project_id?: string | null;
   run_id?: string | null;
@@ -2055,7 +1901,6 @@ export interface TopologyResourceDeepLinksDto {
   pod_name?: string | null;
 }
 
-/** Cluster checks and inventory for agent pods, warm pools, and sandbox claims. */
 export interface ClusterDiagnosticsDto {
   generated_utc: string;
   total_duration_ms: number;
@@ -2069,7 +1914,6 @@ export interface ClusterDiagnosticsDto {
   details?: TopologyResourceDetailsDto | null;
 }
 
-/** Completeness and outcome of one requested Kubernetes inventory collection. */
 export interface InventoryCollectionStatusDto {
   name: string;
   outcome: 'available' | 'no_resources' | 'forbidden' | 'timeout' | 'unsupported' | 'malformed' | 'collection_error';
@@ -2078,7 +1922,6 @@ export interface InventoryCollectionStatusDto {
   detail: string;
 }
 
-/** Layer names supported by the Kubernetes topology diagnostics endpoint. */
 export type KubernetesTopologyLayer =
   | 'runtime'
   | 'networking'
@@ -2087,7 +1930,6 @@ export type KubernetesTopologyLayer =
   | 'autoscaling'
   | 'availability';
 
-/** Per-layer availability and resource count for a topology response. */
 export interface KubernetesTopologyLayerDto {
   name: KubernetesTopologyLayer;
   status: 'available' | 'partial' | 'unavailable' | 'not_requested';
@@ -2095,7 +1937,6 @@ export interface KubernetesTopologyLayerDto {
   message: string;
 }
 
-/** Kubernetes resource node with health summary and display details. */
 export interface KubernetesTopologyNodeDto {
   id: string;
   layer: KubernetesTopologyLayer;
@@ -2108,7 +1949,6 @@ export interface KubernetesTopologyNodeDto {
   details: Record<string, string>;
 }
 
-/** Relationship between topology resources, including inferred links. */
 export interface KubernetesTopologyEdgeDto {
   id: string;
   source: string;
@@ -2118,7 +1958,6 @@ export interface KubernetesTopologyEdgeDto {
   summary: string;
 }
 
-/** Bounded Kubernetes topology snapshot across the requested layers. */
 export interface KubernetesTopologyDto {
   generated_utc: string;
   namespace: string;
@@ -2189,7 +2028,6 @@ export interface WorkflowYamlResponse {
   yaml: string;
 }
 
-/** Server grammar contract that drives workflow editor validation and choices. */
 export interface WorkflowGrammar {
   grammar_version: string;
   format: 'yaml';
@@ -2243,7 +2081,6 @@ export interface WorkflowGrammar {
 }
 
 // A workflow in the project's list response: identity, validation.
-/** Workflow row including source, validity, default status, and trigger summary. */
 export interface WorkflowSummaryDto {
   id: string | null;
   name: string | null;
@@ -2258,7 +2095,6 @@ export interface WorkflowSummaryDto {
   triggers?: WorkflowTriggerDto[];
 }
 
-/** Schedule or event trigger summary attached to a workflow. */
 export interface WorkflowTriggerDto {
   type: 'schedule' | 'event';
   interval?: 'daily' | 'weekly' | 'monthly' | null;
@@ -2283,7 +2119,6 @@ export interface WorkflowOverrideResponse {
 }
 
 // A node in a workflow detail response.
-/** Typed workflow node and its optional runtime-specific fields. */
 export interface WorkflowNodeDto {
   id: string;
   type: string;
@@ -2301,7 +2136,6 @@ export interface WorkflowNodeDto {
 }
 
 // An edge in a workflow detail response.
-/** Directed transition between workflow nodes, optionally guarded by a condition. */
 export interface WorkflowEdgeDto {
   from: string;
   to: string;
@@ -2309,7 +2143,6 @@ export interface WorkflowEdgeDto {
 }
 
 // Full definition for GET a single workflow.
-/** Complete workflow definition returned for viewing or editing. */
 export interface WorkflowDetailDto {
   id: string;
   name: string;
@@ -2333,8 +2166,6 @@ export interface WorkflowGraphNodeDto {
   kind: 'planned';
   node_type?: GraphNodeType;
 }
-
-/** Planned edge in the rendered workflow graph. */
 export interface WorkflowGraphEdgeDto {
   from: string;
   to: string;
@@ -2342,8 +2173,6 @@ export interface WorkflowGraphEdgeDto {
   loopback: boolean;
   label?: string | null;
 }
-
-/** Graph descriptor for drawing a stored workflow definition. */
 export interface WorkflowGraphDto {
   graph_id: string;
   variant: string;
@@ -2403,33 +2232,28 @@ export interface ProjectMetricsDto {
   aiCreditUsageTrend?: AiCreditUsagePointDto[];
 }
 
-/** Daily invocation count in the project metrics series. */
 export interface DailyInvocationPointDto {
   date: string;
   count: number;
 }
 
-/** Daily AI-credit usage in nano-AIU units. */
 export interface AiCreditUsagePointDto {
   date: string;
   totalNanoAiu: number;
 }
 
-/** Invocation count and credit amount attributed to one model. */
 export interface ModelUsageBreakdownDto {
   model: string;
   invocationCount: number;
   totalNanoAiu: number;
 }
 
-/** Latency percentile pair for one named metric period. */
 export interface MetricPercentilesDto {
   label: string;
   p50Ms?: number | null;
   p95Ms?: number | null;
 }
 
-/** Invocation, token, and credit totals attributed to one agent. */
 export interface AgentUsageBreakdownDto {
   agentName: string;
   invocationCount: number;
@@ -2437,7 +2261,6 @@ export interface AgentUsageBreakdownDto {
   totalNanoAiu: number;
 }
 
-/** Run-level token and credit totals plus agent breakdown. */
 export interface RunAgentTokenBreakdownDto {
   runId: string;
   source: string;
@@ -2447,7 +2270,6 @@ export interface RunAgentTokenBreakdownDto {
   breakdown: AgentUsageBreakdownDto[];
 }
 
-/** One trace span with timing, tool/model identity, and projected attributes. */
 export interface RunTraceSpanDto {
   id: string;
   parentId?: string | null;
@@ -2519,7 +2341,6 @@ export interface ExecutionDiagnosticsDto {
   hostProcessPeakWorkingSetBytes?: number | null;
 }
 
-/** One run trace page with an optional cursor for subsequent spans. */
 export interface RunTraceDto {
   runId: string;
   spans: RunTraceSpanDto[];
@@ -2605,7 +2426,6 @@ export interface NotificationDto {
   cta_path: string | null;
 }
 
-/** Notification center timestamp and the current user's pending review requests. */
 export interface NotificationsResponseDto {
   generated_utc: string;
   notifications: NotificationDto[];
@@ -2621,7 +2441,6 @@ export interface WorkspaceFileNode {
 }
 
 // A single backlog item proposed by the decomposition agent.
-/** Candidate backlog item produced by spec decomposition. */
 export interface ProposedBacklogItem {
   title: string;
   description?: string;
@@ -2654,12 +2473,9 @@ export interface PortForwardSessionDto {
 }
 
 // ── Issues #51/#56 — Per-project skill catalog + agent assignments ───────────
-/** Source that supplied a skill to the project. */
 export type SkillProvenance = 'built-in' | 'repo-import' | 'file-upload' | 'manual' | 'connected-repo-sync' | 'marketplace';
-/** Availability of a skill's stored definition and resources. */
 export type SkillStatus = 'active' | 'missing' | 'malformed';
 
-/** Narrows an unknown value to one of the supported skill provenance labels. */
 export function isSkillProvenance(value: unknown): value is SkillProvenance {
   return value === 'built-in'
     || value === 'repo-import'
@@ -2670,7 +2486,6 @@ export function isSkillProvenance(value: unknown): value is SkillProvenance {
 }
 
 // GET /api/projects/{id}/skills — one row per catalog skill (with assignments).
-/** Skill catalog row with provenance, content digest, and assigned agents. */
 export interface SkillDto {
   id: string;
   name: string;
@@ -2687,14 +2502,12 @@ export interface SkillDto {
   updated_at: string;
 }
 
-/** Relative resource path and text content included with a skill. */
 export interface SkillResourceDto {
   relative_path: string;
   content: string;
 }
 
 // GET /api/projects/{id}/skills/{skillId} — full skill incl. instructions + resources.
-/** Full skill definition with instructions and associated resources. */
 export interface SkillDetailDto {
   id: string;
   name: string;
@@ -2712,7 +2525,6 @@ export interface SkillDetailDto {
 }
 
 // A skill discovered in a repo during import preview (before it is imported).
-/** Candidate found during import preview, including validation failures. */
 export interface SkillCandidateDto {
   location: string;
   name?: string | null;
@@ -2722,12 +2534,10 @@ export interface SkillCandidateDto {
   errors: string[];
 }
 
-/** Discovered skill candidates returned before an import is confirmed. */
 export interface SkillImportPreviewResponse {
   candidates: SkillCandidateDto[];
 }
 
-/** Configured skill marketplace source and its import parsing options. */
 export interface SkillMarketplaceDto {
   name: string;
   repository: string;
@@ -2740,8 +2550,6 @@ export interface SkillMarketplaceDto {
   // true = a user-added URL source for this project; false/absent = a built-in config source.
   project_source?: boolean;
 }
-
-/** One marketplace result page and optional AI generation context. */
 export interface SkillMarketplaceBrowseResponse { marketplace: string; candidates: SkillCandidateDto[]; total: number; page: number; page_size: number; has_more: boolean; ai_execution_context?: AiExecutionContext | null; }
 
 // POST /api/projects/{id}/skill-marketplaces/sources — add a marketplace source by GitHub URL or owner/repo.
@@ -2753,7 +2561,6 @@ export interface AddSkillMarketplaceSourceRequest {
   parseStrategy?: 'auto' | 'skillmd' | 'llm';
 }
 
-/** Owner-supplied fields used to create a project skill. */
 export interface CreateSkillRequest {
   name: string;
   displayName?: string;
@@ -2761,7 +2568,6 @@ export interface CreateSkillRequest {
   instructions: string;
 }
 
-/** Generated skill content before it is accepted into the project catalog. */
 export interface GeneratedSkillDraft {
   name: string;
   display_name?: string | null;
@@ -2798,7 +2604,6 @@ export interface SkillAssignmentDto {
 // concurrency token and must be returned unchanged by the apply request.
 export type BlueprintSkillDefaultAction = 'create' | 'reactivate' | 'assign' | 'blocked';
 
-/** Action preview for one blueprint skill default and its target cast role. */
 export interface BlueprintSkillDefaultAssignmentDto {
   role_id: string;
   agent_name: string;
@@ -2822,7 +2627,6 @@ export interface ApplyBlueprintSkillDefaultsRequest {
   digest: string;
 }
 
-/** Result of applying blueprint defaults, including stale and invalid outcomes. */
 export interface ApplyBlueprintSkillDefaultsResponse {
   outcome: 'applied' | 'stale' | 'invalid';
   errors: string[];

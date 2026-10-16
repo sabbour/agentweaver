@@ -5,13 +5,8 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.AgentRuntime;
 
-/// <summary>Describes which authenticated source is used to recreate a native SDK session.</summary>
 public enum RuntimeSessionRecoveryMode { Fresh, NativeCache, JournalRebuild }
 
-/// <summary>
-/// Recovery input for one authenticated session: a compatible native cache or ordered turn
-/// history from the owner's journal, together with evidence used when committing recovery.
-/// </summary>
 internal sealed record RuntimeSessionRecovery(
     SessionIdentity Identity,
     string TenantId,
@@ -21,7 +16,6 @@ internal sealed record RuntimeSessionRecovery(
     internal RuntimeResumeJournalRebuildReceipt? JournalRebuild { get; init; }
     internal RuntimeSessionJournalEvidence? JournalEvidence { get; init; }
 
-    /// <summary>Checks all pinned session, tenant, selection, SDK, and model fields before cache reuse.</summary>
     internal bool CacheMatches(RuntimeRegistration registration, string sdkVersion, string runtimeVersion,
         string modelId, int? maxPromptTokens = null)
     {
@@ -37,10 +31,6 @@ internal sealed record RuntimeSessionRecovery(
             cached.ModelId == modelId && cached.MaxPromptTokens == maxPromptTokens;
     }
 
-    /// <summary>
-    /// Serializes journal turns as prior context, explicitly marking them as history rather
-    /// than permission to repeat effects; rejects content above the material-size limit.
-    /// </summary>
     internal string? RebuiltContext()
     {
         if (Turns.Count == 0)
@@ -54,10 +44,8 @@ internal sealed record RuntimeSessionRecovery(
     }
 }
 
-/// <summary>Hash evidence identifying the journal prefix used to rebuild a session.</summary>
 internal sealed record RuntimeSessionJournalEvidence(long ThroughPosition, string JournalSha256);
 
-/// <summary>Associates one journal event with any committed turn content and its verified hash.</summary>
 internal sealed record RuntimeSessionJournalHashEntry(
     SessionEventEnvelope Event,
     SessionMaterialAcknowledgment? TurnMaterial,

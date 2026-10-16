@@ -1,4 +1,3 @@
-/** Icon registry and rendering helpers for Fluent glyphs and locally hosted IconCloud assets. */
 import './tokens.css';
 import { mergeClasses } from '@fluentui/react-components';
 import { DocumentRegular } from '@fluentui/react-icons';
@@ -137,10 +136,8 @@ import type { CSSProperties, ReactElement, ReactNode } from 'react';
 // non-visual helper APIs for wiring icon data into AzureIconProvider; the visible
 // showcase representation is AzureIconProvider + AzureIcon.
 
-/** Supported square pixel sizes for AzureIcon output. */
 export type AzureIconSize = 12 | 16 | 18 | 20 | 24 | 28 | 32;
 
-/** Renderable icon content or asset metadata stored in an icon registry. */
 export interface AzureIconDefinition {
   element?: ReactElement;
   src?: string;
@@ -148,10 +145,8 @@ export interface AzureIconDefinition {
   className?: string;
 }
 
-/** Name-to-icon lookup provided to AzureIcon descendants. */
 export type AzureIconRegistry = Record<string, AzureIconDefinition | ReactElement>;
 
-/** One manifest entry describing an icon asset and optional catalog metadata. */
 export interface IconCloudManifestIcon {
   name: string;
   collection?: string;
@@ -161,33 +156,25 @@ export interface IconCloudManifestIcon {
   hash?: string;
 }
 
-/** Manifest container accepted by the registry builder. */
 export interface IconCloudManifest<TIcon extends IconCloudManifestIcon = IconCloudManifestIcon> {
   icons: readonly TIcon[];
 }
 
 const AzureIconRegistryContext = createContext<AzureIconRegistry>({});
 
-/** Props for making a registry available to AzureIcon components in a React subtree. */
 export interface AzureIconProviderProps {
   registry: AzureIconRegistry;
   children: ReactNode;
 }
 
-/** Supplies icon definitions to nested AzureIcon components through context. */
 export function AzureIconProvider({ registry, children }: AzureIconProviderProps) {
   return <AzureIconRegistryContext.Provider value={registry}>{children}</AzureIconRegistryContext.Provider>;
 }
 
-/** Reads the nearest icon registry, or the empty registry when no provider is mounted. */
 export function useAzureIconRegistry() {
   return useContext(AzureIconRegistryContext);
 }
 
-/**
- * Builds a typed icon registry from names and a shared asset path.
- * The generated source path follows `basePath/prefix/name.extension`.
- */
 export function createIconCloudRegistry<TName extends string>(
   iconNames: readonly TName[],
   options: { basePath: string; extension?: 'svg' | 'png' | 'webp'; prefix?: string },
@@ -204,24 +191,18 @@ export function createIconCloudRegistry<TName extends string>(
   ) as unknown as Record<TName, AzureIconDefinition>;
 }
 
-/** Path and filtering options for converting a manifest into icon definitions. */
 export interface CreateIconCloudRegistryFromManifestOptions<TIcon extends IconCloudManifestIcon = IconCloudManifestIcon> {
   basePath: string;
   filter?: (icon: TIcon) => boolean;
   getKey?: (icon: TIcon) => string;
 }
 
-/** Joins an asset path while normalizing separators from manifest file names. */
 function createAssetUrl(basePath: string, file: string) {
   const base = basePath.replace(/\/$/, '');
   const normalizedFile = file.replace(/\\/g, '/').replace(/^\/+/, '');
   return `${base}/${normalizedFile}`;
 }
 
-/**
- * Builds registry entries from either a manifest object or a list of icon records.
- * A custom key function can distinguish repeated icon names across categories.
- */
 export function createIconCloudRegistryFromManifest<TIcon extends IconCloudManifestIcon = IconCloudManifestIcon>(
   manifest: IconCloudManifest<TIcon> | readonly TIcon[],
   options: CreateIconCloudRegistryFromManifestOptions<TIcon>,
@@ -241,7 +222,6 @@ export function createIconCloudRegistryFromManifest<TIcon extends IconCloudManif
   );
 }
 
-/** Accessible or decorative icon inputs; a registry entry may provide the source and alt text. */
 export interface AzureIconProps {
   name?: string;
   icon?: ReactNode;
@@ -252,17 +232,12 @@ export interface AzureIconProps {
   className?: string;
 }
 
-/** Normalizes direct React elements and structured registry entries to one definition shape. */
 function resolveDefinition(definition: AzureIconDefinition | ReactElement | undefined): AzureIconDefinition | undefined {
   if (!definition) return undefined;
   if ('type' in definition && 'props' in definition) return { element: definition };
   return definition;
 }
 
-/**
- * Renders a direct icon, registered asset, or fallback document glyph at the requested size.
- * Without a label the icon is decorative by default; provide one to expose it as an image.
- */
 export function AzureIcon({ name, icon, src, label, size = 20, decorative = !label, className }: AzureIconProps) {
   const registry = useAzureIconRegistry();
   const definition = resolveDefinition(name ? registry[name] : undefined);

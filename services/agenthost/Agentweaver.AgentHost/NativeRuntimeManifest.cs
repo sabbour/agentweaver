@@ -5,16 +5,11 @@ using GitHub.Copilot;
 
 namespace Agentweaver.AgentHost;
 
-/// <summary>
-/// Image-owned native SDK and CLI version pin. Startup checks the manifest, distribution files,
-/// ELF architecture, and executable digest before handing the runtime to the SDK.
-/// </summary>
 public sealed record NativeRuntimeManifest(string SdkVersion, string RuntimeVersion, string ArchiveSha512)
 {
     private const string ExpectedArchiveSha512 =
         "262068b5c39fd83706bec46a11346ed28a33a99f4ceab1fc9e30a416de30ee4059beb1c6f8c1e1228d666c6289b28d86663067655b6f258b0a5cc655dcdc7f8a";
 
-    /// <summary>Builds a stdio connection that disables auto-update and uses private session state.</summary>
     public static StdioRuntimeConnection Connection(string executable, string privateStateDirectory)
     {
         var connection = RuntimeConnection.ForStdio(executable);
@@ -31,8 +26,6 @@ public sealed record NativeRuntimeManifest(string SdkVersion, string RuntimeVers
         return connection;
     }
 
-    /// <summary>Verifies the pinned manifest and executable contents, returning the exact runtime path and version.</summary>
-    /// <exception cref="InvalidOperationException">The manifest, distribution, architecture, or checksum does not match the pin.</exception>
     public static (string ExecutablePath, string RuntimeVersion) ReadAndVerify(string directory)
     {
         var path = Path.Combine(directory, "runtime-manifest.json");

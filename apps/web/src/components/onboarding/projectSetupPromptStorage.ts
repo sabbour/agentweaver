@@ -14,14 +14,12 @@ function normalizeKeyPart(value: string): string {
   return encodeURIComponent(value.trim().toLowerCase() || 'anonymous');
 }
 
-/** Builds the project-specific browser-storage key used to remember setup-prompt dismissal. */
 export function projectSetupPromptStorageKey(
   state: Pick<ProjectSetupPromptState, 'projectId' | 'userKey'>,
 ): string {
   return `agentweaver.projectSetupPrompt.${PROMPT_VERSION}.${normalizeKeyPart(state.userKey)}.${normalizeKeyPart(state.projectId)}`;
 }
 
-/** Creates the setup-state fingerprint used to expire dismissal after requirements change. */
 export function projectSetupPromptFingerprint(state: ProjectSetupPromptState): string {
   return JSON.stringify([
     state.origin,
@@ -32,7 +30,6 @@ export function projectSetupPromptFingerprint(state: ProjectSetupPromptState): s
   ]);
 }
 
-/** Checks whether a dismissal matches the current project setup fingerprint. */
 export function hasDismissedProjectSetupPrompt(
   storageKey: string,
   fingerprint: string,
@@ -44,7 +41,6 @@ export function hasDismissedProjectSetupPrompt(
   }
 }
 
-/** Persists a dismissal with the current setup fingerprint when local storage is available. */
 export function markProjectSetupPromptDismissed(
   storageKey: string,
   fingerprint: string,

@@ -2,23 +2,18 @@ using System.Collections.Immutable;
 
 namespace Agentweaver.Abstractions;
 
-/// <summary>Version and owner naming for suspend/resume checkpoint manifests.</summary>
 public static class SessionSuspendResumeContractVersions
 {
-    /// <summary>Current serialized manifest version.</summary>
     public const int CurrentManifestVersion = 1;
-    /// <summary>Core-owned checkpoint store name expected by checkpoint references.</summary>
     public const string CoordinatorCheckpointStoreName = "coordinator-execution";
 }
 
-/// <summary>Whether a manifest describes a fully suspended session or an interrupted operation.</summary>
 public enum SessionSuspendResumeManifestState
 {
     Suspended,
     Interrupted
 }
 
-/// <summary>Reference to an exact Core-owned coordinator checkpoint revision and plan state.</summary>
 public sealed record SessionSuspendResumeCheckpointReference(
     SessionIdentity Identity,
     string StoreName,
@@ -27,8 +22,6 @@ public sealed record SessionSuspendResumeCheckpointReference(
     string WorkPlanId,
     long DecisionStateVersion)
 {
-    /// <summary>Validates store ownership, checkpoint identity, and positive revisions.</summary>
-    /// <exception cref="ArgumentException">The checkpoint reference is malformed or not Core-owned.</exception>
     public SessionSuspendResumeCheckpointReference Validate()
     {
         SessionSuspendResumeManifestValidation.ValidateIdentity(Identity);
@@ -43,9 +36,7 @@ public sealed record SessionSuspendResumeCheckpointReference(
 }
 
 /// <summary>
-/// Provider-neutral evidence only; Core produces the manifest after resolving the real
-/// checkpoint and draining its journal. A Suspended state requires all consistency pins;
-/// Interrupted records named evidence gaps and is not a completed suspend receipt.
+/// Provider-neutral evidence only; the Core producer must resolve the actual checkpoint and drain.
 /// </summary>
 public sealed record SessionSuspendResumeManifest(
     int ContractVersion,
@@ -67,9 +58,6 @@ public sealed record SessionSuspendResumeManifest(
     long? NetworkIntentGeneration,
     ImmutableArray<string> MissingEvidence)
 {
-    /// <summary>Validates the manifest version, owner fences, workspace/snapshot evidence, and state requirements.</summary>
-    /// <exception cref="ArgumentException">The manifest is incomplete, inconsistent, or contains invalid evidence.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">A supplied generation, fence, or position is out of range.</exception>
     public SessionSuspendResumeManifest Validate()
     {
         if (ContractVersion != SessionSuspendResumeContractVersions.CurrentManifestVersion ||
@@ -109,7 +97,6 @@ public sealed record SessionSuspendResumeManifest(
         return this;
     }
 
-    /// <summary>Checks Storage resource, volume, data-generation, and content evidence consistency.</summary>
     private void ValidateWorkspace()
     {
         if (WorkspaceVolume is { } volume)
@@ -146,7 +133,6 @@ public sealed record SessionSuspendResumeManifest(
             throw new ArgumentException("Workspace content evidence requires its exact resource and data generation.");
     }
 
-    /// <summary>Requires guest snapshot resource and lifecycle generation to appear together.</summary>
     private void ValidateGuestSnapshot()
     {
         if ((GuestSnapshotResource is null) != (GuestSnapshotLifecycleGeneration is null))
@@ -157,7 +143,6 @@ public sealed record SessionSuspendResumeManifest(
             throw new ArgumentOutOfRangeException(nameof(GuestSnapshotLifecycleGeneration));
     }
 
-    /// <summary>Requires a bounded, initialized, duplicate-free list of missing evidence names.</summary>
     private void ValidateMissingEvidence()
     {
         if (MissingEvidence.IsDefault || MissingEvidence.Length > 64 ||
@@ -167,7 +152,6 @@ public sealed record SessionSuspendResumeManifest(
                 nameof(MissingEvidence));
     }
 
-    /// <summary>Enforces complete evidence for suspension and at least one gap for interruption.</summary>
     private void ValidateStateRequirements()
     {
         if (State == SessionSuspendResumeManifestState.Interrupted)
@@ -191,7 +175,6 @@ public sealed record SessionSuspendResumeManifest(
             throw new ArgumentException("A suspended manifest must contain complete consistency evidence.");
     }
 
-    /// <summary>Checks that the acknowledged cache belongs to this session and is an SDK-cache object.</summary>
     private static void ValidateCacheAcknowledgment(
         SessionMaterialAcknowledgment acknowledgment,
         SessionIdentity identity)
@@ -208,11 +191,8 @@ public sealed record SessionSuspendResumeManifest(
     }
 }
 
-/// <summary>Shared identity, resource, and digest checks for suspend/resume evidence.</summary>
 internal static class SessionSuspendResumeManifestValidation
 {
-    /// <summary>Reconstructs the session identity to enforce its canonical component format.</summary>
-    /// <exception cref="ArgumentException">Any session identity component is missing or invalid.</exception>
     internal static void ValidateIdentity(SessionIdentity identity)
     {
         if (string.IsNullOrWhiteSpace(identity.ProjectId) ||
@@ -223,8 +203,6 @@ internal static class SessionSuspendResumeManifestValidation
         _ = new SessionIdentity(identity.ProjectId, identity.RunId, identity.SessionId);
     }
 
-    /// <summary>Requires a provider resource to match the expected seam and have valid positive-generation IDs.</summary>
-    /// <exception cref="ArgumentException">The resource seam, identifiers, or generation is invalid.</exception>
     internal static void ValidateProviderResource(ProviderResourceRef resource, ProviderSeam expectedSeam)
     {
         if (resource.Seam != expectedSeam ||
@@ -234,7 +212,6 @@ internal static class SessionSuspendResumeManifestValidation
             throw new ArgumentException("The provider resource reference is invalid.");
     }
 
-    /// <summary>Checks the restricted identifier character set used by suspend/resume pins.</summary>
     internal static bool IsIdentifier(string? value, int maximumLength) =>
         value is { Length: > 0 } &&
         value.Length <= maximumLength &&

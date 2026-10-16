@@ -5,7 +5,6 @@ using Microsoft.Azure.Cosmos;
 
 namespace Agentweaver.Knowledge;
 
-/// <summary>Provider-neutral document shape for record heads, revisions, idempotency, and delivery state.</summary>
 public sealed record KnowledgeMemoryDocument(
     string Id,
     string ProjectId,
@@ -28,17 +27,14 @@ public sealed record KnowledgeMemoryDocument(
     string? WorkerId = null,
     DateTimeOffset? LeasedUntil = null);
 
-/// <summary>A document paired with the store's concurrency token.</summary>
 public sealed record MemoryStoredDocument(KnowledgeMemoryDocument Document, string ETag);
 
-/// <summary>Atomic operation supported by a project-partitioned document batch.</summary>
 public enum MemoryBatchOperationKind
 {
     Create,
     Replace
 }
 
-/// <summary>Lease change applied atomically with its accepted-effect document update.</summary>
 public enum MemoryLeaseMutationKind
 {
     Claim,
@@ -46,20 +42,17 @@ public enum MemoryLeaseMutationKind
     Acknowledge
 }
 
-/// <summary>Describes a fenced claim, release, or acknowledgement in a batch operation.</summary>
 public sealed record MemoryLeaseMutation(
     MemoryLeaseMutationKind Kind,
     Guid LeaseToken,
     long DurationMilliseconds = 0);
 
-/// <summary>Creates or replaces one stored document, optionally using ETag and lease preconditions.</summary>
 public sealed record MemoryBatchOperation(
     MemoryBatchOperationKind Kind,
     KnowledgeMemoryDocument Document,
     string? ETag = null,
     MemoryLeaseMutation? LeaseMutation = null);
 
-/// <summary>Outcome of an atomic Memory-store batch.</summary>
 public enum MemoryBatchStatus
 {
     Succeeded,
@@ -67,13 +60,11 @@ public enum MemoryBatchStatus
     Failed
 }
 
-/// <summary>Batch result whose conflict status represents a failed concurrency precondition.</summary>
 public sealed record MemoryBatchResult(MemoryBatchStatus Status)
 {
     public bool Succeeded => Status == MemoryBatchStatus.Succeeded;
 }
 
-/// <summary>Live Cosmos resource settings inspected during provider negotiation.</summary>
 public sealed record CosmosMemoryContainerIdentity(
     string DatabaseId,
     string ContainerId,
@@ -81,7 +72,6 @@ public sealed record CosmosMemoryContainerIdentity(
     int? DefaultTimeToLiveSeconds,
     bool HasRequiredSearchCompositeIndex);
 
-/// <summary>Storage contract shared by document-backed Memory providers.</summary>
 public interface IKnowledgeMemoryDocumentStore
 {
     Task<MemoryStoredDocument?> ReadAsync(
@@ -134,14 +124,12 @@ public interface IKnowledgeMemoryDocumentStore
         CancellationToken cancellationToken);
 }
 
-/// <summary>Document-store contract with the live identity check needed for Cosmos negotiation.</summary>
 public interface ICosmosMemoryDocumentStore : IKnowledgeMemoryDocumentStore
 {
     Task<CosmosMemoryContainerIdentity> ReadContainerIdentityAsync(
         CancellationToken cancellationToken);
 }
 
-/// <summary>Implements the shared document contract with Cosmos point reads and project-partitioned batches.</summary>
 public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
 {
     private const string RecordDocumentType = "record";
@@ -153,7 +141,6 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
     private readonly string _containerId;
     private readonly Container _container;
 
-    /// <summary>Creates a store for the configured database and container.</summary>
     public CosmosMemoryDocumentStore(CosmosClient client, CosmosMemoryOptions options)
     {
         ArgumentNullException.ThrowIfNull(client);
@@ -165,7 +152,6 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
         _container = client.GetContainer(_databaseId, _containerId);
     }
 
-    /// <summary>Reads database/container identity, partitioning, retention, and search-index properties.</summary>
     public async Task<CosmosMemoryContainerIdentity> ReadContainerIdentityAsync(
         CancellationToken cancellationToken)
     {
@@ -188,7 +174,6 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
             hasRequiredSearchCompositeIndex);
     }
 
-    /// <summary>Reads one item from the project partition; Cosmos not-found is returned as null.</summary>
     public async Task<MemoryStoredDocument?> ReadAsync(
         string projectId,
         string documentId,
@@ -208,7 +193,6 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
         }
     }
 
-    /// <summary>Returns at most two matching receipts so duplicate global identities can be detected.</summary>
     public async Task<IReadOnlyList<KnowledgeMemoryDocument>> FindAcceptedEffectAsync(
         Guid receiptId,
         CancellationToken cancellationToken)
@@ -229,7 +213,6 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
         return documents;
     }
 
-    /// <summary>Runs a count query and a stable, project-partitioned record page query.</summary>
     public async Task<KnowledgeRecordPage> SearchAsync(
         KnowledgeRecordQuery query,
         CancellationToken cancellationToken)
@@ -378,7 +361,6 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
             pageSize);
     }
 
-    /// <summary>Queries records eligible for context under project, trust, agent, and run visibility rules.</summary>
     public async Task<IReadOnlyList<KnowledgeRecord>> ReadContextCandidatesAsync(
         string projectId,
         string agentId,
@@ -423,7 +405,6 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
             .ToImmutableArray();
     }
 
-    /// <summary>Checks whether an earlier event in the same stream remains unacknowledged.</summary>
     public async Task<bool> HasUndeliveredPredecessorAsync(
         string projectId,
         string streamId,
@@ -445,8 +426,6 @@ public sealed class CosmosMemoryDocumentStore : ICosmosMemoryDocumentStore
         return await ReadScalarAsync<long>(query, projectId, cancellationToken).ConfigureAwait(false) > 0;
     }
 
-    /// <summary>Applies at most 100 creates and ETag-guarded replacements in one project-partition transaction.</summary>
-    /// <returns>Conflict for failed preconditions, success for a committed batch, or failure for other statuses.</returns>
     public async Task<MemoryBatchResult> ExecuteBatchAsync(
         string projectId,
         IReadOnlyList<MemoryBatchOperation> operations,

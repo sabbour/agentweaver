@@ -11,7 +11,6 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Knowledge;
 
-/// <summary>Resolved provider, immutable pin, and accepted project-run selection for a request.</summary>
 public sealed record KnowledgeProviderContext(
     IMemoryProvider Provider,
     PinnedProviderBinding Binding,
@@ -19,7 +18,6 @@ public sealed record KnowledgeProviderContext(
     string ContextRevision,
     ProjectRunSelectionResponse Selection);
 
-/// <summary>Resolves a run's selected Memory provider and persists or verifies its immutable resource binding.</summary>
 public sealed class KnowledgeProviderBindingService(
     NpgsqlDataSource dataSource,
     NativePostgresMemoryOptions options,
@@ -39,7 +37,6 @@ public sealed class KnowledgeProviderBindingService(
             "memory.proposals.promote",
             "memory.context.compose");
 
-    /// <summary>Resolves the accepted run selection and creates its first immutable provider binding if needed.</summary>
     public async Task<KnowledgeProviderContext> ResolveAndVerifyAsync(
         ProjectAuthorizationContextResponse authority,
         string projectId,
@@ -48,7 +45,6 @@ public sealed class KnowledgeProviderBindingService(
         => await ResolveAsync(authority, projectId, runId, allowCreate: true, cancellationToken)
             .ConfigureAwait(false);
 
-    /// <summary>Resolves the provider only when an earlier persisted binding already exists.</summary>
     public async Task<KnowledgeProviderContext> ResolveExistingAndVerifyAsync(
         ProjectAuthorizationContextResponse authority,
         string projectId,
@@ -178,8 +174,6 @@ public sealed class KnowledgeProviderBindingService(
             selection);
     }
 
-    /// <summary>Inserts a binding once, then compares the stored snapshot with the current selection.</summary>
-    /// <remarks>The unique project/run key makes concurrent first writes converge; a different snapshot conflicts.</remarks>
     private async Task PersistOrVerifyBindingAsync(
         string projectId,
         ProjectRunSelectionResponse selection,
@@ -224,7 +218,6 @@ public sealed class KnowledgeProviderBindingService(
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Checks an existing run binding without allowing this path to create one.</summary>
     private async Task VerifyPersistedBindingAsync(
         string projectId,
         ProjectRunSelectionResponse selection,
@@ -238,8 +231,6 @@ public sealed class KnowledgeProviderBindingService(
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Compares each persisted selection, resource, version, and capability field in one transaction.</summary>
-    /// <exception cref="KnowledgeApiException">A binding exists but differs from the current resolved selection.</exception>
     private async Task VerifyBindingAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -285,7 +276,6 @@ public sealed class KnowledgeProviderBindingService(
         }
     }
 
-    /// <summary>Records provider identity and a one-way resource identifier hash for tracing.</summary>
     private static void RecordPinnedBinding(string selectedProviderId, PinnedProviderBinding binding)
     {
         using var activity = TelemetrySignals.Activities.StartActivity(

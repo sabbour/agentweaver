@@ -1,10 +1,7 @@
 namespace Agentweaver.Orchestrator.Core;
 
-/// <summary>Pure UTC evaluator for daily, weekly, and monthly workflow schedule triggers.</summary>
 public static class WorkflowScheduleEvaluator
 {
-    /// <summary>Finds the latest scheduled occurrence at or before <paramref name="now"/>.</summary>
-    /// <remarks>Invalid schedule shapes return an issue; a valid future schedule returns a valid, not-due result.</remarks>
     public static WorkflowScheduleEvaluation Evaluate(
         WorkflowScheduleDefinition? schedule,
         DateTimeOffset now)

@@ -8,41 +8,34 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Durable accepted command, execution operation, and provider-effect markers for a build/test run.</summary>
 public sealed record EnvironmentSandboxBuildTestCommandState(
     SandboxBuildTestAcceptedCommand AcceptedCommand,
     SandboxBuildTestOperationSnapshot Operation,
     ImmutableArray<string> AttemptedEffects);
 
-/// <summary>Returns a reserved command state and whether it was reused from a prior idempotent request.</summary>
 public sealed record EnvironmentSandboxBuildTestCommandReservation(
     EnvironmentSandboxBuildTestCommandState State,
     bool Replayed);
 
-/// <summary>Defines durable reserve, read, and save operations for accepted Sandbox build/test commands.</summary>
 public interface IEnvironmentSandboxBuildTestCommandStore
 {
-    /// <summary>Reserves a command only when accepted metadata and the current Sandbox/workspace binding match.</summary>
     Task<EnvironmentSandboxBuildTestCommandReservation> ReserveAsync(
         SandboxBuildTestApiRequest request,
         SandboxBuildTestAcceptedCommand acceptedCommand,
         SandboxBuildTestOperationSnapshot initialOperation,
         CancellationToken cancellationToken);
 
-    /// <summary>Reads one command state by Environment owner and operation ID.</summary>
     Task<EnvironmentSandboxBuildTestCommandState?> GetAsync(
         EnvironmentOwnerIdentity owner,
         Guid operationId,
         CancellationToken cancellationToken);
 
-    /// <summary>Saves a command state only when its immutable accepted command and owner binding still match.</summary>
     Task<EnvironmentSandboxBuildTestCommandState> SaveAsync(
         EnvironmentOwnerIdentity owner,
         EnvironmentSandboxBuildTestCommandState state,
         CancellationToken cancellationToken);
 }
 
-/// <summary>PostgreSQL implementation of owner-locked, idempotent build/test command persistence.</summary>
 public sealed class EnvironmentSandboxBuildTestCommandStore(
     NpgsqlDataSource dataSource,
     TimeProvider timeProvider) : IEnvironmentSandboxBuildTestCommandStore
@@ -53,10 +46,6 @@ public sealed class EnvironmentSandboxBuildTestCommandStore(
     internal const string PendingPolicyUid = "pending";
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
-    /// <summary>
-    /// Reserves one accepted operation and rejects operation-ID reuse with different command or binding data.
-    /// The active Sandbox and workspace are checked in the same owner-locked transaction.
-    /// </summary>
     public async Task<EnvironmentSandboxBuildTestCommandReservation> ReserveAsync(
         SandboxBuildTestApiRequest request,
         SandboxBuildTestAcceptedCommand acceptedCommand,
@@ -211,7 +200,6 @@ public sealed class EnvironmentSandboxBuildTestCommandStore(
         return new(initialState, false);
     }
 
-    /// <summary>Reads a validated command state for one owner and non-empty operation ID.</summary>
     public async Task<EnvironmentSandboxBuildTestCommandState?> GetAsync(
         EnvironmentOwnerIdentity owner,
         Guid operationId,
@@ -230,7 +218,6 @@ public sealed class EnvironmentSandboxBuildTestCommandStore(
         return row is null ? null : DeserializeState(row);
     }
 
-    /// <summary>Updates mutable execution state while preserving the accepted command's immutable identity.</summary>
     public async Task<EnvironmentSandboxBuildTestCommandState> SaveAsync(
         EnvironmentOwnerIdentity owner,
         EnvironmentSandboxBuildTestCommandState state,
@@ -559,7 +546,6 @@ public sealed class EnvironmentSandboxBuildTestCommandStore(
             : null;
     }
 
-    /// <summary>Rebuilds and validates immutable and mutable operation fields from a stored database row.</summary>
     internal static EnvironmentSandboxBuildTestCommandState DeserializeState(StoredRow row)
     {
         try
@@ -596,7 +582,6 @@ public sealed class EnvironmentSandboxBuildTestCommandStore(
         }
     }
 
-    /// <summary>Serializes progress fields separately so the accepted command remains immutable.</summary>
     internal static string SerializeMutableState(EnvironmentSandboxBuildTestCommandState state) =>
         JsonSerializer.Serialize(
             new MutableState(state.Operation, state.AttemptedEffects),
@@ -660,7 +645,6 @@ public sealed class EnvironmentSandboxBuildTestCommandStore(
             attempts.Contains($"{role}:observed", StringComparer.Ordinal);
     }
 
-    /// <summary>Allows only monotonic progress and prevents terminal results or capture receipts from being rewritten.</summary>
     internal static bool IsAllowedOperationTransition(
         SandboxBuildTestOperationSnapshot previous,
         SandboxBuildTestOperationSnapshot next)
@@ -740,12 +724,10 @@ public sealed class EnvironmentSandboxBuildTestCommandStore(
         return options;
     }
 
-    /// <summary>Mutable execution output and status stored separately from the accepted command.</summary>
     private sealed record MutableState(
         SandboxBuildTestOperationSnapshot Operation,
         ImmutableArray<string> AttemptedEffects);
 
-    /// <summary>Database projection of one durable build/test owner effect.</summary>
     internal sealed record StoredRow(
         EnvironmentOwnerIdentity Owner,
         string EffectKind,

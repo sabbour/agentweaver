@@ -6,7 +6,6 @@ using Npgsql;
 
 namespace Agentweaver.Knowledge;
 
-/// <summary>Native PostgreSQL resource identity and schema version selected for Memory.</summary>
 public sealed record NativePostgresMemoryOptions(
     string ResourceId,
     string DatabaseName,
@@ -17,7 +16,6 @@ public sealed record NativePostgresMemoryOptions(
 {
     public const int CurrentOptionsSchemaVersion = 1;
 
-    /// <summary>Reads the required native Memory settings, applying only the documented schema defaults.</summary>
     public static NativePostgresMemoryOptions Read(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -33,7 +31,6 @@ public sealed record NativePostgresMemoryOptions(
         return options;
     }
 
-    /// <summary>Rejects invalid identifiers, reserved schemas, and unsupported option versions.</summary>
     public void Validate()
     {
         if (!IsToken(ResourceId) ||
@@ -64,7 +61,6 @@ public sealed record NativePostgresMemoryOptions(
             : throw new InvalidOperationException($"Missing required configuration '{name}'.");
 }
 
-/// <summary>Validated endpoints, audiences, storage settings, and context limits for the Knowledge service.</summary>
 public sealed record KnowledgeRuntimeOptions(
     Uri IdentityAuthority,
     string Audience,
@@ -76,7 +72,6 @@ public sealed record KnowledgeRuntimeOptions(
     int DefaultContextItems,
     int DefaultContextTokens)
 {
-    /// <summary>Reads and validates the complete runtime configuration before service registration.</summary>
     public static KnowledgeRuntimeOptions Read(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -104,7 +99,6 @@ public sealed record KnowledgeRuntimeOptions(
         return result;
     }
 
-    /// <summary>Checks HTTPS endpoints, nonempty audiences, bounded context limits, and provider options.</summary>
     public void Validate()
     {
         if (!IdentityAuthority.IsAbsoluteUri || IdentityAuthority.Scheme != Uri.UriSchemeHttps ||
@@ -146,27 +140,22 @@ public sealed record KnowledgeRuntimeOptions(
             : throw new InvalidOperationException($"Missing required configuration '{name}'.");
 }
 
-/// <summary>Connection string and workload-identity inputs used to authenticate to PostgreSQL.</summary>
 internal sealed record KnowledgePostgresConnection(
     string ConnectionString,
     string TenantId,
     string ClientId,
     string TokenFilePath);
 
-/// <summary>Creates password-provider-backed PostgreSQL data sources using workload identity access tokens.</summary>
 internal static class KnowledgePostgresDataSource
 {
     private const string TokenScope = "https://ossrdbms-aad.database.windows.net/.default";
 
-    /// <summary>Reads the service's runtime connection and workload identity settings.</summary>
     public static KnowledgePostgresConnection ReadRuntimeConnection(IConfiguration configuration) =>
         ReadConnection(configuration, "Knowledge", "Knowledge:Database:WorkloadIdentity");
 
-    /// <summary>Reads the separately scoped migration connection and workload identity settings.</summary>
     public static KnowledgePostgresConnection ReadMigrationConnection(IConfiguration configuration) =>
         ReadConnection(configuration, "KnowledgeMigration", "Knowledge:Migration:WorkloadIdentity");
 
-    /// <summary>Creates an Entra workload-identity credential from the selected identity file and IDs.</summary>
     public static TokenCredential CreateCredential(KnowledgePostgresConnection connection) =>
         new AzureIdentity::Azure.Identity.WorkloadIdentityCredential(
             new AzureIdentity::Azure.Identity.WorkloadIdentityCredentialOptions
@@ -176,7 +165,6 @@ internal static class KnowledgePostgresDataSource
                 TokenFilePath = connection.TokenFilePath,
             });
 
-    /// <summary>Builds a full-verification TLS data source and disables synchronous token acquisition.</summary>
     public static NpgsqlDataSource Create(
         string connectionString,
         TokenCredential credential,
@@ -200,7 +188,6 @@ internal static class KnowledgePostgresDataSource
         return dataSource.Build();
     }
 
-    /// <summary>Requests a fresh PostgreSQL audience token and rejects empty or already-expired results.</summary>
     internal static async ValueTask<string> GetPostgresTokenAsync(
         TokenCredential credential,
         CancellationToken cancellationToken,

@@ -9,28 +9,16 @@ using WorkloadIdentityCredentialOptions = AzureIdentity::Azure.Identity.Workload
 
 namespace Agentweaver.Identity.Broker;
 
-/// <summary>Inputs required to authenticate the dedicated schema-migration workload identity.</summary>
 internal sealed record IdentityBrokerMigrationIdentity(string TenantId, string ClientId, string TokenFilePath);
 
-/// <summary>
-/// Command-line entry point for running Identity broker schema migrations with its
-/// separate workload identity and database connection. It does not run the web host.
-/// </summary>
 internal static class IdentityBrokerMigrationCommand
 {
     private const string Argument = "--migrate";
 
-    /// <summary>Returns whether the argument list consists only of the migration command.</summary>
     public static bool IsRequested(string[] args) => args.Length == 1 && args[0] == Argument;
 
-    /// <summary>Detects the migration command so mixed maintenance and host commands can be rejected.</summary>
     public static bool ContainsArgument(string[] args) => args.Contains(Argument, StringComparer.Ordinal);
 
-    /// <summary>
-    /// Validates explicit migration credentials, creates an Entra-authenticated PostgreSQL
-    /// data source and runs migrations under the schema-specific advisory lock. A supplied
-    /// credential factory supports tests; disposable credentials are always disposed.
-    /// </summary>
     public static async Task RunAsync(
         IConfiguration configuration,
         Func<IdentityBrokerMigrationIdentity, TokenCredential>? credentialFactory = null,

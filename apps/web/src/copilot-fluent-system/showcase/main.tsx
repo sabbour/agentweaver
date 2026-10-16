@@ -1,9 +1,7 @@
-/** Standalone bootstrap for the library-local preview app, separate from the product entry point. */
 import { Component, StrictMode, type ErrorInfo, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import './standalone.css';
 import { AzureFluentShowcaseApp } from './AzureFluentShowcaseApp';
-/** Converts a failed preview render into a reload prompt without crashing the showcase page. */
 class ShowcaseErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   state = { error: null };
 
@@ -34,11 +32,9 @@ class ShowcaseErrorBoundary extends Component<{ children: ReactNode }, { error: 
 const rootElement = document.getElementById('root');
 
 if (!rootElement) {
-  // A missing host element means the standalone HTML is misconfigured, so fail during startup.
   throw new Error('Azure Fluent showcase root element was not found.');
 }
 
-// Render the preview tree in strict mode with an isolated error boundary.
 createRoot(rootElement).render(
   <StrictMode>
     <ShowcaseErrorBoundary>

@@ -4,7 +4,6 @@ import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-/** Rendering formats and recipe identifiers used by the diagram generation pipeline. */
 export const DRAWIO_FORMATS = new Set(['png', 'svg', 'pdf']);
 export const DIAGRAM_STAMP_VERSION = 2;
 export const PNG_EXPORT_RECIPE = Object.freeze({
@@ -28,7 +27,6 @@ function canonicalize(value) {
   return value;
 }
 
-/** Enumerate JSON and editable draw.io diagram sources, rejecting ambiguous duplicate names. */
 export async function listDiagramSources(specsDir) {
   async function filesUnder(directory, relativeDirectory = '') {
     const entries = await readdir(directory, { withFileTypes: true });
@@ -58,7 +56,6 @@ export async function listDiagramSources(specsDir) {
   return [...sources.values()];
 }
 
-/** Resolve requested diagram names against the source inventory or return the complete set. */
 export function selectDiagramSources(sources, requestedNames = []) {
   if (!requestedNames.length) return [...sources];
   const byName = new Map(sources.map((source) => [source.name, source]));
@@ -68,7 +65,6 @@ export function selectDiagramSources(sources, requestedNames = []) {
   return names.map((name) => byName.get(name));
 }
 
-/** Hash a diagram source using stable JSON key order or normalized editable XML text. */
 export async function diagramSourceHash(source) {
   const raw = await readFile(source.path, 'utf8');
   const canonical = source.kind === 'json'
@@ -77,12 +73,10 @@ export async function diagramSourceHash(source) {
   return createHash('sha256').update(canonical).digest('hex');
 }
 
-/** Compute a SHA-256 digest of a file's exact bytes. */
 export async function fileHash(filePath) {
   return createHash('sha256').update(await readFile(filePath)).digest('hex');
 }
 
-/** Create a versioned stamp binding the input, editable draw.io file, renderer recipe, and PNG. */
 export async function createDiagramStamp(
   source,
   drawioPath,
@@ -113,7 +107,6 @@ export async function createDiagramStamp(
   };
 }
 
-/** Parse a diagram stamp and reject obsolete versions or a different rendering recipe. */
 export function parseDiagramStamp(contents, stampPath = 'diagram stamp') {
   let stamp;
   try {
@@ -138,12 +131,10 @@ export function parseDiagramStamp(contents, stampPath = 'diagram stamp') {
   return stamp;
 }
 
-/** Return the generated editable draw.io path for a named JSON diagram. */
 export function generatedDrawioPath(generatedDir, name, relativeDirectory = '') {
   return path.join(generatedDir, relativeDirectory, `${name}.drawio`);
 }
 
-/** Require a diagram source to be valid, editable, uncompressed draw.io XML. */
 export function validateUncompressedDrawio(contents, source = 'draw.io source') {
   if (!contents.includes('<mxfile') || !contents.includes('<mxGraphModel')) {
     throw new Error(`${source} is not editable draw.io XML`);
@@ -154,7 +145,6 @@ export function validateUncompressedDrawio(contents, source = 'draw.io source') 
   return true;
 }
 
-/** Build the explicit CLI argument list for one supported draw.io export format. */
 export function drawioExportArgs(sourcePath, outputPath, format, { embed = true } = {}) {
   if (!DRAWIO_FORMATS.has(format)) throw new Error(`Unsupported draw.io format: ${format}`);
   const args = ['--export', '--format', format, '--border', '16'];
@@ -164,7 +154,6 @@ export function drawioExportArgs(sourcePath, outputPath, format, { embed = true 
   return args;
 }
 
-/** Resolve an explicit or platform-default draw.io Desktop command and its launch arguments. */
 export function resolveDrawioCommand({ explicitPath, env = process.env, platform = process.platform } = {}) {
   const configured = explicitPath || env.DRAWIO_CLI;
   if (configured) return { command: configured, prefixArgs: [] };
@@ -182,7 +171,6 @@ export function resolveDrawioCommand({ explicitPath, env = process.env, platform
   return { command: 'drawio', prefixArgs: [] };
 }
 
-/** Execute the renderer version check and require a parseable Desktop version string. */
 export function verifyDrawioVersion(
   { command, prefixArgs = [] },
   { execute, platform = process.platform } = {},

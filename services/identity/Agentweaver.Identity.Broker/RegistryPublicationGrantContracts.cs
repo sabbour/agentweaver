@@ -2,15 +2,11 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity.Broker;
 
-/// <summary>
-/// Stable purpose and denial codes used by the registry-publication grant boundary.
-/// </summary>
 internal static class RegistryPublicationGrantContracts
 {
     public const string Purpose = "registry-publication";
     public const string AuthorityUnavailableCode = "registry_publication_authority_unavailable";
 
-    /// <summary>Returns the specific denial code for the first mismatched binding field.</summary>
     public static string MismatchCode(RegistryPublicationGrantBindingField field) => field switch
     {
         RegistryPublicationGrantBindingField.Actor => "registry_publication_actor_mismatch",
@@ -25,7 +21,6 @@ internal static class RegistryPublicationGrantContracts
     };
 }
 
-/// <summary>Binding component compared before a publication grant can be considered.</summary>
 internal enum RegistryPublicationGrantBindingField
 {
     Actor,
@@ -38,13 +33,9 @@ internal enum RegistryPublicationGrantBindingField
     SecretVersion,
 }
 
-/// <summary>
-/// Validated proposed publication values for equality checks only. These values are not
-/// authenticated actor identity or fresh owner evidence.
-/// </summary>
+// This carries untrusted proposed values for equality checks only, not authenticated actor or owner evidence.
 internal sealed class RegistryPublicationGrantCandidate
 {
-    /// <summary>Creates a candidate after validating identifiers, text bounds and positive fencing generation.</summary>
     public RegistryPublicationGrantCandidate(
         string actorId,
         string projectId,
@@ -91,7 +82,6 @@ internal sealed class RegistryPublicationGrantCandidate
     }
 }
 
-/// <summary>Denial raised when a publication binding differs or its authority is unavailable.</summary>
 internal sealed class RegistryPublicationGrantDeniedException(string code) : Exception(code)
 {
     public string Code { get; } = code;

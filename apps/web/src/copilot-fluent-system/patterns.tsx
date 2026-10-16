@@ -1,4 +1,3 @@
-/** Thin page compositions that combine system primitives into browse, form, Copilot, and approval flows. */
 import type { ReactNode } from 'react';
 import {
   Card,
@@ -27,7 +26,6 @@ import {
   type CopilotComposerProps,
   type CopilotResponseProps,
 } from './components';
-/** Props for the header, filter, grid, and optional paging composition used on resource lists. */
 export interface BrowseResourcePatternProps<T> {
   title: ReactNode;
   subtitle?: ReactNode;
@@ -47,7 +45,6 @@ export interface BrowseResourcePatternProps<T> {
   className?: string;
 }
 
-/** Composes a resource header, toolbar, filters, data grid, and optional pager. */
 export function BrowseResourcePattern<T>({
   title,
   subtitle,
@@ -79,17 +76,14 @@ export function BrowseResourcePattern<T>({
   );
 }
 
-/** Browse pattern props with an optional default title. */
 export interface FilteringPatternProps<T> extends Omit<BrowseResourcePatternProps<T>, 'title'> {
   title?: ReactNode;
 }
 
-/** Convenience wrapper for a browsable list when no explicit title is provided. */
 export function FilteringPattern<T>({ title = 'Resources', ...props }: FilteringPatternProps<T>) {
   return <BrowseResourcePattern {...props} title={title} />;
 }
 
-/** Header, optional service navigation, and host-owned content for a resource-management page. */
 export interface ManageResourcePatternProps {
   header: ReactNode;
   serviceMenu?: ReactNode;
@@ -97,7 +91,6 @@ export interface ManageResourcePatternProps {
   className?: string;
 }
 
-/** Lays out a management header beside its optional service menu and page content. */
 export function ManageResourcePattern({ header, serviceMenu, children, className }: ManageResourcePatternProps) {
   return (
     <section className={mergeClasses('azf-stack azf-pattern-shell', className)}>
@@ -110,7 +103,6 @@ export function ManageResourcePattern({ header, serviceMenu, children, className
   );
 }
 
-/** One selectable step and its content in a create or form workflow. */
 export interface StepWizardPatternStep {
   id: string;
   label: ReactNode;
@@ -120,7 +112,6 @@ export interface StepWizardPatternStep {
   status?: 'default' | 'complete' | 'warning' | 'error';
 }
 
-/** Shared header, fields, message, and action footer for a form blade. */
 export interface FormBladePatternProps {
   title: ReactNode;
   subtitle?: ReactNode;
@@ -132,7 +123,6 @@ export interface FormBladePatternProps {
   className?: string;
 }
 
-/** Renders a titled form surface with optional message and standard action footer. */
 export function FormBladePattern({
   title,
   subtitle,
@@ -153,7 +143,6 @@ export function FormBladePattern({
   );
 }
 
-/** Wizard state and actions for a multi-step form using the shared form blade. */
 export interface StepWizardPatternProps {
   title: ReactNode;
   subtitle?: ReactNode;
@@ -167,7 +156,6 @@ export interface StepWizardPatternProps {
   className?: string;
 }
 
-/** Selects the current wizard step and places its content inside the common form shell. */
 export function StepWizardPattern({
   title,
   subtitle,
@@ -202,7 +190,6 @@ export function StepWizardPattern({
   );
 }
 
-/** Inputs for a staged resource-creation flow with validation and optional review content. */
 export interface CreateResourcePatternProps {
   title: ReactNode;
   subtitle?: ReactNode;
@@ -217,7 +204,6 @@ export interface CreateResourcePatternProps {
   className?: string;
 }
 
-/** Composes step navigation, validation, current-step content, review, and final actions. */
 export function CreateResourcePattern({
   title,
   subtitle,
@@ -251,7 +237,6 @@ export function CreateResourcePattern({
   );
 }
 
-/** Plain message content and optional actions for an error or warning state. */
 export interface ErrorPatternProps {
   title: ReactNode;
   body: ReactNode;
@@ -259,7 +244,6 @@ export interface ErrorPatternProps {
   actions?: ReactNode;
 }
 
-/** Renders an inline message bar with severity, explanatory text, and optional actions. */
 export function ErrorPattern({ title, body, severity = 'error', actions }: ErrorPatternProps) {
   return (
     <MessageBar intent={severity}>
@@ -272,7 +256,6 @@ export function ErrorPattern({ title, body, severity = 'error', actions }: Error
   );
 }
 
-/** Content for an inline informational or success notification. */
 export interface NotificationPatternProps {
   title: ReactNode;
   body?: ReactNode;
@@ -280,7 +263,6 @@ export interface NotificationPatternProps {
   intent?: 'info' | 'success' | 'warning' | 'error';
 }
 
-/** Renders a compact message bar for a status update and its next action. */
 export function NotificationPattern({ title, body, actions, intent = 'info' }: NotificationPatternProps) {
   return (
     <MessageBar intent={intent}>
@@ -293,7 +275,6 @@ export function NotificationPattern({ title, body, actions, intent = 'info' }: N
   );
 }
 
-/** Overview cards and header commands for a service landing surface. */
 export interface ServiceOverviewPatternProps {
   title: ReactNode;
   subtitle?: ReactNode;
@@ -303,7 +284,6 @@ export interface ServiceOverviewPatternProps {
   className?: string;
 }
 
-/** Displays a service header with primary and secondary actions above overview cards. */
 export function ServiceOverviewPattern({
   title,
   subtitle,
@@ -332,7 +312,6 @@ export function ServiceOverviewPattern({
   );
 }
 
-/** Inputs for a workspace that places optional service navigation beside Copilot content. */
 export interface CopilotWorkspacePatternProps {
   title: ReactNode;
   serviceMenuGroups?: AzfServiceMenuGroup[];
@@ -343,7 +322,6 @@ export interface CopilotWorkspacePatternProps {
   className?: string;
 }
 
-/** Composes optional service navigation, response history, and a Copilot composer. */
 export function CopilotWorkspacePattern({
   title,
   serviceMenuGroups = [],
@@ -377,7 +355,6 @@ export function CopilotWorkspacePattern({
 //   ChainOfThought   node 386:75088   (file oqjy7GlpGqEQgUwMCs1wdq; sub-row 386:75111)
 //   CopilotResponse  node 32382:38129 (file oqjy7GlpGqEQgUwMCs1wdq)
 //   CopilotComposer  node 32382:38468 (file oqjy7GlpGqEQgUwMCs1wdq)
-/** Run review surface that pairs step reasoning with response and steering controls. */
 export interface CoordinatorRunPatternProps {
   title: ReactNode;
   subtitle?: ReactNode;
@@ -394,7 +371,6 @@ export interface CoordinatorRunPatternProps {
   className?: string;
 }
 
-/** Composes an automation run header and body, with slots for host-owned chrome or content. */
 export function CoordinatorRunPattern({
   title,
   subtitle,
@@ -438,7 +414,6 @@ export function CoordinatorRunPattern({
 //   AgenticProgress  nodes 27950:10571 / 27880:13472 (file q2TdO4dVcMhNWYp0N6Bc05)
 //   Running loader   node 386:75129 (shared Copilot loader)
 //   ArtifactPill     node 27865:11293
-/** Approval summary and step data for a human checkpoint in an agent workflow. */
 export interface AgenticApprovalPatternProps {
   title: ReactNode;
   summary?: ReactNode;
@@ -449,7 +424,6 @@ export interface AgenticApprovalPatternProps {
   className?: string;
 }
 
-/** Presents approval steps and wires approve or deny actions back to the host. */
 export function AgenticApprovalPattern({
   title,
   summary,
@@ -470,7 +444,6 @@ export function AgenticApprovalPattern({
   );
 }
 
-/** Response, optional composer, progress steps, and actions for a Copilot triage panel. */
 export interface CopilotTriagePanelPatternProps {
   title: ReactNode;
   summary?: ReactNode;
@@ -481,7 +454,6 @@ export interface CopilotTriagePanelPatternProps {
   className?: string;
 }
 
-/** Combines progress, generated response, and optional operator input in a triage card. */
 export function CopilotTriagePanelPattern({
   title,
   summary,
@@ -505,7 +477,6 @@ export function CopilotTriagePanelPattern({
   );
 }
 
-/** Header, status summaries, and optional commands for a resource operation surface. */
 export interface ResourceOperationHeaderPatternProps {
   title: ReactNode;
   subtitle?: ReactNode;
@@ -517,7 +488,6 @@ export interface ResourceOperationHeaderPatternProps {
   className?: string;
 }
 
-/** Renders a resource header followed by optional commands, status cards, and host content. */
 export function ResourceOperationHeaderPattern({
   title,
   subtitle,

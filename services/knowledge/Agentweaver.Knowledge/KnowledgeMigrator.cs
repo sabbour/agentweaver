@@ -5,15 +5,12 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Knowledge;
 
-/// <summary>Applies and verifies Knowledge schema migrations and the runtime role's least-privilege grants.</summary>
 public static class KnowledgeMigrator
 {
     private static readonly Regex SchemaPattern = new(
         "^[a-z][a-z0-9_]{0,62}\\z", RegexOptions.CultureInvariant);
     private const int CurrentSchemaVersion = 3;
 
-    /// <summary>Applies each missing embedded migration under a schema-scoped advisory lock.</summary>
-    /// <remarks>The outbox schema is initialized first; all Knowledge migration steps then commit together.</remarks>
     public static async Task MigrateAsync(
         NpgsqlDataSource dataSource,
         string schema,
@@ -79,7 +76,6 @@ public static class KnowledgeMigrator
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Verifies migration inventory and exact runtime database privileges without changing the schema.</summary>
     public static async Task VerifyAsync(
         NpgsqlDataSource dataSource,
         string schema,
@@ -92,7 +88,6 @@ public static class KnowledgeMigrator
         await VerifyRuntimePrivilegesAsync(connection, schema, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Checks migration inventory only, for callers that separately validate runtime grants.</summary>
     public static async Task VerifyMigrationsAppliedAsync(
         NpgsqlDataSource dataSource,
         string schema,

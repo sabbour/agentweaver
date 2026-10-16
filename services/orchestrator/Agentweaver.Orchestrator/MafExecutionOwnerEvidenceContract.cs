@@ -9,10 +9,6 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Serializes owner evidence for a completed work plan into versioned capture, merge, or no-output rows.
-/// It verifies all declared outputs against admitted source-control records and the checkpoint's BuildTest receipts.
-/// </summary>
 internal static class MafExecutionOwnerEvidenceContract
 {
     internal const int CurrentVersion = 1;
@@ -24,16 +20,6 @@ internal static class MafExecutionOwnerEvidenceContract
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
-    /// <summary>
-    /// Validates the accepted root state and serializes the current capture and merge evidence.
-    /// </summary>
-    /// <param name="root">The owner-bound actor, session, decision, checkpoint, plan, and output set.</param>
-    /// <param name="tenantId">The tenant that must own the capture and merge records.</param>
-    /// <param name="captures">The admitted output captures read from the source-control owner.</param>
-    /// <param name="mergeIntents">The merge intents read from the same owner binding.</param>
-    /// <returns>Versioned JSON evidence rows for the capture and optional approved merge.</returns>
-    /// <exception cref="CoordinationException">Thrown when owner records, output obligations, or approval evidence do not match the accepted run.</exception>
-    /// <remarks>An empty output set is represented only when no required or completed platform work needs evidence.</remarks>
     internal static JsonElement Serialize(
         MafExecutionOwnerEvidenceBinding root,
         string tenantId,
@@ -218,9 +204,6 @@ internal static class MafExecutionOwnerEvidenceContract
         return JsonSerializer.SerializeToElement(rows, JsonOptions);
     }
 
-    /// <summary>
-    /// Verifies that the root decision, checkpoint, work plan, and execution fence describe one accepted run.
-    /// </summary>
     private static void ValidateRootBinding(MafExecutionOwnerEvidenceBinding root)
     {
         if (root.ExecutionFence < 1 ||
@@ -236,13 +219,6 @@ internal static class MafExecutionOwnerEvidenceContract
             throw InvalidEvidence();
     }
 
-    /// <summary>
-    /// Validates an admitted capture's proof, ownership, package hashes, and manifest binding.
-    /// </summary>
-    /// <param name="capture">The capture record returned by the source-control owner.</param>
-    /// <param name="root">The accepted run binding used to check identity and selection.</param>
-    /// <param name="tenantId">The tenant that must own the capture.</param>
-    /// <exception cref="CoordinationException">Thrown when the capture or package differs from the admitted contract.</exception>
     private static void ValidateCapture(
         SourceControlOutputCaptureRecord capture,
         MafExecutionOwnerEvidenceBinding root,
@@ -297,14 +273,6 @@ internal static class MafExecutionOwnerEvidenceContract
             throw InvalidEvidence();
     }
 
-    /// <summary>
-    /// Verifies that a completed merge intent carries the matching accepted-run and approval receipt.
-    /// </summary>
-    /// <param name="intent">The current merge intent snapshot.</param>
-    /// <param name="root">The accepted root run and current decision state.</param>
-    /// <param name="tenantId">The tenant authorized for the merge.</param>
-    /// <param name="capture">The capture whose repository and resource pin must match the merge.</param>
-    /// <exception cref="CoordinationException">Thrown when merge state, source version, pin, or approval evidence is inconsistent.</exception>
     private static void ValidateMerge(
         SourceControlMergeIntentSnapshot intent,
         MafExecutionOwnerEvidenceBinding root,
@@ -351,9 +319,6 @@ internal static class MafExecutionOwnerEvidenceContract
             throw InvalidEvidence();
     }
 
-    /// <summary>
-    /// Checks whether a required or already-run platform operation prevents declaring an empty output set complete.
-    /// </summary>
     private static bool HasRequiredOrCompletedPlatformOperation(
         WorkPlanSnapshot plan,
         MafExecutionCheckpointSnapshot checkpoint) =>
@@ -363,9 +328,6 @@ internal static class MafExecutionOwnerEvidenceContract
             (step.Cardinality.Minimum > 0 ||
              checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(step.Id) != MafExecutionTaskStatus.Pending));
 
-    /// <summary>
-    /// Checks for a platform operation other than the selected merge or a successfully receipted BuildTest step.
-    /// </summary>
     private static bool HasUnsupportedPlatformOperation(
         WorkPlanSnapshot plan,
         MafExecutionCheckpointSnapshot checkpoint,
@@ -377,9 +339,6 @@ internal static class MafExecutionOwnerEvidenceContract
             (step.Cardinality.Minimum > 0 ||
              checkpoint.State.Progress.NonModelSteps.GetValueOrDefault(step.Id) != MafExecutionTaskStatus.Pending));
 
-    /// <summary>
-    /// Identifies a BuildTest step whose checkpoint contains a successful owner-validated terminal receipt.
-    /// </summary>
     private static bool IsVerifiedBuildTest(
         WorkflowStepDefinition step, MafExecutionCheckpointSnapshot checkpoint) =>
         MafBuildTestCommandContract.IsExecutable(step) &&
@@ -387,16 +346,10 @@ internal static class MafExecutionOwnerEvidenceContract
         checkpoint.State.BuildTestReceipts.TryGetValue(step.Id, out var receipt) &&
         receipt.ValidateFor(intent) == MafExecutionTaskStatus.Succeeded;
 
-    /// <summary>
-    /// Creates the conflict response used when the owner evidence contract cannot be satisfied.
-    /// </summary>
     private static CoordinationException InvalidEvidence() =>
         new("maf_execution_output_witness_evidence_invalid", StatusCodes.Status409Conflict);
 }
 
-/// <summary>
-/// Versioned evidence for one admitted capture, including the exact output rows proven by its manifest.
-/// </summary>
 internal sealed record MafExecutionOwnerEvidenceCaptureRow(
     int ContractVersion,
     string Kind,
@@ -407,9 +360,6 @@ internal sealed record MafExecutionOwnerEvidenceCaptureRow(
     DateTimeOffset AdmittedAt,
     ImmutableArray<MafExecutionOwnerEvidenceOutputRow> Outputs);
 
-/// <summary>
-/// One declared output file proven by a capture manifest and optionally associated with a merge intent.
-/// </summary>
 internal sealed record MafExecutionOwnerEvidenceOutputRow(
     string WorkItemId,
     string Path,
@@ -417,9 +367,6 @@ internal sealed record MafExecutionOwnerEvidenceOutputRow(
     long ByteLength,
     string? MergeIntentId);
 
-/// <summary>
-/// Versioned evidence that an approved merge completed for the captured outputs.
-/// </summary>
 internal sealed record MafExecutionOwnerEvidenceMergeRow(
     int ContractVersion,
     string Kind,
@@ -437,9 +384,6 @@ internal sealed record MafExecutionOwnerEvidenceMergeRow(
     CoordinatorGateDecisionReceipt ApprovalReceipt,
     string MergeSha);
 
-/// <summary>
-/// Versioned evidence that a plan with no declared outputs has no required platform work remaining.
-/// </summary>
 internal sealed record MafExecutionOwnerEvidenceNoOutputRow(
     int ContractVersion,
     string Kind,

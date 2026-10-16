@@ -12,42 +12,22 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Defines the server-owned boundary for negotiating an existing Sandbox resource without provisioning or releasing it.
-/// </summary>
 internal interface ICoordinatorSandboxResourceProvider
 {
-    /// <summary>
-    /// Gets the stable identifier of the Sandbox provider served by this adapter.
-    /// </summary>
     string ProviderId { get; }
-
-    /// <summary>
-    /// Gets the isolation choices the adapter can negotiate for an existing resource.
-    /// </summary>
     ImmutableArray<string> IsolationChoices { get; }
 
     // This boundary may resolve an existing registered resource, but must not provision or release one.
-    /// <summary>
-    /// Negotiates capabilities against an already registered resource for the accepted run.
-    /// </summary>
-    /// <remarks>The provider boundary must not create or delete a resource.</remarks>
     Task<ProviderResult<ResourceNegotiation>> NegotiateAsync(
         ProviderCandidate candidate,
         EffectiveRunSelection selection,
         CancellationToken cancellationToken);
 }
 
-/// <summary>
-/// Returns a run's validated selection context and any binding that still needs durable persistence.
-/// </summary>
 internal sealed record CoordinatorRunSelectionContextResolution(
     WorkPlanRunSelectionContext Context,
     PendingCoordinatorRunSelectionBinding? PendingBinding);
 
-/// <summary>
-/// Holds an accepted candidate and its completed negotiation until the owner transaction pins it.
-/// </summary>
 internal sealed record PendingCoordinatorRunSelectionBinding(
     EffectiveRunSelection Selection,
     long ExecutionFence,
@@ -57,9 +37,6 @@ internal sealed record PendingCoordinatorRunSelectionBinding(
     ImmutableArray<RoleRunSelection> Roles,
     WorkPlanRunSelectionContext Context);
 
-/// <summary>
-/// Resolves, pins, and persists the provider and role selections used to validate a coordinator work plan.
-/// </summary>
 internal sealed class CoordinatorRunSelectionContextStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -75,10 +52,6 @@ internal sealed class CoordinatorRunSelectionContextStore
     private readonly ProviderResolver _resolver;
     private readonly ImmutableDictionary<string, ICoordinatorSandboxResourceProvider> _providers;
 
-    /// <summary>
-    /// Creates the store and indexes unique server-registered Sandbox resource providers by stable identifier.
-    /// </summary>
-    /// <exception cref="ArgumentException">The schema or registered provider identities and choices are invalid.</exception>
     public CoordinatorRunSelectionContextStore(
         NpgsqlDataSource dataSource,
         string schema,
@@ -119,16 +92,9 @@ internal sealed class CoordinatorRunSelectionContextStore
         _providers = providerBuilder.ToImmutable();
     }
 
-    /// <summary>
-    /// Rehydrates a Source Control repository pin using the server's provider catalog and resolver.
-    /// </summary>
     public SourceControlRepositoryPin RestoreSourceControlRepositoryPin(string serializedPin) =>
         SourceControlOwnerStore.RestorePin(serializedPin, _catalog, _resolver);
 
-    /// <summary>
-    /// Reuses a persisted run context or negotiates a server-registered Sandbox candidate for first-time pinning.
-    /// </summary>
-    /// <exception cref="CoordinationException">The selection has no unique valid candidate or the resource provider is unavailable.</exception>
     public async Task<CoordinatorRunSelectionContextResolution> ResolveForPlanAsync(
         EffectiveRunSelection selection,
         long executionFence,
@@ -170,11 +136,6 @@ internal sealed class CoordinatorRunSelectionContextStore
         return new CoordinatorRunSelectionContextResolution(context, pendingBinding);
     }
 
-    /// <summary>
-    /// Reads and revalidates the persisted role and Sandbox binding for one execution fence.
-    /// </summary>
-    /// <returns>The exact stored context, or <see langword="null"/> when that fence has no binding.</returns>
-    /// <exception cref="CoordinationException">The stored binding no longer matches the accepted selection or server catalog.</exception>
     public async Task<WorkPlanRunSelectionContext?> ReadAsync(
         EffectiveRunSelection selection,
         long executionFence,
@@ -242,10 +203,6 @@ internal sealed class CoordinatorRunSelectionContextStore
         return new WorkPlanRunSelectionContext(persisted.Roles, pinned.Value);
     }
 
-    /// <summary>
-    /// Saves a newly negotiated binding in the decision transaction that accepts its work plan.
-    /// </summary>
-    /// <exception cref="CoordinationException">The pending binding is stale or another binding already occupies the run fence.</exception>
     internal async Task PersistBindingAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -329,10 +286,6 @@ internal sealed class CoordinatorRunSelectionContextStore
                 "coordinator_sandbox_binding_conflict", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Copies a validated provider binding from the previous execution fence to its immediate successor.
-    /// </summary>
-    /// <exception cref="CoordinationException">The fence sequence is invalid or the source binding is missing.</exception>
     internal async Task CarryForwardAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -374,10 +327,6 @@ internal sealed class CoordinatorRunSelectionContextStore
                 "coordinator_sandbox_binding_conflict", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Resolves an accepted provider candidate against the server catalog and selected required capabilities.
-    /// </summary>
-    /// <exception cref="CoordinationException">The candidate is malformed, disabled, or differs from server registration.</exception>
     private ProviderCandidate ResolveCandidate(EffectiveProviderCandidate selected)
     {
         if (!Version.TryParse(selected.AdapterVersion, out var adapterVersion) ||
@@ -422,19 +371,12 @@ internal sealed class CoordinatorRunSelectionContextStore
         return candidate;
     }
 
-    /// <summary>
-    /// Returns the configured resource adapter for a provider or fails closed when none is registered.
-    /// </summary>
     private ICoordinatorSandboxResourceProvider RequireProvider(string providerId) =>
         _providers.TryGetValue(providerId, out var provider)
             ? provider
             : throw BindingUnavailable(
                 $"The server has no registered Sandbox resource provider for '{providerId}'.");
 
-    /// <summary>
-    /// Reads the single exclusive Sandbox candidate embedded in an accepted selection snapshot.
-    /// </summary>
-    /// <exception cref="CoordinationException">The provider snapshot is absent, malformed, ambiguous, or not exclusive.</exception>
     private static EffectiveProviderCandidate ReadSelectedSandboxCandidate(JsonElement selection)
     {
         if (selection.ValueKind != JsonValueKind.Object ||
@@ -476,18 +418,12 @@ internal sealed class CoordinatorRunSelectionContextStore
         return candidate;
     }
 
-    /// <summary>
-    /// Adds the provider's supported isolation choices to every authorized role selection.
-    /// </summary>
     private static ImmutableArray<RoleRunSelection> CreateAuthorizedRoles(
         ImmutableArray<RoleRunSelection> roles,
         ImmutableArray<string> isolationChoices) =>
         roles.Select(role => role with { EligibleIsolationChoices = isolationChoices })
             .ToImmutableArray();
 
-    /// <summary>
-    /// Compares role contexts using the same deterministic JSON representation used for persistence.
-    /// </summary>
     private static bool RolesMatch(
         ImmutableArray<RoleRunSelection> expected,
         ImmutableArray<RoleRunSelection> persisted) =>
@@ -498,9 +434,6 @@ internal sealed class CoordinatorRunSelectionContextStore
             JsonSerializer.Serialize(persisted, JsonOptions),
             StringComparison.Ordinal);
 
-    /// <summary>
-    /// Decodes the durable row and converts malformed fields into a fail-closed provider error.
-    /// </summary>
     private static PersistedBinding ReadPersistedBinding(NpgsqlDataReader reader)
     {
         try
@@ -531,9 +464,6 @@ internal sealed class CoordinatorRunSelectionContextStore
         }
     }
 
-    /// <summary>
-    /// Reads a persisted unique string array and rejects uninitialized, blank, or repeated values.
-    /// </summary>
     private static ImmutableArray<string> ReadStringArray(string json)
     {
         var values = JsonSerializer.Deserialize<ImmutableArray<string>>(json, JsonOptions);
@@ -543,15 +473,9 @@ internal sealed class CoordinatorRunSelectionContextStore
         return values;
     }
 
-    /// <summary>
-    /// Hashes the accepted selection snapshot so the binding cannot be reused with different run inputs.
-    /// </summary>
     private static string HashSelection(EffectiveRunSelection selection) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(selection.Snapshot.GetRawText())));
 
-    /// <summary>
-    /// Compares project, run, revisions, context, and selection hash before carrying a pending binding forward.
-    /// </summary>
     private static bool SelectionMatches(EffectiveRunSelection first, EffectiveRunSelection second) =>
         first.ProjectId == second.ProjectId &&
         first.RunId == second.RunId &&
@@ -561,24 +485,15 @@ internal sealed class CoordinatorRunSelectionContextStore
         first.ContextRevision == second.ContextRevision &&
         HashSelection(first) == HashSelection(second);
 
-    /// <summary>
-    /// Checks that a provider, role, or choice identifier uses the supported stable identifier syntax.
-    /// </summary>
     private static bool IsStableIdentifier(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= WorkflowDomainLimits.MaximumIdentifierLength &&
         value.All(character => char.IsAsciiLetterOrDigit(character) ||
             character is '.' or '_' or '-' or ':');
 
-    /// <summary>
-    /// Creates the consistent service-unavailable error used when an exact Sandbox binding cannot be supplied.
-    /// </summary>
     private static CoordinationException BindingUnavailable(string message) =>
         new("coordinator_sandbox_provider_unavailable", StatusCodes.Status503ServiceUnavailable);
 
-    /// <summary>
-    /// Holds the validated durable Sandbox and role-selection data for one run fence.
-    /// </summary>
     private sealed record PersistedBinding(
         string SelectionHash,
         long ProjectRevision,
@@ -599,9 +514,6 @@ internal sealed class CoordinatorRunSelectionContextStore
         ImmutableArray<string> NegotiatedCapabilities,
         ImmutableArray<string> IsolationChoices)
     {
-        /// <summary>
-        /// Checks all selected provider descriptor fields against the accepted selection candidate.
-        /// </summary>
         public bool Matches(EffectiveProviderCandidate candidate) =>
             ProviderId == candidate.ProviderId &&
             AdapterVersion == candidate.AdapterVersion &&

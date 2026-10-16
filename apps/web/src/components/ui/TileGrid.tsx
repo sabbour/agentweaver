@@ -28,10 +28,6 @@ export interface TileGridProps {
   'aria-label'?: string;
 }
 
-/**
- * Lays out caller-provided tiles in the shared responsive grid.
- * Column and spacing props control layout; it has no API dependency or local state.
- */
 export function TileGrid({ children, className, ...rest }: TileGridProps) {
   const styles = useGridStyles();
   return (
@@ -177,10 +173,6 @@ export interface TileProps {
   [key: string]: unknown;
 }
 
-/**
- * Renders a single tile with optional title and caller-provided content.
- * Props control the tile presentation; it does not load or mutate data.
- */
 export function Tile({
   media,
   bubble = true,

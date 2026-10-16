@@ -29,7 +29,6 @@ export type RunAction =
   | { type: 'ADVANCE' }
   | { type: 'DISPATCH_TICK' };
 
-/** Creates the initial local animation state for a landing workflow scenario. */
 export function initialRunState(): RunState {
   return {
     activeId: SCENARIOS[0].id,
@@ -46,17 +45,12 @@ function freshRun(activeId: string, phase: Phase, token: number): RunState {
 }
 
 /** Id of the scenario after `id`, wrapping from the last back to the first. */
-/** Selects the next scenario ID in the curated sequence, wrapping when needed. */
 export function nextScenarioId(id: string): string {
   const index = SCENARIOS.findIndex((s) => s.id === id);
   const next = (index + 1 + SCENARIOS.length) % SCENARIOS.length;
   return SCENARIOS[next].id;
 }
 
-/**
- * Applies one playback action to the landing demo state.
- * It returns a new state for play, pause, reset, scenario changes, and simulation events.
- */
 export function runReducer(state: RunState, action: RunAction): RunState {
   switch (action.type) {
     case 'SELECT':

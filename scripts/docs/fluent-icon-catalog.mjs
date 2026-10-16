@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
 
-/** Source catalog mapping diagram semantics and aliases to Fluent icons. */
 export const ICONCLOUD_CATALOG = JSON.parse(readFileSync(
   new URL('../../docs/diagrams/drawio/iconcloud-fluent-icons.json', import.meta.url),
   'utf8',
@@ -11,7 +10,6 @@ const rules = ICONCLOUD_CATALOG.semanticRules.map(rule => ({
   pattern: new RegExp(rule.pattern, 'i'),
 }));
 
-/** Resolve an explicit icon, semantic match, or supported legacy icon alias for a node. */
 export function resolveFluentIcon(node) {
   if (node.fluentIcon) {
     if (!ICONCLOUD_CATALOG.icons[node.fluentIcon]) {
@@ -27,7 +25,6 @@ export function resolveFluentIcon(node) {
   throw new Error(`No IconCloud Fluent icon mapping for ${node.id ?? node.label ?? 'node'}`);
 }
 
-/** Build the public IconCloud search URL for a known catalog icon. */
 export function iconCloudSourceUrl(icon) {
   const entry = ICONCLOUD_CATALOG.icons[icon];
   if (!entry) throw new Error(`Unknown IconCloud Fluent icon: ${icon}`);

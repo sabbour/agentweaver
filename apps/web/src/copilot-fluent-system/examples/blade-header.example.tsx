@@ -1,7 +1,6 @@
 import { Button } from '..';
 import { ArrowClockwiseRegular, DismissRegular, SparkleRegular } from '@fluentui/react-icons';
 import { BladeHeader } from '..';
-/** Shows header commands, overflow actions, a Copilot prompt, and a dismiss action. */
 export function BladeHeaderExample() {
   return (
     <BladeHeader

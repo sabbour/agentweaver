@@ -22,11 +22,6 @@ import { SetupReadiness } from './SetupReadiness';
 const CONNECTION_LOAD_ERROR = 'The model provider status did not load. Reload the status and try again.';
 const GITHUB_APPS_EXPLANATION = 'GitHub Copilot provides AI access. Repository authorization is managed separately.';
 
-/**
- * Loads and edits project model-provider settings through the project API.
- * Route state identifies the project; effects load provider choices and local form state tracks
- * edits, authorization status, saves, and errors.
- */
 export function ProjectModelProviderSettings({
   projectId,
   triggerLabel = 'Manage GitHub Copilot',

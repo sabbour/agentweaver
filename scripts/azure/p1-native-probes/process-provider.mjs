@@ -1,7 +1,3 @@
-/**
- * Supplies the allowlisted local process recipes used by P1 native recovery probes.
- * Each recipe invokes a fixed command with structured arguments rather than accepting shell text.
- */
 import { createHash } from 'node:crypto';
 import { run } from '../lib/exec.mjs';
 
@@ -295,10 +291,6 @@ function mountMarker(value) {
     /^agentweaver-p1:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
-/**
- * Creates a provider that executes approved probe recipes and records bounded process evidence.
- * Unknown recipes or invalid inputs are rejected before any process is started.
- */
 export function createP1NativeProcessProvider({
   kubeContext,
   clusterIdentity,

@@ -6,16 +6,10 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity;
 
-/// <summary>
-/// Immutable remote MCP OAuth connection configuration, including exact resource, issuer,
-/// redirect, scopes, transport profile, and a canonical binding hash.
-/// </summary>
 public sealed class RemoteMcpOAuthConnectionBinding
 {
     public const string SupportedTransportProfile = "mcp-2025-06-18";
 
-    /// <summary>Validates and freezes the connection configuration, then computes its binding hash.</summary>
-    /// <exception cref="ArgumentException">A URI, scope, profile, ID, or configuration hash is invalid.</exception>
     public RemoteMcpOAuthConnectionBinding(
         string humanId,
         string tenantId,
@@ -102,7 +96,6 @@ public sealed class RemoteMcpOAuthConnectionBinding
     public IReadOnlyList<string> Scopes { get; }
     public string BindingHash { get; }
 
-    /// <summary>Compares connection bindings by their canonical hash.</summary>
     public bool Matches(RemoteMcpOAuthConnectionBinding? other) =>
         other is not null && string.Equals(BindingHash, other.BindingHash, StringComparison.Ordinal);
 
@@ -126,7 +119,6 @@ public sealed class RemoteMcpOAuthConnectionBinding
             character is not ('"' or '\\'));
 }
 
-/// <summary>Stored connection state, including indeterminate refresh when the provider outcome is unknown.</summary>
 public enum RemoteMcpOAuthConnectionState
 {
     NotConnected,
@@ -138,10 +130,8 @@ public enum RemoteMcpOAuthConnectionState
     Revoked
 }
 
-/// <summary>Immutable OAuth connection and credential references at one configuration revision.</summary>
 public sealed class RemoteMcpOAuthConnection
 {
-    /// <summary>Creates a connection state whose token and refresh-attempt fields satisfy its lifecycle rules.</summary>
     public RemoteMcpOAuthConnection(
         RemoteMcpOAuthConnectionBinding binding,
         long revision,
@@ -216,7 +206,6 @@ public sealed class RemoteMcpOAuthConnection
     public override string ToString() => nameof(RemoteMcpOAuthConnection) + " [REDACTED]";
 }
 
-/// <summary>Lifecycle of one consent attempt and its one-time callback claim.</summary>
 public enum RemoteMcpOAuthConsentState
 {
     Pending,
@@ -226,7 +215,6 @@ public enum RemoteMcpOAuthConsentState
     Superseded
 }
 
-/// <summary>What is known about an OAuth HTTP request when its flow fails.</summary>
 public enum RemoteMcpOAuthRequestFailure
 {
     DefinitelyNotSent,
@@ -234,10 +222,8 @@ public enum RemoteMcpOAuthRequestFailure
     ProviderRejected
 }
 
-/// <summary>Hashed state and PKCE challenge for a time-bounded, revision-bound consent attempt.</summary>
 public sealed class RemoteMcpOAuthPendingConsent
 {
-    /// <summary>Creates a validated consent record; only a claimed callback may carry a claim ID.</summary>
     public RemoteMcpOAuthPendingConsent(
         Guid correlationId,
         string bindingHash,
@@ -295,7 +281,6 @@ public sealed class RemoteMcpOAuthPendingConsent
 
     public override string ToString() => nameof(RemoteMcpOAuthPendingConsent) + " [REDACTED]";
 
-    /// <summary>Requires a canonical base64url-encoded S256 PKCE challenge.</summary>
     private static void ValidateChallenge(string value)
     {
         ArgumentNullException.ThrowIfNull(value);
@@ -307,11 +292,9 @@ public sealed class RemoteMcpOAuthPendingConsent
             throw new ArgumentException("Expected a canonical S256 PKCE challenge.", nameof(value));
     }
 
-    /// <summary>Encodes bytes as unpadded base64url for OAuth state and PKCE values.</summary>
     internal static string ToBase64Url(ReadOnlySpan<byte> value) =>
         Convert.ToBase64String(value).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
-    /// <summary>Decodes a base64url value after restoring the standard alphabet and padding.</summary>
     internal static byte[] FromBase64Url(string value)
     {
         var base64 = value.Replace('-', '+').Replace('_', '/');
@@ -320,7 +303,6 @@ public sealed class RemoteMcpOAuthPendingConsent
     }
 }
 
-/// <summary>Transient secret state and PKCE verifier used to begin one consent flow.</summary>
 public sealed class RemoteMcpOAuthConsentMaterial
 {
     private readonly RemoteMcpOAuthConnectionBinding _binding;
@@ -353,7 +335,6 @@ public sealed class RemoteMcpOAuthConsentMaterial
     public SecretCredential PkceVerifier { get; }
     public string PkceChallenge { get; }
 
-    /// <summary>Creates random state and PKCE verifier material with a future expiry.</summary>
     public static RemoteMcpOAuthConsentMaterial Create(
         RemoteMcpOAuthConnectionBinding binding,
         Guid correlationId,
@@ -374,7 +355,6 @@ public sealed class RemoteMcpOAuthConsentMaterial
             NewVerifier(), NewVerifier(), clock);
     }
 
-    /// <summary>Stores only the state hash and protected verifier reference in the pending-consent record.</summary>
     public RemoteMcpOAuthPendingConsent CreatePendingConsent(
         long connectionRevision,
         SecretRef protectedVerifierReference,
@@ -390,7 +370,6 @@ public sealed class RemoteMcpOAuthConsentMaterial
 
     public override string ToString() => nameof(RemoteMcpOAuthConsentMaterial) + " [REDACTED]";
 
-    /// <summary>Checks the material's connection binding and that both transient secrets remain usable.</summary>
     internal bool IsFor(RemoteMcpOAuthConnectionBinding binding) =>
         _binding.Matches(binding) && State.IsUsable() && PkceVerifier.IsUsable();
 
@@ -398,14 +377,12 @@ public sealed class RemoteMcpOAuthConsentMaterial
         RemoteMcpOAuthPendingConsent.ToBase64Url(RandomNumberGenerator.GetBytes(32));
 }
 
-/// <summary>Next connection and consent snapshots plus transient browser material for consent.</summary>
 public sealed record RemoteMcpOAuthConsentStart(
     long ExpectedConnectionRevision,
     RemoteMcpOAuthConnection Connection,
     RemoteMcpOAuthPendingConsent Consent,
     RemoteMcpOAuthConsentMaterial Material);
 
-/// <summary>Fencing claim for one refresh attempt and credential revision.</summary>
 public sealed record RemoteMcpOAuthRefreshClaim(
     Guid ConnectionId,
     string BindingHash,
@@ -414,20 +391,14 @@ public sealed record RemoteMcpOAuthRefreshClaim(
     Guid AttemptId,
     SecretRef RefreshTokenReference);
 
-/// <summary>Atomic next connection and consent snapshots after a successful callback.</summary>
 public sealed record RemoteMcpOAuthCallbackCompletion(
     RemoteMcpOAuthConnection Connection,
     RemoteMcpOAuthPendingConsent Consent);
 
 // These transitions are pure. Their owner must persist each returned snapshot
 // with an atomic revision compare-and-swap; a SecretRef write is not that CAS.
-/// <summary>
-/// Pure compare-and-swap transitions for consent, callbacks, refresh, and disconnect. Owners
-/// must persist returned snapshots with atomic revision checks; a secret write alone is not CAS.
-/// </summary>
 public static class RemoteMcpOAuthLifecycle
 {
-    /// <summary>Starts consent only when the expected connection revision and current binding still match.</summary>
     public static RemoteMcpOAuthConsentStart? TryBeginConsent(
         RemoteMcpOAuthConnection current,
         RemoteMcpOAuthConnectionBinding currentBinding,
@@ -457,7 +428,6 @@ public static class RemoteMcpOAuthLifecycle
         return new RemoteMcpOAuthConsentStart(current.Revision, connection, consent, material);
     }
 
-    /// <summary>Claims a valid state callback once, tied to the exact connection and consent revisions.</summary>
     public static RemoteMcpOAuthPendingConsent? TryClaimCallback(
         RemoteMcpOAuthPendingConsent consent,
         RemoteMcpOAuthConnection connection,
@@ -484,7 +454,6 @@ public static class RemoteMcpOAuthLifecycle
         return NewConsentRevision(consent, RemoteMcpOAuthConsentState.CallbackClaimed, claimAttemptId);
     }
 
-    /// <summary>Completes a claimed callback by storing token references and consuming the consent record.</summary>
     public static RemoteMcpOAuthCallbackCompletion? TryCompleteCallback(
         RemoteMcpOAuthPendingConsent consent,
         RemoteMcpOAuthConnection connection,
@@ -518,10 +487,6 @@ public static class RemoteMcpOAuthLifecycle
             NewConsentRevision(consent, RemoteMcpOAuthConsentState.Consumed, null));
     }
 
-    /// <summary>
-    /// Returns a claimed callback to pending only when definitely unsent; provider rejection
-    /// denies it, and uncertain outcomes consume it to prevent replay.
-    /// </summary>
     public static RemoteMcpOAuthPendingConsent? TryResolveCallbackFailure(
         RemoteMcpOAuthPendingConsent consent,
         RemoteMcpOAuthConnection connection,
@@ -546,7 +511,6 @@ public static class RemoteMcpOAuthLifecycle
         return NewConsentRevision(consent, RemoteMcpOAuthConsentState.Consumed, null);
     }
 
-    /// <summary>Closes a settled failed consent attempt and clears its old credentials.</summary>
     public static RemoteMcpOAuthConnection? TryCloseFailedConsent(
         RemoteMcpOAuthPendingConsent consent,
         RemoteMcpOAuthConnection connection,
@@ -569,7 +533,6 @@ public static class RemoteMcpOAuthLifecycle
             RemoteMcpOAuthConnectionState.NotConnected);
     }
 
-    /// <summary>Creates a fenced refresh claim only from the exact current authorized connection.</summary>
     public static RemoteMcpOAuthRefreshClaim? TryBeginRefresh(
         RemoteMcpOAuthConnection current,
         RemoteMcpOAuthConnectionBinding currentBinding,
@@ -602,7 +565,6 @@ public static class RemoteMcpOAuthLifecycle
             current.CredentialRevision, attemptId, current.RefreshTokenReference);
     }
 
-    /// <summary>Accepts refreshed tokens only when the same claim still owns the connection revision.</summary>
     public static RemoteMcpOAuthConnection? TryCompleteRefresh(
         RemoteMcpOAuthConnection current,
         RemoteMcpOAuthConnectionBinding currentBinding,
@@ -631,10 +593,6 @@ public static class RemoteMcpOAuthLifecycle
                 : refreshTokenExpiresAt);
     }
 
-    /// <summary>
-    /// Revokes on provider rejection, restores authorized state when definitely unsent, and
-    /// marks the attempt indeterminate when the provider may have rotated credentials.
-    /// </summary>
     public static RemoteMcpOAuthConnection? TryResolveRefreshFailure(
         RemoteMcpOAuthConnection current,
         RemoteMcpOAuthConnectionBinding currentBinding,
@@ -667,7 +625,6 @@ public static class RemoteMcpOAuthLifecycle
             current.RefreshTokenExpiresAt);
     }
 
-    /// <summary>Creates a new disconnected or revoked revision for the exact current binding.</summary>
     public static RemoteMcpOAuthConnection? TryDisconnect(
         RemoteMcpOAuthConnection current,
         RemoteMcpOAuthConnectionBinding currentBinding,
@@ -685,7 +642,6 @@ public static class RemoteMcpOAuthLifecycle
             revoked ? RemoteMcpOAuthConnectionState.Revoked : RemoteMcpOAuthConnectionState.Disconnected);
     }
 
-    /// <summary>Checks whether the exact binding has an active, unexpired access token.</summary>
     public static bool IsCurrentAccessTokenUsable(
         RemoteMcpOAuthConnection current,
         RemoteMcpOAuthConnectionBinding currentBinding,

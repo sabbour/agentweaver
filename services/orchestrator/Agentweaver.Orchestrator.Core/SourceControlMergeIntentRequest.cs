@@ -2,10 +2,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Orchestrator.Core;
 
-/// <summary>
-/// Pending merge request that saves the exact accepted workflow, source-decision version, pull request,
-/// and approval request identity until a typed approval receipt arrives.
-/// </summary>
 public sealed class SourceControlMergeIntentRequest
 {
     private SourceControlMergeIntentRequest(
@@ -52,8 +48,6 @@ public sealed class SourceControlMergeIntentRequest
     public SourceControlMergeMethod Method { get; }
     public DateTimeOffset CreatedAt { get; }
 
-    /// <summary>Validates a pending merge against the current accepted run and confirmed platform gate.</summary>
-    /// <exception cref="InvalidOperationException">The workflow, plan, gate state, or merge capability is not current.</exception>
     public static SourceControlMergeIntentRequest Create(
         string intentId,
         string approvalRequestId,
@@ -135,8 +129,6 @@ public sealed class SourceControlMergeIntentRequest
             createdAt);
     }
 
-    /// <summary>Rebuilds the exact merge assembly request and creates an intent from its accepted approval receipt.</summary>
-    /// <exception cref="InvalidOperationException">The receipt or current decision state does not match this request.</exception>
     public SourceControlMergeIntent Approve(
         CoordinatorDecisionState currentDecisionState,
         CoordinatorGateDecisionReceipt approvalReceipt)

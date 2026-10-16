@@ -4,7 +4,6 @@ import { ApiError } from '../api/client';
 import { aiExecutionProviderLabel, providerIdentity } from '../components/aiExecutionContext';
 import type { AiExecutionContext, EffectiveModelProvider } from '../api/types';
 
-/** Reads a refreshed execution context from a provider-change or expired-context response. */
 function replacementContext(error: unknown): AiExecutionContext | null {
   if (!(error instanceof ApiError) || error.status !== 409) return null;
   const payload = error.payload;
@@ -14,7 +13,6 @@ function replacementContext(error: unknown): AiExecutionContext | null {
   return value as AiExecutionContext;
 }
 
-/** Returns a recognized execution-context error code from an API error payload. */
 function replacementErrorCode(error: unknown): string | null {
   if (!(error instanceof ApiError) || !error.payload || typeof error.payload !== 'object')
     return null;
@@ -22,11 +20,6 @@ function replacementErrorCode(error: unknown): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-/**
- * Prepares and tracks the provider confirmation required for one AI operation.
- * A prepared context is sent with the action; completed or active display state
- * is kept separate so refreshes cannot silently replace the provider being reviewed.
- */
 export function useAiExecutionContext(
   operation: string,
   projectId?: string,

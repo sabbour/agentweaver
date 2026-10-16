@@ -3,14 +3,12 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.EventsAndSessions.Cost;
 
-/// <summary>Selects the Azure pricing shape; provisioned-throughput work stays unpriced without usage-share evidence.</summary>
 public enum AzureCostPricingModel
 {
     StandardTokens,
     ProvisionedThroughput
 }
 
-/// <summary>Configures a versioned Azure rate card and the resource identity bound to a run.</summary>
 public sealed record AzureCostProviderOptions(
     string ResourceId,
     long ResourceGeneration,
@@ -23,8 +21,6 @@ public sealed record AzureCostProviderOptions(
     public const decimal TokensPerRateUnit = 1_000_000m;
     public const string RateCardSource = "azure-retail-prices";
 
-    /// <summary>Reads and validates an optional explicit rate card from configuration.</summary>
-    /// <returns>Null when the section is absent; invalid or incomplete configuration throws.</returns>
     public static AzureCostProviderOptions? FromConfiguration(IConfigurationSection section)
     {
         ArgumentNullException.ThrowIfNull(section);
@@ -57,7 +53,6 @@ public sealed record AzureCostProviderOptions(
         return options;
     }
 
-    /// <summary>Checks resource identity, rate-card denomination, and model-scoped input/output rates.</summary>
     public void Validate()
     {
         if (!IsToken(ResourceId, 256) || ResourceGeneration < 1 ||
@@ -107,7 +102,6 @@ public sealed record AzureCostProviderOptions(
             throw new ArgumentException("Each Azure model requires explicit input and output rates.");
     }
 
-    /// <summary>Returns an immutable copy so later configuration mutations cannot change a pinned quote.</summary>
     internal CostRateCard SnapshotRateCard()
     {
         Validate();
@@ -125,9 +119,7 @@ public sealed record AzureCostProviderOptions(
         }
     }
 
-    /// <summary>Builds the canonical input-token rate key for a concrete model identifier.</summary>
     internal static string InputRateKey(string modelId) => $"{modelId}|input";
-    /// <summary>Builds the canonical output-token rate key for a concrete model identifier.</summary>
     internal static string OutputRateKey(string modelId) => $"{modelId}|output";
 
     private static string PricingModelId(AzureCostPricingModel pricingModel) =>

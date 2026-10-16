@@ -1,5 +1,4 @@
 import { ProgressBarWithLabel } from '..';
-/** Shows determinate progress with a count and an indeterminate provisioning state. */
 export function ProgressBarWithLabelExample() {
   return (
     <div className="azf-stack azf-gap-l">

@@ -5,16 +5,13 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.EventsAndSessions;
 
-/// <summary>Signals that stored material bytes or their journal reference do not match the recorded integrity contract.</summary>
 internal sealed class SessionMaterialIntegrityException(string code) : Exception(code)
 {
     public string Code { get; } = code;
 }
 
-/// <summary>Writes bounded producer material to Object Store before its journal reference and verifies reads by digest.</summary>
 internal sealed class SessionMaterialStore(PostgresSessionsJournal journal, IObjectStore objects)
 {
-    /// <summary>Persists bytes and a typed event reference after checking the runtime source and current authority.</summary>
     internal async Task<SessionMaterialAcknowledgment> WriteAsync(
         ClaimsPrincipal principal, string sessionId, SessionMaterialWriteRequest input,
         RuntimeRegistration registration, SdkSessionFacts source,
@@ -43,7 +40,6 @@ internal sealed class SessionMaterialStore(PostgresSessionsJournal journal, IObj
         var identity = scope.Value.ForSession(sessionId);
         var bytes = input.Bytes.ToArray();
         var digest = RuntimeContractValidation.Hash(bytes);
-        // A deterministic key makes an identical retry inspect the existing object rather than replace it.
         var keyScope = RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
             $"{binding.TenantId}\0{identity.ProjectId}\0{identity.RunId}\0{identity.SessionId}"));
         var reference = new SessionObjectReference(
@@ -90,7 +86,6 @@ internal sealed class SessionMaterialStore(PostgresSessionsJournal journal, IObj
         return Acknowledgment(result.Event, reference);
     }
 
-    /// <summary>Reads only material named by an event in the authorized session and verifies its byte length and hash.</summary>
     internal async Task<SessionMaterialReadResult> ReadAsync(
         ClaimsPrincipal principal, string sessionId, Guid eventId, SessionMaterialKind kind,
         Func<SessionMaterialBinding, CancellationToken, Task> validateReadAuthority,
@@ -128,7 +123,6 @@ internal sealed class SessionMaterialStore(PostgresSessionsJournal journal, IObj
         return new(Acknowledgment(envelope, reference), bytes);
     }
 
-    /// <summary>Compares object references, including any full private tool-result proof.</summary>
     private static bool SameReference(SessionObjectReference first, SessionObjectReference second)
     {
         if (first.Key != second.Key || first.Purpose != second.Purpose || first.ByteLength != second.ByteLength)
@@ -143,7 +137,6 @@ internal sealed class SessionMaterialStore(PostgresSessionsJournal journal, IObj
             proofMatches;
     }
 
-    /// <summary>Requires a completed result event whose call identity and event ID are derived from its proof.</summary>
     private static SessionObjectReference RequireRemoteToolResultReference(
         SessionEventEnvelope envelope, ToolCallSessionPayload payload)
     {
@@ -157,13 +150,11 @@ internal sealed class SessionMaterialStore(PostgresSessionsJournal journal, IObj
         return payload.Result;
     }
 
-    /// <summary>Builds the private result event using only proof-derived tool identity and the stored object reference.</summary>
     private static ToolCallSessionPayload CreateRemoteToolResultPayload(
         RemoteToolResultProof proof, SessionObjectReference reference) =>
         new(SessionMaterialValidation.RemoteToolResultCallId(proof),
             SessionMaterialValidation.RemoteToolResultToolName(proof), "completed", null, reference);
 
-    /// <summary>Checks that every proof binding matches the current immutable runtime registration.</summary>
     private static void ValidateRemoteToolResultBinding(
         SessionMaterialWriteRequest input, RuntimeRegistration registration)
     {
@@ -191,12 +182,10 @@ internal sealed class SessionMaterialStore(PostgresSessionsJournal journal, IObj
             throw new RuntimeAuthorizationException("runtime_remote_tool_result_binding_invalid");
     }
 
-    /// <summary>Builds the acknowledgment from the committed event position and its exact material reference.</summary>
     private static SessionMaterialAcknowledgment Acknowledgment(
         SessionEventEnvelope envelope, SessionObjectReference reference) =>
         new(1, envelope.Identity, envelope.EventId, envelope.Position, reference);
 
-    /// <summary>Reads exactly the recorded size, rejects trailing bytes, and verifies the SHA-256 digest.</summary>
     private static async Task<byte[]> ReadVerifiedBytesAsync(
         ObjectRead download, SessionObjectReference reference, CancellationToken cancellationToken)
     {

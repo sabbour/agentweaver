@@ -12,7 +12,6 @@ using NpgsqlTypes;
 
 namespace Agentweaver.EventsAndSessions;
 
-/// <summary>Configures the fixed owners, Identity issuer/audience, and schema for accepted-effect facts.</summary>
 public sealed record AcceptedEffectRuntimeOptions(
     Uri IdentityIssuer,
     string EventsAudience,
@@ -20,7 +19,6 @@ public sealed record AcceptedEffectRuntimeOptions(
     Uri ProjectsConfigBaseAddress,
     string Schema)
 {
-    /// <summary>Reads and validates the explicitly configured HTTPS addresses and caller audience.</summary>
     public static AcceptedEffectRuntimeOptions Read(
         IConfiguration configuration,
         string schema)
@@ -37,7 +35,6 @@ public sealed record AcceptedEffectRuntimeOptions(
         return new AcceptedEffectRuntimeOptions(issuer, audience, knowledge, projects, schema);
     }
 
-    /// <summary>Parses an absolute HTTPS address without embedded credentials or caller-controlled suffixes.</summary>
     private static Uri ReadHttpsUri(string? value, string key)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
@@ -51,18 +48,13 @@ public sealed record AcceptedEffectRuntimeOptions(
     }
 }
 
-/// <summary>Stores an owner-issued accepted-effect receipt as an ordered project fact.</summary>
 public interface IProjectFactJournal
 {
-    /// <summary>Appends the immutable receipt once, returning the original acknowledgment for an identical retry.</summary>
     Task<ProjectFactAcknowledgment> AppendAcceptedEffectAsync(
         AcceptedEffectReceipt receipt,
         CancellationToken cancellationToken = default);
 }
 
-/// <summary>
-/// Persists accepted-effect facts and their inbox receipt in one PostgreSQL transaction per project stream.
-/// </summary>
 public sealed class PostgresProjectFactJournal : IProjectFactJournal
 {
     private const string InboxConsumer = "events-and-sessions.accepted-effects";
@@ -83,7 +75,6 @@ public sealed class PostgresProjectFactJournal : IProjectFactJournal
         _outbox = new PostgresOutbox(dataSource, options.Schema);
     }
 
-    /// <summary>Appends the receipt or reports an identity conflict when a duplicate ID has changed content.</summary>
     public async Task<ProjectFactAcknowledgment> AppendAcceptedEffectAsync(
         AcceptedEffectReceipt receipt,
         CancellationToken cancellationToken = default)
@@ -101,7 +92,6 @@ public sealed class PostgresProjectFactJournal : IProjectFactJournal
             cancellationToken);
         if (admission == InboxAdmission.Duplicate)
         {
-            // Inbox admission and the fact row share this transaction, so a retry can only observe a committed fact.
             var duplicate = await ReadExistingAsync(
                 connection, transaction, receipt.ReceiptId, receiptJson, cancellationToken);
             await transaction.CommitAsync(cancellationToken);
@@ -152,7 +142,6 @@ public sealed class PostgresProjectFactJournal : IProjectFactJournal
         return acknowledgment;
     }
 
-    /// <summary>Allocates the next serialized position in the project's append-only fact stream.</summary>
     private async Task<long> NextPositionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -171,7 +160,6 @@ public sealed class PostgresProjectFactJournal : IProjectFactJournal
             ?? throw new InvalidOperationException("The project fact stream position was not assigned."));
     }
 
-    /// <summary>Checks that a duplicate receipt is byte-equivalent as JSON and returns its saved acknowledgment.</summary>
     private async Task<ProjectFactAcknowledgment> ReadExistingAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -198,7 +186,6 @@ public sealed class PostgresProjectFactJournal : IProjectFactJournal
     }
 }
 
-/// <summary>Reads an immutable accepted-effect receipt from Knowledge while forwarding the original caller token.</summary>
 public sealed class KnowledgeAcceptedEffectReceiptClient(
     HttpClient client,
     IHttpContextAccessor contextAccessor)
@@ -209,7 +196,6 @@ public sealed class KnowledgeAcceptedEffectReceiptClient(
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
-    /// <summary>Reads a receipt through its exact project/run route.</summary>
     public async Task<AcceptedEffectReceipt> ReadAsync(
         string projectId,
         string runId,
@@ -220,14 +206,12 @@ public sealed class KnowledgeAcceptedEffectReceiptClient(
             $"/accepted-effects/{receiptId:D}",
             cancellationToken).ConfigureAwait(false);
 
-    /// <summary>Reads a receipt by ID when the request does not supply project/run selectors.</summary>
     public async Task<AcceptedEffectReceipt> ReadAsync(
         Guid receiptId,
         CancellationToken cancellationToken) =>
         await ReadAsync($"/internal/accepted-effects/{receiptId:D}", cancellationToken)
             .ConfigureAwait(false);
 
-    /// <summary>Validates the owner response and maps missing, denied, malformed, or unavailable results to stable errors.</summary>
     private async Task<AcceptedEffectReceipt> ReadAsync(
         string path,
         CancellationToken cancellationToken)
@@ -266,7 +250,6 @@ public sealed class KnowledgeAcceptedEffectReceiptClient(
         }
     }
 
-    /// <summary>Sends the owner request without following redirects and maps transport failure to service unavailability.</summary>
     private static async Task<HttpResponseMessage> SendAsync(
         HttpClient client,
         HttpRequestMessage request,
@@ -284,7 +267,6 @@ public sealed class KnowledgeAcceptedEffectReceiptClient(
     }
 }
 
-/// <summary>Reads current Projects authority before an accepted-effect receipt is stored as a project fact.</summary>
 public sealed class ProjectsConfigAuthorizationClient(
     HttpClient client,
     IHttpContextAccessor contextAccessor,
@@ -296,7 +278,6 @@ public sealed class ProjectsConfigAuthorizationClient(
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
-    /// <summary>Requires a valid owner context and current WriteProjects authority for the receipt's project.</summary>
     public async Task<ProjectAuthorizationContextResponse> GetCurrentAuthorityAsync(
         string projectId,
         string runId,
@@ -367,7 +348,6 @@ public sealed class ProjectsConfigAuthorizationClient(
         }
     }
 
-    /// <summary>Checks effective project or tenant grants; token claims alone do not satisfy this check.</summary>
     private static bool HasWritePermission(
         ProjectAuthorizationContextResponse authority,
         string projectId) =>
@@ -379,7 +359,6 @@ public sealed class ProjectsConfigAuthorizationClient(
             resource.Permissions.Any(permission =>
                 permission.Permission == ProjectAuthorizationPermission.WriteProjects));
 
-    /// <summary>Requires exactly one nonblank caller claim of the requested type.</summary>
     private static string Claim(ClaimsPrincipal principal, string type)
     {
         var values = principal.FindAll(type).Take(2).ToArray();
@@ -388,7 +367,6 @@ public sealed class ProjectsConfigAuthorizationClient(
         return values[0].Value;
     }
 
-    /// <summary>Reads an optional claim and rejects repeated values.</summary>
     private static string? OptionalClaim(ClaimsPrincipal principal, string type)
     {
         var values = principal.FindAll(type).Take(2).ToArray();
@@ -397,22 +375,18 @@ public sealed class ProjectsConfigAuthorizationClient(
         return values.Length == 0 ? null : values[0].Value;
     }
 
-    /// <summary>Accepts bounded opaque owner identifiers without whitespace or control characters.</summary>
     private static bool ValidIdentifier(string? value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= 256 &&
         value.All(character => char.IsAsciiLetterOrDigit(character) ||
             character is '.' or '_' or '-' or ':');
 }
 
-/// <summary>Validates the caller, owner receipt, and current authority before writing an accepted-effect fact.</summary>
 public sealed class AcceptedEffectApplicationService(
     KnowledgeAcceptedEffectReceiptClient receipts,
     ProjectsConfigAuthorizationClient projects,
     IProjectFactJournal journal,
     AcceptedEffectRuntimeOptions options)
 {
-    /// <summary>Reads the owner receipt, matches its exact scope to the caller, and appends it idempotently.</summary>
-    /// <exception cref="ProjectFactApiException">The caller, receipt, current authority, or owner response is invalid.</exception>
     public async Task<ProjectFactAcknowledgment> AppendAsync(
         ClaimsPrincipal principal,
         AcceptedEffectDeliveryRequest request,
@@ -455,7 +429,6 @@ public sealed class AcceptedEffectApplicationService(
         string? RunId,
         string[] TenantAssertions);
 
-    /// <summary>Builds caller identity bounds only from one authenticated identity issued by the configured broker.</summary>
     private static CallerBounds ValidateCaller(
         ClaimsPrincipal principal,
         AcceptedEffectRuntimeOptions options)
@@ -500,7 +473,6 @@ public sealed class AcceptedEffectApplicationService(
             tenantAssertions);
     }
 
-    /// <summary>Rejects receipts whose actor, project/run binding, or tenant differs from the authenticated caller.</summary>
     private static void ValidateCallerMatchesReceipt(
         CallerBounds caller,
         AcceptedEffectReceipt receipt)
@@ -515,7 +487,6 @@ public sealed class AcceptedEffectApplicationService(
             throw new ProjectFactApiException("accepted_effect_caller_mismatch", StatusCodes.Status403Forbidden);
     }
 
-    /// <summary>Checks the full receipt contract and its issuer-owned authorization and revision fields.</summary>
     private static void ValidateReceipt(
         AcceptedEffectReceipt receipt,
         AcceptedEffectRuntimeOptions options)
@@ -552,23 +523,19 @@ public sealed class AcceptedEffectApplicationService(
                 "accepted_effect_receipt_invalid", StatusCodes.Status502BadGateway);
     }
 
-    /// <summary>Accepts only bounded opaque identifiers used in receipt scope and actor fields.</summary>
     private static bool ValidIdentifier(string? value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= 256 &&
         value.All(character => char.IsAsciiLetterOrDigit(character) ||
             character is '.' or '_' or '-' or ':');
 
-    /// <summary>Checks that a claim's issuer parses to the configured canonical HTTPS issuer.</summary>
     private static bool HasClaimIssuer(Claim claim, string expectedIssuer) =>
         TryNormalizeIssuer(claim.Issuer, out var issuer) &&
         string.Equals(issuer, expectedIssuer, StringComparison.Ordinal);
 
-    /// <summary>Checks that an issuer claim matches the canonical configured issuer.</summary>
     private static bool HasIssuerValue(string? value, string expectedIssuer) =>
         TryNormalizeIssuer(value, out var issuer) &&
         string.Equals(issuer, expectedIssuer, StringComparison.Ordinal);
 
-    /// <summary>Canonicalizes a valid HTTPS issuer and rejects credentials, query, and fragment data.</summary>
     private static bool TryNormalizeIssuer(string? value, out string issuer)
     {
         issuer = string.Empty;
@@ -584,24 +551,20 @@ public sealed class AcceptedEffectApplicationService(
     }
 }
 
-/// <summary>Signals that a stable receipt identity was replayed with changed immutable content.</summary>
 public sealed class ProjectFactConflictException : Exception
 {
 }
 
-/// <summary>Provides a stable error code and HTTP status for accepted-effect admission failures.</summary>
 public sealed class ProjectFactApiException(string code, int statusCode) : Exception(code)
 {
     public string Code { get; } = code;
     public int StatusCode { get; } = statusCode;
 }
 
-/// <summary>Extracts only the original bearer and optional tenant selector before calls to trusted owners.</summary>
 internal static class ForwardedHeaders
 {
     private const string KnowledgeAuthorizationHeader = "X-Agentweaver-Knowledge-Authorization";
 
-    /// <summary>Reads the caller headers, including the dedicated Knowledge receipt token when present.</summary>
     public static ForwardedCallerHeaders Read(
         HttpContext? context,
         bool knowledgeReceiptOwner = false)
@@ -626,14 +589,12 @@ internal static class ForwardedHeaders
             null);
     }
 
-    /// <summary>Validates a tenant selector as a bounded opaque identifier.</summary>
     private static bool ValidTenant(string? value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= 256 &&
         value.All(character => char.IsAsciiLetterOrDigit(character) ||
             character is '.' or '_' or '-' or ':');
 }
 
-/// <summary>Contains the validated actor headers or the stable reason they could not be forwarded.</summary>
 internal sealed record ForwardedCallerHeaders(
     AuthenticationHeaderValue? Authorization,
     string? TenantSelector,

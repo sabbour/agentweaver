@@ -8,15 +8,11 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Providers.Sandbox.AgentSandbox;
 
-/// <summary>Builds stable Kubernetes policy names for command and output-collector operations.</summary>
 public static class AgentSandboxBuildTestPolicyNames
 {
-    /// <summary>Gets the command-policy name for a non-empty operation identifier.</summary>
     public static string Command(Guid operationId) => Get(operationId, SandboxBuildTestLimits.CommandPolicyRole);
-    /// <summary>Gets the collector-policy name for a non-empty operation identifier.</summary>
     public static string Collector(Guid operationId) => Get(operationId, SandboxBuildTestLimits.CollectorPolicyRole);
 
-    /// <summary>Validates the operation ID and composes a bounded role-specific policy name.</summary>
     private static string Get(Guid operationId, string role)
     {
         if (operationId == Guid.Empty)
@@ -25,10 +21,6 @@ public static class AgentSandboxBuildTestPolicyNames
     }
 }
 
-/// <summary>
-/// Creates and observes isolated BuildTest command and output-collector Pods.
-/// Every Pod starts behind a scheduling gate and is admitted only after runtime, PVC, policy, owner, and manifest checks.
-/// </summary>
 public sealed partial class AgentSandboxProvider
 {
     private const string BuildTestPodNamePrefix = "buildtest-";
@@ -60,11 +52,6 @@ public sealed partial class AgentSandboxProvider
             MaxDepth = 16
         };
 
-    /// <summary>Creates or recovers a command Pod after dry-run admission and complete policy validation.</summary>
-    /// <param name="request">Accepted command, immutable provider binding, and command network-policy pin.</param>
-    /// <param name="cancellationToken">Cancels Kubernetes reads and writes.</param>
-    /// <returns>The exact command Pod reference with UID and resource version.</returns>
-    /// <exception cref="SandboxProviderException">The pinned runtime, PVC, network policy, or Pod manifest is invalid.</exception>
     public async Task<SandboxBuildTestPodReference> CreateGatedAsync(
         SandboxBuildTestProviderRequest request,
         CancellationToken cancellationToken)
@@ -100,12 +87,6 @@ public sealed partial class AgentSandboxProvider
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Creates or recovers a gated, separately policy-bound output collector after command success is proven.</summary>
-    /// <param name="request">Accepted command and immutable provider binding.</param>
-    /// <param name="collectorRequest">Bounded output request matching the accepted command obligations.</param>
-    /// <param name="cancellationToken">Cancels Kubernetes reads and writes.</param>
-    /// <returns>The exact output-collector Pod reference.</returns>
-    /// <exception cref="SandboxProviderException">Command success, collector policy, or Pod validation fails.</exception>
     public async Task<SandboxBuildTestPodReference> CreateOutputCollectorGatedAsync(
         SandboxBuildTestProviderRequest request,
         SandboxBuildTestOutputCollectorRequest collectorRequest,
@@ -155,19 +136,16 @@ public sealed partial class AgentSandboxProvider
             collectorRequest).ConfigureAwait(false);
     }
 
-    /// <summary>Reads the command Pod for its accepted operation, returning null when it is absent.</summary>
     public Task<SandboxBuildTestPodReference?> GetAsync(
         SandboxBuildTestProviderRequest request,
         CancellationToken cancellationToken) =>
         GetBuildTestPodAsync(request, SandboxBuildTestLimits.CommandPolicyRole, cancellationToken);
 
-    /// <summary>Reads the output-collector Pod for its accepted operation, returning null when it is absent.</summary>
     public Task<SandboxBuildTestPodReference?> GetOutputCollectorAsync(
         SandboxBuildTestProviderRequest request,
         CancellationToken cancellationToken) =>
         GetBuildTestPodAsync(request, SandboxBuildTestLimits.CollectorPolicyRole, cancellationToken);
 
-    /// <summary>Reads and validates an operation's Pod for the requested command or collector role.</summary>
     private async Task<SandboxBuildTestPodReference?> GetBuildTestPodAsync(
         SandboxBuildTestProviderRequest request,
         string role,
@@ -183,8 +161,6 @@ public sealed partial class AgentSandboxProvider
             : ValidateBuildTestPod(pod.Value, request, context, role);
     }
 
-    /// <summary>Removes the single authorization gate after revalidating the Pod UID and any command prerequisite.</summary>
-    /// <exception cref="SandboxProviderException">The Pod is missing, its gate or identity changed, or its prerequisite failed.</exception>
     public async Task<SandboxBuildTestPodReference> ReleaseSchedulingGateAsync(
         SandboxBuildTestProviderRequest request,
         SandboxBuildTestPodReference pod,
@@ -223,9 +199,6 @@ public sealed partial class AgentSandboxProvider
         return ValidateBuildTestPod(updated, request, context, role, requireGate: false);
     }
 
-    /// <summary>Observes Pod state and bounded logs, then verifies the same Pod UID still exists after log collection.</summary>
-    /// <returns>A validated pending, running, successful, failed, or unknown observation.</returns>
-    /// <exception cref="SandboxProviderException">The request bounds or exact Pod manifest no longer match.</exception>
     public async Task<SandboxBuildTestPodObservation> ObserveAsync(
         SandboxBuildTestProviderRequest request,
         SandboxBuildTestPodReference pod,
@@ -290,7 +263,6 @@ public sealed partial class AgentSandboxProvider
         return observation.Validate(maximumOutputBytes);
     }
 
-    /// <summary>Stops the exact operation Pod using foreground deletion and its UID precondition.</summary>
     public async Task StopAsync(
         SandboxBuildTestProviderRequest request,
         SandboxBuildTestPodReference pod,
@@ -299,7 +271,6 @@ public sealed partial class AgentSandboxProvider
         await DeleteBuildTestPodAsync(request, pod, foreground: true, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Deletes the exact operation Pod using background propagation and its UID precondition.</summary>
     public async Task DeleteAsync(
         SandboxBuildTestProviderRequest request,
         SandboxBuildTestPodReference pod,
@@ -308,8 +279,6 @@ public sealed partial class AgentSandboxProvider
         await DeleteBuildTestPodAsync(request, pod, foreground: false, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Creates the desired Pod and validates the returned object; conflicts are resolved by reading it once.</summary>
-    /// <exception cref="SandboxProviderException">Creation fails or the returned Pod does not match the gated manifest.</exception>
     private async Task<SandboxBuildTestPodReference> CreateBuildTestPodAsync(
         JsonElement desired,
         SandboxBuildTestProviderRequest request,
@@ -381,7 +350,6 @@ public sealed partial class AgentSandboxProvider
         }
     }
 
-    /// <summary>Checks the pinned RuntimeClass, workspace claim, and role-specific offline Cilium policy.</summary>
     private async Task<BuildTestContext> VerifyBuildTestContextAsync(
         SandboxBuildTestProviderRequest request,
         string role,
@@ -408,18 +376,14 @@ public sealed partial class AgentSandboxProvider
         return context;
     }
 
-    /// <summary>Converts the accepted command policy contract to the common internal shape.</summary>
     private static BuildTestPolicyDescriptor ToPolicyDescriptor(
         SandboxBuildTestCommandNetworkPolicyBinding policy) =>
         new(policy.PolicyUid, policy.SpecSha256, policy.NetworkPolicyGeneration, policy.SelectorLabels);
 
-    /// <summary>Converts the accepted collector policy contract to the common internal shape.</summary>
     private static BuildTestPolicyDescriptor ToPolicyDescriptor(
         SandboxBuildTestOutputCollectorNetworkPolicyBinding policy) =>
         new(policy.PolicyUid, policy.SpecSha256, policy.NetworkPolicyGeneration, policy.SelectorLabels);
 
-    /// <summary>Reconstructs the pinned Sandbox and PVC context and checks accepted BuildTest profile and generation.</summary>
-    /// <exception cref="SandboxProviderException">The accepted options, owner, Sandbox, Storage, or workspace identity differs.</exception>
     private BuildTestContext ReadBuildTestContext(SandboxBuildTestProviderRequest request)
     {
         var expected = request.ExpectedBinding;
@@ -468,7 +432,6 @@ public sealed partial class AgentSandboxProvider
         return new(options, descriptor, workspace);
     }
 
-    /// <summary>Rechecks the exact bound PVC and requires multi-writer mode for the command-plus-collector flow.</summary>
     private async Task VerifyWorkspaceClaimForBuildTestAsync(
         BuildTestContext context,
         CancellationToken cancellationToken)
@@ -504,8 +467,6 @@ public sealed partial class AgentSandboxProvider
             throw ProviderResourceMismatch("The BuildTest workspace PVC is not a verified ReadWriteMany claim.");
     }
 
-    /// <summary>Requires the exact policy UID, canonical spec hash, selector, generation, and deny-all behavior.</summary>
-    /// <exception cref="SandboxProviderException">The policy is absent, changed, or permits traffic.</exception>
     private async Task VerifyBuildTestPolicyAsync(
         BuildTestContext context,
         Guid operationId,
@@ -559,7 +520,6 @@ public sealed partial class AgentSandboxProvider
                 $"The exact BuildTest {expectedRole} Cilium policy does not enforce its pinned offline selector.");
     }
 
-    /// <summary>Compares every accepted execution and collector option using ordinal sequence equality.</summary>
     private static bool SameExecutionOptions(
         SandboxBuildTestAcceptedExecutionOptions left,
         SandboxBuildTestAcceptedExecutionOptions right) =>
@@ -581,8 +541,6 @@ public sealed partial class AgentSandboxProvider
         left.CollectorMode == right.CollectorMode &&
         left.CollectorContainerName == right.CollectorContainerName;
 
-    /// <summary>Builds the isolated Pod manifest from accepted command data and pinned policy selectors.</summary>
-    /// <exception cref="SandboxProviderException">The command requests an unsupported working directory or its binding is incomplete.</exception>
     private JsonElement BuildTestPodManifest(
         SandboxBuildTestProviderRequest request,
         BuildTestContext context,
@@ -740,7 +698,6 @@ public sealed partial class AgentSandboxProvider
             ? manifest : AddWorkspacePodContainers(manifest, request, context, isCollector);
     }
 
-    /// <summary>Combines policy selector labels with stable operation, owner, lifecycle, and generation labels.</summary>
     private ImmutableDictionary<string, string> BuildTestPodLabels(
         SandboxBuildTestProviderRequest request,
         BuildTestContext context,
@@ -766,7 +723,6 @@ public sealed partial class AgentSandboxProvider
         return labels.ToImmutable();
     }
 
-    /// <summary>Adds a required label unless an existing policy selector conflicts with its pinned value.</summary>
     private static void AddBuildTestLabel(
         ImmutableDictionary<string, string>.Builder labels,
         string key,
@@ -781,7 +737,6 @@ public sealed partial class AgentSandboxProvider
         labels.Add(key, value);
     }
 
-    /// <summary>Builds annotations that bind the Pod to accepted command, Sandbox, PVC, and network-policy digests.</summary>
     private ImmutableDictionary<string, string> BuildTestPodAnnotations(
         SandboxBuildTestProviderRequest request,
         BuildTestContext context,
@@ -808,9 +763,6 @@ public sealed partial class AgentSandboxProvider
             new KeyValuePair<string, string>(BuildTestPolicyHashAnnotation, policySpecSha256)
         ]);
 
-    /// <summary>Validates metadata, operation identity, policy labels, annotations, and the full Pod spec.</summary>
-    /// <returns>The exact namespace, name, UID, and resource version.</returns>
-    /// <exception cref="SandboxProviderException">The Pod does not match the accepted operation.</exception>
     private SandboxBuildTestPodReference ValidateBuildTestPod(
         JsonElement pod,
         SandboxBuildTestProviderRequest request,
@@ -849,8 +801,6 @@ public sealed partial class AgentSandboxProvider
         return new SandboxBuildTestPodReference(namespaceName, name, uid, resourceVersion).Validate();
     }
 
-    /// <summary>Verifies runtime, isolation, helper, resource, mount, environment, and scheduling-gate invariants.</summary>
-    /// <exception cref="SandboxProviderException">Any Pod spec field differs from the immutable accepted manifest.</exception>
     private void ValidateBuildTestPodSpec(
         JsonElement pod,
         SandboxBuildTestProviderRequest request,
@@ -946,7 +896,6 @@ public sealed partial class AgentSandboxProvider
             throw ProviderResourceMismatch("The BuildTest scheduling gate was changed unexpectedly.");
     }
 
-    /// <summary>Requires the Pod to target Linux on amd64 and no additional node-selector values.</summary>
     private static bool NodeSelectorMatches(JsonElement spec)
     {
         var selector = ReadStringDictionary(spec, "nodeSelector");
@@ -955,7 +904,6 @@ public sealed partial class AgentSandboxProvider
             selector.GetValueOrDefault("kubernetes.io/arch") == "amd64";
     }
 
-    /// <summary>Checks the non-root UID/GID, supplemental group, and runtime-default seccomp settings.</summary>
     private static bool PodSecurityContextMatches(JsonElement spec)
     {
         var security = TryGetObject(spec, "securityContext");
@@ -967,7 +915,6 @@ public sealed partial class AgentSandboxProvider
             ReadOptionalString(value, "seccompProfile", "type") == "RuntimeDefault";
     }
 
-    /// <summary>Requires non-root execution, no privilege escalation, a read-only root, and dropped capabilities.</summary>
     private static bool ContainerSecurityContextMatches(JsonElement container)
     {
         var security = TryGetObject(container, "securityContext");
@@ -990,7 +937,6 @@ public sealed partial class AgentSandboxProvider
             (added is null || added.Value.GetArrayLength() == 0);
     }
 
-    /// <summary>Compares container resource requests and limits against the accepted CPU, memory, and storage bounds.</summary>
     private static bool ContainerResourcesMatch(
         JsonElement container,
         SandboxBuildTestAcceptedExecutionOptions options)
@@ -1003,7 +949,6 @@ public sealed partial class AgentSandboxProvider
         return ResourceQuantityMatches(requests, options) && ResourceQuantityMatches(limits, options);
     }
 
-    /// <summary>Requires exactly the accepted three resource quantities and no additional resource keys.</summary>
     private static bool ResourceQuantityMatches(
         ImmutableDictionary<string, string> quantities,
         SandboxBuildTestAcceptedExecutionOptions options) =>
@@ -1012,7 +957,6 @@ public sealed partial class AgentSandboxProvider
         quantities.GetValueOrDefault("memory") == options.MemoryLimit &&
         quantities.GetValueOrDefault("ephemeral-storage") == options.EphemeralStorageLimit;
 
-    /// <summary>Checks the exact workspace PVC mount and optional private helper state volume.</summary>
     private static bool WorkspaceVolumeMatches(
         JsonElement spec,
         JsonElement container,
@@ -1041,7 +985,6 @@ public sealed partial class AgentSandboxProvider
             mountReadOnly == readOnly;
     }
 
-    /// <summary>Requires the collector environment variable to reference the current Pod UID field.</summary>
     private static bool CollectorUidEnvironmentMatches(JsonElement container)
     {
         var env = TryGetArray(container, "env");
@@ -1053,7 +996,6 @@ public sealed partial class AgentSandboxProvider
             ReadOptionalString(item, "valueFrom", "fieldRef", "fieldPath") == "metadata.uid";
     }
 
-    /// <summary>Compares a JSON string array with accepted values using ordinal equality and exact length.</summary>
     private static bool JsonStringArrayMatches(
         JsonElement parent,
         string name,
@@ -1069,7 +1011,6 @@ public sealed partial class AgentSandboxProvider
                 .SequenceEqual(materialized, StringComparer.Ordinal);
     }
 
-    /// <summary>Reads scheduling-gate names and rejects malformed gate objects.</summary>
     private static string[] ReadSchedulingGates(JsonElement pod)
     {
         var gates = TryGetArray(RequiredObject(pod, "spec"), "schedulingGates");
@@ -1086,7 +1027,6 @@ public sealed partial class AgentSandboxProvider
         return result.ToArray();
     }
 
-    /// <summary>Extracts terminal evidence only for the named container with a complete termination record.</summary>
     private static SandboxBuildTestTerminalEvidence? ReadBuildTestTerminalEvidence(
         JsonElement pod,
         SandboxBuildTestPodReference reference,
@@ -1127,7 +1067,6 @@ public sealed partial class AgentSandboxProvider
         return null;
     }
 
-    /// <summary>Removes control characters and bounds an untrusted Kubernetes termination reason.</summary>
     private static string? BoundedBuildTestReason(string? value)
     {
         if (value is null)
@@ -1136,7 +1075,6 @@ public sealed partial class AgentSandboxProvider
         return safe.Length == 0 ? null : safe;
     }
 
-    /// <summary>Requires a successful, exit-code-zero command and bounded output before collecting declared files.</summary>
     private async Task RequireSuccessfulCommandPodAsync(
         SandboxBuildTestProviderRequest request,
         BuildTestContext context,
@@ -1167,8 +1105,6 @@ public sealed partial class AgentSandboxProvider
             throw ProviderResourceMismatch("The command output exceeded its accepted capture limit.");
     }
 
-    /// <summary>Requires the collector request to match every accepted operation, checkpoint, path, and size limit.</summary>
-    /// <exception cref="ArgumentException">The collector input is not the accepted command's exact output request.</exception>
     private static void ValidateCollectorRequest(
         SandboxBuildTestProviderRequest request,
         SandboxBuildTestOutputCollectorRequest collectorRequest,
@@ -1192,7 +1128,6 @@ public sealed partial class AgentSandboxProvider
             throw new ArgumentException("The trusted output collector request does not match the accepted command.");
     }
 
-    /// <summary>Builds the collector request from accepted command metadata and the exact workspace mount.</summary>
     private static SandboxBuildTestOutputCollectorRequest CreateCollectorRequest(
         SandboxBuildTestProviderRequest request,
         BuildTestContext context) =>
@@ -1210,7 +1145,6 @@ public sealed partial class AgentSandboxProvider
             AcceptedCommandContractVersion = request.AcceptedCommand.ContractVersion == 2 ? 2 : null
         }.Validate();
 
-    /// <summary>Compares all checkpoint identity and revision fields used to pin the accepted command.</summary>
     private static bool SameCheckpoint(
         SandboxBuildTestCheckpointReference left,
         SandboxBuildTestCheckpointReference right) =>
@@ -1225,7 +1159,6 @@ public sealed partial class AgentSandboxProvider
         left.ExecutionFence == right.ExecutionFence &&
         string.Equals(left.AcceptedSelectionHash, right.AcceptedSelectionHash, StringComparison.Ordinal);
 
-    /// <summary>Serializes a bounded collector request as unpadded base64url for the helper command line.</summary>
     private static string EncodeCollectorRequest(SandboxBuildTestOutputCollectorRequest request)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(request, BuildTestJsonOptions);
@@ -1237,7 +1170,6 @@ public sealed partial class AgentSandboxProvider
             .Replace('/', '_');
     }
 
-    /// <summary>Creates an unknown observation with an empty, correctly digested output capture.</summary>
     private static SandboxBuildTestPodObservation UnknownPodObservation(
         SandboxBuildTestPodReference pod,
         string containerName) =>
@@ -1247,7 +1179,6 @@ public sealed partial class AgentSandboxProvider
             null,
             EmptyOutput(pod, containerName));
 
-    /// <summary>Builds the zero-byte capture result used when no output was collected.</summary>
     private static SandboxBuildTestOutputCapture EmptyOutput(
         SandboxBuildTestPodReference pod,
         string containerName)
@@ -1263,7 +1194,6 @@ public sealed partial class AgentSandboxProvider
             0);
     }
 
-    /// <summary>Returns the accepted maximum output size for the command or collector role.</summary>
     private static int GetBuildTestMaximumOutputBytes(
         SandboxBuildTestProviderRequest request,
         string role) =>
@@ -1271,17 +1201,14 @@ public sealed partial class AgentSandboxProvider
             ? request.AcceptedCommand.ExecutionOptions.MaximumOutputBytes
             : SandboxBuildTestLimits.MaximumCollectorRequestBytes;
 
-    /// <summary>Returns the fixed container name assigned to a BuildTest role.</summary>
     private static string GetBuildTestContainerName(string role) =>
         role == SandboxBuildTestLimits.CommandPolicyRole
             ? BuildTestCommandContainerName
             : SandboxBuildTestLimits.OutputCollectorContainerName;
 
-    /// <summary>Derives the deterministic Pod name from its operation ID and role.</summary>
     private static string BuildTestPodName(Guid operationId, string role) =>
         $"{BuildTestPodNamePrefix}{operationId:N}-{role}";
 
-    /// <summary>Returns a role-specific Pod name, or null when no role was selected.</summary>
     private static string? GetBuildTestPodName(
         SandboxBuildTestProviderRequest request,
         string? role) =>
@@ -1289,7 +1216,6 @@ public sealed partial class AgentSandboxProvider
             ? null
             : BuildTestPodName(request.AcceptedCommand.OperationId, role);
 
-    /// <summary>Determines which accepted role owns a Pod resource, rejecting names from another operation.</summary>
     private static string GetBuildTestPodRole(
         JsonElement pod,
         SandboxBuildTestProviderRequest request)
@@ -1304,7 +1230,6 @@ public sealed partial class AgentSandboxProvider
                 : throw ProviderResourceMismatch("The BuildTest Pod name does not belong to this operation.");
     }
 
-    /// <summary>Determines which accepted role owns a Pod reference, rejecting names from another operation.</summary>
     private static string GetRoleFromPodName(
         SandboxBuildTestProviderRequest request,
         string name) =>
@@ -1314,8 +1239,6 @@ public sealed partial class AgentSandboxProvider
                 ? SandboxBuildTestLimits.CollectorPolicyRole
                 : throw ProviderResourceMismatch("The BuildTest Pod reference does not belong to this operation.");
 
-    /// <summary>Validates the exact Pod and namespace, then issues UID-preconditioned cleanup.</summary>
-    /// <remarks>Missing Pods are treated as already deleted.</remarks>
     private async Task DeleteBuildTestPodAsync(
         SandboxBuildTestProviderRequest request,
         SandboxBuildTestPodReference pod,
@@ -1347,14 +1270,12 @@ public sealed partial class AgentSandboxProvider
             cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Normalized expected policy UID, spec digest, generation, and selector for one helper role.</summary>
     private sealed record BuildTestPolicyDescriptor(
         string PolicyUid,
         string SpecSha256,
         long NetworkPolicyGeneration,
         ImmutableDictionary<string, string> SelectorLabels);
 
-    /// <summary>Validated options, Sandbox recovery descriptor, and negotiated workspace for one BuildTest operation.</summary>
     private sealed record BuildTestContext(
         AgentSandboxOptions Options,
         AgentSandboxRecoveryDescriptor Descriptor,

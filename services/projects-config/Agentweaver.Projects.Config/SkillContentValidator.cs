@@ -6,16 +6,13 @@ using YamlDotNet.RepresentationModel;
 
 namespace Agentweaver.Projects.Config;
 
-/// <summary>Untrusted resource path and bytes included with a Skill.md candidate.</summary>
 public sealed record SkillContentResourceInput(string RelativePath, ReadOnlyMemory<byte> Content);
 
-/// <summary>Normalized resource bytes and their individual SHA-256 digest.</summary>
 public sealed record ValidatedSkillContentResource(
     string RelativePath,
     ImmutableArray<byte> Content,
     string Sha256);
 
-/// <summary>Parsed skill instructions and canonically ordered resources with a stable combined content digest.</summary>
 public sealed record ValidatedSkillContent(
     string Name,
     string Description,
@@ -23,15 +20,11 @@ public sealed record ValidatedSkillContent(
     ImmutableArray<ValidatedSkillContentResource> Resources,
     string ContentDigest);
 
-/// <summary>Invalid or unsupported manifest/resource input; endpoint mapping returns this as a client error.</summary>
 public sealed class SkillContentValidationException(string message) : Exception(message)
 {
     public const string ErrorCode = "invalid_skill_content";
 }
 
-/// <summary>
-/// Validates Skill.md frontmatter, strict UTF-8 instructions, safe resource paths, and bounded content sizes.
-/// </summary>
 public static class SkillContentValidator
 {
     public const int MaxNameLength = SkillRuntimeContentContract.MaxNameLength;
@@ -44,10 +37,6 @@ public static class SkillContentValidator
 
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
-    /// <summary>
-    /// Parses and validates the skill candidate, normalizes resource paths, sorts resources, and computes the content digest.
-    /// </summary>
-    /// <exception cref="SkillContentValidationException">The manifest, text encoding, resource inventory, or size limits are invalid.</exception>
     public static ValidatedSkillContent Validate(
         ReadOnlyMemory<byte> skillMarkdown,
         IReadOnlyList<SkillContentResourceInput>? resources = null)
@@ -137,7 +126,6 @@ public static class SkillContentValidator
                 name, description, instructions, immutableResources));
     }
 
-    /// <summary>Reads a single YAML mapping and accepts only scalar name and description fields.</summary>
     private static (string? Name, string? Description) ParseFrontmatter(string text)
     {
         try
@@ -185,7 +173,6 @@ public static class SkillContentValidator
         }
     }
 
-    /// <summary>Finds the opening and closing YAML delimiters without treating later document markers as body content.</summary>
     private static bool TrySplitFrontmatter(string text, out string frontmatter, out string body)
     {
         frontmatter = string.Empty;
@@ -216,7 +203,6 @@ public static class SkillContentValidator
         return false;
     }
 
-    /// <summary>Converts path-contract failures into the validator's public input error.</summary>
     private static string NormalizeResourcePath(string? raw)
     {
         try
@@ -247,7 +233,6 @@ public static class SkillContentValidator
         return true;
     }
 
-    /// <summary>Decodes strict UTF-8 and reports which manifest or resource failed decoding.</summary>
     private static string DecodeText(ReadOnlySpan<byte> bytes, string source)
     {
         try

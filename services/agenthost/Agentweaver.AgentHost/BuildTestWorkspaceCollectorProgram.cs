@@ -10,16 +10,10 @@ using PreparationReceipt = Agentweaver.Abstractions.SandboxBuildTestBindingPrepa
 
 namespace Agentweaver.AgentHost;
 
-/// <summary>
-/// Workspace-collector half of the AgentHost utility executable. It verifies accepted seed bytes,
-/// prepares repositories and seals output captures in private state for replay-safe export.
-/// </summary>
 internal static partial class BuildTestOutputCollectorProgram
 {
     private const string NativeCaptureStatePath = "/state/buildtest";
 
-    /// <summary>Runs the immutable prepare, capture, export, or hold action for a workspace collector request.</summary>
-    /// <remarks>Receipts are bound to operation, checkpoint, request fingerprint, and the actual Pod UID.</remarks>
     internal static async Task<int> RunWorkspaceAsync(
         string[] args,
         CancellationToken cancellationToken = default)
@@ -120,7 +114,6 @@ internal static partial class BuildTestOutputCollectorProgram
     private static string PreparationStatePath(WorkspaceRequest request) =>
         NativeCaptureStatePath + "/preparation-" + request.OperationId.ToString("N") + ".json";
 
-    /// <summary>Reads exactly the accepted seed length and rejects extra bytes or a digest mismatch.</summary>
     private static async Task<byte[]> ReadSeedAsync(
         SandboxBuildTestWorkspaceSource source,
         CancellationToken cancellationToken)
@@ -135,7 +128,6 @@ internal static partial class BuildTestOutputCollectorProgram
         return bytes;
     }
 
-    /// <summary>Creates or replays one sealed capture under an operation lock and immutable request binding.</summary>
     private static async Task<SandboxBuildTestWorkspaceCaptureReference> CaptureWorkspaceAsync(
         WorkspaceRequest request,
         string podUid,
@@ -233,7 +225,6 @@ internal static partial class BuildTestOutputCollectorProgram
         return reference;
     }
 
-    /// <summary>Exports capture bytes only after verifying the operation/Pod binding and sealed document digest.</summary>
     private static async Task<byte[]> ReadSealedCaptureAsync(
         WorkspaceRequest request,
         string podUid,
@@ -333,7 +324,6 @@ internal static partial class BuildTestOutputCollectorProgram
         }).ToImmutableArray();
     }
 
-    /// <summary>Captures a complete stable repository tree, excluding only the ordinary top-level Git metadata directory.</summary>
     private static async Task<ImmutableArray<GitWorkspaceCapturedFile>> CaptureCompleteTreeAsync(
         string repositoryPath,
         CancellationToken cancellationToken)
@@ -372,7 +362,6 @@ internal static partial class BuildTestOutputCollectorProgram
         return files.ToImmutable();
     }
 
-    /// <summary>Inventories only regular files and directories on the workspace mount; links and special nodes fail closed.</summary>
     private static Dictionary<string, FileIdentity> ReadWorkspaceTree(
         string repositoryPath,
         CancellationToken cancellationToken)

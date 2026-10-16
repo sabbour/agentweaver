@@ -62,11 +62,6 @@ export interface CoordinatorArtifactsPanelProps {
  * read-only file viewer on the right) inside the full-width Changes/Files slide-in — clicking a
  * file selects it in place instead of opening a separate modal on top.
  */
-/**
- * Renders the coordinator's artifact browser for a run using the shared artifact-browser hook.
- * Props select the run and supply any display overrides; loading, refresh, and result state come
- * from that hook rather than a second request in this panel.
- */
 export function CoordinatorArtifactsPanel({ runId, runStatus, adapter, initialTab = 'changes', liveUpdateKey, previewStatusSlot }: CoordinatorArtifactsPanelProps) {
   const styles = useStyles();
   const state = useArtifactBrowser(runId, runStatus, undefined, undefined, undefined, undefined, adapter, initialTab, liveUpdateKey);

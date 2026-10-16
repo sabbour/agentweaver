@@ -2,7 +2,6 @@ using Microsoft.Extensions.Configuration;
 
 namespace Agentweaver.Knowledge;
 
-/// <summary>Validated identity and version information for the configured Cosmos Memory container.</summary>
 public sealed record CosmosMemoryOptions(
     Uri Endpoint,
     string DatabaseId,
@@ -15,9 +14,6 @@ public sealed record CosmosMemoryOptions(
     public const int CurrentOptionsSchemaVersion = 1;
     public const string PartitionKeyPath = "/projectId";
 
-    /// <summary>Reads the optional Cosmos provider section and validates it when present.</summary>
-    /// <returns><see langword="null"/> when Cosmos is not configured; otherwise the validated options.</returns>
-    /// <exception cref="InvalidOperationException">A required setting is absent or the endpoint is malformed.</exception>
     public static CosmosMemoryOptions? ReadOptional(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -42,8 +38,6 @@ public sealed record CosmosMemoryOptions(
         return options;
     }
 
-    /// <summary>Rejects unsupported resource identities, endpoint forms, and option revisions.</summary>
-    /// <exception cref="ArgumentException">Any configured value violates the provider contract.</exception>
     public void Validate()
     {
         if (!Endpoint.IsAbsoluteUri ||

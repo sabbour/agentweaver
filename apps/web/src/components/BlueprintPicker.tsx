@@ -225,7 +225,6 @@ function useBlueprintCatalog(active: boolean) {
   return { blueprints, loading, error };
 }
 
-/** Renders a bounded set of roster-role badges and a count for any hidden roles. */
 export function BlueprintRosterChips({ roster, limit }: { roster: string[]; limit?: number }) {
   const styles = useStyles();
   const visible = typeof limit === 'number' ? roster.slice(0, limit) : roster;
@@ -247,7 +246,6 @@ function workflowList(blueprint: Blueprint): string[] {
   return blueprint.workflow ? [blueprint.workflow] : [];
 }
 
-/** Renders workflow, agent-count, and review-policy metadata from the supplied blueprint. */
 export function BlueprintMeta({ blueprint }: { blueprint: Blueprint }) {
   const styles = useStyles();
   const workflows = workflowList(blueprint);
@@ -261,7 +259,6 @@ export function BlueprintMeta({ blueprint }: { blueprint: Blueprint }) {
   );
 }
 
-/** Renders a blueprint summary card with its roster, skill bindings, and metadata. */
 export function BlueprintPreviewCard({ blueprint, generated, reveal }: { blueprint: Blueprint; generated?: boolean; reveal?: boolean }) {
   const styles = useStyles();
   return (
@@ -278,7 +275,6 @@ export function BlueprintPreviewCard({ blueprint, generated, reveal }: { bluepri
   );
 }
 
-/** Renders the blueprint's role-to-skill defaults, or nothing when no bindings exist. */
 export function BlueprintSkillBindings({ bindings }: { bindings?: Blueprint['skill_bindings'] }) {
   const styles = useStyles();
   if (!bindings?.length) return null;
@@ -367,10 +363,6 @@ function TemplateRow({ blueprint, selected, onSelect }: { blueprint: Blueprint; 
   );
 }
 
-/**
- * Renders the selectable blueprint catalog supplied by the caller, including loading/error
- * states. Selection changes are sent through `onChange`; this component does not load the catalog.
- */
 export function BlueprintTemplatePicker({
   blueprints,
   loading,
@@ -410,7 +402,6 @@ export function BlueprintTemplatePicker({
   );
 }
 
-/** Wraps the blueprint template picker with a titled starter-template section. */
 export function StarterTemplatesSection({
   title,
   ...props
@@ -426,11 +417,6 @@ export function StarterTemplatesSection({
   );
 }
 
-/**
- * Renders the blueprint-generation prompt and its generate/cancel/retry actions.
- * Generation job, provider context, and errors come from the parent; this box forwards input and
- * actions rather than making API calls.
- */
 export function GenerateBlueprintBox({
   description,
   onDescriptionChange,
@@ -486,7 +472,6 @@ export function GenerateBlueprintBox({
   );
 }
 
-/** Renders generation progress, an empty prompt, or the generated blueprint preview. */
 export function GeneratedBlueprintPane({ generated, generating }: { generated: { blueprint: Blueprint; generatedWorkflowYaml?: string | null } | null; generating?: boolean }) {
   const styles = useStyles();
   if (generating) {
@@ -510,11 +495,6 @@ export function GeneratedBlueprintPane({ generated, generating }: { generated: {
   return <BlueprintPreviewCard blueprint={generated.blueprint} generated reveal />;
 }
 
-/**
- * Fetches a repository-specific blueprint recommendation through `apiClient.suggestBlueprint`.
- * `active` and `repository` govern the effect; local state tracks loading, failures, and expanded
- * rationale, while selection/navigation actions are reported to the parent.
- */
 export function SuggestedBlueprintPanel({
   active,
   repository,
@@ -652,11 +632,6 @@ function BlueprintTabStrip({ tabs, value, onChange }: { tabs: BlueprintPanelTab[
   );
 }
 
-/**
- * Renders the blueprint workflow tabs and their suggestion, template, or generation surfaces.
- * Catalog data comes from `useBlueprintCatalog`; generation state and provider context are props,
- * and local state remembers the selected tab.
- */
 export function BlueprintPanel({
   active,
   tabs,
@@ -754,11 +729,6 @@ export function BlueprintPanel({
   );
 }
 
-/**
- * Provides the compact blueprint selector used by orchestration forms.
- * It combines `useBlueprintGeneration` with `BlueprintPanel`; current choice and repository are
- * props, while prompt text and generation job state are local/hook state.
- */
 export function BlueprintPicker({ active, value, onChange, targetRepository }: {
   active: boolean;
   value: BlueprintSelection;

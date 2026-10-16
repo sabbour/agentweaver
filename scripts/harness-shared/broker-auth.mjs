@@ -1,9 +1,5 @@
 import { validateNetworkTarget } from './target-guard.mjs';
 
-/**
- * Build an auth provider around a caller-supplied broker JWT after checking its selected claims.
- * The token is never refreshed, and authorization is refused for other origins or after expiry.
- */
 export function createBrokerAuthProvider({
   target, token, issuer, audience, actorId, now = Date.now,
 }) {
@@ -30,7 +26,6 @@ export function createBrokerAuthProvider({
     issuer,
     audience,
     actorId,
-    /** Return the pinned bearer token only for its selected origin while it remains unexpired. */
     async getAuthorization(destination) {
       if (validateNetworkTarget(destination).origin !== origin) {
         throw new Error('Refusing broker authentication outside its selected target origin.');

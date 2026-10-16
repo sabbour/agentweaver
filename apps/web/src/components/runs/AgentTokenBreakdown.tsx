@@ -74,10 +74,6 @@ function usageValue(entry: AgentUsageBreakdownDto): number {
   return entry.totalTokens > 0 ? entry.totalTokens : entry.totalNanoAiu;
 }
 
-/**
- * Renders token and AI-credit usage by agent from API-derived breakdown props.
- * It formats supplied values for display and has no local state or data request.
- */
 export function AgentTokenBreakdown({
   data,
   title = 'Agent token breakdown',

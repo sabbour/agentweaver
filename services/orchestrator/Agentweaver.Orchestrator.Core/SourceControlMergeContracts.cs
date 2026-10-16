@@ -2,7 +2,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Orchestrator.Core;
 
-/// <summary>Reference to a versioned secret and the one Source Control purpose allowed to use it.</summary>
 public sealed record SourceControlCredentialReference
 {
     public SourceControlCredentialReference(SecretRef secret, string purpose)
@@ -20,7 +19,6 @@ public sealed record SourceControlCredentialReference
     public string Purpose { get; }
 }
 
-/// <summary>Identity Broker installation and repository-scope evidence captured for a GitHub App pin.</summary>
 public sealed record SourceControlGitHubAppBinding
 {
     public SourceControlGitHubAppBinding(
@@ -67,7 +65,6 @@ public sealed record SourceControlGitHubAppBinding
     public bool IssueWriteGranted { get; }
 }
 
-/// <summary>Immutable actor, project, run, accepted-selection, revision, and fence identity for Source Control.</summary>
 public sealed record SourceControlAcceptedRunBinding
 {
     public SourceControlAcceptedRunBinding(
@@ -128,7 +125,6 @@ public sealed record SourceControlAcceptedRunBinding
     }
 }
 
-/// <summary>Provider, repository, credentials, and accepted-run details pinned for later Source Control operations.</summary>
 public sealed record SourceControlRepositoryPin
 {
     public SourceControlRepositoryPin(
@@ -207,10 +203,6 @@ public sealed record SourceControlRepositoryPin
     public DateTimeOffset PinnedAt { get; }
 }
 
-/// <summary>
-/// Approved merge operation bound to an accepted run, confirmed platform Merge gate, exact pull-request heads,
-/// and a typed approval receipt. Creating the value performs validation only; the service owns the merge effect.
-/// </summary>
 public sealed record SourceControlMergeIntent
 {
     private SourceControlMergeIntent(
@@ -260,9 +252,6 @@ public sealed record SourceControlMergeIntent
     public SourceControlMergeMethod Method { get; }
     public DateTimeOffset CreatedAt { get; }
 
-    /// <summary>Creates a merge intent only when every run, gate, approval, capability, and commit identity matches.</summary>
-    /// <exception cref="InvalidOperationException">The decision state, approval receipt, or pinned capability is not current.</exception>
-    /// <exception cref="ArgumentException">The pull request or merge method is invalid.</exception>
     public static SourceControlMergeIntent Create(
         string intentId,
         SourceControlAcceptedRunBinding acceptedRun,

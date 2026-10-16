@@ -1,5 +1,4 @@
 import { AgenticApprovalPattern } from '..';
-/** Demonstrates a human approval checkpoint and a completed step using local sample data. */
 export function AgenticApprovalPatternExample() {
   return (
     <AgenticApprovalPattern

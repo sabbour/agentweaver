@@ -1,4 +1,3 @@
-/** Shared presentation helpers for converting backend AI usage units to credits and USD estimates. */
 // Single source of truth for converting AI credits (AIC) to a USD estimate.
 //
 // Confirmed rate (gh-aw AI Credits spec): 1 AIC = $0.01, i.e. USD = AIC × 0.01.

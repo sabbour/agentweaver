@@ -4,7 +4,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Gateway;
 
-/// <summary>Builds and validates the public OpenAPI document from the Gateway route catalog.</summary>
 internal static partial class GatewayOpenApi
 {
     internal static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
@@ -101,7 +100,6 @@ internal static partial class GatewayOpenApi
             ["readRunUsage"] = C(null, "UsageRunTotals", "200"),
         };
 
-    /// <summary>Checks operation/schema coverage and returns the versioned API document.</summary>
     internal static object CreateDocument()
     {
         var schemas = CreateSchemas();
@@ -166,7 +164,6 @@ internal static partial class GatewayOpenApi
         };
     }
 
-    /// <summary>Creates path parameters, request bodies, and documented responses for one catalog route.</summary>
     private static object CreateOperation(GatewayRoute route)
     {
         var parameters = PathParameterRegex().Matches(route.PublicPath)

@@ -4,7 +4,6 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Projects.Config;
 
-/// <summary>One bundled skill resource sent to the preview or import endpoint.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record SkillContentResourceRequest
 {
@@ -12,14 +11,12 @@ public sealed record SkillContentResourceRequest
     public required byte[] Content { get; init; }
 }
 
-/// <summary>Strict API payload for a skill manifest and its bounded resource inventory.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record SkillContentCandidateRequest
 {
     public required byte[] SkillMarkdown { get; init; }
     public required ImmutableArray<SkillContentResourceRequest?> Resources { get; init; }
 
-    /// <summary>Rejects missing, excessive, or malformed resource entries before creating the internal candidate.</summary>
     public SkillContentCandidate ToCandidate()
     {
         if (SkillMarkdown is null || Resources.IsDefault)
@@ -40,14 +37,12 @@ public sealed record SkillContentCandidateRequest
     }
 }
 
-/// <summary>Request to validate a skill candidate without persisting it.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record PreviewSkillContentRequest
 {
     public required SkillContentCandidateRequest Candidate { get; init; }
 }
 
-/// <summary>Request to import a validated candidate at an expected content digest and idempotency key.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ImportSkillContentRequest
 {
@@ -59,7 +54,6 @@ public sealed record ImportSkillContentRequest
     public required SkillContentCandidateRequest Candidate { get; init; }
 }
 
-/// <summary>Request to pin a skill revision and agent assignment in project configuration.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record UpdateSkillAssignmentRequest
 {
@@ -71,21 +65,16 @@ public sealed record UpdateSkillAssignmentRequest
     public required ImmutableArray<string> AgentIds { get; init; }
 }
 
-/// <summary>Request to revoke one immutable skill revision with a human-readable reason.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RevokeSkillRevisionRequest
 {
     public required string Reason { get; init; }
 }
 
-/// <summary>Maps the authenticated skill-content owner routes and applies request-size and no-store controls.</summary>
 public static class SkillContentEndpoints
 {
     private const long MaxContentRequestBytes = 3 * 1024 * 1024;
 
-    /// <summary>Registers skill preview, inventory, import, assignment, revocation, and accepted-run read routes.</summary>
-    /// <param name="app">The application route builder.</param>
-    /// <returns>The same route builder for endpoint composition.</returns>
     public static IEndpointRouteBuilder MapSkillContentEndpoints(this IEndpointRouteBuilder app)
     {
         var preview = app.MapGroup("/api/skills").RequireAuthorization();
@@ -316,14 +305,12 @@ public static class SkillContentEndpoints
         return app;
     }
 
-    /// <summary>Rejects query parameters on routes whose request contract is body-only.</summary>
     private static void RejectQuery(HttpContext context)
     {
         if (context.Request.Query.Count != 0)
             throw ProjectConfigException.Forbidden();
     }
 
-    /// <summary>Resolves current authority from the authenticated principal and tenant selector header.</summary>
     private static Task<ProjectAuthorizationContext> ResolveCallerAsync(
         HttpContext context,
         ProjectAuthorizationOwner authorizationOwner,
@@ -333,7 +320,6 @@ public static class SkillContentEndpoints
             context.Request.Headers[ProjectAuthorizationOwner.TenantSelectorHeader].ToArray(),
             cancellationToken);
 
-    /// <summary>Maps an owner authorization or project error to a problem response.</summary>
     private static IResult ToProblem(ProjectConfigException exception) =>
         Results.Problem(
             title: exception.Code,

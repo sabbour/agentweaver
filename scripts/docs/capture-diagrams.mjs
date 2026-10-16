@@ -3,7 +3,6 @@
 // inputs are converted to editable, uncompressed draw.io XML before the
 // official draw.io Desktop CLI exports documentation assets.
 
-/** Validate source and generated diagrams, then render and stamp their published assets. */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
@@ -49,7 +48,6 @@ async function materializeDrawio(source) {
   return outputPath;
 }
 
-/** Export the selected editable diagram to each requested format without invoking a shell. */
 function exportDrawio(drawioPath, source, formats, commandInfo, { embed = true, execute = execFileSync } = {}) {
   const outputDirectory = path.join(outDir, source.relativeDirectory);
   for (const format of formats) {
@@ -70,10 +68,6 @@ function exportDrawio(drawioPath, source, formats, commandInfo, { embed = true, 
   }
 }
 
-/**
- * Validate every selected source before writing any output, then render assets and source hashes.
- * Renderer lookup and execution failures stop the batch rather than publishing incomplete evidence.
- */
 export async function render(
   requestedNames,
   {
@@ -118,7 +112,6 @@ export async function render(
   }
 }
 
-/** Compare the selected diagram sources with their committed render artifacts. */
 export async function check(requestedNames) {
   const sources = selectDiagramSources(await listDiagramSources(specsDir), requestedNames);
   let drift = false;
@@ -132,10 +125,6 @@ export async function check(requestedNames) {
   return !drift;
 }
 
-/**
- * Check one source's editable draw.io file, PNG, and stamp against its current source hash.
- * Returns a status message instead of throwing for missing or stale committed artifacts.
- */
 export async function checkSourceArtifacts(
   source,
   { outputDirectory, generatedDirectory },

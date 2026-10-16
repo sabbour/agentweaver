@@ -14,10 +14,6 @@ namespace Agentweaver.Identity.Broker;
 public sealed class RefreshTokenFamilyRevoker(
     IOpenIddictTokenManager tokens, IOpenIddictAuthorizationManager authorizations)
 {
-    /// <summary>
-    /// Revokes all tokens for the authorization and then revokes the authorization record.
-    /// Used after refresh-token replay or a failed atomic redemption race.
-    /// </summary>
     public async Task RevokeAsync(string authorizationId, CancellationToken cancellationToken)
     {
         await tokens.RevokeByAuthorizationIdAsync(authorizationId, cancellationToken);
@@ -36,7 +32,6 @@ public sealed class RefreshTokenFamilyRevoker(
 public sealed class RefreshReplayHandler(IOpenIddictTokenManager tokens, RefreshTokenFamilyRevoker familyRevoker)
     : IOpenIddictServerHandler<ValidateTokenRequestContext>
 {
-    /// <summary>Detects redeemed or revoked refresh-token reuse and revokes its full authorization family.</summary>
     public async ValueTask HandleAsync(ValidateTokenRequestContext context)
     {
         if (!context.Request.IsRefreshTokenGrantType() || string.IsNullOrWhiteSpace(context.Request.RefreshToken))
@@ -68,10 +63,6 @@ public sealed class AtomicRefreshTokenRedemptionHandler(
     IOpenIddictTokenManager tokens, RefreshTokenFamilyRevoker familyRevoker)
     : IOpenIddictServerHandler<ProcessSignInContext>
 {
-    /// <summary>
-    /// Claims a refresh token before OpenIddict signs in the replacement; a lost claim
-    /// revokes the token family and rejects the exchange.
-    /// </summary>
     public async ValueTask HandleAsync(ProcessSignInContext context)
     {
         if (context.EndpointType is not OpenIddictServerEndpointType.Token || !context.Request.IsRefreshTokenGrantType())

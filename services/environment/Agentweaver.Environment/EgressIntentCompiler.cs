@@ -6,14 +6,10 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Groups compiled outbound network rules by the admitted purpose that requires them.</summary>
 public sealed record EgressPurposeGroup(
     NetworkEgressPurpose Purpose,
     ImmutableArray<NetworkEgressRule> Rules);
 
-/// <summary>
-/// Immutable network policy selected for one project run, together with the revisions used to authorize it.
-/// </summary>
 public sealed record CompiledEgressIntent(
     string ProjectId,
     string RunId,
@@ -25,10 +21,8 @@ public sealed record CompiledEgressIntent(
     ImmutableArray<EgressPurposeGroup> PurposeGroups,
     bool RequiresL7Mediation);
 
-/// <summary>Explains why an effective run network policy could not be represented safely.</summary>
 public sealed record EgressCompilationFailure(string Code, string Message);
 
-/// <summary>Holds either a compiled egress intent or the validation failure that prevented compilation.</summary>
 public sealed class EgressCompilationResult
 {
     private EgressCompilationResult(CompiledEgressIntent? intent, EgressCompilationFailure? failure) =>
@@ -38,18 +32,13 @@ public sealed class EgressCompilationResult
     public EgressCompilationFailure? Failure { get; }
     public bool IsSuccess => Failure is null;
 
-    /// <summary>Creates a successful result containing the compiled intent.</summary>
     public static EgressCompilationResult Success(CompiledEgressIntent intent) =>
         new(intent ?? throw new ArgumentNullException(nameof(intent)), null);
 
-    /// <summary>Creates a failed result with a stable code and a human-readable reason.</summary>
     public static EgressCompilationResult Fail(string code, string message) =>
         new(null, new EgressCompilationFailure(code, message));
 }
 
-/// <summary>
-/// Converts the authorized Projects run selection into the narrower policy that the Environment service applies.
-/// </summary>
 public static class EgressIntentCompiler
 {
     private static readonly string[] ProtectedIdentityDestinations =
@@ -76,12 +65,6 @@ public static class EgressIntentCompiler
         "*.sts.windows.net"
     ];
 
-    /// <summary>
-    /// Validates policy revisions and rule containment, then compiles only the admitted run needs.
-    /// Protected identity destinations and incomplete DNS requirements are rejected rather than widened.
-    /// </summary>
-    /// <param name="selection">The immutable, authorized policy selection for the run.</param>
-    /// <returns>A compiled intent, or a coded failure when the selection is malformed or unsafe.</returns>
     public static EgressCompilationResult Compile(EffectiveNetworkPolicySelection selection)
     {
         if (selection is null ||
@@ -189,10 +172,6 @@ public static class EgressIntentCompiler
                 NetworkEgressPurpose.RemoteMcp or NetworkEgressPurpose.PublicHttps)));
     }
 
-    /// <summary>Hashes the canonical policy identity and selected Kubernetes scope for policy pinning.</summary>
-    /// <param name="intent">The compiled policy and its authorization revisions.</param>
-    /// <param name="selector">The namespace and labels that scope the policy.</param>
-    /// <returns>A lowercase SHA-256 digest suitable for comparing policy versions.</returns>
     public static string Hash(CompiledEgressIntent intent, EnvironmentEgressSelector selector)
     {
         var material = string.Join('\n',
@@ -209,7 +188,6 @@ public static class EgressIntentCompiler
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material))).ToLowerInvariant();
     }
 
-    /// <summary>Builds one of the required kube-dns TCP or UDP port-53 rules.</summary>
     private static NetworkEgressRule DnsRule(EgressProtocol protocol) =>
         new(NetworkEgressPurpose.DnsResolver,
             NetworkEgressDestinationKind.KubernetesService,
@@ -217,7 +195,6 @@ public static class EgressIntentCompiler
             53,
             protocol);
 
-    /// <summary>Checks whether an FQDN rule overlaps a Key Vault or identity-provider destination.</summary>
     private static bool CanReachProtectedIdentityDestination(NetworkEgressRule rule)
     {
         if (rule.DestinationKind != NetworkEgressDestinationKind.Fqdn)

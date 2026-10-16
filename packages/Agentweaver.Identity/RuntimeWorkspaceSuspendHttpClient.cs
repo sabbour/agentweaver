@@ -4,13 +4,11 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity;
 
-/// <summary>Authenticated owner requests and receipts used to flush and release a suspended runtime workspace.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record WorkspaceVolumeApiFlushRequest(
     WorkspaceVolumeApiTransitionRequest Transition,
     RuntimeHostSuspendRequest Suspend)
 {
-    /// <summary>Checks workspace flush identity, expected generations, and suspend authority.</summary>
     public WorkspaceVolumeApiFlushRequest Validate()
     {
         ArgumentNullException.ThrowIfNull(Transition);
@@ -38,7 +36,6 @@ public sealed record WorkspaceVolumeApiFlushRequest(
     }
 }
 
-/// <summary>Versioned transition fields supplied to the workspace owner.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record WorkspaceVolumeApiTransitionRequest(
     long ExpectedTransitionRevision,
@@ -47,7 +44,6 @@ public sealed record WorkspaceVolumeApiTransitionRequest(
     string IdempotencyKey,
     long? NextDataGeneration = null)
 {
-    /// <summary>Converts API fields into the validated workspace transition contract.</summary>
     public WorkspaceVolumeTransitionRequest ToTransition(
         string volumeId,
         WorkspaceVolumeTransitionKind operation) =>
@@ -61,7 +57,6 @@ public sealed record WorkspaceVolumeApiTransitionRequest(
             IdempotencyKey).ValidateFor(operation);
 }
 
-/// <summary>Workspace transition reservation, completion, current volume, cleanup, and suspend evidence.</summary>
 public sealed record WorkspaceVolumeLifecycleResult(
     EnvironmentWorkspaceVolumeTransitionReservation Reservation,
     EnvironmentWorkspaceVolumeTransitionResult? Completion,
@@ -86,13 +81,11 @@ public sealed record WorkspaceVolumeLifecycleResult(
         CleanupStatus is { State: EnvironmentWorkspaceVolumeCleanupState.Blocked };
 }
 
-/// <summary>Request to release the exact placement after its workspace flush and host suspension.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeSuspendPlacementReleaseRequest(
     RuntimeHostSuspendReceipt HostReceipt,
     long FlushTransitionRevision)
 {
-    /// <summary>Checks the recorded host suspension and its matching Environment generation.</summary>
     public RuntimeSuspendPlacementReleaseRequest Validate()
     {
         RuntimeWorkspaceSuspendHttpClient.ValidateRecordedHostReceipt(HostReceipt);
@@ -111,7 +104,6 @@ public sealed record RuntimeSuspendPlacementReleaseRequest(
     }
 }
 
-/// <summary>Owner receipt confirming placement release while preserving the flushed workspace reference.</summary>
 public sealed record RuntimeSuspendPlacementReleaseReceipt(
     int ContractVersion,
     Guid OperationId,
@@ -125,7 +117,6 @@ public sealed record RuntimeSuspendPlacementReleaseReceipt(
     long WorkspaceDataGeneration,
     long WorkspaceTransitionRevision)
 {
-    /// <summary>Matches the released resource, fencing generation, and workspace transition to the request.</summary>
     public RuntimeSuspendPlacementReleaseReceipt ValidateFor(RuntimeSuspendPlacementReleaseRequest request)
     {
         request.Validate();
@@ -149,7 +140,6 @@ public sealed record RuntimeSuspendPlacementReleaseReceipt(
     }
 }
 
-/// <summary>Coordinates workspace resolution, flush, and placement release with the Environment owner.</summary>
 public sealed class RuntimeWorkspaceSuspendHttpClient(
     HttpClient client, Uri environmentOwnerAddress, TimeProvider? timeProvider = null)
 {
@@ -157,7 +147,6 @@ public sealed class RuntimeWorkspaceSuspendHttpClient(
     private readonly Uri _owner = RuntimeOwnerHttpTransport.RequireOwnerAddress(environmentOwnerAddress);
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
 
-    /// <summary>Requests release and validates the owner receipt for the suspended placement.</summary>
     public async Task<RuntimeSuspendPlacementReleaseReceipt> ReleasePlacementAsync(
         RuntimeSuspendPlacementReleaseRequest request, RuntimeActorAuthorization actor,
         CancellationToken cancellationToken)
@@ -170,7 +159,6 @@ public sealed class RuntimeWorkspaceSuspendHttpClient(
         return result.ValidateFor(request);
     }
 
-    /// <summary>Resolves the exact workspace flush transaction while rejecting caller-supplied flush evidence.</summary>
     public async Task<WorkspaceVolumeApiFlushRequest> ResolveAsync(
         RuntimeHostSuspendRequest request, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
     {
@@ -186,10 +174,6 @@ public sealed class RuntimeWorkspaceSuspendHttpClient(
         return resolved;
     }
 
-    /// <summary>
-    /// Flushes the workspace, validates reservation and completion ordering, and checks that
-    /// the host suspend receipt references the same durable flush receipt.
-    /// </summary>
     public async Task<WorkspaceVolumeLifecycleResult> FlushAsync(
         WorkspaceVolumeApiFlushRequest request, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
     {
@@ -239,7 +223,6 @@ public sealed class RuntimeWorkspaceSuspendHttpClient(
         return result;
     }
 
-    /// <summary>Checks the host suspension against the current request, source grant, and time.</summary>
     public static void ValidateHostReceipt(
         RuntimeHostSuspendReceipt receipt, RuntimeHostSuspendRequest request, DateTimeOffset now)
     {
@@ -256,7 +239,6 @@ public sealed class RuntimeWorkspaceSuspendHttpClient(
         receipt.WorkspaceFlush!.ValidateFor(request.WorkspaceFlush);
     }
 
-    /// <summary>Validates all persisted suspend, cache, grant, native-turn, and workspace evidence.</summary>
     public static void ValidateRecordedHostReceipt(RuntimeHostSuspendReceipt receipt)
     {
         if (receipt is null || receipt.Registration?.Binding is null ||

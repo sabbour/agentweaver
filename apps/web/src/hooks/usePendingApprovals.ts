@@ -2,11 +2,6 @@ import { apiClient } from '../api/apiClient';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PendingApprovalDto } from '../api/types';
 
-/**
- * Loads pending approval details for the selected run and refreshes on `refreshKey`.
- * Request generations prevent a slow response for an older refresh or run from
- * replacing the currently selected run's data.
- */
 export function usePendingApprovals(runId: string, refreshKey: string) {
   const [approvals, setApprovals] = useState<PendingApprovalDto[]>([]);
   const [loadedRunId, setLoadedRunId] = useState('');

@@ -1,7 +1,3 @@
-/**
- * Applies a validated release plan to manifest, version, and changeset files as an ordered transaction.
- * Preconditions are checked before writes; a failed write triggers rollback to the prior file contents.
- */
 // Dependency-free release application: consumes a plan produced by `plan.mjs` and deterministically
 // applies it to the current source tree. Every precondition is checked before any file is touched;
 // writes are performed as an ordered list of {do, undo} operations so a mid-sequence I/O failure
@@ -136,10 +132,6 @@ function runWithRollback(operations) {
  * atomic run; treated as tampering), or a missing changeset/archive-destination conflict. A plan
  * whose every component is already at `toVersion` is a no-op only after its receipt and all dirty
  * paths match the exact source-derived preparation bytes.
- */
-/**
- * Applies a plan only when its source SHA, checksum, and expected file states still match.
- * Writes release metadata and receipts; stale plans or I/O errors throw, with partial writes rolled back.
  */
 export function applyPlan(plan, manifestPath, {
   root = repositoryRoot,

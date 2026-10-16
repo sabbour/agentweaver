@@ -3,7 +3,6 @@ using System.Text;
 
 namespace Agentweaver.Projects.Config;
 
-/// <summary>Built-in role text used to create project agent charters from the catalog.</summary>
 public sealed record ProjectCastingRoleDefinition(
     string Id,
     string Title,
@@ -11,16 +10,12 @@ public sealed record ProjectCastingRoleDefinition(
     ImmutableArray<string> Responsibilities,
     ImmutableArray<string> Boundaries);
 
-/// <summary>A built-in set of role IDs used to seed a team proposal.</summary>
 public sealed record ProjectCastingTemplateDefinition(
     string Id,
     string Title,
     string Description,
     ImmutableArray<string> RoleIds);
 
-/// <summary>
-/// Owns the authenticated built-in role/template catalog and creates validated casting drafts without changing storage.
-/// </summary>
 public static class ProjectCastingCatalog
 {
     private static readonly ImmutableArray<ProjectCastingRoleDefinition> RoleDefinitions =
@@ -111,14 +106,10 @@ public static class ProjectCastingCatalog
             ["lead-pm", "customer-researcher", "prototype-designer", "core-implementer", "docs-writer", "ai-safety-reviewer"]),
     ];
 
-    /// <summary>Returns the immutable role catalog exposed by the casting endpoint.</summary>
     public static ImmutableArray<ProjectCastingRoleDefinition> Roles => RoleDefinitions;
 
-    /// <summary>Returns the immutable scenario templates exposed by the casting endpoint.</summary>
     public static ImmutableArray<ProjectCastingTemplateDefinition> Templates => TemplateDefinitions;
 
-    /// <summary>Creates a draft from a known template, replacing only the current charters and casting.</summary>
-    /// <exception cref="ProjectConfigException">The template ID is empty or is not in the catalog.</exception>
     public static ProjectConfiguration CreateScenarioDraft(ProjectConfiguration current, string templateId)
     {
         ArgumentNullException.ThrowIfNull(current);
@@ -135,10 +126,6 @@ public static class ProjectCastingCatalog
         return CreateDraft(current, template.RoleIds);
     }
 
-    /// <summary>
-    /// Creates a draft from unique, known, non-reserved role IDs while preserving unrelated configuration settings.
-    /// </summary>
-    /// <exception cref="ProjectConfigException">The selection is empty, duplicated, reserved, or unknown.</exception>
     public static ProjectConfiguration CreateManualDraft(
         ProjectConfiguration current,
         ImmutableArray<string> roleIds)
@@ -172,7 +159,6 @@ public static class ProjectCastingCatalog
         return CreateDraft(current, roleIds);
     }
 
-    /// <summary>Builds matching charter and cast entries in the selected role order.</summary>
     private static ProjectConfiguration CreateDraft(
         ProjectConfiguration current,
         ImmutableArray<string> roleIds)
@@ -198,7 +184,6 @@ public static class ProjectCastingCatalog
         };
     }
 
-    /// <summary>Formats a role summary, responsibilities, and boundaries as the charter text.</summary>
     private static string BuildCharter(ProjectCastingRoleDefinition role)
     {
         var charter = new StringBuilder(role.Summary);

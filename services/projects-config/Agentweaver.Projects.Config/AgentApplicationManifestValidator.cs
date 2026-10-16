@@ -9,19 +9,16 @@ using Agentweaver.Providers;
 
 namespace Agentweaver.Projects.Config;
 
-/// <summary>One structured manifest validation error with a stable code and JSON path.</summary>
 internal sealed record AgentApplicationManifestValidationIssue(
     string Code,
     string Path,
     string Message);
 
-/// <summary>Observed package path, expanded byte size, and computed content digest.</summary>
 internal sealed record AgentApplicationInventoryEntry(
     string Path,
     long Size,
     string Sha256);
 
-/// <summary>One declared application dependency with version interval and optional exact manifest digest.</summary>
 internal sealed record AgentApplicationDependencyRequirement(
     string AppId,
     string MinimumVersion,
@@ -29,28 +26,24 @@ internal sealed record AgentApplicationDependencyRequirement(
     string? ManifestDigest,
     string Kind);
 
-/// <summary>Resolved application node and its own declared dependency requirements.</summary>
 internal sealed record AgentApplicationDependencyNode(
     string AppId,
     string Version,
     string ManifestDigest,
     ImmutableArray<AgentApplicationDependencyRequirement> Dependencies);
 
-/// <summary>Deterministic dependency pin emitted for a validated bundle.</summary>
 internal sealed record AgentApplicationDependencyLockEntry(
     string AppId,
     string Version,
     string ManifestDigest,
     string Kind);
 
-/// <summary>Host contract, product version, component schemas, and prerelease admission supplied to validation.</summary>
 internal sealed record AgentApplicationHostCompatibility(
     string Contract,
     string ProductVersion,
     ImmutableDictionary<string, int> ComponentSchemas,
     bool AllowPrerelease);
 
-/// <summary>Validation digest, all discovered issues, and a dependency lock emitted only for a valid manifest.</summary>
 internal sealed record AgentApplicationManifestValidationResult(
     string ConfigurationSha256,
     ImmutableArray<AgentApplicationManifestValidationIssue> Issues,
@@ -59,9 +52,6 @@ internal sealed record AgentApplicationManifestValidationResult(
     public bool IsValid => Issues.IsEmpty;
 }
 
-/// <summary>
-/// Validates the application manifest against actual package bytes, dependency resolution, provider catalog, and host support.
-/// </summary>
 internal static class AgentApplicationManifestValidator
 {
     private const int MaximumConfigurationBytes = 1_048_576;
@@ -93,16 +83,6 @@ internal static class AgentApplicationManifestValidator
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
     };
 
-    /// <summary>
-    /// Returns structured issues rather than throwing for invalid input and emits dependency pins only when every check passes.
-    /// </summary>
-    /// <param name="configuration">Raw manifest JSON bytes whose exact SHA-256 is returned.</param>
-    /// <param name="inventory">Actual expanded package file paths, sizes, and digests.</param>
-    /// <param name="compressedLayerBytes">Compressed package size measured by the caller.</param>
-    /// <param name="dependencyGraph">Resolved dependency nodes supplied by the caller.</param>
-    /// <param name="providerCatalog">Provider catalog used to test declared requirements.</param>
-    /// <param name="hostCompatibility">Current host contract, version, and schema support.</param>
-    /// <returns>Configuration digest, validation issues, and an empty lock when validation fails.</returns>
     public static AgentApplicationManifestValidationResult Validate(
         ReadOnlyMemory<byte> configuration,
         ImmutableArray<AgentApplicationInventoryEntry> inventory,
@@ -114,7 +94,6 @@ internal static class AgentApplicationManifestValidator
         ArgumentNullException.ThrowIfNull(providerCatalog);
         ArgumentNullException.ThrowIfNull(hostCompatibility);
 
-        // The digest binds the result to the exact manifest bytes, including whitespace and property order.
         var configurationSha256 = Convert.ToHexString(SHA256.HashData(configuration.Span)).ToLowerInvariant();
         var issues = ImmutableArray.CreateBuilder<AgentApplicationManifestValidationIssue>();
         if (configuration.Length > MaximumConfigurationBytes)
@@ -215,7 +194,6 @@ internal static class AgentApplicationManifestValidator
         }
     }
 
-    /// <summary>Checks the supported manifest schema, publisher-qualified app ID, and SemVer release.</summary>
     private static string? ValidateManifestIdentity(
         ManifestDocument manifest,
         ImmutableArray<AgentApplicationManifestValidationIssue>.Builder issues)
@@ -231,7 +209,6 @@ internal static class AgentApplicationManifestValidator
         return IsPublisherQualifiedAppId(manifest.AppId) ? manifest.AppId : null;
     }
 
-    /// <summary>Builds the component ID sets used to resolve entry points and file declarations.</summary>
     private static Dictionary<string, HashSet<string>> ValidateComponents(
         ComponentDeclarations? declarations,
         ImmutableArray<AgentApplicationManifestValidationIssue>.Builder issues)
@@ -277,7 +254,6 @@ internal static class AgentApplicationManifestValidator
         }
     }
 
-    /// <summary>Checks host contract/version compatibility and exact component schema versions.</summary>
     private static void ValidateHost(
         HostDocument? host,
         AgentApplicationHostCompatibility compatibility,
@@ -343,7 +319,6 @@ internal static class AgentApplicationManifestValidator
         }
     }
 
-    /// <summary>Requires unique entry-point IDs, object input schemas, supported kinds, and declared component references.</summary>
     private static void ValidateEntryPoints(
         EntryPointDocument[]? entryPoints,
         IReadOnlyDictionary<string, HashSet<string>> components,
@@ -394,7 +369,6 @@ internal static class AgentApplicationManifestValidator
         }
     }
 
-    /// <summary>Matches declared files to actual package inventory and rejects path collisions, unsafe paths, size, or digest drift.</summary>
     private static void ValidateInventory(
         FileDocument[]? declaredFiles,
         ImmutableArray<AgentApplicationInventoryEntry> actualInventory,
@@ -540,7 +514,6 @@ internal static class AgentApplicationManifestValidator
                     "Content file is not declared by the manifest.");
     }
 
-    /// <summary>Validates supported model-selection and run-scoped SecretRef slots without accepting other input kinds.</summary>
     private static void ValidateConfigurationInputs(
         ConfigurationInputDocument[]? inputs,
         ImmutableArray<AgentApplicationManifestValidationIssue>.Builder issues)
@@ -580,7 +553,6 @@ internal static class AgentApplicationManifestValidator
         }
     }
 
-    /// <summary>Requires a present constraints value to be a JSON object.</summary>
     private static void ValidateConstraints(
         JsonElement? constraints,
         ImmutableArray<AgentApplicationManifestValidationIssue>.Builder issues)
@@ -589,7 +561,6 @@ internal static class AgentApplicationManifestValidator
             Add(issues, "invalid_constraints", "constraints", "Constraints must be a JSON object.");
     }
 
-    /// <summary>Converts manifest dependency DTOs to validation records and reports missing or null entries.</summary>
     private static ImmutableArray<AgentApplicationDependencyRequirement> ParseDependencies(
         DependencyRequirementDocument[]? dependencies,
         ImmutableArray<AgentApplicationManifestValidationIssue>.Builder issues)
@@ -619,7 +590,6 @@ internal static class AgentApplicationManifestValidator
         return result.ToImmutable();
     }
 
-    /// <summary>Checks every resolved node, range, digest, kind, cycle, reachability, and emits stable dependency pins.</summary>
     private static ImmutableArray<AgentApplicationDependencyLockEntry> ValidateDependencyGraph(
         string? rootAppId,
         string? rootVersion,
@@ -735,7 +705,6 @@ internal static class AgentApplicationManifestValidator
                 node.AppId, node.Version, node.ManifestDigest!, selectedKinds[node.AppId]))];
     }
 
-    /// <summary>Checks one edge for a qualified ID, unique direct declaration, valid SemVer interval, digest, and kind.</summary>
     private static bool ValidateDependencyRequirement(
         AgentApplicationDependencyRequirement requirement,
         string sourceAppId,
@@ -777,7 +746,6 @@ internal static class AgentApplicationManifestValidator
         return valid;
     }
 
-    /// <summary>Detects back-edges with an iterative depth-first traversal to avoid recursive stack growth.</summary>
     private static bool HasDependencyCycle(IReadOnlyDictionary<string, DependencyGraphNode> nodes)
     {
         var state = new Dictionary<string, byte>(StringComparer.Ordinal);
@@ -817,7 +785,6 @@ internal static class AgentApplicationManifestValidator
         return false;
     }
 
-    /// <summary>Finds all dependency nodes reachable from the root manifest.</summary>
     private static HashSet<string> ReachableDependencies(
         string rootAppId,
         IReadOnlyDictionary<string, DependencyGraphNode> nodes)
@@ -836,7 +803,6 @@ internal static class AgentApplicationManifestValidator
         return reachable;
     }
 
-    /// <summary>Validates provider requirement shape and asks the existing resolver to verify each supported seam.</summary>
     private static void ValidateProviderRequirements(
         ProviderRequirementDocument[]? requirements,
         ProviderCatalog catalog,
@@ -953,7 +919,6 @@ internal static class AgentApplicationManifestValidator
         }
     }
 
-    /// <summary>Builds an ordinal capability set and reports unstable or duplicate names.</summary>
     private static ImmutableHashSet<string>? ToCapabilities(
         string[] values,
         string path,
@@ -978,7 +943,6 @@ internal static class AgentApplicationManifestValidator
         return capabilities.ToImmutable();
     }
 
-    /// <summary>Parses only the exact declared ProviderSeam name, not case-folded aliases.</summary>
     private static bool TryParseSeam(string? value, out ProviderSeam seam)
     {
         if (Enum.TryParse(value, ignoreCase: false, out seam) &&
@@ -989,7 +953,6 @@ internal static class AgentApplicationManifestValidator
         return false;
     }
 
-    /// <summary>Maps manifest file kinds to the component declaration category that owns their IDs.</summary>
     private static string? ComponentCategory(string? kind) => kind switch
     {
         "agent" => "agents",
@@ -1002,7 +965,6 @@ internal static class AgentApplicationManifestValidator
         _ => null,
     };
 
-    /// <summary>Maps manifest file kinds to the host schema key required for that content.</summary>
     private static string? ComponentSchema(string? kind) => kind switch
     {
         "agent" => "agentCharter",
@@ -1015,7 +977,6 @@ internal static class AgentApplicationManifestValidator
         _ => null,
     };
 
-    /// <summary>Requires a lower-case, dotted publisher name whose labels use bounded DNS-like characters.</summary>
     private static bool IsPublisherQualifiedAppId(string? value)
     {
         if (string.IsNullOrEmpty(value) || value.Length > 256)
@@ -1029,7 +990,6 @@ internal static class AgentApplicationManifestValidator
             label.All(character => !char.IsAsciiLetter(character) || char.IsLower(character)));
     }
 
-    /// <summary>Checks the bounded ASCII identifier form used by component, schema, and capability names.</summary>
     private static bool IsStableIdentifier(string? value) =>
         !string.IsNullOrEmpty(value) &&
         value.Length <= MaximumIdentifierLength &&
@@ -1040,11 +1000,9 @@ internal static class AgentApplicationManifestValidator
     private static bool IsAsciiAlphaNumeric(char value) =>
         char.IsAsciiLetterOrDigit(value);
 
-    /// <summary>Requires the canonical <c>sha256:</c> prefix and 64 lower-case hexadecimal digits.</summary>
     private static bool IsSha256(string? value) =>
         value is not null && DigestPattern.IsMatch(value);
 
-    /// <summary>Rejects absolute, non-normalized, traversing, reserved-device, and non-portable package paths.</summary>
     private static bool IsCanonicalPackagePath(string? value)
     {
         if (string.IsNullOrEmpty(value) ||
@@ -1076,7 +1034,6 @@ internal static class AgentApplicationManifestValidator
         return true;
     }
 
-    /// <summary>Detects device basenames that cannot be safely represented on Windows package filesystems.</summary>
     private static bool IsReservedWindowsDeviceName(string segment)
     {
         var basename = segment.Split('.')[0].TrimEnd(' ', '.');
@@ -1093,7 +1050,6 @@ internal static class AgentApplicationManifestValidator
                basename[3] is >= '1' and <= '9' or '\u00B9' or '\u00B2' or '\u00B3';
     }
 
-    /// <summary>Walks every object and array to reject duplicate property names and oversized number tokens.</summary>
     private static void ValidateJsonProperties(
         JsonElement element,
         string path,
@@ -1127,7 +1083,6 @@ internal static class AgentApplicationManifestValidator
         }
     }
 
-    /// <summary>Adds a path-addressed validation issue to the result collection.</summary>
     private static void Add(
         ImmutableArray<AgentApplicationManifestValidationIssue>.Builder issues,
         string code,
@@ -1135,20 +1090,17 @@ internal static class AgentApplicationManifestValidator
         string message) =>
         issues.Add(new AgentApplicationManifestValidationIssue(code, path, message));
 
-    /// <summary>Creates an early-failure result with no dependency lock.</summary>
     private static AgentApplicationManifestValidationResult Result(
         string configurationSha256,
         ImmutableArray<AgentApplicationManifestValidationIssue>.Builder issues) =>
         new(configurationSha256, issues.ToImmutable(), []);
 
-    /// <summary>Internal normalized graph node used while validating dependency edges and reachability.</summary>
     private sealed record DependencyGraphNode(
         string AppId,
         string Version,
         string? ManifestDigest,
         ImmutableArray<AgentApplicationDependencyRequirement> Dependencies);
 
-    /// <summary>Strict deserialization shape for the top-level application manifest document.</summary>
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     private sealed class ManifestDocument
     {
@@ -1168,7 +1120,6 @@ internal static class AgentApplicationManifestValidator
         public JsonElement? Constraints { get; init; }
     }
 
-    /// <summary>Manifest host contract and required component schemas.</summary>
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     private sealed class HostDocument
     {
@@ -1180,7 +1131,6 @@ internal static class AgentApplicationManifestValidator
         public Dictionary<string, int>? ComponentSchemas { get; init; }
     }
 
-    /// <summary>Manifest entry-point identity, kind, component reference, and input schema.</summary>
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     private sealed class EntryPointDocument
     {
@@ -1192,7 +1142,6 @@ internal static class AgentApplicationManifestValidator
         public JsonElement InputSchema { get; init; }
     }
 
-    /// <summary>Declared component identifiers grouped by supported host category.</summary>
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     private sealed class ComponentDeclarations
     {
@@ -1207,7 +1156,6 @@ internal static class AgentApplicationManifestValidator
         public string[]? Assets { get; init; }
     }
 
-    /// <summary>One manifest declaration for an application package file.</summary>
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     private sealed class FileDocument
     {
@@ -1222,7 +1170,6 @@ internal static class AgentApplicationManifestValidator
         public string? Digest { get; init; }
     }
 
-    /// <summary>One dependency range and optional exact manifest digest from the manifest.</summary>
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     private sealed class DependencyRequirementDocument
     {
@@ -1235,7 +1182,6 @@ internal static class AgentApplicationManifestValidator
         public string? Kind { get; init; }
     }
 
-    /// <summary>One required provider seam, adapter/options versions, and capability set.</summary>
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     private sealed class ProviderRequirementDocument
     {
@@ -1250,7 +1196,6 @@ internal static class AgentApplicationManifestValidator
         public string[]? RequiredL7Capabilities { get; init; }
     }
 
-    /// <summary>One supported manifest configuration input with optional protected-credential purpose and scope.</summary>
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     private sealed class ConfigurationInputDocument
     {
@@ -1263,7 +1208,6 @@ internal static class AgentApplicationManifestValidator
         public string? Scope { get; init; }
     }
 
-    /// <summary>Minimal SemVer 2 parser and comparator used for host and dependency compatibility checks.</summary>
     private sealed class ApplicationSemanticVersion : IComparable<ApplicationSemanticVersion>
     {
         private static readonly Regex Pattern = new(
@@ -1288,7 +1232,6 @@ internal static class AgentApplicationManifestValidator
         public string Patch { get; }
         public ImmutableArray<string> PreRelease { get; }
 
-        /// <summary>Parses a bounded SemVer 2 value without throwing for malformed or excessively long input.</summary>
         public static bool TryParse(string? value, out ApplicationSemanticVersion? version)
         {
             version = null;
@@ -1323,7 +1266,6 @@ internal static class AgentApplicationManifestValidator
             return true;
         }
 
-        /// <summary>Compares numeric release parts, then SemVer prerelease identifiers; build metadata does not affect order.</summary>
         public int CompareTo(ApplicationSemanticVersion? other)
         {
             if (other is null)

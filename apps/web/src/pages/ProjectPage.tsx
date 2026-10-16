@@ -53,7 +53,6 @@ import type { ProjectSetupPromptState } from '../components/onboarding/projectSe
 // Map a coordinator orchestration status (Feature 008) to a human label. Optional —
 // the backend adds coordinator_status concurrently, so callers fall back to the bare
 // RunStatus when it is absent.
-/** Converts coordinator state values into the labels shown in the run audit table. */
 function coordinatorStatusLabel(status: string | undefined): string | undefined {
   if (!status) return undefined;
   const k = status.toLowerCase().replace(/[^a-z]/g, '');
@@ -73,7 +72,6 @@ function coordinatorStatusLabel(status: string | undefined): string | undefined 
 // was cancelled/abandoned mid-'dispatching'), the badge must fall back to the run-level
 // status instead of showing a stale in-flight label (#304).
 const TERMINAL_COORD_LABELS = new Set(['Complete', 'Failed', 'Blocked', 'Declined']);
-/** Falls back to the terminal run result when coordinator state is absent or stale. */
 function runStatusFallbackLabel(run: WorkflowRunDto): string {
   const result = run.result?.toLowerCase() ?? '';
   if (result.includes('abandon')) return 'Cancelled';
@@ -88,7 +86,6 @@ function runStatusFallbackLabel(run: WorkflowRunDto): string {
 
 // Resolves the label to display for a run's status badge, correcting for a stale
 // coordinator_status when the run has already terminated (#304).
-/** Keeps terminal run labels authoritative over lingering coordinator progress. */
 function resolveRunStatusLabel(run: WorkflowRunDto): string | undefined {
   const coordLabel = coordinatorStatusLabel(run.coordinator_status);
   if (isTerminalRunStatus(run.status) && (!coordLabel || !TERMINAL_COORD_LABELS.has(coordLabel))) {
@@ -258,7 +255,6 @@ const useStyles = makeStyles({
   },
 });
 
-/** One audit row with a confirmed abandon/delete action appropriate to run state. */
 function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId: string; onDeleted: (workflowRunId: string) => void }) {
   const styles = useStyles();
   const [acting, setActing] = useState(false);
@@ -271,7 +267,6 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
   const coordLabel = isCoord ? resolveRunStatusLabel(run) : undefined;
   const coordReason = run.coordinator_status_reason;
 
-  /** Deletes the selected run after confirmation, then updates the parent list. */
   const handleConfirmed = async () => {
     setConfirmOpen(false);
     setActing(true);
@@ -412,11 +407,9 @@ function RunRow({ run, projectId, onDeleted }: { run: WorkflowRunDto; projectId:
 }
 
 export interface ProjectPageProps {
-  /** Stable user key used to keep project setup dismissals user-specific. */
   currentUserKey?: string | null;
 }
 
-/** Builds the persistence key payload used to track the setup prompt dismissal. */
 function projectSetupPromptState(
   project: Project,
   currentUserKey: string | null | undefined,
@@ -433,10 +426,6 @@ function projectSetupPromptState(
   };
 }
 
-/**
- * Uses structured repository readiness when present and infers the legacy response
- * shape only from visible project and Repo App connection fields.
- */
 function projectRepositoryReadiness(
   project: Project,
   readiness: UnattendedReadiness,
@@ -473,8 +462,6 @@ export function ProjectPage({ currentUserKey }: ProjectPageProps = {}) {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
-  // Project metadata and run audit state are loaded together. Repository setup is
-  // derived separately because its readiness request can fail without hiding the page.
   const [project, setProject] = useState<Project | null>(null);
   const [runs, setRuns] = useState<WorkflowRunDto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -486,19 +473,15 @@ export function ProjectPage({ currentUserKey }: ProjectPageProps = {}) {
     repository: NonNullable<UnattendedReadiness['repository']>;
   } | null>(null);
 
-  /** Removes a deleted run from the local audit list without another full request. */
   const handleRunDeleted = (workflowRunId: string) => {
     setRuns((prev) => prev.filter((r) => r.workflow_run_id !== workflowRunId));
   };
 
-  // Fetch project and run history on route change. Poll only while at least one run
-  // remains live, then stop the timer once all returned runs are terminal.
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
     let intervalId: ReturnType<typeof setInterval> | null = null;
 
-    // Recent rows power the audit trail and determine whether polling is required.
     const fetchRuns = async () => {
       try {
         const { items: runList } = await apiClient.listProjectRuns(projectId, { pageSize: 100 });
@@ -509,7 +492,6 @@ export function ProjectPage({ currentUserKey }: ProjectPageProps = {}) {
       }
     };
 
-    // Setup readiness is optional UI state; failures clear the prompt context only.
     const fetchRepositorySetup = async (proj: Project) => {
       try {
         const readiness = await apiClient.getUnattendedReadiness(projectId);

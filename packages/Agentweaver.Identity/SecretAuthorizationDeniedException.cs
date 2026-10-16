@@ -1,6 +1,5 @@
 namespace Agentweaver.Identity;
 
-/// <summary>Stable, non-sensitive reasons for denying a secret redemption.</summary>
 public enum SecretAuthorizationDenialReason
 {
     // The trusted actor's bound run does not match the request's run. Neither
@@ -25,19 +24,16 @@ public enum SecretAuthorizationDenialReason
     GrantChanged,
 }
 
-/// <summary>A redacted authorization denial that does not reveal secret or grant data.</summary>
 // Thrown whenever a redemption is denied. The message carries only the
 // denial reason, never a secret value, identifier payload, or grant detail
 // that could help an attacker enumerate valid bindings.
 public sealed class SecretAuthorizationDeniedException : Exception
 {
-    /// <summary>Creates a denial carrying only the safe reason category.</summary>
     internal SecretAuthorizationDeniedException(SecretAuthorizationDenialReason reason)
         : base($"Secret redemption was denied ({reason}).")
     {
         Reason = reason;
     }
 
-    /// <summary>The non-secret authorization failure reason.</summary>
     public SecretAuthorizationDenialReason Reason { get; }
 }

@@ -24,7 +24,6 @@ const lines = [
   { lineNumber: 4, text: '}', tokens: [{ text: '}', tone: 'operator' as const }] },
 ];
 
-/** Renders a short tokenized template with line numbers, folding markers, and copy support. */
 export function CodeSnippetExample() {
   return <CodeSnippet title="ARM template" lines={lines} maxHeight={220} />;
 }

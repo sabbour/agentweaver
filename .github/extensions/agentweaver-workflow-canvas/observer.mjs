@@ -1,9 +1,5 @@
 import { projectRun, publish, readRepository, githubReference } from "./metadata.mjs";
 
-/**
- * Observe workflow runs owned by this extension session and publish a shared repository projection.
- * Reference association records validated metadata only; it does not mutate workflows or GitHub items.
- */
 export function createObserver(session, context, { interval = 30_000, lookup = githubReference } = {}) {
   let pending;
   let timer;
@@ -13,7 +9,6 @@ export function createObserver(session, context, { interval = 30_000, lookup = g
   const refs = new Map();
   const githubCache = new Map();
 
-  /** Refresh owner runs, retain verified associations, and publish a bounded snapshot. */
   async function refresh(force = false) {
     if (pending) return pending;
     if (!force && Date.now() - last < 1500) return readRepository(context);
@@ -58,7 +53,6 @@ export function createObserver(session, context, { interval = 30_000, lookup = g
     try { return await pending; } finally { pending = null; }
   }
 
-  /** Associate validated GitHub references with a run owned by the current session. */
   async function associate(input) {
     if (!input || typeof input !== "object" || !/^[A-Za-z0-9._-]{1,80}$/.test(input.runId || "")) {
       throw new Error("A valid owning-session runId is required");
@@ -87,7 +81,6 @@ export function createObserver(session, context, { interval = 30_000, lookup = g
     return { runId: input.runId, issueNumber: references.issueNumber ?? null, prNumber: references.prNumber ?? null };
   }
 
-  /** Read the shared repository model and add cached summaries for observed GitHub references. */
   async function state() {
     const snapshot = await readRepository(context);
     const own = snapshot.sessions.find((item) => item.sessionId === session.sessionId);
@@ -118,7 +111,6 @@ export function createObserver(session, context, { interval = 30_000, lookup = g
     };
   }
 
-  /** Start periodic and event-triggered refreshes and return a function that stops both. */
   function start() {
     timer = setInterval(() => { if (!closed) refresh().catch(() => {}); }, interval);
     timer.unref();

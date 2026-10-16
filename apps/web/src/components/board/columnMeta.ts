@@ -4,7 +4,6 @@ import type { BoardCardDto, BoardColumnDto, RunCardDto } from '../../api/types';
 // standalone module (not the component file) so React Fast Refresh stays happy and so
 // the mapping is unit-testable in isolation.
 
-/** Stable board column definitions shared by board layout and status rendering. */
 export const FIXED_BOARD_COLUMNS: ReadonlyArray<Pick<BoardColumnDto, 'id' | 'kind' | 'label'>> = [
   { id: 'backlog', kind: 'intake', label: 'Backlog' },
   { id: 'ready', kind: 'intake', label: 'Ready' },
@@ -18,7 +17,6 @@ export const FIXED_BOARD_COLUMNS: ReadonlyArray<Pick<BoardColumnDto, 'id' | 'kin
 
 // Resolve a column's left-accent color. `workflowIndex` is the column's 0-based
 // position among the non-intake (workflow) columns; it is ignored for backlog/ready.
-/** Returns the accent color token associated with a task stage. */
 export function columnAccentColor(columnId: string, workflowIndex: number): string {
   void workflowIndex;
   if (columnId === 'backlog') return tokens.colorNeutralStroke1;
@@ -32,7 +30,6 @@ export function columnAccentColor(columnId: string, workflowIndex: number): stri
 
 // Human copy for the known intake stages. Dynamic workflow stages have no entry and
 // degrade gracefully (no subtitle) rather than printing "undefined".
-/** User-facing descriptions for the task stages used in the board. */
 export const STAGE_DESCRIPTIONS: Record<string, string> = {
   backlog: "Captured work not yet committed to an agent run.",
   ready: 'Committed tasks wait here until prerequisites clear, then queue for the coordinator or pickup monitor.',
@@ -80,7 +77,6 @@ function fixedColumnForCard(card: BoardCardDto, source: BoardColumnDto): string 
   return 'active';
 }
 
-/** Builds the fixed display columns from the board stages, including empty columns. */
 export function fixedBoardColumns(columns: BoardColumnDto[]): BoardColumnDto[] {
   const byId = new Map<string, BoardColumnDto>(
     FIXED_BOARD_COLUMNS.map((col) => [col.id, { ...col, cards: [] }]),

@@ -10,7 +10,6 @@ const resources = [
   { id: 'vm-02', label: 'vm-sample-02' },
 ];
 
-/** Demonstrates controlled tag editing, field validation, row creation, and row removal. */
 export function ResourceTagEditorExample() {
   const [rows, setRows] = useState<AzfResourceTagRow[]>(initialRows);
 

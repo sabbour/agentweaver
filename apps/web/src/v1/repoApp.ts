@@ -1,19 +1,15 @@
 import { brokerBaseUrl } from './config';
 
 const REPO_APP_ROUTE = '/auth/github/repo-app';
-/** Gateway-root callback page used to report successful Repo App setup. */
 export const REPO_APP_CALLBACK_PATH = '/settings/source-control';
-/** Same-origin popup message discriminator for GitHub App connection callbacks. */
 export const REPO_APP_CALLBACK_MESSAGE_TYPE = 'agentweaver.repo-app.connected';
 
-/** Durable Identity Broker state for a user's GitHub Repo App connection. */
 export type RepoAppConnectionState =
   | 'not_connected'
   | 'connected'
   | 'revoked'
   | 'rotation_uncertain';
 
-/** Local readiness of credentials used to access GitHub through the connection. */
 export type RepoAppLocalReadiness =
   | 'not_connected'
   | 'reauthorization_required'
@@ -22,7 +18,6 @@ export type RepoAppLocalReadiness =
   | 'access_token_available'
   | 'refresh_required';
 
-/** Redacted Repo App connection status returned to the browser. */
 export interface RepoAppConnectionStatus {
   state: RepoAppConnectionState;
   localReadiness: RepoAppLocalReadiness;
@@ -33,7 +28,6 @@ export interface RepoAppConnectionStatus {
   updatedAt: string | null;
 }
 
-/** Repository metadata visible through the current GitHub installation. */
 export interface RepoAppRepository {
   installationId: number;
   repositoryId: number;
@@ -43,7 +37,6 @@ export interface RepoAppRepository {
   defaultBranch: string;
 }
 
-/** Repository list with the connection revision used to fetch it. */
 export interface RepoAppRepositoryList {
   connectionId: string;
   connectionRevision: number;
@@ -51,7 +44,6 @@ export interface RepoAppRepositoryList {
   repositories: RepoAppRepository[];
 }
 
-/** Short-lived server code binding a selected repository to a connection revision. */
 export interface RepoAppRepositorySelection {
   code: string;
   connectionId: string;
@@ -61,7 +53,6 @@ export interface RepoAppRepositorySelection {
   repositoryFullName: string;
 }
 
-/** Same-origin popup notification that a Repo App callback completed. */
 export interface RepoAppConnectedCallbackMessage {
   type: typeof REPO_APP_CALLBACK_MESSAGE_TYPE;
 }
@@ -72,7 +63,6 @@ declare global {
   }
 }
 
-/** Error returned by the Broker client, preserving status and a safe error code. */
 export class RepoAppBrokerError extends Error {
   readonly status: number;
   readonly code?: string;
@@ -85,12 +75,10 @@ export class RepoAppBrokerError extends Error {
   }
 }
 
-/** Narrows JSON data to a plain object before validating its exact contract. */
 function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-/** Rejects response objects that include fields outside their declared shape. */
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   const actual = Object.keys(value);
   return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
@@ -108,7 +96,6 @@ function isPositiveSafeInteger(value: unknown): value is number {
   return Number.isSafeInteger(value) && Number(value) > 0;
 }
 
-/** Validates the bounded and redacted status contract returned by the Broker. */
 function isRepoAppConnectionStatus(value: unknown): value is RepoAppConnectionStatus {
   if (!isObject(value) || !hasExactKeys(value, [
     'state',
@@ -138,7 +125,6 @@ function isRepoAppConnectionStatus(value: unknown): value is RepoAppConnectionSt
   );
 }
 
-/** Validates one repository entry before it reaches the project UI. */
 function isRepoAppRepository(value: unknown): value is RepoAppRepository {
   return isObject(value) &&
     hasExactKeys(value, [
@@ -157,7 +143,6 @@ function isRepoAppRepository(value: unknown): value is RepoAppRepository {
     isNonEmptyString(value.defaultBranch);
 }
 
-/** Validates the full repository list and its connection-version metadata. */
 function isRepoAppRepositoryList(value: unknown): value is RepoAppRepositoryList {
   return isObject(value) &&
     hasExactKeys(value, ['connectionId', 'connectionRevision', 'githubLogin', 'repositories']) &&
@@ -168,7 +153,6 @@ function isRepoAppRepositoryList(value: unknown): value is RepoAppRepositoryList
     value.repositories.every(isRepoAppRepository);
 }
 
-/** Validates a repository-selection code and the connection revision it pins. */
 function isRepoAppRepositorySelection(value: unknown): value is RepoAppRepositorySelection {
   return isObject(value) &&
     hasExactKeys(value, [
@@ -204,7 +188,6 @@ function errorMessage(value: unknown, status: number): string {
     : `Identity Broker Repo App request failed with HTTP ${status}.`;
 }
 
-/** Narrows a message to the exact Repo App callback notification shape. */
 export function isRepoAppConnectedCallbackMessage(
   value: unknown,
 ): value is RepoAppConnectedCallbackMessage {
@@ -213,7 +196,6 @@ export function isRepoAppConnectedCallbackMessage(
     value.type === REPO_APP_CALLBACK_MESSAGE_TYPE;
 }
 
-/** Accepts only the tracked popup's same-origin message for the active attempt. */
 export function isCurrentRepoAppPopupCallback(
   event: Pick<MessageEvent<unknown>, 'origin' | 'source' | 'data'>,
   expectedOrigin: string,
@@ -229,11 +211,6 @@ export function isCurrentRepoAppPopupCallback(
     isRepoAppConnectedCallbackMessage(event.data);
 }
 
-/**
- * Browser client for Identity Broker Repo App operations.
- * Reads include credentials and no-store caching; mutations obtain an antiforgery
- * token first and validate exact response contracts before returning data.
- */
 export class IdentityBrokerRepoAppClient {
   private readonly baseUrl: string;
   private readonly fetcher: typeof fetch;
@@ -249,7 +226,6 @@ export class IdentityBrokerRepoAppClient {
     this.documentRef = documentRef;
   }
 
-  /** Builds a Broker URL or fails when the Broker endpoint is not configured. */
   private url(path: string): string {
     if (!this.baseUrl) {
       throw new RepoAppBrokerError(
@@ -261,7 +237,6 @@ export class IdentityBrokerRepoAppClient {
     return `${this.baseUrl}${REPO_APP_ROUTE}${path}`;
   }
 
-  /** Sends one Broker request and rejects non-success or malformed JSON responses. */
   private async requestJson<T>(
     path: string,
     init: RequestInit,
@@ -310,23 +285,19 @@ export class IdentityBrokerRepoAppClient {
     return payload;
   }
 
-  /** Obtains an antiforgery token for a subsequent state-changing request. */
   private async csrfToken(signal?: AbortSignal): Promise<string> {
     const result = await this.requestJson('/csrf', { method: 'GET', signal }, isCsrfResponse);
     return result.csrf_token;
   }
 
-  /** Reads the current redacted Repo App connection and credential readiness. */
   getStatus(): Promise<RepoAppConnectionStatus> {
     return this.requestJson('/status', { method: 'GET' }, isRepoAppConnectionStatus);
   }
 
-  /** Reads repositories available to the active GitHub installation. */
   getRepositories(): Promise<RepoAppRepositoryList> {
     return this.requestJson('/repositories', { method: 'GET' }, isRepoAppRepositoryList);
   }
 
-  /** Starts connection authorization by submitting a Broker form into the tracked popup. */
   async beginConnect(
     popup: Pick<Window, 'name' | 'closed'>,
     signal?: AbortSignal,
@@ -334,7 +305,6 @@ export class IdentityBrokerRepoAppClient {
     await this.submitOAuthForm('connect', popup, signal);
   }
 
-  /** Opens the installation setup flow in the tracked Broker popup. */
   async beginInstallationSetup(
     popup: Pick<Window, 'name' | 'closed'>,
     signal?: AbortSignal,
@@ -342,7 +312,6 @@ export class IdentityBrokerRepoAppClient {
     await this.submitOAuthForm('install', popup, signal);
   }
 
-  /** Disconnects only if the connection still has the caller's expected revision. */
   async disconnect(
     connectionId: string,
     expectedConnectionRevision: number,
@@ -355,7 +324,6 @@ export class IdentityBrokerRepoAppClient {
     }, isRepoAppConnectionStatus);
   }
 
-  /** Creates a short-lived selection code for the chosen installation repository. */
   async createRepositorySelection(
     installationId: number,
     repositoryId: number,
@@ -368,7 +336,6 @@ export class IdentityBrokerRepoAppClient {
     }, isRepoAppRepositorySelection);
   }
 
-  /** Fetches CSRF state and submits the Broker authorization form to the named popup. */
   private async submitOAuthForm(
     action: 'connect' | 'install',
     popup: Pick<Window, 'name' | 'closed'>,
@@ -414,5 +381,4 @@ export class IdentityBrokerRepoAppClient {
   }
 }
 
-/** Shared Browser client for Identity Broker Repo App endpoints. */
 export const repoAppBrokerClient = new IdentityBrokerRepoAppClient();

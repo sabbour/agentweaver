@@ -5,21 +5,16 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity;
 
-/// <summary>Stage at which a native model turn was denied by a hard credit limit.</summary>
 public enum RuntimeCreditLimitDenialStage { Preparation, NativeTurnBegin }
 
-/// <summary>Stable reason categories for native credit denials.</summary>
 public enum RuntimeCreditLimitDenialCode { HardLimitReached }
 
-/// <summary>Point at which a fixed zero-credit guard denied a runtime request.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter<RuntimeFixedCreditGuardStage>))]
 public enum RuntimeFixedCreditGuardStage { ActionAuthorize, ActionVerify, HostPreQueue }
 
-/// <summary>Stable reason recorded by the fixed credit guard.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter<RuntimeFixedCreditGuardCode>))]
 public enum RuntimeFixedCreditGuardCode { HardLimitZero }
 
-/// <summary>Canonical owner evidence that a zero hard-credit limit denied a request.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeFixedCreditGuardReceipt(
     int ContractVersion,
@@ -35,7 +30,6 @@ public sealed record RuntimeFixedCreditGuardReceipt(
     DateTimeOffset RecordedAt,
     string CanonicalPayloadHash);
 
-/// <summary>Evidence that a denied fixed-credit request did not send a native model turn.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeFixedCreditNoSendReceipt(
     int ContractVersion,
@@ -57,7 +51,6 @@ public sealed record RuntimeFixedCreditNoSendReceipt(
     DateTimeOffset VerifiedAt,
     string CanonicalPayloadHash);
 
-/// <summary>Authenticated request to persist a fixed-credit denial receipt.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeFixedCreditGuardRecordRequest(
     RuntimeCredentialHttpRequest Authorization,
@@ -66,7 +59,6 @@ public sealed record RuntimeFixedCreditGuardRecordRequest(
     public override string ToString() => nameof(RuntimeFixedCreditGuardRecordRequest) + " [REDACTED]";
 }
 
-/// <summary>Authenticated request to persist no-send evidence for a fixed-credit denial.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeFixedCreditNoSendEvidenceRequest(
     RuntimeCredentialHttpRequest Authorization,
@@ -76,7 +68,6 @@ public sealed record RuntimeFixedCreditNoSendEvidenceRequest(
     public override string ToString() => nameof(RuntimeFixedCreditNoSendEvidenceRequest) + " [REDACTED]";
 }
 
-/// <summary>Request for one fixed-credit guard receipt and optional no-send evidence.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeFixedCreditGuardReadRequest(
     RuntimeCredentialHttpRequest? Authorization,
@@ -90,13 +81,11 @@ public sealed record RuntimeFixedCreditGuardReadRequest(
     public override string ToString() => nameof(RuntimeFixedCreditGuardReadRequest) + " [REDACTED]";
 }
 
-/// <summary>Stored fixed-credit receipt and optional proof that the native call was not sent.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeFixedCreditGuardReadResult(
     RuntimeFixedCreditGuardReceipt? Receipt,
     RuntimeFixedCreditNoSendReceipt? Evidence);
 
-/// <summary>Owner receipt explaining a native turn hard-limit denial and the dispatch state transition.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeNativeCreditDenialReceipt(
     int ContractVersion,
@@ -125,13 +114,11 @@ public sealed record RuntimeNativeCreditDenialReceipt(
     DateTimeOffset RecordedAt,
     string CanonicalPayloadHash);
 
-/// <summary>Exclusive result of beginning a native turn: either an admission or a denial.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeNativeTurnBeginResult(
     RuntimeNativeTurnAdmissionReceipt? Admission,
     RuntimeNativeCreditDenialReceipt? Denial);
 
-/// <summary>Authenticated request to read a native-turn credit denial by dispatch and stage.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeNativeCreditDenialReadRequest(
     RuntimeCredentialHttpRequest Authorization,
@@ -141,13 +128,11 @@ public sealed record RuntimeNativeCreditDenialReadRequest(
     public override string ToString() => nameof(RuntimeNativeCreditDenialReadRequest) + " [REDACTED]";
 }
 
-/// <summary>Native-turn denial and optional evidence that no SDK turn was sent.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeNativeCreditDenialReadResult(
     RuntimeNativeCreditDenialReceipt? Receipt,
     RuntimeNativeTurnNoSendReceipt? NoSend = null);
 
-/// <summary>Evidence that a hard-limit-denied native turn emitted no session events.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeNativeTurnNoSendReceipt(
     int ContractVersion,
@@ -165,7 +150,6 @@ public sealed record RuntimeNativeTurnNoSendReceipt(
     DateTimeOffset VerifiedAt,
     string CanonicalPayloadHash);
 
-/// <summary>Authenticated request to record no-send evidence for a native turn denial.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeNativeTurnNoSendEvidenceRequest(
     RuntimeCredentialHttpRequest Authorization,
@@ -175,18 +159,14 @@ public sealed record RuntimeNativeTurnNoSendEvidenceRequest(
     public override string ToString() => nameof(RuntimeNativeTurnNoSendEvidenceRequest) + " [REDACTED]";
 }
 
-/// <summary>Seals and validates owner receipts for hard-limit native-turn denial and no-send behavior.</summary>
 public static class RuntimeNativeDenialContract
 {
-    /// <summary>Returns a denial receipt with a canonical hash over its content.</summary>
     public static RuntimeNativeCreditDenialReceipt SealDenial(RuntimeNativeCreditDenialReceipt receipt) =>
         receipt with { CanonicalPayloadHash = DenialPayloadHash(receipt) };
 
-    /// <summary>Returns no-send evidence with a canonical hash over its content.</summary>
     public static RuntimeNativeTurnNoSendReceipt SealNoSend(RuntimeNativeTurnNoSendReceipt receipt) =>
         receipt with { CanonicalPayloadHash = NoSendPayloadHash(receipt) };
 
-    /// <summary>Checks denial scope, source accounting, hard limit, dispatch revision, and canonical hashes.</summary>
     public static void ValidateDenial(
         RuntimeNativeCreditDenialReceipt receipt,
         RuntimeRegistration registration,
@@ -253,7 +233,6 @@ public static class RuntimeNativeDenialContract
             throw new RuntimeAuthorizationException("runtime_native_credit_denial_invalid");
     }
 
-    /// <summary>Requires a completed native-turn denial to be backed by a complete empty event range.</summary>
     public static void ValidateNoSend(
         RuntimeNativeTurnNoSendReceipt evidence,
         RuntimeNativeCreditDenialReceipt denial,
@@ -283,7 +262,6 @@ public static class RuntimeNativeDenialContract
         RuntimeContractValidation.ValidateHash(evidence.AfterCursorHash);
     }
 
-    /// <summary>Checks a read result for the requested dispatch and denial stage.</summary>
     public static void ValidateReadResult(
         RuntimeNativeCreditDenialReadResult result,
         RuntimeRegistration registration,
@@ -308,7 +286,6 @@ public static class RuntimeNativeDenialContract
         }
     }
 
-    /// <summary>Validates the authenticated evidence request before it reaches the owner.</summary>
     public static void ValidateRequest(
         RuntimeNativeTurnNoSendEvidenceRequest request,
         RuntimeRegistration registration,
@@ -319,7 +296,6 @@ public static class RuntimeNativeDenialContract
         ValidateNoSend(request.Evidence, request.Denial, registration, sourceReceipt);
     }
 
-    /// <summary>Validates the identifiers and stage in a denial read request.</summary>
     public static void ValidateReadRequest(RuntimeNativeCreditDenialReadRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -328,7 +304,6 @@ public static class RuntimeNativeDenialContract
             throw new RuntimeAuthorizationException("runtime_native_credit_denial_request_invalid");
     }
 
-    /// <summary>Requires exactly one admission or denial and checks its registration and message binding.</summary>
     public static void ValidateBeginResult(
         RuntimeNativeTurnBeginResult result,
         RuntimeRegistration registration,
@@ -349,7 +324,6 @@ public static class RuntimeNativeDenialContract
         }
     }
 
-    /// <summary>Hashes the dispatch's identity, source, checkpoint, and state revision.</summary>
     public static string DispatchHash(
         Guid dispatchId, string registrationHash, string sourceHash,
         string checkpointHash, string state, long revision) =>
@@ -365,20 +339,16 @@ public static class RuntimeNativeDenialContract
             receipt with { CanonicalPayloadHash = string.Empty }));
 }
 
-/// <summary>Seals and validates denials for a configured zero-credit hard limit.</summary>
 public static class RuntimeFixedCreditGuardContract
 {
-    /// <summary>Returns a guard receipt with a canonical digest of all receipt fields.</summary>
     public static RuntimeFixedCreditGuardReceipt Seal(
         RuntimeFixedCreditGuardReceipt receipt) =>
         receipt with { CanonicalPayloadHash = GuardPayloadHash(receipt) };
 
-    /// <summary>Returns no-send evidence with a canonical digest of all evidence fields.</summary>
     public static RuntimeFixedCreditNoSendReceipt Seal(
         RuntimeFixedCreditNoSendReceipt evidence) =>
         evidence with { CanonicalPayloadHash = EvidencePayloadHash(evidence) };
 
-    /// <summary>Hashes the non-secret host request fields that determine a queued action.</summary>
     public static string HashHostRequest(RuntimeA2ASendRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -399,7 +369,6 @@ public static class RuntimeFixedCreditGuardContract
         }));
     }
 
-    /// <summary>Validates a zero-limit receipt against its registration and request hash.</summary>
     public static void ValidateReceipt(RuntimeFixedCreditGuardReceipt receipt)
     {
         ArgumentNullException.ThrowIfNull(receipt);
@@ -429,7 +398,6 @@ public static class RuntimeFixedCreditGuardContract
             throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_invalid");
     }
 
-    /// <summary>Requires a complete empty native event range tied to the denied host request.</summary>
     public static void ValidateEvidence(
         RuntimeFixedCreditNoSendReceipt evidence,
         RuntimeFixedCreditGuardReceipt receipt,
@@ -469,7 +437,6 @@ public static class RuntimeFixedCreditGuardContract
         RuntimeContractValidation.ValidateHash(evidence.AfterCursorHash);
     }
 
-    /// <summary>Requires receipt, registration, grant, and source hashes to describe one exact authority tuple.</summary>
     public static void ValidateSourceTuple(
         RuntimeFixedCreditGuardReceipt receipt,
         RuntimeRegistration registration,
@@ -497,7 +464,6 @@ public static class RuntimeFixedCreditGuardContract
             throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_source_invalid");
     }
 
-    /// <summary>Validates the scope and identity fields of a fixed-credit receipt read request.</summary>
     public static void ValidateReadRequest(RuntimeFixedCreditGuardReadRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -510,7 +476,6 @@ public static class RuntimeFixedCreditGuardContract
         RuntimeContractValidation.ValidateHash(request.RequestHash);
     }
 
-    /// <summary>Matches a returned receipt and optional evidence to the registration and read request.</summary>
     public static void ValidateReadResult(
         RuntimeFixedCreditGuardReadResult result,
         RuntimeRegistration registration,

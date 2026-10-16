@@ -4,7 +4,6 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.AgentRuntime;
 
-/// <summary>Receipt confirming a source-grant rotation and the resulting effective session expiry.</summary>
 public sealed record RuntimeSessionRefreshReceipt(
     int ContractVersion,
     Guid RuntimeInstanceId,
@@ -13,10 +12,6 @@ public sealed record RuntimeSessionRefreshReceipt(
     RuntimeGrantReceipt SourceGrant,
     DateTimeOffset EffectiveSessionExpiresAt);
 
-/// <summary>
-/// Runs the Copilot session only while its registration, source grant, model credential,
-/// placement readiness, action authority, and accepted skill projection remain current.
-/// </summary>
 public sealed class AuthorizedRuntimeSession : IAsyncDisposable
 {
     private readonly RuntimeCopilotSession _session;
@@ -39,7 +34,6 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
     private int _suspended;
     private int _disposed;
 
-    /// <summary>Creates a configured session with its owner, broker, actor, and model credentials.</summary>
     internal AuthorizedRuntimeSession(
         RuntimeRegistration registration, RuntimeGrantReceipt sourceGrant, SecretCredential sourceCredential,
         RuntimeCopilotSession session, RuntimeModelCredential modelCredential, IRuntimeRegistrationOwner owner,
@@ -62,30 +56,16 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         _requireSkillContent = requireSkillContent;
     }
 
-    /// <summary>The immutable runtime registration pinned when the session was configured.</summary>
     public RuntimeRegistration Registration { get; }
-
-    /// <summary>The latest owner-issued source grant after any successful refresh.</summary>
     public RuntimeGrantReceipt SourceGrant => Volatile.Read(ref _source).Receipt;
-
-    /// <summary>The selected native SDK source and model facts.</summary>
     public SdkSessionFacts Facts => _session.Facts;
-
-    /// <summary>The source used to recover the SDK conversation.</summary>
     public RuntimeSessionRecoveryMode RecoveryMode => _session.RecoveryMode;
-
-    /// <summary>Safe reason explaining why recovery did not reuse a compatible native cache.</summary>
     public string? RecoveryReason => _session.RecoveryReason;
     internal RuntimeResumeJournalRebuildReceipt? JournalRebuildReceipt => _session.JournalRebuildReceipt;
     internal SessionMaterialAcknowledgment? ConsumedNativeCacheAcknowledgment =>
         _session.ConsumedNativeCacheAcknowledgment;
     internal RuntimeSessionJournalEvidence? JournalEvidence => _session.JournalEvidence;
 
-    /// <summary>
-    /// Sends one bounded user turn after recording user and assistant content, rechecking owner
-    /// authority around the model call, and persisting the resulting native cache.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">The turn lacks action authority or the session is stale.</exception>
     public async Task<string> SendTurnAsync(
         string prompt, RuntimeSessionMaterialHttpClient material, CancellationToken cancellationToken,
         Guid? userEventId = null)
@@ -128,7 +108,6 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         }
     }
 
-    /// <summary>Rejects hosted Copilot hard-credit limits that cannot be tied to a workflow-step turn.</summary>
     internal void RequireSupportedCostTurnAffinity()
     {
         if (Registration.Binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
@@ -137,10 +116,6 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             throw new RuntimeAuthorizationException("runtime_usage_affinity_unavailable");
     }
 
-    /// <summary>
-    /// Persists a zero-credit denial only after confirming no native event appeared since the
-    /// captured SDK cursor; returns both the guard receipt and no-send evidence.
-    /// </summary>
     internal async Task<RuntimeFixedCreditGuardReadResult> RecordFixedCreditNoSendAsync(
         RuntimeA2ASendRequest request, RuntimeHostSessionProof expectedProof,
         RuntimeUsageSourceHttpClient source, CancellationToken cancellationToken)
@@ -246,10 +221,6 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         failure is OperationCanceledException && !cancellationToken.IsCancellationRequested ||
         failure is RuntimeAuthorizationException { Code: "runtime_owner_unavailable" };
 
-    /// <summary>
-    /// Begins a step-bound turn with the owner, records its native SDK events and output,
-    /// and commits the returned cache under the same current registration.
-    /// </summary>
     internal async Task<(string Response, RuntimeNativeTurnRecordedReceipt Receipt)> SendNativeTurnAsync(
         RuntimeA2ASendRequest request, RuntimeSessionMaterialHttpClient material,
         RuntimeUsageSourceHttpClient source, CancellationToken cancellationToken)
@@ -322,7 +293,6 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         }
     }
 
-    /// <summary>Serializes and performs a fresh registration, credential, source, and skill authority check.</summary>
     internal async Task RequireCurrentAsync(CancellationToken cancellationToken)
     {
         await _authorityGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -356,10 +326,6 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             await _requireSkillContent(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Rotates the source credential once for the expected grant revision. An exact operation
-    /// replay returns the same receipt; the replaced credential is invalidated after rotation.
-    /// </summary>
     public async Task<RuntimeSessionRefreshReceipt> RefreshAsync(
         Guid operationId, long expectedSourceRevision, CancellationToken cancellationToken)
     {
@@ -417,7 +383,6 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         }
     }
 
-    /// <summary>Streams SDK usage only after rechecking current authority for each observation.</summary>
     public async IAsyncEnumerable<SdkUsageObservation> ReadUsageAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -429,7 +394,6 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         }
     }
 
-    /// <summary>Writes one turn message to the Events owner between fresh authority checks.</summary>
     public async Task<SessionMaterialAcknowledgment> CommitTurnContentAsync(
         RuntimeSessionMaterialHttpClient material, Guid eventId, string role, string content,
         CancellationToken cancellationToken)
@@ -451,7 +415,6 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         }
     }
 
-    /// <summary>Builds a transient observe proof around the current source credential.</summary>
     internal RuntimeCredentialProof Proof()
     {
         var source = Volatile.Read(ref _source);
@@ -460,12 +423,10 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             source.Credential ?? throw new RuntimeAuthorizationException("runtime_source_credential_unavailable"));
     }
 
-    /// <summary>Captures the SDK filesystem and persists its cache material with authority checks.</summary>
     public Task<SessionMaterialAcknowledgment> CommitNativeCacheAsync(
         RuntimeSessionMaterialHttpClient material, Guid eventId, CancellationToken cancellationToken) =>
         CommitNativeCacheCoreAsync(material, eventId, cancellationToken, requireCurrentSuspend: null);
 
-    /// <summary>Shared cache writer that can also require current suspend authority at each boundary.</summary>
     private async Task<SessionMaterialAcknowledgment> CommitNativeCacheCoreAsync(
         RuntimeSessionMaterialHttpClient material, Guid eventId, CancellationToken cancellationToken,
         Func<CancellationToken, Task>? requireCurrentSuspend)
@@ -495,10 +456,6 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Prevents new turns, waits for the in-flight execution, and creates a durable native-turn
-    /// and cache receipt. Exact retries reread the original cache acknowledgment.
-    /// </summary>
     internal async Task<RuntimeHostSuspendReceipt> SuspendAsync(
         RuntimeSessionMaterialHttpClient material, RuntimeHostSuspendRequest request,
         Func<CancellationToken, Task> requireCurrentSuspend,
@@ -558,14 +515,12 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         }
     }
 
-    /// <summary>Rejects new work after suspension has begun.</summary>
     private void RequireTurnAdmission()
     {
         if (Volatile.Read(ref _suspended) != 0)
             throw new RuntimeAuthorizationException("runtime_session_suspended");
     }
 
-    /// <summary>Requires a caller proof to identify the current observe grant and registration.</summary>
     private void RequireExpectedSourceGrant(RuntimeHostSessionProof proof)
     {
         var grant = SourceGrant;
@@ -574,7 +529,6 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
             throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_source_invalid");
     }
 
-    /// <summary>Registers the SDK source and streams each usage event to the owner under the authority gate.</summary>
     public async IAsyncEnumerable<RuntimeUsageSourceReceipt> CommitUsageAsync(
         RuntimeUsageSourceHttpClient source,
         [EnumeratorCancellation] CancellationToken cancellationToken)
@@ -609,7 +563,6 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         }
     }
 
-    /// <summary>Registers the exact SDK source with fresh authority checks before and after the request.</summary>
     internal async Task RegisterUsageAsync(RuntimeUsageSourceHttpClient source, CancellationToken cancellationToken)
     {
         await _authorityGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -624,11 +577,9 @@ public sealed class AuthorizedRuntimeSession : IAsyncDisposable
         }
     }
 
-    /// <summary>Waits until all previously emitted usage has passed through the single-reader stream.</summary>
     internal Task FlushUsageAsync(CancellationToken cancellationToken) =>
         _session.FlushUsageAsync(cancellationToken);
 
-    /// <summary>Revokes the current source grant when possible, invalidates credentials, and disposes the SDK session.</summary>
     public async ValueTask DisposeAsync()
     {
         await _authorityGate.WaitAsync().ConfigureAwait(false);

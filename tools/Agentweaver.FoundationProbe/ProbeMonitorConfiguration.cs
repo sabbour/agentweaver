@@ -2,13 +2,10 @@ using System.Text.Json.Serialization;
 
 namespace Agentweaver.FoundationProbe;
 
-/// <summary>Validates that monitoring configuration points to the expected Azure Application Insights endpoint.</summary>
 internal static class ProbeMonitorConfiguration
 {
     private const string AzureIngestionSuffix = ".in.applicationinsights.azure.com";
 
-    /// <summary>Parses a bounded connection string and returns only non-secret monitoring evidence.</summary>
-    /// <exception cref="ProbeException">The endpoint, instrumentation key, or resource configuration is invalid.</exception>
     public static MonitorConfigurationEvidence Validate(string? connectionString, ProbeTarget target)
     {
         ArgumentNullException.ThrowIfNull(target);
@@ -48,7 +45,6 @@ internal static class ProbeMonitorConfiguration
             InstrumentationKeyConfigured: true);
     }
 
-    /// <summary>Rechecks serialized monitoring evidence against the validated target without exposing the key.</summary>
     public static bool IsValidFor(MonitorConfigurationEvidence? evidence, ProbeTarget target)
     {
         if (target.FoundationResources is null || evidence is null || !evidence.InstrumentationKeyConfigured ||
@@ -66,7 +62,6 @@ internal static class ProbeMonitorConfiguration
     }
 }
 
-/// <summary>Safe subset of monitoring configuration retained in the probe receipt.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record MonitorConfigurationEvidence(
     string AppInsightsResourceId,

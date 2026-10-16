@@ -128,10 +128,6 @@ export interface TaskCardProps {
   isDragging: boolean;
 }
 
-/**
- * Renders one task card and its parent-supplied status, metadata, and actions.
- * The board owns task data and mutation callbacks; local state is limited to card interactions.
- */
 export function TaskCard({ card, columnId, projectId, onMutated, onDragStartTask, onDragEndTask, isDragging }: TaskCardProps) {
   const styles = useStyles();
   const [editing, setEditing] = useState(false);

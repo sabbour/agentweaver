@@ -11,9 +11,6 @@ using Microsoft.Agents.AI.Workflows;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// The persisted progress states for child work and non-model workflow steps.
-/// </summary>
 internal enum MafExecutionTaskStatus
 {
     Pending,
@@ -23,10 +20,6 @@ internal enum MafExecutionTaskStatus
     Indeterminate
 }
 
-/// <summary>
-/// Current progress maps for model work items, platform steps, and fixed-work associations.
-/// All maps use ordinal identifiers so checkpoint comparisons are stable.
-/// </summary>
 internal sealed record MafExecutionProgress(
     ImmutableDictionary<string, MafExecutionTaskStatus> WorkItems,
     ImmutableDictionary<string, MafExecutionTaskStatus> NonModelSteps)
@@ -43,10 +36,6 @@ internal sealed record MafExecutionProgress(
     };
 }
 
-/// <summary>
-/// The immutable association between one accepted fixed-work step activation and its child session.
-/// It preserves the selected agent, model, provider, selection hash, and execution fence for later dispatch checks.
-/// </summary>
 internal sealed record MafExecutionFixedWorkAssociation(
     string AssociationId,
     long ActivationRevision,
@@ -64,20 +53,12 @@ internal sealed record MafExecutionFixedWorkAssociation(
     long DecisionStateVersion,
     string ChildSessionId);
 
-/// <summary>
-/// A deterministic addressed-message request awaiting dispatch for a work association.
-/// The prompt hash and message ID make retries refer to the original request rather than creating a new one.
-/// </summary>
 internal sealed record MafExecutionDispatchIntent(
     string AssociationId,
     string ChildSessionId,
     Guid MessageId,
     string PromptHash);
 
-/// <summary>
-/// The persisted, authority-bound intent for one platform BuildTest command.
-/// Workspace bytes are stored separately and referenced by hash so checkpoint metadata remains bounded.
-/// </summary>
 internal sealed record MafExecutionBuildTestIntent(
     Guid OperationId,
     SessionIdentity Identity,
@@ -101,9 +82,6 @@ internal sealed record MafExecutionBuildTestIntent(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SandboxBuildTestWorkspaceSource? WorkspaceInput { get; init; }
 
-    /// <summary>
-    /// Returns the effective workspace source and rejects a late input that would replace a confirmed source.
-    /// </summary>
     [JsonIgnore]
     internal SandboxBuildTestWorkspaceSource? EffectiveWorkspaceSource
     {
@@ -116,20 +94,10 @@ internal sealed record MafExecutionBuildTestIntent(
         }
     }
 
-    /// <summary>
-    /// Builds the checkpoint reference containing the intent's session, plan, revision, and authority fences.
-    /// </summary>
     internal SandboxBuildTestCheckpointReference CheckpointReference() =>
         new(Identity.ProjectId, Identity.RunId, Identity.SessionId, CheckpointId, WorkPlanId,
             StepId, CheckpointRevision, DecisionStateVersion, ExecutionFence, AcceptedSelectionHash);
 
-    /// <summary>
-    /// Attaches and validates a workspace source and seed while preserving its origin checkpoint reference.
-    /// </summary>
-    /// <param name="source">The accepted source descriptor for the workspace seed.</param>
-    /// <param name="seed">The package bytes whose content must match the source digest.</param>
-    /// <returns>A new intent containing the source and seed reference.</returns>
-    /// <exception cref="CoordinationException">Thrown when a source or seed reference was already attached inconsistently.</exception>
     internal MafExecutionBuildTestIntent AttachWorkspaceInput(
         SandboxBuildTestWorkspaceSource source,
         ImmutableArray<byte> seed)
@@ -150,12 +118,6 @@ internal sealed record MafExecutionBuildTestIntent(
         return intent;
     }
 
-    /// <summary>
-    /// Creates the accepted command contract from persisted intent data and optionally requires seed bytes.
-    /// </summary>
-    /// <param name="requireSeed">When true, validates the full command including available seed content.</param>
-    /// <returns>The command contract with a recomputed immutable hash.</returns>
-    /// <exception cref="ArgumentException">Thrown when the pinned execution profile or workspace seed reference is invalid.</exception>
     internal SandboxBuildTestAcceptedCommand ToAcceptedCommand(bool requireSeed = true)
     {
         if (Command is null || ExecutionOptions is null ||
@@ -187,17 +149,10 @@ internal sealed record MafExecutionBuildTestIntent(
         return requireSeed ? accepted.Validate() : accepted.ValidateMetadata();
     }
 
-    /// <summary>
-    /// Creates the owner API request bound to this intent's checkpoint reference and expected binding.
-    /// </summary>
     internal SandboxBuildTestApiRequest ToApiRequest() =>
         new SandboxBuildTestApiRequest(CheckpointReference(), ExpectedBinding).Validate();
 }
 
-/// <summary>
-/// A versioned checkpoint state for one work plan, including progress, pending dispatches, results, and BuildTest evidence.
-/// State validation and transition checks prevent accepted intents and terminal receipts from being rewritten.
-/// </summary>
 internal sealed record MafExecutionCheckpoint(
     long Revision,
     string WorkPlanId,
@@ -216,9 +171,6 @@ internal sealed record MafExecutionCheckpoint(
         ImmutableDictionary<string, MafBuildTestTerminalReceipt>.Empty.WithComparers(StringComparer.Ordinal);
 }
 
-/// <summary>
-/// A checkpoint state paired with the database checkpoint metadata that identifies its parent.
-/// </summary>
 internal sealed record MafExecutionCheckpointSnapshot(
     CheckpointInfo Info,
     MafExecutionCheckpoint State)
@@ -227,9 +179,6 @@ internal sealed record MafExecutionCheckpointSnapshot(
     public bool HasParentMetadata { get; init; }
 }
 
-/// <summary>
-/// The authority and current owner evidence needed to attest that a completed plan produced its declared outputs.
-/// </summary>
 internal sealed record MafExecutionOwnerEvidenceBinding(
     CoordinationActor Actor,
     SessionIdentity Identity,
@@ -240,23 +189,13 @@ internal sealed record MafExecutionOwnerEvidenceBinding(
     WorkPlanSnapshot WorkPlan,
     MafBacklogOutputSetSnapshot OutputSet);
 
-/// <summary>
-/// Creates stable identifiers for BuildTest associations, child sessions, and fixed-work activations.
-/// Hashing the full owner scope avoids exposing source identifiers and makes retries deterministic.
-/// </summary>
 internal static class MafExecutionIds
 {
-    /// <summary>
-    /// Creates the deterministic association ID for a BuildTest step in a root session and plan.
-    /// </summary>
     internal static string CreateBuildTestAssociationId(
         SessionIdentity root, string workPlanId, string stepId) =>
         $"build-test-{Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(
             new[] { root.ProjectId, root.RunId, root.SessionId, workPlanId, stepId })))}";
 
-    /// <summary>
-    /// Creates the deterministic child-session ID for a work association.
-    /// </summary>
     internal static string CreateChildSessionId(
         SessionIdentity parent,
         string workPlanId,
@@ -269,10 +208,6 @@ internal static class MafExecutionIds
         return $"maf-{Convert.ToHexStringLower(SHA256.HashData(scope))}";
     }
 
-    /// <summary>
-    /// Creates an activation-specific fixed-work association ID.
-    /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">Thrown when the activation revision is not positive.</exception>
     internal static string CreateFixedWorkAssociationId(
         SessionIdentity parent,
         string workPlanId,
@@ -290,10 +225,6 @@ internal static class MafExecutionIds
     }
 }
 
-/// <summary>
-/// Defines the JSON and validation contract for persisted MAF execution checkpoints.
-/// It rejects unknown JSON fields and enforces immutable intent and terminal-receipt history.
-/// </summary>
 internal static class MafExecutionCheckpointContract
 {
     internal const string StoreName = "coordinator-execution";
@@ -305,21 +236,12 @@ internal static class MafExecutionCheckpointContract
         MaxDepth = 16
     };
 
-    /// <summary>
-    /// Validates and serializes checkpoint state using the versioned store contract.
-    /// </summary>
-    /// <exception cref="ArgumentException">Thrown when the checkpoint violates the persisted-state contract.</exception>
     internal static JsonElement Serialize(MafExecutionCheckpoint state)
     {
         ValidateState(state);
         return JsonSerializer.SerializeToElement(state, JsonOptions);
     }
 
-    /// <summary>
-    /// Deserializes a stored checkpoint, rejecting missing data and any invalid state.
-    /// </summary>
-    /// <exception cref="InvalidOperationException">Thrown when stored JSON cannot represent a checkpoint.</exception>
-    /// <exception cref="ArgumentException">Thrown when the deserialized checkpoint fails validation.</exception>
     internal static MafExecutionCheckpoint Deserialize(JsonElement value)
     {
         var state = value.Deserialize<MafExecutionCheckpoint>(JsonOptions)
@@ -328,9 +250,6 @@ internal static class MafExecutionCheckpointContract
         return state;
     }
 
-    /// <summary>
-    /// Checks that a store binding names the same session and fence as the requested execution.
-    /// </summary>
     internal static bool IsBoundTo(
         MafCheckpointBinding binding,
         SessionIdentity identity,
@@ -339,12 +258,6 @@ internal static class MafExecutionCheckpointContract
         binding.ExecutionFence == executionFence &&
         string.Equals(binding.StoreName, StoreName, StringComparison.Ordinal);
 
-    /// <summary>
-    /// Validates that the next checkpoint preserves prior BuildTest intents and terminal receipts.
-    /// </summary>
-    /// <param name="previous">The currently persisted state.</param>
-    /// <param name="next">The proposed state.</param>
-    /// <exception cref="ArgumentException">Thrown when an intent or terminal receipt is removed, changed, or first bound to the wrong revision.</exception>
     internal static void ValidateTransition(
         MafExecutionCheckpoint previous,
         MafExecutionCheckpoint next)
@@ -375,10 +288,6 @@ internal static class MafExecutionCheckpointContract
         }
     }
 
-    /// <summary>
-    /// Ensures every BuildTest intent belongs to this identity and fence and binds new intents to this checkpoint.
-    /// </summary>
-    /// <exception cref="ArgumentException">Thrown when an intent's session, fence, or originating checkpoint does not match.</exception>
     internal static void ValidateBuildTestBinding(
         MafExecutionCheckpoint state,
         SessionIdentity identity,
@@ -393,9 +302,6 @@ internal static class MafExecutionCheckpointContract
         }
     }
 
-    /// <summary>
-    /// Compares two BuildTest intents using their serialized contract, excluding transient seed bytes.
-    /// </summary>
     internal static bool BuildTestIntentsMatch(
         MafExecutionBuildTestIntent left,
         MafExecutionBuildTestIntent right) =>
@@ -403,10 +309,6 @@ internal static class MafExecutionCheckpointContract
             JsonSerializer.SerializeToElement(left, JsonOptions),
             JsonSerializer.SerializeToElement(right, JsonOptions));
 
-    /// <summary>
-    /// Validates bounded identifiers, status maps, dispatches, results, intents, receipts, and fixed-work associations.
-    /// </summary>
-    /// <exception cref="ArgumentException">Thrown when any checkpoint field is missing, oversized, unknown, or inconsistently bound.</exception>
     internal static void ValidateState(MafExecutionCheckpoint state)
     {
         if (state is null || state.Revision < 1 ||
@@ -509,22 +411,13 @@ internal static class MafExecutionCheckpointContract
         }
     }
 
-    /// <summary>
-    /// Checks whether a value is a bounded identifier containing only supported identifier characters.
-    /// </summary>
     private static bool IsIdentifier(string? value) =>
         IsMetadataValue(value, 128) && value!.All(character =>
             char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-' or ':');
 
-    /// <summary>
-    /// Checks whether a value is a 64-character hexadecimal digest.
-    /// </summary>
     private static bool IsHash(string? value) =>
         value is { Length: 64 } && value.All(Uri.IsHexDigit);
 
-    /// <summary>
-    /// Checks that metadata is present, bounded, and free of control characters.
-    /// </summary>
     private static bool IsMetadataValue(string? value, int maximumLength = 256) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= maximumLength &&
         !value.Any(char.IsControl);

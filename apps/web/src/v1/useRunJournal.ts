@@ -2,10 +2,8 @@ import { useEffect, useState } from 'react';
 import { gatewayClient, GatewayError } from './api';
 import type { SessionEventEnvelope } from './contracts';
 
-/** Signals that a live or replayed event violates this journal's selected run scope. */
 class JournalScopeError extends Error {}
 
-/** Combines replay and live events by event ID, then orders them by owner position. */
 export function mergeOrderedEvents(
   current: SessionEventEnvelope[],
   incoming: SessionEventEnvelope[],
@@ -17,7 +15,6 @@ export function mergeOrderedEvents(
     left.position - right.position || left.eventId.localeCompare(right.eventId));
 }
 
-/** Local connection, replay, and cursor state for one exact journal scope. */
 interface JournalState {
   events: SessionEventEnvelope[];
   cursor: string | null;
@@ -35,11 +32,6 @@ const initialState: Omit<JournalState, 'scopeId'> = {
   connected: false,
 };
 
-/**
- * Replays a run's persisted owner events, then follows its live event stream.
- * Replay is cursor-bounded, live events are deduplicated by ID, and any event
- * outside the exact project/run scope stops the stream instead of being shown.
- */
 export function useRunJournal(
   token: string | undefined,
   projectId: string,

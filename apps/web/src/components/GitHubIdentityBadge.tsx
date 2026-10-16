@@ -178,10 +178,6 @@ export interface GitHubIdentityBadgeProps {
   footerMeta?: ReactNode;
 }
 
-/**
- * Loads and renders the GitHub identity associated with the supplied account or connection
- * through the API. The effect tracks loading and failures; props control the target and display.
- */
 export function GitHubIdentityBadge({ projectId, collapsed, footerMeta }: GitHubIdentityBadgeProps) {
   const styles = useStyles();
   const [open, setOpen] = useState(false);

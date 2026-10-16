@@ -1,4 +1,3 @@
-/** Generates and installs the signing state required by the P0 identity broker. */
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { run, redact } from './exec.mjs';
@@ -9,7 +8,6 @@ const SIGNING = 'identity-broker-signing';
 const KEY_RING = 'identity-broker-key-ring';
 const OPTIONS = { check: false, timeout: 35_000 };
 
-/** Projects broker key-state resources to fields needed for verification without exposing key bytes. */
 export function projectBrokerState(value) {
   if (Array.isArray(value?.items)) {
     if (value.items.length > 1) throw new Error('Exact Broker state lookup returned multiple objects.');
@@ -39,7 +37,6 @@ export function projectBrokerState(value) {
   return result;
 }
 
-/** Generates a local broker signing key using the configured source-tree tooling. */
 export function generateBrokerSigning(repoRoot) {
   // This is the only unredacted subprocess output: private bytes remain in memory
   // and go directly to kubectl stdin, never into a file, argument, log, or receipt.
@@ -62,10 +59,6 @@ export function generateBrokerSigning(repoRoot) {
   return secret;
 }
 
-/**
- * Creates or validates broker signing and key-ring resources in the scoped P0 namespace.
- * Invalid state or failed Kubernetes operations throw rather than accepting an incomplete key ring.
- */
 export function bootstrapIdentityBrokerState(config, {
   withKubeconfig = withP0UserKubeconfig,
   execKubectl = (args, options) => run('kubectl', args, options),

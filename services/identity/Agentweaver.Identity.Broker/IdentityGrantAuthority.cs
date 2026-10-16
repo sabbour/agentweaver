@@ -7,21 +7,13 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Identity.Broker;
 
-/// <summary>Identifies the grant revision committed by a successful grant mutation.</summary>
 public sealed record GrantMutationResult(string GrantId, long Revision);
 
-/// <summary>
-/// Signals that a grant changed after the caller read its expected revision. The caller
-/// must reload authority state rather than applying a stale mutation.
-/// </summary>
 public sealed class GrantConcurrencyException : Exception
 {
     public GrantConcurrencyException() : base("The grant revision changed.") { }
 }
 
-/// <summary>
-/// Signals that an idempotency key was already committed for different grant metadata.
-/// </summary>
 public sealed class GrantIdempotencyConflictException : Exception
 {
     public GrantIdempotencyConflictException() : base("The idempotency key was already used.") { }
@@ -36,11 +28,6 @@ public sealed class IdentityGrantAuthority(
     IdentityBrokerDbContext db,
     TimeProvider timeProvider) : IGrantAuthority
 {
-    /// <summary>
-    /// Checks whether the current grant revision authorizes this exact actor, project and
-    /// run for any secret, and is active and unexpired. Returns <see langword="false"/> if
-    /// no current revision matches.
-    /// </summary>
     public Task<bool> HasActiveRunBindingAsync(
         string actorId,
         string projectId,
@@ -67,10 +54,6 @@ public sealed class IdentityGrantAuthority(
             .AnyAsync(cancellationToken);
     }
 
-    /// <summary>
-    /// Returns current, unexpired snapshots for the exact trusted actor, project, run,
-    /// purpose and secret version. No secret value is read or returned by this lookup.
-    /// </summary>
     public async Task<IReadOnlyList<SecretRedemptionGrant>> FindGrantsAsync(
         TrustedActorContext actor,
         SecretRedemptionRequest request,
@@ -140,11 +123,6 @@ public sealed class IdentityGrantAuthority(
     }
 
     /// <summary>Appends a revoked snapshot using a compare-and-swap revision.</summary>
-    /// <param name="grantId">Opaque identifier of the grant to revoke.</param>
-    /// <param name="expectedRevision">Current revision the caller is authorized to revoke.</param>
-    /// <param name="idempotencyKey">Stable key used to replay the same mutation safely.</param>
-    /// <param name="cancellationToken">Cancels database work before commit.</param>
-    /// <returns>The committed revision, or the original receipt for a matching replay.</returns>
     public Task<GrantMutationResult> RevokeAsync(
         string grantId,
         long expectedRevision,

@@ -1,6 +1,5 @@
 import { DESIGN_TOKENS } from './fluent-tokens.mjs';
 
-/** Measure and wrap a group caption to fit its available width using diagram typography tokens. */
 export function groupCaptionMetrics(label, availableWidth) {
   const size=DESIGN_TOKENS.typography.titleSize;
   const limit=Math.max(8,Math.min(28,Math.floor(availableWidth/(size*.72))));

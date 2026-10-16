@@ -1,7 +1,6 @@
 import { createContext, useContext } from 'react';
 import type { NotificationDto } from '../api/types';
 
-/** State and actions exposed by the notification provider to the bell and toast surfaces. */
 export interface NotificationsContextValue {
   /** All currently pending notifications for the signed-in user (server truth, not filtered by read state). */
   notifications: NotificationDto[];
@@ -18,10 +17,8 @@ export interface NotificationsContextValue {
   refresh: () => void;
 }
 
-/** Shared notification state; `null` means a consumer is mounted outside the provider. */
 export const NotificationsContext = createContext<NotificationsContextValue | null>(null);
 
-/** Reads notification state and fails fast when the provider is missing from the component tree. */
 export function useNotifications(): NotificationsContextValue {
   const value = useContext(NotificationsContext);
   if (!value) {

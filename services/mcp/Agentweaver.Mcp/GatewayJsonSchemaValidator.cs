@@ -5,12 +5,10 @@ using System.Text.RegularExpressions;
 
 namespace Agentweaver.Mcp;
 
-/// <summary>Small bounded evaluator for the JSON Schema keywords emitted by the Gateway OpenAPI catalog.</summary>
 internal static class GatewayJsonSchemaValidator
 {
     private static readonly TimeSpan PatternTimeout = TimeSpan.FromMilliseconds(100);
 
-    /// <summary>Returns false for mismatches, unsupported shapes, excessive recursion, and regex timeouts.</summary>
     internal static bool IsValid(JsonElement value, JsonElement schema) =>
         IsValid(value, schema, 0);
 

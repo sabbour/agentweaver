@@ -5,22 +5,12 @@ using Microsoft.AspNetCore.Server.Kestrel.Https;
 
 namespace Agentweaver.Identity.Broker;
 
-/// <summary>
-/// Configures the dedicated mutual-TLS listener used only by Environment's remote MCP
-/// credential-use path. It requires a distinct pinned recipient certificate and verifies
-/// the direct peer connection before a request may proceed.
-/// </summary>
 public static class RemoteMcpCredentialUseComposition
 {
     public const string RecipientTlsKey = "remote-mcp-credential-use-recipient";
     public const string SectionName = "IdentityBroker:RemoteMcpCredentialUse";
     public const string ListenerName = "RemoteMcpCredentialUse";
 
-    /// <summary>
-    /// Adds the recipient certificate profile and isolated HTTPS listener when configured.
-    /// Returns <see langword="false"/> if the feature section is absent; invalid or
-    /// colliding listener settings fail host startup.
-    /// </summary>
     public static bool AddRemoteMcpCredentialUseTls(this WebApplicationBuilder builder)
     {
         var section = builder.Configuration.GetSection(SectionName);
@@ -61,7 +51,6 @@ public static class RemoteMcpCredentialUseComposition
         return true;
     }
 
-    /// <summary>Requires the configured direct TLS listener and authenticated Environment client certificate.</summary>
     public static void RequireRecipient(HttpContext context)
     {
         var options = context.RequestServices

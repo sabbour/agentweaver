@@ -7,9 +7,7 @@ import { routeFluentGraph, spaceFluentCards } from './fluent-routing.mjs';
 import { groupCaptionMetrics } from './fluent-group-label.mjs';
 import { resolveFluentIcon } from './fluent-icon-catalog.mjs';
 
-/** Generate editable Fluent-style draw.io XML from canonical graph, architecture, and sequence specs. */
 export { DESIGN_TOKENS };
-/** References to installed native draw.io shape libraries used by generated diagrams. */
 export const NATIVE_LIBRARY_REFERENCES = Object.freeze(DESIGN_SYSTEM.nativeLibraries);
 const C = DESIGN_TOKENS.colors;
 const G = DESIGN_TOKENS.geometry;
@@ -127,7 +125,6 @@ function textCell(id,role,text,x,y,w,h,size,color,weight=400,parent='1',mono=fal
     rect(x,y,w,h),{value,parent});
 }
 
-/** Build the card and its semantic accent, icon, labels, and optional badge as draw.io cells. */
 export function cardCells(node,box,parent='1',suffix='') {
   for(const key of ['label','subLabel','meta']) {
     if(node[key]!=null && typeof node[key]!=='string') throw new Error(`Card ${node.id}: ${key} must be text, not a structured value`);
@@ -194,7 +191,6 @@ function labelCell(id,label,position) {
     {value:`<div style="font-family:${T.family};font-size:${T.edgeSize}px;font-weight:600;line-height:1.15;">${html(label)}</div>`});
 }
 
-/** Reject graph specs with missing identities, unknown references, or cyclic group parents. */
 function validateGraph(spec) {
   if(!Array.isArray(spec.nodes)||!Array.isArray(spec.edges)) throw new Error('Graph spec requires nodes and edges arrays');
   const ids=new Set(spec.nodes.map(n=>n.id));
@@ -215,10 +211,6 @@ function validateGraph(spec) {
   }
 }
 
-/**
- * Convert a canonical graph spec to editable draw.io XML using the shared layout and route builders.
- * Invalid references or unbound visual node types throw before XML is returned.
- */
 export function graphSpecToDrawio(spec,{name='diagram'}={}) {
   validateGraph(spec);
   const result=spec.layoutSnapshot??layoutGraph(spec);
@@ -368,7 +360,6 @@ const architectureRoleIcons = {
   external: 'cloud',
 };
 
-/** Convert an explicitly layered architecture spec into lanes, component cards, and connectors. */
 export function architectureSpecToDrawio(spec,{name='diagram'}={}) {
   if(!Array.isArray(spec.layers)||spec.layers.length<2) throw new Error('Architecture spec requires at least two layers');
   if(!Array.isArray(spec.nodes)||!spec.nodes.length||!Array.isArray(spec.edges)) throw new Error('Architecture spec requires nodes and edges');
@@ -475,7 +466,6 @@ export function architectureSpecToDrawio(spec,{name='diagram'}={}) {
   return document(name,spec.title??name,width,height,cells);
 }
 
-/** Flatten nested sequence fragments into ordered drawing instructions with their nesting depth. */
 function flatten(steps,depth=0,out=[]) {
   for(const step of steps) {
     if(step.type==='fragment') {
@@ -490,7 +480,6 @@ function flatten(steps,depth=0,out=[]) {
   return out;
 }
 
-/** Convert a participant and message sequence spec into editable draw.io sequence-diagram XML. */
 export function sequenceSpecToDrawio(spec,{name='diagram'}={}) {
   if(!Array.isArray(spec.participants)||!spec.participants.length||!Array.isArray(spec.steps)) throw new Error('Sequence requires participants and steps');
   const ids=new Set(spec.participants.map(p=>p.id));
@@ -566,14 +555,12 @@ export function sequenceSpecToDrawio(spec,{name='diagram'}={}) {
   return document(name,spec.title??name,width,height,cells);
 }
 
-/** Select the matching graph, architecture, or sequence converter from the spec's declared kind. */
 export function specToDrawio(spec,options) {
   if(spec.kind==='sequence') return sequenceSpecToDrawio(spec,options);
   if(spec.kind==='architecture') return architectureSpecToDrawio(spec,options);
   return graphSpecToDrawio(spec,options);
 }
 
-/** Read and convert one JSON diagram specification from disk. */
 export async function jsonFileToDrawio(sourcePath,options={}) {
   const raw=await readFile(sourcePath,'utf8');
   let spec;

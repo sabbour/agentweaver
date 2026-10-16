@@ -3,7 +3,6 @@ import { readAssistantSessionKey } from './assistantNavigation';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { useState } from 'react';
 
-/** Identity used to decide when the assistant page should start with fresh local state. */
 interface AssistantRouteIdentity {
   projectId?: string;
   explicitSessionKey: string;
@@ -11,7 +10,6 @@ interface AssistantRouteIdentity {
   revision: number;
 }
 
-/** Advances the identity revision when the project, explicit session, or established run changes. */
 function nextAssistantRouteIdentity(
   current: AssistantRouteIdentity,
   projectId: string | undefined,
@@ -53,7 +51,6 @@ function nextAssistantRouteIdentity(
   return current;
 }
 
-/** Resolves route query/state into a keyed assistant page so unrelated runs do not share UI state. */
 export function AssistantRoute() {
   const [searchParams] = useSearchParams();
   const location = useLocation();

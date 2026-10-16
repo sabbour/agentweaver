@@ -9,7 +9,6 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Knowledge;
 
-/// <summary>Forwards the validated caller to Projects &amp; Config and verifies its current authority and run selection.</summary>
 public sealed class ProjectsConfigClient(
     HttpClient client,
     IHttpContextAccessor contextAccessor,
@@ -18,8 +17,6 @@ public sealed class ProjectsConfigClient(
     private const string TenantSelectorHeader = "X-Agentweaver-Tenant";
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
-    /// <summary>Reads and binds current project authority to the authenticated caller and requested project/run.</summary>
-    /// <exception cref="KnowledgeApiException">Authority is absent, malformed, rejected, or unavailable.</exception>
     public async Task<ProjectAuthorizationContextResponse> GetCurrentAuthorityAsync(
         string projectId,
         string runId,
@@ -58,8 +55,6 @@ public sealed class ProjectsConfigClient(
         return authority;
     }
 
-    /// <summary>Reads the accepted provider selection and limits for a specific project run.</summary>
-    /// <exception cref="KnowledgeApiException">The selection is absent, mismatched, malformed, or unavailable.</exception>
     public async Task<ProjectRunSelectionResponse> GetRunSelectionAsync(
         string projectId,
         string runId,
@@ -108,7 +103,6 @@ public sealed class ProjectsConfigClient(
         return selection;
     }
 
-    /// <summary>Requires effective project- or tenant-level permission for private Knowledge access.</summary>
     public static void RequireProjectPermission(
         ProjectAuthorizationContextResponse authority,
         string projectId,
@@ -126,8 +120,6 @@ public sealed class ProjectsConfigClient(
             StatusCodes.Status403Forbidden);
     }
 
-    /// <summary>Returns the single effective grant, preferring a project grant over a tenant grant.</summary>
-    /// <exception cref="KnowledgeApiException">No unique effective grant is present in the verified response.</exception>
     public static (ProjectAuthorityResourceType ResourceType, string ResourceId, long RoleRevision)
         GetEffectiveProjectPermission(
             ProjectAuthorizationContextResponse authority,
@@ -147,7 +139,6 @@ public sealed class ProjectsConfigClient(
         return (grants[0].ResourceType, grants[0].ResourceId, grants[0].Grant.RoleRevision);
     }
 
-    /// <summary>Requires a direct project grant to read the run's accepted provider selection.</summary>
     public static void RequireRunSelectionPermission(
         ProjectAuthorizationContextResponse authority,
         string projectId)
@@ -161,8 +152,6 @@ public sealed class ProjectsConfigClient(
         throw MissingRunSelectionAuthority();
     }
 
-    /// <summary>Sends one bearer-authenticated request without following redirects or accepting duplicate headers.</summary>
-    /// <exception cref="KnowledgeApiException">The caller token or tenant selector is invalid, or the owner is unreachable.</exception>
     private async Task<HttpResponseMessage> SendAsync(
         HttpMethod method,
         string path,
@@ -216,8 +205,6 @@ public sealed class ProjectsConfigClient(
         }
     }
 
-    /// <summary>Checks that returned claims, issuer, tenant, resource binding, and effective grants match the caller.</summary>
-    /// <summary>Rejects owner responses that do not match authenticated caller claims and requested scope.</summary>
     private static void ValidateAuthority(
         ProjectAuthorizationContextResponse authority,
         ClaimsPrincipal? principal,
@@ -312,7 +299,6 @@ public sealed class ProjectsConfigClient(
                 .Select(grant => (resource.ResourceType, resource.ResourceId, grant)))
             .ToArray();
 
-    /// <summary>Maps owner-service failures without following redirects or exposing response bodies.</summary>
     private static KnowledgeApiException MapOwnerFailure(HttpResponseMessage response, string message)
     {
         if ((int)response.StatusCode is >= 500 or 0)

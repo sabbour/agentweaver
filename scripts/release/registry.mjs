@@ -1,7 +1,3 @@
-/**
- * Reads and verifies immutable container image manifests from the configured OCI registry.
- * Pull-only authorization is requested, and response digests are checked against requested references.
- */
 import { createHash } from 'node:crypto';
 
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
@@ -53,7 +49,6 @@ function splitImageReference(image) {
   return { repository: repository.slice('ghcr.io/'.length), digest: imageDigest };
 }
 
-/** Requests a pull-scoped bearer token for one registry repository. */
 export async function pullToken(repository, fetchImpl) {
   const tokenUrl = new URL('https://ghcr.io/token');
   tokenUrl.searchParams.set('service', 'ghcr.io');
@@ -98,7 +93,6 @@ async function registryReader(repository, fetchImpl) {
   };
 }
 
-/** Verifies a registry image reference and its manifest digest without downloading image layers. */
 export async function verifyRegistryImage(image, fetchImpl = globalThis.fetch) {
   const separator = image.indexOf('/', 'ghcr.io/'.length);
   const repository = image.slice('ghcr.io/'.length, image.lastIndexOf('@'));
@@ -124,7 +118,6 @@ export async function verifyRegistryImage(image, fetchImpl = globalThis.fetch) {
   return acceptedDigests;
 }
 
-/** Verifies service image manifests and their platform-specific child manifests. */
 export async function verifyServiceRegistryImage(image, fetchImpl = globalThis.fetch) {
   const reference = splitImageReference(image);
   const reader = await registryReader(reference.repository, fetchImpl);

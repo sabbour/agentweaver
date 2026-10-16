@@ -5,22 +5,16 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.AgentRuntime;
 
-/// <summary>Allow-listed provider configuration for one hosted or BYOK model in the runtime.</summary>
 public sealed record RuntimeByokProvider(
     string Type,
     Uri BaseUrl,
     string WireApi = "responses",
     string? AzureApiVersion = null)
 {
-    /// <summary>Additional provider headers copied into the SDK configuration.</summary>
     public ImmutableDictionary<string, string> Headers { get; init; } =
         ImmutableDictionary<string, string>.Empty;
 }
 
-/// <summary>
-/// One enabled model choice and its source mode, optional BYOK provider, and prompt capacity.
-/// Validation rejects any source/provider combination that is not explicitly supported.
-/// </summary>
 public sealed record RuntimeModelBinding(
     string ModelId, ModelSourceMode SourceMode, RuntimeByokProvider? Provider = null)
 {
@@ -29,7 +23,6 @@ public sealed record RuntimeModelBinding(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? PromptCapacityTokens { get; init; }
 
-    /// <summary>Checks model identity, source mode, prompt capacity, and the provider allow-list.</summary>
     internal void Validate()
     {
         RuntimeContractValidation.ValidateIdentifier(ModelId);

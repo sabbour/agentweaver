@@ -4,12 +4,10 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Implements suspend-time workspace discovery, authority checks, flush delivery, and receipt validation.</summary>
 public sealed partial class EnvironmentRuntimeBootstrapDelivery
 {
     private static readonly JsonSerializerOptions SuspendJsonOptions = new(JsonSerializerDefaults.Web);
 
-    /// <summary>Reads the current registration, placement, and workspace context needed for a suspend operation.</summary>
     public async Task<EnvironmentRuntimeWorkspaceContext> ReadSuspendWorkspaceAsync(
         RuntimeHostSuspendRequest request,
         RuntimeActorAuthorization actor,
@@ -32,7 +30,6 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
         return context;
     }
 
-    /// <summary>Requires the request, registration, and orchestrator authority to remain current before a flush.</summary>
     public async Task RequireCurrentSuspendAsync(
         RuntimeHostSuspendRequest request,
         RuntimeActorAuthorization actor,
@@ -58,9 +55,6 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
             throw new RuntimeAuthorizationException("runtime_suspend_authority_stale");
     }
 
-    /// <summary>
-    /// Flushes only the exact caller-authorized workspace binding, then rechecks placement and returns host evidence.
-    /// </summary>
     public async Task<WorkspaceVolumeFlushEvidence> SuspendWorkspaceAsync(
         RuntimeHostSuspendRequest request,
         WorkspaceVolumeFlushRequest exactWorkspace,
@@ -120,7 +114,6 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
             flush, JsonSerializer.SerializeToElement(receipt, SuspendJsonOptions)).Validate();
     }
 
-    /// <summary>Rejects workspace context that does not match the requested volume, data generation, and sandbox placement.</summary>
     private static void RequireSuspendWorkspace(
         EnvironmentRuntimeWorkspaceContext context,
         WorkspaceVolumeFlushRequest request,
@@ -141,14 +134,12 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
             throw new RuntimeAuthorizationException("runtime_suspend_workspace_stale");
     }
 
-    /// <summary>Delegates host receipt validation to the shared runtime suspend contract.</summary>
     internal static void ValidateSuspendReceipt(
         RuntimeHostSuspendReceipt receipt,
         RuntimeHostSuspendRequest request,
         DateTimeOffset now) =>
         RuntimeWorkspaceSuspendHttpClient.ValidateHostReceipt(receipt, request, now);
 
-    /// <summary>Compares requests and placement snapshots by their serialized JSON values.</summary>
     private static bool SameSuspendJson<T>(T expected, T actual) =>
         JsonElement.DeepEquals(
             JsonSerializer.SerializeToElement(expected, SuspendJsonOptions),

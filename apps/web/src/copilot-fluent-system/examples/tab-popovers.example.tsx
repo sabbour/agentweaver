@@ -7,7 +7,6 @@ const tabs = [
   { id: 'settings', label: 'Settings', icon: <SettingsRegular />, status: 'success' as const },
 ];
 
-/** Demonstrates status-bearing tabs and contextual help popovers with local selection state. */
 export function TabPopoversExample() {
   const [selectedValue, setSelectedValue] = useState('overview');
 

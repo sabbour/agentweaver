@@ -13,10 +13,6 @@ namespace Agentweaver.Identity.Broker;
 /// </summary>
 public sealed class BrokerScopeSeeder(IOpenIddictScopeManager scopes, IdentityBrokerOptions options)
 {
-    /// <summary>
-    /// Aggregates resources across configured clients by scope, creates missing scope
-    /// registrations, and fails startup when an existing audience set differs.
-    /// </summary>
     public async Task SeedAsync(CancellationToken cancellationToken)
     {
         var resourcesByScope = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);

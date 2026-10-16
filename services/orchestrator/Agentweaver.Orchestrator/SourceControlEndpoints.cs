@@ -13,9 +13,6 @@ using Microsoft.AspNetCore.Mvc.ModelBinding;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Maps the authenticated Source Control API and checks accepted-run, provider-pin, and owner authority around repository operations.
-/// </summary>
 internal static partial class SourceControlEndpoints
 {
     private static readonly TimeSpan MergeSettlementTimeout = TimeSpan.FromSeconds(30);
@@ -26,9 +23,6 @@ internal static partial class SourceControlEndpoints
         MaxDepth = 16
     };
 
-    /// <summary>
-    /// Registers authenticated Source Control routes, the internal Events proof route, and an explicit rejection for direct GitHub webhook delivery.
-    /// </summary>
     public static IEndpointRouteBuilder MapSourceControlEndpoints(this IEndpointRouteBuilder app)
     {
         var sourceControl = app.MapGroup(
@@ -62,9 +56,6 @@ internal static partial class SourceControlEndpoints
         return app;
     }
 
-    /// <summary>
-    /// Returns an owner-scoped capture proof to Events after authorization and a second selection check.
-    /// </summary>
     private static Task<IResult> ReadOutputCaptureProofForEventsAsync(
         HttpContext context,
         string projectId,
@@ -96,9 +87,6 @@ internal static partial class SourceControlEndpoints
             return Results.Json(proof, ProviderSelectionJsonOptions);
         }, cancellationToken);
 
-    /// <summary>
-    /// Negotiates the selected provider and repository using a short-lived credential, then persists one immutable pin against the current decision and accepted selection.
-    /// </summary>
     private static Task<IResult> PinRepositoryAsync(
         string projectId,
         string runId,
@@ -273,9 +261,6 @@ internal static partial class SourceControlEndpoints
             return Results.Accepted(value: ToPinView(persisted));
         }, cancellationToken);
 
-    /// <summary>
-    /// Creates an issue only after validating the request, pinned provider capabilities, credential purpose, and current run around the provider call.
-    /// </summary>
     private static Task<IResult> CreateIssueAsync(
         string projectId,
         string runId,
@@ -331,9 +316,6 @@ internal static partial class SourceControlEndpoints
             return Results.Ok(issue);
         }, cancellationToken);
 
-    /// <summary>
-    /// Creates or reuses a pull request through the pinned provider after checking the current run before and after the remote operation.
-    /// </summary>
     private static Task<IResult> CreateOrReusePullRequestAsync(
         string projectId,
         string runId,
@@ -388,9 +370,6 @@ internal static partial class SourceControlEndpoints
             return Results.Ok(pullRequest);
         }, cancellationToken);
 
-    /// <summary>
-    /// Reads reviews for a positive pull request number after verifying the pinned provider and current run.
-    /// </summary>
     private static Task<IResult> ReadReviewsAsync(
         string projectId,
         string runId,
@@ -447,9 +426,6 @@ internal static partial class SourceControlEndpoints
             return Results.Ok(reviews);
         }, cancellationToken);
 
-    /// <summary>
-    /// Prepares a checkout from the pinned repository and requested base revision using a temporary checkout credential; unavailable workspace support returns a service error.
-    /// </summary>
     private static Task<IResult> PrepareWorkspaceAsync(
         string projectId,
         string runId,
@@ -522,9 +498,6 @@ internal static partial class SourceControlEndpoints
                 workspace.BranchName));
         }, cancellationToken);
 
-    /// <summary>
-    /// Prepares the requested pinned workspace and returns its diff only while the accepted run remains current.
-    /// </summary>
     private static Task<IResult> ReadWorkspaceDiffAsync(
         string projectId,
         string runId,
@@ -599,9 +572,6 @@ internal static partial class SourceControlEndpoints
                 diff.WorkspaceId, diff.BaseSha, diff.HeadSha, diff.Status, diff.Patch));
         }, cancellationToken);
 
-    /// <summary>
-    /// Captures a workspace package, stores it as pending, and admits it through Events; an existing matching pending capture is reused.
-    /// </summary>
     private static Task<IResult> CaptureWorkspaceOutputAsync(
         string projectId,
         string runId,
@@ -696,9 +666,6 @@ internal static partial class SourceControlEndpoints
             }
         }, cancellationToken);
 
-    /// <summary>
-    /// Writes the package proof to Events and marks the owner record admitted only after the journal acknowledgment matches; already admitted records are returned as duplicates.
-    /// </summary>
     internal static async Task<(SourceControlOutputCaptureRecord Capture, bool IsDuplicate)>
         WriteAndAdmitOutputCaptureAsync(
             HttpContext context,
@@ -729,9 +696,6 @@ internal static partial class SourceControlEndpoints
         return (admitted, acknowledgment.IsDuplicate);
     }
 
-    /// <summary>
-    /// Returns a bounded page of admitted captures for the current selection and revalidates authority before exposing the page.
-    /// </summary>
     private static Task<IResult> ReadOutputCapturePageAsync(
         string projectId,
         string runId,
@@ -771,9 +735,6 @@ internal static partial class SourceControlEndpoints
                 last?.Proof.CaptureId));
         }, cancellationToken);
 
-    /// <summary>
-    /// Returns an admitted capture and validated manifest after checking its scope, integrity, and unchanged authority.
-    /// </summary>
     private static Task<IResult> ReadOutputCaptureAsync(
         string projectId,
         string runId,
@@ -803,9 +764,6 @@ internal static partial class SourceControlEndpoints
                 ToOutputCaptureSummary(record), manifest));
         }, cancellationToken);
 
-    /// <summary>
-    /// Returns the verified patch for an admitted capture and rechecks owner authority before responding.
-    /// </summary>
     private static Task<IResult> ReadOutputCaptureDiffAsync(
         string projectId,
         string runId,
@@ -844,9 +802,6 @@ internal static partial class SourceControlEndpoints
                 ToOutputCaptureSummary(record), patch));
         }, cancellationToken);
 
-    /// <summary>
-    /// Reads the captured package from Events, extracts only the requested manifest-listed file, and returns its digest after revalidating the capture and owner scope.
-    /// </summary>
     private static Task<IResult> ReadOutputCaptureFileAsync(
         string projectId,
         string runId,
@@ -901,9 +856,6 @@ internal static partial class SourceControlEndpoints
             return Results.Bytes(file, "application/octet-stream");
         }, cancellationToken);
 
-    /// <summary>
-    /// Requires the current owner actor and accepted selection, and withholds captures while execution is failed or indeterminate.
-    /// </summary>
     private static async Task<AuthorizedOutputCaptureScope> ReadAuthorizedOutputCaptureScopeAsync(
         HttpContext context,
         SessionIdentity identity,
@@ -922,9 +874,6 @@ internal static partial class SourceControlEndpoints
         return new AuthorizedOutputCaptureScope(selection);
     }
 
-    /// <summary>
-    /// Reloads owner authority and rejects a read if the accepted selection changed while data was being fetched.
-    /// </summary>
     private static async Task RevalidateOutputCaptureReadAsync(
         HttpContext context,
         SessionIdentity identity,
@@ -941,9 +890,6 @@ internal static partial class SourceControlEndpoints
             throw OutputCaptureWithheld();
     }
 
-    /// <summary>
-    /// Reads a capture under the accepted selection and returns it only when its durable state is admitted; unavailable records are hidden as not found.
-    /// </summary>
     private static async Task<SourceControlOutputCaptureRecord> ReadAdmittedOutputCaptureAsync(
         SessionIdentity identity,
         string captureId,
@@ -961,9 +907,6 @@ internal static partial class SourceControlEndpoints
         return record;
     }
 
-    /// <summary>
-    /// Confirms the selection and exact proof, journal position, and object key still match the capture that was read.
-    /// </summary>
     private static async Task RevalidateAdmittedOutputCaptureAsync(
         HttpContext context,
         SessionIdentity identity,
@@ -992,9 +935,6 @@ internal static partial class SourceControlEndpoints
             throw OutputCaptureWithheld();
     }
 
-    /// <summary>
-    /// Verifies persisted manifest and patch lengths, hashes, and run/workspace bindings against the capture proof; corrupt records fail as unavailable.
-    /// </summary>
     private static GitWorkspaceCapturedOutputManifest ValidateOutputCaptureDocument(
         SourceControlOutputCaptureRecord record)
     {
@@ -1027,9 +967,6 @@ internal static partial class SourceControlEndpoints
         }
     }
 
-    /// <summary>
-    /// Allows output capture only while the run is idle, active, or blocked; every other execution state is rejected.
-    /// </summary>
     private static async Task RequireCapturableOutputRunStateAsync(
         CoordinationOwnerStore coordinationOwner,
         SessionIdentity identity,
@@ -1042,35 +979,20 @@ internal static partial class SourceControlEndpoints
                 "source_control_output_run_unavailable", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Creates the not-found response used to avoid disclosing unavailable or out-of-scope captures.
-    /// </summary>
     private static CoordinationException OutputCaptureWithheld() =>
         new("source_control_output_capture_unavailable", StatusCodes.Status404NotFound);
 
-    /// <summary>
-    /// Creates a service-unavailable error for invalid persisted capture data.
-    /// </summary>
     private static CoordinationException OutputCaptureIntegrityFailure(Exception? inner = null) =>
         new("source_control_output_capture_integrity_invalid", StatusCodes.Status503ServiceUnavailable, inner);
 
-    /// <summary>
-    /// Converts a capture or summary record to the public metadata view; a missing Events position is an integrity failure.
-    /// </summary>
     private static SourceControlOutputCaptureSummaryView ToOutputCaptureSummary(
         SourceControlOutputCaptureRecord record)
         => ToOutputCaptureSummary(record.Proof, record.EventPosition);
 
-    /// <summary>
-    /// Converts a capture or summary record to the public metadata view; a missing Events position is an integrity failure.
-    /// </summary>
     private static SourceControlOutputCaptureSummaryView ToOutputCaptureSummary(
         SourceControlOutputCaptureSummary record)
         => ToOutputCaptureSummary(record.Proof, record.EventPosition);
 
-    /// <summary>
-    /// Converts a capture or summary record to the public metadata view; a missing Events position is an integrity failure.
-    /// </summary>
     private static SourceControlOutputCaptureSummaryView ToOutputCaptureSummary(
         ProducedRunCaptureProof proof,
         long? eventPosition)
@@ -1093,9 +1015,6 @@ internal static partial class SourceControlEndpoints
             proof.PackageByteLength);
     }
 
-    /// <summary>
-    /// Validates an idempotent workflow merge request, records observed pull-request revisions, persists the intent, and creates an approval gate only while owner authority remains current.
-    /// </summary>
     private static Task<IResult> PrepareMergeIntentAsync(
         string projectId,
         string runId,
@@ -1272,9 +1191,6 @@ internal static partial class SourceControlEndpoints
                 persisted.State.PendingGate));
         }, cancellationToken);
 
-    /// <summary>
-    /// Checks the intent state and approved grant, evaluates pinned action policy, and delegates an authorized merge; uncertain remote outcomes are reported without retrying.
-    /// </summary>
     private static Task<IResult> ExecuteMergeIntentAsync(
         string projectId,
         string runId,
@@ -1422,9 +1338,6 @@ internal static partial class SourceControlEndpoints
             };
         }, cancellationToken);
 
-    /// <summary>
-    /// Serializes merges per repository, checks approval and grant authority around preflight, records merge-started before the remote effect, and durably records known or uncertain outcomes.
-    /// </summary>
     private static async Task<SourceControlMergeExecutionResult> ExecuteMergeEffectAsync(
         HttpContext context,
         CoordinationActor actor,
@@ -1707,9 +1620,6 @@ internal static partial class SourceControlEndpoints
         }
     }
 
-    /// <summary>
-    /// Serializes recovery of a merge-started intent and marks it outcome-uncertain rather than repeating a possibly completed remote merge.
-    /// </summary>
     private static async Task<IResult> ResolveInterruptedMergeAsync(
         HttpContext context,
         CoordinationActor actor,
@@ -1747,9 +1657,6 @@ internal static partial class SourceControlEndpoints
             statusCode: StatusCodes.Status502BadGateway);
     }
 
-    /// <summary>
-    /// Requires unchanged selection, current decision fence and approval receipt, and the exact active grant before a merge can proceed.
-    /// </summary>
     private static async Task RequireCurrentMergeAuthorityAsync(
         HttpContext context,
         CoordinationActor actor,
@@ -1799,9 +1706,6 @@ internal static partial class SourceControlEndpoints
             grantOwner, intent.GrantReference, intent, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Runs the merge-authority check and returns its coordination failure for outcome reporting instead of throwing it.
-    /// </summary>
     private static async Task<CoordinationException?> GetMergeAuthorityFailureAsync(
         HttpContext context,
         CoordinationActor actor,
@@ -1833,15 +1737,9 @@ internal static partial class SourceControlEndpoints
         }
     }
 
-    /// <summary>
-    /// Identifies authorization and stale-state conflicts that prevent the merge side effect from starting.
-    /// </summary>
     private static bool IsTerminalPreEffectConflict(CoordinationException exception) =>
         exception.StatusCode is StatusCodes.Status403Forbidden or StatusCodes.Status409Conflict;
 
-    /// <summary>
-    /// Requires the referenced grant to be current, active, and scoped to this accepted run, root session, merge step, and action.
-    /// </summary>
     private static async Task RequireCurrentMergeGrantAsync(
         IExecutableActionGrantOwnerLookup grantOwner,
         ExecutableActionGrantReference reference,
@@ -1868,9 +1766,6 @@ internal static partial class SourceControlEndpoints
                 "source_control_merge_grant_not_current", StatusCodes.Status403Forbidden);
     }
 
-    /// <summary>
-    /// Validates the accepted selection’s single policy provider, resolves and negotiates its pinned binding, and fails closed on any mismatch.
-    /// </summary>
     internal static async Task<PinnedProviderBinding> ResolvePolicyBindingAsync(
         System.Text.Json.JsonElement acceptedSelectionSnapshot,
         string runId,
@@ -1950,9 +1845,6 @@ internal static partial class SourceControlEndpoints
         return pinned.Value;
     }
 
-    /// <summary>
-    /// Returns a merge intent only after the caller, accepted run selection, and owner lookup authorize its scope.
-    /// </summary>
     private static Task<IResult> ReadMergeIntentAsync(
         string projectId,
         string runId,
@@ -1975,9 +1867,6 @@ internal static partial class SourceControlEndpoints
             return Results.Ok(ToView(intent));
         }, cancellationToken);
 
-    /// <summary>
-    /// Always rejects direct GitHub webhook delivery because this host accepts only authenticated relay traffic.
-    /// </summary>
     private static Task<IResult> RejectDirectGitHubWebhookAsync(
         HttpContext context,
         CancellationToken cancellationToken) =>
@@ -1990,9 +1879,6 @@ internal static partial class SourceControlEndpoints
                     statusCode: StatusCodes.Status403Forbidden));
         }, cancellationToken);
 
-    /// <summary>
-    /// Validates relay headers and a bounded body, verifies the signature using the pinned webhook credential, checks run authority, and records delivery idempotently.
-    /// </summary>
     private static Task<IResult> ReceiveRelayedGitHubWebhookAsync(
         string projectId,
         string runId,
@@ -2097,9 +1983,6 @@ internal static partial class SourceControlEndpoints
                     delivery.Envelope.DeliveryId, "accepted"));
         }, cancellationToken);
 
-    /// <summary>
-    /// Reads a webhook body up to one mebibyte and rejects oversized requests before signature verification.
-    /// </summary>
     private static async Task<byte[]> ReadWebhookBodyAsync(
         HttpRequest request,
         CancellationToken cancellationToken)
@@ -2124,9 +2007,6 @@ internal static partial class SourceControlEndpoints
         return buffer.ToArray();
     }
 
-    /// <summary>
-    /// Loads the authorized accepted selection, current decision, and repository pin, then verifies configuration and execution-fence consistency.
-    /// </summary>
     private static async Task<SourceControlRunContext> ReadPinnedSourceControlRunAsync(
         HttpContext context,
         string projectId,
@@ -2155,9 +2035,6 @@ internal static partial class SourceControlEndpoints
             actor, identity, selection, pin, current.StateVersion);
     }
 
-    /// <summary>
-    /// Rereads the accepted selection and decision and rejects a changed selection, state version, or execution fence.
-    /// </summary>
     private static async Task RequireCurrentSourceControlRunAsync(
         HttpContext context,
         SourceControlRunContext run,
@@ -2180,9 +2057,6 @@ internal static partial class SourceControlEndpoints
                 "source_control_run_binding_changed", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Requires the registered adapter and resource to use the Source Control provider pinned for the run.
-    /// </summary>
     private static void EnsureAdapterMatchesPin(
         ISourceControlAdapter adapter,
         SourceControlRepositoryPin pin)
@@ -2195,9 +2069,6 @@ internal static partial class SourceControlEndpoints
                 "The pinned SourceControl provider adapter is not registered.");
     }
 
-    /// <summary>
-    /// Rejects a secret reference whose declared purpose differs from the operation that will use it.
-    /// </summary>
     private static void EnsureCredentialPurpose(
         SourceControlCredentialReference credential,
         string expectedPurpose)
@@ -2207,9 +2078,6 @@ internal static partial class SourceControlEndpoints
                 "source_control_credential_purpose_invalid", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Requires an API-purpose secret for ordinary credentials and ensures GitHub App pins do not also retain static credentials.
-    /// </summary>
     private static void EnsureApiCredential(SourceControlRepositoryPin pin)
     {
         if (pin.GitHubAppBinding is not null)
@@ -2226,9 +2094,6 @@ internal static partial class SourceControlEndpoints
         EnsureCredentialPurpose(credential, SourceControlSecretPurposes.Api);
     }
 
-    /// <summary>
-    /// Requires the pinned provider to have negotiated repository checkout support.
-    /// </summary>
     private static void EnsureCheckoutCapability(SourceControlRepositoryPin pin)
     {
         if (!pin.ProviderBinding.NegotiatedCapabilities.Contains(
@@ -2238,9 +2103,6 @@ internal static partial class SourceControlEndpoints
                 "The pinned SourceControl provider does not support repository checkout.");
     }
 
-    /// <summary>
-    /// Requires issue-write support from both the provider pin and the GitHub App permission binding.
-    /// </summary>
     private static void EnsureIssueWriteCapability(SourceControlRepositoryPin pin)
     {
         if (!pin.ProviderBinding.NegotiatedCapabilities.Contains(
@@ -2251,9 +2113,6 @@ internal static partial class SourceControlEndpoints
                 "The pinned SourceControl provider does not support issue creation.");
     }
 
-    /// <summary>
-    /// Rejects a missing title, a title over 256 characters, or a body over 60,000 characters.
-    /// </summary>
     private static void ValidateIssueRequest(SourceControlIssueRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -2264,9 +2123,6 @@ internal static partial class SourceControlEndpoints
                 "source_control_issue_request_invalid", StatusCodes.Status400BadRequest);
     }
 
-    /// <summary>
-    /// Checks title and body limits, valid head and base branch names, and full-length hexadecimal commit identifiers.
-    /// </summary>
     private static void ValidatePullRequestRequest(SourceControlPullRequestRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -2281,9 +2137,6 @@ internal static partial class SourceControlEndpoints
                 "source_control_pull_request_request_invalid", StatusCodes.Status400BadRequest);
     }
 
-    /// <summary>
-    /// Checks the bounded workspace identifier, commit identifier, and branch name before workspace access.
-    /// </summary>
     private static void ValidateWorkspaceRequest(string workspaceId, string baseSha, string branchName)
     {
         if (string.IsNullOrWhiteSpace(workspaceId) ||
@@ -2296,9 +2149,6 @@ internal static partial class SourceControlEndpoints
                 "source_control_workspace_request_invalid", StatusCodes.Status400BadRequest);
     }
 
-    /// <summary>
-    /// Applies bounded Git ref checks that reject empty, unsafe, reserved, or malformed branch segments.
-    /// </summary>
     private static bool IsValidGitBranchName(string? branch) =>
         !string.IsNullOrWhiteSpace(branch) &&
         branch.Length <= 255 &&
@@ -2313,15 +2163,9 @@ internal static partial class SourceControlEndpoints
                 character is '-' or '_' or '.')) &&
         !branch.Contains("..", StringComparison.Ordinal);
 
-    /// <summary>
-    /// Accepts only a forty-character hexadecimal Git commit identifier.
-    /// </summary>
     private static bool IsGitSha(string? value) =>
         value is { Length: 40 } && value.All(Uri.IsHexDigit);
 
-    /// <summary>
-    /// Creates the immutable actor and run binding from the accepted selection, hashing the exact snapshot bytes and retaining revision and fence values.
-    /// </summary>
     private static SourceControlAcceptedRunBinding CreateAcceptedRun(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -2346,9 +2190,6 @@ internal static partial class SourceControlEndpoints
             fence);
     }
 
-    /// <summary>
-    /// Reloads the accepted selection and authority and compares actor, role, membership, revisions, and exact snapshot text; any change is a conflict.
-    /// </summary>
     private static async Task RequireUnchangedAuthorizedSelectionAsync(
         HttpContext context,
         string projectId,
@@ -2380,9 +2221,6 @@ internal static partial class SourceControlEndpoints
                 "coordinator_selection_stale", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Returns the single positive project role revision for accepting the selection, or denies ambiguous authority.
-    /// </summary>
     private static long ProjectRoleRevision(AuthorizedRunSelection selection, string projectId)
     {
         var revisions = selection.Authorization.EffectiveAuthority
@@ -2398,9 +2236,6 @@ internal static partial class SourceControlEndpoints
         return revisions[0];
     }
 
-    /// <summary>
-    /// Checks the authenticated actor, required scopes, exact project/run scope, and orchestrator audience.
-    /// </summary>
     private static CoordinationActor RequireOwnerActor(
         HttpContext context,
         OrchestratorOptions options,
@@ -2416,9 +2251,6 @@ internal static partial class SourceControlEndpoints
         return actor;
     }
 
-    /// <summary>
-    /// Maps a persisted merge intent to its public view without exposing stored credential references.
-    /// </summary>
     private static SourceControlMergeIntentView ToView(SourceControlMergeIntentSnapshot intent) =>
         new(
             intent.IntentId,
@@ -2437,9 +2269,6 @@ internal static partial class SourceControlEndpoints
             intent.MergeSha,
             intent.LastFailureCode);
 
-    /// <summary>
-    /// Maps the persisted provider pin to its non-secret response fields.
-    /// </summary>
     private static SourceControlRepositoryPinView ToPinView(SourceControlRepositoryPin pin) =>
         new(
             pin.PinId,
@@ -2452,9 +2281,6 @@ internal static partial class SourceControlEndpoints
             pin.IsPrivate,
             pin.PinnedAt);
 
-    /// <summary>
-    /// Requires repository and credential references in current project configuration to match the immutable pin.
-    /// </summary>
     private static void EnsurePinnedConfiguration(
         SourceControlRepositoryPin pin,
         SourceControlProjectSettings settings)
@@ -2473,40 +2299,25 @@ internal static partial class SourceControlEndpoints
                 "source_control_accepted_configuration_changed", StatusCodes.Status409Conflict);
     }
 
-    /// <summary>
-    /// Returns the configured API secret reference or rejects a missing reference.
-    /// </summary>
     private static SecretRef RequireSecretApiReference(SourceControlProjectSettings settings) =>
         settings.ApiSecretReference
         ?? throw new CoordinationException(
             "source_control_github_app_selection_required", StatusCodes.Status409Conflict);
 
-    /// <summary>
-    /// Checks that a GitHub App repository selection code is exactly 64 lowercase hexadecimal characters.
-    /// </summary>
     private static bool IsExactIdentityRepositorySelectionCode(string selectionCode) =>
         selectionCode.Length == 64 &&
         selectionCode.All(character =>
             character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
-    /// <summary>
-    /// Hashes a one-time GitHub App repository selection code before storing its binding.
-    /// </summary>
     private static string HashIdentityRepositorySelectionCode(string selectionCode) =>
         Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.ASCII.GetBytes(selectionCode)));
 
-    /// <summary>
-    /// Compares optional secret references by both identifier and exact version.
-    /// </summary>
     private static bool SameSecretReference(SecretRef? left, SecretRef? right) =>
         left is null
             ? right is null
             : right is not null && left.Id == right.Id && left.Version == right.Version;
 
-    /// <summary>
-    /// Checks merge idempotency-key syntax, positive pull-request number, and a defined merge method.
-    /// </summary>
     private static void ValidateRequest(PrepareSourceControlMergeIntentRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -2520,9 +2331,6 @@ internal static partial class SourceControlEndpoints
                 "source_control_merge_request_invalid", StatusCodes.Status400BadRequest);
     }
 
-    /// <summary>
-    /// Maps expected coordination, provider, configuration, workspace, argument, and JSON failures to safe HTTP responses while allowing request cancellation to propagate.
-    /// </summary>
     private static async Task<IResult> ExecuteAsync(
         Func<Task<IResult>> action,
         CancellationToken cancellationToken)
@@ -2589,9 +2397,6 @@ internal static partial class SourceControlEndpoints
         }
     }
 
-    /// <summary>
-    /// Maps workspace failure codes to safe coordination error codes and HTTP statuses.
-    /// </summary>
     internal static CoordinationException MapGitWorkspaceFailure(GitWorkspaceException exception) =>
         new("source_control_workspace_" + exception.Code.ToString().ToLowerInvariant(),
             exception.Code switch
@@ -2606,9 +2411,6 @@ internal static partial class SourceControlEndpoints
                 _ => StatusCodes.Status502BadGateway
             });
 
-    /// <summary>
-    /// Maps provider failure values to stable public error suffixes without returning provider exception details.
-    /// </summary>
     private static string ToErrorSuffix(SourceControlFailureCode code) =>
         code switch
         {
@@ -2628,15 +2430,9 @@ internal static partial class SourceControlEndpoints
         };
 }
 
-/// <summary>
-/// Optional request body for pinning a repository; the selection code is used only by the GitHub App flow.
-/// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record SourceControlPinRequest(string? SelectionCode);
 
-/// <summary>
-/// The idempotent request to prepare an approval-gated merge for a workflow step.
-/// </summary>
 internal sealed record PrepareSourceControlMergeIntentRequest(
     string IdempotencyKey,
     long ExpectedStateVersion,
@@ -2647,9 +2443,6 @@ internal sealed record PrepareSourceControlMergeIntentRequest(
     long PullRequestNumber,
     SourceControlMergeMethod Method);
 
-/// <summary>
-/// The actor, accepted selection, pinned repository, and decision version captured for one Source Control operation.
-/// </summary>
 internal sealed record SourceControlRunContext(
     CoordinationActor Actor,
     SessionIdentity Identity,
@@ -2657,33 +2450,21 @@ internal sealed record SourceControlRunContext(
     SourceControlRepositoryPin Pin,
     long DecisionStateVersion);
 
-/// <summary>
-/// The workspace identifier, base commit, and branch requested for a repository checkout.
-/// </summary>
 internal sealed record PrepareSourceControlWorkspaceRequest(
     string WorkspaceId,
     string BaseSha,
     string BranchName);
 
-/// <summary>
-/// The base commit and branch used to identify an existing workspace revision.
-/// </summary>
 internal sealed record PrepareSourceControlWorkspaceRevisionRequest(
     string BaseSha,
     string BranchName);
 
-/// <summary>
-/// The safe workspace metadata returned after a checkout is prepared.
-/// </summary>
 internal sealed record SourceControlWorkspaceView(
     string WorkspaceId,
     string WorkspacePath,
     string BaseSha,
     string BranchName);
 
-/// <summary>
-/// The branch revision and patch returned for an authorized workspace diff.
-/// </summary>
 internal sealed record SourceControlWorkspaceDiffView(
     string WorkspaceId,
     string BaseSha,
@@ -2691,9 +2472,6 @@ internal sealed record SourceControlWorkspaceDiffView(
     string Status,
     string Patch);
 
-/// <summary>
-/// The metadata and digests exposed for one admitted repository output capture.
-/// </summary>
 internal sealed record SourceControlOutputCaptureSummaryView(
     string CaptureId,
     Guid EventId,
@@ -2709,36 +2487,21 @@ internal sealed record SourceControlOutputCaptureSummaryView(
     long PatchByteLength,
     long PackageByteLength);
 
-/// <summary>
-/// A page of admitted output summaries with the next keyset cursor, when present.
-/// </summary>
 internal sealed record SourceControlOutputCapturePageView(
     ImmutableArray<SourceControlOutputCaptureSummaryView> Captures,
     DateTimeOffset? NextBeforeCapturedAt,
     string? NextBeforeCaptureId);
 
-/// <summary>
-/// An admitted output summary and its validated manifest.
-/// </summary>
 internal sealed record SourceControlOutputCaptureDetailView(
     SourceControlOutputCaptureSummaryView Capture,
     GitWorkspaceCapturedOutputManifest Manifest);
 
-/// <summary>
-/// An admitted output summary and its validated text patch.
-/// </summary>
 internal sealed record SourceControlOutputCaptureDiffView(
     SourceControlOutputCaptureSummaryView Capture,
     string Patch);
 
-/// <summary>
-/// The accepted selection used to scope and revalidate an output-capture read.
-/// </summary>
 internal sealed record AuthorizedOutputCaptureScope(AuthorizedRunSelection Selection);
 
-/// <summary>
-/// The merge intent and decision-gate information returned after an approval request is persisted.
-/// </summary>
 internal sealed record SourceControlMergeApprovalView(
     string IntentId,
     string ApprovalRequestId,
@@ -2747,16 +2510,10 @@ internal sealed record SourceControlMergeApprovalView(
     long StateVersion,
     CoordinatorGateRequest? PendingGate);
 
-/// <summary>
-/// The webhook delivery identifier and whether the relay accepted it or recognized a duplicate.
-/// </summary>
 internal sealed record SourceControlWebhookDeliveryView(
     string DeliveryId,
     string State);
 
-/// <summary>
-/// The non-secret repository and provider metadata exposed for a persisted pin.
-/// </summary>
 internal sealed record SourceControlRepositoryPinView(
     string PinId,
     string Repository,
@@ -2768,9 +2525,6 @@ internal sealed record SourceControlRepositoryPinView(
     bool IsPrivate,
     DateTimeOffset PinnedAt);
 
-/// <summary>
-/// The approval, grant, and outcome metadata exposed for a merge intent without secret values.
-/// </summary>
 internal sealed record SourceControlMergeIntentView(
     string IntentId,
     string ApprovalRequestId,
@@ -2788,17 +2542,11 @@ internal sealed record SourceControlMergeIntentView(
     string? MergeSha,
     string? LastFailureCode);
 
-/// <summary>
-/// The internal merge state, resulting commit when known, and safe failure code.
-/// </summary>
 internal sealed record SourceControlMergeExecutionResult(
     string State,
     string? MergeSha,
     string? FailureCode);
 
-/// <summary>
-/// The merge outcome returned to the caller.
-/// </summary>
 internal sealed record SourceControlMergeExecutionView(
     string IntentId,
     string State,

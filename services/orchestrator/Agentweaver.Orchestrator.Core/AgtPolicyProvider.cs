@@ -8,7 +8,6 @@ using Agentweaver.Providers;
 
 namespace Agentweaver.Orchestrator.Core;
 
-/// <summary>Capability identifiers exposed by the in-process AGT Policy adapter.</summary>
 public static class PolicyProviderCapabilities
 {
     public const string AgentActionEvaluation = "policy.agent-actions.evaluate";
@@ -17,7 +16,6 @@ public static class PolicyProviderCapabilities
         ImmutableHashSet.Create(StringComparer.Ordinal, AgentActionEvaluation);
 }
 
-/// <summary>Server-owned resource identity, policy set, and revision needed to configure AGT Policy.</summary>
 public sealed record AgtPolicyProviderOptions(
     string ResourceId,
     long ResourceGeneration,
@@ -25,7 +23,6 @@ public sealed record AgtPolicyProviderOptions(
     ImmutableArray<string> PlatformPolicyDocuments,
     int OptionsSchemaVersion = 1)
 {
-    /// <summary>Rejects incomplete identity, unsupported schema versions, and invalid platform policies.</summary>
     public void Validate()
     {
         if (!AgtPolicyProvider.IsIdentifier(ResourceId) ||
@@ -38,14 +35,12 @@ public sealed record AgtPolicyProviderOptions(
     }
 }
 
-/// <summary>One policy check with an actor/action and optional bounded context and project rules.</summary>
 public sealed record AgtPolicyEvaluationRequest(
     string ActorId,
     string ActionId,
     IReadOnlyDictionary<string, object>? Context = null,
     ImmutableArray<string> ProjectPolicyDocuments = default);
 
-/// <summary>Policy outcome plus the exact adapter and configuration revision that evaluated it.</summary>
 public sealed record AgtPolicyEvaluationResult(
     PolicyEvaluationOutcome Outcome,
     PolicyEvaluationReasonCode ReasonCode,
@@ -54,10 +49,6 @@ public sealed record AgtPolicyEvaluationResult(
     int OptionsSchemaVersion,
     string OptionsRevision);
 
-/// <summary>
-/// In-process AGT Policy adapter. Platform policies are evaluated first and must default to deny;
-/// project policies can further restrict an allow but cannot turn a platform denial into an allow.
-/// </summary>
 public sealed class AgtPolicyProvider
 {
     private sealed record DocumentDecision(bool Allowed);
@@ -82,7 +73,6 @@ public sealed class AgtPolicyProvider
         ProviderHostingPattern.InProcess,
         PolicyProviderCapabilities.All);
 
-    /// <summary>Validates options and creates the enabled provider registration advertised to the resolver.</summary>
     public ProviderRegistration CreateRegistration(AgtPolicyProviderOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -94,8 +84,6 @@ public sealed class AgtPolicyProvider
             OptionsSchemaVersion);
     }
 
-    /// <summary>Validates a selected candidate against these options and negotiates the Policy resource.</summary>
-    /// <remarks>Invalid configuration is returned as a provider failure; cancellation is propagated.</remarks>
     public Task<ProviderResult<ResourceNegotiation>> NegotiateAsync(
         ProviderCandidate candidate,
         AgtPolicyProviderOptions options,
@@ -129,7 +117,6 @@ public sealed class AgtPolicyProvider
             PolicyProviderCapabilities.All)));
     }
 
-    /// <summary>Resolves, negotiates, and pins the Policy adapter to one run, recording safe binding metadata.</summary>
     public async Task<ProviderResult<PinnedProviderBinding>> ResolveNegotiateAndPinAsync(
         ProviderResolver resolver,
         AgtPolicyProviderOptions options,
@@ -165,8 +152,6 @@ public sealed class AgtPolicyProvider
         return pinned;
     }
 
-    /// <summary>Evaluates platform policy and then optional project policy, returning denial or error without throwing.</summary>
-    /// <remarks>Context shapes and document counts are bounded; project rules only narrow platform permission.</remarks>
     public AgtPolicyEvaluationResult Evaluate(
         AgtPolicyProviderOptions options,
         AgtPolicyEvaluationRequest request)
@@ -204,13 +189,11 @@ public sealed class AgtPolicyProvider
         }
     }
 
-    /// <summary>Applies the provider's bounded identifier syntax to actors, actions, and resource references.</summary>
     internal static bool IsIdentifier(string value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= 256 &&
         value.All(character => char.IsAsciiLetterOrDigit(character) ||
             character is '.' or '_' or '-' or ':');
 
-    /// <summary>Parses bounded YAML policies and optionally enforces platform default-deny behavior.</summary>
     internal static void ValidatePolicyDocuments(
         ImmutableArray<string> documents,
         bool requireDefaultDeny)
@@ -269,7 +252,6 @@ public sealed class AgtPolicyProvider
 
     private static Dictionary<string, object> CreateContext(AgtPolicyEvaluationRequest request)
     {
-        // Actor and action identity are provider-owned inputs; callers cannot shadow them in Context.
         var context = new Dictionary<string, object>(StringComparer.Ordinal)
         {
             ["actor_id"] = request.ActorId,
@@ -292,7 +274,6 @@ public sealed class AgtPolicyProvider
 
         foreach (var document in documents)
         {
-            // Separate documents compose monotonically: any deny blocks the complete policy set.
             var engine = new PolicyEngine { ConflictStrategy = ConflictResolutionStrategy.DenyOverrides };
             engine.LoadYaml(document);
 

@@ -1,8 +1,3 @@
-/**
- * Owner-facing v1 browser application for Gateway-backed projects and runs.
- * The route tree owns navigation; AuthContext owns Broker identity, while page
- * components load and mutate project, knowledge, and run data through the Gateway.
- */
 import '@xyflow/react/dist/style.css';
 import { ReactFlow, Background, Controls, MiniMap } from '@xyflow/react';
 import '../components/shell/shell.css';
@@ -77,7 +72,6 @@ import type {
 import type { RunBinding } from './authProtocol';
 import { useRunJournal } from './useRunJournal';
 
-/** Formats Gateway and unexpected failures for display in page-level notices. */
 function errorMessage(error: unknown): string {
   if (error instanceof GatewayError) {
     const code = error.code ? ` (${error.code})` : '';
@@ -86,14 +80,12 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'The request failed unexpectedly.';
 }
 
-/** Extracts a stable API error code when an action needs code-specific handling. */
 function errorCode(error: unknown): string | undefined {
   return error instanceof GatewayError || error instanceof RepoAppBrokerError
     ? error.code
     : undefined;
 }
 
-/** Checks that a callback or response still refers to the selected project/run pair. */
 function isSameBinding(
   actual: RunBinding | null | undefined,
   expected: RunBinding | null,
@@ -102,19 +94,14 @@ function isSameBinding(
 }
 
 const RUN_TAB_VALUES = ['topology', 'chat', 'approvals', 'activity', 'selection', 'usage'] as const;
-/** URL-backed views available on the run page. */
 type RunTab = typeof RUN_TAB_VALUES[number];
-/** Maximum lifetime for a GitHub App setup popup. */
 const REPO_APP_POPUP_TIMEOUT_MS = 10 * 60 * 1000;
-/** Poll period while waiting for the popup's authorization result. */
 const REPO_APP_POPUP_POLL_INTERVAL_MS = 500;
 
-/** Narrows the URL's view query to a supported run tab. */
 function isRunTab(value: string | null): value is RunTab {
   return value !== null && RUN_TAB_VALUES.includes(value as RunTab);
 }
 
-/** Accessible error banner shared by authentication and data pages. */
 function ErrorNotice({ children, code }: { children: ReactNode; code?: string }) {
   return (
     <MessageBar intent="error" role="alert">
@@ -126,12 +113,10 @@ function ErrorNotice({ children, code }: { children: ReactNode; code?: string })
   );
 }
 
-/** Shared loading indicator for route content awaiting Gateway data. */
 function Loading({ label = 'Loading from the Gateway…' }: { label?: string }) {
   return <div className="v1-loading"><Spinner label={label} /></div>;
 }
 
-/** Shows the Broker's requested scopes and submits the signed-in user's consent choice. */
 function ConsentScreen() {
   const { consent, busy, error, decideConsent } = useAuth();
   if (!consent) return null;
@@ -160,7 +145,6 @@ function ConsentScreen() {
   );
 }
 
-/** Starts Broker authorization and explains that access tokens are not persisted in the browser. */
 function SignInScreen() {
   const { busy, error, configurationError, authorize } = useAuth();
   return (
@@ -187,7 +171,6 @@ function SignInScreen() {
   );
 }
 
-/** Renders shared navigation and the active project's route content. */
 function Shell({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -280,7 +263,6 @@ function Shell({ children }: { children: ReactNode }) {
   );
 }
 
-/** Standard page title, optional description, and aligned page actions. */
 function PageHeading({ title, description, actions }: { title: string; description?: string; actions?: ReactNode }) {
   return (
     <header className="v1-page-heading">
@@ -290,7 +272,6 @@ function PageHeading({ title, description, actions }: { title: string; descripti
   );
 }
 
-/** Standard titled content panel with an optional action area. */
 function Panel({ title, children, actions }: { title: string; children: ReactNode; actions?: ReactNode }) {
   return (
     <section className="v1-panel">
@@ -300,7 +281,6 @@ function Panel({ title, children, actions }: { title: string; children: ReactNod
   );
 }
 
-/** Lists the owner's projects and handles project creation and navigation. */
 function ProjectsPage() {
   const { session, apiCall, authorize } = useAuth();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -390,7 +370,6 @@ function ProjectsPage() {
   );
 }
 
-/** Loads and displays one project's current Gateway-backed overview. */
 function ProjectOverviewPage() {
   const { projectId = '' } = useParams();
   const { session, apiCall } = useAuth();
@@ -484,7 +463,6 @@ function ProjectOverviewPage() {
   );
 }
 
-/** Manages a project's GitHub App installation and repository connection. */
 function ProjectRepoAppConnectionPanel() {
   const [connection, setConnection] = useState<RepoAppConnectionStatus | null>(null);
   const [repositories, setRepositories] = useState<RepoAppRepository[]>([]);
@@ -744,7 +722,6 @@ function ProjectRepoAppConnectionPanel() {
   );
 }
 
-/** Edits project configuration and reports rejected or stale updates. */
 function ProjectConfigurationPage() {
   const { projectId = '' } = useParams();
   const { session, apiCall } = useAuth();
@@ -983,7 +960,6 @@ function ProjectConfigurationPage() {
   );
 }
 
-/** Validates that one returned knowledge record is bound to the requested project and agent. */
 function isKnowledgeRecordInScope(value: unknown, projectId: string, agentId: string): boolean {
   return typeof value === 'object' && value !== null &&
     (value as { projectId?: unknown }).projectId === projectId &&
@@ -992,13 +968,11 @@ function isKnowledgeRecordInScope(value: unknown, projectId: string, agentId: st
     (value as { recordId: string }).recordId.length > 0;
 }
 
-/** Rejects malformed or cross-agent knowledge lists before they reach the page state. */
 function assertKnowledgeRecordsInScope(records: unknown, projectId: string, agentId: string): asserts records is KnowledgeRecord[] {
   if (!Array.isArray(records) || records.some((record) => !isKnowledgeRecordInScope(record, projectId, agentId)))
     throw new Error('Knowledge returned records outside the exact project and agent scope.');
 }
 
-/** Verifies a mutation receipt matches the project and agent whose record was changed. */
 function assertKnowledgeMutationScope(
   result: unknown,
   projectId: string,
@@ -1017,7 +991,6 @@ function assertKnowledgeMutationScope(
   }
 }
 
-/** Ensures an imported or exported knowledge bundle cannot cross project/agent scope. */
 function assertKnowledgeTransferBundleScope(
   value: unknown,
   projectId: string,
@@ -1045,7 +1018,6 @@ function assertKnowledgeTransferBundleScope(
     throw new Error('Knowledge transfer bundle contains records or revisions outside its exact scope.');
 }
 
-/** Lists, edits, versions, and transfers knowledge records within a selected project agent. */
 function KnowledgePage() {
   const { projectId = '' } = useParams();
   const { session, apiCall, authorize } = useAuth();
@@ -1853,7 +1825,6 @@ function KnowledgePage() {
   );
 }
 
-/** Finds a session's depth by following parent links in the current session tree. */
 function sessionDepth(node: SessionTreeNode, nodes: SessionTreeNode[]): number {
   let depth = 0;
   let current = node;
@@ -1868,7 +1839,6 @@ function sessionDepth(node: SessionTreeNode, nodes: SessionTreeNode[]): number {
   return depth;
 }
 
-/** Converts the session tree and run statuses into the nodes and edges used by React Flow. */
 function createTopology(
   tree: SessionTreeSnapshot | null,
   statuses: Record<string, SessionStatusSnapshot>,
@@ -1913,7 +1883,6 @@ function createTopology(
   return { nodes, edges };
 }
 
-/** Produces a compact activity label for a Broker journal event. */
 function eventSummary(event: SessionEventEnvelope): string {
   const payload = event.payload;
   if (event.kind === 'turn') {
@@ -1943,7 +1912,6 @@ function eventSummary(event: SessionEventEnvelope): string {
   return `${event.kind} event; content is available only through the exact fields returned by the journal DTO.`;
 }
 
-/** Renders ordered session events with their compact event summaries. */
 function JournalList({ events }: { events: SessionEventEnvelope[] }) {
   if (events.length === 0) return <p className="v1-muted">No committed run events are available yet.</p>;
   return (
@@ -1959,7 +1927,6 @@ function JournalList({ events }: { events: SessionEventEnvelope[] }) {
   );
 }
 
-/** Shows the current run snapshot and status-specific blocking information. */
 function SnapshotDetail({ runStatus }: { runStatus: OwnerRunStatus }) {
   return (
     <dl className="v1-detail-list">
@@ -1973,7 +1940,6 @@ function SnapshotDetail({ runStatus }: { runStatus: OwnerRunStatus }) {
   );
 }
 
-/** Combines the run journal and status snapshot for the activity tab. */
 function ActivityView({
   runStatus,
   statuses,
@@ -2008,7 +1974,6 @@ function ActivityView({
   );
 }
 
-/** One locally queued chat message awaiting a Gateway response. */
 interface PendingMessage {
   id: string;
   from: string;
@@ -2017,7 +1982,6 @@ interface PendingMessage {
   status: string;
 }
 
-/** Renders run chat, sends owner messages, and reconciles pending messages with journal updates. */
 function ChatView({
   projectId,
   runId,
@@ -2132,10 +2096,8 @@ function ChatView({
   );
 }
 
-/** The shared authentication hook's return type, used by callback-bearing view props. */
 type AuthReturn = ReturnType<typeof useAuth>;
 
-/** Sends an answer or decision for the exact blocker shown by the owner snapshot. */
 function BlockerAction({
   projectId,
   runId,
@@ -2254,7 +2216,6 @@ function BlockerAction({
   );
 }
 
-/** Groups the currently reported session blockers with their matching decision states. */
 function ApprovalsView({
   projectId,
   runId,
@@ -2297,7 +2258,6 @@ function ApprovalsView({
   );
 }
 
-/** Shows the accepted immutable provider selection without treating it as a provisioned resource. */
 function SelectionView({ selection }: { selection: EffectiveRunSelection | null }) {
   if (!selection) return <p className="v1-muted">No accepted run-selection snapshot was returned by Projects & Config.</p>;
   return (
@@ -2331,7 +2291,6 @@ function SelectionView({ selection }: { selection: EffectiveRunSelection | null 
   );
 }
 
-/** Displays run-level and per-agent usage, preserving missing measurements as unavailable. */
 function UsageView({ usage }: { usage: UsageRunTotals | null }) {
   if (!usage) return <p className="v1-muted">No usage totals were returned by Events & Sessions.</p>;
   const measurement = (value: number | null | undefined) => value == null ? 'not reported' : String(value);
@@ -2368,12 +2327,10 @@ function UsageView({ usage }: { usage: UsageRunTotals | null }) {
   );
 }
 
-/** Builds a stable key for one installation/repository pair returned by the Broker. */
 function repoAppRepositoryKey(repository: RepoAppRepository): string {
   return `${repository.installationId}/${repository.repositoryId}`;
 }
 
-/** Loads Broker repository metadata and pins the selected opaque repository code to this run. */
 function RunGitHubAppPanel({
   projectId,
   runId,
@@ -2449,8 +2406,6 @@ function RunGitHubAppPanel({
 
   useEffect(() => {
     const onMessage = (event: MessageEvent<unknown>) => {
-      // A popup message alone is not connection proof: require same-origin and the exact tracked popup,
-      // then re-read status from Identity before allowing repository access.
       if (event.origin !== window.location.origin ||
           event.source !== popupRef.current ||
           !isRepoAppConnectedCallbackMessage(event.data))
@@ -2519,8 +2474,6 @@ function RunGitHubAppPanel({
         (candidate) => repoAppRepositoryKey(candidate) === selectedRepository,
       );
       if (!repository) throw new Error('Select a repository returned by the Identity Broker.');
-      // The Broker-issued code represents the selected installation/repository; do not send
-      // the user's repository list or a client-constructed identifier to the Gateway.
       const selection = await repoAppBrokerClient.createRepositorySelection(
         repository.installationId,
         repository.repositoryId,
@@ -2626,11 +2579,6 @@ function RunGitHubAppPanel({
   );
 }
 
-/**
- * Coordinates the owner snapshots for one project/run, then renders topology, chat,
- * approvals, activity, selection, and usage. Responses are accepted only for the
- * current run binding and generation; mutations wait for refreshed owner state.
- */
 function RunPage() {
   const { projectId = '', runId = '' } = useParams();
   const binding = useMemo(() => ({ projectId, runId }), [projectId, runId]);
@@ -2674,7 +2622,6 @@ function RunPage() {
   }, [requestedTab, searchParams, setSearchParams]);
 
   useLayoutEffect(() => {
-    // Invalidate outstanding reads synchronously when the access-token or route scope changes.
     activeSnapshotScope.current = snapshotScope;
     refreshGeneration.current += 1;
   }, [snapshotScope]);
@@ -2683,8 +2630,6 @@ function RunPage() {
     if (!authorized) return;
     const scope = snapshotScope;
     const generation = ++refreshGeneration.current;
-    // Every awaited snapshot below is discarded unless both the request generation and
-    // the exact token/project/run scope still match.
     const isCurrent = () =>
       refreshGeneration.current === generation && activeSnapshotScope.current === scope;
     setSnapshotBusy(true);
@@ -2725,7 +2670,6 @@ function RunPage() {
       return;
     }
     const currentRun = runResult.value;
-    // Fail closed if the owner returns a valid-looking snapshot for another route binding.
     if (currentRun.projectId !== projectId || currentRun.runId !== runId) {
       setRunStatus(null);
       setTree(null);
@@ -2766,7 +2710,6 @@ function RunPage() {
         binding,
       );
       if (!isCurrent()) return;
-      // The tree must agree with the root and route scope before its nodes are rendered or queried.
       if (nextTree.rootSessionId !== currentRun.rootSessionId ||
           nextTree.nodes.some((node) =>
             node.identity.projectId !== projectId || node.identity.runId !== runId)) {
@@ -2779,8 +2722,6 @@ function RunPage() {
         ), binding)));
       if (!isCurrent()) return;
       const nextStatuses: Record<string, SessionStatusSnapshot> = {};
-      // Fetch decision state only for the root and sessions with blockers; this limits reads
-      // while still allowing every actionable request to be matched to its owner state.
       const decisionSessions: string[] = [];
       sessionResults.forEach((result, index) => {
         const sessionId = nextTree.nodes[index].identity.sessionId;
@@ -2874,8 +2815,6 @@ function RunPage() {
 
   const runAction = async (node: SessionTreeNode, action: 'detach' | 'archive') => {
     if (!currentRunStatus || snapshotBusy) return;
-    // The owner uses the execution fence to reject stale lifecycle changes; each user action
-    // also receives a unique idempotency key so a transport retry cannot repeat the mutation.
     const idempotencyKey = crypto.randomUUID();
     setSnapshotMessage(null);
     try {
@@ -3000,7 +2939,6 @@ function RunPage() {
   );
 }
 
-/** Adapts the coordinator session tree into the shared interactive React Flow canvas. */
 function ReactFlowView({
   nodes,
   edges,
@@ -3031,7 +2969,6 @@ function ReactFlowView({
   );
 }
 
-/** Displays the in-window Broker sign-in exchange and redirects after a session is established. */
 function CallbackPage() {
   const { session, error, busy } = useAuth();
   if (session) return <Navigate to="/projects" replace />;
@@ -3045,7 +2982,6 @@ function CallbackPage() {
   );
 }
 
-/** Sends a validated Broker callback from the popup to its same-origin opener. */
 function IdentityPopupCallbackPage() {
   const [callback] = useState(() => {
     const callbackSearch = window.__AGENTWEAVER_IDENTITY_CALLBACK__;
@@ -3084,7 +3020,6 @@ function IdentityPopupCallbackPage() {
   );
 }
 
-/** Relays GitHub App callback status from the redirect URL to the initiating popup. */
 function RepoAppCallbackRelay() {
   const [searchParams] = useSearchParams();
   const authorizationOutcome = searchParams.get('repo_app_auth');
@@ -3108,7 +3043,6 @@ function RepoAppCallbackRelay() {
   return null;
 }
 
-/** Notifies the opener that GitHub returned; the opener must verify connection status with Identity. */
 function RepoAppPopupCallbackPage() {
   const [message] = useState(() => {
     const opener = window.opener;
@@ -3141,7 +3075,6 @@ function RepoAppPopupCallbackPage() {
   );
 }
 
-/** Accepts a same-origin Remote MCP callback and asks Identity to complete the authorization. */
 function RemoteMcpOAuthCallbackRelay() {
   const { apiCall } = useAuth();
   const [notice, setNotice] = useState<string | null>(null);
@@ -3178,7 +3111,6 @@ function RemoteMcpOAuthCallbackRelay() {
     : null;
 }
 
-/** Applies consent/sign-in gates before mounting the authenticated project and run routes. */
 function AuthenticatedRoutes() {
   const { session, consent } = useAuth();
   if (consent) return <ConsentScreen />;
@@ -3198,13 +3130,11 @@ function AuthenticatedRoutes() {
   );
 }
 
-/** Preserves older orchestration links by redirecting them to the current run route. */
 function CoordinatorRunRedirect() {
   const { projectId = '', runId = '' } = useParams();
   return <Navigate to={`/projects/${encodeURIComponent(projectId)}/runs/${encodeURIComponent(runId)}`} replace />;
 }
 
-/** Selects popup callback handling or the authenticated v1 route application. */
 export default function App() {
   const repoAppCallback = window.location.pathname === REPO_APP_CALLBACK_PATH &&
     window.__AGENTWEAVER_REPO_APP_CALLBACK__ === true;

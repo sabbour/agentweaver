@@ -1,6 +1,5 @@
 import type { AgentQueueDto, CoordinatorChildResponse, WorkPlanResponse } from './types';
 // Per-orchestration breakdown of one agent's work (camelCase mirror of AgentOrchestrationQueueDto).
-/** Work counts and sample subtask titles for one coordinator run. */
 export type AgentOrchestrationQueue = {
   runId: string;
   title: string | null;
@@ -12,7 +11,6 @@ export type AgentOrchestrationQueue = {
 };
 
 // Web model for the agent activity shown on the Flow page.
-/** Per-agent totals and the per-run queue breakdown shown on the Flow page. */
 export type AgentQueueItem = {
   agentName: string;
   active: number;

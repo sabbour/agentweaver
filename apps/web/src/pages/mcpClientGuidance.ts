@@ -1,6 +1,5 @@
 import { resolvePublicApiOrigin } from '../config';
 
-/** Supported clients with client-specific setup instructions on Account Settings. */
 export const MCP_CLIENT_IDS = [
   'copilot-cli',
   'copilot-desktop',
@@ -10,22 +9,16 @@ export const MCP_CLIENT_IDS = [
 
 export type McpClientId = (typeof MCP_CLIENT_IDS)[number];
 
-/** Public Agentweaver custom-agent definition shown beside MCP setup guidance. */
 export const AGENTWEAVER_AGENT_URL =
   `${resolvePublicApiOrigin()}/agents/agentweaver.agent.md`;
 export const CLAUDE_OAUTH_CLIENT_ID = 'agentweaver-claude';
 
-/** Text shown for one supported MCP client. */
 export interface McpClientGuidance {
   label: string;
   setup: string;
   verification: string;
 }
 
-/**
- * Client setup copy kept in one typed map so tabs and instructions cannot drift
- * from the supported client identifiers.
- */
 export const MCP_CLIENT_GUIDANCE: Record<McpClientId, McpClientGuidance> = {
   'claude-desktop': {
     label: 'Claude Desktop',

@@ -1,7 +1,3 @@
-/**
- * Runs publication tools while classifying operations and sanitizing any surfaced diagnostics.
- * Callers receive the process result on success; command failures carry a redacted diagnostic.
- */
 import { spawnSync } from 'node:child_process';
 
 function operationName(bin, args) {
@@ -87,10 +83,6 @@ function sanitizePublicationDiagnostic(stdout, stderr, args) {
   return truncateDiagnostic(diagnostic);
 }
 
-/**
- * Executes one publication command and returns its normalized result or throws a sanitized error.
- * Arguments remain separate from shell syntax, and operation-specific output is filtered before exposure.
- */
 export function runPublicationCommand(bin, args, input, spawn = spawnSync) {
   const operation = operationName(bin, args);
   const result = spawn(bin, args, {

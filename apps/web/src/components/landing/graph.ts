@@ -24,9 +24,7 @@ import type { Scenario, ScenarioNode } from './types';
  */
 
 /** Rank/node separation mirrors the Coordinator graph's compact band/gutter spacing. */
-/** Layout spacing constants used to keep the landing scenario graph readable. */
 export const LANDING_RANK_SEP = 40;
-/** Vertical separation used between peer nodes in the landing scenario graph. */
 export const LANDING_NODE_SEP = 20;
 
 /** Layout options mirroring CoordinatorRunPage's compact banded flow. */
@@ -54,7 +52,6 @@ export interface ScenarioGraph {
  * caption below the card, so their height reserves the caption room — exactly the
  * content-driven rule CoordinatorRunPage uses for its compact WorkflowNodes.
  */
-/** Estimates a node's layout dimensions from its scenario role and display content. */
 export function scenarioNodeSizeHint(node: ScenarioNode): NodeSizeHint {
   return {
     width: FIXED_NODE_W,
@@ -65,10 +62,6 @@ export function scenarioNodeSizeHint(node: ScenarioNode): NodeSizeHint {
 /**
  * Compute the deterministic banded-lane geometry for one scenario using the
  * shared production helpers. Pure — depends only on the scenario topology.
- */
-/**
- * Builds the positioned node and edge model used by the landing workflow graph.
- * The authored `Scenario` is the input; this helper is deterministic and makes no API requests.
  */
 export function buildScenarioGraph(scenario: Scenario): ScenarioGraph {
   const rawNodes: Node[] = scenario.nodes.map((node) => ({

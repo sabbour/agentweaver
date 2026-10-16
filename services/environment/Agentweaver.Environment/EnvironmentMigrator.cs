@@ -3,12 +3,10 @@ using Npgsql;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Runs explicit Environment database migrations and validates runtime schema authority.</summary>
 public static class EnvironmentMigrator
 {
     private const string LockName = "agentweaver.environment.migrate";
 
-    /// <summary>Fails startup when the schema, required tables, migration history, or migration state is incomplete.</summary>
     public static async Task VerifyMigrationsAppliedAsync(
         NpgsqlDataSource dataSource,
         DbContextOptions<EnvironmentDbContext> options,
@@ -52,10 +50,6 @@ public static class EnvironmentMigrator
                 $"The Environment database has pending migrations ({string.Join(", ", pending)}). Run the explicit Environment migration command before starting the service.");
     }
 
-    /// <summary>
-    /// Confirms the runtime database principal has only the table operations required by the service,
-    /// including append-only access for lifecycle history and catalog records.
-    /// </summary>
     public static async Task VerifyRuntimeAuthorityAsync(
         NpgsqlDataSource dataSource,
         CancellationToken cancellationToken = default)
@@ -123,8 +117,6 @@ public static class EnvironmentMigrator
                 "The Environment runtime principal must have required owner-scoped lifecycle and connection DML, append-only history/catalog/idempotency access, no schema CREATE, and no physical DELETE/TRUNCATE authority.");
     }
 
-    /// <summary>Applies pending migrations while holding a database advisory lock shared by migration instances.</summary>
-    /// <remarks>The lock is released in a finally block, including when migration execution fails.</remarks>
     public static async Task MigrateAsync(
         NpgsqlDataSource dataSource,
         DbContextOptions<EnvironmentDbContext> options,

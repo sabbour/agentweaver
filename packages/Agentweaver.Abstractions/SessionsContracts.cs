@@ -7,7 +7,6 @@ using System.Text.Json.Serialization;
 
 namespace Agentweaver.Abstractions;
 
-/// <summary>Schema and event versions owned by the Sessions journal contract.</summary>
 public static class SessionsContractVersions
 {
     public const int CurrentSchemaVersion = 1;
@@ -16,7 +15,6 @@ public static class SessionsContractVersions
     public const int PolicyEvaluationEventVersion = 2;
 }
 
-/// <summary>Discriminator for the typed payload stored in a session journal event.</summary>
 public enum SessionEventKind
 {
     Turn,
@@ -31,7 +29,6 @@ public enum SessionEventKind
     RuntimeConfiguration
 }
 
-/// <summary>Outcome of a policy decision captured as session evidence.</summary>
 public enum PolicyEvaluationOutcome
 {
     Allow,
@@ -39,7 +36,6 @@ public enum PolicyEvaluationOutcome
     Error
 }
 
-/// <summary>Reason explaining an allow, deny, or error outcome in policy evidence.</summary>
 public enum PolicyEvaluationReasonCode
 {
     Allowed,
@@ -52,18 +48,12 @@ public enum PolicyEvaluationReasonCode
     EvaluationFailed
 }
 
-/// <summary>Project/run/session identity used by the Events &amp; Sessions owner.</summary>
 public readonly record struct SessionIdentity
 {
-    /// <summary>Project that owns the session.</summary>
     public string ProjectId { get; }
-    /// <summary>Run that contains the session.</summary>
     public string RunId { get; }
-    /// <summary>Stable session identity within the run.</summary>
     public string SessionId { get; }
 
-    /// <summary>Creates an identity after validating each bounded ASCII identifier.</summary>
-    /// <exception cref="ArgumentException">Any identity component is empty, too long, or contains unsupported characters.</exception>
     [JsonConstructor]
     public SessionIdentity(string projectId, string runId, string sessionId)
     {
@@ -72,7 +62,6 @@ public readonly record struct SessionIdentity
         SessionId = ValidateIdentity(sessionId, nameof(sessionId));
     }
 
-    /// <summary>Checks one session identity component against the canonical identifier format.</summary>
     private static string ValidateIdentity(string value, string name)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 256 ||
@@ -83,22 +72,17 @@ public readonly record struct SessionIdentity
     }
 }
 
-/// <summary>Reference to an object stored outside the journal, optionally bound to private runtime material.</summary>
 public sealed record SessionObjectReference(
     [property: JsonConverter(typeof(SessionObjectKeyJsonConverter))] ObjectKey Key,
     string Purpose,
     long? ByteLength = null)
 {
-    /// <summary>Binding used for private typed material; absent for ordinary artifact references.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SessionMaterialBinding? Material { get; init; }
 }
 
-/// <summary>Serializes an opaque object key as one JSON string and validates it on read.</summary>
 public sealed class SessionObjectKeyJsonConverter : JsonConverter<ObjectKey>
 {
-    /// <summary>Reads a valid object-key string, translating key validation errors into JSON errors.</summary>
-    /// <exception cref="JsonException">The JSON value is not a valid opaque object key.</exception>
     public override ObjectKey Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         if (reader.TokenType != JsonTokenType.String || reader.GetString() is not { } value)
@@ -113,20 +97,16 @@ public sealed class SessionObjectKeyJsonConverter : JsonConverter<ObjectKey>
         }
     }
 
-    /// <summary>Writes only the opaque object-key value.</summary>
     public override void Write(Utf8JsonWriter writer, ObjectKey value, JsonSerializerOptions options) =>
         writer.WriteStringValue(value.Value);
 }
 
-/// <summary>Retention owner and minimum retention time for a stored event object.</summary>
 public sealed record SessionObjectRetention(string OwnerId, DateTimeOffset RetainUntil);
 
-/// <summary>Object reference together with the owner-controlled retention metadata.</summary>
 public sealed record StoredSessionObjectReference(
     SessionObjectReference Reference,
     SessionObjectRetention Retention);
 
-/// <summary>Typed base for all JSON-polymorphic event payloads accepted by the journal.</summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
 [JsonDerivedType(typeof(TurnSessionPayload), "turn")]
 [JsonDerivedType(typeof(ToolCallSessionPayload), "tool_call")]
@@ -140,10 +120,8 @@ public sealed record StoredSessionObjectReference(
 [JsonDerivedType(typeof(RuntimeConfigurationSessionPayload), "runtime_configuration")]
 public abstract record SessionEventPayload;
 
-/// <summary>Turn message whose potentially large content is stored by object reference.</summary>
 public sealed record TurnSessionPayload(string Role, SessionObjectReference Content) : SessionEventPayload;
 
-/// <summary>Tool-call lifecycle record with optional references to its arguments and result.</summary>
 public sealed record ToolCallSessionPayload(
     string CallId,
     string ToolName,
@@ -151,7 +129,6 @@ public sealed record ToolCallSessionPayload(
     SessionObjectReference? Arguments,
     SessionObjectReference? Result) : SessionEventPayload;
 
-/// <summary>Policy evaluation result and provider/grant revisions captured for audit.</summary>
 public sealed record PolicyEvaluationSessionPayload(
     string ActorId,
     string TenantId,
@@ -168,7 +145,6 @@ public sealed record PolicyEvaluationSessionPayload(
     int OptionsSchemaVersion,
     string OptionsRevision) : SessionEventPayload;
 
-/// <summary>Accepted coordinator decision, including optional rationale and effect IDs.</summary>
 public sealed record AcceptedDecisionSessionPayload(
     string DecisionId,
     string DecisionType,
@@ -176,25 +152,20 @@ public sealed record AcceptedDecisionSessionPayload(
     SessionObjectReference? Rationale,
     ImmutableArray<string> AcceptedEffectIds) : SessionEventPayload;
 
-/// <summary>Accepted effect identity and optional stored receipt.</summary>
 public sealed record AcceptedEffectSessionPayload(
     string EffectId,
     string EffectType,
     SessionObjectReference? Receipt) : SessionEventPayload;
 
-/// <summary>Reference to an artifact associated with a session event.</summary>
 public sealed record ArtifactReferenceSessionPayload(SessionObjectReference Artifact) : SessionEventPayload;
 
-/// <summary>Reference to an SDK cache together with its runtime version and binding identity.</summary>
 public sealed record CacheReferenceSessionPayload(
     SessionObjectReference Cache,
     string RuntimeVersion,
     string BindingId) : SessionEventPayload;
 
-/// <summary>Optional reference to the accepted runtime configuration for a session.</summary>
 public sealed record RuntimeConfigurationSessionPayload(SessionObjectReference? Configuration) : SessionEventPayload;
 
-/// <summary>Journal link to a routed message, including its thread order and purpose.</summary>
 public sealed record AddressedMessageSessionPayload(
     Guid MessageId,
     SessionIdentity Sender,
@@ -203,20 +174,14 @@ public sealed record AddressedMessageSessionPayload(
     long ThreadSequence,
     AddressedMessagePurpose Purpose) : SessionEventPayload;
 
-/// <summary>Caller-supplied append command with stable event ID and supported schema versions.</summary>
 public sealed record AppendSessionEvent(
     Guid EventId,
     int SchemaVersion,
     int EventVersion,
     SessionEventPayload Payload);
 
-/// <summary>
-/// Owner-produced journal event with assigned position, timestamp, identity, typed payload,
-/// and stored references. Callers cannot choose the persisted position or owner metadata.
-/// </summary>
 public sealed class SessionEventEnvelope
 {
-    /// <summary>Creates the envelope from validated owner-assigned journal fields.</summary>
     [JsonConstructor]
     internal SessionEventEnvelope(
         int schemaVersion,
@@ -244,23 +209,15 @@ public sealed class SessionEventEnvelope
     public SessionIdentity Identity { get; }
     public long Position { get; }
     public DateTimeOffset OccurredAt { get; }
-    /// <summary>Type discriminator derived from the concrete payload type.</summary>
     public SessionEventKind Kind => SessionEventPayloadValidation.KindOf(Payload);
     public SessionEventPayload Payload { get; }
     public ImmutableArray<StoredSessionObjectReference> ObjectReferences { get; }
 }
 
-/// <summary>Session identity, creation time, and latest run event position returned by the owner.</summary>
 public sealed record SessionRecord(SessionIdentity Identity, DateTimeOffset CreatedAt, long RunLastPosition);
 
-/// <summary>
-/// Immutable run-scoped Sessions provider binding. The resource generation and negotiated
-/// capabilities pin which provider instance serves the journal for this run.
-/// </summary>
 public sealed class SessionProviderBinding
 {
-    /// <summary>Creates a validated provider binding for one project and run.</summary>
-    /// <exception cref="ArgumentException">The provider, revisions, resource, generation, or capabilities are invalid.</exception>
     public SessionProviderBinding(
         string projectId,
         string runId,
@@ -307,7 +264,6 @@ public sealed class SessionProviderBinding
     public long ResourceGeneration { get; }
     public ImmutableHashSet<string> NegotiatedCapabilities { get; }
 
-    /// <summary>Compares all provider and resource pins, including capability-set equality.</summary>
     public bool Matches(SessionProviderBinding other) =>
         other is not null &&
         ProjectId == other.ProjectId &&
@@ -321,14 +277,11 @@ public sealed class SessionProviderBinding
         NegotiatedCapabilities.SetEquals(other.NegotiatedCapabilities);
 }
 
-/// <summary>Page-read request for events in one session, optionally continuing from a cursor.</summary>
 public sealed record SessionEventPageRequest(string SessionId, string? Cursor = null, int Limit = 100);
 
-/// <summary>Page-read request spanning a run's sessions, optionally continuing from a cursor.</summary>
 public sealed record SessionRunEventPageRequest(
     string ProjectId, string RunId, string? Cursor = null, int Limit = 100);
 
-/// <summary>Bounded subscription request for event deliveries across a run.</summary>
 public sealed record SessionRunSubscriptionRequest(
     string ProjectId,
     string RunId,
@@ -336,18 +289,13 @@ public sealed record SessionRunSubscriptionRequest(
     int MaximumEvents = 1000,
     int MaximumDurationSeconds = 300);
 
-/// <summary>Read page of journal envelopes plus the cursor and indication of remaining data.</summary>
 public sealed record SessionEventPage(
     ImmutableArray<SessionEventEnvelope> Events,
     string? NextCursor,
     bool HasMore);
 
-/// <summary>One live or replayed event paired with the cursor required to acknowledge its position.</summary>
 public sealed record SessionEventDelivery
 {
-    /// <summary>Creates a delivery only when both the event and continuation cursor are present.</summary>
-    /// <exception cref="ArgumentNullException">The event is null.</exception>
-    /// <exception cref="ArgumentException">The cursor is empty.</exception>
     public SessionEventDelivery(SessionEventEnvelope @event, string nextCursor)
     {
         ArgumentNullException.ThrowIfNull(@event);
@@ -356,30 +304,24 @@ public sealed record SessionEventDelivery
         NextCursor = nextCursor;
     }
 
-    /// <summary>Delivered journal event.</summary>
     public SessionEventEnvelope Event { get; }
-    /// <summary>Opaque continuation cursor after this event.</summary>
     public string NextCursor { get; }
 }
 
-/// <summary>Append result with the owner-issued event and idempotent duplicate indicator.</summary>
 public sealed record SessionAppendResult(SessionEventEnvelope Event, bool IsDuplicate);
 
-/// <summary>Bounded subscription request for one session.</summary>
 public sealed record SessionSubscriptionRequest(
     string SessionId,
     string? Cursor = null,
     int MaximumEvents = 1000,
     int MaximumDurationSeconds = 300);
 
-/// <summary>Request to fork a session from one explicitly selected source event and cursor.</summary>
 public sealed record SessionForkRequest(
     string TargetSessionId,
     Guid SourceEventId,
     string SourceCursor,
     string IdempotencyKey);
 
-/// <summary>Owner-issued lineage proving the source event, schema, provider binding, and cursor of a fork.</summary>
 public sealed record SessionForkLineage(
     SessionIdentity Source,
     Guid SourceEventId,
@@ -390,13 +332,11 @@ public sealed record SessionForkLineage(
     string ProviderBindingHash,
     string SourceCursor);
 
-/// <summary>Forked session and lineage, with a duplicate flag for retried commands.</summary>
 public sealed record SessionForkResult(
     SessionRecord Target,
     SessionForkLineage Lineage,
     bool IsDuplicate);
 
-/// <summary>Admission proof passed to the owner before it creates a fork from explicit event history.</summary>
 public sealed record SessionForkAdmissionReceipt(
     Guid CommandId,
     SessionIdentity Source,
@@ -409,86 +349,60 @@ public sealed record SessionForkAdmissionReceipt(
     string ActorSubject,
     string AcceptedSelectionHash);
 
-/// <summary>
-/// Durable journal owner contract for session creation, event append/replay/subscription,
-/// provider binding reads, and explicitly admitted session forks.
-/// </summary>
 public interface ISessionsJournal
 {
-    /// <summary>Creates a session for an authenticated principal and pins its run provider binding.</summary>
     Task<SessionRecord> CreateSessionAsync(
         ClaimsPrincipal principal, string sessionId, SessionProviderBinding binding,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Reads the provider binding for a session the principal may access.</summary>
     Task<SessionProviderBinding> GetProviderBindingAsync(
         ClaimsPrincipal principal, string sessionId, CancellationToken cancellationToken = default);
 
-    /// <summary>Reads the one pinned Sessions provider binding for a project run.</summary>
     Task<SessionProviderBinding> GetRunProviderBindingAsync(
         ClaimsPrincipal principal, string projectId, string runId, CancellationToken cancellationToken = default);
 
-    /// <summary>Appends a typed event, returning the prior event when the event ID is a duplicate.</summary>
     Task<SessionAppendResult> AppendAsync(
         ClaimsPrincipal principal, string sessionId, AppendSessionEvent input,
         CancellationToken cancellationToken = default);
 
-    /// <summary>
-    /// Forks from an explicit source event after the supplied admission check succeeds;
-    /// the admission callback runs as part of the owner-controlled operation.
-    /// </summary>
     Task<SessionForkResult> ForkFromExplicitEventAsync(
         ClaimsPrincipal principal, string sourceSessionId, SessionForkRequest request,
         Func<CancellationToken, Task> validateAdmission,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Reads a bounded page of one session's journal after an optional cursor.</summary>
     Task<SessionEventPage> ReplayAsync(
         ClaimsPrincipal principal, SessionEventPageRequest request,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Reads a bounded page of journal events across the requested project run.</summary>
     Task<SessionEventPage> ReplayRunAsync(
         ClaimsPrincipal principal, SessionRunEventPageRequest request,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Streams bounded event deliveries for one session from an optional cursor.</summary>
     IAsyncEnumerable<SessionEventDelivery> SubscribeAsync(
         ClaimsPrincipal principal, SessionSubscriptionRequest request,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Streams bounded event deliveries across a run from an optional cursor.</summary>
     IAsyncEnumerable<SessionEventDelivery> SubscribeRunAsync(
         ClaimsPrincipal principal, SessionRunSubscriptionRequest request,
         CancellationToken cancellationToken = default);
 }
 
-/// <summary>Signals that an append conflicts with an existing event identity or content.</summary>
 public sealed class SessionEventConflictException(string message) : Exception(message);
 
-/// <summary>Signals that the selected session fork operation is unsupported.</summary>
 public sealed class SessionForkUnsupportedException(string message) : Exception(message);
 
-/// <summary>Signals that a requested provider binding differs from the run's immutable binding.</summary>
 public sealed class SessionProviderBindingConflictException(string message) : Exception(message);
 
-/// <summary>Signals that the run-pinned provider is not available to serve the session.</summary>
 public sealed class SessionPinnedProviderUnavailableException(string message) : Exception(message);
 
-/// <summary>Signals that the authenticated principal is not authorized for the session operation.</summary>
 public sealed class SessionAccessDeniedException(string message) : Exception(message);
 
-/// <summary>Signals that the requested session does not exist within the owner's scope.</summary>
 public sealed class SessionNotFoundException(string message) : Exception(message);
 
-/// <summary>Signals an unsupported session schema or event contract version.</summary>
 public sealed class SessionContractVersionException(string message) : Exception(message);
 
-/// <summary>Maps event payloads to kinds and validates version and object-reference rules.</summary>
 public static class SessionEventPayloadValidation
 {
-    /// <summary>Returns the event kind for a supported payload type.</summary>
-    /// <exception cref="ArgumentException">The payload type is not supported.</exception>
     public static SessionEventKind KindOf(SessionEventPayload payload) => payload switch
     {
         TurnSessionPayload => SessionEventKind.Turn,
@@ -504,7 +418,6 @@ public static class SessionEventPayloadValidation
         _ => throw new ArgumentException("The session event kind is not supported.", nameof(payload))
     };
 
-    /// <summary>Returns whether an event version can represent the supplied payload type.</summary>
     public static bool SupportsEventVersion(int eventVersion, SessionEventPayload payload)
     {
         ArgumentNullException.ThrowIfNull(payload);
@@ -518,8 +431,6 @@ public static class SessionEventPayloadValidation
         };
     }
 
-    /// <summary>Validates a payload and returns its unique, validated object references.</summary>
-    /// <exception cref="ArgumentException">The payload or any referenced material violates the journal contract.</exception>
     public static ImmutableArray<SessionObjectReference> ValidateAndGetReferences(SessionEventPayload payload)
     {
         ArgumentNullException.ThrowIfNull(payload);
@@ -578,7 +489,6 @@ public static class SessionEventPayloadValidation
         }
     }
 
-    /// <summary>Checks policy identity, revisions, provider pins, and valid outcome/reason combinations.</summary>
     private static void ValidatePolicyEvaluation(PolicyEvaluationSessionPayload policy)
     {
         if (        !IsOpaqueIdentifier(policy.ActorId) ||
@@ -599,7 +509,6 @@ public static class SessionEventPayloadValidation
             throw new ArgumentException("Policy evaluation evidence is invalid.", nameof(policy));
     }
 
-    /// <summary>Allows only reason codes that are consistent with the policy outcome.</summary>
     private static bool IsValidOutcomeReason(
         PolicyEvaluationOutcome outcome,
         PolicyEvaluationReasonCode reasonCode) =>
@@ -618,7 +527,6 @@ public static class SessionEventPayloadValidation
             _ => false
         };
 
-    /// <summary>Validates optional object references and rejects repeated key/purpose pairs.</summary>
     private static ImmutableArray<SessionObjectReference> References(params SessionObjectReference?[] values)
     {
         var references = values.Where(value => value is not null)
@@ -630,7 +538,6 @@ public static class SessionEventPayloadValidation
         return references;
     }
 
-    /// <summary>Checks one reference's opaque key, purpose, byte length, and optional material binding.</summary>
     private static SessionObjectReference ValidateReference(SessionObjectReference? reference)
     {
         if (reference is null || string.IsNullOrWhiteSpace(reference.Purpose) ||
@@ -644,33 +551,28 @@ public static class SessionEventPayloadValidation
         return reference;
     }
 
-    /// <summary>Requires a string to equal one of the event's supported values.</summary>
     private static void RequireChoice(string value, params string[] choices)
     {
         if (!choices.Contains(value, StringComparer.Ordinal))
             throw new ArgumentException("The session event value is invalid.", nameof(value));
     }
 
-    /// <summary>Checks an event identifier against the supported token characters and length.</summary>
     private static void RequireToken(string value, string name)
     {
         if (!IsToken(value))
             throw new ArgumentException("A bounded session event identifier is required.", name);
     }
 
-    /// <summary>Checks the restricted opaque actor/project identifier format.</summary>
     private static bool IsOpaqueIdentifier(string? value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= 256 &&
         value.All(character => char.IsAsciiLetterOrDigit(character) ||
             character is '.' or '_' or '-' or ':');
 
-    /// <summary>Checks the supported revision identifier format.</summary>
     private static bool IsRevision(string? value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= 128 &&
         value.All(character => char.IsAsciiLetterOrDigit(character) ||
             character is '.' or '_' or '-' or ':');
 
-    /// <summary>Checks a bounded event token that may also contain path separators.</summary>
     private static bool IsToken(string? value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= 256 &&
         value.All(character => char.IsAsciiLetterOrDigit(character) ||

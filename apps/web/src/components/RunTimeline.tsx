@@ -741,11 +741,6 @@ export interface RunTimelineProps {
   flat?: boolean;
 }
 
-/**
- * Renders the event timeline for a run from events supplied by the parent.
- * Local state/effects manage timeline expansion and updates; event data and any navigation
- * callbacks are caller-owned.
- */
 export function RunTimeline({
   steps, running, emptyHint, embedded = false, flat = false,
 }: RunTimelineProps) {

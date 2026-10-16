@@ -21,18 +21,14 @@ ROLES = {"card", "surface", "accent", "shadow", "title", "subtitle", "meta", "ic
          "notation-node"}
 
 
-# Parse draw.io style tokens without altering any unknown style text.
 def style(cell):
     return dict(p.split("=", 1) for p in cell.get("style", "").split(";") if "=" in p)
 
 
-# Extract visible cell text for checks that must not silently discard semantic copy.
 def text(cell):
     return unescape(re.sub("<[^>]*>", "", cell.get("value", ""))).strip()
 
 
-# Validate semantic bindings, card geometry, labels, routes, junctions, and page density.
-# Unknown roles remain uncertain and block publication rather than being guessed.
 def analyze(raw, bindings=None):
     tree = ET.fromstring(raw)
     if tree.tag != "mxfile" or not tree.findall("diagram/mxGraphModel/root"):
@@ -297,7 +293,6 @@ def analyze(raw, bindings=None):
     return tree, {"status": "blocked" if errors or uncertain else "passed", "errors": errors, "uncertainty": uncertain}
 
 
-# Apply only token-normalization changes, then revalidate the candidate before returning it.
 def normalize(raw, bindings=None):
     tree, before = analyze(raw, bindings)
     if tree.get("approvedSnapshot"):
@@ -337,7 +332,6 @@ def normalize(raw, bindings=None):
     return result, after
 
 
-# Read XML and optional bindings, write a report, and emit normalized output only after validation.
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument("source", type=Path)

@@ -5,10 +5,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity;
 
-/// <summary>
-/// Trusted in-memory context created only after authentication, current registration checks,
-/// and owner verification of a remote tool-result proof. Its string representation is redacted.
-/// </summary>
 // The trusted host creates this after authentication and fresh Orchestrator verification.
 // It is never a request DTO. The native handler must repeat current-owner checks before IO.
 public sealed class RemoteMcpNativeCallContext
@@ -31,11 +27,6 @@ public sealed class RemoteMcpNativeCallContext
     [JsonIgnore] public DateTimeOffset ExpiresAt { get; }
     public override string ToString() => nameof(RemoteMcpNativeCallContext) + " [REDACTED]";
 
-    /// <summary>
-    /// Validates the authenticated actor, proof, registration, expiry, and owner verification
-    /// receipt before constructing a native call context.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Any actor, expiry, or proof binding is invalid.</exception>
     public static RemoteMcpNativeCallContext CreateVerified(
         ClaimsPrincipal authenticatedPrincipal,
         string validatedIssuer,
@@ -87,7 +78,6 @@ public sealed class RemoteMcpNativeCallContext
         return new(proof, currentRegistration, actor, expiresAt, timeProvider);
     }
 
-    /// <summary>Rejects use after the bearer, actor token, or registration has expired.</summary>
     public void RequireUsable()
     {
         if (!Actor.Bearer.IsUsable() || ExpiresAt <= _timeProvider.GetUtcNow() ||

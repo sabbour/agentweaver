@@ -3,7 +3,6 @@ using StackExchange.Redis;
 
 namespace Agentweaver.Knowledge;
 
-/// <summary>Negotiates Redis Memory and delegates record behavior to the shared document-provider core.</summary>
 public sealed class RedisMemoryProvider : KnowledgeDocumentMemoryProviderCore
 {
     public const string ProviderId = "redis.memory";
@@ -27,8 +26,6 @@ public sealed class RedisMemoryProvider : KnowledgeDocumentMemoryProviderCore
 
     protected override bool RequiresStoreLeaseExpiryCheck => true;
 
-    /// <summary>Validates catalog metadata and inspects Redis persistence and namespace compatibility.</summary>
-    /// <returns>The pinned Redis resource and its supported Memory capabilities.</returns>
     public override async Task<ResourceNegotiation> NegotiateAsync(
         ProviderCandidate candidate,
         CancellationToken cancellationToken = default)

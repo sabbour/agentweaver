@@ -2,7 +2,6 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** Render the Projects Config deployment profile from explicit reviewed inputs only. */
 const namespace = 'agentweaver-v1-p0';
 const service = 'projects-config';
 const tenantId = '72f988bf-86f1-41af-91ab-2d7cd011db47';
@@ -31,13 +30,11 @@ function exactFields(value, fields, location) {
   }
 }
 
-/** Require a valid positive Linux UID or GID. */
 function positiveInteger(value, location) {
   if (!Number.isSafeInteger(value) || value < 1 || value > 2147483647)
     throw new Error(`${location} must be an explicit positive integer no greater than 2147483647.`);
 }
 
-/** Require the managed Broker authority to use the approved HTTPS root hostname. */
 function issuerHost(value) {
   if (!/^https:\/\/agentweaver\.[a-z0-9.-]+\.aksapp\.io\/$/.test(value))
     throw new Error('Projects authority requires the existing managed Broker HTTPS root on port 443.');
@@ -48,10 +45,6 @@ function issuerHost(value) {
   return uri.hostname;
 }
 
-/**
- * Build the Projects Config Kubernetes resources and bounded Cilium policy.
- * The image digest, provider catalog, TLS secret, runtime mapping, and cluster target are validated first.
- */
 export function renderProjectsProfile(input) {
   exactFields(input, ['subscriptionId', 'resourceGroup', 'clusterName', 'image',
     'imageUser', 'imageGroup', 'tlsSecretName', 'providerCatalog', 'configuration'], 'Projects profile');

@@ -5,26 +5,13 @@ using OpenIddict.Abstractions;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Configures the owner used to resolve environment bootstrap profiles.
-/// </summary>
 public sealed record RuntimeRegistrationOwnerOptions(Uri EnvironmentOwnerAddress);
 
-/// <summary>
-/// Identifies the requested environment and profile for a runtime registration.
-/// </summary>
 public sealed record RegisterRuntimeRequest(string EnvironmentId, string ProfileId);
 
-/// <summary>
-/// Reads profile resolution receipts and runtime bootstrap context from the environment owner.
-/// </summary>
 internal sealed class RuntimeEnvironmentContextClient(
     HttpClient client, RuntimeRegistrationOwnerOptions options)
 {
-    /// <summary>
-    /// Resolves a source profile to the canonical profile ID for this runtime placement.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when the environment owner response is unavailable or invalid.</exception>
     public async Task<string> ResolveProfileIdAsync(
         RuntimeActorAuthorization actor,
         string projectId,
@@ -43,9 +30,6 @@ internal sealed class RuntimeEnvironmentContextClient(
         return receipt.ValidateFor(sourceProfileId).ProfileId;
     }
 
-    /// <summary>
-    /// Reads the bootstrap placement and owner context for a selected environment profile.
-    /// </summary>
     public Task<EnvironmentRuntimeBootstrapContext> ReadAsync(
         RuntimeActorAuthorization actor, string projectId, string runId, string sessionId,
         string environmentId, string profileId, CancellationToken cancellationToken) =>
@@ -57,10 +41,6 @@ internal sealed class RuntimeEnvironmentContextClient(
             actor, null, cancellationToken);
 }
 
-/// <summary>
-/// Creates and validates runtime registrations from current orchestrator, Projects, and environment-owner state.
-/// Registration writes are bounded by repeated authority derivation to close changes across the owner calls.
-/// </summary>
 internal sealed class RuntimeRegistrationOwner(
     OrchestratorOptions options,
     ProjectsRunSelectionClient projects,
@@ -74,10 +54,6 @@ internal sealed class RuntimeRegistrationOwner(
 {
     private const int MaximumRegistrationCandidatesPerSession = 64;
 
-    /// <summary>
-    /// Resolves the profile, derives a current server-side binding, and registers it after authority revalidation.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when actor, selection, placement, registration, or expiry checks fail.</exception>
     public async Task<RuntimeRegistration> RegisterAsync(
         HttpContext context, string projectId, string runId, string sessionId,
         RegisterRuntimeRequest request, CancellationToken cancellationToken)
@@ -105,10 +81,6 @@ internal sealed class RuntimeRegistrationOwner(
         return registration;
     }
 
-    /// <summary>
-    /// Revokes a registration after the environment placement has been released.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when the expected registration is invalid or stale.</exception>
     internal async Task<RuntimeRegistration> RevokeAfterPlacementReleaseAsync(
         RuntimeRegistration expected,
         CancellationToken cancellationToken)
@@ -122,10 +94,6 @@ internal sealed class RuntimeRegistrationOwner(
             expected.RuntimeInstanceId, expected.Revision, cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>
-    /// Replaces a released registration after resume, requiring the execution fence to advance exactly once.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when the released registration or replacement binding is stale.</exception>
     internal async Task<RuntimeRegistration> ReplaceAfterResumeFenceAsync(
         HttpContext context,
         RuntimeRegistration releasedRegistration,
@@ -169,18 +137,11 @@ internal sealed class RuntimeRegistrationOwner(
         return replacement;
     }
 
-    /// <summary>
-    /// Reads the current registration after rederiving and validating its owner binding.
-    /// </summary>
     public async Task<RuntimeRegistration> ReadCurrentAsync(
         HttpContext context, Guid runtimeInstanceId, CancellationToken cancellationToken) =>
         await ExecuteCurrentAsync(context, runtimeInstanceId,
             (current, _) => Task.FromResult(current), cancellationToken).ConfigureAwait(false);
 
-    /// <summary>
-    /// Finds the single current registration for a session from bounded candidate pages.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when no unique current registration can be identified or owner state changes.</exception>
     public async Task<RuntimeRegistration> ReadCurrentForSessionAsync(
         HttpContext context,
         string projectId,
@@ -253,10 +214,6 @@ internal sealed class RuntimeRegistrationOwner(
         }
     }
 
-    /// <summary>
-    /// Reads a registration under its current database lock and executes an action only after binding revalidation.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when the registration is unknown, inactive, expired, or stale.</exception>
     internal async Task<T> ExecuteCurrentAsync<T>(
         HttpContext context, Guid runtimeInstanceId,
         Func<RuntimeRegistration, CancellationToken, Task<T>> action,
@@ -280,10 +237,6 @@ internal sealed class RuntimeRegistrationOwner(
         return result;
     }
 
-    /// <summary>
-    /// Derives the runtime binding from authenticated caller, owner context, current placement, and accepted selection.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when caller credentials or owner/placement evidence is invalid.</exception>
     private async Task<DerivedBinding> DeriveCurrentBindingAsync(
         HttpContext context, string projectId, string runId, string sessionId,
         RegisterRuntimeRequest request, CancellationToken cancellationToken,
@@ -353,9 +306,6 @@ internal sealed class RuntimeRegistrationOwner(
         }
     }
 
-    /// <summary>
-    /// Resolves the environment profile using a short-lived credential derived from the authenticated request.
-    /// </summary>
     private async Task<string> ResolveProfileIdAsync(
         HttpContext context,
         string projectId,
@@ -384,19 +334,12 @@ internal sealed class RuntimeRegistrationOwner(
         }
     }
 
-    /// <summary>
-    /// Reads the current orchestrator owner context for a session.
-    /// </summary>
     private Task<RuntimeOwnerContext> ReadOwnerAsync(
         HttpContext context, string projectId, string runId, string sessionId, CancellationToken cancellationToken) =>
         CoordinationEndpoints.ReadRuntimeOwnerContextCoreAsync(
             projectId, runId, sessionId, context, options, projects, sessions, decisions,
             selectionContexts, checkpoints, cancellationToken);
 
-    /// <summary>
-    /// Validates the environment owner's bootstrap response and placement against the requested owner context.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when placement identity, lease, fencing, resource, or endpoint evidence is invalid.</exception>
     private void ValidatePlacement(
         RuntimeOwnerContext owner, RegisterRuntimeRequest request, EnvironmentRuntimeBootstrapContext placement)
     {
@@ -419,18 +362,12 @@ internal sealed class RuntimeRegistrationOwner(
         placement.Placement.Validate();
     }
 
-    /// <summary>
-    /// Rejects authority drift between the initially derived binding and its later revalidation.
-    /// </summary>
     private static void RequireSame(DerivedBinding expected, DerivedBinding current)
     {
         if (current != expected)
             throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
 
-    /// <summary>
-    /// Requires a replacement registration to preserve identity and selection while advancing the execution fence once.
-    /// </summary>
     private static void RequireNextFenceReplacement(
         RuntimeRegistration released,
         RuntimeBinding replacement,
@@ -448,9 +385,6 @@ internal sealed class RuntimeRegistrationOwner(
             throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
 
-    /// <summary>
-    /// Requires a stored registration to match its newly derived binding and expiry.
-    /// </summary>
     private void RequireRegistrationMatches(RuntimeRegistration registration, DerivedBinding derived)
     {
         RequireActive(registration);
@@ -458,10 +392,6 @@ internal sealed class RuntimeRegistrationOwner(
             throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
 
-    /// <summary>
-    /// Validates a registration and requires it to remain active and unexpired.
-    /// </summary>
-    /// <exception cref="RuntimeAuthorizationException">Thrown when the registration is invalid, inactive, or expired.</exception>
     private void RequireActive(RuntimeRegistration registration)
     {
         RuntimeContractValidation.Validate(registration);
@@ -470,14 +400,8 @@ internal sealed class RuntimeRegistrationOwner(
             throw new RuntimeAuthorizationException("runtime_registration_unavailable");
     }
 
-    /// <summary>
-    /// Identifies stale or expired registration candidates that can be skipped during bounded lookup.
-    /// </summary>
     private static bool IsStaleCandidate(RuntimeAuthorizationException exception) =>
         exception.Code is "runtime_registration_stale" or "runtime_registration_unavailable";
 
-    /// <summary>
-    /// Holds a server-derived runtime binding and its placement-bound expiration time.
-    /// </summary>
     private sealed record DerivedBinding(RuntimeBinding Binding, DateTimeOffset ExpiresAt);
 }

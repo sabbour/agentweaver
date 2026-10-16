@@ -6,13 +6,11 @@ using System.Text.RegularExpressions;
 
 namespace Agentweaver.Abstractions;
 
-/// <summary>One immutable runtime resource file with normalized relative path, bytes, and digest.</summary>
 public sealed record SkillRuntimeContentResourceV1(
     string RelativePath,
     ImmutableArray<byte> Content,
     string Sha256);
 
-/// <summary>One accepted skill revision with instructions, resources, and a content digest.</summary>
 public sealed record SkillRuntimeContentV1(
     string SkillId,
     long Revision,
@@ -22,10 +20,6 @@ public sealed record SkillRuntimeContentV1(
     string ContentDigest,
     ImmutableArray<SkillRuntimeContentResourceV1> Resources);
 
-/// <summary>
-/// Owner-produced content projection bound to one runtime registration, project revision,
-/// run, session, agent, execution fence, and accepted selection.
-/// </summary>
 public sealed record SkillRuntimeContentProjectionV1(
     int ContractVersion,
     Guid RuntimeInstanceId,
@@ -40,38 +34,22 @@ public sealed record SkillRuntimeContentProjectionV1(
     string AcceptedSelectionHash,
     ImmutableArray<SkillRuntimeContentV1> Skills);
 
-/// <summary>Defines size limits, canonical content hashing, and validation for runtime skill projections.</summary>
 public static class SkillRuntimeContentContract
 {
-    /// <summary>Projection contract version accepted by the runtime.</summary>
     public const int CurrentVersion = 1;
-    /// <summary>Maximum display-name length for one skill.</summary>
     public const int MaxNameLength = 64;
-    /// <summary>Maximum description length for one skill.</summary>
     public const int MaxDescriptionLength = 1024;
-    /// <summary>Maximum UTF-8 byte count for skill instructions.</summary>
     public const int MaxInstructionsBytes = 256 * 1024;
-    /// <summary>Maximum aggregate Markdown bytes for one skill.</summary>
     public const int MaxSkillMarkdownBytes = 512 * 1024;
-    /// <summary>Maximum byte count for one resource file.</summary>
     public const int MaxResourceBytes = 256 * 1024;
-    /// <summary>Maximum aggregate resource bytes for one skill.</summary>
     public const int MaxTotalResourceBytes = 1024 * 1024;
-    /// <summary>Maximum resource-file count per skill.</summary>
     public const int MaxResourceCount = 64;
-    /// <summary>Maximum skill count in one runtime projection.</summary>
     public const int MaxSkillCount = 32;
-    /// <summary>Maximum encoded content size of one complete projection.</summary>
     public const int MaxProjectionBytes = 2 * 1024 * 1024;
     private const int MaxResourcePathLength = 1024;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private static readonly byte[] DigestDomain = "agentweaver.skill-content.v1"u8.ToArray();
 
-    /// <summary>
-    /// Computes a domain-separated, length-framed digest over skill text and resources
-    /// sorted by relative path, so concatenation ambiguity and input ordering cannot alter identity.
-    /// </summary>
-    /// <exception cref="ArgumentException">The resource inventory is uninitialized or UTF-8 text is invalid.</exception>
     public static string ComputeContentDigest(
         string name,
         string description,
@@ -100,8 +78,6 @@ public static class SkillRuntimeContentContract
         return Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
     }
 
-    /// <summary>Validates the projection binding, unique skill IDs, safe resources, limits, and exact digests.</summary>
-    /// <exception cref="ArgumentException">The projection has invalid pins, duplicate IDs/paths, unsafe paths, or mismatched content.</exception>
     public static void ValidateProjection(SkillRuntimeContentProjectionV1 projection)
     {
         ArgumentNullException.ThrowIfNull(projection);
@@ -172,8 +148,6 @@ public static class SkillRuntimeContentContract
         }
     }
 
-    /// <summary>Normalizes a safe relative resource path and rejects traversal or platform-specific device names.</summary>
-    /// <exception cref="ArgumentException">The path is rooted, malformed, too long, or contains an unsafe segment.</exception>
     public static string NormalizeResourcePath(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw))
@@ -200,7 +174,6 @@ public static class SkillRuntimeContentContract
         return string.Join('/', segments);
     }
 
-    /// <summary>Adds a length prefix and bytes so each part has an unambiguous digest boundary.</summary>
     private static void AppendFrame(IncrementalHash hash, ReadOnlySpan<byte> bytes)
     {
         Span<byte> length = stackalloc byte[sizeof(int)];
@@ -209,7 +182,6 @@ public static class SkillRuntimeContentContract
         hash.AppendData(bytes);
     }
 
-    /// <summary>Checks the restricted bounded identifier format used by the runtime projection.</summary>
     private static void RequireIdentifier(string? value, string name)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 256 ||
@@ -218,7 +190,6 @@ public static class SkillRuntimeContentContract
             throw new ArgumentException("A valid skill-content identifier is required.", name);
     }
 
-    /// <summary>Requires a 64-character lowercase SHA-256 value.</summary>
     private static void RequireHash(string? value, string name)
     {
         if (value is not { Length: 64 } ||
@@ -226,7 +197,6 @@ public static class SkillRuntimeContentContract
             throw new ArgumentException("A lowercase SHA-256 digest is required.", name);
     }
 
-    /// <summary>Rejects reserved Windows device names so a resource path is portable across hosts.</summary>
     private static bool IsWindowsDeviceName(string segment)
     {
         var stem = segment.Split('.', 2)[0];

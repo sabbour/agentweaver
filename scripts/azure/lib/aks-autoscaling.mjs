@@ -1,4 +1,3 @@
-/** Reads and validates the fixed P0 system node-pool autoscaling contract from Azure. */
 export function assertAutoscalerBounds(values) {
   const minCount = values?.nodePoolMinCount?.value;
   const maxCount = values?.nodePoolMaxCount?.value;
@@ -8,10 +7,6 @@ export function assertAutoscalerBounds(values) {
   return { minCount, maxCount };
 }
 
-/**
- * Reads the system node pool and projects only fields used by deployment checks.
- * Throws when Azure cannot provide the pool or when required autoscaling bounds are absent.
- */
 export function readSystemNodePool(config, execAz, { requireAutoscaling = false } = {}) {
   const result = execAz(['aks', 'nodepool', 'show', '--resource-group', config.resourceGroup,
     '--cluster-name', `${config.resourceGroup}-aks`, '--name', 'system', '-o', 'json'], {

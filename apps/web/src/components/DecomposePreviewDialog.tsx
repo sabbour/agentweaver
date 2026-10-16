@@ -83,11 +83,6 @@ export interface DecomposePreviewDialogProps {
   onRefreshProvider?: () => void;
 }
 
-/**
- * Renders a preview dialog for decomposed work before the caller starts it.
- * The caller supplies the proposed work and action callbacks; this component displays that data
- * without fetching it or changing the plan itself.
- */
 export function DecomposePreviewDialog({
   isOpen,
   onClose,

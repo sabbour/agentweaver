@@ -5,10 +5,6 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Providers.Sandbox.AgentSandbox;
 
-/// <summary>
-/// Validated configuration for the Kubernetes-backed Agent Sandbox adapter.
-/// It pins the runtime image and Kubernetes resources used by provision and recovery calls.
-/// </summary>
 public sealed record AgentSandboxOptions(
     int OptionsSchemaVersion,
     string OptionsRevision,
@@ -25,14 +21,11 @@ public sealed record AgentSandboxOptions(
     int PollIntervalMilliseconds,
     AgentSandboxStartupBudgets StartupBudgets)
 {
-    /// <summary>The options contract version accepted by this adapter.</summary>
     public const int CurrentOptionsSchemaVersion = 2;
 
-    /// <summary>Optional immutable configuration for the AgentHost workload profile.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AgentSandboxAgentHostProfile? AgentHost { get; init; }
 
-    /// <summary>Optional accepted BuildTest profile that enables the command-Pod capability.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SandboxBuildTestAcceptedExecutionOptions? AcceptedBuildTestProfile { get; init; }
 
@@ -46,12 +39,6 @@ public sealed record AgentSandboxOptions(
         "^.+@sha256:[a-f0-9]{64}$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
-    /// <summary>
-    /// Checks that all configured Kubernetes names, resource limits, image pins, and nested profiles are supported.
-    /// </summary>
-    /// <returns>This options instance when valid.</returns>
-    /// <exception cref="ArgumentException">A schema version, identifier, image, or quantity is invalid.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">A size or timeout is outside its supported range.</exception>
     public AgentSandboxOptions Validate()
     {
         if (OptionsSchemaVersion != CurrentOptionsSchemaVersion)
@@ -96,13 +83,10 @@ public sealed record AgentSandboxOptions(
         return this;
     }
 
-    /// <summary>Names the immutable Kubernetes configuration and TLS secret mounted by AgentHost.</summary>
     public sealed record AgentSandboxAgentHostProfile(string ConfigurationMapName, string TlsSecretName);
 
-    /// <summary>Gets the digest portion of the required OCI image reference.</summary>
     public string ContainerImageDigest => ContainerImage[(ContainerImage.LastIndexOf("@sha256:", StringComparison.Ordinal) + 1)..];
 
-    /// <summary>Validates the bounded opaque revision string used to pin provider configuration.</summary>
     private static void ValidateOpaque(string value, string name)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 128 ||
@@ -111,7 +95,6 @@ public sealed record AgentSandboxOptions(
             throw new ArgumentException("A valid opaque provider options revision is required.", name);
     }
 
-    /// <summary>Checks the restricted syntax accepted for a workspace Storage provider identifier.</summary>
     private static void ValidateProviderId(string value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 128 ||
@@ -121,7 +104,6 @@ public sealed record AgentSandboxOptions(
                 nameof(WorkspaceStorageProviderId));
     }
 
-    /// <summary>Checks that a value is a Kubernetes DNS subdomain.</summary>
     private static void ValidateDnsSubdomain(string value, string name)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 253 ||
@@ -135,9 +117,6 @@ public sealed record AgentSandboxOptions(
     }
 }
 
-/// <summary>
-/// Per-phase and total startup deadlines used when evaluating Sandbox startup progress.
-/// </summary>
 public sealed record AgentSandboxStartupBudgets(
     int ScheduledSeconds,
     int ImageReadySeconds,
@@ -146,9 +125,6 @@ public sealed record AgentSandboxStartupBudgets(
     int ReadySeconds,
     int TotalSeconds)
 {
-    /// <summary>Rejects missing or non-positive phase deadlines.</summary>
-    /// <returns>This budget set when every deadline is positive.</returns>
-    /// <exception cref="ArgumentOutOfRangeException">Any phase or total deadline is not positive.</exception>
     public AgentSandboxStartupBudgets Validate()
     {
         if (ScheduledSeconds <= 0 || ImageReadySeconds <= 0 || StartedSeconds <= 0 ||
@@ -158,10 +134,6 @@ public sealed record AgentSandboxStartupBudgets(
         return this;
     }
 
-    /// <summary>Returns the deadline assigned to a startup phase.</summary>
-    /// <param name="phase">The phase whose budget is requested.</param>
-    /// <returns>The configured deadline in seconds.</returns>
-    /// <exception cref="ArgumentOutOfRangeException">The phase is not supported.</exception>
     public int For(SandboxStartupPhase phase) => phase switch
     {
         SandboxStartupPhase.Scheduled => ScheduledSeconds,
@@ -172,17 +144,13 @@ public sealed record AgentSandboxStartupBudgets(
         _ => throw new ArgumentOutOfRangeException(nameof(phase))
     };
 
-    /// <summary>Copies these values into the provider-neutral startup budget contract.</summary>
     public SandboxStartupTimeBudgets ToContract() => new(
         ScheduledSeconds, ImageReadySeconds, StartedSeconds, ConfiguredSeconds, ReadySeconds, TotalSeconds);
 }
 
-/// <summary>Describes the Agent Sandbox provider identity and constructs its registration contract.</summary>
 public static class AgentSandboxProviderMetadata
 {
-    /// <summary>The stable identifier used to select this Sandbox provider.</summary>
     public const string ProviderId = "agent-sandbox";
-    /// <summary>The adapter version advertised to provider selection.</summary>
     public static Version AdapterVersion { get; } = new(1, 0, 0);
 
     private static readonly ImmutableHashSet<string> Capabilities =
@@ -191,12 +159,6 @@ public static class AgentSandboxProviderMetadata
             SandboxCapabilities.VmIsolation,
             SandboxCapabilities.WorkspacePersistentVolumeClaim);
 
-    /// <summary>
-    /// Creates a registration after validating the options and deriving supported capabilities.
-    /// </summary>
-    /// <param name="options">Configuration revision to advertise.</param>
-    /// <param name="enabled">Whether callers may select this registration.</param>
-    /// <returns>The Sandbox provider registration.</returns>
     public static ProviderRegistration CreateRegistration(
         AgentSandboxOptions options,
         bool enabled = true)

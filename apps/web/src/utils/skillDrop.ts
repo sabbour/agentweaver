@@ -25,7 +25,6 @@ export interface FsEntry {
   createReader?: () => FsDirectoryReader;
 }
 
-/** Minimal directory-reader shape used to enumerate FileSystemEntry children. */
 export interface FsDirectoryReader {
   readEntries: (success: (entries: FsEntry[]) => void, error?: (e: unknown) => void) => void;
 }

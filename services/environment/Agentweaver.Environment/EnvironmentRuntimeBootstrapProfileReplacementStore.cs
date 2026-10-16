@@ -8,26 +8,19 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Environment;
 
-/// <summary>Persists and retrieves owner-scoped replacements for runtime bootstrap profiles.</summary>
 public interface IEnvironmentRuntimeBootstrapProfileReplacementStore
 {
-    /// <summary>Reads a replacement by Environment owner and profile identifier.</summary>
     Task<EnvironmentRuntimeBootstrapProfileReplacement?> ReadAsync(
         EnvironmentOwnerIdentity owner,
         string profileId,
         CancellationToken cancellationToken);
 
-    /// <summary>
-    /// Appends a replacement once, then rechecks authority and lease expiry before committing it.
-    /// An existing different value is treated as a conflict.
-    /// </summary>
     Task<EnvironmentRuntimeBootstrapProfileReplacement> AppendAsync(
         EnvironmentRuntimeBootstrapProfileReplacement replacement,
         Func<CancellationToken, Task> requireCurrentAuthority,
         CancellationToken cancellationToken);
 }
 
-/// <summary>PostgreSQL implementation that stores immutable runtime bootstrap profile replacements.</summary>
 public sealed class EnvironmentRuntimeBootstrapProfileReplacementStore(
     NpgsqlDataSource dataSource,
     TimeProvider timeProvider) : IEnvironmentRuntimeBootstrapProfileReplacementStore
@@ -39,7 +32,6 @@ public sealed class EnvironmentRuntimeBootstrapProfileReplacementStore(
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
-    /// <summary>Reads and validates the saved owner/profile replacement, if one exists.</summary>
     public async Task<EnvironmentRuntimeBootstrapProfileReplacement?> ReadAsync(
         EnvironmentOwnerIdentity owner,
         string profileId,
@@ -63,10 +55,6 @@ public sealed class EnvironmentRuntimeBootstrapProfileReplacementStore(
         return json is null ? null : Deserialize(json);
     }
 
-    /// <summary>
-    /// Inserts the replacement if absent and verifies the canonical stored value before committing.
-    /// Stale leases, oversized payloads, changed authority, and conflicting values are rejected.
-    /// </summary>
     public async Task<EnvironmentRuntimeBootstrapProfileReplacement> AppendAsync(
         EnvironmentRuntimeBootstrapProfileReplacement replacement,
         Func<CancellationToken, Task> requireCurrentAuthority,
@@ -123,7 +111,6 @@ public sealed class EnvironmentRuntimeBootstrapProfileReplacementStore(
         return Deserialize(savedJson);
     }
 
-    /// <summary>Reads the replacement JSON inside the append transaction for compare-before-commit checks.</summary>
     private static async Task<string?> ReadJsonAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -143,7 +130,6 @@ public sealed class EnvironmentRuntimeBootstrapProfileReplacementStore(
         return (string?)await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    /// <summary>Deserializes and validates saved data, mapping malformed rows to a fail-closed authorization error.</summary>
     private static EnvironmentRuntimeBootstrapProfileReplacement Deserialize(string json)
     {
         try
@@ -157,7 +143,6 @@ public sealed class EnvironmentRuntimeBootstrapProfileReplacementStore(
         }
     }
 
-    /// <summary>Adds all four Environment owner keys to a parameterized database command.</summary>
     private static void AddOwner(NpgsqlCommand command, EnvironmentOwnerIdentity owner)
     {
         command.Parameters.AddWithValue("tenant_id", NpgsqlDbType.Text, owner.TenantId);
@@ -166,7 +151,6 @@ public sealed class EnvironmentRuntimeBootstrapProfileReplacementStore(
         command.Parameters.AddWithValue("environment_id", NpgsqlDbType.Text, owner.EnvironmentId);
     }
 
-    /// <summary>Compares two serialized representations as JSON values rather than by formatting.</summary>
     private static bool SameJson(string left, string right) =>
         JsonElement.DeepEquals(JsonSerializer.Deserialize<JsonElement>(left), JsonSerializer.Deserialize<JsonElement>(right));
 }

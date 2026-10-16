@@ -3,7 +3,6 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.AgentRuntime;
 
-/// <summary>Reads skill content from the owner and verifies every projection binding field.</summary>
 public sealed class RuntimeSkillContentHttpClient(
     HttpClient client,
     Uri orchestratorAddress,
@@ -11,11 +10,6 @@ public sealed class RuntimeSkillContentHttpClient(
 {
     private readonly Uri _address = RuntimeOwnerHttpTransport.RequireOwnerAddress(orchestratorAddress);
 
-    /// <summary>Fetches the skill projection for the current registration from the Orchestrator owner.</summary>
-    /// <param name="registration">The exact runtime registration used to scope the request.</param>
-    /// <param name="cancellationToken">Cancels the owner request.</param>
-    /// <returns>The validated content projection.</returns>
-    /// <exception cref="RuntimeAuthorizationException">The returned content does not match the registration.</exception>
     internal async Task<SkillRuntimeContentProjectionV1> ReadAsync(
         RuntimeRegistration registration,
         CancellationToken cancellationToken)
@@ -34,7 +28,6 @@ public sealed class RuntimeSkillContentHttpClient(
         return projection;
     }
 
-    /// <summary>Rejects malformed projections and content from another revision or execution fence.</summary>
     internal static void ValidateForRegistration(
         SkillRuntimeContentProjectionV1 projection,
         RuntimeRegistration registration)

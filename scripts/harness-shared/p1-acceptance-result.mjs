@@ -1,8 +1,6 @@
 import { appendRedactedJsonLine } from './safe-jsonl.mjs';
 import { redact } from './redaction.mjs';
 
-/** Construct and persist the final required-probe result for an API, MCP, or UI P1 run. */
-/** Probe names that require native owner evidence beyond the admitted API, MCP, and UI harnesses. */
 const REQUIRED_NATIVE_PROBES = [
   {
     id: 'storage-owner-isolation',
@@ -44,7 +42,6 @@ const NATIVE_ENVELOPES = new Map([
 ]);
 const ACCEPTED_SURFACE_STATUSES = new Set(['passed', 'failed', 'blocked']);
 
-/** Validate native probe envelopes and fill every missing required probe as blocked. */
 function nativeProbeRows(envelopes) {
   if (!Array.isArray(envelopes)) throw new Error('Native P1 probe results must be an array of exact owner envelopes.');
   if (envelopes.length === 0) {
@@ -99,10 +96,6 @@ function nativeProbeRows(envelopes) {
     ?? { ...required, required: true, status: 'blocked' });
 }
 
-/**
- * Combine surface execution with source-bound and native probe results into a redacted P1 receipt.
- * Required failed probes fail the overall result; missing or blocked probes prevent a pass.
- */
 export function createP1AcceptanceResult({
   surface,
   surfaceStatus,
@@ -154,7 +147,6 @@ export function createP1AcceptanceResult({
   });
 }
 
-/** Persist transcripts, probe dispositions, and the final result as redacted JSON Lines records. */
 export async function persistP1AcceptanceResult(file, result, transcripts = []) {
   if (typeof file !== 'string' || !file || result?.kind !== 'p1-acceptance-result') {
     throw new Error('A durable evidence path and P1 result are required.');

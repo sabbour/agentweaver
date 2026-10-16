@@ -3,18 +3,8 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Orchestrator;
 
-/// <summary>
-/// Registers the runtime usage broker and maps authenticated source, observation, native-turn, and accounting routes.
-/// </summary>
 public static class RuntimeUsageSourceEndpoints
 {
-    /// <summary>
-    /// Registers usage-source services when the Broker owner is configured alongside runtime registration.
-    /// </summary>
-    /// <param name="services">The service collection receiving usage stores and clients.</param>
-    /// <param name="configuration">Configuration containing Broker and Environment owner addresses.</param>
-    /// <returns><see langword="true"/> when native usage support is enabled, or <see langword="false"/> when unconfigured.</returns>
-    /// <exception cref="InvalidOperationException">Thrown when the Broker or runtime-registration configuration is invalid.</exception>
     public static bool AddRuntimeUsageSource(
         this IServiceCollection services, IConfiguration configuration)
     {
@@ -32,11 +22,6 @@ public static class RuntimeUsageSourceEndpoints
         return true;
     }
 
-    /// <summary>
-    /// Maps protected runtime usage APIs for source receipts, native turns, credit guards, and dispatch completions.
-    /// </summary>
-    /// <param name="endpoints">The endpoint route builder.</param>
-    /// <returns>The same route builder after endpoint registration.</returns>
     public static IEndpointRouteBuilder MapRuntimeUsageSourceEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapGet("/internal/runtime/sources/{runtimeInstanceId:guid}",
@@ -122,13 +107,6 @@ public static class RuntimeUsageSourceEndpoints
         return endpoints;
     }
 
-    /// <summary>
-    /// Converts owner results and expected runtime failures into no-store HTTP responses.
-    /// </summary>
-    /// <typeparam name="T">The successful response type.</typeparam>
-    /// <param name="context">The current request context used to set response headers and distinguish client cancellation.</param>
-    /// <param name="action">The owner operation to execute.</param>
-    /// <returns>An OK response or a structured error response with a mapped HTTP status.</returns>
     private static async Task<IResult> ExecuteAsync<T>(HttpContext context, Func<Task<T>> action)
     {
         context.Response.Headers.CacheControl = "no-store";

@@ -1,12 +1,7 @@
-/** Validates custom DNS zone resource IDs used to configure Azure App Routing. */
 const subscriptionIdPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const resourceGroupPattern = /^[a-z0-9_.()-]{1,90}$/i;
 const dnsLabelPattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
 
-/**
- * Parses one full public or private DNS zone resource ID and returns its normalized components.
- * Invalid IDs, unsafe zone names, and private-link zones are rejected with an error.
- */
 export function parseAppRoutingDnsZoneResourceId(resourceId) {
   const match = typeof resourceId === 'string' && resourceId.match(
     /^\/subscriptions\/([^/]+)\/resourceGroups\/([^/]+)\/providers\/Microsoft\.Network\/(dnsZones|privateDnsZones)\/([^/]+)$/i,
@@ -34,10 +29,6 @@ export function parseAppRoutingDnsZoneResourceId(resourceId) {
   };
 }
 
-/**
- * Validates a bounded list of DNS zones against the authorized subscription and returns parsed zones.
- * Undefined input means no custom zones; malformed, duplicate, or cross-subscription IDs throw.
- */
 export function validateAppRoutingDnsZoneResourceIds(resourceIds, subscriptionId) {
   if (resourceIds === undefined) return [];
   if (!Array.isArray(resourceIds)) throw new Error('App Routing DNS zone IDs must be an array.');

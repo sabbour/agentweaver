@@ -135,7 +135,6 @@ const CoordPanelContext = createContext<((nodeId: string, opts?: { closeTopology
 // Topology status helpers
 // ---------------------------------------------------------------------------
 
-/** Counts pending approvals by the run that owns each approval request. */
 function pendingApprovalsByRun(approvals: PendingApprovalDto[]): Map<string, number> {
   const counts = new Map<string, number>();
   for (const approval of approvals) {
@@ -145,7 +144,6 @@ function pendingApprovalsByRun(approvals: PendingApprovalDto[]): Map<string, num
   return counts;
 }
 
-/** Converts topology lifecycle values into the generic graph card status vocabulary. */
 function topoStatusToStepStatus(status: string): StepStatus {
   switch (status) {
     case 'revising':
@@ -171,7 +169,7 @@ function topoStatusToStepStatus(status: string): StepStatus {
   }
 }
 
-/** Supplies readable card copy for topology statuses, including review and capacity waits. */
+
 function topoStatusToLabel(status: string): string {
   switch (status) {
     case 'revising':        return 'Changes requested — revising';
@@ -213,10 +211,6 @@ function resolveSubtaskTopoNode(
 // Orchestration lifecycle derivation (issues 3 & 4)
 // ---------------------------------------------------------------------------
 
-/**
- * Canonical orchestration phases used to normalize run fields and assembly events.
- * Keeping a local vocabulary lets the page handle older payloads that omit newer fields.
- */
 // Canonical orchestration phases. Backend strings (coordinator_status / work-plan
 // status) and assembly_* events are normalized into these so the UI degrades
 // gracefully whether or not Tank's in-flight fields are present.
@@ -241,7 +235,6 @@ type OrchPhase =
   | 'declined'
   | 'unknown';
 
-/** Derived phase plus the event or persisted field that currently explains it. */
 interface OrchState {
   phase: OrchPhase;
   reason?: string;
@@ -255,7 +248,6 @@ interface OrchState {
   updatedAt?: string;
 }
 
-/** Coarse lifecycle category used for the run header, status rail, and available actions. */
 type CoordinatorRunBucket =
   | 'pending'
   | 'running'
@@ -265,7 +257,6 @@ type CoordinatorRunBucket =
   | 'completed'
   | 'unknown';
 
-/** Complete display/action state after run status, phase, and loading errors are reconciled. */
 interface CoordinatorRunViewState {
   bucket: CoordinatorRunBucket;
   label: string;
@@ -277,7 +268,6 @@ interface CoordinatorRunViewState {
   canToggleAutomation: boolean;
 }
 
-/** Formats a run timestamp while keeping missing or invalid values explicit. */
 function formatRunStartedAt(timestamp: number | undefined): string {
   if (timestamp === undefined) return 'Start time unavailable';
   const value = new Date(timestamp);
@@ -312,7 +302,6 @@ const ASSEMBLY_EVENT_PHASE: Record<string, { phase: OrchPhase; priority?: number
   'coordinator.assembly_declined': { phase: 'declined', priority: 3 },
 };
 
-/** Maps planning events to the orchestration phase they establish. */
 function planningPhaseForEvent(type: string): OrchPhase | undefined {
   switch (type) {
     case 'coordinator.outcome_spec.confirmed':
@@ -325,7 +314,6 @@ function planningPhaseForEvent(type: string): OrchPhase | undefined {
   }
 }
 
-/** Normalizes backend phase/status spellings into the page's stable lifecycle enum. */
 function normalizePhase(raw: string | undefined | null): OrchPhase {
   if (!raw) return 'unknown';
   const k = raw.toLowerCase().replace(/[^a-z]/g, '');
@@ -347,7 +335,6 @@ function normalizePhase(raw: string | undefined | null): OrchPhase {
   return 'unknown';
 }
 
-/** Identifies phases in which the coordinator is still doing or awaiting work. */
 function isActiveOrchPhase(phase: OrchPhase): boolean {
   return phase === 'drafting_outcome'
     || phase === 'dispatching'
@@ -360,7 +347,6 @@ function isActiveOrchPhase(phase: OrchPhase): boolean {
     || phase === 'scribe';
 }
 
-/** Identifies completed or parked phases that should not override newer active status. */
 function isTerminalOrParkedOrchPhase(phase: OrchPhase): boolean {
   return phase === 'complete'
     || phase === 'delegated'
@@ -370,12 +356,10 @@ function isTerminalOrParkedOrchPhase(phase: OrchPhase): boolean {
     || phase === 'declined';
 }
 
-/** Detects the backend reason family used when subtasks are not ready for assembly. */
 function isIneligibleSubtasksReason(reason: string | undefined | null): boolean {
   return /(?:^|\b)ineligible_subtasks(?:\b|\s*\[)/i.test(reason ?? '');
 }
 
-/** Keeps explanatory reasons only for phases where they still describe the current state. */
 function normalizeCoordinatorReasonForPhase(reason: string | undefined | null, phase: OrchPhase): string | undefined {
   if (!reason || reason.trim() === '') return undefined;
   if (isIneligibleSubtasksReason(reason)) {
@@ -386,7 +370,6 @@ function normalizeCoordinatorReasonForPhase(reason: string | undefined | null, p
   return undefined;
 }
 
-/** Determines whether a submitted clarification still has an active outcome-plan redraft. */
 function outcomePlanRedraftIsActive(
   events: RunStreamEvent[],
   runStatus: RunStatus | undefined,
@@ -413,39 +396,33 @@ function outcomePlanRedraftIsActive(
   return latestDraftingSequence > latestOutcomeSequence;
 }
 
-/** Reads a structured API error code without assuming arbitrary failures have a payload. */
 function apiErrorCode(err: unknown): string | undefined {
   if (!(err instanceof ApiError) || typeof err.payload !== 'object' || err.payload === null) return undefined;
   const error = (err.payload as Record<string, unknown>).error;
   return typeof error === 'string' ? error : undefined;
 }
 
-/** Reads the first recognized timestamp field from an event payload. */
 function readEventTimestamp(p: Record<string, unknown>): string | undefined {
   return readStr(p, ['timestamp_utc', 'timestampUtc', 'updated_at', 'updatedAt', 'timestamp']);
 }
 
-/** Parses an optional timestamp and returns undefined for values the browser cannot parse. */
 function parseTimestamp(value: string | null | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-/** Resolves a child run identifier from the graph's supported descriptor fields. */
 function readChildRunId(node: GraphDescriptor['nodes'][number]): string | undefined {
   return node.child_run_id
     ?? readStr(node.data ?? {}, ['child_run_id', 'childRunId'])
     ?? (node.child_graph_ref?.startsWith('run:') ? node.child_graph_ref.slice(4) : undefined);
 }
 
-/** Reads the gate kind from either the camel-case or snake-case event field. */
 function readGateKind(payload: Record<string, unknown>): string | undefined {
   const gateKind = payload['gateKind'] ?? payload['gate_kind'];
   return gateKind == null ? undefined : String(gateKind).toLowerCase();
 }
 
-/** Converts a known gate key into display text and humanizes unknown keys. */
 function gateLabelForKind(gateKind: string | undefined): string {
   switch (gateKind) {
     case 'build-test': return 'Build & Test';
@@ -456,7 +433,6 @@ function gateLabelForKind(gateKind: string | undefined): string {
   }
 }
 
-/** Reads redispatched subtask identifiers from the assembly feedback payload. */
 function readSubtaskIdsFromPayload(payload: Record<string, unknown>): string[] {
   const raw = payload['redispatchedSubtaskIds'] ?? payload['redispatchSubtaskIds'];
   return Array.isArray(raw)
@@ -464,7 +440,6 @@ function readSubtaskIdsFromPayload(payload: Record<string, unknown>): string[] {
     : [];
 }
 
-/** Removes graph prefixes so IDs from plans and stream events can be compared. */
 function normalizeSubtaskId(value: string): string {
   return value.trim().replace(/^plan:/i, '').replace(/^subtask-/i, '');
 }
@@ -472,7 +447,6 @@ function normalizeSubtaskId(value: string): string {
 // #97 — a single ineligible (assembly-blocking) subtask surfaced from the enriched
 // coordinator.assembly_blocked payload (id + title + status + agent), so the UI can name WHICH
 // subtasks blocked assembly and WHY (their actual status) instead of an opaque error code.
-/** Optional detail used to identify each task preventing collective assembly. */
 export interface IneligibleSubtaskInfo {
   id: string;
   title?: string;
@@ -544,13 +518,11 @@ export function normalizeAssemblyBlockedReason(reason: string | undefined | null
 }
 
 
-/** Distinguishes the human approval gate from other assembly review events. */
 function isHumanReviewGateEvent(evt: RunStreamEvent): boolean {
   const gateKind = readGateKind(evt.payload);
   return gateKind === undefined || gateKind === 'human-review';
 }
 
-/** Resolves review lifecycle events to the phase implied by their gate kind. */
 function assemblyReviewPhaseForEvent(evt: RunStreamEvent, fallback: OrchPhase): OrchPhase {
   const gateKind = readGateKind(evt.payload);
   if (evt.type === 'coordinator.assembly_review_requested') {
@@ -570,13 +542,11 @@ function assemblyReviewPhaseForEvent(evt: RunStreamEvent, fallback: OrchPhase): 
   return fallback;
 }
 
-/** Recognizes Build & Test nodes across the descriptor's different naming conventions. */
 function isBuildTestNodeIdOrLabel(id: string | undefined, label: string | undefined): boolean {
   const key = `${id ?? ''} ${label ?? ''}`.toLowerCase().replace(/[^a-z0-9]+/g, ' ');
   return key.includes('build test') || key.includes('buildtest');
 }
 
-/** Resolves a graph node's effective role, including Build & Test naming fallbacks. */
 function effectiveGraphRole(node: GraphDescriptor['nodes'][number]): string {
   const explicitType = readStr(node.data ?? {}, ['type', 'nodeType', 'node_type', 'gate', 'kind']);
   if (node.role === 'build_test' || explicitType === 'build_test' || isBuildTestNodeIdOrLabel(node.id, node.label)) {
@@ -585,7 +555,6 @@ function effectiveGraphRole(node: GraphDescriptor['nodes'][number]): string {
   return node.role;
 }
 
-/** Returns whether a node status can be replaced when the enclosing run is terminal. */
 function isLiveStatus(status: string | undefined): boolean {
   return status === 'running'
     || status === 'dispatched'
@@ -598,30 +567,22 @@ function isLiveStatus(status: string | undefined): boolean {
     || status === 'awaiting_review';
 }
 
-/** Prevents a terminal run from leaving child graph nodes visibly in a live state. */
 function terminalizedStatus(status: string | undefined, terminal: boolean, terminalStatus: string): string {
   if (!terminal || !isLiveStatus(status)) return status ?? 'pending';
   return terminalStatus;
 }
 
-/** Supports both API spellings for a sandbox session's preview URL. */
 function previewUrlFromSession(session: PortForwardSessionDto | undefined): string | null {
   return session?.preview_url ?? session?.previewUrl ?? null;
 }
 
-/** Produces concise preview-failure copy from the structured failure reason. */
 function previewFailureCopy(state: Extract<RunPreviewState, { status: 'failed' }>): string {
   const reason = state.reason.replace(/_/g, ' ');
   return state.message ? `${reason}: ${state.message}` : reason;
 }
 
-/** Browser-side readiness result for the proxied sandbox preview address. */
 type PreviewDnsStatus = 'idle' | 'warming' | 'ready' | 'timed_out';
 
-/**
- * Probes a ready preview URL until it responds or the bounded retry window expires.
- * Cleanup aborts the request and timer when the URL changes or the page unmounts.
- */
 function usePreviewDnsStatus(previewUrl: string | null, probeKey: string | null): PreviewDnsStatus {
   const [probeState, setProbeState] = useState<{ key: string | null; status: PreviewDnsStatus }>({
     key: null,
@@ -663,11 +624,6 @@ function usePreviewDnsStatus(previewUrl: string | null, probeKey: string | null)
   return probeState.key === probeKey ? probeState.status : 'warming';
 }
 
-/**
- * Derives the displayed orchestration phase from event history and persisted status.
- * Higher-priority assembly events win, while an active status field can supersede a stale
- * terminal event; the result also carries review and blocked-subtask detail for the UI.
- */
 // Priority: live assembly_* events (last wins) > coordinator_status field > work-plan status, except an active coordinator_status overrides stale terminal/parked events.
 function deriveOrchState(
   events: RunStreamEvent[],
@@ -797,7 +753,6 @@ function deriveOrchState(
 }
 
 // Coordinator graph node status (so it never shows a stale "Pending").
-/** Maps the orchestration phase onto the coordinator graph node's visible status. */
 function orchPhaseToTopoStatus(phase: OrchPhase): string | undefined {
   switch (phase) {
     case 'complete': return 'completed';
@@ -815,7 +770,6 @@ function orchPhaseToTopoStatus(phase: OrchPhase): string | undefined {
 // node becomes 'started' so WorkflowNode renders it action-required ("Awaiting your review").
 // Returns undefined for stages not yet reached so the backend planned/live kind is preserved.
 // role ∈ {rai, review, merge, scribe}.
-/** Matches a terminal-stage identifier to a normalized assembly role. */
 function assemblyTerminalStageMatchesRole(role: string, terminalStage: string | undefined): boolean {
   if (!terminalStage) return false;
   const stage = terminalStage.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -828,10 +782,6 @@ function assemblyTerminalStageMatchesRole(role: string, terminalStage: string | 
   return false;
 }
 
-/**
- * Projects the collective assembly phase onto each stage node. Undefined means the
- * stage has not been reached and its descriptor status should remain authoritative.
- */
 function assemblyNodeStatus(role: string, phase: OrchPhase, terminalStage?: string): StepStatus | undefined {
   switch (phase) {
     case 'delegated':
@@ -876,7 +826,6 @@ function assemblyNodeStatus(role: string, phase: OrchPhase, terminalStage?: stri
   }
 }
 
-/** Returns the user-facing label for a normalized orchestration phase. */
 function orchPhaseLabel(phase: OrchPhase): string {
   switch (phase) {
     case 'drafting_outcome':    return 'Drafting outcome plan';
@@ -898,7 +847,6 @@ function orchPhaseLabel(phase: OrchPhase): string {
   }
 }
 
-/** Converts the run-level status field into concise display text. */
 function runStatusLabel(status: string | undefined): string {
   switch (status) {
     case 'pending': return 'Pending';
@@ -917,7 +865,6 @@ function runStatusLabel(status: string | undefined): string {
   }
 }
 
-/** Groups a run-level status into the page's action and color categories. */
 function bucketForRunStatus(status: string | undefined): CoordinatorRunBucket {
   switch (status) {
     case 'pending': return 'pending';
@@ -935,7 +882,6 @@ function bucketForRunStatus(status: string | undefined): CoordinatorRunBucket {
   }
 }
 
-/** Groups an orchestration phase into running, waiting, terminal, or blocked state. */
 function bucketForOrchPhase(phase: OrchPhase): CoordinatorRunBucket {
   switch (phase) {
     case 'drafting_outcome':
@@ -956,10 +902,6 @@ function bucketForOrchPhase(phase: OrchPhase): CoordinatorRunBucket {
   }
 }
 
-/**
- * Combines run status, orchestration phase, and load errors into the page's primary
- * state, including whether retry, stop, or automation controls are valid.
- */
 function deriveCoordinatorRunViewState(
   runLevelStatus: RunStatus | undefined,
   orch: OrchState,
@@ -1045,7 +987,6 @@ function deriveCoordinatorRunViewState(
 // Session timeline derivation (issue 6)
 // ---------------------------------------------------------------------------
 
-/** Formats an elapsed duration at the largest useful whole-unit precision. */
 function fmtTotal(ms: number): string {
   const secs = Math.floor(ms / 1000);
   if (secs < 60) return `${secs}s`;
@@ -1058,7 +999,6 @@ function fmtTotal(ms: number): string {
 
 // Parent subtask elapsed = sum of the child pipeline steps' durations (issue 2).
 // Ticks live while any child step is still running.
-/** Supplies a one-second clock only while the caller has a live elapsed duration to show. */
 function useTickingNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -1073,7 +1013,6 @@ function useTickingNow(active: boolean): number {
 // Subtask node data + custom React Flow node
 // ---------------------------------------------------------------------------
 
-/** Display data passed to the custom React Flow node for one coordinator subtask. */
 interface SubtaskNodeData extends Record<string, unknown> {
   graphNodeId: string;
   label: string;
@@ -1104,7 +1043,6 @@ interface SubtaskNodeData extends Record<string, unknown> {
 const COORD_GRAPH_RANK_SEP = 40;
 const COORD_GRAPH_NODE_SEP = 20;
 
-/** Renders a subtask pill with its status, assigned agent, timing, credits, and session action. */
 function SubtaskNode({ id, data, selected }: NodeProps) {
   const s = useNodeStyles();
   const d = data as SubtaskNodeData;
@@ -2005,7 +1943,6 @@ const useStyles = makeStyles({
 // nesting level (recursion depth), NOT from graph column position. This prevents the
 // cascading-staircase regression where sequential sibling rows each indented one level
 // deeper than the last.
-/** Flattens nested session items while recording their actual tree depth. */
 function flattenRunTree(nodes: RunSessionTree[], depth = 0): RunSessionTree[] {
   return nodes.flatMap((node) => [
     { ...node, depth },
@@ -2025,14 +1962,12 @@ const SESSION_TREE_STAGE_RANK: Record<string, number> = {
   rubberduck: 55,
 };
 
-/** Returns a zero-padded subtask number so dependent IDs sort numerically. */
 function subtaskSortKey(nodeId: string): string {
   const match = /(?:^|:)subtask-(\d+)\b/i.exec(nodeId);
   if (!match) return nodeId;
   return Number(match[1]).toString().padStart(12, '0');
 }
 
-/** Assigns a stable pipeline rank from role metadata or recognizable node labels. */
 function sessionTreeRoleRank(meta: { nodeId: string; label: string; roleKey?: string; isSubtask: boolean; y: number; x: number }): number {
   if (meta.isSubtask) return SESSION_TREE_STAGE_RANK.subtask;
   const role = meta.roleKey?.toLowerCase();
@@ -2048,7 +1983,6 @@ function sessionTreeRoleRank(meta: { nodeId: string; label: string; roleKey?: st
   return 100;
 }
 
-/** Stable metadata consumed by the run-tree sibling comparator. */
 export interface RunTreeSiblingMeta {
   nodeId: string;
   label: string;
@@ -2077,7 +2011,6 @@ export function compareRunTreeSiblings(a: RunTreeSiblingMeta, b: RunTreeSiblingM
     || a.nodeId.localeCompare(b.nodeId);
 }
 
-/** Renders a status glyph using the same semantic color classification as the tree row. */
 function runTreeStatusIcon(status: string) {
   const color = semanticStateColorForStatus(status);
   if (color === 'success') return <CheckmarkRegular aria-hidden="true" />;
@@ -2087,10 +2020,8 @@ function runTreeStatusIcon(status: string) {
   return <CircleRegular aria-hidden="true" />;
 }
 
-/** Shared semantic palette category for graph and session-tree statuses. */
 type SemanticStateColor = 'running' | 'success' | 'danger' | 'input' | 'queued';
 
-/** Classifies backend statuses into consistent running, success, danger, input, or queued colors. */
 function semanticStateColorForStatus(status: string | undefined): SemanticStateColor {
   switch (status) {
     case 'drafting_outcome':
@@ -2133,7 +2064,6 @@ function semanticStateColorForStatus(status: string | undefined): SemanticStateC
   }
 }
 
-/** Converts the run summary bucket into its matching semantic color. */
 function semanticStateColorForBucket(bucket: CoordinatorRunBucket): SemanticStateColor {
   switch (bucket) {
     case 'running': return 'running';
@@ -2145,7 +2075,6 @@ function semanticStateColorForBucket(bucket: CoordinatorRunBucket): SemanticStat
   }
 }
 
-/** Formats a session-tree status and includes the confirmer when available. */
 function runTreeStatusLabel(status: string, confirmedBy?: string): string {
   switch (status) {
     case 'drafting_outcome': return 'Drafting outcome plan';
@@ -2176,7 +2105,6 @@ const WAITING_TASK_STATUSES = new Set(['waiting', 'awaiting_confirmation', 'revi
 const PENDING_TASK_STATUSES = new Set(['pending']);
 const EXECUTING_TASK_STATUSES = new Set(['drafting_outcome', 'planning', 'running', 'dispatched', 'dispatching', 'in_progress', 'awaiting_assembly', 'assembling']);
 
-/** Summarizes child subtasks by lifecycle state for the coordinator root row. */
 function summarizeCoordinatorChildren(nodes: RunSessionTree[]): string | null {
   if (nodes.length === 0) return null;
   const counts = nodes.reduce(
@@ -2205,7 +2133,6 @@ function summarizeCoordinatorChildren(nodes: RunSessionTree[]): string | null {
   return parts.length > 0 ? parts.join(', ') : `${nodes.length} agents`;
 }
 
-/** Selects empty-graph copy that distinguishes loading, missing work plans, and errors. */
 function graphEmptyCopy(
   isConnecting: boolean,
   noWorkPlan: boolean,
@@ -2271,7 +2198,6 @@ const useTopologyToolbarStyles = makeStyles({
   },
 });
 
-/** Inputs for the React Flow zoom, fit, and tidy toolbar. */
 interface TopologyToolbarProps {
   onTidy: () => void;
   fitPadding: number;
@@ -2280,7 +2206,6 @@ interface TopologyToolbarProps {
 // Copilot Studio-style control bar for the topology overlay. Lives inside a ReactFlowProvider so it
 // can drive the shared viewport (zoom in/out, fit) natively. Tidy re-runs the dagre layout and
 // re-fits via the keyed ReactFlow remount + its fitView prop.
-/** Provides native React Flow zoom, fit, and layout-reset controls for the topology overlay. */
 function TopologyToolbar({ onTidy, fitPadding }: TopologyToolbarProps) {
   const toolbarStyles = useTopologyToolbarStyles();
   const { zoomIn, zoomOut, fitView } = useReactFlow();
@@ -2310,10 +2235,8 @@ function TopologyToolbar({ onTidy, fitPadding }: TopologyToolbarProps) {
 // onNodeClick can glide onto a clicked node (in addition to selecting it) and onPaneClick can glide
 // back out to the whole graph. Lives inside the ReactFlowProvider so it can reach the native viewport
 // API (`setCenter` / `fitView`).
-/** Imperative viewport operations shared between the topology graph and toolbar. */
 type TopologyViewportApi = { centerOnNode: (node: Node) => void; fitAll: () => void };
 
-/** Registers safe animated focus and fit operations while mounted inside React Flow. */
 function TopologyViewportController({
   apiRef,
   fitPadding,
@@ -2346,12 +2269,6 @@ function TopologyViewportController({
   return null;
 }
 
-/**
- * Coordinates a single orchestration view: REST snapshots seed durable state, the
- * run stream supplies live updates, and derived graph/tree projections feed the panels.
- * Run-level and orchestration-level status remain separate because review gates can outlive
- * or lag the underlying run.
- */
 export function CoordinatorRunPage() {
   const styles = useStyles();
   const { focused, setFocused } = useAppShellFocus();
@@ -2389,8 +2306,6 @@ export function CoordinatorRunPage() {
   const runEndedAt = runTimingState.runId === (runId ?? '') ? runTimingState.endedAt : undefined;
   useEffect(() => () => setFocused(false), [setFocused]);
 
-  // Seed durable history, then merge live events; approval refreshes are keyed to
-  // approval/tool events so unrelated stream traffic does not refetch approval data.
   const {
     events,
     liveEvents,
@@ -2513,7 +2428,6 @@ export function CoordinatorRunPage() {
   const seededToggles = useRef(false);
 
 
-  // Resolve the project name for the breadcrumb and reset it while a new project loads.
   useEffect(() => {
     if (!projectId) {
       queueMicrotask(() => setProjectName('Project'));
@@ -2529,7 +2443,6 @@ export function CoordinatorRunPage() {
     return () => { cancelled = true; };
   }, [projectId]);
 
-  // Load the persisted graph as a fallback for completed runs and reconnecting streams.
   useEffect(() => {
     if (!runId) return;
     let cancelled = false;
@@ -2553,7 +2466,6 @@ export function CoordinatorRunPage() {
     return () => { cancelled = true; };
   }, [runId]);
 
-  // Refresh token totals periodically; stop polling after repeated failures for this run.
   useEffect(() => {
     if (!runId) return;
     let cancelled = false;
@@ -2585,7 +2497,6 @@ export function CoordinatorRunPage() {
 
 
   // Fetch the project team once to resolve each assigned agent's role title for the subtask cards.
-  // A failed roster request affects the role caption only, not run status or graph rendering.
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
@@ -2603,8 +2514,6 @@ export function CoordinatorRunPage() {
   }, [projectId]);
 
 
-  // Refresh run detail and work-plan state until the run or orchestration reaches a terminal phase.
-  // Typed "not ready" responses back off exponentially; child runs skip coordinator-only endpoints.
   useEffect(() => {
     if (!runId) return;
     let cancelled = false;
@@ -2822,7 +2731,6 @@ export function CoordinatorRunPage() {
     [events, workPlanData],
   );
 
-  // Add stable outcome/work-plan stages around the saved graph while planning advances.
   const planningDescriptor = useMemo<GraphDescriptor | null>(() => {
     if (!effectiveDescriptor) return null;
     const base = effectiveDescriptor;
@@ -3107,7 +3015,6 @@ export function CoordinatorRunPage() {
   }, [events, effectiveDescriptor]);
 
 
-  // Project graph descriptors into status-aware React Flow nodes, then compute a balanced layout.
   const { rfNodes, displayEdges } = useMemo<{ rfNodes: Node[]; displayEdges: Edge[] }>(() => {
     if (!planningDescriptor) return { rfNodes: [], displayEdges: [] };
 
@@ -3417,8 +3324,6 @@ export function CoordinatorRunPage() {
   );
   const outcomePlanClarificationBaseSequenceRef = useRef<number | null>(null);
 
-  // A clarification remains pending until a newer outcome plan is observed or the
-  // persisted run and event history confirm that drafting has stopped.
   useEffect(() => {
     outcomePlanClarificationBaseSequenceRef.current = null;
   }, [runId]);
@@ -3524,8 +3429,6 @@ export function CoordinatorRunPage() {
     setRunLevelStatus,
   ]);
 
-  // Build a flat coordinator-owned session tree from the displayed graph nodes. Subtask
-  // dependencies remain in the graph; approval counts are attached to their owning runs.
   const { sessionTree, sessionNodeIds, defaultSessionNodeId } = useMemo<{
     sessionTree: RunSessionTree[];
     sessionNodeIds: Set<string>;
@@ -3761,7 +3664,6 @@ export function CoordinatorRunPage() {
   // Tracks previous pendingApprovalCounts.size so we can detect NEW arrivals only.
   const prevApprovalSizeRef = useRef(0);
 
-  /** Selects a run-tree session and optionally closes the topology overlay. */
   const openPanelForNode = useCallback((nodeId: string, opts?: { closeTopology?: boolean }) => {
     setPanelNodeId(nodeId);
     setSessionPanelOpen(true);
@@ -3777,14 +3679,12 @@ export function CoordinatorRunPage() {
   // the ReactFlowProvider) so a node click can cinematically pan+zoom onto the node.
   const topologyViewportApiRef = useRef<TopologyViewportApi | null>(null);
 
-  /** Selects the outcome-plan session and signals its composer to take focus. */
   const focusOutcomePlanComposer = useCallback(() => {
     setPanelNodeId('outcome-plan');
     setSessionPanelOpen(true);
     setComposerFocusSignal((value) => value + 1);
   }, [setPanelNodeId, setSessionPanelOpen, setComposerFocusSignal]);
 
-  // Surface each newly emitted outcome plan in its panel, but never auto-open it for child runs.
   useEffect(() => {
     if (!latestOutcomePlanEvent || isChildRun) return;
     if (lastSelectedOutcomePlanSeqRef.current === latestOutcomePlanEvent.sequence) return;
@@ -3820,7 +3720,6 @@ export function CoordinatorRunPage() {
 
   const activePanelNodeId = panelNodeId && sessionNodeIds.has(panelNodeId) ? panelNodeId : defaultSessionNodeId;
   const selectedSessionItem = flatSessionTree.find((node) => node.nodeId === activePanelNodeId) ?? flatSessionTree[0] ?? null;
-  // Choose the most relevant session for the status rail without changing the user's selection.
   const executingSessionItem = useMemo(() => {
     const nonRoot = flatSessionTree.filter((node) => node.nodeId !== defaultSessionNodeId);
     if (viewState.terminal) {
@@ -3903,7 +3802,6 @@ export function CoordinatorRunPage() {
 
   // Merge "Browse files": route to the project Workspace with the coordinator integration branch
   // selected, so refresh/back preserve the browsed ref and the user lands in the WORK section.
-  /** Opens the project Workspace at this run's collective integration branch. */
   const browseAssemblyFiles = useCallback(() => {
     if (!projectId || !runId) return;
     const query = new URLSearchParams({
@@ -3916,14 +3814,12 @@ export function CoordinatorRunPage() {
   // Collective-assembly "View execution": RAI/Scribe have their own persisted sub-run streams, so
   // focus that session in the slide-up. For the review node, open the artifacts/review panel where
   // the Approve / Request changes / Decline actions live.
-  /** Routes stage execution links to their own session or to the collective review panel. */
   const viewAssemblyExecution = useCallback((id: string) => {
     if (id.endsWith('-rai') || id.endsWith('-scribe')) openPanelForNode(id);
     else setArtifactsPanelOpen(true);
   }, [openPanelForNode, setArtifactsPanelOpen]);
 
   // Option toggles — optimistic update, revert on error. Both cascade to children server-side.
-  /** Updates autopilot optimistically and restores the prior value if the API rejects it. */
   const toggleAutopilot = useCallback((next: boolean) => {
     if (!runId || autopilotBusy || !viewState.canToggleAutomation) return;
     setAutomationError(null);
@@ -3938,7 +3834,6 @@ export function CoordinatorRunPage() {
       .finally(() => setAutopilotBusy(false));
   }, [runId, autopilotBusy, viewState.canToggleAutomation]);
 
-  /** Updates tool auto-approval optimistically and reverts it if the server rejects the change. */
   const toggleAutoApprove = useCallback((next: boolean) => {
     if (!runId || autoApproveBusy || !viewState.canToggleAutomation) return;
     setAutomationError(null);
@@ -3953,10 +3848,6 @@ export function CoordinatorRunPage() {
       .finally(() => setAutoApproveBusy(false));
   }, [runId, autoApproveBusy, viewState.canToggleAutomation]);
 
-  /**
-   * Retries the run with the selected provider. Resumed runs reconnect here; a fresh
-   * or retained startup-failure run navigates to its own detail page.
-   */
   const handleRetry = useCallback(async () => {
     if (!runId || !projectId || retrying) return;
     setRetrying(true);
@@ -3996,7 +3887,6 @@ export function CoordinatorRunPage() {
     setRunLevelStatus,
   ]);
 
-  /** Sends the coordinator stop request and reconnects so the resulting state is observed. */
   const handleStopRun = useCallback(async () => {
     if (!runId || stopping) return;
     setStopping(true);
@@ -4011,7 +3901,6 @@ export function CoordinatorRunPage() {
     }
   }, [reconnectStream, runId, stopping]);
 
-  /** Starts a manual sandbox port forward after validating the requested TCP port. */
   const startPreview = () => {
     const port = parseInt(previewTargetPort, 10);
     if (isNaN(port) || port <= 0 || port > 65535) {
@@ -4029,7 +3918,6 @@ export function CoordinatorRunPage() {
       .finally(() => setPreviewBusy(false));
   };
 
-  /** Stops the currently selected manual port forward and removes it from local state. */
   const stopPreview = () => {
     if (!runId || !manualPreviewSession) return;
     setPreviewBusy(true);
@@ -4050,7 +3938,6 @@ export function CoordinatorRunPage() {
       && previewUrlFromSession(session) === activePreviewUrl);
   const keepaliveUrl = keepaliveSession?.keepalive_url ?? keepaliveSession?.keepaliveUrl ?? null;
 
-  // Keep an active preview session alive while its keepalive URL is available.
   useEffect(() => {
     if (!keepaliveUrl) return;
     const id = setInterval(() => {
@@ -4067,7 +3954,6 @@ export function CoordinatorRunPage() {
   const hasGraph        = rfNodes.length > 0;
   // Reused by both the left-rail minimap AND the Work Plan detail thumbnail (#UI-bug-3) so the
   // graph-rendering ReactFlow/MiniMap markup exists in exactly one place.
-  /** Renders a compact graph preview that opens the full topology inspector. */
   const renderTopologyThumbnail = (variant: 'rail' | 'workplan') => (
     <div
       role="button"
@@ -4357,7 +4243,6 @@ export function CoordinatorRunPage() {
       }
     : null;
 
-  /** Applies the collective review decision and refreshes the run stream afterward. */
   const handleAssemblyApproval = useCallback(async (decision: 'approve' | 'decline') => {
     if (!runId) return;
     setAutomationError(null);
@@ -4378,7 +4263,6 @@ export function CoordinatorRunPage() {
     }
   }, [providerContext, reconnectStream, runId]);
 
-  /** Sends reviewer feedback to the collective assembly and reconnects to its progress. */
   const handleAssemblyRequestChanges = useCallback(async (_stepId: string, comment: string) => {
     if (!runId) return;
     setAutomationError(null);
@@ -4430,7 +4314,6 @@ export function CoordinatorRunPage() {
     : orch.phase !== 'unknown'
       ? orchPhaseLabel(orch.phase)
       : 'No task selected';
-  // The full graph shares the run's node/session contexts and owns its pan/zoom viewport.
   const topologyInspectorContent = (
     <div className={styles.topologyInspector} data-testid="topology-inspector">
       <div className={styles.topologyInspectorSummary}>
@@ -4531,7 +4414,6 @@ export function CoordinatorRunPage() {
       )}
     </div>
   );
-  /** Selects the status-icon class used by a run-tree row. */
   const stateIconClass = (color: SemanticStateColor) => {
     switch (color) {
       case 'running': return styles.runTreeStatusRunning;
@@ -4541,7 +4423,6 @@ export function CoordinatorRunPage() {
       default: return styles.runTreeStatusQueued;
     }
   };
-  /** Selects the matching text class for a run-tree status or state label. */
   const stateTextClass = (color: SemanticStateColor) => {
     switch (color) {
       case 'running': return styles.stateTextRunning;
@@ -4551,7 +4432,6 @@ export function CoordinatorRunPage() {
       default: return styles.stateTextQueued;
     }
   };
-  /** Keeps every non-leaf branch expanded because the session list is intentionally flat. */
   const treeBranchIds = useMemo(() => {
     const ids: string[] = [];
     const walk = (nodes: RunSessionTree[]) => nodes.forEach((n) => {
@@ -4560,7 +4440,6 @@ export function CoordinatorRunPage() {
     walk(sessionTree);
     return ids;
   }, [sessionTree]);
-  /** Renders one selectable row per flattened session node with status and approval context. */
   const renderTreeItems = (nodes: RunSessionTree[]): ReactNode => nodes.map((item) => {
     const color = semanticStateColorForStatus(item.status);
     const statusLabel = runTreeStatusLabel(item.status, item.nodeId === 'outcome-plan' ? outcomePlanConfirmedBy : undefined);
@@ -4641,11 +4520,9 @@ export function CoordinatorRunPage() {
       </TreeItem>
     );
   });
-  /** Opens the automatic Build & Test preview when its event state is ready. */
   const openPreview = () => {
     if (previewAction) previewAction.onClick();
   };
-  /** Retries an expired preview approval only when the event payload marks it retryable. */
   const retryPreviewApproval = async () => {
     if (!runId
       || runPreviewState.status !== 'failed'
@@ -4662,7 +4539,6 @@ export function CoordinatorRunPage() {
       setPreviewRetrying(false);
     }
   };
-  /** Renders preview availability, DNS warm-up, failure, and retry guidance. */
   const previewStatusContent = (compact = false) => {
     if (previewListError) {
       return (

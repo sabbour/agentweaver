@@ -3,7 +3,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { jsonFileToDrawio } from './drawio-generator.mjs';
 
-/** Build the editable draw.io counterparts for all canonical flagship JSON diagrams. */
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const sourceDir = path.join(repoRoot, 'docs', 'diagrams', 'src', 'flagship');
 const outputDir = path.join(repoRoot, 'docs', 'diagrams', 'drawio', 'generated', 'flagship');

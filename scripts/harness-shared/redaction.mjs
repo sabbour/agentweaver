@@ -1,4 +1,3 @@
-/** Remove secrets from nested harness evidence while preserving safe diagnostic context. */
 const SENSITIVE_KEY = /authorization|cookie|token|credential|api[ _-]?key|execution[ _-]?key|provider[ _-]?key|secret|password|kubeconfig|storagestate|signedurl/i;
 const SENSITIVE_DESCRIPTOR = /(?:^|[ _-])(?:authorization|cookie|token|credential|secret|password|kubeconfig|storagestate|signedurl)$/i;
 const SENSITIVE_KEY_DESCRIPTOR = /(?:^|[ _-])(?:api|execution|provider)[ _-]?key$/i;
@@ -13,7 +12,6 @@ const SECRET_ASSIGNMENT = /((?:authorization|cookie|token|credentials?|api[_-]?k
 const SECRET_CANARY = /\b(?:(?:credential|secret|token|bearer)[_-]?canary|canary[_-]?(?:credential|secret|token|bearer))(?:[-_][A-Za-z0-9]+)*\b/gi;
 const TOKEN_COUNT_KEY = /^(?:input|output|cached|cacheWrite|reasoning|maxPrompt|prompt|total)Tokens$/i;
 
-/** Remove URL query and fragment data while keeping the origin and path useful for diagnostics. */
 export function sanitizeUrl(match) {
   try {
     const url = new URL(match);
@@ -23,7 +21,6 @@ export function sanitizeUrl(match) {
   }
 }
 
-/** Replace a value and all nested descendants when its containing field is sensitive. */
 function redactSensitiveValue(value) {
   if (Array.isArray(value)) return value.map(redactSensitiveValue);
   if (value && typeof value === 'object') {
@@ -32,14 +29,12 @@ function redactSensitiveValue(value) {
   return '[REDACTED]';
 }
 
-/** Find a header-like key/value descriptor that labels the associated value as sensitive. */
 function sensitiveDescriptorEntry(entries) {
   return entries.find(([key, item]) => DESCRIPTOR_KEY.test(key)
     && typeof item === 'string'
     && isSensitiveDescriptor(item));
 }
 
-/** Decide whether a key or descriptor name identifies a credential or other secret value. */
 function isSensitiveDescriptor(value) {
   const descriptor = value.trim();
   return SENSITIVE_DESCRIPTOR.test(descriptor)
@@ -47,10 +42,6 @@ function isSensitiveDescriptor(value) {
     || SENSITIVE_STANDALONE_DESCRIPTOR.test(descriptor);
 }
 
-/**
- * Recursively redact credential fields, token strings, and sensitive URL components.
- * Non-sensitive values remain available for diagnostic evidence; finite token counts are preserved.
- */
 export function redact(value) {
   if (Array.isArray(value)) {
     if (value.length === 2 && typeof value[0] === 'string' && isSensitiveDescriptor(value[0])) {

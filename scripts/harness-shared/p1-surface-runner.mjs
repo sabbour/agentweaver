@@ -21,12 +21,10 @@ import {
   waitForP1GateResolution,
 } from './p1-surface-common.mjs';
 
-/** Surface adapters and journey names accepted by the shared P1 execution flow. */
 const SURFACES = new Set(['api', 'mcp', 'ui']);
 const JOURNEYS = new Set(['gate-answer', 'gate-approve', 'gate-reject', 'message', 'journal']);
 const EVENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Resolve the fixture-owned gate answer against both the current blocker and gate receipt. */
 function validateActorAnswer(snapshot, input) {
   const { gate, blocker } = requireP1OwnedGate(snapshot, input);
   let answerBody = {};
@@ -48,7 +46,6 @@ function validateActorAnswer(snapshot, input) {
   return { gate, blocker, answerBody };
 }
 
-/** Submit a gate answer, approval, or rejection through the selected surface adapter. */
 async function dispatchGate(surface, adapters, input, snapshot, dependencies) {
   const { gate, answerBody } = validateActorAnswer(snapshot, input);
   const operationId = input.journey === 'gate-answer'
@@ -102,7 +99,6 @@ async function dispatchGate(surface, adapters, input, snapshot, dependencies) {
   return { operationId, status: result.status, receipt: result.ownerResponse, correlationId: result.correlationId };
 }
 
-/** Read the current owner session tree and require the exact active message participants. */
 async function readMessageTree(api, input) {
   const { projectId, runId, rootSessionId } = input.pins.ownerFences;
   const call = await api.invoke('readSessionTree', {
@@ -127,7 +123,6 @@ async function readMessageTree(api, input) {
   return message;
 }
 
-/** Submit an immediate addressed message through the selected API, MCP, or UI surface. */
 async function dispatchMessage(surface, adapters, input, dependencies) {
   const message = await readMessageTree(adapters.api, input);
   const operationId = 'sendMessage';
@@ -179,7 +174,6 @@ async function dispatchMessage(surface, adapters, input, dependencies) {
   return { operationId, status: result.status, receipt: result.ownerResponse, correlationId: result.correlationId };
 }
 
-/** Require durable action-start evidence before allowing a UI write that cannot be retried safely. */
 async function requireUiActionEvidence(beforeUiAction, journey) {
   if (typeof beforeUiAction !== 'function') {
     throw new P1BlockedError('UI writes require durable action-start evidence to prevent duplicate retries.');
@@ -187,7 +181,6 @@ async function requireUiActionEvidence(beforeUiAction, journey) {
   await beforeUiAction({ journey });
 }
 
-/** Validate the actual accepted-message receipt for the selected recipient. */
 function requireMessageReceipt(receipt, recipientSessionId) {
   if (typeof receipt?.ownerMessageId !== 'string' || !receipt.ownerMessageId
     || receipt.recipientSessionId !== recipientSessionId
@@ -196,10 +189,6 @@ function requireMessageReceipt(receipt, recipientSessionId) {
   }
 }
 
-/**
- * Run a bounded P1 journey with current owner checks, selected-surface actions, and durable evidence.
- * Returns a passed, failed, or blocked acceptance result; cleanup and adapter close outcomes are recorded.
- */
 export async function runP1SurfaceJourney(surface, input, {
   api,
   deniedApi,

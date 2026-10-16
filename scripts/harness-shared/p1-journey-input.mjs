@@ -1,6 +1,5 @@
 import { validateNetworkTarget } from './target-guard.mjs';
 
-/** Receipt fields that must be pinned before a P1 surface journey can use owner-owned resources. */
 const PIN_RECEIPTS = [
   'providerReceipt',
   'runtimeReceipt',
@@ -116,7 +115,6 @@ function validateP1StaticInput(input) {
   return { environment, pins, deploymentEvidence };
 }
 
-/** Check owner fences and invocation receipts for a live, unexpired runner-owned fixture. */
 function validateFixtureOwnership(input, pins, now) {
   const fences = pins.ownerFences;
   if (!isRecord(fences)) throw new Error('Current owner fences are required.');
@@ -179,7 +177,6 @@ function validateFixtureOwnership(input, pins, now) {
   return { fences, fixture };
 }
 
-/** Validate the requested journey and fixture setup plan without accepting caller-supplied ownership. */
 function validatePlan(input, { environment, pins }) {
   if (Object.hasOwn(pins, 'ownerFences') || Object.hasOwn(pins, 'fixtureScope')) {
     throw new Error('Runner plans cannot contain caller-supplied owner fences or fixture receipts.');
@@ -245,20 +242,17 @@ function validatePlan(input, { environment, pins }) {
   return { fixturePlan: plan, journey: input.journey };
 }
 
-/** Validate a setup plan that will be used to create a runner-owned P1 fixture. */
 export function validateP1RunnerPlanInput(input, options = {}) {
   const base = validateP1StaticInput(input);
   return { ...base, ...validatePlan(input, base) };
 }
 
-/** Validate the exact environment pins and active fixture scope before a P1 journey runs. */
 export function validateP1JourneyInput(input, { now = () => Date.now() } = {}) {
   const base = validateP1StaticInput(input);
   const { fences, fixture } = validateFixtureOwnership(input, base.pins, now);
   return { ...base, fences, fixture, journey: input.journey };
 }
 
-/** Require each named resource to have a receipt tied to this fixture invocation. */
 export function requireP1OwnedResources(fixture, requiredResources) {
   for (const { resourceType, resourceId } of requiredResources) {
     if (!fixture.ownershipReceipts.some(receipt =>

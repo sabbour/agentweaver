@@ -2,10 +2,6 @@ using System.Collections.Immutable;
 
 namespace Agentweaver.Orchestrator.Core;
 
-/// <summary>
-/// Immutable, deterministic project backlog graph. Mutations return a replacement graph and use
-/// caller-supplied revisions to reject stale edits; this type does not persist or authorize them.
-/// </summary>
 public sealed class BacklogDependencyGraph
 {
     private readonly ImmutableDictionary<string, BacklogTaskSnapshot> _tasks;
@@ -39,10 +35,6 @@ public sealed class BacklogDependencyGraph
     public BacklogDependencyGraphSnapshot Snapshot =>
         new(ProjectId, Revision, Tasks, Dependencies);
 
-    /// <summary>Adds a task when the expected graph revision is current.</summary>
-    /// <param name="taskReference">Stable identity in this graph's project.</param>
-    /// <param name="expectedGraphRevision">Revision observed by the caller.</param>
-    /// <returns>A new graph on success, or structured issues for invalid, duplicate, stale, or exhausted state.</returns>
     public BacklogCoreResult<BacklogTaskEdit> AddTask(
         BacklogTaskReference? taskReference,
         long expectedGraphRevision)
@@ -79,8 +71,6 @@ public sealed class BacklogDependencyGraph
             new BacklogTaskEdit(graph, Changed: true));
     }
 
-    /// <summary>Changes an editable task's state and advances its task and graph revisions.</summary>
-    /// <remarks>Claimed state is reserved for <see cref="ClaimTask"/>; idempotent state changes preserve revisions.</remarks>
     public BacklogCoreResult<BacklogTaskEdit> SetTaskState(
         BacklogTaskReference? taskReference,
         BacklogTaskState state,
@@ -120,8 +110,6 @@ public sealed class BacklogDependencyGraph
             new BacklogTaskEdit(graph, Changed: true));
     }
 
-    /// <summary>Claims a ready task after checking current graph, task, and prerequisite revisions.</summary>
-    /// <remarks>The owner must make persistence atomic; this pure method does not lock or write storage.</remarks>
     public BacklogCoreResult<BacklogTaskClaimEdit> ClaimTask(
         BacklogTaskReference? taskReference,
         long expectedGraphRevision,
@@ -167,7 +155,6 @@ public sealed class BacklogDependencyGraph
             new BacklogTaskClaimEdit(graph, readiness.Value));
     }
 
-    /// <summary>Archives an unclaimed task without deleting it or its dependency history.</summary>
     public BacklogCoreResult<BacklogTaskEdit> ArchiveTask(
         BacklogTaskReference? taskReference,
         long expectedGraphRevision,
@@ -200,8 +187,6 @@ public sealed class BacklogDependencyGraph
             new BacklogTaskEdit(graph, Changed: true));
     }
 
-    /// <summary>Validates and rebuilds an immutable graph from an owner-provided snapshot.</summary>
-    /// <returns>A graph only if all identities, revisions, edges, and cycle constraints are valid.</returns>
     public static BacklogCoreResult<BacklogDependencyGraph> Create(
         BacklogDependencyGraphSnapshot? snapshot)
     {
@@ -308,8 +293,6 @@ public sealed class BacklogDependencyGraph
                 tasks.ToImmutable(), immutableDependencies, CreatePrerequisiteMap(immutableDependencies)));
     }
 
-    /// <summary>Adds a prerequisite edge if it is valid, editable, and does not create a cycle.</summary>
-    /// <remarks>An existing edge is an idempotent no-op and does not advance the graph revision.</remarks>
     public BacklogCoreResult<BacklogDependencyGraphEdit> AddDependency(
         BacklogTaskReference task,
         BacklogTaskReference prerequisite,
@@ -344,8 +327,6 @@ public sealed class BacklogDependencyGraph
             new BacklogDependencyGraphEdit(changed, Changed: true));
     }
 
-    /// <summary>Removes an existing prerequisite edge from an editable task.</summary>
-    /// <remarks>A missing edge is an idempotent no-op; changed graphs receive a new revision.</remarks>
     public BacklogCoreResult<BacklogDependencyGraphEdit> RemoveDependency(
         BacklogTaskReference task,
         BacklogTaskReference prerequisite,

@@ -379,11 +379,6 @@ function stageAnnouncement(scenario: Scenario, stage: StageIndex): string {
 // ---------------------------------------------------------------------------
 // Player
 // ---------------------------------------------------------------------------
-/**
- * Renders the animated scenario theater using authored scenarios and the local playback reducer.
- * Effects drive the stage timeline and visibility-aware animations; no application API data is
- * loaded by the landing-page simulation.
- */
 export function ScenarioTheater() {
   const styles = useStyles();
   const [state, dispatch] = useReducer(runReducer, undefined, initialRunState);
@@ -812,11 +807,6 @@ export function ScenarioTheater() {
   );
 }
 
-/**
- * Mounts the landing workflow demo into a DOM host and returns its unmount callback.
- * The React player uses the local scenario state/reducer; its effects drive animation timers,
- * visibility handling, and teardown without calling the application API.
- */
 export function mountLandingWorkflowDemo(element: HTMLElement) {
   const root = createRoot(element);
   root.render(<ScenarioTheater />);

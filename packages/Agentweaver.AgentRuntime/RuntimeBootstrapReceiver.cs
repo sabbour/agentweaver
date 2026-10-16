@@ -3,13 +3,8 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.AgentRuntime;
 
-/// <summary>Lifecycle states for receiving a bootstrap credential and configuring a session.</summary>
 public enum RuntimeBootstrapReceiverState { Empty, Pending, Configuring, Ready, Failed, Disposed }
 
-/// <summary>
-/// Accepts an owner-verified, run-bound bootstrap delivery and uses it once to configure an
-/// authorized runtime session. A semaphore serializes delivery, replay, configuration, and disposal.
-/// </summary>
 public sealed class RuntimeBootstrapReceiver(
     RuntimeRegistration registration,
     IRuntimeRegistrationOwner owner,
@@ -24,18 +19,8 @@ public sealed class RuntimeBootstrapReceiver(
     private AuthorizedRuntimeSession? _session;
     private int _state;
 
-    /// <summary>Gets the receiver state using a volatile read.</summary>
     public RuntimeBootstrapReceiverState State => (RuntimeBootstrapReceiverState)Volatile.Read(ref _state);
 
-    /// <summary>
-    /// Verifies a delivered credential against the owner and registration, then retains it only
-    /// for an exact replay or the pending configure operation. Conflicting replays are rejected.
-    /// </summary>
-    /// <param name="request">The delivery receipt fields and credential value.</param>
-    /// <param name="actor">The authenticated runtime actor making the delivery.</param>
-    /// <param name="cancellationToken">Cancels owner verification or state transitions.</param>
-    /// <returns>A receipt bound to the current registration and placement generation.</returns>
-    /// <exception cref="RuntimeAuthorizationException">The owner, registration, or replay does not match.</exception>
     public async Task<RuntimeBootstrapDeliveryReceipt> ReceiveAsync(
         RuntimeBootstrapDeliveryRequest request,
         RuntimeActorAuthorization actor,
@@ -131,19 +116,6 @@ public sealed class RuntimeBootstrapReceiver(
         }
     }
 
-    /// <summary>
-    /// Configures once from the pending delivery. Exact repeats return the existing session;
-    /// a different configuration or operation ID is a conflict. The bootstrap credential is
-    /// invalidated whether configuration succeeds or fails.
-    /// </summary>
-    /// <param name="bootstrap">The runtime configuration operation.</param>
-    /// <param name="configuration">The exact bytes whose hash was authorized for delivery.</param>
-    /// <param name="consumeOperationId">Stable operation ID for grant consumption.</param>
-    /// <param name="exchangeOperationId">Stable operation ID for the credential exchange.</param>
-    /// <param name="cancellationToken">Cancels configuration work.</param>
-    /// <param name="resumeBootstrap">Optional validated resume bootstrap evidence.</param>
-    /// <returns>The configured authorized session.</returns>
-    /// <exception cref="RuntimeAuthorizationException">No valid delivery exists or an operation conflicts.</exception>
     public async Task<AuthorizedRuntimeSession> ConfigureAsync(
         RuntimeSessionBootstrap bootstrap,
         ReadOnlyMemory<byte> configuration,
@@ -209,7 +181,6 @@ public sealed class RuntimeBootstrapReceiver(
         }
     }
 
-    /// <summary>Rereads owner registration state and confirms both registration and credential remain current.</summary>
     private async Task RequireCurrentAsync(
         RuntimeActorAuthorization actor, SecretCredential credential, CancellationToken cancellationToken)
     {
@@ -220,7 +191,6 @@ public sealed class RuntimeBootstrapReceiver(
             throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
 
-    /// <summary>Compares all replay-sensitive values, using a hash rather than retaining another secret copy.</summary>
     private static bool MatchesDelivery(
         DeliveryReplay replay,
         RuntimeBootstrapDeliveryRequest request,
@@ -231,7 +201,6 @@ public sealed class RuntimeBootstrapReceiver(
         replay.CredentialExpiresAt == request.CredentialExpiresAt &&
         replay.CredentialHash == credentialHash;
 
-    /// <summary>Requires the grant receipt to match the registration revision and expiry boundary.</summary>
     private void RequireGrant(RuntimeGrantReceipt grant)
     {
         if (grant.RegistrationRevision != registration.Revision ||
@@ -239,7 +208,6 @@ public sealed class RuntimeBootstrapReceiver(
             throw new RuntimeAuthorizationException("runtime_delivery_binding_invalid");
     }
 
-    /// <summary>Invalidates pending credentials, clears replay state, and disposes a configured session.</summary>
     public async ValueTask DisposeAsync()
     {
         await _gate.WaitAsync().ConfigureAwait(false);

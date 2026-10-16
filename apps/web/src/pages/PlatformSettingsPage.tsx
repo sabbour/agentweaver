@@ -43,11 +43,6 @@ import { useSearchParams } from 'react-router-dom';
 import { markRequiredSetupPending } from '../components/onboarding/firstRunTourStorage';
 import { PlatformCopilotAuthorizationResultNotice } from '../components/GitHubAuthorizationResultNotices';
 
-/**
- * Platform-level model access settings. Owners can connect platform Copilot or
- * manage custom provider configurations, choose the active inference source, and
- * complete required first-run setup.
- */
 const useStyles = makeStyles({
   form: {
     display: 'flex',
@@ -112,7 +107,6 @@ const useStyles = makeStyles({
 // The three provider TYPES an admin can add. Foundry Local / Microsoft Foundry are
 // intentionally NOT listed here — this deployment has no Microsoft-internal Foundry
 // infrastructure to back them.
-/** Provider types supported by the UI and its corresponding backend configuration. */
 const ADDABLE_PROVIDER_TYPES: { type: ByokProviderType; label: string; description: string }[] = [
   {
     type: 'openai',
@@ -131,7 +125,6 @@ const ADDABLE_PROVIDER_TYPES: { type: ByokProviderType; label: string; descripti
   },
 ];
 
-/** Human labels for the persisted provider type identifiers. */
 const PROVIDER_TYPE_LABELS: Record<ByokProviderType, string> = {
   openai: 'Custom endpoint',
   azure: 'Azure OpenAI',
@@ -146,7 +139,6 @@ const PROVIDER_TYPE_LABELS: Record<ByokProviderType, string> = {
 const DEFAULT_AZURE_API_VERSION = '2024-08-01-preview';
 const DEFAULT_ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 
-/** Editable provider fields; API keys are intentionally never hydrated from the API. */
 interface ProviderFormState {
   name: string;
   baseUrl: string;
@@ -157,7 +149,6 @@ interface ProviderFormState {
   azureApiVersion: string;
 }
 
-/** Creates defaults appropriate to a newly selected provider type. */
 function blankFormState(type: ByokProviderType): ProviderFormState {
   return {
     name: '',
@@ -170,7 +161,6 @@ function blankFormState(type: ByokProviderType): ProviderFormState {
   };
 }
 
-/** Populates an edit form while leaving the secret field blank for safety. */
 function formStateFromProvider(provider: ByokProviderConfig): ProviderFormState {
   return {
     name: provider.name,
@@ -206,7 +196,6 @@ function parseHeadersText(text: string): Record<string, string> | undefined {
   return Object.fromEntries(entries as [string, string][]);
 }
 
-/** Replaces the known unavailable binding error with a user-directed recovery message. */
 function formatPlatformCopilotError(err: unknown): string {
   if (err instanceof ApiError && parseApiBody(err.body).error === 'github_binding_unavailable') {
     return 'GitHub Copilot is unavailable. Reconnect the platform account, or set a custom provider active.';
@@ -227,8 +216,6 @@ export function PlatformSettingsPage({
 }) {
   const styles = useStyles();
   const [searchParams, setSearchParams] = useSearchParams();
-  // Provider, platform connection, and dialog state are separate because the page
-  // can report one source unavailable while still displaying the other source.
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [providers, setProviders] = useState<ByokProviderConfig[]>([]);
@@ -259,14 +246,12 @@ export function PlatformSettingsPage({
   const [removeTarget, setRemoveTarget] = useState<ByokProviderConfig | null>(null);
   const [removing, setRemoving] = useState(false);
 
-  /** Removes the authorization callback marker without navigating away. */
   const dismissCopilotAuthorizationResult = () => {
     const next = new URLSearchParams(searchParams);
     next.delete('copilot_app_auth');
     setSearchParams(next, { replace: true });
   };
 
-  /** Refreshes both provider definitions and the active provider id from the server. */
   const refreshProviders = async () => {
     const list = await apiClient.listByokProviders();
     setProviders(list.providers);
@@ -274,7 +259,6 @@ export function PlatformSettingsPage({
     return list;
   };
 
-  /** Refreshes Copilot connection state and records failures independently. */
   const refreshPlatformCopilotConnection = async () => {
     try {
       const connection = await apiClient.getPlatformDefaultCopilotConnection();
@@ -286,14 +270,12 @@ export function PlatformSettingsPage({
     }
   };
 
-  /** Resets setup retry tracking before notifying the parent of provider changes. */
   const providerStateChanged = async () => {
     continueFailures.current = 0;
     setContinueError(null);
     await onProviderStateChanged?.();
   };
 
-  /** Prevents duplicate setup checks and escalates repeated not-ready responses. */
   const handleContinueSetup = async () => {
     if (!onContinueSetup || continueInFlight.current) return;
     continueInFlight.current = true;
@@ -313,8 +295,6 @@ export function PlatformSettingsPage({
     }
   };
 
-  // Load providers and Copilot status independently so one failed source does not
-  // prevent showing the other; ignore the response if the page has unmounted.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
@@ -342,7 +322,6 @@ export function PlatformSettingsPage({
     return () => { cancelled = true; };
   }, []);
 
-  /** Begins the platform OAuth handoff and leaves this page for GitHub authorization. */
   const handleConnectPlatformCopilot = async () => {
     setConnectingCopilot(true);
     setPlatformCopilotError(null);
@@ -356,7 +335,6 @@ export function PlatformSettingsPage({
     }
   };
 
-  /** Disconnects the platform account, refreshes status, and notifies setup owners. */
   const handleDisconnectPlatformCopilot = async () => {
     setDisconnectingCopilot(true);
     setPlatformCopilotError(null);
@@ -373,7 +351,6 @@ export function PlatformSettingsPage({
     }
   };
 
-  /** Selects platform Copilot by deactivating custom provider selection. */
   const handleActivateCopilot = async () => {
     setSwitchingActive('copilot');
     setNotice(null);
@@ -390,7 +367,6 @@ export function PlatformSettingsPage({
     }
   };
 
-  /** Activates one configured provider and refreshes authoritative server state. */
   const handleActivateProvider = async (provider: ByokProviderConfig) => {
     setSwitchingActive(provider.id);
     setNotice(null);
@@ -412,7 +388,6 @@ export function PlatformSettingsPage({
     setPickerOpen(true);
   };
 
-  /** Opens a clean add form using defaults for the chosen provider type. */
   const chooseType = (type: ByokProviderType) => {
     setPickerOpen(false);
     setForm({ mode: 'add', type });
@@ -421,7 +396,6 @@ export function PlatformSettingsPage({
     setShowApiKey(false);
   };
 
-  /** Opens an edit form without exposing any previously stored API key. */
   const openEdit = (provider: ByokProviderConfig) => {
     setForm({ mode: 'edit', type: provider.type, editingId: provider.id });
     setFormState(formStateFromProvider(provider));
@@ -445,10 +419,6 @@ export function PlatformSettingsPage({
   const formRequiredFieldsFilled = !!form && !!formState.name.trim() && !!formState.baseUrl.trim() && !!formState.model.trim()
     && (form.type === 'openai' || !!formState.apiKey.trim() || form.mode === 'edit');
 
-  /**
-   * Validates headers and submits the add/update request. Blank secrets are sent as
-   * null so editing other fields does not replace a stored credential accidentally.
-   */
   const handleSubmitForm = async () => {
     if (!form) return;
     setSaving(true);
@@ -491,7 +461,6 @@ export function PlatformSettingsPage({
     }
   };
 
-  /** Removes the selected provider, then reloads active-source state. */
   const handleConfirmRemove = async () => {
     if (!removeTarget) return;
     setRemoving(true);

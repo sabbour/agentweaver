@@ -22,10 +22,6 @@ export interface AutomationToggleProps {
   labelPosition?: 'before' | 'after';
 }
 
-/**
- * Renders one automation setting toggle with its shared explanatory copy and scope.
- * Parent props own the current value and change handler; this component does not save settings.
- */
 export function AutomationToggle({
   label,
   info,

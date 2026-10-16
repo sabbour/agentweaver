@@ -2,10 +2,6 @@ using System.Text.Json;
 
 namespace Agentweaver.Persistence.Postgres;
 
-/// <summary>
-/// An event supplied by an owner for durable, ordered outbox delivery. The idempotency key
-/// protects retries from creating a second logical event.
-/// </summary>
 public record OutboxEvent(
     Guid Id,
     string StreamId,
@@ -15,20 +11,16 @@ public record OutboxEvent(
     JsonElement Payload,
     DateTimeOffset OccurredAt);
 
-/// <summary>An outbox event together with its monotonically assigned stream sequence.</summary>
 public record StoredOutboxEvent(OutboxEvent Message, long Sequence);
 
-/// <summary>An event temporarily claimed by one worker using a fencing token and lease expiry.</summary>
 public record OutboxDelivery(
     StoredOutboxEvent Event,
     Guid LeaseToken,
     string WorkerId,
     DateTimeOffset LeasedUntil);
 
-/// <summary>Signals that a reused event ID or idempotency key describes conflicting event data.</summary>
 public sealed class OutboxConflictException : Exception
 {
-    /// <summary>Creates a conflict with a non-sensitive diagnostic message.</summary>
     public OutboxConflictException(string message) : base(message) { }
 }
 

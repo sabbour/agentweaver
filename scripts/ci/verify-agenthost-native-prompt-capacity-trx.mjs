@@ -8,7 +8,6 @@ const expectedTests = [
   'ByokNativeRuntimeReportsCapacityAttributedQueryErrorForIrreduciblePrompt',
 ];
 
-/** Require one passing TRX result for each pinned native prompt-capacity test and no extras. */
 export function verifyPromptCapacityResults(xml, runnerExitCode) {
   if (typeof xml !== 'string') throw new TypeError('TRX content must be a string.');
 
@@ -55,7 +54,6 @@ export function verifyPromptCapacityResults(xml, runnerExitCode) {
   }));
 }
 
-/** Verify the requested TRX and attach its test and file-hash receipts to the identity record. */
 function main() {
   const [trxArgument, receiptArgument, outputArgument] = process.argv.slice(2);
   if (!trxArgument || !receiptArgument || !outputArgument) {

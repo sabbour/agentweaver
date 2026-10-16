@@ -2,11 +2,8 @@ using System.Text.Json;
 
 namespace Agentweaver.Abstractions;
 
-/// <summary>Tenant, project, run, and Environment identity owned by the Environment service.</summary>
 public sealed record EnvironmentOwnerIdentity
 {
-    /// <summary>Creates an owner identity with bounded nonempty identifiers.</summary>
-    /// <exception cref="ArgumentException">An identifier is blank, too long, or contains control characters.</exception>
     public EnvironmentOwnerIdentity(
         string tenantId,
         string projectId,
@@ -24,7 +21,6 @@ public sealed record EnvironmentOwnerIdentity
     public string RunId { get; }
     public string EnvironmentId { get; }
 
-    /// <summary>Checks one owner identifier before it becomes part of an Environment fence.</summary>
     private static string Validate(string value, string name)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value, name);
@@ -34,12 +30,8 @@ public sealed record EnvironmentOwnerIdentity
     }
 }
 
-/// <summary>Lifecycle generation fence used to reject operations from replaced Environment owners.</summary>
 public sealed record EnvironmentGenerationFence
 {
-    /// <summary>Creates a fence for a specific owner and positive lifecycle generation.</summary>
-    /// <exception cref="ArgumentNullException">The owner identity is null.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">The generation is not positive.</exception>
     public EnvironmentGenerationFence(EnvironmentOwnerIdentity owner, long lifecycleGeneration)
     {
         Owner = owner ?? throw new ArgumentNullException(nameof(owner));
@@ -52,27 +44,18 @@ public sealed record EnvironmentGenerationFence
     public long LifecycleGeneration { get; }
 }
 
-/// <summary>Whether an Environment owner is active or released.</summary>
 public enum EnvironmentLifecycleState
 {
     Active,
     Released
 }
 
-/// <summary>Current Environment lifecycle state and its generation fence.</summary>
 public sealed record EnvironmentLifecycleSnapshot(
     EnvironmentGenerationFence Fence,
     EnvironmentLifecycleState State);
 
-/// <summary>
-/// Compare-and-swap request for Environment lifecycle registration or transition.
-/// Generation zero is reserved for initial activation; later changes use the expected generation.
-/// </summary>
 public sealed record EnvironmentLifecycleTransitionRequest
 {
-    /// <summary>Creates a lifecycle transition with a bounded idempotency key and valid state.</summary>
-    /// <exception cref="ArgumentException">The owner, transition, or idempotency key is invalid.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">The expected generation or state is invalid.</exception>
     public EnvironmentLifecycleTransitionRequest(
         EnvironmentOwnerIdentity owner,
         long expectedLifecycleGeneration,
@@ -105,12 +88,10 @@ public sealed record EnvironmentLifecycleTransitionRequest
     public string IdempotencyKey { get; }
 }
 
-/// <summary>New lifecycle snapshot and whether the request replayed an earlier transition.</summary>
 public sealed record EnvironmentLifecycleTransitionResult(
     EnvironmentLifecycleSnapshot Snapshot,
     bool Replayed);
 
-/// <summary>Operations that change a workspace volume's provider resource or attachment state.</summary>
 public enum EnvironmentWorkspaceVolumeOperation
 {
     Create,
@@ -124,7 +105,6 @@ public enum EnvironmentWorkspaceVolumeOperation
     Release
 }
 
-/// <summary>Committed lifecycle phase of an Environment-owned workspace volume.</summary>
 public enum EnvironmentWorkspaceVolumeState
 {
     Requested,
@@ -134,7 +114,6 @@ public enum EnvironmentWorkspaceVolumeState
     Released
 }
 
-/// <summary>Whether a reserved provider effect is pending, verified, uncertain, or stale.</summary>
 public enum EnvironmentWorkspaceVolumeTransitionState
 {
     Reserved,
@@ -145,16 +124,8 @@ public enum EnvironmentWorkspaceVolumeTransitionState
     Stale
 }
 
-/// <summary>
-/// Owner snapshot of one workspace volume. Transition revision fences metadata changes;
-/// resource generation identifies provider replacement; data generation advances only
-/// when durable workspace contents are flushed.
-/// </summary>
 public sealed record EnvironmentWorkspaceVolumeSnapshot
 {
-    /// <summary>Creates a volume snapshot and checks phase, provider resource, and binding consistency.</summary>
-    /// <exception cref="ArgumentException">The specification or provider/resource binding conflicts with the phase.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">A revision, generation, or enum value is invalid.</exception>
     public EnvironmentWorkspaceVolumeSnapshot(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -220,7 +191,6 @@ public sealed record EnvironmentWorkspaceVolumeSnapshot
     public string VolumeId { get; }
     public long TransitionRevision { get; }
     public long ResourceGeneration { get; }
-    /// <summary>Data durability generation, distinct from the provider resource generation.</summary>
     public long DataGeneration { get; }
     public EnvironmentWorkspaceVolumeState Phase { get; }
     public EnvironmentWorkspaceVolumeOperation LastOperation { get; }
@@ -228,7 +198,6 @@ public sealed record EnvironmentWorkspaceVolumeSnapshot
     public ProviderResourceRef? Resource { get; }
     public WorkspaceVolumeProviderBindingSnapshot? ProviderBinding { get; }
 
-    /// <summary>Checks that an active provider resource is from Storage and matches the supplied generation.</summary>
     internal static void ValidateStorageResource(
         ProviderResourceRef? resource,
         long generation,
@@ -250,15 +219,8 @@ public sealed record EnvironmentWorkspaceVolumeSnapshot
     }
 }
 
-/// <summary>
-/// Fenced reservation for a workspace-volume transition. Expected values describe the
-/// pre-state; target values are the next transition/data/resource generations.
-/// </summary>
 public sealed record EnvironmentWorkspaceVolumeTransitionReservation
 {
-    /// <summary>Creates a reservation and validates its expected and target generation relationship.</summary>
-    /// <exception cref="ArgumentException">Current resource and provider binding are incomplete or inconsistent.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">Transition or generation values are invalid.</exception>
     public EnvironmentWorkspaceVolumeTransitionReservation(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -339,20 +301,12 @@ public sealed record EnvironmentWorkspaceVolumeTransitionReservation
     public EnvironmentWorkspaceVolumeOperation Operation { get; }
     public EnvironmentWorkspaceVolumeTransitionState TransitionState { get; }
     public bool Replayed { get; }
-    /// <summary>Verified flush proof attached to this reservation, when the operation is a flush.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public WorkspaceVolumeFlushEvidence? FlushEvidence { get; init; }
 }
 
-/// <summary>
-/// Result of a volume effect, carrying both the expected pre-state and committed target
-/// so consumers can detect stale completions and uncertain provider effects.
-/// </summary>
 public sealed record EnvironmentWorkspaceVolumeTransitionResult
 {
-    /// <summary>Creates a transition result and checks resource presence for its generations and state.</summary>
-    /// <exception cref="ArgumentException">Resource references contradict the expected or completed target state.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">Transition or generation values are invalid.</exception>
     public EnvironmentWorkspaceVolumeTransitionResult(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -436,19 +390,16 @@ public sealed record EnvironmentWorkspaceVolumeTransitionResult
     public EnvironmentWorkspaceVolumeOperation Operation { get; }
     public EnvironmentWorkspaceVolumeTransitionState TransitionState { get; }
     public bool Replayed { get; }
-    /// <summary>Durable flush proof associated with this transition, when verified.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public WorkspaceVolumeFlushEvidence? FlushEvidence { get; init; }
 }
 
-/// <summary>Effect applied to a network policy resource by the Environment owner.</summary>
 public enum EnvironmentNetworkEffectKind
 {
     Apply,
     Revoke
 }
 
-/// <summary>Lifecycle of a reserved network-policy provider effect.</summary>
 public enum EnvironmentNetworkEffectState
 {
     Reserved,
@@ -459,7 +410,6 @@ public enum EnvironmentNetworkEffectState
     Stale
 }
 
-/// <summary>Fenced reservation for applying or revoking one network-policy generation.</summary>
 public sealed record EnvironmentNetworkEffectReservation(
     Guid OperationId,
     EnvironmentGenerationFence Fence,
@@ -470,14 +420,12 @@ public sealed record EnvironmentNetworkEffectReservation(
     EnvironmentNetworkEffectState State,
     bool Replayed);
 
-/// <summary>Provider observation used to reconcile an uncertain network-policy effect.</summary>
 public sealed record EnvironmentNetworkEffectObservation(
     bool ObjectVerified,
     long? AppliedIntentGeneration,
     bool Revoked,
     string? IntentHash);
 
-/// <summary>State of background cleanup for a replaced workspace resource.</summary>
 public enum EnvironmentWorkspaceVolumeCleanupState
 {
     Pending,
@@ -486,7 +434,6 @@ public enum EnvironmentWorkspaceVolumeCleanupState
     Completed
 }
 
-/// <summary>Cleanup work identity and current lease state for one retired resource generation.</summary>
 public sealed record EnvironmentWorkspaceVolumeCleanupStatus(
     Guid WorkId,
     Guid SourceReplaceOperationId,
@@ -496,7 +443,6 @@ public sealed record EnvironmentWorkspaceVolumeCleanupStatus(
     long LeaseRevision,
     DateTimeOffset? LeaseExpiresAt);
 
-/// <summary>Fenced cleanup lease with the exact prior volume reference and provider release request.</summary>
 public sealed record EnvironmentWorkspaceVolumeCleanupLease(
     Guid WorkId,
     EnvironmentGenerationFence Fence,
@@ -509,8 +455,6 @@ public sealed record EnvironmentWorkspaceVolumeCleanupLease(
     Guid LeaseId,
     DateTimeOffset LeaseExpiresAt)
 {
-    /// <summary>Validates that the lease still identifies the expected retired resource and Environment.</summary>
-    /// <exception cref="ArgumentException">The lease identity, release target, generation, or expiry is invalid.</exception>
     public EnvironmentWorkspaceVolumeCleanupLease Validate()
     {
         ArgumentNullException.ThrowIfNull(Fence);
@@ -532,30 +476,21 @@ public sealed record EnvironmentWorkspaceVolumeCleanupLease(
     }
 }
 
-/// <summary>
-/// Environment owner persistence boundary for lifecycle fences, provider-effect reservations,
-/// workspace-volume generations, durable flush evidence, and cleanup leases.
-/// Implementations use the expected revisions/fences to reject stale or replayed effects.
-/// </summary>
 public interface IEnvironmentLifecycleStore
 {
-    /// <summary>Reads the lifecycle snapshot for an owner, or null before registration.</summary>
     Task<EnvironmentLifecycleSnapshot?> GetAsync(
         EnvironmentOwnerIdentity owner,
         CancellationToken cancellationToken);
 
-    /// <summary>Requires the supplied lifecycle fence to remain current and active.</summary>
     Task<EnvironmentLifecycleSnapshot> RequireActiveAsync(
         EnvironmentGenerationFence fence,
         CancellationToken cancellationToken);
 
-    /// <summary>Registers or transitions lifecycle state using expected-generation and idempotency checks.</summary>
     Task<EnvironmentLifecycleTransitionResult> TransitionAsync(
         EnvironmentLifecycleTransitionRequest request,
         CancellationToken cancellationToken,
         Func<CancellationToken, Task>? beforeCommitCheck = null);
 
-    /// <summary>Reserves an apply/revoke effect for an exact network policy generation.</summary>
     Task<EnvironmentNetworkEffectReservation> ReserveNetworkEffectAsync(
         EnvironmentGenerationFence fence,
         string resourceId,
@@ -565,27 +500,23 @@ public interface IEnvironmentLifecycleStore
         string idempotencyKey,
         CancellationToken cancellationToken);
 
-    /// <summary>Reads a reserved network effect only while the supplied Environment fence is current.</summary>
     Task<EnvironmentNetworkEffectReservation> GetNetworkEffectAsync(
         Guid operationId,
         EnvironmentGenerationFence currentFence,
         CancellationToken cancellationToken);
 
-    /// <summary>Requires durable proof that the exact network-policy generation is currently applied.</summary>
     Task RequireVerifiedNetworkPolicyGenerationAsync(
         EnvironmentGenerationFence fence,
         string resourceId,
         long policyGeneration,
         CancellationToken cancellationToken);
 
-    /// <summary>Reads verification state for the exact current network-policy generation.</summary>
     Task ReadVerifiedNetworkPolicyGenerationAsync(
         EnvironmentGenerationFence fence,
         string resourceId,
         long policyGeneration,
         CancellationToken cancellationToken);
 
-    /// <summary>Records effect completion, retaining reconciliation state if application may be uncertain.</summary>
     Task<EnvironmentNetworkEffectReservation> CompleteNetworkEffectAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,
@@ -593,20 +524,17 @@ public interface IEnvironmentLifecycleStore
         bool exactGenerationVerified,
         CancellationToken cancellationToken);
 
-    /// <summary>Reconciles a network effect against an owner/provider observation.</summary>
     Task<EnvironmentNetworkEffectReservation> MarkNetworkEffectReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence fence,
         EnvironmentNetworkEffectObservation observation,
         CancellationToken cancellationToken);
 
-    /// <summary>Reads a volume snapshot within the supplied Environment generation.</summary>
     Task<EnvironmentWorkspaceVolumeSnapshot?> GetWorkspaceVolumeAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
         CancellationToken cancellationToken);
 
-    /// <summary>Creates a volume definition with its initial specification and idempotency key.</summary>
     Task<EnvironmentWorkspaceVolumeSnapshot> CreateWorkspaceVolumeAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -614,7 +542,6 @@ public interface IEnvironmentLifecycleStore
         string idempotencyKey,
         CancellationToken cancellationToken);
 
-    /// <summary>Reserves provider provisioning against expected transition, resource, and data generations.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeProvisionAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -624,7 +551,6 @@ public interface IEnvironmentLifecycleStore
         string idempotencyKey,
         CancellationToken cancellationToken);
 
-    /// <summary>Completes provisioning only with the effect status and exact negotiated Storage resource.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeProvisionAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -634,13 +560,11 @@ public interface IEnvironmentLifecycleStore
         bool effectVerified,
         CancellationToken cancellationToken);
 
-    /// <summary>Reconciles an uncertain volume-provision operation against current provider state.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeProvisionReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
         CancellationToken cancellationToken);
 
-    /// <summary>Reserves replacement of a provider resource at the expected volume generations.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeReplaceAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -650,7 +574,6 @@ public interface IEnvironmentLifecycleStore
         string idempotencyKey,
         CancellationToken cancellationToken);
 
-    /// <summary>Commits the replacement resource only after its provider effect is verified.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeReplaceAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -660,13 +583,11 @@ public interface IEnvironmentLifecycleStore
         bool effectVerified,
         CancellationToken cancellationToken);
 
-    /// <summary>Reconciles an uncertain replacement against the provider's current resource.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeReplaceReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
         CancellationToken cancellationToken);
 
-    /// <summary>Reserves binding of a ready volume to an Environment consumer.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeBindAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -676,7 +597,6 @@ public interface IEnvironmentLifecycleStore
         string idempotencyKey,
         CancellationToken cancellationToken);
 
-    /// <summary>Commits the volume binding only when the provider effect is verified.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeBindAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -685,13 +605,11 @@ public interface IEnvironmentLifecycleStore
         bool effectVerified,
         CancellationToken cancellationToken);
 
-    /// <summary>Reconciles an uncertain binding operation against provider state.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeBindReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
         CancellationToken cancellationToken);
 
-    /// <summary>Reserves unbinding of a volume from its current consumer.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeUnbindAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -701,7 +619,6 @@ public interface IEnvironmentLifecycleStore
         string idempotencyKey,
         CancellationToken cancellationToken);
 
-    /// <summary>Commits the volume unbinding only when the provider effect is verified.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeUnbindAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -710,13 +627,11 @@ public interface IEnvironmentLifecycleStore
         bool effectVerified,
         CancellationToken cancellationToken);
 
-    /// <summary>Reconciles an uncertain unbinding operation against provider state.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeUnbindReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
         CancellationToken cancellationToken);
 
-    /// <summary>Reserves attachment of the exact Storage resource to a runtime consumer.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeAttachAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -726,7 +641,6 @@ public interface IEnvironmentLifecycleStore
         string idempotencyKey,
         CancellationToken cancellationToken);
 
-    /// <summary>Commits attachment only after the provider reports the expected effect.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeAttachAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -735,13 +649,11 @@ public interface IEnvironmentLifecycleStore
         bool effectVerified,
         CancellationToken cancellationToken);
 
-    /// <summary>Reconciles an uncertain attachment against the provider's actual state.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeAttachReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
         CancellationToken cancellationToken);
 
-    /// <summary>Reserves detachment of a bound volume at its expected generation.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeDetachAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -751,7 +663,6 @@ public interface IEnvironmentLifecycleStore
         string idempotencyKey,
         CancellationToken cancellationToken);
 
-    /// <summary>Completes detachment and optionally rechecks authority before committing owner state.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeDetachAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -761,13 +672,11 @@ public interface IEnvironmentLifecycleStore
         CancellationToken cancellationToken,
         Func<CancellationToken, Task>? beforeCommitCheck = null);
 
-    /// <summary>Reconciles an uncertain detachment against provider state.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeDetachReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
         CancellationToken cancellationToken);
 
-    /// <summary>Reserves a durable data flush to the explicitly supplied next data generation.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeFlushAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -778,7 +687,6 @@ public interface IEnvironmentLifecycleStore
         string idempotencyKey,
         CancellationToken cancellationToken);
 
-    /// <summary>Completes a flush only when effect and durable-flush evidence are verified.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeFlushAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -788,8 +696,6 @@ public interface IEnvironmentLifecycleStore
         bool durableFlushVerified,
         CancellationToken cancellationToken);
 
-    /// <summary>Completes a flush with provider-issued durable evidence and a final authority check.</summary>
-    /// <remarks>The default implementation rejects this operation so unsupported owners fail closed.</remarks>
     Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeFlushAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -800,14 +706,11 @@ public interface IEnvironmentLifecycleStore
         Func<CancellationToken, Task>? beforeCommitCheck = null) =>
         throw new NotSupportedException("The Environment owner cannot persist verified workspace flush evidence.");
 
-    /// <summary>Reconciles an uncertain flush without claiming durability unless evidence is available.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeFlushReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
         CancellationToken cancellationToken);
 
-    /// <summary>Reads durable flush evidence for the exact current volume transition.</summary>
-    /// <remarks>The default implementation rejects reads so unsupported owners fail closed.</remarks>
     Task<WorkspaceVolumeFlushEvidence?> GetWorkspaceVolumeFlushEvidenceAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -815,8 +718,6 @@ public interface IEnvironmentLifecycleStore
         CancellationToken cancellationToken) =>
         throw new NotSupportedException("The Environment owner cannot read durable workspace flush evidence.");
 
-    /// <summary>Reads retained flush evidence across a lifecycle replacement using both source and current fences.</summary>
-    /// <remarks>The default implementation rejects reads so unsupported owners fail closed.</remarks>
     Task<WorkspaceVolumeFlushEvidence?> GetRetainedWorkspaceVolumeFlushEvidenceAsync(
         EnvironmentGenerationFence currentFence,
         EnvironmentGenerationFence sourceFence,
@@ -825,7 +726,6 @@ public interface IEnvironmentLifecycleStore
         CancellationToken cancellationToken) =>
         throw new NotSupportedException("The Environment owner cannot read retained workspace flush evidence.");
 
-    /// <summary>Reserves release of the exact provider resource at expected transition and data generations.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveWorkspaceVolumeReleaseAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -835,7 +735,6 @@ public interface IEnvironmentLifecycleStore
         string idempotencyKey,
         CancellationToken cancellationToken);
 
-    /// <summary>Commits release only when the external provider confirms the resource is released.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> CompleteWorkspaceVolumeReleaseAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
@@ -843,31 +742,26 @@ public interface IEnvironmentLifecycleStore
         bool releaseVerified,
         CancellationToken cancellationToken);
 
-    /// <summary>Reconciles an uncertain release against the provider's current resource state.</summary>
     Task<EnvironmentWorkspaceVolumeTransitionResult> MarkWorkspaceVolumeReleaseReconciledAsync(
         Guid operationId,
         EnvironmentGenerationFence environmentFence,
         CancellationToken cancellationToken);
 
-    /// <summary>Claims pending cleanup work with a bounded lease under the current Environment fence.</summary>
     Task<EnvironmentWorkspaceVolumeCleanupLease?> ClaimWorkspaceVolumeCleanupAsync(
         EnvironmentGenerationFence environmentFence,
         Guid? sourceReplaceOperationId,
         TimeSpan leaseDuration,
         CancellationToken cancellationToken);
 
-    /// <summary>Completes cleanup only when its release receipt matches the current lease.</summary>
     Task<EnvironmentWorkspaceVolumeCleanupStatus> CompleteWorkspaceVolumeCleanupAsync(
         EnvironmentWorkspaceVolumeCleanupLease lease,
         WorkspaceVolumeReleaseReceipt receipt,
         CancellationToken cancellationToken);
 
-    /// <summary>Releases the matching cleanup lease without marking the resource deleted.</summary>
     Task ReleaseWorkspaceVolumeCleanupLeaseAsync(
         EnvironmentWorkspaceVolumeCleanupLease lease,
         CancellationToken cancellationToken);
 
-    /// <summary>Reads cleanup status for a resource replaced by the specified operation.</summary>
     Task<EnvironmentWorkspaceVolumeCleanupStatus?> GetWorkspaceVolumeCleanupStatusAsync(
         EnvironmentGenerationFence environmentFence,
         Guid sourceReplaceOperationId,

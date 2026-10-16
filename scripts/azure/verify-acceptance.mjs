@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-/**
- * Evaluates deployment acceptance evidence for the dedicated Azure environment.
- * Checks return structured passed/blocked results; optional integration probes create temporary resources.
- */
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
@@ -35,7 +31,6 @@ function hasExactKeys(value, keys) {
     Object.keys(value).length === keys.length && keys.every(key => Object.hasOwn(value, key));
 }
 
-/** Checks that AKS network security settings and the cluster identity match the expected target. */
 export function checkAksNetworkSecurity({ clusterId, resourceGroup, subscriptionId }, execAz) {
   const name = 'aks-observed-network-security';
   const expectedClusterId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}` +
@@ -106,7 +101,6 @@ export function checkAksNetworkSecurity({ clusterId, resourceGroup, subscription
   });
 }
 
-/** Compares deployed image/source evidence with the exact source SHA selected for acceptance. */
 export function checkDeployedSha({
   resourceGroup, subscriptionId, deploymentName, expectedSha, sourceTree, sourceHash, scope = 'infrastructure-only',
   foundationSource,
@@ -220,13 +214,11 @@ export function checkDeployedSha({
   }
 }
 
-/** Reports whether each expected service has an immutable image digest in the acceptance input. */
 export function checkServiceDigests({ services = {} }) {
   return blocked('service-image-digests', 'Caller digest strings do not prove a running pod/image. #1784 workload evidence is required.',
     { services, verified: false });
 }
 
-/** Reads the configured workload identity bindings and reports missing or mismatched assignments. */
 export function checkWorkloadIdentity({ clusterName, resourceGroup, identityChecks = [] }, execAz) {
   const name = 'workload-identity-oidc';
   const issuer = execAz(['aks', 'show', '--resource-group', resourceGroup, '--name', clusterName,
@@ -255,7 +247,6 @@ export function checkWorkloadIdentity({ clusterName, resourceGroup, identityChec
   return configured(name, { issuerUrl, identities, exact: true, tokenExchangeVerified: false });
 }
 
-/** Checks that a secret reference pins a concrete Key Vault version rather than a moving alias. */
 export function checkKeyVaultSecretVersion({ secretVersion }) {
   return blocked('key-vault-secret-version', secretVersion ?
     'An operator secret lookup is not workload-identity proof. #1784 must redeem this exact version.' :
@@ -264,10 +255,6 @@ export function checkKeyVaultSecretVersion({ secretVersion }) {
 
 // Operator diagnostics only. #1784 owns the SDK workload probe.
 // A unique generation plus If-None-Match prevents overwriting another writer.
-/**
- * Optionally performs a temporary blob upload/read/delete round trip and returns its evidence.
- * Without explicit probe execution, it reports a blocked integration check without creating resources.
- */
 export function checkBlobRoundtrip({ accountName, container, executeProbes = false, repoRoot = process.cwd() },
   execAz, { uuid = randomUUID } = {}) {
   const name = 'blob-roundtrip';
@@ -330,7 +317,6 @@ export function checkBlobRoundtrip({ accountName, container, executeProbes = fal
     { blobName, generation, cleanupFailed: false, operatorOnly: true });
 }
 
-/** Verifies that a trace query returns the expected acceptance marker and source evidence. */
 export function checkMonitorTrace({
   workspaceId, query, runId, expectedSha, sourceTree, traceId, spanId, startedAt, completedAt,
 },
@@ -412,10 +398,6 @@ function resolveImageSource(config, receiptPath, sourceResolver, readImageReceip
   return { sha: source.sha, sourceTree: source.sourceTree, sourceHash: source.sourceHash };
 }
 
-/**
- * Runs configuration and optional live integration checks, then writes the acceptance report.
- * Individual failures are recorded as blocked results; setup or report I/O failures throw.
- */
 export function runAcceptance(config, {
   execAz = runAz,
   execKubectl = (args, options) => run('kubectl', args, options),

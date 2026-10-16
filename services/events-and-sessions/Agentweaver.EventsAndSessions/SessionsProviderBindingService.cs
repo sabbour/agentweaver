@@ -6,26 +6,17 @@ using Npgsql;
 
 namespace Agentweaver.EventsAndSessions;
 
-/// <summary>Resolves a Sessions provider for a run and verifies its immutable saved binding.</summary>
 public interface ISessionsProviderBinder
 {
-    /// <summary>Returns the run's existing provider pin or negotiates and pins the configured provider.</summary>
-    /// <param name="principal">The caller whose project/run claims define the binding scope.</param>
-    /// <param name="cancellationToken">Cancels database negotiation or provider checks.</param>
-    /// <returns>The exact persisted or newly negotiated provider binding.</returns>
     Task<SessionProviderBinding> ResolveAndPinAsync(
         ClaimsPrincipal principal, CancellationToken cancellationToken = default);
 
-    /// <summary>Checks the saved binding against the exact provider, options, resource, and capabilities still available.</summary>
     Task VerifyPinnedAsync(
         ClaimsPrincipal principal,
         SessionProviderBinding binding,
         CancellationToken cancellationToken = default);
 }
 
-/// <summary>
-/// Uses the native PostgreSQL Sessions adapter and provider catalog to keep one provider identity fixed per run.
-/// </summary>
 public sealed class SessionsProviderBindingService : ISessionsProviderBinder
 {
     private readonly NativePostgresSessionsProvider _provider;
@@ -63,7 +54,6 @@ public sealed class SessionsProviderBindingService : ISessionsProviderBinder
         var runScope = scope.Value;
         try
         {
-            // An existing run is resolved only through its recorded provider, never a changed platform default.
             var pinned = await _journal.GetRunProviderBindingAsync(
                 principal, runScope.ProjectId, runScope.RunId, cancellationToken).ConfigureAwait(false);
             await VerifyPinnedAsync(principal, pinned, cancellationToken).ConfigureAwait(false);
@@ -146,7 +136,6 @@ public sealed class SessionsProviderBindingService : ISessionsProviderBinder
                 "The exact pinned Sessions provider binding has changed.");
     }
 
-    /// <summary>Copies the provider resolver's negotiated identity into the journal contract.</summary>
     private static SessionProviderBinding ToContractBinding(
         string projectId,
         PinnedProviderBinding binding) =>
@@ -162,5 +151,4 @@ public sealed class SessionsProviderBindingService : ISessionsProviderBinder
             binding.NegotiatedCapabilities);
 }
 
-/// <summary>Signals that the configured Sessions provider could not be resolved for a run.</summary>
 public sealed class SessionsProviderUnavailableException(string message) : Exception(message);

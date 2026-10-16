@@ -143,10 +143,6 @@ export interface RunCardProps {
 
 // Read-only coordinator-run card. Not draggable — the coordinator owns workflow movement.
 // Links to the coordinator topology/graph page (FR-016).
-/**
- * Renders a board task's active run summary and run actions from API-backed task data.
- * AI execution context is read through `useAiExecutionContext`; local state handles card actions.
- */
 export function RunCard({ card, projectId, onMutated }: RunCardProps) {
   const styles = useStyles();
   const navigate = useNavigate();
