@@ -631,6 +631,12 @@ Admission has two parts:
   environment. The publisher reads that approval from the GitHub API before
   any mutation. A run without it stops, even if the job started.
 
+The workflow downloads the original pack and receipt artifacts by ID with
+`merge-multiple: true`. Without it, `actions/download-artifact@v4` extracts a
+by-ID download into a subdirectory named after the artifact, and the publisher
+can't find `provenance.json` or `publication.json`. Run `38958385097` failed
+this way before it read any artifact or wrote any record.
+
 Before writing anything, the continuation checks:
 
 - the exact original receipt bytes and provenance hash
