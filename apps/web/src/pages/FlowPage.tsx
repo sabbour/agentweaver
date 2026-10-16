@@ -30,6 +30,11 @@ import type { Project, WorkflowRunDto } from '../api/types';
 // keeps only a compact per-run presence rail). Data comes from the project board's
 // agent_queues aggregate (real data; no mocks). Auto-refreshes every 5s.
 
+/**
+ * Live project workbench with an optional URL-backed agent filter and a terminal-run
+ * archive for that agent. Board queues refresh periodically; archive results load
+ * only when an agent is selected.
+ */
 const REFRESH_MS = 5000;
 
 const useStyles = makeStyles({
@@ -212,6 +217,7 @@ const useStyles = makeStyles({
   },
 });
 
+/** Maps terminal workflow states to the status badge severity. */
 function terminalStatusColor(status: string): 'success' | 'danger' | 'warning' | 'subtle' {
   switch (status) {
     case 'merged':
@@ -228,6 +234,7 @@ function terminalStatusColor(status: string): 'success' | 'danger' | 'warning' |
   }
 }
 
+/** Uses the completion time when present, otherwise the start time for older runs. */
 function formatEndedAt(run: WorkflowRunDto): string {
   const timestamp = run.ended_at ?? run.started_at;
   return new Date(timestamp).toLocaleString();
@@ -236,6 +243,7 @@ function formatEndedAt(run: WorkflowRunDto): string {
 // Renders up to 2 sample task titles, clamped to 2 lines each, with a "+N more" tail
 // instead of an unbounded raw list — long/duplicate goal strings from thin backend
 // data can never blow out card height this way.
+/** Limits the card preview to two task titles and reports the remaining count. */
 function TaskPreview({ titles, styles }: { titles: string[]; styles: ReturnType<typeof useStyles> }) {
   if (titles.length === 0) return null;
   const visible = titles.slice(0, 2);
@@ -250,6 +258,7 @@ function TaskPreview({ titles, styles }: { titles: string[]; styles: ReturnType<
   );
 }
 
+/** Renders one agent's queue counts and links to its current orchestrations. */
 function AgentCard({ agent, projectId }: { agent: AgentQueueItem; projectId: string }) {
   const styles = useStyles();
   const hasGroups = agent.orchestrations && agent.orchestrations.length > 0;
@@ -327,6 +336,8 @@ export function FlowPage() {
   const [searchParams] = useSearchParams();
   const selectedAgent = searchParams.get('agent')?.trim() ?? '';
 
+  // Live queue data and selected-agent history have independent loading/error
+  // lifecycles; the URL query keeps filtered views linkable from the dashboard.
   const [agents, setAgents] = useState<AgentQueueItem[]>([]);
   const [history, setHistory] = useState<WorkflowRunDto[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -343,6 +354,8 @@ export function FlowPage() {
         ? err.message
         : String(err);
 
+  // Load project metadata once per route change and poll the board while mounted.
+  // The cancellation flag prevents old project responses from replacing the view.
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
@@ -374,6 +387,8 @@ export function FlowPage() {
     };
   }, [projectId]);
 
+  // Fetch only terminal runs for the selected agent; clearing the filter also clears
+  // the archive, and the cancellation guard handles rapid agent changes.
   useEffect(() => {
     let cancelled = false;
     const loadHistory = async () => {
@@ -406,6 +421,7 @@ export function FlowPage() {
     };
   }, [projectId, selectedAgent]);
 
+  // Rank agents by weighted in-flight work, then apply the optional exact-name filter.
   const sorted = useMemo(
     () =>
       [...agents].sort(

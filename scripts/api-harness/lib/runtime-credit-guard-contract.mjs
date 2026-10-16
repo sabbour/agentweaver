@@ -1,3 +1,5 @@
+/** Static OpenAPI contract and runtime validators for the actor-authorized credit-guard read. */
+/** JSON Schema fragments shared by the static credit-guard request and response contract. */
 const sha256 = {
   type: 'string',
   pattern: '^[a-f0-9]{64}$',
@@ -159,6 +161,7 @@ const contract = {
   },
 };
 
+/** Recursively freeze the exported contract so callers cannot alter the expected API shape. */
 function deepFreeze(value) {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
     Object.freeze(value);
@@ -167,9 +170,12 @@ function deepFreeze(value) {
   return value;
 }
 
+/** Immutable OpenAPI description of the actor-authorized credit-guard read endpoint. */
 export const RUNTIME_CREDIT_GUARD_READ_CONTRACT = deepFreeze(contract);
+/** Direct Orchestrator route used by the credit-guard snapshot reader. */
 export const RUNTIME_CREDIT_GUARD_READ_PATH = '/internal/runtime/credit-guards/read';
 
+/** Require an object with exactly the contract's declared keys. */
 function exactKeys(value, expected, label) {
   if (!value || typeof value !== 'object' || Array.isArray(value)
     || Object.keys(value).length !== expected.length
@@ -205,6 +211,7 @@ function dateTime(value) {
     && Number.isFinite(Date.parse(value));
 }
 
+/** Validate the exact tenant, run, selection, fence, and credit limits used for a read. */
 function validateIntent(value, label = 'intent') {
   const fields = [
     'contractVersion', 'runtimeInstanceId', 'registrationRevision', 'tenantId',
@@ -226,6 +233,7 @@ function validateIntent(value, label = 'intent') {
   }
 }
 
+/** Validate the short-lived Observe credential proof and bind it to the intent runtime instance. */
 function validateCredentialProof(value, runtimeInstanceId) {
   const fields = [
     'grantId', 'runtimeInstanceId', 'revision', 'purpose', 'audience',
@@ -252,12 +260,17 @@ function validateCredentialProof(value, runtimeInstanceId) {
   }
 }
 
+/** Reject read requests that do not match the static owner route contract. */
 export function validateRuntimeCreditGuardReadRequest(request) {
   exactKeys(request, ['authorization', 'intent'], 'request');
   validateIntent(request.intent);
   validateCredentialProof(request.authorization, request.intent.runtimeInstanceId);
 }
 
+/**
+ * Validate a successful snapshot and require every intent field to match the original read request.
+ * Throws a TypeError for unexpected fields, invalid hashes, or an owner-scope mismatch.
+ */
 export function validateRuntimeCreditGuardSnapshot(value, requestedIntent) {
   const fields = [
     'intent', 'registrationHash', 'costIdentity', 'costUnit', 'costScope',

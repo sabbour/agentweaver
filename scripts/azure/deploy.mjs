@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+/**
+ * Azure deployment entry point for the dedicated v1 P0 environment.
+ * It validates the selected source and target before provisioning the foundation and identity resources.
+ */
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { runAz } from './lib/exec.mjs';
@@ -26,6 +30,7 @@ import {
 
 const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
+/** Builds the literal Azure CLI argument list for a source-bound infrastructure deployment. */
 export function buildDeployArgs({
   resourceGroup, template, parametersFile, deploymentName, subscription, sourceSha, sourceTree, sourceHash,
   operatorObjectId, operatorRoleAssignmentName,
@@ -44,6 +49,10 @@ export function buildDeployArgs({
     '--mode', 'Incremental', '--name', deploymentName, '--subscription', subscription, '-o', 'json'];
 }
 
+/**
+ * Validates the Azure target and source, then runs the requested deployment and bootstrap steps.
+ * Azure or bootstrap errors are propagated; mutating work is gated by the explicit execute setting.
+ */
 export async function deploy(config, {
   execAz = runAz, sourceResolver = resolveSource, bootstrapNamespace = bootstrapP0Namespace,
   initializeIdentityPostgres = bootstrapIdentityPostgres,
@@ -374,6 +383,7 @@ export async function deploy(config, {
     ...deploymentReceipt, autoscaling } };
 }
 
+/** Converts parsed command-line values into the deployment configuration consumed by deploy(). */
 export function cliConfig(values) {
   return { resourceGroup: values['resource-group'], template: values.template, parametersFile: values.parameters,
     repoRoot: process.cwd(), execute: values.execute, subscriptionId: values.subscription,
@@ -398,6 +408,7 @@ export function cliConfig(values) {
     confirmBrokerCallback: values['confirm-identity-broker-callback'] };
 }
 
+/** CLI option definitions shared by the deployment and planning entry points. */
 export const cliOptions = {
   'resource-group': { type: 'string' }, template: { type: 'string', default: 'infra/bicep/main.bicep' },
   parameters: { type: 'string' }, subscription: { type: 'string' }, 'allowed-subscription': { type: 'string' },

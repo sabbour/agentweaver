@@ -17,9 +17,11 @@ import {
 } from './copilotCallback';
 import type { CopilotCallbackMessage } from './copilotCallback';
 
+/** Maximum time a popup authorization attempt may remain pending. */
 const POPUP_TIMEOUT_MS = 10 * 60 * 1000;
 const POPUP_POLL_INTERVAL_MS = 250;
 
+/** Popup and identity snapshot retained while the owner connection is pending. */
 interface PendingConnection {
   popup: Window;
   state: string;
@@ -33,6 +35,7 @@ interface PendingConnection {
   timeoutId?: number;
 }
 
+/** Captured scope for a begin request that has not yet returned its connection. */
 interface StartingConnection {
   popup: Window;
   projectId: string;
@@ -40,6 +43,7 @@ interface StartingConnection {
   generation: number;
 }
 
+/** Formats Broker/Gateway failures for the connection panel. */
 function messageForError(reason: unknown): string {
   if (reason instanceof GatewayError) {
     const code = reason.code ? ` (${reason.code})` : '';
@@ -48,6 +52,7 @@ function messageForError(reason: unknown): string {
   return reason instanceof Error ? reason.message : 'The GitHub Copilot connection failed.';
 }
 
+/** Rejects any connection receipt not bound to the selected project and connection. */
 function receiptForProject(
   value: unknown,
   connectionId: string,
@@ -62,6 +67,7 @@ function receiptForProject(
   return value;
 }
 
+/** Builds the same-origin HTTPS callback expected by the Gateway nonce cookie. */
 function copilotCallbackUri(): string {
   if (window.location.protocol !== 'https:') {
     throw new Error('Open project settings over HTTPS before connecting GitHub Copilot.');
@@ -73,6 +79,7 @@ function copilotCallbackUri(): string {
   return new URL(COPILOT_CALLBACK_PATH, window.location.origin).toString();
 }
 
+/** Converts connection state into the short label shown to the operator. */
 function stateLabel(state: CopilotConnectionReceipt['state']): string {
   switch (state) {
     case 'pending': return 'Authorization pending';
@@ -85,6 +92,11 @@ function stateLabel(state: CopilotConnectionReceipt['state']): string {
   }
 }
 
+/**
+ * Connects project-scoped GitHub Copilot through a tracked popup.
+ * Callback origin, popup identity, state, actor, project scope, and connection
+ * ID are checked before the Gateway completion and status calls are accepted.
+ */
 export function CopilotUserConnectionPanel({ projectId }: { projectId: string }) {
   const { session, apiCall } = useAuth();
   const accessToken = session?.accessToken;
@@ -446,6 +458,7 @@ export function CopilotUserConnectionPanel({ projectId }: { projectId: string })
   );
 }
 
+/** Chooses a safe status message for the standalone callback relay page. */
 function callbackPageMessage(): string {
   const callback = window.__AGENTWEAVER_COPILOT_CALLBACK__;
   if (!isCopilotCallbackMessage(callback))
@@ -456,6 +469,7 @@ function callbackPageMessage(): string {
   return 'Returning to the project settings window…';
 }
 
+/** Relays the sanitized callback to its same-origin opener and closes the popup. */
 export function CopilotPopupCallbackPage() {
   const [message] = useState(callbackPageMessage);
   const attempted = useRef(false);

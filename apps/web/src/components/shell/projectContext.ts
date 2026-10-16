@@ -7,6 +7,7 @@
 
 const LAST_ACTIVE_KEY = 'agentweaver:last-active-project-id';
 
+/** Reads the last active project ID from browser storage, returning an empty value when absent. */
 export function getLastActiveProjectId(): string | undefined {
   try {
     return localStorage.getItem(LAST_ACTIVE_KEY) ?? undefined;
@@ -15,6 +16,7 @@ export function getLastActiveProjectId(): string | undefined {
   }
 }
 
+/** Stores the last active project ID for the next app-shell visit. */
 export function setLastActiveProjectId(id: string): void {
   try {
     localStorage.setItem(LAST_ACTIVE_KEY, id);
@@ -23,6 +25,7 @@ export function setLastActiveProjectId(id: string): void {
   }
 }
 
+/** Removes the last active project selection from browser storage. */
 export function clearLastActiveProjectId(): void {
   try {
     localStorage.removeItem(LAST_ACTIVE_KEY);

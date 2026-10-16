@@ -3,8 +3,18 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Providers;
 
+/// <summary>
+/// Resolves validated catalog selections into provider candidates and pins the exact
+/// configuration and negotiated resource identity needed by a run.
+/// </summary>
 public sealed class ProviderResolver(ProviderCatalog catalog)
 {
+    /// <summary>
+    /// Resolves one exclusive or platform-singleton seam, applying only an explicitly
+    /// permitted project override. Unsupported cardinalities return a structured error.
+    /// </summary>
+    /// <param name="request">The seam, version, options, and required capabilities to resolve.</param>
+    /// <returns>The selected candidate, explicit Snapshots None result, or a structured failure.</returns>
     public ProviderResult<ProviderResolution> Resolve(ProviderResolutionRequest request)
     {
         if (request is null || !Enum.IsDefined(request.Seam) ||
@@ -44,6 +54,9 @@ public sealed class ProviderResolver(ProviderCatalog catalog)
             : Fail<ProviderResolution>(candidate.Error!.Code, candidate.Error.Message);
     }
 
+    /// <summary>Resolves the provider mapped to an exact cost meter source.</summary>
+    /// <param name="request">The meter source and provider compatibility requirements.</param>
+    /// <returns>The candidate mapped to that source, or a structured failure.</returns>
     public ProviderResult<CostProviderResolution> ResolveCost(CostProviderResolutionRequest request)
     {
         if (request is null || string.IsNullOrWhiteSpace(request.MeterSource) ||
@@ -66,6 +79,15 @@ public sealed class ProviderResolver(ProviderCatalog catalog)
             : Fail<CostProviderResolution>(candidate.Error!.Code, candidate.Error.Message);
     }
 
+    /// <summary>
+    /// Rechecks the meter mapping and candidate configuration before pinning the negotiated
+    /// resource, preventing a stale cost selection from becoming a run binding.
+    /// </summary>
+    /// <param name="runId">The run that owns the resulting binding.</param>
+    /// <param name="resolution">The previously resolved cost provider.</param>
+    /// <param name="expectedResourceId">The resource identity expected from provisioning.</param>
+    /// <param name="negotiation">The provisioner's resource and capabilities.</param>
+    /// <returns>The pinned cost binding or a structured mismatch/validation error.</returns>
     public ProviderResult<PinnedCostProviderBinding> PinCost(
         string runId, CostProviderResolution resolution, string expectedResourceId,
         ResourceNegotiation negotiation)
@@ -100,6 +122,10 @@ public sealed class ProviderResolver(ProviderCatalog catalog)
             : Fail<PinnedCostProviderBinding>(pinned.Error!.Code, pinned.Error.Message);
     }
 
+    /// <summary>Checks that a pinned cost binding still matches the exact configured source and provider.</summary>
+    /// <param name="request">The original meter source and compatibility requirements.</param>
+    /// <param name="pinnedBinding">The immutable run binding to validate.</param>
+    /// <returns>The current matching resolution, or a structured failure.</returns>
     public ProviderResult<CostProviderResolution> VerifyCost(
         CostProviderResolutionRequest request, CostBinding pinnedBinding)
     {
@@ -136,6 +162,12 @@ public sealed class ProviderResolver(ProviderCatalog catalog)
         return current;
     }
 
+    /// <summary>
+    /// Resolves an ordered composite set while preserving unpermitted platform entries in
+    /// their original order and admitting only explicitly permitted project additions.
+    /// </summary>
+    /// <param name="request">The seam and required provider capabilities.</param>
+    /// <returns>The ordered candidates or a structured validation failure.</returns>
     public ProviderResult<OrderedProviderResolution> ResolveOrdered(OrderedProviderResolutionRequest request)
     {
         if (request is null || !Enum.IsDefined(request.Seam) ||
@@ -179,6 +211,9 @@ public sealed class ProviderResolver(ProviderCatalog catalog)
             new OrderedProviderResolution(request.Seam, candidates.ToImmutable()));
     }
 
+    /// <summary>Resolves configured network policy layers, requiring L3/L4 and enforcing requested capabilities.</summary>
+    /// <param name="request">Required L3/L4 and optional L7 capabilities plus compatible versions.</param>
+    /// <returns>The configured layer candidates or a structured failure.</returns>
     public ProviderResult<NetworkPolicyResolution> ResolveNetworkPolicy(NetworkPolicyResolutionRequest request)
     {
         if (request is null ||
@@ -208,6 +243,7 @@ public sealed class ProviderResolver(ProviderCatalog catalog)
         return ProviderResult<NetworkPolicyResolution>.Success(new NetworkPolicyResolution(layers.ToImmutable()));
     }
 
+    /// <summary>Checks registration, enabled state, versions, and advertised capabilities for one candidate.</summary>
     private ProviderResult<ProviderCandidate> Select(string id, ProviderSeam seam, Version version,
         int schema, ImmutableHashSet<string> capabilities)
     {
@@ -233,10 +269,12 @@ public sealed class ProviderResolver(ProviderCatalog catalog)
         return ProviderResult<ProviderCandidate>.Success(new ProviderCandidate(registration, required));
     }
 
+    /// <summary>Validates shared compatibility requirements before consulting the catalog.</summary>
     private static bool ValidRequirements(Version version, int schema, ImmutableHashSet<string> capabilities) =>
         version is not null && schema >= 1 && capabilities is not null &&
         !capabilities.Any(string.IsNullOrWhiteSpace);
 
+    /// <summary>Compares every pinned provider identity and options field to detect stale resolution.</summary>
     private static bool CandidatesMatch(ProviderCandidate left, ProviderCandidate right) =>
         left.Seam == right.Seam &&
         left.ProviderId == right.ProviderId &&
@@ -247,6 +285,11 @@ public sealed class ProviderResolver(ProviderCatalog catalog)
         left.AdvertisedCapabilities.SetEquals(right.AdvertisedCapabilities) &&
         left.RequiredCapabilities.SetEquals(right.RequiredCapabilities);
 
+    /// <summary>Pins each ordered candidate to its corresponding resource input without changing order.</summary>
+    /// <param name="runId">The run that owns the resulting binding.</param>
+    /// <param name="resolution">The previously resolved ordered candidates.</param>
+    /// <param name="inputs">One expected resource and negotiation per candidate, in the same order.</param>
+    /// <returns>The ordered pinned binding or a structured failure.</returns>
     public ProviderResult<PinnedOrderedProviderBinding> PinOrdered(
         string runId, OrderedProviderResolution resolution, IReadOnlyList<ProviderPinInput> inputs)
     {
@@ -268,6 +311,16 @@ public sealed class ProviderResolver(ProviderCatalog catalog)
             new PinnedOrderedProviderBinding(runId, resolution.Seam, bindings.ToImmutable()));
     }
 
+    /// <summary>
+    /// Pins each selected network layer and requires the expected egress-intent generation
+    /// to equal the generation confirmed as applied.
+    /// </summary>
+    /// <param name="runId">The run that owns the resulting binding.</param>
+    /// <param name="resolution">The configured network layers and candidates.</param>
+    /// <param name="inputs">One matching resource negotiation for each layer.</param>
+    /// <param name="expectedIntentGeneration">The generation requested for application.</param>
+    /// <param name="appliedIntentGeneration">The generation confirmed by the policy owner.</param>
+    /// <returns>The pinned layered binding or a structured validation failure.</returns>
     public ProviderResult<PinnedNetworkPolicyBinding> PinNetworkPolicy(
         string runId, NetworkPolicyResolution resolution, IReadOnlyList<ProviderPinInput> inputs,
         long expectedIntentGeneration, long appliedIntentGeneration)
@@ -291,6 +344,15 @@ public sealed class ProviderResolver(ProviderCatalog catalog)
             new PinnedNetworkPolicyBinding(runId, appliedIntentGeneration, bindings.ToImmutable()));
     }
 
+    /// <summary>
+    /// Binds a selected candidate to one matching provisioned resource after checking that
+    /// negotiated capabilities are advertised and include all required capabilities.
+    /// </summary>
+    /// <param name="runId">The run that owns the resulting binding.</param>
+    /// <param name="candidate">The selected provider candidate.</param>
+    /// <param name="expectedResourceId">The exact resource identity expected by the caller.</param>
+    /// <param name="negotiation">The resource identity, generation, and negotiated capabilities.</param>
+    /// <returns>The immutable resource binding or a structured failure.</returns>
     public ProviderResult<PinnedProviderBinding> Pin(
         string runId, ProviderCandidate candidate, string expectedResourceId, ResourceNegotiation negotiation)
     {
@@ -319,6 +381,10 @@ public sealed class ProviderResolver(ProviderCatalog catalog)
             new PinnedProviderBinding(runId, candidate, resource, negotiated));
     }
 
+    /// <summary>Pins the explicit no-snapshot choice without fabricating a provider resource.</summary>
+    /// <param name="runId">The run that owns the no-snapshot binding.</param>
+    /// <param name="resolution">A Snapshots resolution that explicitly represents None.</param>
+    /// <returns>The pinned no-snapshot binding or a structured failure.</returns>
     public ProviderResult<PinnedSnapshotNoneBinding> PinSnapshotNone(string runId, ProviderResolution resolution)
     {
         if (string.IsNullOrWhiteSpace(runId) || resolution is null)

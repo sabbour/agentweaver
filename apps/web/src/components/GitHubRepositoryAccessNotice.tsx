@@ -35,6 +35,10 @@ interface GitHubRepositoryAccessNoticeProps {
   repoAppInstallUrl?: string | null;
 }
 
+/**
+ * Explains repository-access status from the GitHub access data supplied by the parent.
+ * It renders the applicable next step without making its own request or holding local state.
+ */
 export function GitHubRepositoryAccessNotice({
   installations,
   repositoryCount,

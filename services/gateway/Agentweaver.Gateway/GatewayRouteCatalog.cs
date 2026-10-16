@@ -3,6 +3,7 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Gateway;
 
+/// <summary>Identifies the service that owns an API route and its authorization semantics.</summary>
 public enum GatewayOwner
 {
     Projects,
@@ -12,6 +13,7 @@ public enum GatewayOwner
     IdentityBroker,
 }
 
+/// <summary>Describes one versioned public route and how the Gateway proxies its request.</summary>
 public sealed record GatewayRoute(
     string Method,
     string PublicPath,
@@ -29,12 +31,14 @@ public sealed record GatewayRoute(
     long? MaximumRequestBodyBytes = null,
     bool ForwardTenantSelector = false);
 
+/// <summary>Defines the public v1 API surface and its owner paths, request bounds, and forwarding flags.</summary>
 public static class GatewayRouteCatalog
 {
     public const string VersionPrefix = "/api/v1";
 
     public static ImmutableArray<GatewayRoute> Routes { get; } = BuildRoutes();
 
+    /// <summary>Builds the immutable route table used by endpoint mapping, CORS, and OpenAPI generation.</summary>
     private static ImmutableArray<GatewayRoute> BuildRoutes()
     {
         var routes = ImmutableArray.CreateBuilder<GatewayRoute>();

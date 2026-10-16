@@ -1,3 +1,4 @@
+/** Public package surface for product UI; dev showcase code is intentionally excluded. */
 import './tokens.css';
 // Public library barrel. This is the surface downstream apps (e.g. agentweaver)
 // import from. It intentionally does NOT re-export `./showcase` — that is a

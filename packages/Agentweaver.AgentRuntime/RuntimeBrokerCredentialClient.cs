@@ -3,6 +3,10 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.AgentRuntime;
 
+/// <summary>
+/// Exchanges bootstrap and model credentials with the Identity broker, validating every
+/// returned receipt against the source proof, actor lifetime, and registration.
+/// </summary>
 public sealed class RuntimeBrokerCredentialClient(
     HttpClient client,
     Uri brokerAddress,
@@ -12,6 +16,7 @@ public sealed class RuntimeBrokerCredentialClient(
 {
     private readonly Uri _brokerAddress = RuntimeOwnerHttpTransport.RequireOwnerAddress(brokerAddress);
 
+    /// <summary>Consumes a configure grant once and requires the next consumed revision.</summary>
     public async Task<RuntimeGrantReceipt> ConsumeBootstrapAsync(
         RuntimeCredentialProof proof, Guid operationId, CancellationToken cancellationToken)
     {
@@ -22,6 +27,7 @@ public sealed class RuntimeBrokerCredentialClient(
         return receipt;
     }
 
+    /// <summary>Exchanges a consumed configure grant for a fresh observe credential.</summary>
     public Task<RuntimeCredentialExchange> ExchangeBootstrapAsync(
         RuntimeCredentialProof proof, Guid operationId, CancellationToken cancellationToken)
     {
@@ -30,6 +36,7 @@ public sealed class RuntimeBrokerCredentialClient(
             cancellationToken);
     }
 
+    /// <summary>Rotates a source grant; a replay returns only the receipt, never the old credential.</summary>
     public Task<RuntimeCredentialExchange> RotateSourceAsync(
         RuntimeCredentialProof proof, Guid operationId, CancellationToken cancellationToken)
     {
@@ -38,6 +45,7 @@ public sealed class RuntimeBrokerCredentialClient(
             cancellationToken);
     }
 
+    /// <summary>Requires the current observe grant to remain active at its exact revision.</summary>
     public async Task<RuntimeGrantReceipt> VerifySourceAsync(
         RuntimeCredentialProof proof, CancellationToken cancellationToken)
     {
@@ -48,6 +56,7 @@ public sealed class RuntimeBrokerCredentialClient(
         return receipt;
     }
 
+    /// <summary>Revokes the source grant and requires the next revision in the broker receipt.</summary>
     public async Task<RuntimeGrantReceipt> RevokeAsync(
         RuntimeCredentialProof proof, Guid operationId, CancellationToken cancellationToken)
     {
@@ -57,6 +66,10 @@ public sealed class RuntimeBrokerCredentialClient(
         return receipt;
     }
 
+    /// <summary>
+    /// Obtains a grant for the accepted model credential, redeems it, caps its lifetime by
+    /// grant and actor expiry, and verifies the grant before returning the in-memory secret.
+    /// </summary>
     public async Task<RuntimeModelCredential> RedeemModelCredentialAsync(
         RuntimeRegistration registration, Guid operationId, CancellationToken cancellationToken)
     {
@@ -123,6 +136,7 @@ public sealed class RuntimeBrokerCredentialClient(
         }
     }
 
+    /// <summary>Rechecks the broker grant and credential lifetime before a model call.</summary>
     public async Task VerifyModelCredentialAsync(
         RuntimeModelCredential model, CancellationToken cancellationToken)
     {
@@ -140,6 +154,7 @@ public sealed class RuntimeBrokerCredentialClient(
         RuntimeOwnerHttpTransport.SendAsync<RuntimeGrantReceipt>(
             client, _brokerAddress, path, actor, Input(proof, operationId), cancellationToken);
 
+    /// <summary>Performs an exchange or rotation and validates the replay/no-credential contract.</summary>
     private async Task<RuntimeCredentialExchange> ExchangeAsync(
         string path, RuntimeCredentialProof proof, Guid operationId, bool rotate,
         CancellationToken cancellationToken)
@@ -180,6 +195,7 @@ public sealed class RuntimeBrokerCredentialClient(
         RequireIssuerAndLifetime(receipt);
     }
 
+    /// <summary>Requires the configured HTTPS issuer and caps grant lifetime at the actor bearer expiry.</summary>
     private void RequireIssuerAndLifetime(RuntimeGrantReceipt receipt)
     {
         if (!Uri.TryCreate(expectedIssuer, UriKind.Absolute, out var issuer) ||

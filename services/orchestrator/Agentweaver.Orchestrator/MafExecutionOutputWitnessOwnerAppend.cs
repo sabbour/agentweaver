@@ -5,8 +5,28 @@ using Npgsql;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Adds owner-read evidence to the output witness within the caller's database transaction.
+/// The partial store keeps this workflow separate from witness persistence while sharing its validation rules.
+/// </summary>
 internal sealed partial class MafExecutionOutputWitnessStore
 {
+    /// <summary>
+    /// Reads current source-control capture and merge evidence, validates one stable owner binding, and appends the witness.
+    /// </summary>
+    /// <param name="connection">The connection that owns the caller's transaction.</param>
+    /// <param name="transaction">The transaction used for all owner reads and witness persistence.</param>
+    /// <param name="checkpointStore">The checkpoint store used to verify completion state.</param>
+    /// <param name="checkpointBinding">The checkpoint identity and fence binding.</param>
+    /// <param name="sourceControlStore">The source-control owner that provides capture and merge records.</param>
+    /// <param name="root">The accepted root execution, decision, plan, checkpoint, and output set.</param>
+    /// <param name="tenantId">The tenant expected on each owner record.</param>
+    /// <param name="outputCaptureIds">The capture IDs that must prove all output obligations.</param>
+    /// <param name="mergeIntentIds">The optional merge-intent IDs to include as owner evidence.</param>
+    /// <param name="cancellationToken">Cancels the database reads and append.</param>
+    /// <returns>The persisted output witness record.</returns>
+    /// <exception cref="CoordinationException">Thrown when owner evidence is missing, stale, or bound to a different accepted run.</exception>
+    /// <remarks>Every record is reread in the same transaction, and each read must return the same current owner binding before any witness is written.</remarks>
     internal async Task<MafExecutionOutputWitnessRecord>
         AppendOutputWitnessWithCurrentOwnerEvidenceInTransactionAsync(
             NpgsqlConnection connection,
@@ -100,10 +120,16 @@ internal sealed partial class MafExecutionOutputWitnessStore
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Checks that an identifier list has no blank entries or duplicate values.
+    /// </summary>
     private static bool HasUniqueIdentifiers(ImmutableArray<string> identifiers) =>
         identifiers.All(identifier => !string.IsNullOrWhiteSpace(identifier)) &&
         identifiers.Distinct(StringComparer.Ordinal).Count() == identifiers.Length;
 
+    /// <summary>
+    /// Rejects source-control evidence when its accepted run or active writer binding differs from the root execution.
+    /// </summary>
     private static void ValidateRootOwnerBinding(
         SourceControlOwnerStore.OwnerBindingSnapshot owner,
         MafExecutionOwnerEvidenceBinding root,
@@ -125,9 +151,15 @@ internal sealed partial class MafExecutionOutputWitnessStore
             throw StaleOwnerBinding();
     }
 
+    /// <summary>
+    /// Creates the conflict response for owner evidence read from a changed binding.
+    /// </summary>
     private static CoordinationException StaleOwnerBinding() =>
         new("maf_execution_output_witness_owner_stale", StatusCodes.Status409Conflict);
 
+    /// <summary>
+    /// Creates the conflict response for malformed owner evidence input.
+    /// </summary>
     private static CoordinationException InvalidOwnerEvidence() =>
         new("maf_execution_output_witness_evidence_invalid", StatusCodes.Status409Conflict);
 }

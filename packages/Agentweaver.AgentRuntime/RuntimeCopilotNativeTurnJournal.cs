@@ -7,18 +7,25 @@ using GitHub.Copilot.Rpc;
 
 namespace Agentweaver.AgentRuntime;
 
+/// <summary>Response and event receipt captured for one native Copilot turn.</summary>
 internal sealed record RuntimeCopilotNativeTurnResult(
     string Response,
     RuntimeNativeTurnObservation Receipt);
 
+/// <summary>Evidence that the native event cursor remained empty during a rejected turn attempt.</summary>
 internal sealed record RuntimeNativeEmptyRangeEvidence(
     string BeforeCursorHash, string AfterCursorHash, int ObservedEventCount, bool IsComplete);
 
 #pragma warning disable GHCP001 // This private native receipt bridge is pinned to SDK 1.0.18.
+/// <summary>
+/// Reads the pinned SDK event log to prove native turn boundaries, output, and usage IDs.
+/// It fails closed when the event range is incomplete or the native receipt shape is ambiguous.
+/// </summary>
 internal static class RuntimeCopilotNativeTurnJournal
 {
     internal const int MaximumEvents = 512;
 
+    /// <summary>Captures and validates the current event-log cursor before a model turn.</summary>
     internal static async Task<string> CaptureCursorAsync(
         CopilotSession session, CancellationToken cancellationToken)
     {
@@ -28,6 +35,7 @@ internal static class RuntimeCopilotNativeTurnJournal
         return cursor;
     }
 
+    /// <summary>Requires a complete immediate event-log read to contain no new events.</summary>
     internal static async Task<RuntimeNativeEmptyRangeEvidence> RequireEmptyRangeAsync(
         CopilotSession session, string startCursor, CancellationToken cancellationToken)
     {
@@ -50,6 +58,7 @@ internal static class RuntimeCopilotNativeTurnJournal
         return new(cursorHash, cursorHash, 0, true);
     }
 
+    /// <summary>Reads at most 512 events after a cursor and builds one complete turn observation.</summary>
     internal static async Task<RuntimeNativeTurnObservation> ReadAsync(
         CopilotSession session,
         SdkSessionFacts source,
@@ -84,6 +93,7 @@ internal static class RuntimeCopilotNativeTurnJournal
         throw new RuntimeAuthorizationException("runtime_native_turn_journal_limit_exceeded");
     }
 
+    /// <summary>Matches user, assistant start/end, completion receipt, output, and usage events for one turn.</summary>
     internal static RuntimeNativeTurnObservation Create(
         SdkSessionFacts source,
         string nativeMessageId,
@@ -178,6 +188,7 @@ internal static class RuntimeCopilotNativeTurnJournal
         return -1;
     }
 
+    /// <summary>Requires a nonblank bounded cursor without control characters.</summary>
     internal static void ValidateCursor(string? cursor)
     {
         if (string.IsNullOrWhiteSpace(cursor) || cursor.Length > 4096 || cursor.Any(char.IsControl))

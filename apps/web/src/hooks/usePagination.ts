@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 
+/** Initial page and page-size settings for client-side pagination. */
 export interface UsePaginationOptions {
   /** Initial page size. Defaults to 25 to match the backend pagination contract's default. */
   pageSize?: number;
@@ -7,6 +8,7 @@ export interface UsePaginationOptions {
   initialPage?: number;
 }
 
+/** Computed page state and controls returned by usePagination. */
 export interface UsePaginationResult<T> {
   /** Current 1-based page, clamped to [1, totalPages]. */
   page: number;

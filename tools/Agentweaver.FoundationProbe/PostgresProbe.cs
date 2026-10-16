@@ -5,8 +5,11 @@ using NpgsqlTypes;
 
 namespace Agentweaver.FoundationProbe;
 
+/// <summary>Verifies the runtime database role and commits a nonce-bound effect, inbox receipt, and outbox event.</summary>
 internal sealed class PostgresProbe(NpgsqlDataSource dataSource, PostgresOutbox outbox)
 {
+    /// <summary>Writes all probe effects in one transaction and confirms the committed rows afterward.</summary>
+    /// <exception cref="ProbeException">The active role or any expected database effect does not match.</exception>
     public async Task<PostgresEvidence> RunAsync(
         ProbeTarget target,
         ProbeSource source,
@@ -82,6 +85,7 @@ internal sealed class PostgresProbe(NpgsqlDataSource dataSource, PostgresOutbox 
             TransactionCommitted: true);
     }
 
+    /// <summary>Checks that the effect, inbox receipt, and outbox identity each occur exactly once.</summary>
     private static async Task<bool> VerifyPostgresEffectsAsync(
         NpgsqlConnection connection,
         string nonce,

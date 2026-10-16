@@ -1,5 +1,7 @@
+/** Persists notification sound preference and plays chimes without interfering with notification delivery. */
 const MUTE_KEY = 'aw.notifications.muted';
 
+/** Returns the saved mute preference, defaulting to sound enabled when storage is unavailable. */
 export function getNotificationsMuted(): boolean {
   try {
     return localStorage.getItem(MUTE_KEY) === '1';
@@ -8,6 +10,7 @@ export function getNotificationsMuted(): boolean {
   }
 }
 
+/** Persists the mute preference when browser storage permits; audio remains usable if it does not. */
 export function setNotificationsMuted(muted: boolean): void {
   try {
     localStorage.setItem(MUTE_KEY, muted ? '1' : '0');
@@ -19,6 +22,7 @@ export function setNotificationsMuted(muted: boolean): void {
 // Lazily created so we never touch AudioContext until a chime is actually needed.
 let audioContext: AudioContext | null = null;
 
+/** Creates or returns the shared browser audio context, or `null` when WebAudio is unavailable. */
 function getAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null;
   const Ctor = window.AudioContext

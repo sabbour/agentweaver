@@ -1,4 +1,8 @@
 #!/usr/bin/env node
+/**
+ * Read-only Azure planning entry point for the deployment configuration.
+ * It resolves the clean source and target before requesting Azure's what-if result.
+ */
 import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { runAz } from './lib/exec.mjs';
@@ -6,6 +10,7 @@ import { resolveSource } from './lib/git.mjs';
 import { guardAzureTarget, resolveClusterAdminRoleAssignmentName } from './lib/guardrails.mjs';
 import { buildDeployArgs, cliConfig, cliOptions } from './deploy.mjs';
 
+/** Converts deployment arguments into the non-mutating Azure what-if command form. */
 export function buildWhatIfArgs(options) {
   const args = buildDeployArgs(options);
   args[2] = 'what-if';
@@ -15,6 +20,10 @@ export function buildWhatIfArgs(options) {
   return args;
 }
 
+/**
+ * Runs an Azure what-if plan after checking source ancestry, ownership, and the dedicated target.
+ * Returns the CLI result; target or source validation failures throw before the what-if call.
+ */
 export function plan(config, { execAz = runAz, sourceResolver = resolveSource } = {}) {
   const source = sourceResolver(config);
   const { group, execAz: boundAz } = guardAzureTarget({ ...config, ...source }, execAz);

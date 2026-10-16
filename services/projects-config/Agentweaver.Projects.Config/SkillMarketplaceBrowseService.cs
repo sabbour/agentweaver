@@ -5,6 +5,9 @@ using System.Text.Json;
 
 namespace Agentweaver.Projects.Config;
 
+/// <summary>
+/// Resolves GitHub refs to commits and reads a bounded, filtered skill inventory or selected skill files.
+/// </summary>
 public sealed class SkillMarketplaceBrowseService
 {
     public const int DefaultPageSize = 25;
@@ -28,6 +31,7 @@ public sealed class SkillMarketplaceBrowseService
     private readonly IProjectMarketplaceSourceStore _sources;
     private readonly TimeSpan _timeout;
 
+    /// <summary>Creates a browser with an injected HTTP transport and finite upstream timeout.</summary>
     public SkillMarketplaceBrowseService(
         HttpClient httpClient,
         IProjectMarketplaceSourceStore sources,
@@ -40,6 +44,10 @@ public sealed class SkillMarketplaceBrowseService
             throw new ArgumentOutOfRangeException(nameof(timeout));
     }
 
+    /// <summary>
+    /// Resolves the requested ref, indexes safe SKILL.md paths, reads only the current page, and rechecks authority/source state.
+    /// </summary>
+    /// <exception cref="MarketplaceSourceException">Input is invalid, the source changed, the upstream failed, or size limits were exceeded.</exception>
     public async Task<MarketplaceBrowsePage> BrowseAsync(
         string projectId,
         ProjectMarketplaceSourceRecord source,
@@ -117,6 +125,10 @@ public sealed class SkillMarketplaceBrowseService
         }
     }
 
+    /// <summary>
+    /// Reads a selected skill's manifest and bounded resources from the exact commit, excluding nested skills and unsafe files.
+    /// </summary>
+    /// <exception cref="MarketplaceSourceException">The selection is invalid, source authority changed, or upstream data is unsafe/unavailable.</exception>
     public async Task<MarketplaceSkillSourceFiles> ReadSelectedSkillFilesAsync(
         string projectId,
         ProjectMarketplaceSourceRecord source,
@@ -224,6 +236,7 @@ public sealed class SkillMarketplaceBrowseService
         }
     }
 
+    /// <summary>Checks source ownership, active revision, paging/search bounds, and normalized stored source settings.</summary>
     private static void ValidateRequest(
         string projectId,
         ProjectMarketplaceSourceRecord source,
@@ -250,6 +263,7 @@ public sealed class SkillMarketplaceBrowseService
             throw MarketplaceSourceException.InvalidUpstream("The stored marketplace source is invalid.");
     }
 
+    /// <summary>Checks the exact commit and selected path against the expected active source revision and subpath.</summary>
     private static void ValidateSelectedSkillRequest(
         string projectId,
         ProjectMarketplaceSourceRecord source,
@@ -278,6 +292,7 @@ public sealed class SkillMarketplaceBrowseService
                 "The selected skill path is outside the configured source subpath.");
     }
 
+    /// <summary>Resolves a mutable Git ref to one validated full commit SHA before any content path is read.</summary>
     private async Task<string> ResolveCommitAsync(
         string owner,
         string repository,
@@ -305,6 +320,7 @@ public sealed class SkillMarketplaceBrowseService
         }
     }
 
+    /// <summary>Loads the recursive tree at a commit and rejects truncated or excessive repository inventories.</summary>
     private async Task<GitTreeIndex> ReadTreeAsync(
         string owner,
         string repository,
@@ -337,6 +353,7 @@ public sealed class SkillMarketplaceBrowseService
         return new GitTreeIndex(tree.Truncated, entries);
     }
 
+    /// <summary>Finds unique safe SKILL.md paths beneath the configured source subpath.</summary>
     private static List<IndexedCandidate> IndexCandidates(GitTreeIndex tree, string? subpath)
     {
         var prefix = MarketplaceSourceDefinition.NormalizeSubpath(subpath);
@@ -416,6 +433,7 @@ public sealed class SkillMarketplaceBrowseService
             "The selected skill manifest is missing from the resolved commit.");
     }
 
+    /// <summary>Collects resources owned by the selected skill while excluding child skills and path aliases.</summary>
     private static List<SelectedResourceEntry> SelectResourceEntries(
         List<GitTreeEntry> entries,
         IndexedCandidate selected,
@@ -473,6 +491,7 @@ public sealed class SkillMarketplaceBrowseService
     private static bool IsUnderLocation(string path, string location) =>
         location.Length == 0 || path.StartsWith($"{location}/", StringComparison.Ordinal);
 
+    /// <summary>Performs a bounded GitHub GET and maps HTTP, timeout, and truncated-body failures to source errors.</summary>
     private async Task<byte[]> GetBytesAsync(
         Uri uri,
         int maxBytes,
@@ -521,6 +540,7 @@ public sealed class SkillMarketplaceBrowseService
         }
     }
 
+    /// <summary>Reads only a simple description scalar from the manifest frontmatter for browse display.</summary>
     private static string? ReadDescription(byte[] manifest)
     {
         string content;
@@ -569,18 +589,23 @@ public sealed class SkillMarketplaceBrowseService
         string.Equals(path, $"{subpath}/SKILL.md", StringComparison.Ordinal) ||
         path.StartsWith($"{subpath}/", StringComparison.Ordinal);
 
+    /// <summary>Indexed candidate path, location, and display name derived from one tree entry.</summary>
     private sealed record IndexedCandidate(string ManifestPath, string Location, string Name);
 
+    /// <summary>A selected resource's normalized relative path paired with the pinned Git tree entry.</summary>
     private sealed record SelectedResourceEntry(string RelativePath, GitTreeEntry Entry);
 
+    /// <summary>Recursive Git tree response metadata retained while indexing a commit.</summary>
     private sealed record GitTreeIndex(bool Truncated, List<GitTreeEntry> Entries);
 
+    /// <summary>Subset of GitHub's recursive tree response used by source browsing.</summary>
     private sealed class GitHubTreeResponse
     {
         public bool Truncated { get; init; }
         public List<GitTreeEntry>? Tree { get; init; }
     }
 
+    /// <summary>Subset of a Git tree entry needed to validate type, path, mode, and byte size.</summary>
     private sealed class GitTreeEntry
     {
         public string? Path { get; init; }
@@ -590,10 +615,12 @@ public sealed class SkillMarketplaceBrowseService
     }
 }
 
+/// <summary>Manifest and bundled resource bytes loaded from one exact marketplace commit and path.</summary>
 public sealed record MarketplaceSkillSourceFiles(
     ReadOnlyMemory<byte> SkillMarkdown,
     IReadOnlyList<MarketplaceSkillSourceResource> Resources);
 
+/// <summary>One bundled resource returned from a pinned marketplace commit.</summary>
 public sealed record MarketplaceSkillSourceResource(
     string RelativePath,
     ReadOnlyMemory<byte> Content);

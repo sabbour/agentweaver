@@ -10,8 +10,10 @@ namespace Agentweaver.Identity.Broker;
 /// </summary>
 public static class OpaqueHandle
 {
+    /// <summary>Creates a cryptographically random 256-bit opaque handle encoded as lowercase hexadecimal.</summary>
     public static string NewHandle() => Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
 
+    /// <summary>Returns the lowercase SHA-256 digest used to persist a handle without storing its replayable value.</summary>
     public static string Hash(string handle) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.ASCII.GetBytes(handle)));
 }

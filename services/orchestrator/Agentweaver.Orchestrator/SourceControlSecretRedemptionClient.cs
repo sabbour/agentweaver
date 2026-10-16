@@ -10,6 +10,9 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Non-secret metadata returned with a GitHub App installation token and checked against the selected repository and permission binding.
+/// </summary>
 internal sealed record GitHubAppInstallationBindingMetadata(
     string ConnectionId,
     long ConnectionRevision,
@@ -22,8 +25,19 @@ internal sealed record GitHubAppInstallationBindingMetadata(
     bool IssueWriteGranted,
     string SelectionHash);
 
+/// <summary>
+/// Validated issuer, audience, and broker-origin settings used to call the trusted Identity Broker.
+/// </summary>
 internal sealed class SourceControlSecretRedemptionOptions
 {
+    /// <summary>
+    /// Validates the broker issuer and audiences, and accepts only a single HTTPS origin when broker access is configured.
+    /// </summary>
+    /// <param name="issuer">HTTPS issuer used to validate the caller identity.</param>
+    /// <param name="orchestratorAudience">Audience required on the incoming Orchestrator token.</param>
+    /// <param name="brokerAudience">Audience required by the trusted broker, when configured.</param>
+    /// <param name="ownerBaseAddress">The trusted broker's HTTPS origin, when configured.</param>
+    /// <exception cref="ArgumentException">The issuer, audience, or broker origin is invalid.</exception>
     public SourceControlSecretRedemptionOptions(
         string issuer,
         string orchestratorAudience,
@@ -59,6 +73,9 @@ internal sealed class SourceControlSecretRedemptionOptions
     public Uri? OwnerBaseAddress { get; }
     public bool IsConfigured => BrokerAudience is not null && OwnerBaseAddress is not null;
 
+    /// <summary>
+    /// Rejects a missing audience before it is used in broker token validation.
+    /// </summary>
     private static string RequireAudience(string? value, string paramName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value, paramName);
@@ -66,6 +83,9 @@ internal sealed class SourceControlSecretRedemptionOptions
     }
 }
 
+/// <summary>
+/// Redeems exact-version credentials through the trusted broker and exposes them only for a bounded provider operation.
+/// </summary>
 internal sealed class SourceControlSecretRedemptionClient(
     HttpClient httpClient,
     SourceControlSecretRedemptionOptions options,
@@ -311,6 +331,9 @@ internal sealed class SourceControlSecretRedemptionClient(
         }
     }
 
+    /// <summary>
+    /// Posts the pinned secret identifier, version, purpose, and run to the broker; rejects unauthorized, non-OK, oversized, expired, or mismatched responses.
+    /// </summary>
     private async Task<SecretCredential> RedeemAsync(
         HttpContext context,
         SourceControlAcceptedRunBinding acceptedRun,
@@ -376,6 +399,9 @@ internal sealed class SourceControlSecretRedemptionClient(
         }
     }
 
+    /// <summary>
+    /// Reads and deserializes a broker response while enforcing the shared maximum response size.
+    /// </summary>
     private static async Task<SecretRedemptionResult?> ReadResponseAsync(
         HttpContent content,
         CancellationToken cancellationToken)
@@ -400,6 +426,9 @@ internal sealed class SourceControlSecretRedemptionClient(
             buffer.GetBuffer().AsSpan(0, checked((int)buffer.Length)), JsonOptions);
     }
 
+    /// <summary>
+    /// Reads and deserializes an installation-token response without accepting an oversized body.
+    /// </summary>
     private static async Task<GitHubAppInstallationTokenResponse?> ReadAppTokenResponseAsync(
         HttpContent content,
         CancellationToken cancellationToken)
@@ -424,6 +453,9 @@ internal sealed class SourceControlSecretRedemptionClient(
             buffer.GetBuffer().AsSpan(0, checked((int)buffer.Length)), JsonOptions);
     }
 
+    /// <summary>
+    /// Reads only a small JSON object containing one string error field from the installation-token endpoint.
+    /// </summary>
     private static async Task<string?> ReadAppTokenErrorAsync(
         HttpContent content,
         CancellationToken cancellationToken)
@@ -456,6 +488,9 @@ internal sealed class SourceControlSecretRedemptionClient(
                 : null;
     }
 
+    /// <summary>
+    /// Maps known broker error codes to safe HTTP statuses and leaves unknown codes unmapped.
+    /// </summary>
     private static bool TryMapIdentityAppTokenError(string error, out int statusCode)
     {
         statusCode = error switch
@@ -475,13 +510,22 @@ internal sealed class SourceControlSecretRedemptionClient(
         return statusCode != 0;
     }
 
+    /// <summary>
+    /// Hashes a one-time repository selection code before it is retained as a binding.
+    /// </summary>
     private static string HashSelectionCode(string value) =>
         Convert.ToHexStringLower(SHA256.HashData(Encoding.ASCII.GetBytes(value)));
 
+    /// <summary>
+    /// Checks for a lowercase fixed-length SHA-256 hexadecimal digest.
+    /// </summary>
     private static bool IsSha256Hash(string value) =>
         value.Length == 64 && value.All(character =>
             character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
+    /// <summary>
+    /// Requires configured broker settings and verifies issuer, actor, run scope, and both audiences against the accepted run.
+    /// </summary>
     private void ValidateCaller(
         HttpContext context,
         SourceControlAcceptedRunBinding acceptedRun)
@@ -502,12 +546,18 @@ internal sealed class SourceControlSecretRedemptionClient(
                 "source_control_secret_redemption_caller_mismatch", StatusCodes.Status403Forbidden);
     }
 
+    /// <summary>
+    /// The exact secret identifier, version, purpose, and run sent to the broker.
+    /// </summary>
     private sealed record SecretRedemptionInput(
         string SecretId,
         string SecretVersion,
         string Purpose,
         string RunId);
 
+    /// <summary>
+    /// The broker response containing the requested secret version and its short-lived value.
+    /// </summary>
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     private sealed record SecretRedemptionResult(
         string SecretId,
@@ -515,6 +565,9 @@ internal sealed class SourceControlSecretRedemptionClient(
         DateTimeOffset ExpiresAt,
         string Value);
 
+    /// <summary>
+    /// The broker response describing a short-lived installation token and the repository permissions it received.
+    /// </summary>
     [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
     private sealed record GitHubAppInstallationTokenResponse(
         string AccessToken,
@@ -530,6 +583,9 @@ internal sealed class SourceControlSecretRedemptionClient(
         bool IssueWriteGranted,
         string SelectionHash);
 
+    /// <summary>
+    /// The repository selection and expected binding sent when requesting an installation token.
+    /// </summary>
     private sealed record GitHubAppInstallationTokenInput(
         string? SelectionCode,
         string? SelectionHash,

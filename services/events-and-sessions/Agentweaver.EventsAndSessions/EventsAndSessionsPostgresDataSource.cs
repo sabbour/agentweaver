@@ -8,22 +8,27 @@ using WorkloadIdentityCredentialOptions = AzureIdentity::Azure.Identity.Workload
 
 namespace Agentweaver.EventsAndSessions;
 
+/// <summary>Holds one PostgreSQL endpoint and its explicit Entra workload-identity inputs.</summary>
 internal sealed record EventsAndSessionsPostgresConnection(
     string ConnectionString,
     string TenantId,
     string ClientId,
     string TokenFilePath);
 
+/// <summary>Builds runtime or migration PostgreSQL data sources using short-lived Entra tokens.</summary>
 internal static class EventsAndSessionsPostgresDataSource
 {
     private const string TokenScope = "https://ossrdbms-aad.database.windows.net/.default";
 
+    /// <summary>Reads the runtime database connection and workload identity configuration.</summary>
     public static EventsAndSessionsPostgresConnection ReadRuntimeConnection(IConfiguration configuration) =>
         ReadConnection(configuration, "EventsAndSessions", "EventsAndSessions:Database:WorkloadIdentity");
 
+    /// <summary>Reads the separately scoped migration database connection and workload identity.</summary>
     public static EventsAndSessionsPostgresConnection ReadMigrationConnection(IConfiguration configuration) =>
         ReadConnection(configuration, "EventsAndSessionsMigration", "EventsAndSessions:Migration:WorkloadIdentity");
 
+    /// <summary>Creates the Azure credential from the configured tenant, client, and projected token file.</summary>
     public static TokenCredential CreateCredential(EventsAndSessionsPostgresConnection connection) =>
         new WorkloadIdentityCredential(new WorkloadIdentityCredentialOptions
         {
@@ -32,6 +37,8 @@ internal static class EventsAndSessionsPostgresDataSource
             TokenFilePath = connection.TokenFilePath,
         });
 
+    /// <summary>Creates a PostgreSQL source that obtains Entra passwords asynchronously for new connections.</summary>
+    /// <exception cref="InvalidOperationException">The connection is missing a database role, uses a password, or token acquisition fails.</exception>
     public static NpgsqlDataSource Create(
         string connectionString,
         TokenCredential credential,
@@ -57,6 +64,8 @@ internal static class EventsAndSessionsPostgresDataSource
         return builder.Build();
     }
 
+    /// <summary>Gets a non-empty, unexpired token for the PostgreSQL Entra scope.</summary>
+    /// <exception cref="InvalidOperationException">The credential returns an empty or expired token.</exception>
     internal static async ValueTask<string> GetPostgresTokenAsync(
         TokenCredential credential,
         CancellationToken cancellationToken,
@@ -73,6 +82,7 @@ internal static class EventsAndSessionsPostgresDataSource
         return token.Token;
     }
 
+    /// <summary>Validates the named connection string and requires explicit workload identity configuration.</summary>
     private static EventsAndSessionsPostgresConnection ReadConnection(
         IConfiguration configuration,
         string connectionName,
@@ -91,6 +101,7 @@ internal static class EventsAndSessionsPostgresDataSource
             connectionString, options.TenantId, options.ClientId, options.TokenFilePath);
     }
 
+    /// <summary>Returns a configured nonblank value or stops startup with the missing key named.</summary>
     private static string Required(string? value, string name) =>
         !string.IsNullOrWhiteSpace(value)
             ? value

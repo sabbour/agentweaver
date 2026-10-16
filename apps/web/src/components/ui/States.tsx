@@ -60,6 +60,7 @@ export interface EmptyStateProps {
   className?: string;
 }
 
+/** Renders an empty-result message with optional caller-supplied action content. */
 export function EmptyState({ title, description, icon, action, className }: EmptyStateProps) {
   const styles = useEmptyStyles();
   return (
@@ -112,6 +113,7 @@ export interface LoadingStateProps {
   className?: string;
 }
 
+/** Renders the shared loading indicator and optional status label while the caller loads data. */
 export function LoadingState({ rows = 3, label = 'Loading', className }: LoadingStateProps) {
   const styles = useLoadingStyles();
   return (
@@ -167,6 +169,7 @@ export interface ErrorStateProps {
   className?: string;
 }
 
+/** Renders an error message and optional retry action from caller-supplied request state. */
 export function ErrorState({
   title = 'Something went wrong',
   message,

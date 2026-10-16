@@ -4,6 +4,7 @@ using System.Reflection;
 
 namespace Agentweaver.FoundationProbe;
 
+/// <summary>Strictly parsed deployment receipt that binds the probe to one source revision and Azure target.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record ProbeTarget
 {
@@ -22,6 +23,8 @@ internal sealed record ProbeTarget
     public required ProbeResources FoundationResources { get; init; }
     public required ProbeRuntime Runtime { get; init; }
 
+    /// <summary>Reads the target JSON without allowing unknown properties or casing variants.</summary>
+    /// <exception cref="ProbeException">The path is missing, unreadable, or does not contain a valid target.</exception>
     public static ProbeTarget Read(string path)
     {
         if (string.IsNullOrWhiteSpace(path))
@@ -51,6 +54,7 @@ internal sealed record ProbeTarget
     };
 }
 
+/// <summary>Identity facts for the federated workload used by the acceptance probe.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record ProbeIdentity
 {
@@ -62,6 +66,7 @@ internal sealed record ProbeIdentity
     public required string ServiceAccount { get; init; }
 }
 
+/// <summary>Resource IDs and endpoint names the probe is allowed to access.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record ProbeResources
 {
@@ -78,6 +83,7 @@ internal sealed record ProbeResources
     public required string AppInsightsResourceId { get; init; }
 }
 
+/// <summary>Database and secret settings needed by the probe operations.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record ProbeRuntime
 {
@@ -88,6 +94,7 @@ internal sealed record ProbeRuntime
     public required string KeyVaultSecretVersion { get; init; }
 }
 
+/// <summary>Infrastructure source provenance and linked foundation deployment metadata.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record ProbeInfrastructure
 {
@@ -98,6 +105,7 @@ internal sealed record ProbeInfrastructure
     public required ProbeFoundationDeployment Foundation { get; init; }
 }
 
+/// <summary>Source identity of the separately deployed foundation resources.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record ProbeFoundationDeployment
 {
@@ -109,11 +117,13 @@ internal sealed record ProbeFoundationDeployment
     public required string DeploymentId { get; init; }
 }
 
+/// <summary>Build source identity embedded in the probe assembly.</summary>
 internal sealed record ProbeSource(string Sha, string Tree, string InfrastructureHash)
 {
     private static readonly System.Text.RegularExpressions.Regex FullSha =
         new("^[0-9a-f]{40}$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
+    /// <summary>Reads and validates source hashes from assembly metadata; missing provenance fails closed.</summary>
     public static ProbeSource FromAssembly(Type? entryPoint = null)
     {
         var assembly = (entryPoint ?? typeof(ProbeSource)).Assembly;
@@ -132,6 +142,7 @@ internal sealed record ProbeSource(string Sha, string Tree, string Infrastructur
     public static bool IsFullSha(string? value) => FullSha.IsMatch(value ?? "");
 }
 
+/// <summary>Validates that deployment evidence, resource IDs, and runtime targets match the reviewed probe source.</summary>
 internal static class ProbeTargetValidator
 {
     private const string ExpectedResourceGroup = "aw-v1-p0";
@@ -146,6 +157,7 @@ internal static class ProbeTargetValidator
     private static readonly System.Text.RegularExpressions.Regex ResourceName =
         new("^[a-z][a-z0-9_]{0,62}$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
+    /// <summary>Rejects source, deployment, identity, resource, issuer, or runtime mismatches before Azure calls.</summary>
     public static void Validate(ProbeTarget target, ProbeSource source)
     {
         ArgumentNullException.ThrowIfNull(target);

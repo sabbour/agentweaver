@@ -8,6 +8,7 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Accepts provider lifecycle reports only when they bind to an authenticated provider and exact active lease.</summary>
 public interface IEnvironmentProviderLifecycleReportStore
 {
     /// <summary>
@@ -21,6 +22,7 @@ public interface IEnvironmentProviderLifecycleReportStore
         CancellationToken cancellationToken);
 }
 
+/// <summary>PostgreSQL implementation that reserves provider events for later reconciliation.</summary>
 public sealed class EnvironmentProviderLifecycleReportStore(
     NpgsqlDataSource dataSource,
     TimeProvider timeProvider) : IEnvironmentProviderLifecycleReportStore
@@ -30,6 +32,11 @@ public sealed class EnvironmentProviderLifecycleReportStore(
     private const string Reports = "\"environment\".\"provider_lifecycle_reports\"";
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
+    /// <summary>
+    /// Validates the authenticated provider, active owner, and current Sandbox lease before storing an event.
+    /// A repeated event is replayed only when its fingerprint and lease binding match exactly.
+    /// </summary>
+    /// <exception cref="EnvironmentLifecycleException">The provider identity, event content, owner, or lease is invalid or stale.</exception>
     public async Task<EnvironmentProviderLifecycleReportSnapshot> ReserveAsync(
         EnvironmentProviderLifecycleReportRequest request,
         string authenticatedProviderId,
@@ -171,6 +178,7 @@ public sealed class EnvironmentProviderLifecycleReportStore(
             now);
     }
 
+    /// <summary>Requires the owner row to remain active at the event's lifecycle generation.</summary>
     private static async Task RequireActiveOwnerAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -202,6 +210,7 @@ public sealed class EnvironmentProviderLifecycleReportStore(
                 "The Environment lifecycle fence is stale.");
     }
 
+    /// <summary>Reads and locks the active lease whose resource and fencing values match the report.</summary>
     private static async Task<LeaseBinding> ReadCurrentLeaseAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -291,6 +300,7 @@ public sealed class EnvironmentProviderLifecycleReportStore(
             leaseRevision);
     }
 
+    /// <summary>Loads an existing owner-scoped report for idempotency comparison.</summary>
     private static async Task<EnvironmentProviderLifecycleReportSnapshot?> ReadReportAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -343,6 +353,7 @@ public sealed class EnvironmentProviderLifecycleReportStore(
             reader.GetFieldValue<DateTimeOffset>(18));
     }
 
+    /// <summary>Hashes the request and authenticated provider identity to detect event-ID reuse with changed content.</summary>
     private static string RequestFingerprint(
         EnvironmentProviderLifecycleReportRequest request,
         string authenticatedProviderId,
@@ -366,12 +377,14 @@ public sealed class EnvironmentProviderLifecycleReportStore(
             request.ProviderFencingGeneration.ToString(System.Globalization.CultureInfo.InvariantCulture),
             reportedAt.UtcTicks.ToString(System.Globalization.CultureInfo.InvariantCulture)));
 
+    /// <summary>Normalizes timestamps to the precision retained by PostgreSQL.</summary>
     private static DateTimeOffset NormalizeTimestamp(DateTimeOffset value)
     {
         var utcTicks = value.UtcTicks;
         return new DateTimeOffset(utcTicks - utcTicks % 10, TimeSpan.Zero);
     }
 
+    /// <summary>Creates a stable reconciliation key bound to the Environment and exact Sandbox operation.</summary>
     private static string CreateCoreOperationKey(
         EnvironmentOwnerIdentity owner,
         Guid sandboxOperationId,
@@ -385,9 +398,11 @@ public sealed class EnvironmentProviderLifecycleReportStore(
             sandboxOperationId.ToString("N"),
             providerEventId.ToString("N")));
 
+    /// <summary>Computes a lowercase SHA-256 digest for request fingerprint material.</summary>
     private static string Fingerprint(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
+    /// <summary>Rejects empty, oversized, or control-character-containing provider identifiers.</summary>
     private static void ValidateProviderIdentity(string providerId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(providerId);
@@ -397,6 +412,7 @@ public sealed class EnvironmentProviderLifecycleReportStore(
                 nameof(providerId));
     }
 
+    /// <summary>Adds the four-part Environment owner key to a parameterized command.</summary>
     private static void AddOwnerParameters(NpgsqlCommand command, EnvironmentOwnerIdentity owner)
     {
         command.Parameters.AddWithValue("tenant_id", NpgsqlDbType.Text, owner.TenantId);
@@ -405,6 +421,7 @@ public sealed class EnvironmentProviderLifecycleReportStore(
         command.Parameters.AddWithValue("environment_id", NpgsqlDbType.Text, owner.EnvironmentId);
     }
 
+    /// <summary>Creates strict JSON settings for durable lifecycle report values.</summary>
     private static JsonSerializerOptions CreateJsonOptions()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
@@ -412,6 +429,7 @@ public sealed class EnvironmentProviderLifecycleReportStore(
         return options;
     }
 
+    /// <summary>Captures the exact lease operation, resource, and revision accepted for a provider report.</summary>
     private sealed record LeaseBinding(
         long LifecycleGeneration,
         long ProviderFencingGeneration,

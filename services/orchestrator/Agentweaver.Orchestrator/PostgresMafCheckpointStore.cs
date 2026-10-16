@@ -11,6 +11,9 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Binds a MAF checkpoint store to an authenticated actor, accepted run, execution fence, model, and optional cache object.
+/// </summary>
 internal sealed record MafCheckpointBinding(
     SessionIdentity Identity,
     CoordinationActor Actor,
@@ -20,20 +23,35 @@ internal sealed record MafCheckpointBinding(
     ObjectKey? CacheReference,
     string StoreName = "coordinator");
 
+/// <summary>
+/// Describes whether an SDK checkpoint cache can be used or must be rebuilt from the durable run journal.
+/// </summary>
 internal enum CheckpointCacheRecovery
 {
+    /// <summary>The checkpoint and matching SDK cache are available.</summary>
     UseCheckpoint,
+    /// <summary>The checkpoint is present, but its cache cannot be used and context must be rebuilt.</summary>
     RebuildFromJournal,
+    /// <summary>No checkpoint with the requested ID exists in this bound run.</summary>
     CheckpointMissing
 }
 
+/// <summary>
+/// Reports a checkpoint recovery decision and an optional diagnostic reason.
+/// </summary>
 internal sealed record CheckpointRecoveryDecision(
     CheckpointCacheRecovery Recovery,
     string? Reason);
 
+/// <summary>
+/// Signals that the SDK checkpoint cannot be retrieved and the caller must rebuild from its durable journal.
+/// </summary>
 internal sealed class CheckpointJournalRebuildRequiredException(string reason)
     : InvalidOperationException(reason);
 
+/// <summary>
+/// Persists bound MAF workflow checkpoints in PostgreSQL and validates their current run authority on access.
+/// </summary>
 internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
 {
     private static readonly Regex SchemaPattern = new("^[a-z][a-z0-9_]{0,62}\\z", RegexOptions.CultureInvariant);
@@ -46,6 +64,10 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
     private readonly TimeProvider _timeProvider;
     private readonly MafCheckpointBinding? _binding;
 
+    /// <summary>
+    /// Creates an unbound checkpoint store, which must be bound to a run before checkpoint operations are used.
+    /// </summary>
+    /// <exception cref="ArgumentException">Thrown when the schema is invalid or reserved.</exception>
     public PostgresMafCheckpointStore(
         NpgsqlDataSource dataSource,
         string schema,
@@ -74,12 +96,22 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         _binding = binding;
     }
 
+    /// <summary>
+    /// Creates a run-bound view of this store after validating the owner and checkpoint binding.
+    /// </summary>
     internal PostgresMafCheckpointStore ForRun(MafCheckpointBinding binding) =>
         new(_dataSource, _schema.Trim('"'), _objectStore, _timeProvider, ValidateBinding(binding));
 
+    /// <summary>
+    /// Opens a PostgreSQL connection from the configured data source.
+    /// </summary>
     internal ValueTask<NpgsqlConnection> OpenConnectionAsync(CancellationToken cancellationToken) =>
         _dataSource.OpenConnectionAsync(cancellationToken);
 
+    /// <summary>
+    /// Appends an idempotent checkpoint using the caller's transaction after locking and validating current run state.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when the owner binding, selection, parent, or idempotent checkpoint differs.</exception>
     internal async Task<(CheckpointInfo Info, string? ParentCheckpointId, bool HasParentMetadata)> AppendInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -147,12 +179,18 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         return (new CheckpointInfo(sessionId, checkpointId), parent?.CheckpointId, true);
     }
 
+    /// <summary>
+    /// Creates a bound store view using the supplied object-store cache reference.
+    /// </summary>
     internal PostgresMafCheckpointStore ForCacheReference(ObjectKey? cacheReference)
     {
         var binding = RequireBinding();
         return ForRun(binding with { CacheReference = cacheReference });
     }
 
+    /// <summary>
+    /// Creates and commits a checkpoint for the store's bound run.
+    /// </summary>
     public override async ValueTask<CheckpointInfo> CreateCheckpointAsync(
         string sessionId,
         JsonElement value,
@@ -178,6 +216,11 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         return checkpoint.Info;
     }
 
+    /// <summary>
+    /// Retrieves a checkpoint payload after confirming that its SDK cache and current run binding are usable.
+    /// </summary>
+    /// <exception cref="CheckpointJournalRebuildRequiredException">Thrown when the cache must be rebuilt from the journal.</exception>
+    /// <exception cref="KeyNotFoundException">Thrown when the checkpoint ID is not stored for this run.</exception>
     public override async ValueTask<JsonElement> RetrieveCheckpointAsync(string sessionId, CheckpointInfo key)
     {
         ArgumentNullException.ThrowIfNull(key);
@@ -211,6 +254,9 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         return RestoreMetadataOrder(document.RootElement);
     }
 
+    /// <summary>
+    /// Lists checkpoints for the bound run, optionally filtering by their parent checkpoint.
+    /// </summary>
     public override async ValueTask<IEnumerable<CheckpointInfo>> RetrieveIndexAsync(
         string sessionId,
         CheckpointInfo? withParent = null)
@@ -245,6 +291,9 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         return checkpoints;
     }
 
+    /// <summary>
+    /// Reads the latest checkpoint for a run using a dedicated transaction.
+    /// </summary>
     internal async Task<(
         CheckpointInfo Info,
         JsonElement Value,
@@ -262,6 +311,9 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         return latest;
     }
 
+    /// <summary>
+    /// Reads the latest checkpoint within the caller's transaction.
+    /// </summary>
     internal async Task<(
         CheckpointInfo Info,
         JsonElement Value,
@@ -275,6 +327,9 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
             connection, transaction, binding, requireCompletedRootEvidence: false, cancellationToken)
             .ConfigureAwait(false);
 
+    /// <summary>
+    /// Reads the latest root checkpoint only when completed-root evidence is allowed by current owner state.
+    /// </summary>
     internal Task<(
         CheckpointInfo Info,
         JsonElement Value,
@@ -287,6 +342,10 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         ReadLatestCheckpointInTransactionCoreAsync(
             connection, transaction, binding, requireCompletedRootEvidence: true, cancellationToken);
 
+    /// <summary>
+    /// Reads the unique leaf checkpoint and validates its run binding and optional completed-root evidence.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when owner state is unavailable, stale, or has forked checkpoints.</exception>
     private async Task<(
         CheckpointInfo Info,
         JsonElement Value,
@@ -353,6 +412,10 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
             hasParentMetadata);
     }
 
+    /// <summary>
+    /// Determines whether a checkpoint and its SDK cache match the current SDK, model, and accepted run binding.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when the checkpoint reference or run binding is invalid or stale.</exception>
     internal async Task<CheckpointRecoveryDecision> GetRecoveryDecisionAsync(
         MafCheckpointBinding binding,
         string checkpointId,
@@ -418,6 +481,10 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
             : new CheckpointRecoveryDecision(CheckpointCacheRecovery.UseCheckpoint, null);
     }
 
+    /// <summary>
+    /// Requires the referenced SDK cache object to exist in the configured object store.
+    /// </summary>
+    /// <exception cref="CheckpointJournalRebuildRequiredException">Thrown when the cache store or object is unavailable.</exception>
     private async Task RequireCacheObjectAsync(ObjectKey key, CancellationToken cancellationToken)
     {
         if (_objectStore is null)
@@ -429,6 +496,9 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
                 "The SDK cache object is missing; rebuild context from the run journal.");
     }
 
+    /// <summary>
+    /// Reads the current binding using the standard active-session validation policy.
+    /// </summary>
     private async Task<CurrentBinding> ReadCurrentBindingAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -439,6 +509,10 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
             connection, transaction, binding, lockRows,
             requireCompletedRootEvidence: false, cancellationToken).ConfigureAwait(false);
 
+    /// <summary>
+    /// Reads accepted selection and session state, optionally locking owner rows and requiring completed-root evidence.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when actor, fence, lifecycle, selection, or model binding is invalid.</exception>
     private async Task<CurrentBinding> ReadCurrentBindingAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -489,6 +563,9 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         return new CurrentBinding(selectionHash);
     }
 
+    /// <summary>
+    /// Checks whether the named checkpoint exists within the specified bound run and fence.
+    /// </summary>
     private async Task<bool> CheckpointExistsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -512,6 +589,10 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
             ?? false);
     }
 
+    /// <summary>
+    /// Checks whether an existing checkpoint ID is an exact replay of the requested payload and metadata.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when the checkpoint ID is already bound to different data.</exception>
     private async Task<(CheckpointInfo Info, string? ParentCheckpointId, bool HasParentMetadata)?>
         FindExistingCheckpointAsync(
         NpgsqlConnection connection,
@@ -559,6 +640,9 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         return (new CheckpointInfo(binding.Identity.SessionId, checkpointId), storedParent, hasParentMetadata);
     }
 
+    /// <summary>
+    /// Validates any BuildTest workspace seed stored with its originating execution checkpoint.
+    /// </summary>
     private static void ValidateOriginWorkspaceSeed(
         JsonElement payload,
         MafCheckpointBinding binding,
@@ -590,6 +674,10 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         _ = GitWorkspaceBuildTestSeedPackage.Parse(bytes!, source);
     }
 
+    /// <summary>
+    /// Reads the seed bytes for an accepted BuildTest intent from its originating checkpoint under the caller's transaction.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when the intent, selection, checkpoint, seed length, or seed integrity differs.</exception>
     internal async Task<byte[]> ReadBuildTestWorkspaceSeedInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -653,6 +741,9 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         return bytes;
     }
 
+    /// <summary>
+    /// Validates checkpoint session identity, payload shape and size, and optional parent reference.
+    /// </summary>
     private static void ValidateCheckpoint(
         JsonElement value,
         string sessionId,
@@ -669,6 +760,10 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
             throw new CoordinationException("checkpoint_parent_not_found", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Reads the pinned model reference from an accepted run selection.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown when the selection has no valid pinned model reference.</exception>
     internal static string ReadSelectedModelReference(JsonElement selection)
     {
         if (selection.ValueKind == JsonValueKind.Object &&
@@ -681,6 +776,11 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         throw new InvalidOperationException("The accepted run selection has no valid pinned model reference.");
     }
 
+    /// <summary>
+    /// Requires this store to be bound to the requested accepted run and session.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown when this store has no run binding.</exception>
+    /// <exception cref="CoordinationException">Thrown when the requested session differs from the bound session.</exception>
     private MafCheckpointBinding RequireBinding(string? sessionId = null)
     {
         var binding = _binding
@@ -690,6 +790,9 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         return binding;
     }
 
+    /// <summary>
+    /// Validates all identifiers and authority fields in a checkpoint binding.
+    /// </summary>
     private static MafCheckpointBinding ValidateBinding(MafCheckpointBinding binding)
     {
         if (!IsMetadataValue(binding.Identity.ProjectId, 256) ||
@@ -705,14 +808,23 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         return binding;
     }
 
+    /// <summary>
+    /// Checks that metadata is non-empty, bounded, and free of control characters.
+    /// </summary>
     private static bool IsMetadataValue(string? value, int maximumLength) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= maximumLength &&
         !value.Any(char.IsControl);
 
+    /// <summary>
+    /// Checks that a checkpoint identifier contains only supported ASCII identifier characters.
+    /// </summary>
     private static bool IsIdentifier(string? value) =>
         IsMetadataValue(value, 128) && value!.All(character =>
             char.IsAsciiLetterOrDigit(character) || character is '.' or '_' or '-' or ':');
 
+    /// <summary>
+    /// Adds the project, run, and session parameters shared by checkpoint queries.
+    /// </summary>
     private static void AddBinding(NpgsqlCommand command, MafCheckpointBinding binding)
     {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.Identity.ProjectId);
@@ -720,6 +832,9 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, binding.Identity.SessionId);
     }
 
+    /// <summary>
+    /// Rewrites checkpoint JSON with type metadata properties first for SDK deserialization.
+    /// </summary>
     internal static JsonElement RestoreMetadataOrder(JsonElement payload)
     {
         using var stream = new MemoryStream();
@@ -729,6 +844,9 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         return restored.RootElement.Clone();
     }
 
+    /// <summary>
+    /// Writes a JSON tree while placing serialization metadata before other object properties.
+    /// </summary>
     private static void WriteWithMetadataFirst(JsonElement element, Utf8JsonWriter writer)
     {
         switch (element.ValueKind)
@@ -762,5 +880,8 @@ internal sealed class PostgresMafCheckpointStore : JsonCheckpointStore
         }
     }
 
+    /// <summary>
+    /// Carries the accepted selection hash read with the current checkpoint owner binding.
+    /// </summary>
     private sealed record CurrentBinding(string SelectionHash);
 }

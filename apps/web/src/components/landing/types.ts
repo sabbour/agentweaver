@@ -2,6 +2,7 @@ import type { ComponentType } from 'react';
 import type { StepStatus } from '../WorkflowGraphPanel';
 
 /** Stage indices for the five visible beats of every scenario run. */
+/** Stage keys used by the landing workflow simulation and its timeline. */
 export const STAGE = {
   TYPING: 0,
   OUTCOME: 1,
@@ -10,6 +11,7 @@ export const STAGE = {
   ARTIFACT: 4,
 } as const;
 
+/** Index type for the ordered simulation stages. */
 export type StageIndex = (typeof STAGE)[keyof typeof STAGE];
 
 /** A node on the run tree. Positions are derived from `col`/`row` so authored
@@ -20,6 +22,7 @@ export type StageIndex = (typeof STAGE)[keyof typeof STAGE];
  *  carries `state.startedAt`; leaving it out keeps the player's single run-token
  *  scheduler the sole owner of time. "Running" is shown by status + a static
  *  authored `duration` string. */
+/** A node and its presentation/runtime metadata in a landing-page scenario. */
 export interface ScenarioNode {
   id: string;
   label: string;
@@ -41,6 +44,7 @@ export interface ScenarioNode {
   isReviewGate?: boolean;
 }
 
+/** A generated outcome description displayed by a scenario. */
 export interface OutcomeSpec {
   goal: string;
   scope: string[];
@@ -48,6 +52,7 @@ export interface OutcomeSpec {
   review: string[];
 }
 
+/** One specialist task shown in the scenario's work plan. */
 export interface WorkPlanItem {
   id: string;
   title: string;
@@ -55,8 +60,10 @@ export interface WorkPlanItem {
   detail: string;
 }
 
+/** A directed relationship between two scenario nodes. */
 export type ScenarioEdge = [id: string, source: string, target: string];
 
+/** Complete authored scenario graph and result data consumed by the demo player. */
 export interface Scenario {
   id: string;
   /** Short label for the tab strip. */
@@ -83,6 +90,7 @@ export interface Scenario {
 }
 
 /** Derived per-node runtime status for a given stage/dispatch position. */
+/** Per-node animation state held while a scenario is playing. */
 export interface NodeRuntime {
   status: StepStatus;
   statusLabel: string;

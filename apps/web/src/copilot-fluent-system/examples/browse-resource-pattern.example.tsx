@@ -22,6 +22,7 @@ const columns: AzfColumn<ResourceRecord>[] = [
   { columnId: 'status', header: 'Status', sortable: true, sortValue: (item) => item.status, renderCell: (item) => item.status },
 ];
 
+/** Exercises the browse composition's search, filter, paging, empty, loading, and error slots. */
 export function BrowseResourcePatternExample() {
   const [searchValue, setSearchValue] = useState('');
   const [selectedRegion, setSelectedRegion] = useState<string | undefined>('West US 2');

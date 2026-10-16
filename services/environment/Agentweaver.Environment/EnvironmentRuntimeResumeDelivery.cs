@@ -3,8 +3,10 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Implements authenticated requests to a placed runtime host for resume-related operations.</summary>
 public sealed partial class EnvironmentRuntimeBootstrapDelivery
 {
+    /// <summary>Sends a host request only to the validated receiver endpoint for the current placement.</summary>
     private async Task<TResponse> SendToHostAsync<TResponse>(
         EnvironmentRuntimeBootstrapContext placement,
         string path,
@@ -37,6 +39,7 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
             ?? throw new RuntimeAuthorizationException("runtime_host_unavailable");
     }
 
+    /// <summary>Confirms that the orchestrator still accepts the exact workspace resume request.</summary>
     public async Task RequireCurrentResumeAsync(
         RuntimeWorkspaceResumeRequest request,
         RuntimeActorAuthorization actor,
@@ -52,6 +55,7 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery
             throw new RuntimeAuthorizationException("runtime_resume_authority_stale");
     }
 
+    /// <summary>Asks the current host to verify restored workspace content and rechecks request authority afterward.</summary>
     public async Task<RuntimeHostWorkspaceResumeReceipt> VerifyResumeWorkspaceAsync(
         RuntimeWorkspaceResumeRequest request,
         RuntimeActorAuthorization actor,

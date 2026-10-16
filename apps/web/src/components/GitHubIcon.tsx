@@ -8,6 +8,10 @@ interface GitHubIconProps {
 // inherits its color from the surrounding text via currentColor. Pass `title` to
 // expose it as an accessible image (announced by screen readers); omit it to
 // render the mark decoratively next to a text label that already conveys meaning.
+/**
+ * Renders the GitHub mark as a decorative icon using the requested size and styling props.
+ * It has no external data source or state.
+ */
 export function GitHubIcon({ size = 16, title, className }: GitHubIconProps) {
   return (
     <svg

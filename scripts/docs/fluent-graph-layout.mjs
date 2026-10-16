@@ -2,6 +2,7 @@
 
 import { DESIGN_TOKENS, cardContentMetrics } from './fluent-tokens.mjs';
 import { alignLoopbackToContinuation, findConnectorBridges, findConnectorJunctions } from './fluent-edge-geometry.mjs';
+/** Deterministic graph layout for authored groups, linear sequences, and branching flows. */
 const CARD_WIDTH = DESIGN_TOKENS.geometry.cardWidth;
 const CARD_HEIGHT_2 = DESIGN_TOKENS.geometry.cardMinHeight;
 const cardHeightFor = node => cardContentMetrics(node).height;
@@ -144,6 +145,7 @@ function columnsFor(count) {
         return 4;
     return 5;
 }
+/** Rank graph nodes by longest forward path after ignoring back edges in cycles. */
 function rankNodes(nodes, edges) {
     const byId = new Map(nodes.map((n) => [n.id, n]));
     const real = (edges ?? []).filter((e) => byId.has(e.from) && byId.has(e.to) && e.from !== e.to);
@@ -191,6 +193,7 @@ function rankNodes(nodes, edges) {
         rankOf(n.id);
     return rank;
 }
+/** Order nodes within rank layers by their predecessor positions to reduce edge crossings. */
 function layerNodes(nodes, edges, outerRank) {
     const byId = new Map(nodes.map((n) => [n.id, n]));
     const rank = outerRank ?? rankNodes(nodes, edges);
@@ -255,6 +258,7 @@ function serpentine(chain, cols) {
     }
     return out;
 }
+/** Find the first meaningful branch or merge reached after a loopback target. */
 export function findLoopbackReturnJoinNode(loopback, edges) {
     const forwardEdges = edges.filter((edge) => !edge.loopback);
     const outgoing = new Map();
@@ -280,6 +284,10 @@ export function findLoopbackReturnJoinNode(loopback, edges) {
     }
     return fallback;
 }
+/**
+ * Place graph nodes and groups, then derive orthogonal connectors and junction metadata.
+ * Explicit authored groups, linear runs, and branching sections receive different layout rules.
+ */
 export function layout(spec) {
     const groups = spec.groups ?? [];
     if (spec.nodes.length === 0 && groups.length > 0) {

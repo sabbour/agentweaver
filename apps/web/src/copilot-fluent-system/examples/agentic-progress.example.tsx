@@ -26,6 +26,7 @@ const baseSteps: AzfAgentStep[] = [
   },
 ];
 
+/** Demonstrates how local approve/deny decisions update step status and the next action. */
 export function AgenticProgressExample() {
   const [steps, setSteps] = useState(baseSteps);
   const [decision, setDecision] = useState<string | undefined>();

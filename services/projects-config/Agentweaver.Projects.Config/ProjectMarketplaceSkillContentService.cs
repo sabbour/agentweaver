@@ -3,11 +3,15 @@ using System.Globalization;
 
 namespace Agentweaver.Projects.Config;
 
+/// <summary>
+/// Bridges a commit-pinned marketplace source to the existing Skills preview/import authority.
+/// </summary>
 public sealed class ProjectMarketplaceSkillContentService(
     ProjectMarketplaceSourceService sources,
     SkillMarketplaceBrowseService marketplace,
     ISkillContentService skills)
 {
+    /// <summary>Reads the exact selected commit/path and delegates byte validation to the Skills owner.</summary>
     public async Task<SkillContentPreview> PreviewAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -34,6 +38,10 @@ public sealed class ProjectMarketplaceSkillContentService(
         return skills.Preview(ToCandidate(files));
     }
 
+    /// <summary>
+    /// Rechecks write authority and the exact source revision around the read before importing with source provenance.
+    /// </summary>
+    /// <exception cref="MarketplaceSourceException">The source revision changes or the source becomes unavailable.</exception>
     public async Task<SkillContentImportReceipt> ImportAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -86,6 +94,7 @@ public sealed class ProjectMarketplaceSkillContentService(
             .ConfigureAwait(false);
     }
 
+    /// <summary>Maps source-selected file bytes to the existing validator input without changing their contents.</summary>
     private static SkillContentCandidate ToCandidate(MarketplaceSkillSourceFiles files) =>
         new(
             files.SkillMarkdown,

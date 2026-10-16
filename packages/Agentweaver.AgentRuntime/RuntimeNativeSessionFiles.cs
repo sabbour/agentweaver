@@ -9,6 +9,10 @@ namespace Agentweaver.AgentRuntime;
 
 #pragma warning disable GHCP001 // Native filesystem RPC contracts belong to the pinned SDK.
 // The SDK owns the file contents. Agentweaver only archives the virtual filesystem.
+/// <summary>
+/// Provides the Copilot SDK with a private in-memory session filesystem, installs accepted skill
+/// resources, and stores bounded credential-checked cache archives.
+/// </summary>
 internal sealed class RuntimeNativeSessionFiles : SessionFsProvider
 {
     private static readonly UTF8Encoding Utf8 = new(false, throwOnInvalidBytes: true);
@@ -18,11 +22,13 @@ internal sealed class RuntimeNativeSessionFiles : SessionFsProvider
     private readonly string[] _forbiddenCredentials;
     private readonly string? _workingDirectory;
 
+    /// <summary>Creates an isolated filesystem and rejects captured files containing these credentials.</summary>
     internal RuntimeNativeSessionFiles(params string[] forbiddenCredentials)
         : this(forbiddenCredentials, null)
     {
     }
 
+    /// <summary>Creates the filesystem and optionally maps an absolute workspace root into its virtual tree.</summary>
     internal RuntimeNativeSessionFiles(string[] forbiddenCredentials, string? workingDirectory)
     {
         _forbiddenCredentials = forbiddenCredentials;
@@ -36,6 +42,7 @@ internal sealed class RuntimeNativeSessionFiles : SessionFsProvider
         }
     }
 
+    /// <summary>Copies accepted skill resources under their deterministic SDK resource directories.</summary>
     internal void InstallSkillResources(SkillRuntimeContentProjectionV1 projection)
     {
         SkillRuntimeContentContract.ValidateProjection(projection);
@@ -54,6 +61,7 @@ internal sealed class RuntimeNativeSessionFiles : SessionFsProvider
         }
     }
 
+    /// <summary>Creates a bounded ZIP snapshot with stable ordering after checking for credentials.</summary>
     internal byte[] Capture()
     {
         lock (_gate)
@@ -86,6 +94,7 @@ internal sealed class RuntimeNativeSessionFiles : SessionFsProvider
         }
     }
 
+    /// <summary>Validates and restores a bounded ZIP snapshot before the SDK session is created.</summary>
     internal void Restore(byte[] bytes)
     {
         if (bytes is not { Length: > 0 and <= SessionMaterialValidation.MaximumBytes })
@@ -143,6 +152,7 @@ internal sealed class RuntimeNativeSessionFiles : SessionFsProvider
         }
     }
 
+    /// <summary>Reads a virtual file after mapping and validating its SDK path.</summary>
     protected override Task<string> ReadFileAsync(string path, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -151,6 +161,7 @@ internal sealed class RuntimeNativeSessionFiles : SessionFsProvider
                 ? file.Content : throw new FileNotFoundException("Native session file is unavailable."));
     }
 
+    /// <summary>Replaces virtual file content after checking it for captured credentials.</summary>
     protected override Task WriteFileAsync(
         string path, string content, int? mode, CancellationToken cancellationToken)
     {
@@ -160,6 +171,7 @@ internal sealed class RuntimeNativeSessionFiles : SessionFsProvider
         return Task.CompletedTask;
     }
 
+    /// <summary>Appends virtual file content after checking the complete result for credentials.</summary>
     protected override Task AppendFileAsync(
         string path, string content, int? mode, CancellationToken cancellationToken)
     {
@@ -169,6 +181,7 @@ internal sealed class RuntimeNativeSessionFiles : SessionFsProvider
         return Task.CompletedTask;
     }
 
+    /// <summary>Checks whether a normalized virtual file or directory exists.</summary>
     protected override Task<bool> ExistsAsync(string path, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -179,6 +192,7 @@ internal sealed class RuntimeNativeSessionFiles : SessionFsProvider
         }
     }
 
+    /// <summary>Returns file size and timestamps or confirms that the path is a directory.</summary>
     protected override Task<SessionFsStatResult> StatAsync(string path, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -197,6 +211,7 @@ internal sealed class RuntimeNativeSessionFiles : SessionFsProvider
         }
     }
 
+    /// <summary>Creates a directory and its missing parents only when recursive creation is allowed.</summary>
     protected override Task MakeDirectoryAsync(
         string path, bool recursive, int? mode, CancellationToken cancellationToken)
     {
@@ -206,10 +221,12 @@ internal sealed class RuntimeNativeSessionFiles : SessionFsProvider
         return Task.CompletedTask;
     }
 
+    /// <summary>Returns names of the immediate children of a virtual directory.</summary>
     protected override async Task<IList<string>> ReadDirectoryAsync(
         string path, CancellationToken cancellationToken) =>
         (await ReadDirectoryWithTypesAsync(path, cancellationToken)).Select(entry => entry.Name).ToArray();
 
+    /// <summary>Returns sorted immediate children with their file or directory type.</summary>
     protected override Task<IList<SessionFsReaddirWithTypesEntry>> ReadDirectoryWithTypesAsync(
         string path, CancellationToken cancellationToken)
     {
@@ -235,6 +252,7 @@ internal sealed class RuntimeNativeSessionFiles : SessionFsProvider
         }
     }
 
+    /// <summary>Removes a file or directory and rejects nonrecursive removal of nonempty directories.</summary>
     protected override Task RemoveAsync(
         string path, bool recursive, bool force, CancellationToken cancellationToken)
     {
@@ -265,6 +283,7 @@ internal sealed class RuntimeNativeSessionFiles : SessionFsProvider
         return Task.CompletedTask;
     }
 
+    /// <summary>Moves a file or directory within the private tree without allowing root or descendant escapes.</summary>
     protected override Task RenameAsync(string source, string destination, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -325,6 +344,7 @@ internal sealed class RuntimeNativeSessionFiles : SessionFsProvider
         _directories.Add(path);
     }
 
+    /// <summary>Rejects file content that contains any non-empty credential provided to this filesystem.</summary>
     private void RequireCredentialSafe(string content)
     {
         if (_forbiddenCredentials.Any(value =>
@@ -332,6 +352,7 @@ internal sealed class RuntimeNativeSessionFiles : SessionFsProvider
             throw new RuntimeAuthorizationException("runtime_sdk_cache_contains_credential");
     }
 
+    /// <summary>Maps SDK workspace paths into the private virtual root and rejects path traversal.</summary>
     internal string MapWorkingDirectoryPath(string path)
     {
         if (_workingDirectory is not null)

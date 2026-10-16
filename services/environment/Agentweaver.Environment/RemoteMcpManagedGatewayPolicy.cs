@@ -3,9 +3,13 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Environment;
 
+/// <summary>
+/// Keeps exact Remote MCP gateway descriptors active in this process and produces receipts for apply, verify, and revoke.
+/// </summary>
 public sealed class RemoteMcpManagedGatewayPolicy :
     IRemoteMcpManagedGatewayPolicy, IRemoteMcpManagedGatewayStateReader
 {
+    /// <summary>Stored descriptor and apply receipt used to verify this process's active gateway state.</summary>
     private sealed record ActiveState(
         RemoteMcpManagedGatewayGateDescriptor Descriptor,
         RemoteMcpManagedGatewayPolicyReceipt AppliedReceipt);
@@ -14,6 +18,7 @@ public sealed class RemoteMcpManagedGatewayPolicy :
     private readonly Dictionary<string, ActiveState> _active = new(StringComparer.Ordinal);
     private readonly Guid _handlerInstanceId = Guid.NewGuid();
 
+    /// <summary>Activates a descriptor idempotently, rejecting a digest collision with different descriptor content.</summary>
     public Task<RemoteMcpManagedGatewayPolicyReceipt> ApplyAsync(
         RemoteMcpManagedGatewayGateDescriptor descriptor,
         CancellationToken cancellationToken)
@@ -40,6 +45,7 @@ public sealed class RemoteMcpManagedGatewayPolicy :
         }
     }
 
+    /// <summary>Verifies that the exact descriptor remains active in the same handler instance.</summary>
     public Task<RemoteMcpManagedGatewayPolicyReceipt> VerifyAsync(
         RemoteMcpManagedGatewayGateDescriptor descriptor,
         CancellationToken cancellationToken)
@@ -59,6 +65,7 @@ public sealed class RemoteMcpManagedGatewayPolicy :
         }
     }
 
+    /// <summary>Revokes only the exact descriptor and confirms it is no longer active.</summary>
     public Task<RemoteMcpManagedGatewayPolicyReceipt> RevokeAsync(
         RemoteMcpManagedGatewayGateDescriptor descriptor,
         CancellationToken cancellationToken)
@@ -80,6 +87,7 @@ public sealed class RemoteMcpManagedGatewayPolicy :
         }
     }
 
+    /// <summary>Finds the one active descriptor bound to the live call and re-verifies it before returning state.</summary>
     public async Task<RemoteMcpManagedGatewayActiveState> ReadCurrentAsync(
         RemoteMcpNativeCallContext currentCall,
         CancellationToken cancellationToken)
@@ -123,6 +131,7 @@ public sealed class RemoteMcpManagedGatewayPolicy :
         return new(active.Descriptor, receipt);
     }
 
+    /// <summary>Creates a receipt tied to this handler instance and the supplied descriptor digest.</summary>
     private RemoteMcpManagedGatewayPolicyReceipt Receipt(
         RemoteMcpManagedGatewayOperation operation,
         string descriptorHash,

@@ -1,5 +1,6 @@
 import { makeStyles, tokens } from '@fluentui/react-components';
 
+/** Provides shared Fluent UI styles for the agentic activity components. */
 export const useAgenticStyles = makeStyles({
   // ArtifactChip
   artifactChip: {

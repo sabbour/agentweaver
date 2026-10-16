@@ -1,3 +1,7 @@
+/**
+ * Validates release manifests, component metadata, project versions, and change coverage.
+ * Errors include a field or file location so planning and publication can fail before modifying state.
+ */
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -8,6 +12,7 @@ const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.
 const sha = /^[a-f0-9]{40}$/;
 const digest = /^sha256:[a-f0-9]{64}$/;
 const id = /^[A-Za-z][A-Za-z0-9.-]*$/;
+/** Repository paths whose package versions and lock data are validated with the release manifest. */
 export const WEB_PROJECT_PATH = 'apps/web/package.json';
 export const WEB_LOCK_PATH = 'apps/web/package-lock.json';
 export const WEB_HOST_PROJECT_PATH = 'apps/web/host/Agentweaver.Web.Host.csproj';
@@ -76,6 +81,10 @@ function readJsonFile(project, root, readProject) {
   }
 }
 
+/**
+ * Validates manifest shape, component paths, version alignment, and release-stage evidence.
+ * Returns the validated manifest; malformed or inconsistent values throw a location-specific error.
+ */
 export function validateManifest(manifest, { root = repositoryRoot, readProject = (file) => readFileSync(file, 'utf8') } = {}) {
   root = path.resolve(root);
   object(manifest, 'manifest', ['schemaVersion', 'stage', 'components', 'compatibility'],
@@ -239,6 +248,10 @@ export function validateManifest(manifest, { root = repositoryRoot, readProject 
   return manifest;
 }
 
+/**
+ * Reads and parses a manifest file, then applies validateManifest() to its contents.
+ * File, JSON, and validation errors are propagated with the manifest path.
+ */
 export function validateFile(file, options = {}) {
   let text;
   try {

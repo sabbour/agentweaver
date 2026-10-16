@@ -9,6 +9,7 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Providers.Sandbox.AgentSandbox;
 
+/// <summary>Verifies a persisted PVC attachment against the Storage resource selected for a workspace volume.</summary>
 public sealed record AgentSandboxPersistentVolumeClaimAttachment(
     int ContractVersion,
     string StorageProviderId,
@@ -16,6 +17,8 @@ public sealed record AgentSandboxPersistentVolumeClaimAttachment(
     string ClaimName,
     string ClaimUid)
 {
+    /// <summary>Requires this descriptor's provider, namespace, claim name, and UID to match the negotiation.</summary>
+    /// <exception cref="ArgumentException">The descriptor is malformed or does not identify the negotiated Storage resource.</exception>
     public AgentSandboxPersistentVolumeClaimAttachment ValidateFor(
         WorkspaceVolumeAttachmentNegotiation negotiation)
     {
@@ -32,6 +35,7 @@ public sealed record AgentSandboxPersistentVolumeClaimAttachment(
         return this;
     }
 
+    /// <summary>Checks a Kubernetes DNS subdomain used as a namespace or claim identity.</summary>
     private static bool IsDnsSubdomain(string value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= 253 &&
@@ -43,6 +47,10 @@ public sealed record AgentSandboxPersistentVolumeClaimAttachment(
                 character is >= 'a' and <= 'z' or >= '0' and <= '9' or '-'));
 }
 
+/// <summary>
+/// Owns the Kubernetes Sandbox lifecycle for one pinned provider binding.
+/// It creates fenced resources, observes only resources with matching ownership, and releases them by UID.
+/// </summary>
 public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBuildTestCommandProvider
 {
     private const string ExtensionsApiGroup = "extensions.agents.x-k8s.io";
@@ -64,6 +72,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
     private readonly KubernetesAgentSandboxClient _client;
     private readonly TimeProvider _timeProvider;
 
+    /// <summary>Creates the JSON options used for persisted provider and recovery bindings.</summary>
     private static JsonSerializerOptions CreateJsonOptions()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
@@ -71,6 +80,11 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return options;
     }
 
+    /// <summary>Creates the adapter after validating the fixed provider options and Kubernetes client.</summary>
+    /// <param name="options">Provider configuration revision to use for provisioning.</param>
+    /// <param name="client">Kubernetes API adapter for namespaced and cluster resources.</param>
+    /// <param name="timeProvider">Optional clock for polling and startup evidence evaluation.</param>
+    /// <exception cref="ArgumentException">The provider options are invalid.</exception>
     public AgentSandboxProvider(
         AgentSandboxOptions options,
         KubernetesAgentSandboxClient client,
@@ -81,6 +95,14 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
+    /// <summary>
+    /// Creates the template, zero-replica warm pool, and fenced claim after verifying runtime and workspace pins.
+    /// </summary>
+    /// <param name="request">Validated Sandbox request, selected candidate, workspace negotiation, and fence.</param>
+    /// <param name="cancellationToken">Cancels Kubernetes operations.</param>
+    /// <returns>The created resource reference, endpoint and placement pins, capabilities, and provider binding.</returns>
+    /// <exception cref="SandboxProviderException">A pin, capability, Kubernetes object, or post-create binding check fails.</exception>
+    /// <remarks>The exception records whether any Kubernetes creation or binding annotation may have applied.</remarks>
     public async Task<SandboxProvisionedResource> ProvisionAsync(
         SandboxProvisionRequest request,
         CancellationToken cancellationToken = default)
@@ -250,6 +272,13 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         }
     }
 
+    /// <summary>
+    /// Observes the exact claimed Sandbox and Pod, verifies workspace and isolation, and optionally resolves AgentHost.
+    /// </summary>
+    /// <param name="request">Resource reference, lease fence, fencing generation, and pinned binding.</param>
+    /// <param name="cancellationToken">Cancels Kubernetes reads.</param>
+    /// <returns>Validated pending, failed, finished, or absent observation for the requested generation.</returns>
+    /// <exception cref="SandboxProviderException">The persisted binding or observed resource ownership is invalid.</exception>
     public async Task<SandboxObservation> DescribeAsync(
         SandboxDescribeRequest request,
         CancellationToken cancellationToken = default)
@@ -385,6 +414,11 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         }.ValidateFor(request);
     }
 
+    /// <summary>Lists claims owned by the requested owner and fencing generation, then describes each exact claim.</summary>
+    /// <param name="request">Owner fence, pinned provision intent, and minimum accepted fencing generation.</param>
+    /// <param name="cancellationToken">Cancels Kubernetes listing and reads.</param>
+    /// <returns>Observations for verified owned claims; unrelated or stale claims are excluded.</returns>
+    /// <exception cref="SandboxProviderException">An owned claim is missing or has invalid recovery metadata.</exception>
     public async Task<IReadOnlyList<SandboxObservation>> ListOwnedAsync(
         SandboxListOwnedRequest request,
         CancellationToken cancellationToken = default)
@@ -439,6 +473,14 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return observations;
     }
 
+    /// <summary>
+    /// Removes a partially provisioned template and warm pool only after proving no claim or child remains.
+    /// </summary>
+    /// <param name="request">Fenced lease and idempotent partial-release request.</param>
+    /// <param name="cancellationToken">Cancels Kubernetes reads and deletes.</param>
+    /// <returns>A receipt for the exact absent or released resources.</returns>
+    /// <exception cref="SandboxProviderException">A claim or child exists, a pin mismatches, or deletion is unconfirmed.</exception>
+    /// <remarks>Resource deletions are foreground and UID-guarded; failures indicate if an effect may have applied.</remarks>
     public async Task<SandboxPartialReleaseReceipt> ReleasePartialAsync(
         SandboxPartialReleaseRequest request,
         CancellationToken cancellationToken = default)
@@ -601,6 +643,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
                 : SandboxReleaseDisposition.Released).ValidateFor(request);
     }
 
+    /// <summary>Deserializes and checks the exact provider options revision stored in a lease intent.</summary>
+    /// <exception cref="SandboxProviderException">The saved options or provider/version/revision pin is invalid.</exception>
     private AgentSandboxOptions ReadPinnedOptions(SandboxLeaseProvisionIntent pinnedIntent)
     {
         AgentSandboxOptions options;
@@ -637,6 +681,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return options;
     }
 
+    /// <summary>Validates the owner, workspace negotiation, provider, and egress selector in a recovery intent.</summary>
+    /// <exception cref="SandboxProviderException">The recovery request does not match the lease's immutable fence.</exception>
     private static AgentSandboxRecoveryIntent ReadRecoveryIntent(
         SandboxLeaseSnapshot lease,
         AgentSandboxOptions options)
@@ -684,6 +730,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return recovery with { Workspace = workspace };
     }
 
+    /// <summary>Fails closed when any Sandbox or Pod carrying the partial operation labels remains.</summary>
     private async Task EnsureNoPartialClaimChildrenAsync(
         string kubernetesNamespace,
         string ownerFingerprint,
@@ -713,6 +760,11 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
                 effectMayHaveApplied: false);
     }
 
+    /// <summary>Deletes a claim and its dependent resources, then reports the confirmed release disposition.</summary>
+    /// <param name="request">Exact resource, fence, UID, provider binding, and idempotency key to release.</param>
+    /// <param name="cancellationToken">Cancels Kubernetes reads, foreground deletion, and polling.</param>
+    /// <returns>A validated release receipt.</returns>
+    /// <exception cref="SandboxProviderException">The claim or children cannot be verified or removed.</exception>
     public async Task<SandboxReleaseReceipt> ReleaseAsync(
         SandboxReleaseRequest request,
         CancellationToken cancellationToken = default)
@@ -785,6 +837,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
                 : SandboxReleaseDisposition.KnownOwnedAbsent).ValidateFor(request);
     }
 
+    /// <summary>Requires the selected candidate to match the configured adapter and all required capabilities.</summary>
+    /// <exception cref="SandboxProviderException">Provider, version, options revision, or capability requirements differ.</exception>
     private static void ValidateCandidate(ProviderCandidate candidate, AgentSandboxOptions options)
     {
         if (candidate.Seam != ProviderSeam.Sandbox ||
@@ -805,6 +859,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
                 effectMayHaveApplied: false);
     }
 
+    /// <summary>Deserializes a negotiated PVC attachment and checks its protocol, provider, and namespace.</summary>
+    /// <exception cref="SandboxProviderException">The attachment is malformed or unsupported by this adapter.</exception>
     private static AgentSandboxPersistentVolumeClaimAttachment ReadWorkspaceAttachment(
         SandboxWorkspaceAttachment workspace,
         AgentSandboxOptions options)
@@ -841,6 +897,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return descriptor;
     }
 
+    /// <summary>Verifies the configured RuntimeClass maps to the expected virtual-machine handler.</summary>
+    /// <exception cref="SandboxProviderException">The runtime class is absent or maps to another handler.</exception>
     private async Task VerifyRuntimeClassAsync(
         AgentSandboxOptions options,
         CancellationToken cancellationToken)
@@ -862,6 +920,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
                 effectMayHaveApplied: false);
     }
 
+    /// <summary>Reads the negotiated PVC and returns its validated owner and generation fingerprint.</summary>
+    /// <exception cref="SandboxProviderException">The claim is missing, unbound, or differs from the negotiation.</exception>
     private async Task<string> VerifyWorkspaceClaimAsync(
         EnvironmentGenerationFence fence,
         WorkspaceVolumeAttachmentNegotiation negotiation,
@@ -882,6 +942,9 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return ValidateWorkspaceClaim(claim.Value, fence, negotiation, descriptor, requireBound: true);
     }
 
+    /// <summary>Checks claim UID and owner annotations and optionally requires Kubernetes phase Bound.</summary>
+    /// <returns>A stable fingerprint of the verified workspace identity.</returns>
+    /// <exception cref="SandboxProviderException">The claim identity, annotations, or required phase is incorrect.</exception>
     private static string ValidateWorkspaceClaim(
         JsonElement claim,
         EnvironmentGenerationFence fence,
@@ -921,6 +984,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             annotations["agentweaver.dev/environment-id"]);
     }
 
+    /// <summary>Builds the restrictive SandboxTemplate and applies the optional pinned AgentHost launch profile.</summary>
     private static JsonElement BuildTemplate(
         SandboxProvisionRequest request,
         AgentSandboxPersistentVolumeClaimAttachment workspace,
@@ -1040,6 +1104,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return JsonSerializer.SerializeToElement(document);
     }
 
+    /// <summary>Adds AgentHost mounts, HTTPS probes, runtime configuration, state volumes, and fixed UID settings.</summary>
+    /// <exception cref="ArgumentException">No explicit AgentHost launch profile is configured.</exception>
     private static void ApplyAgentHostProfile(JsonObject podSpec, AgentSandboxOptions options, string mountPath)
     {
         var host = options.AgentHost ?? throw new ArgumentException("An explicit AgentHost launch profile is required.");
@@ -1100,6 +1166,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         mounts.Add(JsonSerializer.SerializeToNode(new { name = "agenthost-tls", mountPath = "/run/agenthost-tls", readOnly = true }));
     }
 
+    /// <summary>Creates the zero-replica SandboxWarmPool manifest for one exact template and owner.</summary>
     private JsonElement BuildWarmPool(
         string name,
         string templateName,
@@ -1126,6 +1193,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             }
         });
 
+    /// <summary>Creates the SandboxClaim manifest with fenced labels and its serialized recovery descriptor.</summary>
     private JsonElement BuildClaim(
         string name,
         string warmPoolName,
@@ -1153,6 +1221,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             }
         });
 
+    /// <summary>Builds deterministic owner, lifecycle, resource, fence, and operation labels for Kubernetes objects.</summary>
     private static ImmutableDictionary<string, string> BuildResourceLabels(
         string ownerFingerprint,
         long lifecycleGeneration,
@@ -1177,6 +1246,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
                 new KeyValuePair<string, string>(OperationLabel, operationId.ToString("N"))
             });
 
+    /// <summary>Reads an existing object or creates it; after a create conflict, rereads rather than retrying creation.</summary>
+    /// <exception cref="SandboxProviderException">A create conflict cannot be resolved by reading the expected object.</exception>
     private async Task<(JsonElement Resource, bool Created)> EnsureResourceAsync(
         string apiGroup,
         string plural,
@@ -1208,6 +1279,9 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         }
     }
 
+    /// <summary>Checks a template's metadata, policies, pod labels, workload image, isolation, and workspace mount.</summary>
+    /// <returns>The verified Kubernetes object UID.</returns>
+    /// <exception cref="SandboxProviderException">Any ownership or launch invariant differs from the desired template.</exception>
     private static string ValidateTemplate(
         JsonElement resource,
         SandboxWorkspaceAttachment workspaceAttachment,
@@ -1268,6 +1342,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return uid;
     }
 
+    /// <summary>Checks that the warm pool is owned and references exactly the expected zero-replica template.</summary>
+    /// <returns>The verified warm-pool UID.</returns>
     private static string ValidateWarmPool(
         JsonElement resource,
         string kubernetesNamespace,
@@ -1287,6 +1363,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return uid;
     }
 
+    /// <summary>Checks claim metadata, warm-pool reference, lifecycle behavior, and its exact recovery descriptor.</summary>
+    /// <returns>The verified claim UID.</returns>
     private static string ValidateClaim(
         JsonElement resource,
         string name,
@@ -1306,6 +1384,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return uid;
     }
 
+    /// <summary>Validates resource name, namespace, owner annotation, and all expected labels before returning its UID.</summary>
     private static string ValidateResourceMetadata(
         JsonElement resource,
         string expectedName,
@@ -1337,6 +1416,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return RequiredString(metadata, "uid");
     }
 
+    /// <summary>Requires pod and container identity, non-root UID/GID, seccomp, and restricted capabilities.</summary>
+    /// <exception cref="SandboxProviderException">The workload security context does not match the required restriction.</exception>
     private static void ValidatePodSecurityContext(JsonElement podSecurityContext, JsonElement container, int user)
     {
         if (!TryGetBoolean(podSecurityContext, "runAsNonRoot", out var podNonRoot) ||
@@ -1368,6 +1449,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             throw ProviderResourceMismatch("The owned AgentHost container security context is not restricted.");
     }
 
+    /// <summary>Rebuilds the expected AgentHost profile and verifies every pinned launch setting in the observed Pod.</summary>
     private static void ValidateAgentHostProfile(
         JsonElement podSpec, JsonElement container, AgentSandboxOptions options, string mountPath)
     {
@@ -1393,6 +1475,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             throw ProviderResourceMismatch("The owned AgentHost launch configuration differs from its pinned profile.");
     }
 
+    /// <summary>Checks that each expected JSON subtree is present and has the exact configured value.</summary>
     private static bool ContainsLaunchConfiguration(JsonNode? actual, JsonNode? expected) => expected switch
     {
         JsonObject properties => actual is JsonObject candidate &&
@@ -1403,6 +1486,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         _ => JsonNode.DeepEquals(actual, expected)
     };
 
+    /// <summary>Requires container CPU and memory requests and limits to match provider options exactly.</summary>
     private static void ValidateContainerResources(JsonElement container, AgentSandboxOptions options)
     {
         var resources = RequiredObject(container, "resources");
@@ -1415,6 +1499,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             throw ProviderResourceMismatch("The owned AgentHost container resources differ from pinned options.");
     }
 
+    /// <summary>Requires the Pod volume and container mount to reference the negotiated PVC and mount mode.</summary>
     private static void ValidateWorkspacePodMount(
         JsonElement podSpec,
         JsonElement container,
@@ -1440,6 +1525,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             throw ProviderResourceMismatch("The owned Pod template does not mount the workspace at its negotiated path.");
     }
 
+    /// <summary>Matches a claim's Kubernetes UID, warm-pool reference, labels, and saved recovery descriptor to its pin.</summary>
     private static void ValidateClaimAgainstDescriptor(
         JsonElement claim,
         ProviderResourceRef resource,
@@ -1466,6 +1552,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             throw ProviderResourceMismatch("The current claim does not match the exact pinned sandbox owner and generation.");
     }
 
+    /// <summary>Compares recovery metadata structurally and returns false for malformed JSON.</summary>
     private static bool RecoveryDescriptorMatches(
         string recoveryJson,
         AgentSandboxRecoveryDescriptor expected)
@@ -1484,6 +1571,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         }
     }
 
+    /// <summary>Requires the Agent Sandbox custom resource to be controller-owned by the exact claim UID.</summary>
     private static void ValidateSandboxOwner(JsonElement sandbox, string claimUid)
     {
         var metadata = RequiredObject(sandbox, "metadata");
@@ -1491,6 +1579,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             throw ProviderResourceMismatch("The Agent Sandbox resource is not controlled by the exact SandboxClaim UID.");
     }
 
+    /// <summary>Reads supported terminal conditions only when their observed generation matches the resource generation.</summary>
     private static SandboxTerminalEvidence? TryReadTerminalEvidence(
         JsonElement sandbox,
         string claimUid,
@@ -1532,6 +1621,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return null;
     }
 
+    /// <summary>Checks Pod ownership, claim UID label, pinned egress selectors, and operation-generation labels.</summary>
     private static void ValidatePodOwner(
         JsonElement pod,
         string sandboxUid,
@@ -1561,6 +1651,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
                 throw ProviderResourceMismatch("The backing Pod ownership labels do not match its Sandbox claim.");
     }
 
+    /// <summary>Verifies the exact workspace PVC mount and its current claim fence before reporting attachment success.</summary>
     private async Task<bool> VerifyAttachedPodAsync(
         JsonElement pod,
         EnvironmentGenerationFence fence,
@@ -1602,6 +1693,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             descriptor);
     }
 
+    /// <summary>Checks that the PVC is bound and matches the lease owner, environment, volume generation, and fingerprint.</summary>
     private static bool ValidateWorkspaceClaimForFence(
         JsonElement claim,
         EnvironmentGenerationFence fence,
@@ -1629,6 +1721,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             StringComparison.Ordinal);
     }
 
+    /// <summary>Checks the Pod runtime class, service account, host networking, and restricted workload profile.</summary>
     private async Task<bool> VerifyPodIsolationAsync(
         JsonElement pod,
         AgentSandboxOptions options,
@@ -1664,6 +1757,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         }
     }
 
+    /// <summary>Finds Sandboxes controlled by the exact claim UID.</summary>
     private async Task<IReadOnlyList<JsonElement>> FindClaimSandboxesAsync(
         AgentSandboxRecoveryDescriptor descriptor,
         CancellationToken cancellationToken)
@@ -1684,6 +1778,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return result;
     }
 
+    /// <summary>Finds Pods labelled with the exact claim UID.</summary>
     private Task<IReadOnlyList<JsonElement>> FindClaimPodsAsync(
         AgentSandboxRecoveryDescriptor descriptor,
         CancellationToken cancellationToken) =>
@@ -1694,6 +1789,9 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             ImmutableDictionary<string, string>.Empty.Add(ClaimUidLabel, descriptor.ClaimUid!),
             cancellationToken);
 
+    /// <summary>Deletes an owned Kubernetes object only after matching all pinned labels and its expected UID.</summary>
+    /// <returns><see langword="true"/> when an object was found and deletion requested; otherwise false.</returns>
+    /// <exception cref="SandboxProviderException">The object identity differs or deletion is not confirmed.</exception>
     private async Task<bool> DeleteOwnedResourceAsync(
         string apiGroup,
         string plural,
@@ -1747,6 +1845,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return true;
     }
 
+    /// <summary>Polls until an exact Kubernetes object is absent or the reconciliation deadline expires.</summary>
+    /// <exception cref="SandboxProviderException">The object remains after the configured deadline.</exception>
     private async Task WaitForAbsentAsync(
         string apiGroup,
         string plural,
@@ -1775,6 +1875,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         }
     }
 
+    /// <summary>Waits until both Sandbox custom resources and Pods for this claim have disappeared.</summary>
+    /// <exception cref="SandboxProviderException">Dependent resources remain after the reconciliation deadline.</exception>
     private async Task WaitForClaimChildrenAbsentAsync(
         AgentSandboxRecoveryDescriptor descriptor,
         AgentSandboxOptions options,
@@ -1800,12 +1902,14 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         }
     }
 
+    /// <summary>Caps a poll delay at the remaining time before the reconciliation deadline.</summary>
     private static TimeSpan MinDelay(TimeSpan remaining, int pollIntervalMilliseconds)
     {
         var poll = TimeSpan.FromMilliseconds(pollIntervalMilliseconds);
         return remaining < poll ? remaining : poll;
     }
 
+    /// <summary>Creates a pending or failed observation after applying the pinned startup budget to observed phases.</summary>
     private SandboxObservation PendingObservation(
         SandboxDescribeRequest request,
         AgentSandboxRecoveryDescriptor descriptor,
@@ -1833,6 +1937,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             StartupFailure: startupFailure).ValidateFor(request);
     }
 
+    /// <summary>Evaluates provider startup deadlines and maps invalid phase evidence to a provider error.</summary>
     private static SandboxStartupBudgetFailure? EvaluateStartupBudget(
         DateTimeOffset leaseCreatedAt,
         ImmutableArray<SandboxStartupPhaseObservation> phases,
@@ -1850,6 +1955,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         }
     }
 
+    /// <summary>Reconstructs the stable provisioned resource and capabilities from the persisted provider binding.</summary>
     private SandboxProvisionedResource BuildProvisionedResource(
         SandboxDescribeRequest request,
         AgentSandboxRecoveryDescriptor descriptor,
@@ -1865,6 +1971,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             phases,
             request.ProviderBinding).Validate();
 
+    /// <summary>Deserializes and verifies the provider binding against the exact owner, resource, and cluster.</summary>
+    /// <exception cref="SandboxProviderException">The adapter version, options, recovery descriptor, or resource pin differs.</exception>
     private (AgentSandboxOptions Options, AgentSandboxRecoveryDescriptor Descriptor) ReadBinding(
         EnvironmentGenerationFence fence,
         ProviderResourceRef resource,
@@ -1913,6 +2021,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return (options, descriptor);
     }
 
+    /// <summary>Creates the immutable binding snapshot stored with the provider resource.</summary>
     private static SandboxProviderBindingSnapshot BuildBinding(
         AgentSandboxRecoveryDescriptor recovery,
         ProviderResourceRef resource)
@@ -1929,6 +2038,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             .ValidateFor(resource);
     }
 
+    /// <summary>Validates every recovery field and recomputes deterministic resource names from the fence.</summary>
+    /// <exception cref="SandboxProviderException">Any owner, generation, option, selector, name, or digest pin is invalid.</exception>
     private static void ValidateRecoveryDescriptor(
         AgentSandboxRecoveryDescriptor descriptor,
         EnvironmentGenerationFence fence,
@@ -1998,6 +2109,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             throw ProviderBindingMismatch();
     }
 
+    /// <summary>Parses persisted recovery JSON and reports malformed or unsupported metadata as a provider failure.</summary>
     private static AgentSandboxRecoveryDescriptor DeserializeRecoveryDescriptor(string value)
     {
         try
@@ -2016,15 +2128,19 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         }
     }
 
+    /// <summary>Creates the common failure for a provider binding that does not match the requested generation.</summary>
     private static SandboxProviderException ProviderBindingMismatch() =>
         new(
             "provider_binding_mismatch",
             "The pinned Agent Sandbox binding does not match the exact owner and resource generation.",
             effectMayHaveApplied: false);
 
+    /// <summary>Creates the common failure for an observed Kubernetes object that differs from its pin.</summary>
     private static SandboxProviderException ProviderResourceMismatch(string message) =>
         new("provider_resource_mismatch", message, effectMayHaveApplied: false);
 
+    /// <summary>Derives claim, template, and warm-pool names from the fenced resource identity.</summary>
+    /// <exception cref="SandboxProviderException">The supplied owner or lifecycle generation differs from the fence.</exception>
     private static (string ClaimName, string TemplateName, string WarmPoolName) GetResourceNames(
         string ownerFingerprint,
         EnvironmentGenerationFence fence,
@@ -2051,9 +2167,11 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             $"aw-pool-{suffix}");
     }
 
+    /// <summary>Hashes the complete owner identity before storing it as a Kubernetes label.</summary>
     private static string GetOwnerFingerprint(EnvironmentOwnerIdentity owner) =>
         Hash($"{owner.TenantId}\0{owner.ProjectId}\0{owner.RunId}\0{owner.EnvironmentId}")[..40];
 
+    /// <summary>Hashes workspace owner, volume, resource generation, and environment into a stable attachment identity.</summary>
     private static string GetWorkspaceFingerprint(
         string projectId,
         string volumeId,
@@ -2061,9 +2179,11 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         string environmentId) =>
         Hash($"{projectId}\0{volumeId}\0{resourceGeneration}\0{environmentId}");
 
+    /// <summary>Computes the lower-case SHA-256 digest used for Kubernetes-safe identity values.</summary>
     private static string Hash(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
+    /// <summary>Derives a stable endpoint identifier from owner, resource generation, fence, and operation.</summary>
     private static SandboxEndpointReference CreateEndpointReference(
         string ownerFingerprint,
         long resourceGeneration,
@@ -2075,12 +2195,14 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return new SandboxEndpointReference(new Guid(digest.AsSpan(0, 16))).Validate();
     }
 
+    /// <summary>Derives a stable placement reference from the cluster API target and namespace.</summary>
     private static SandboxPlacementReference CreatePlacementReference(
         string clusterIdentity,
         string kubernetesNamespace) =>
         new SandboxPlacementReference(
             $"k8s-{Hash($"{clusterIdentity}\0{kubernetesNamespace}")[..32]}").Validate();
 
+    /// <summary>Builds ordered startup evidence from Pod conditions, the selected image, and matching pull events.</summary>
     private async Task<ImmutableArray<SandboxStartupPhaseObservation>> ReadStartupPhasesAsync(
         JsonElement pod,
         string kubernetesNamespace,
@@ -2134,6 +2256,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             .ToImmutableArray();
     }
 
+    /// <summary>Requires the selected container to run the pinned image digest and return its start timestamp.</summary>
     private static bool IsSelectedImageRunning(
         JsonElement pod,
         JsonElement container,
@@ -2157,6 +2280,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return false;
     }
 
+    /// <summary>Finds a successful image-pull event for the exact Pod UID and configured digest.</summary>
     private static bool TryReadMatchingImagePullCompletedAt(
         IReadOnlyList<JsonElement> events,
         string podUid,
@@ -2179,6 +2303,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return false;
     }
 
+    /// <summary>Reads a true status condition and its transition timestamp when present.</summary>
     private static bool HasTrueCondition(
         JsonElement resource,
         string type,
@@ -2202,6 +2327,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return false;
     }
 
+    /// <summary>Finds one named container status in a Pod response.</summary>
     private static JsonElement? FindContainerStatus(JsonElement pod, string containerName)
     {
         var status = TryGetObject(pod, "status");
@@ -2214,9 +2340,11 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return null;
     }
 
+    /// <summary>Returns whether Kubernetes reports the Pod phase as Failed.</summary>
     private static bool IsPodFailed(JsonElement pod) =>
         string.Equals(ReadOptionalString(pod, "status", "phase"), "Failed", StringComparison.Ordinal);
 
+    /// <summary>Restricts workspace mounts to bounded absolute paths beneath the reserved Agentweaver workspace root.</summary>
     private static bool IsWorkspaceMountPath(string value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 512 ||
@@ -2227,6 +2355,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return segments.Skip(1).All(segment => segment is not ("" or "." or ".."));
     }
 
+    /// <summary>Checks the lower-case Kubernetes DNS subdomain syntax used by stored resource names.</summary>
     private static bool IsDnsSubdomain(string value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= 253 &&
@@ -2237,10 +2366,13 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             label.All(character =>
                 character is >= 'a' and <= 'z' or >= '0' and <= '9' or '-'));
 
+    /// <summary>Checks a lower-case 64-character SHA-256 digest.</summary>
     private static bool IsSha256(string value) =>
         value.Length == 64 && value.All(character =>
             character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
+    /// <summary>Validates caller-provided egress selectors and rejects Kubernetes ownership or system keys.</summary>
+    /// <exception cref="SandboxProviderException">A key or value is invalid, too large, or reserved.</exception>
     private static void ValidateEgressSelectorLabels(
         ImmutableDictionary<string, string> labels)
     {
@@ -2266,6 +2398,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         }
     }
 
+    /// <summary>Checks Kubernetes label-key syntax, including an optional DNS prefix.</summary>
     private static bool IsKubernetesLabelKey(string value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 317)
@@ -2279,6 +2412,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return true;
     }
 
+    /// <summary>Checks the bounded name portion of a Kubernetes label key.</summary>
     private static bool IsLabelName(string value) =>
         value.Length is >= 1 and <= 63 &&
         value[0] is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' &&
@@ -2286,6 +2420,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         value.All(character =>
             character is >= 'a' and <= 'z' or >= 'A' and <= 'Z' or >= '0' and <= '9' or '.' or '_' or '-');
 
+    /// <summary>Checks that metadata has a controlling owner reference with the requested UID.</summary>
     private static bool HasOwnerReference(JsonElement metadata, string uid)
     {
         var references = TryGetArray(metadata, "ownerReferences");
@@ -2297,9 +2432,11 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             controller);
     }
 
+    /// <summary>Reads an object's Kubernetes labels as an ordinal immutable dictionary.</summary>
     private static ImmutableDictionary<string, string> ReadLabels(JsonElement resource) =>
         ReadStringDictionary(RequiredObject(resource, "metadata"), "labels");
 
+    /// <summary>Reads a string annotation by name, returning false when metadata or the annotation is absent.</summary>
     private static bool TryGetAnnotation(JsonElement resource, string name, out string value)
     {
         var metadata = TryGetObject(resource, "metadata");
@@ -2317,6 +2454,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return false;
     }
 
+    /// <summary>Compares an annotation value using ordinal equality.</summary>
     private static bool HasAnnotation(
         ImmutableDictionary<string, string> annotations,
         string key,
@@ -2324,6 +2462,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         annotations.TryGetValue(key, out var value) &&
         string.Equals(value, expected, StringComparison.Ordinal);
 
+    /// <summary>Compares a Kubernetes label value using ordinal equality.</summary>
     private static bool HasAnnotationOrLabel(
         ImmutableDictionary<string, string> labels,
         string key,
@@ -2331,6 +2470,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         labels.TryGetValue(key, out var value) &&
         string.Equals(value, expected, StringComparison.Ordinal);
 
+    /// <summary>Reads a string-valued metadata object, rejecting values of unexpected JSON types.</summary>
     private static ImmutableDictionary<string, string> ReadStringDictionary(
         JsonElement parent,
         string name)
@@ -2351,6 +2491,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return builder.ToImmutable();
     }
 
+    /// <summary>Reads a required JSON object or reports an invalid Kubernetes response.</summary>
     private static JsonElement RequiredObject(JsonElement parent, string name) =>
         TryGetObject(parent, name) ??
         throw new SandboxProviderException(
@@ -2358,9 +2499,11 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             $"Kubernetes response is missing object '{name}'.",
             effectMayHaveApplied: false);
 
+    /// <summary>Reads two nested required objects from a Kubernetes response.</summary>
     private static JsonElement RequiredObject(JsonElement parent, string first, string second) =>
         RequiredObject(RequiredObject(parent, first), second);
 
+    /// <summary>Reads a required non-empty response string or reports an invalid Kubernetes response.</summary>
     private static string RequiredString(JsonElement parent, string name) =>
         ReadOptionalString(parent, name) ??
         throw new SandboxProviderException(
@@ -2368,6 +2511,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             $"Kubernetes response is missing string '{name}'.",
             effectMayHaveApplied: false);
 
+    /// <summary>Reads an optional string by walking a JSON property path.</summary>
     private static string? ReadOptionalString(JsonElement parent, params string[] path)
     {
         var current = parent;
@@ -2381,9 +2525,11 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             : null;
     }
 
+    /// <summary>Reads one required-path boolean property from a JSON object.</summary>
     private static bool TryGetBoolean(JsonElement parent, string name, out bool value) =>
         TryGetBoolean(parent, [name], out value);
 
+    /// <summary>Reads a boolean property nested under two object properties.</summary>
     private static bool TryGetBoolean(
         JsonElement parent,
         string first,
@@ -2391,6 +2537,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         out bool value) =>
         TryGetBoolean(parent, [first, second], out value);
 
+    /// <summary>Reads a boolean value by JSON path, returning false when the path or value is invalid.</summary>
     private static bool TryGetBoolean(JsonElement parent, string[] path, out bool value)
     {
         value = false;
@@ -2401,6 +2548,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return true;
     }
 
+    /// <summary>Reads an integer-valued JSON number without treating strings as numbers.</summary>
     private static bool TryGetInt64(JsonElement parent, string name, out long value)
     {
         value = 0;
@@ -2409,6 +2557,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
                element.TryGetInt64(out value);
     }
 
+    /// <summary>Reads a required JSON array or reports an invalid Kubernetes response.</summary>
     private static JsonElement RequiredArray(JsonElement parent, string name) =>
         TryGetArray(parent, name) ??
         throw new SandboxProviderException(
@@ -2416,11 +2565,13 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             $"Kubernetes response is missing array '{name}'.",
             effectMayHaveApplied: false);
 
+    /// <summary>Returns a JSON array when the named property is an array.</summary>
     private static JsonElement? TryGetArray(JsonElement parent, string name) =>
         parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Array
             ? value
             : null;
 
+    /// <summary>Returns a JSON object when the named property is an object.</summary>
     private static JsonElement? TryGetObject(JsonElement parent, string name) =>
         parent.ValueKind == JsonValueKind.Object &&
         parent.TryGetProperty(name, out var value) &&
@@ -2428,12 +2579,14 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             ? value
             : null;
 
+    /// <summary>Reads a round-trip timestamp from one JSON property.</summary>
     private static bool TryGetDateTime(
         JsonElement parent,
         string name,
         out DateTimeOffset result) =>
         TryGetDateTime(parent, [name], out result);
 
+    /// <summary>Reads a round-trip timestamp from a three-level JSON path.</summary>
     private static bool TryGetDateTime(
         JsonElement parent,
         string first,
@@ -2442,6 +2595,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         out DateTimeOffset result) =>
         TryGetDateTime(parent, [first, second, third], out result);
 
+    /// <summary>Reads a round-trip timestamp by path, returning false for missing or invalid values.</summary>
     private static bool TryGetDateTime(
         JsonElement parent,
         string[] path,
@@ -2457,6 +2611,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
                    out result);
     }
 
+    /// <summary>Walks a JSON object path and returns its final element when each segment exists.</summary>
     private static bool TryGetPropertyPath(
         JsonElement parent,
         string[] path,
@@ -2471,6 +2626,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return true;
     }
 
+    /// <summary>Persisted identities and pins required to recover the exact Sandbox claim and its children.</summary>
     private sealed record AgentSandboxRecoveryDescriptor(
         int ContractVersion,
         string ProviderId,
@@ -2501,9 +2657,11 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         Guid EndpointId,
         string ClusterIdentity)
     {
+        /// <summary>The claim UID once provisioning has created and verified the claim.</summary>
         public string? ClaimUid { get; init; }
     }
 
+    /// <summary>Persisted pre-provisioning inputs needed to safely clean up a partially created operation.</summary>
     private sealed record AgentSandboxRecoveryIntent(
         int ContractVersion,
         SandboxWorkspaceAttachment Workspace,

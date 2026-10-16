@@ -5,6 +5,7 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Orchestrator.Core;
 
+/// <summary>Point in the content flow where Guardrails inspects data.</summary>
 public enum GuardrailsContentStage
 {
     UserInput,
@@ -14,6 +15,7 @@ public enum GuardrailsContentStage
     McpDiscovery
 }
 
+/// <summary>Representation of content passed to a Guardrails classifier.</summary>
 public enum GuardrailsContentClass
 {
     Text,
@@ -23,6 +25,7 @@ public enum GuardrailsContentClass
     Audio
 }
 
+/// <summary>Severity label attached to a classifier finding.</summary>
 public enum GuardrailsFindingSeverity
 {
     Low,
@@ -31,6 +34,7 @@ public enum GuardrailsFindingSeverity
     Critical
 }
 
+/// <summary>Classifier response category before the gate maps it to an allow or withhold decision.</summary>
 public enum GuardrailsClassifierOutcome
 {
     Clear,
@@ -38,6 +42,7 @@ public enum GuardrailsClassifierOutcome
     Error
 }
 
+/// <summary>Classifier failure category, used to produce bounded public reasons.</summary>
 public enum GuardrailsClassifierFailure
 {
     Unavailable,
@@ -45,6 +50,7 @@ public enum GuardrailsClassifierFailure
     ProviderFailure
 }
 
+/// <summary>Recorded outcome for one classifier check.</summary>
 public enum GuardrailsCheckOutcome
 {
     Clear,
@@ -52,12 +58,14 @@ public enum GuardrailsCheckOutcome
     Failed
 }
 
+/// <summary>Whether content may continue beyond the Guardrails boundary.</summary>
 public enum GuardrailsDecision
 {
     Allow,
     Withhold
 }
 
+/// <summary>Stable reason for allowing or withholding content.</summary>
 public enum GuardrailsReasonCode
 {
     Allowed,
@@ -77,6 +85,7 @@ public enum GuardrailsReasonCode
     JournalDuplicate
 }
 
+/// <summary>Result of checking that accepted authority is still current.</summary>
 public enum GuardrailsAuthorityStatus
 {
     Current,
@@ -85,6 +94,7 @@ public enum GuardrailsAuthorityStatus
     Unavailable
 }
 
+/// <summary>Result of appending one complete Guardrails evaluation record.</summary>
 public enum GuardrailsJournalAppendStatus
 {
     Appended,
@@ -92,6 +102,7 @@ public enum GuardrailsJournalAppendStatus
     Unavailable
 }
 
+/// <summary>Capability identifiers mapping supported stage/content pairs to provider pins.</summary>
 public static class GuardrailsProviderCapabilities
 {
     public const string PromptInjectionDetection = "guardrails.prompt-injection.detect";
@@ -107,6 +118,7 @@ public static class GuardrailsProviderCapabilities
     public static ImmutableHashSet<string> PromptShieldsSupported { get; } =
         ImmutableHashSet.Create(StringComparer.Ordinal, PromptInjectionDetection, UserInputText, ToolResultText);
 
+    /// <summary>Returns the exact capability required for a supported pair, or null when the pair is unsupported.</summary>
     public static string? For(GuardrailsContentStage stage, GuardrailsContentClass contentClass) =>
         (stage, contentClass) switch
         {
@@ -122,8 +134,10 @@ public static class GuardrailsProviderCapabilities
         };
 }
 
+/// <summary>Combines baseline and finding-aware policy so Guardrails findings can only narrow permission.</summary>
 public static class GuardrailsPolicyNarrowing
 {
+    /// <summary>Uses the finding-aware result only when baseline policy allowed; otherwise preserves baseline denial or error.</summary>
     public static AgtPolicyEvaluationResult Apply(
         AgtPolicyEvaluationResult baseline,
         AgtPolicyEvaluationResult withFindings)
@@ -144,6 +158,7 @@ public static class GuardrailsPolicyNarrowing
     }
 }
 
+/// <summary>Common identity, revision, and timeout settings for classifier adapters.</summary>
 public abstract record GuardrailsProviderOptions(
     string ProviderId,
     Version AdapterVersion,
@@ -151,6 +166,7 @@ public abstract record GuardrailsProviderOptions(
     string OptionsRevision,
     TimeSpan RequestTimeout)
 {
+    /// <summary>Validates adapter identity and bounds the request timeout to two minutes.</summary>
     public virtual void Validate()
     {
         if (!AgtPolicyProvider.IsIdentifier(ProviderId) ||
@@ -163,8 +179,10 @@ public abstract record GuardrailsProviderOptions(
     }
 }
 
+/// <summary>Classifier finding code and severity, without the source content itself.</summary>
 public sealed record GuardrailsFinding(string Code, GuardrailsFindingSeverity Severity);
 
+/// <summary>Classifier finding annotated with its ordered, pinned adapter identity.</summary>
 public sealed record GuardrailsVersionedFinding(
     int CheckOrder,
     string ProviderId,
@@ -174,27 +192,33 @@ public sealed record GuardrailsVersionedFinding(
     string Code,
     GuardrailsFindingSeverity Severity);
 
+/// <summary>Canonical content bytes and digest supplied to one pinned classifier.</summary>
 public sealed record GuardrailsClassifierRequest(
     GuardrailsContentStage Stage,
     GuardrailsContentClass ContentClass,
     string ContentDigest,
     ImmutableArray<byte> CanonicalContent);
 
+/// <summary>Bounded clear/findings/error result returned by a classifier.</summary>
 public sealed record GuardrailsClassifierResult(
     GuardrailsClassifierOutcome Outcome,
     ImmutableArray<GuardrailsFinding> Findings,
     GuardrailsClassifierFailure? Failure = null)
 {
+    /// <summary>Creates an empty clear result.</summary>
     public static GuardrailsClassifierResult Clear() =>
         new(GuardrailsClassifierOutcome.Clear, []);
 
+    /// <summary>Creates a result containing classifier findings.</summary>
     public static GuardrailsClassifierResult Detected(ImmutableArray<GuardrailsFinding> findings) =>
         new(GuardrailsClassifierOutcome.Findings, findings);
 
+    /// <summary>Creates a failed result with a typed cause.</summary>
     public static GuardrailsClassifierResult Failed(GuardrailsClassifierFailure failure) =>
         new(GuardrailsClassifierOutcome.Error, [], failure);
 }
 
+/// <summary>Provider adapter contract for inspecting canonical content with an explicit timeout.</summary>
 public interface IGuardrailsClassifier<TOptions> where TOptions : GuardrailsProviderOptions
 {
     string ProviderId { get; }
@@ -208,6 +232,7 @@ public interface IGuardrailsClassifier<TOptions> where TOptions : GuardrailsProv
         CancellationToken cancellationToken);
 }
 
+/// <summary>Classifier and options bound to the accepted run's immutable provider pin.</summary>
 public interface IGuardrailsClassifierBinding
 {
     PinnedProviderBinding Pin { get; }
@@ -222,6 +247,7 @@ public interface IGuardrailsClassifierBinding
         CancellationToken cancellationToken);
 }
 
+/// <summary>Type-safe bridge from an untyped accepted binding to a provider with concrete options.</summary>
 public sealed class GuardrailsClassifierBinding<TOptions> : IGuardrailsClassifierBinding
     where TOptions : GuardrailsProviderOptions
 {
@@ -250,12 +276,14 @@ public sealed class GuardrailsClassifierBinding<TOptions> : IGuardrailsClassifie
         _classifier.ClassifyAsync((TOptions)Options, request, cancellationToken);
 }
 
+/// <summary>Ordered classifier set admitted for one content stage and content class.</summary>
 public sealed record GuardrailsAcceptedStagePlan(
     GuardrailsContentStage Stage,
     GuardrailsContentClass ContentClass,
     PinnedOrderedProviderBinding Binding,
     ImmutableArray<IGuardrailsClassifierBinding> Checks);
 
+/// <summary>Accepted actor, run, policy, grant, and stage bindings consumed by the gate.</summary>
 public sealed record GuardrailsAcceptedRunBinding(
     string ActorIssuer,
     string ActorId,
@@ -275,6 +303,7 @@ public sealed record GuardrailsAcceptedRunBinding(
     ImmutableArray<string> ProjectPolicyDocuments,
     ImmutableArray<GuardrailsAcceptedStagePlan> StagePlans);
 
+/// <summary>Operation and canonical bytes submitted for a Guardrails decision.</summary>
 public sealed record GuardrailsContentRequest(
     Guid OperationId,
     string SnapshotId,
@@ -284,6 +313,7 @@ public sealed record GuardrailsContentRequest(
     GuardrailsRemoteToolCallIdentity? RemoteToolCall,
     ImmutableArray<byte> CanonicalContent);
 
+/// <summary>Digest-bound identity of a remote tool call when examining its returned content.</summary>
 public sealed record GuardrailsRemoteToolCallIdentity(
     string AgentId,
     string NodeId,
@@ -292,6 +322,7 @@ public sealed record GuardrailsRemoteToolCallIdentity(
     string PermissionMetadataDigest,
     string ArgumentsDigest);
 
+/// <summary>Accepted authority values that must still match at each asynchronous boundary.</summary>
 public sealed record GuardrailsAuthorityBinding(
     string ActorIssuer,
     string ActorId,
@@ -307,6 +338,7 @@ public sealed record GuardrailsAuthorityBinding(
     string GrantRevision,
     long ExecutionFence);
 
+/// <summary>Exact authority and content facts requested from the current-authority owner.</summary>
 public sealed record GuardrailsAuthorityCheckRequest(
     GuardrailsAuthorityBinding AcceptedAuthority,
     Guid OperationId,
@@ -317,13 +349,16 @@ public sealed record GuardrailsAuthorityCheckRequest(
     GuardrailsContentClass ContentClass,
     GuardrailsRemoteToolCallIdentity? RemoteToolCall);
 
+/// <summary>Owner check that detects revoked or stale accepted-run authority.</summary>
 public interface IGuardrailsCurrentAuthority
 {
+    /// <summary>Checks current authority for the exact operation, content digest, and accepted binding.</summary>
     Task<GuardrailsAuthorityStatus> CheckCurrentAsync(
         GuardrailsAuthorityCheckRequest request,
         CancellationToken cancellationToken);
 }
 
+/// <summary>Metadata about one classifier check, excluding classified content.</summary>
 public sealed record GuardrailsCheckEvidence(
     int Order,
     string ProviderId,
@@ -333,6 +368,7 @@ public sealed record GuardrailsCheckEvidence(
     GuardrailsCheckOutcome Outcome,
     int FindingCount);
 
+/// <summary>Complete decision evidence binding content digest, actor, grant, classifier pins, and policy outcomes.</summary>
 public sealed record GuardrailsEvaluationEvidence(
     Guid OperationId,
     string SnapshotId,
@@ -360,19 +396,26 @@ public sealed record GuardrailsEvaluationEvidence(
     PolicyEvaluationReasonCode PolicyReasonCode,
     GuardrailsReasonCode ReasonCode);
 
+/// <summary>Durable append boundary for Guardrails evaluation evidence.</summary>
 public interface IGuardrailsEvidenceJournal
 {
+    /// <summary>Appends complete evidence and reports duplicate or unavailable writes explicitly.</summary>
     Task<GuardrailsJournalAppendStatus> AppendAsync(
         GuardrailsEvaluationEvidence evidence,
         CancellationToken cancellationToken);
 }
 
+/// <summary>Public decision and findings returned after evidence and authority checks.</summary>
 public sealed record GuardrailsGateResult(
     GuardrailsDecision Decision,
     GuardrailsReasonCode ReasonCode,
     PolicyEvaluationOutcome? PolicyOutcome,
     ImmutableArray<GuardrailsVersionedFinding> Findings);
 
+/// <summary>
+/// Runs the accepted ordered classifiers, applies deny-monotonic policy, journals the decision,
+/// and rechecks authority around asynchronous work. Any failed check or evidence append withholds content.
+/// </summary>
 public sealed class GuardrailsContentGate(
     AgtPolicyProvider? policyProvider,
     IGuardrailsCurrentAuthority? currentAuthority,
@@ -383,6 +426,8 @@ public sealed class GuardrailsContentGate(
     public const int MaximumFindings = 48;
     public const string MaximumFindingsContextKey = "guardrails_findings";
 
+    /// <summary>Evaluates one content snapshot against current authority and accepted classifier/policy bindings.</summary>
+    /// <returns>Allows content only when every check is valid, policy permits it, evidence appends, and authority remains current.</returns>
     public async Task<GuardrailsGateResult> EvaluateAsync(
         GuardrailsAcceptedRunBinding acceptedRun,
         GuardrailsContentRequest request,
@@ -423,6 +468,7 @@ public sealed class GuardrailsContentGate(
         }
 
         var contentDigest = ComputeContentDigest(request.CanonicalContent);
+        // The accepted run may have been revoked after dispatch, so check before contacting any classifier.
         var authority = await CheckAuthorityAsync(acceptedRun, request, contentDigest, cancellationToken)
             .ConfigureAwait(false);
         if (authority is not null)
@@ -559,6 +605,7 @@ public sealed class GuardrailsContentGate(
         if (append != GuardrailsJournalAppendStatus.Appended)
             return Withhold(GuardrailsReasonCode.JournalUnavailable, effectivePolicyResult, findings.ToImmutable());
 
+        // A decision is not released until its evidence is durable and the same authority remains current.
         authority = await CheckAuthorityAsync(acceptedRun, request, contentDigest, cancellationToken)
             .ConfigureAwait(false);
         if (authority is not null)
@@ -875,6 +922,7 @@ public sealed class GuardrailsContentGate(
             findings.IsDefault ? [] : findings);
 }
 
+/// <summary>Typed classifier exception translated by the gate into a safe reason code.</summary>
 public sealed class GuardrailsClassifierException(GuardrailsClassifierFailure failure)
     : Exception("The configured Guardrails classifier failed.")
 {

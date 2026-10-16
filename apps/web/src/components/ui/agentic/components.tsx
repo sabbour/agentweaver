@@ -27,6 +27,7 @@ export interface ArtifactChipProps {
   className?: string;
 }
 
+/** Renders one workflow artifact as a compact chip using the artifact metadata in props. */
 export function ArtifactChip({ artifact, className }: ArtifactChipProps) {
   const styles = useAgenticStyles();
   return (
@@ -66,6 +67,10 @@ export interface ApprovalGateProps {
   onRequestChanges?: (stepId: string, feedback: string) => void;
 }
 
+/**
+ * Renders a pending approval gate with its request details and caller-supplied decision actions.
+ * Approval state comes from the parent; this component does not submit requests on its own.
+ */
 export function ApprovalGate({
   stepId,
   riskText,
@@ -191,6 +196,10 @@ export interface AgentStepProps {
   forceOpen?: boolean;
 }
 
+/**
+ * Renders one workflow step with its status, label, and optional artifact details from props.
+ * Status is supplied by the caller; no API or local state is used.
+ */
 export function AgentStepItem({ step, onApprove, onDeny, onRequestChanges, forceOpen = false }: AgentStepProps) {
   const styles = useAgenticStyles();
   const autoOpen =
@@ -300,6 +309,10 @@ export interface AgentStepListProps {
   'aria-label'?: string;
 }
 
+/**
+ * Renders a sequence of agent workflow steps from the supplied `steps` collection.
+ * It delegates each row to `AgentStepItem` and does not load execution data.
+ */
 export function AgentStepList({ steps, onApprove, onDeny, onRequestChanges, className, forceOpen = false, 'aria-label': ariaLabel }: AgentStepListProps) {
   const styles = useAgenticStyles();
   return (
@@ -349,6 +362,11 @@ export interface AgentActivitySessionProps {
   'aria-label'?: string;
 }
 
+/**
+ * Renders an agent activity session summary and its supplied step history.
+ * Parent props provide the session and activity data; local state only controls expandable
+ * details where present, not the underlying run.
+ */
 export function AgentActivitySession({
   steps,
   title = 'Run activity',
@@ -424,6 +442,10 @@ export interface ToolCallRowProps {
   className?: string;
 }
 
+/**
+ * Renders one tool call's name, arguments, and result from parent-supplied activity data.
+ * Local state controls any expanded detail; the component does not execute tools or fetch results.
+ */
 export function ToolCallRow({ toolCall, className }: ToolCallRowProps) {
   const styles = useAgenticStyles();
   const [open, setOpen] = useState(toolCall.status === 'running');

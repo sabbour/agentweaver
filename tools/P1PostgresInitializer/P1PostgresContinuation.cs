@@ -10,11 +10,13 @@ using NpgsqlTypes;
 
 namespace Agentweaver.P1PostgresInitializer;
 
+/// <summary>Verifies or resumes the narrowly permitted PostgreSQL initialization sequence.</summary>
 internal static class P1PostgresContinuation
 {
     private static readonly string[] ExpectedServices =
         ["projects-config", "environment", "knowledge", "events-and-sessions", "orchestrator"];
 
+    /// <summary>Reads the planned role identities and memberships from the supplied connection.</summary>
     internal static async Task<RuntimePrincipal[]> ReadPrincipalsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -32,6 +34,8 @@ internal static class P1PostgresContinuation
             ?? throw new InvalidOperationException("The required runtime principal facts are missing.");
     }
 
+    /// <summary>Proves that the target contains exactly the migrated, owner-only Projects prefix.</summary>
+    /// <remarks>The checks bind database identity, schema ownership, migration history, objects, guards, and grants.</remarks>
     internal static async Task AssertProjectsPrefixAsync(
         NpgsqlDataSource dataSource,
         NpgsqlConnection connection,
@@ -121,6 +125,7 @@ internal static class P1PostgresContinuation
             .ConfigureAwait(false);
     }
 
+    /// <summary>Creates and verifies only the missing service schemas after rechecking the existing prefix.</summary>
     internal static async Task MigrateRemainingServicesAsync(
         NpgsqlDataSource dataSource,
         PostgresPlan plan,
@@ -153,6 +158,7 @@ internal static class P1PostgresContinuation
         }
     }
 
+    /// <summary>Dispatches one planned service to its own migration implementation.</summary>
     internal static async Task MigrateServiceAsync(
         NpgsqlDataSource dataSource,
         ServicePlan service,
@@ -188,6 +194,7 @@ internal static class P1PostgresContinuation
         }
     }
 
+    /// <summary>Verifies the exact applied migration inventory for one service without mutating it.</summary>
     internal static async Task VerifyServiceMigrationsAsync(
         NpgsqlDataSource dataSource,
         ServicePlan service,
@@ -238,6 +245,7 @@ internal static class P1PostgresContinuation
         }
     }
 
+    /// <summary>Requires a service schema to contain only the planned objects, all owned by the operator.</summary>
     internal static async Task AssertOwnedObjectsAsync(
         NpgsqlConnection connection,
         ServicePlan service,
@@ -272,6 +280,7 @@ internal static class P1PostgresContinuation
             throw new InvalidOperationException($"The {service.Service} schema contains unexpected or foreign-owned objects. No grants were applied.");
     }
 
+    /// <summary>Rejects relation and column ACL entries not owned by the schema owner.</summary>
     private static async Task AssertRelationAclsAsync(
         NpgsqlConnection connection,
         string schema,
@@ -302,6 +311,7 @@ internal static class P1PostgresContinuation
             throw new InvalidOperationException("The Projects relation ACLs differ from the owner-only continuation prefix.");
     }
 
+    /// <summary>Confirms a migrated service remains owner-only before runtime grants are applied.</summary>
     internal static async Task AssertServiceUnprivilegedAsync(
         NpgsqlConnection connection,
         ServicePlan service,
@@ -316,6 +326,7 @@ internal static class P1PostgresContinuation
             connection, service, principals, ownerOid, cancellationToken, beforeRuntimeGrants: true).ConfigureAwait(false);
     }
 
+    /// <summary>Checks that the Projects revision identity column uses its exact planned sequence.</summary>
     private static async Task AssertIdentitySequenceAsync(
         NpgsqlConnection connection,
         string schema,
@@ -330,6 +341,7 @@ internal static class P1PostgresContinuation
             throw new InvalidOperationException("The Projects identity sequence is not attached to the exact source column.");
     }
 
+    /// <summary>Verifies the owner-only triggers that prevent mutation of setup-operation history.</summary>
     private static async Task AssertProjectsSetupGuardsAsync(
         NpgsqlConnection connection,
         string schema,
@@ -371,6 +383,7 @@ internal static class P1PostgresContinuation
             throw new InvalidOperationException("The Projects setup-operation mutation guards are not exact and operator-owned.");
     }
 
+    /// <summary>Rejects any pre-existing schema, table, or owner-only sequence authority for service roles.</summary>
     private static async Task AssertNoRuntimePrivilegesAsync(
         NpgsqlConnection connection,
         ServicePlan service,
@@ -422,6 +435,7 @@ internal static class P1PostgresContinuation
         }
     }
 
+    /// <summary>Checks every planned function grant for each runtime role.</summary>
     private static async Task AssertFunctionGrantsAsync(
         NpgsqlConnection connection,
         ServicePlan service,
@@ -439,6 +453,7 @@ internal static class P1PostgresContinuation
         }
     }
 
+    /// <summary>Reads function owners, execute ACLs, and effective runtime execution rights.</summary>
     private static async Task<FunctionState[]> ReadFunctionStatesAsync(
         NpgsqlConnection connection,
         ServicePlan service,
@@ -471,6 +486,7 @@ internal static class P1PostgresContinuation
             ?? throw new InvalidOperationException("The Projects function ACL readback is missing.");
     }
 
+    /// <summary>Executes one SQL statement on an existing connection without changing its transaction scope.</summary>
     private static async Task ExecuteAsync(
         NpgsqlConnection connection,
         string sql,

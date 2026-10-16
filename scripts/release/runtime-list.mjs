@@ -1,3 +1,7 @@
+/**
+ * Builds the Kubernetes runtime resource list for the selected release images and namespace.
+ * It validates image and broker run-binding contracts before returning resource documents.
+ */
 import { createHash } from 'node:crypto';
 
 const SERVICE_NAMES = Object.freeze([
@@ -15,6 +19,7 @@ const SERVICE_NAMES = Object.freeze([
 const TARGET_NAMESPACE = 'agentweaver-v1-p0';
 const TLS_MODE = 0o440;
 const BACKEND_TLS_CA_CONFIGMAP = 'service-backend-ca';
+/** Names and mount paths shared by broker run-binding runtime resources. */
 export const BROKER_RUN_BINDING_EGRESS_POLICY_NAME = 'identity-broker-projects-egress';
 export const BROKER_RUN_BINDING_INGRESS_POLICY_NAME = 'projects-config-broker-ingress';
 export const BROKER_RUN_BINDING_POLICY_LABEL = 'agentweaver.io/run-binding';
@@ -44,6 +49,7 @@ function requiredImage(images, name) {
   return image;
 }
 
+/** Validates the complete broker-to-projects run-binding descriptor and returns normalized fields. */
 export function validateBrokerRunBinding(binding) {
   if (!binding || typeof binding !== 'object' || Array.isArray(binding)) {
     fail('an explicit Broker run-binding descriptor must be an object');
@@ -92,6 +98,7 @@ export function validateBrokerRunBinding(binding) {
   return descriptor;
 }
 
+/** Returns a stable SHA-256 fingerprint for the normalized broker run-binding descriptor. */
 export function brokerRunBindingFingerprint(binding) {
   const descriptor = validateBrokerRunBinding(binding);
   return createHash('sha256').update(JSON.stringify(descriptor)).digest('hex');
@@ -108,6 +115,7 @@ function runBindingPolicyMetadata(name, service, namespace) {
   };
 }
 
+/** Creates the ingress and egress policy documents restricted to the run-binding contract. */
 export function createBrokerRunBindingPolicies(namespace) {
   return [{
     apiVersion: 'cilium.io/v2',
@@ -361,6 +369,10 @@ function createWorkload(name, image, namespace, providerCatalog, agentHost, brok
   return [deployment, service];
 }
 
+/**
+ * Generates Kubernetes runtime resources for the validated image set and provider catalog.
+ * Invalid namespace, image digests, or binding configuration are rejected before a resource list is returned.
+ */
 export function createRuntimeList(images, namespace, providerCatalog, brokerRunBinding) {
   if (namespace !== TARGET_NAMESPACE) {
     fail(`namespace must be the exact approved v1 P0 namespace (${TARGET_NAMESPACE})`);

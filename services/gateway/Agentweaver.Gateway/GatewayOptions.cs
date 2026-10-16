@@ -1,5 +1,6 @@
 namespace Agentweaver.Gateway;
 
+/// <summary>Contains the fixed HTTPS owner addresses, token validation identity, and proxy timeout.</summary>
 public sealed record GatewayOptions(
     Uri IdentityIssuer,
     string IdentityAudience,
@@ -13,6 +14,7 @@ public sealed record GatewayOptions(
 {
     public const int EventPollIntervalMilliseconds = 1000;
 
+    /// <summary>Returns the configured root URI for one known service owner.</summary>
     public Uri GetOwnerBaseAddress(GatewayOwner owner) => owner switch
     {
         GatewayOwner.Projects => ProjectsOwnerBaseAddress,
@@ -23,6 +25,7 @@ public sealed record GatewayOptions(
         _ => throw new ArgumentOutOfRangeException(nameof(owner)),
     };
 
+    /// <summary>Reads required HTTPS identities and owner roots, rejecting unsafe URI forms and timeout values.</summary>
     public static GatewayOptions Read(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -45,6 +48,7 @@ public sealed record GatewayOptions(
             TimeSpan.FromSeconds(timeoutSeconds));
     }
 
+    /// <summary>Requires an HTTPS audience without credentials, query, or fragment.</summary>
     private static string RequiredHttpsAudience(string? value)
     {
         if (string.IsNullOrWhiteSpace(value) || !string.Equals(value, value.Trim(), StringComparison.Ordinal))
@@ -54,12 +58,14 @@ public sealed record GatewayOptions(
         return value;
     }
 
+    /// <summary>Requires a root-only HTTPS owner address and normalizes it to one trailing slash.</summary>
     private static Uri RequiredHttpsRoot(string? value, string key)
     {
         var uri = RequiredHttpsUri(value, key, allowPath: false);
         return new Uri(uri.AbsoluteUri.TrimEnd('/') + "/", UriKind.Absolute);
     }
 
+    /// <summary>Parses an HTTPS URI and rejects credentials and query/fragment components.</summary>
     private static Uri RequiredHttpsUri(string? value, string key, bool allowPath)
     {
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||

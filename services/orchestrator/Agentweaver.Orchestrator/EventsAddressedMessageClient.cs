@@ -11,6 +11,10 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Forwards session events, message delivery, and capture operations from the orchestrator to the Events owner.
+/// The client carries the caller's bearer identity and tenant selector and validates every returned contract.
+/// </summary>
 internal sealed class EventsAddressedMessageClient(
     HttpClient httpClient,
     OrchestratorOptions options,
@@ -22,6 +26,14 @@ internal sealed class EventsAddressedMessageClient(
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
+    /// <summary>
+    /// Ensures the Events owner has registered the session represented by <paramref name="identity"/>.
+    /// </summary>
+    /// <param name="context">The authenticated request context whose bearer and tenant are forwarded.</param>
+    /// <param name="identity">The project, run, and session that must be registered.</param>
+    /// <param name="cancellationToken">Cancels the owner request and response read.</param>
+    /// <exception cref="CoordinationException">Thrown when the owner denies the request, is unavailable, or returns a mismatched session.</exception>
+    /// <remarks>The method performs an HTTP registration request and does not accept success unless the returned identity matches exactly.</remarks>
     public async Task EnsureSessionAsync(
         HttpContext context,
         SessionIdentity identity,
@@ -78,6 +90,16 @@ internal sealed class EventsAddressedMessageClient(
         }
     }
 
+    /// <summary>
+    /// Asks the Events owner to create a fork from an explicit event and returns its validated result.
+    /// </summary>
+    /// <param name="context">The authenticated request context forwarded to the owner.</param>
+    /// <param name="source">The source session whose event history is forked.</param>
+    /// <param name="fork">The requested fork point and options.</param>
+    /// <param name="cancellationToken">Cancels the owner request.</param>
+    /// <returns>The fork result returned by the owner.</returns>
+    /// <exception cref="CoordinationException">Thrown for denied, conflicting, unavailable, or invalid owner responses.</exception>
+    /// <remarks>The response must be no-store; conflict and missing-source responses are surfaced as a fork conflict.</remarks>
     public async Task<SessionForkResult> ForkFromExplicitEventAsync(
         HttpContext context,
         SessionIdentity source,
@@ -145,6 +167,15 @@ internal sealed class EventsAddressedMessageClient(
         }
     }
 
+    /// <summary>
+    /// Appends a reference to a policy-evaluation receipt to the session event journal.
+    /// </summary>
+    /// <param name="identity">The session receiving the receipt reference.</param>
+    /// <param name="receiptId">The non-empty receipt identifier to append.</param>
+    /// <param name="cancellationToken">Cancels the owner request.</param>
+    /// <returns>Whether the owner recognized this as a duplicate append.</returns>
+    /// <exception cref="CoordinationException">Thrown when the receipt is invalid, the request context is unavailable, or the owner response fails validation.</exception>
+    /// <remarks>The acknowledgement is bound to the session and receipt ID; the owner response must be no-store.</remarks>
     public async Task<ExecutableActionPolicyEvaluationAppendResult> AppendReceiptAsync(
         SessionIdentity identity,
         Guid receiptId,
@@ -217,6 +248,16 @@ internal sealed class EventsAddressedMessageClient(
         }
     }
 
+    /// <summary>
+    /// Writes a verified produced-run package to the Events journal and returns its durable acknowledgement.
+    /// </summary>
+    /// <param name="context">The authenticated request context forwarded to the owner.</param>
+    /// <param name="proof">The identity, capture ID, byte count, and digest that bind the package.</param>
+    /// <param name="packageBytes">The package bytes whose length and SHA-256 must match the proof.</param>
+    /// <param name="cancellationToken">Cancels the owner request.</param>
+    /// <returns>The owner's acknowledgement, including whether the capture was already present.</returns>
+    /// <exception cref="CoordinationException">Thrown when proof or package bytes do not match, or the owner denies or fails the write.</exception>
+    /// <remarks>This operation performs an HTTP write and accepts only a no-store acknowledgement for the exact proof.</remarks>
     public async Task<ProducedRunCaptureAcknowledgment> WriteProducedRunCaptureAsync(
         HttpContext context,
         ProducedRunCaptureProof proof,
@@ -307,6 +348,15 @@ internal sealed class EventsAddressedMessageClient(
         }
     }
 
+    /// <summary>
+    /// Reads a produced-run package by its journal event and verifies its position, length, and digest.
+    /// </summary>
+    /// <param name="context">The authenticated request context forwarded to the owner.</param>
+    /// <param name="proof">The proof that identifies and authenticates the expected package.</param>
+    /// <param name="cancellationToken">Cancels the owner request and content read.</param>
+    /// <returns>The journal entry and package bytes after the response is fully validated.</returns>
+    /// <exception cref="CoordinationException">Thrown when the event is missing, access is denied, or response metadata or bytes do not match the proof.</exception>
+    /// <remarks>The response is bounded by the proof's byte length and must be no-store octet-stream content.</remarks>
     public async Task<ProducedRunCaptureContentResult> ReadProducedRunCaptureAsync(
         HttpContext context,
         ProducedRunCaptureProof proof,
@@ -396,6 +446,19 @@ internal sealed class EventsAddressedMessageClient(
         }
     }
 
+    /// <summary>
+    /// Reads one recorded SDK cache material item and validates its identity, event position, and content digest.
+    /// </summary>
+    /// <param name="context">The authenticated request context used to locate the Events owner.</param>
+    /// <param name="identity">The session that owns the material.</param>
+    /// <param name="eventId">The event that recorded the material.</param>
+    /// <param name="kind">The material kind; only SDK cache material is supported.</param>
+    /// <param name="actor">The runtime actor authorization forwarded to the owner.</param>
+    /// <param name="cancellationToken">Cancels the bounded owner read.</param>
+    /// <returns>The validated material reference and bytes.</returns>
+    /// <exception cref="ArgumentException">Thrown when the event ID or material kind is invalid.</exception>
+    /// <exception cref="CoordinationException">Thrown when the owner response is missing or fails contract validation.</exception>
+    /// <remarks>The read is size-bounded and verifies that the bytes match the material's recorded SHA-256.</remarks>
     internal async Task<SessionMaterialReadResult> ReadSessionMaterialAsync(
         HttpContext context,
         SessionIdentity identity,
@@ -442,6 +505,15 @@ internal sealed class EventsAddressedMessageClient(
         return result;
     }
 
+    /// <summary>
+    /// Submits an outbound addressed message to the Events owner for admission.
+    /// </summary>
+    /// <param name="context">The authenticated request context forwarded to the owner.</param>
+    /// <param name="message">The sender, recipient, fences, and request identity to admit.</param>
+    /// <param name="cancellationToken">Cancels the owner request.</param>
+    /// <returns>The validated receipt for the accepted message.</returns>
+    /// <exception cref="CoordinationException">Thrown when the caller identity is invalid, access is denied, or the owner response does not bind to the submitted message.</exception>
+    /// <remarks>Admission is an HTTP write; the result must be no-store and must not contain an active claim.</remarks>
     public async Task<MessageAdmissionReceipt> AdmitAsync(
         HttpContext context,
         OwnerOutboundMessage message,
@@ -520,6 +592,14 @@ internal sealed class EventsAddressedMessageClient(
         }
     }
 
+    /// <summary>
+    /// Claims the next eligible addressed message for the recipient session, if one is available.
+    /// </summary>
+    /// <param name="context">The authenticated request context forwarded to the owner.</param>
+    /// <param name="recipient">The session that will receive the claim.</param>
+    /// <param name="cancellationToken">Cancels the owner request.</param>
+    /// <returns>The owner-issued claim, or <see langword="null"/> when no message is available.</returns>
+    /// <remarks>The returned claim is used as a fence for the later present and acknowledge operations.</remarks>
     public async Task<AddressedMessageClaim?> ClaimNextAsync(
         HttpContext context,
         SessionIdentity recipient,
@@ -535,6 +615,15 @@ internal sealed class EventsAddressedMessageClient(
         return result.Claim;
     }
 
+    /// <summary>
+    /// Marks a claimed message as presented to its recipient.
+    /// </summary>
+    /// <param name="context">The authenticated request context forwarded to the owner.</param>
+    /// <param name="recipient">The session holding the claim.</param>
+    /// <param name="messageId">The claimed message identifier.</param>
+    /// <param name="claimFence">The claim fence that prevents a stale claimant from changing delivery state.</param>
+    /// <param name="cancellationToken">Cancels the owner request.</param>
+    /// <returns>The updated message envelope.</returns>
     public Task<AddressedMessageEnvelope> PresentAsync(
         HttpContext context,
         SessionIdentity recipient,
@@ -549,6 +638,15 @@ internal sealed class EventsAddressedMessageClient(
             new AddressedMessageClaimFenceRequest(claimFence),
             cancellationToken);
 
+    /// <summary>
+    /// Acknowledges receipt of a claimed addressed message.
+    /// </summary>
+    /// <param name="context">The authenticated request context forwarded to the owner.</param>
+    /// <param name="recipient">The session holding the claim.</param>
+    /// <param name="messageId">The claimed message identifier.</param>
+    /// <param name="claimFence">The claim fence that prevents a stale claimant from acknowledging delivery.</param>
+    /// <param name="cancellationToken">Cancels the owner request.</param>
+    /// <returns>The updated message envelope.</returns>
     public Task<AddressedMessageEnvelope> AcknowledgeAsync(
         HttpContext context,
         SessionIdentity recipient,
@@ -563,6 +661,18 @@ internal sealed class EventsAddressedMessageClient(
             new AddressedMessageClaimFenceRequest(claimFence),
             cancellationToken);
 
+    /// <summary>
+    /// Sends a message-delivery control request and validates its no-store JSON response.
+    /// </summary>
+    /// <typeparam name="T">The expected owner response type.</typeparam>
+    /// <param name="context">The authenticated request context forwarded to the owner.</param>
+    /// <param name="recipient">The session whose delivery state is being changed.</param>
+    /// <param name="method">The HTTP method for the control operation.</param>
+    /// <param name="path">The owner-relative route.</param>
+    /// <param name="content">Optional JSON request body.</param>
+    /// <param name="cancellationToken">Cancels the HTTP request or response read.</param>
+    /// <returns>The non-null response body.</returns>
+    /// <exception cref="CoordinationException">Thrown when access is denied, transport fails, or the response is invalid.</exception>
     private async Task<T> SendControlAsync<T>(
         HttpContext context,
         SessionIdentity recipient,
@@ -624,9 +734,21 @@ internal sealed class EventsAddressedMessageClient(
         }
     }
 
+    /// <summary>
+    /// Resolves the configured Events owner after checking the request's run scope.
+    /// </summary>
     private Uri RequireEventsOwner(HttpContext context, SessionIdentity identity) =>
         RequireEventsOwner(context, new CoordinationRunScope(identity.ProjectId, identity.RunId), options);
 
+    /// <summary>
+    /// Validates caller scopes, project/run binding, Events audience, and the HTTPS owner address.
+    /// </summary>
+    /// <param name="context">The request whose identity and tenant will be forwarded.</param>
+    /// <param name="identity">The expected project and run scope.</param>
+    /// <param name="options">Orchestrator settings that identify the Events audience and owner address.</param>
+    /// <returns>The absolute HTTPS Events owner URI.</returns>
+    /// <exception cref="CoordinationException">Thrown when caller binding or owner configuration is invalid.</exception>
+    /// <remarks>Requiring an origin-only HTTPS address prevents paths, credentials, query strings, or fragments from changing the trusted destination.</remarks>
     internal static Uri RequireEventsOwner(
         HttpContext context, CoordinationRunScope identity, OrchestratorOptions options)
     {
@@ -643,6 +765,9 @@ internal sealed class EventsAddressedMessageClient(
         return owner;
     }
 
+    /// <summary>
+    /// Computes the lowercase hexadecimal SHA-256 used to verify package and material bytes.
+    /// </summary>
     private static string Hash(ReadOnlySpan<byte> bytes) =>
         Convert.ToHexStringLower(SHA256.HashData(bytes));
 }

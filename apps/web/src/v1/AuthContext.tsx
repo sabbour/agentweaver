@@ -34,6 +34,7 @@ import type {
 } from './contracts';
 import { gatewayClient, GatewayError } from './api';
 
+/** In-memory bearer session bound to the project/run that initiated authorization. */
 interface AuthSession {
   accessToken: string;
   refreshToken?: string;
@@ -41,11 +42,13 @@ interface AuthSession {
   binding: RunBinding | null;
 }
 
+/** Tenant authorization values confirmed by the Projects owner. */
 type ConfirmedAuthorizationContext = Pick<
   ProjectAuthorizationContextResponse,
   'tenantId' | 'membershipRevision'
 >;
 
+/** Authentication state and operations shared with v1 pages and Gateway callers. */
 interface AuthContextValue {
   session: AuthSession | null;
   authorizationContext: ConfirmedAuthorizationContext | null;
@@ -68,10 +71,12 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue | null>(null);
 const AUTH_TIMEOUT_MS = 10 * 60 * 1000;
 
+/** True when two optional authorization requests target the same project and run. */
 function sameBinding(left: RunBinding | null, right: RunBinding | null): boolean {
   return left?.projectId === right?.projectId && left?.runId === right?.runId;
 }
 
+/** Ensures owner-returned context is bound to exactly the requested run scope. */
 function contextMatchesBinding(
   context: ProjectAuthorizationContextResponse,
   binding: RunBinding | null,
@@ -81,6 +86,7 @@ function contextMatchesBinding(
     : context.boundProjectId === null && context.boundRunId === null;
 }
 
+/** Starts a new PKCE transaction with fresh state and verifier for the requested scope. */
 function transactionFor(binding: RunBinding | null): AuthorizationTransaction {
   return {
     state: randomState(),
@@ -90,6 +96,7 @@ function transactionFor(binding: RunBinding | null): AuthorizationTransaction {
   };
 }
 
+/** Converts a Broker token response into the session state held only in memory. */
 function sessionFromToken(token: BrokerTokenResponse, binding: RunBinding | null): AuthSession {
   return {
     accessToken: token.access_token,
@@ -99,6 +106,11 @@ function sessionFromToken(token: BrokerTokenResponse, binding: RunBinding | null
   };
 }
 
+/**
+ * Owns the v1 Broker session, PKCE sign-in, consent, refresh, and tenant context.
+ * Access tokens stay in memory; each Gateway call is fenced to the session's
+ * exact project/run binding and may retry once after a 401 using token refresh.
+ */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSessionState] = useState<AuthSession | null>(null);
   const [authorizationContext, setAuthorizationContextState] =
@@ -599,6 +611,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
+/** Reads the active authentication context and throws if no provider is mounted. */
 export function useAuth(): AuthContextValue {
   const value = useContext(AuthContext);
   if (!value) throw new Error('useAuth must be used within AuthProvider.');

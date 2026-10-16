@@ -6,6 +6,8 @@ import { AgentweaverClient } from '../api-harness/lib/client.mjs';
 import { McpHarnessClient } from '../mcp-harness/mcp-client/client.mjs';
 import { UiHarnessClient } from '../ui-harness/lib/client.mjs';
 
+/** Adapt injected, already-authorized credentials and browser pages to the three P1 harness surfaces. */
+/** Decode only the payload claims needed to bind a broker token to its authorized identity. */
 function decodeClaims(token) {
   try {
     const parts = token.split('.');
@@ -16,6 +18,7 @@ function decodeClaims(token) {
   }
 }
 
+/** Reject tokens that are missing, expired by shape, or bound to a different actor or selected run. */
 function requireToken(token, identity, binding) {
   if (typeof token !== 'string' || !token) {
     throw new Error('The authorized identity provider did not return a broker token.');
@@ -30,6 +33,7 @@ function requireToken(token, identity, binding) {
   return token;
 }
 
+/** Load an injected provider module and require its default async provider function. */
 async function loadModule(path, label, importModule) {
   if (typeof path !== 'string' || !path.trim()) throw new Error(`A ${label} module path is required.`);
   let loaded;
@@ -44,6 +48,7 @@ async function loadModule(path, label, importModule) {
   return loaded.default;
 }
 
+/** Create the setup-scoped Gateway client from the selected environment and setup token. */
 export function createP1SetupApi({ environment, setupToken, fetchImpl = globalThis.fetch }) {
   const target = validateNetworkTarget(environment.baseUrl, { exactPath: '/' });
   const authProvider = createBrokerAuthProvider({
@@ -61,6 +66,10 @@ export function createP1SetupApi({ environment, setupToken, fetchImpl = globalTh
   });
 }
 
+/**
+ * Load an already-authorized identity provider and acquire credentials pinned to one project and run.
+ * The returned factory creates the normal and deliberately denied API clients without handling login.
+ */
 export async function acquireP1RunIdentity({
   modulePath,
   environment,
@@ -101,6 +110,7 @@ export async function acquireP1RunIdentity({
     deniedToken: credentials.deniedToken,
     projectId,
     runId,
+    /** Bind normal and denied API clients to the selected environment and distinct actor identities. */
     createClients({ deniedActor }) {
       const base = validateNetworkTarget(environment.baseUrl, { exactPath: '/' });
       const authProvider = createBrokerAuthProvider({ target: base, token, ...identity });
@@ -125,6 +135,10 @@ export async function acquireP1RunIdentity({
   };
 }
 
+/**
+ * Build only the adapters required by the selected P1 surface from injected, already-authorized inputs.
+ * MCP connections are opened here; UI page creation is delegated to the supplied page provider.
+ */
 export async function createP1SurfaceAdapters({
   surface,
   environment,

@@ -76,6 +76,11 @@ function formatVersionBadge(version: string): string {
   return `${base}+${hash.slice(0, 7)}`;
 }
 
+/**
+ * Renders the primary navigation using the configured app routes and current project context.
+ * `useAppVersion` supplies the version display; route hooks determine active navigation and local
+ * state supports responsive navigation behavior.
+ */
 export function LeftNav({
   projectId,
   activeKey,

@@ -8,22 +8,27 @@ using WorkloadIdentityCredentialOptions = AzureIdentity::Azure.Identity.Workload
 
 namespace Agentweaver.Environment;
 
+/// <summary>Validated PostgreSQL connection settings and workload identity inputs for one Environment database role.</summary>
 internal sealed record EnvironmentPostgresConnection(
     string ConnectionString,
     string TenantId,
     string ClientId,
     string TokenFilePath);
 
+/// <summary>Builds passwordless, Entra-authenticated PostgreSQL data sources for Environment operations.</summary>
 internal static class EnvironmentPostgresDataSource
 {
     private const string TokenScope = "https://ossrdbms-aad.database.windows.net/.default";
 
+    /// <summary>Reads the runtime database connection and its dedicated workload identity settings.</summary>
     public static EnvironmentPostgresConnection ReadRuntimeConnection(IConfiguration configuration) =>
         ReadConnection(configuration, "Environment", "Environment:Database:WorkloadIdentity");
 
+    /// <summary>Reads the migration database connection and its separate workload identity settings.</summary>
     public static EnvironmentPostgresConnection ReadMigrationConnection(IConfiguration configuration) =>
         ReadConnection(configuration, "EnvironmentMigration", "Environment:Migration:WorkloadIdentity");
 
+    /// <summary>Creates an Azure workload identity credential from the validated connection settings.</summary>
     public static TokenCredential CreateCredential(EnvironmentPostgresConnection connection) =>
         new WorkloadIdentityCredential(new WorkloadIdentityCredentialOptions
         {
@@ -32,6 +37,10 @@ internal static class EnvironmentPostgresDataSource
             TokenFilePath = connection.TokenFilePath,
         });
 
+    /// <summary>
+    /// Builds a PostgreSQL data source that requires an Entra role, full TLS verification, and asynchronous token retrieval.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The connection uses a password or omits its PostgreSQL role.</exception>
     public static NpgsqlDataSource Create(
         string connectionString,
         TokenCredential credential,
@@ -56,6 +65,7 @@ internal static class EnvironmentPostgresDataSource
         return builder.Build();
     }
 
+    /// <summary>Requests a fresh PostgreSQL Entra token and rejects empty or expired credentials.</summary>
     internal static async ValueTask<string> GetPostgresTokenAsync(
         TokenCredential credential,
         CancellationToken cancellationToken,
@@ -74,6 +84,7 @@ internal static class EnvironmentPostgresDataSource
         return token.Token;
     }
 
+    /// <summary>Loads connection and workload identity settings, rejecting incomplete or malformed configuration.</summary>
     private static EnvironmentPostgresConnection ReadConnection(
         IConfiguration configuration,
         string connectionName,
@@ -96,6 +107,7 @@ internal static class EnvironmentPostgresDataSource
             options.TokenFilePath);
     }
 
+    /// <summary>Returns a required configuration value or reports its missing setting.</summary>
     private static string Required(string? value, string name) =>
         !string.IsNullOrWhiteSpace(value)
             ? value

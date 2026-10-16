@@ -24,6 +24,7 @@ import { loadInventory, selectInventoryEntries, validateInventoryEntries } from 
 import { DRAWIO_FORMATS, listDiagramSources } from './diagram-sources.mjs';
 import { check, render } from './capture-diagrams.mjs';
 
+/** Command-line entry point for selecting, rendering, and checking documentation diagrams. */
 export function parseArgs(args) {
   const specs = [];
   const areas = [];
@@ -94,6 +95,7 @@ export function parseArgs(args) {
   };
 }
 
+/** Resolve inventory filters and dispatch to the render or drift-check pipeline. */
 async function main() {
   const {
     checkMode,

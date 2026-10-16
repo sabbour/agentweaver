@@ -8,6 +8,10 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Agentweaver.AgentRuntime;
 
+/// <summary>
+/// Resolves an accepted model binding and creates a native Copilot SDK session with
+/// approved tools, skills, filesystem, and optional recovery state.
+/// </summary>
 public sealed class RuntimeCopilotSessionFactory
 {
     private readonly RuntimeConnection _connection;
@@ -17,8 +21,10 @@ public sealed class RuntimeCopilotSessionFactory
     private readonly string _workingDirectory;
     private readonly string? _expectedRuntimeVersion;
 
+    /// <summary>The absolute workspace directory exposed to the SDK session.</summary>
     public string WorkingDirectory => _workingDirectory;
 
+    /// <summary>Creates a factory using the supplied legacy model-binding map.</summary>
     public RuntimeCopilotSessionFactory(
         RuntimeConnection approvedConnection,
         string baseDirectory,
@@ -32,6 +38,7 @@ public sealed class RuntimeCopilotSessionFactory
     {
     }
 
+    /// <summary>Creates a factory using versioned approved model bindings.</summary>
     public RuntimeCopilotSessionFactory(
         RuntimeConnection approvedConnection,
         string baseDirectory,
@@ -68,6 +75,10 @@ public sealed class RuntimeCopilotSessionFactory
             throw new ArgumentOutOfRangeException(nameof(abortDrainTimeout));
     }
 
+    /// <summary>
+    /// Starts the pinned SDK, verifies its effective model, applies accepted limits and tools,
+    /// and restores a compatible native cache or journal context when supplied.
+    /// </summary>
     internal async Task<RuntimeCopilotSession> CreateAsync(
         RuntimeRegistration registration,
         string acceptedModelSelectionReference,
@@ -337,6 +348,7 @@ public sealed class RuntimeCopilotSessionFactory
         }
     }
 
+    /// <summary>Returns the accepted limit capped by native model capacity, or rejects unknown capacity.</summary>
     internal static int? ResolvePromptCapacity(int? acceptedLimit, long? supportedCapacity)
     {
         if (acceptedLimit is null)

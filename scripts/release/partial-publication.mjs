@@ -1,3 +1,7 @@
+/**
+ * Continues an approved partial release publication after validating its original workflow evidence.
+ * It publishes only planned, verified artifacts and records completion evidence for that same source.
+ */
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -44,6 +48,7 @@ function imageRepositoryOf(planned) {
   return planned.destination.slice(0, -suffix.length);
 }
 
+/** Returns a copy of the immutable source, run, and receipt bindings expected for the original run. */
 export function originalBinding() {
   return {
     claimSha: P.claimSha,
@@ -86,6 +91,7 @@ function artifactPlan(selected, imageRepositories, feed) {
   }));
 }
 
+/** Verifies the original publication receipt bytes and plan against the pinned run and helper source. */
 export function validateOriginalReceipt(receipt, receiptBytes, plan, helperSha) {
   if (!shaPattern.test(helperSha ?? '') || helperSha === P.sourceSha ||
       sha256(receiptBytes) !== P.receiptSha256 ||
@@ -183,6 +189,7 @@ function verifyOriginalWorkflowRun(run) {
 
 // The helper commit is admitted by a merged pull request into v1; the protected
 // environment approval on the continuation run is the human admission of that exact commit.
+/** Confirms the helper commit was admitted by the expected protected workflow before publication. */
 export function verifyHelperAdmission(run, helperSha) {
   if (!shaPattern.test(helperSha ?? '')) fail('the helper commit must be an exact SHA');
   for (let page = 1; ; page += 1) {
@@ -198,6 +205,7 @@ export function verifyHelperAdmission(run, helperSha) {
   fail('the helper commit is not the exact result of a pull request merged into v1');
 }
 
+/** Checks that the original workflow run received the required protected-environment approval. */
 export function verifyProtectedAdmission(run, runId) {
   const approvals = runGh(run, 'GET', `actions/runs/${runId}/approvals`);
   if (!Array.isArray(approvals) || !approvals.some(approval => approval?.state === 'approved' &&
@@ -264,6 +272,7 @@ async function readPackageBytes(component, { base, authorization }, fetchImpl) {
 
 // Only an explicit registry "missing manifest" answer proves absence. Authorization,
 // transport, rate-limit, or other failures are unknown and stop the continuation.
+/** Distinguishes a genuine missing image from registry authentication, rate-limit, or transport failures. */
 export function isRegistryAbsent(error, reference) {
   const diagnostic = error?.nativeDiagnostic;
   return error?.operation === 'docker.manifest-read' && typeof diagnostic === 'string' &&
@@ -283,6 +292,7 @@ function readRawManifest(run, repository, digest) {
   }
 }
 
+/** Reads and validates a remote image manifest, preserving non-absence errors for the caller. */
 export function readRemoteImage(run, repository, tag) {
   const reference = `${repository}:${tag}`;
   let descriptor;
@@ -430,6 +440,10 @@ function readNamespace(run) {
   return refs;
 }
 
+/**
+ * Verifies original-run evidence, then publishes only artifacts selected by the validated plan.
+ * Any mismatch fails closed; registry writes and completion-receipt writes occur only after admission.
+ */
 export async function continuePartialPublication({
   sourceSha,
   helperSha,
@@ -648,6 +662,7 @@ export async function continuePartialPublication({
   return finalReceipt;
 }
 
+/** Confirms the completion document exactly matches the expected publication result and source. */
 export function verifyPartialPublicationCompletion(completion, publication, sourceSha, run) {
   if (!completion || !publication || canonical(completion) !== canonical(publication) ||
       sourceSha !== P.sourceSha ||

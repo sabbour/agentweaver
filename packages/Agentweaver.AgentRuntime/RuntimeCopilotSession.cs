@@ -7,6 +7,7 @@ using GitHub.Copilot;
 
 namespace Agentweaver.AgentRuntime;
 
+/// <summary>Token and model details captured when native prompt compaction begins.</summary>
 internal sealed record RuntimeNativePromptCompactionStart(
     long? CurrentTokens,
     long? ConversationTokens,
@@ -16,6 +17,7 @@ internal sealed record RuntimeNativePromptCompactionStart(
     string? Model,
     string? Trigger);
 
+/// <summary>Result and token counts reported when native prompt compaction ends.</summary>
 internal sealed record RuntimeNativePromptCompactionComplete(
     bool Success,
     string? Error,
@@ -26,14 +28,17 @@ internal sealed record RuntimeNativePromptCompactionComplete(
     long? TokenLimit,
     string? Trigger);
 
+/// <summary>A paired compaction observation with a monotonically increasing generation.</summary>
 internal sealed record RuntimeNativePromptCompactionObservation(
     long Generation,
     RuntimeNativePromptCompactionStart? Start,
     RuntimeNativePromptCompactionComplete Complete);
 
+/// <summary>A sanitized native session error classified for prompt-capacity diagnostics.</summary>
 internal sealed record RuntimeNativeSessionErrorObservation(
     long Generation, string? ErrorType, string? ErrorCode, string Cause);
 
+/// <summary>Pairs native compaction events and retains the latest safe error classification.</summary>
 internal sealed class RuntimeNativePromptCapacityObserver
 {
     private readonly object _gate = new();
@@ -63,6 +68,7 @@ internal sealed class RuntimeNativePromptCapacityObserver
         }
     }
 
+    /// <summary>Updates compaction or error evidence without retaining raw error messages.</summary>
     public void Observe(SessionEvent sessionEvent)
     {
         TaskCompletionSource? changed = null;
@@ -147,6 +153,7 @@ internal sealed class RuntimeNativePromptCapacityObserver
         return hasLimit && hasCapacity;
     }
 
+    /// <summary>Waits until an observation newer than the supplied generation is available.</summary>
     public async Task<RuntimeNativePromptCompactionObservation> WaitForNextAsync(
         long afterGeneration, CancellationToken cancellationToken)
     {
@@ -168,6 +175,10 @@ internal sealed class RuntimeNativePromptCapacityObserver
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 }
 
+/// <summary>
+/// Wraps one native Copilot SDK session, serializes model turns, observes usage and compaction,
+/// and captures or restores the SDK-owned virtual filesystem.
+/// </summary>
 public sealed class RuntimeCopilotSession : IAsyncDisposable
 {
     private readonly CopilotClient _client;
@@ -184,6 +195,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
     private readonly object _disposeLock = new();
     private Task? _disposeTask;
 
+    /// <summary>Creates a wrapper around a configured SDK session and its bounded event streams.</summary>
     internal RuntimeCopilotSession(
         CopilotClient client,
         CopilotSession session,
@@ -214,14 +226,28 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         _abortDrainTimeout = abortDrainTimeout;
     }
 
+    /// <summary>Immutable SDK, model, and source facts validated during session creation.</summary>
     public SdkSessionFacts Facts { get; }
+
+    /// <summary>Completes when the usage event channel is closed or faulted.</summary>
     public Task UsageCompletion => _usage.Reader.Completion;
+
+    /// <summary>Indicates whether the session was created fresh, from native cache, or by journal rebuild.</summary>
     public RuntimeSessionRecoveryMode RecoveryMode { get; }
+
+    /// <summary>Safe reason explaining why a native cache was not reused, when applicable.</summary>
     public string? RecoveryReason { get; }
+
+    /// <summary>Receipt for a resume that rebuilt the session from its recorded event journal.</summary>
     public RuntimeResumeJournalRebuildReceipt? JournalRebuildReceipt { get; }
+
+    /// <summary>The acknowledgment for a native cache consumed during resume.</summary>
     internal SessionMaterialAcknowledgment? ConsumedNativeCacheAcknowledgment { get; }
+
+    /// <summary>Evidence describing the journal snapshot used to recover this session.</summary>
     internal RuntimeSessionJournalEvidence? JournalEvidence { get; }
 
+    /// <summary>Reads current prompt context after checking the effective model and provider identity.</summary>
     internal async Task<GitHub.Copilot.Rpc.MetadataContextInfoResultContextInfo?> ReadPromptContextInfoAsync(
         CancellationToken cancellationToken)
     {
@@ -257,6 +283,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
     }
 
 #pragma warning disable GHCP001 // Context evidence is pinned to SDK 1.0.18.
+    /// <summary>Returns the SDK's heaviest context messages for the current validated model.</summary>
     internal async Task<IReadOnlyList<GitHub.Copilot.Rpc.ContextHeaviestMessage>>
         ReadContextHeaviestMessagesAsync(CancellationToken cancellationToken)
     {
@@ -282,21 +309,26 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
     }
 #pragma warning restore GHCP001
 
+    /// <summary>Reports a mismatch only when both the pinned and effective provider IDs are present.</summary>
     internal static bool HasProviderIdentityMismatch(string? expectedProviderId, string? actualProviderId) =>
         expectedProviderId is not null &&
         !string.IsNullOrEmpty(actualProviderId) &&
         actualProviderId != expectedProviderId;
 
+    /// <summary>The latest completed native compaction observation, if any.</summary>
     internal RuntimeNativePromptCompactionObservation? LatestPromptCapacityCompaction =>
         _promptCapacityObserver.Latest;
 
+    /// <summary>The latest sanitized native session error, if any.</summary>
     internal RuntimeNativeSessionErrorObservation? LatestNativeSessionError =>
         _promptCapacityObserver.LatestError;
 
+    /// <summary>Waits for compaction evidence newer than the given generation.</summary>
     internal Task<RuntimeNativePromptCompactionObservation> WaitForPromptCapacityCompactionAsync(
         long afterGeneration, CancellationToken cancellationToken) =>
         _promptCapacityObserver.WaitForNextAsync(afterGeneration, cancellationToken);
 
+    /// <summary>Captures a bounded snapshot of the SDK virtual filesystem while no turn is active.</summary>
     internal async Task<byte[]> CaptureNativeCacheAsync(CancellationToken cancellationToken)
     {
         await _turnGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -312,6 +344,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         }
     }
 
+    /// <summary>Captures the event-log cursor used to delimit the next native turn receipt.</summary>
     internal async Task<string> CaptureNativeEventCursorAsync(CancellationToken cancellationToken)
     {
         await _turnGate.WaitAsync(cancellationToken).ConfigureAwait(false);
@@ -364,6 +397,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         return new string(characters) + (identity.Length > length ? "..." : string.Empty);
     }
 
+    /// <summary>Proves that a failed or denied attempt emitted no native events after the captured cursor.</summary>
     internal async Task<RuntimeNativeEmptyRangeEvidence> RequireNoNativeEventsSinceAsync(
         string startCursor, CancellationToken cancellationToken)
     {
@@ -380,14 +414,17 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         }
     }
 
+    /// <summary>Rejects control characters other than tab and line breaks in user prompts.</summary>
     internal static bool HasUnsupportedPromptControls(string prompt) =>
         prompt.Any(character => char.IsControl(character) && character is not ('\r' or '\n' or '\t'));
 
+    /// <summary>Sends a bounded text prompt and returns the assistant response.</summary>
     internal async Task<string> SendTurnAsync(
         string prompt, CancellationToken cancellationToken, Guid? a2aMessageId = null) =>
         (await SendTurnCoreAsync(prompt, captureNativeReceipt: false, cancellationToken, a2aMessageId)
             .ConfigureAwait(false)).Response;
 
+    /// <summary>Sends a turn and returns the SDK event evidence tied to its native message ID.</summary>
     internal async Task<RuntimeCopilotNativeTurnResult> SendTurnWithNativeReceiptAsync(
         string prompt, CancellationToken cancellationToken, Guid? a2aMessageId = null)
     {
@@ -397,6 +434,10 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
             throw new RuntimeAuthorizationException("runtime_native_turn_receipt_unavailable"));
     }
 
+    /// <summary>
+    /// Serializes the turn, optionally captures native events, and aborts/drains a failed call;
+    /// an unconfirmed drain marks the session unusable.
+    /// </summary>
     private async Task<(string Response, RuntimeNativeTurnObservation? Receipt)> SendTurnCoreAsync(
         string prompt, bool captureNativeReceipt, CancellationToken cancellationToken, Guid? a2aMessageId)
     {
@@ -462,6 +503,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         }
     }
 
+    /// <summary>Reads SDK usage events and releases queued flush barriers in event order.</summary>
     public async IAsyncEnumerable<SdkUsageObservation> ReadUsageAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -474,6 +516,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         }
     }
 
+    /// <summary>Waits until all usage events queued before the barrier have been consumed.</summary>
     internal async Task FlushUsageAsync(CancellationToken cancellationToken)
     {
         RequireUsable();
@@ -517,6 +560,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         }
     }
 
+    /// <summary>Maps SDK accounting status and identity into the validated usage contract.</summary>
     internal static SdkUsageAccountingObservation ExtractAccounting(
         SdkSessionFacts source, AssistantUsageEvent usage)
     {
@@ -548,6 +592,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         return checked((long)value.Value);
     }
 
+    /// <summary>Converts a finite, non-negative SDK measurement without silently accepting invalid values.</summary>
     internal static decimal? NullableDecimal(double? value)
     {
         if (value is null)
@@ -566,6 +611,7 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
         return (decimal)value.Value.Ticks / TimeSpan.TicksPerMillisecond;
     }
 
+    /// <summary>Stops active work and disposes the native SDK session and client once.</summary>
     public ValueTask DisposeAsync()
     {
         lock (_disposeLock)
@@ -604,9 +650,11 @@ public sealed class RuntimeCopilotSession : IAsyncDisposable
     }
 }
 
+/// <summary>One SDK usage observation or an ordered barrier in the session's single-reader channel.</summary>
 internal sealed record RuntimeCopilotUsageItem(
     AssistantUsageEvent? Observation, TaskCompletionSource? Barrier, Guid? A2AMessageId = null);
 
+/// <summary>Collects assistant text and idle/error signals for one active native SDK turn.</summary>
 internal sealed class RuntimeCopilotTurnObserver
 {
     private readonly object _gate = new();
@@ -616,6 +664,7 @@ internal sealed class RuntimeCopilotTurnObserver
     private TaskCompletionSource? _idle;
     private Guid? _a2aMessageId;
 
+    /// <summary>Starts collecting one turn and returns the task completed by idle or error events.</summary>
     public Task<string> Begin(CancellationToken cancellationToken, Guid? a2aMessageId = null)
     {
         lock (_gate)
@@ -631,6 +680,7 @@ internal sealed class RuntimeCopilotTurnObserver
         }
     }
 
+    /// <summary>Gets the message ID only while its native turn remains active.</summary>
     public Guid? ActiveA2AMessageId
     {
         get
@@ -640,6 +690,7 @@ internal sealed class RuntimeCopilotTurnObserver
         }
     }
 
+    /// <summary>Indicates that the active native turn emitted its idle event.</summary>
     public bool IsIdle
     {
         get
@@ -649,6 +700,7 @@ internal sealed class RuntimeCopilotTurnObserver
         }
     }
 
+    /// <summary>Waits for the current native turn to become idle.</summary>
     public Task WaitForIdleAsync(CancellationToken cancellationToken)
     {
         lock (_gate)
@@ -656,6 +708,7 @@ internal sealed class RuntimeCopilotTurnObserver
                 .WaitAsync(cancellationToken);
     }
 
+    /// <summary>Returns the active turn token or rejects access when no turn is running.</summary>
     public CancellationToken RequireActiveToken()
     {
         lock (_gate)
@@ -667,6 +720,7 @@ internal sealed class RuntimeCopilotTurnObserver
         }
     }
 
+    /// <summary>Appends assistant text up to the response limit and completes on idle or SDK error.</summary>
     public void Observe(SessionEvent sessionEvent)
     {
         lock (_gate)
@@ -697,6 +751,7 @@ internal sealed class RuntimeCopilotTurnObserver
         }
     }
 
+    /// <summary>Clears the active turn state after completion or failure.</summary>
     public void End()
     {
         lock (_gate)

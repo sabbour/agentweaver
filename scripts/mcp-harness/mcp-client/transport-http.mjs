@@ -1,5 +1,9 @@
 import { validateNetworkTarget } from '../../harness-shared/target-guard.mjs';
 
+/**
+ * Create an MCP Streamable HTTP transport bound to one validated endpoint and tenant.
+ * Every outgoing request is rechecked for same-origin use and receives broker authorization.
+ */
 export async function createHttpTransport({ target, authProvider, tenantId, fetchImpl = globalThis.fetch }) {
   const url = validateNetworkTarget(target, { exactPath: '/mcp' });
   if (authProvider?.origin !== url.origin || typeof authProvider.getAuthorization !== 'function'

@@ -2,7 +2,13 @@ import { createHttpTransport } from './transport-http.mjs';
 import { redact } from '../../harness-shared/redaction.mjs';
 import { validateNetworkTarget } from '../../harness-shared/target-guard.mjs';
 
+/** MCP harness connection, live tool discovery, protocol capture, and owner-result validation. */
+/** MCP client adapter that captures protocol traffic and validates the P1 tool-result contract. */
 export class McpHarnessClient {
+  /**
+   * Connect to the selected same-origin MCP endpoint and wrap its transport with redacted capture.
+   * Connection failures close the partially opened client; a cleanup failure is returned with the original error.
+   */
   static async connect(options) {
     const target = validateNetworkTarget(options.target, { exactPath: '/mcp' });
     const transport = await createHttpTransport(options);
@@ -34,6 +40,7 @@ export class McpHarnessClient {
     }
   }
 
+  /** Store the protocol client and the validated target identity used by this harness session. */
   constructor(client, protocol = [], { target, tenantId, authProvider } = {}) {
     this.client = client;
     this.protocol = protocol;
@@ -44,6 +51,10 @@ export class McpHarnessClient {
     this.calls = [];
   }
 
+  /**
+   * Discover every page of the live tool menu and cache unique Agentweaver tools with object schemas.
+   * Invalid or repeated pagination cursors and malformed tool entries are rejected.
+   */
   async discoverTools() {
     this.tools.clear();
     const tools = new Map();
@@ -72,6 +83,10 @@ export class McpHarnessClient {
     return [...tools.values()];
   }
 
+  /**
+   * Call a discovered tool and verify its structured owner result before returning redacted evidence.
+   * Tool errors are retained as evidence; malformed success contracts throw.
+   */
   async callTool(name, arguments_ = {}) {
     if (!this.tools.has(name)) throw new Error('The requested tool has not been discovered from the live MCP server.');
     const started = Date.now();
@@ -100,6 +115,7 @@ export class McpHarnessClient {
     }
   }
 
+  /** Close the underlying MCP connection. */
   async close() {
     await this.client.close();
   }

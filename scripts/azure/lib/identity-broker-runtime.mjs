@@ -1,3 +1,4 @@
+/** Creates and verifies the identity broker's runtime Kubernetes resources in the P0 namespace. */
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -12,6 +13,7 @@ const OPTIONS = { check: false, timeout: 35_000 };
 const SENTINEL = 'registry.invalid/agentweaver-identity-broker@sha256:' + '0'.repeat(64);
 const SCOPES = ['openid', 'profile', 'email', 'api.read', 'offline_access'];
 
+/** Checks the required broker runtime source and target inputs before resource generation. */
 export function assertBrokerRuntimeInputs(config) {
   if (config.resourceGroup !== 'aw-v1-p0' || config.clusterName !== 'aw-v1-p0-aks' ||
       !GUID.test(config.subscriptionId ?? '') || !GUID.test(config.tenantId ?? '') ||
@@ -30,6 +32,7 @@ export function assertBrokerRuntimeInputs(config) {
   }
 }
 
+/** Builds the broker acceptance configuration from validated cluster issuer and identity values. */
 export function brokerAcceptanceConfiguration(config, { issuer, identity }) {
   assertBrokerRuntimeInputs(config);
   if (!/^https:\/\/agentweaver\.[a-z0-9.-]+\.aksapp\.io\/$/.test(issuer) ||
@@ -57,6 +60,7 @@ export function brokerAcceptanceConfiguration(config, { issuer, identity }) {
   return data;
 }
 
+/** Projects a broker Kubernetes resource to non-secret fields used for stable comparisons. */
 export function projectBrokerRuntimeResource(value) {
   if (Array.isArray(value?.items)) {
     if (value.items.length > 1) throw new Error('Exact Broker runtime lookup returned multiple objects.');
@@ -79,6 +83,7 @@ export function projectBrokerRuntimeResource(value) {
   return result;
 }
 
+/** Computes a stable SHA-256 fingerprint of the projected broker object. */
 export function brokerObjectHash(value) {
     const spec = structuredClone(value.kind === 'ServiceAccount'
       ? { automountServiceAccountToken: value.automountServiceAccountToken,
@@ -118,6 +123,10 @@ function orderedHash(value) {
     return createHash('sha256').update(JSON.stringify(ordered(value))).digest('hex');
 }
 
+/**
+ * Applies broker runtime resources and verifies their readback through a scoped user kubeconfig.
+ * A mismatch or failed command throws; temporary access configuration is cleaned up by its wrapper.
+ */
 export function bootstrapIdentityBrokerRuntime(config, {
   withKubeconfig = withP0UserKubeconfig, execAz = runAz,
   execKubectl = (args, options) => run('kubectl', args, options),

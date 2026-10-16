@@ -13,6 +13,8 @@ using OpenIddict.Validation.AspNetCore;
 using WorkloadIdentityCredential =
     AzureIdentity::Azure.Identity.WorkloadIdentityCredential;
 
+// Configure the orchestrator's database, owner clients, authentication, and endpoints.
+// The standalone migration path exits before registering or starting the web application.
 var migrate = args.SequenceEqual(["--migrate"], StringComparer.Ordinal);
 if (args.Contains("--migrate", StringComparer.Ordinal) && !migrate)
     throw new ArgumentException("The --migrate command must be used by itself.", nameof(args));
@@ -263,15 +265,18 @@ if (runtimeUsageEnabled)
     app.MapRuntimeUsageSourceEndpoints();
 app.Run();
 
+// Reads a required non-blank configuration value or fails application startup.
 static string Required(IConfiguration configuration, string key) =>
     !string.IsNullOrWhiteSpace(configuration[key])
         ? configuration[key]!
         : throw new InvalidOperationException($"Missing required configuration '{key}'.");
 
+// Builds the empty provider catalog used when no catalog section is configured.
 static ProviderCatalog CreateEmptyProviderCatalog() =>
     ProviderCatalog.Create([], [], []).Value
     ?? throw new InvalidOperationException("An empty provider catalog could not be constructed.");
 
+// Loads optional Agent Governance policy settings and validates the configured provider options.
 static AgtPolicyProviderOptions? ReadAgentGovernancePolicyOptions(IConfiguration configuration)
 {
     const string sectionName = "AgentGovernance:Policy";
@@ -297,4 +302,7 @@ static AgtPolicyProviderOptions? ReadAgentGovernancePolicyOptions(IConfiguration
     return options;
 }
 
+/// <summary>
+/// Entry-point marker used by integration tests to locate the orchestrator application.
+/// </summary>
 public partial class Program;

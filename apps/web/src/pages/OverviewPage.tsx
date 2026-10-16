@@ -52,10 +52,14 @@ import type {
   RecentActivityDto,
 } from '../api/types';
 const REFRESH_MS = 10000;
+/** Range keys used for both the current and comparison windows. */
 type TimeRange = '7d' | '30d' | '90d';
+/** Coarse state derived from the active and queued counts for one project. */
 type ProjectStatus = 'active' | 'queued' | 'idle';
 
+/** Dashboard rollup assembled from the project, team, run, and board endpoints. */
 interface ProjectRollup { project: Project; activeCount: number; queuedCount: number; lastActivityUtc: string | null; agentCount: number | null; runCount: number | null; issueCount: number | null }
+/** Actionable health or queue item shown in the overview attention list. */
 interface AttentionItem { key: string; severity: 'error' | 'warning'; title: string; subtitle: string; time?: string | null; action: string; to: string }
 // Warm monochrome ramp (no blue) — model segments separate by lightness, not hue.
 const modelColors = ['#272320', '#635c57', '#8c837c', '#b8afa8', '#d8cfc8'];
@@ -126,6 +130,7 @@ const useStyles = makeStyles({
   skeletonSmall: { height: '16px', maxWidth: '70%', marginTop: tokens.spacingVerticalS },
   wideSkeleton: { height: '180px' },
 });
+/** Formats a timestamp as an age and returns an empty label for missing/invalid input. */
 function timeAgo(iso?: string | null): string {
   if (!iso) return '';
   const then = new Date(iso).getTime();
@@ -139,6 +144,7 @@ function timeAgo(iso?: string | null): string {
   if (h < 24) return `${h}h ago`;
   return `${Math.round(h / 24)}d ago`;
 }
+/** Builds the current or immediately preceding UTC date range for overview metrics. */
 function timeRangeDates(range: TimeRange, previous = false): { from: string; to: string } {
   const days = range === '7d' ? 7 : range === '30d' ? 30 : 90;
   const to = new Date();
@@ -146,8 +152,11 @@ function timeRangeDates(range: TimeRange, previous = false): { from: string; to:
   const from = new Date(to); from.setDate(from.getDate() - days + 1); from.setUTCHours(0, 0, 0, 0);
   return { from: from.toISOString(), to: to.toISOString() };
 }
+/** Converts API and non-API failures into text for the overview alert. */
 function formatError(err: unknown): string { return err instanceof ApiError ? `API error ${err.status}: ${err.body}` : err instanceof Error ? err.message : String(err); }
+/** Turns event-kind identifiers into readable labels for activity rows. */
 function humanizeKind(kind: string): string { const spaced = (kind || 'activity').replace(/_/g, ' '); return spaced.charAt(0).toUpperCase() + spaced.slice(1); }
+/** Displays a repository owner/name when available, otherwise identifies the project as internal. */
 function projectSlug(project: Project): string {
   if (!project.source_repository) return 'Internal Project';
   const source = project.source_repository.replace(/\.git$/i, '');
@@ -156,12 +165,17 @@ function projectSlug(project: Project): string {
   const parts = source.split(/[\\/]/).filter(Boolean);
   return parts.length >= 2 ? `${parts.at(-2)}/${parts.at(-1)}` : source;
 }
+/** Gives active work priority over queued work when presenting project status. */
 function statusFor(rollup: ProjectRollup): ProjectStatus { if (rollup.activeCount > 0) return 'active'; if (rollup.queuedCount > 0) return 'queued'; return 'idle'; }
+/** Identifies activity kinds treated as failed or requiring attention. */
 function isFailure(kind: string): boolean { return ['failed', 'merge_failed', 'declined', 'rai_flagged'].includes(kind); }
+/** Selects the activity icon from the event kind without changing its meaning. */
 function activityIcon(kind: string) { if (kind.includes('merge') || kind.includes('pr')) return <BranchRegular />; if (kind.includes('deploy')) return <PlayRegular />; if (isFailure(kind)) return <ErrorCircleRegular />; if (kind === 'completed') return <CheckmarkCircleRegular />; return <CodeRegular />; }
+/** Shares the product empty-state treatment across overview sections. */
 function emptyState(title: string, body?: string) {
   return <EmptyState title={title} description={body} icon={<InfoRegular />} />;
 }
+/** Loading skeleton for the overview's health, project, usage, and activity areas. */
 function LoadingOverview() {
   const styles = useStyles();
   return <div className={styles.loadingShell} aria-label="Loading overview" role="status">
@@ -193,39 +207,49 @@ function LoadingOverview() {
     </div>
   </div>;
 }
+/** One compact operational count in the overview's glance row. */
 function GlanceItem({ label, value, styles }: { label: string; value: number; styles: ReturnType<typeof useStyles> }) {
   return <div className={styles.glanceItem}><Text className={styles.glanceValue}>{value}</Text><Text className={styles.glanceLabel}>{label}</Text></div>;
 }
+/** Counts task cards across board columns, returning null when the board was unavailable. */
 function boardIssueCount(board: BoardDto | null): number | null { return board ? board.columns.reduce((sum, column) => sum + column.cards.filter((card) => card.kind === 'task').length, 0) : null; }
+/** Counts run cards across board columns, returning null when the board was unavailable. */
 function boardRunCount(board: BoardDto | null): number | null { return board ? board.columns.reduce((sum, column) => sum + column.cards.filter((card) => card.kind === 'run').length, 0) : null; }
+/** Sums invocation and AI-credit usage by model across the selected projects. */
 function aggregateModelUsage(metrics: ProjectMetricsDto[]): ModelUsageBreakdownDto[] {
   const byModel = new Map<string, ModelUsageBreakdownDto>();
   for (const metric of metrics) for (const row of metric.modelUsage ?? []) { const existing = byModel.get(row.model) ?? { model: row.model, invocationCount: 0, totalNanoAiu: 0 }; existing.invocationCount += row.invocationCount; existing.totalNanoAiu += row.totalNanoAiu; byModel.set(row.model, existing); }
   return [...byModel.values()].sort((a, b) => b.totalNanoAiu - a.totalNanoAiu);
 }
+/** Averages available per-project latency percentiles; absent metrics return null. */
 function aggregatePercentiles(metrics: ProjectMetricsDto[], selector: (metric: ProjectMetricsDto) => ProjectMetricsDto['responseDuration']): { p50: number | null; p95: number | null } | null {
   const rows = metrics.flatMap((metric) => selector(metric) ?? []);
   if (rows.length === 0) return null;
   const avg = (values: Array<number | null | undefined>) => { const present = values.filter((value): value is number => typeof value === 'number'); return present.length ? present.reduce((sum, value) => sum + value, 0) / present.length : null; };
   return { p50: avg(rows.map((row) => row.p50Ms)), p95: avg(rows.map((row) => row.p95Ms)) };
 }
+/** Formats latency values while preserving missing measurements as an em dash. */
 function formatMs(ms: number | null | undefined): string { if (ms == null) return '—'; return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)}s`; }
+/** Computes a run-weighted success rate and count of scored runs across projects. */
 function aggregateSuccessRate(metrics: ProjectMetricsDto[]): { rate: number | null; basis: number } {
   let weighted = 0; let total = 0;
   for (const metric of metrics) for (const row of metric.leaderboard ?? []) if (row.runsTotal > 0) { weighted += row.successRate * row.runsTotal; total += row.runsTotal; }
   return { rate: total ? weighted / total : null, basis: total };
 }
+/** Combines invocation counts by date and returns values in date order. */
 function aggregateTrend(metrics: ProjectMetricsDto[]): number[] {
   const byDate = new Map<string, number>();
   for (const metric of metrics) for (const point of metric.invocationTrend ?? []) byDate.set(point.date, (byDate.get(point.date) ?? 0) + point.count);
   return [...byDate.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, count]) => count);
 }
+/** Draws a small normalized trend line for success-related activity. */
 function Sparkline({ points }: { points: number[] }) {
   if (!points.length) return null;
   const width = 160; const height = 42; const max = Math.max(1, ...points);
   const path = points.map((point, index) => { const x = points.length <= 1 ? 0 : (index / (points.length - 1)) * width; const y = height - (point / max) * (height - 4) - 2; return `${index === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`; }).join(' ');
   return <svg viewBox={`0 0 ${width} ${height}`} width="100%" height={height} aria-label="Success trend"><path d={path} fill="none" stroke={tokens.colorBrandForeground1} strokeWidth={2} /></svg>;
 }
+/** Draws a usage-share donut for the first five model rows. */
 function Donut({ rows }: { rows: ModelUsageBreakdownDto[] }) {
   const styles = useStyles(); const total = rows.reduce((sum, row) => sum + row.invocationCount, 0); if (total <= 0) return null;
   const segments = rows.slice(0, 5).reduce<{ start: number; segments: string[] }>((acc, row, index) => {
@@ -235,6 +259,7 @@ function Donut({ rows }: { rows: ModelUsageBreakdownDto[] }) {
   }, { start: 0, segments: [] }).segments;
   return <div style={{ background: `conic-gradient(${segments.join(', ')})` }} className={styles.donut} aria-label="Model usage distribution" />;
 }
+/** Renders aggregated model usage, latency, and weighted success evidence. */
 function UsageTiles({ metrics, previousMetrics, range, recentProjectId }: { metrics: ProjectMetricsDto[]; previousMetrics: ProjectMetricsDto[]; range: TimeRange; recentProjectId?: string }) {
   const styles = useStyles();
   const usage = aggregateModelUsage(metrics);
@@ -273,6 +298,8 @@ function UsageTiles({ metrics, previousMetrics, range, recentProjectId }: { metr
 
 export function OverviewPage() {
   const styles = useStyles();
+  // Keep the platform snapshot, recent-project rollups, and two metrics windows
+  // separately so partial project metrics can be omitted without losing overview data.
   const [overview, setOverview] = useState<OverviewDto | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [rollups, setRollups] = useState<ProjectRollup[]>([]);
@@ -287,6 +314,11 @@ export function OverviewPage() {
   const mountedRef = useRef(true);
   const inFlightRef = useRef<AbortController | null>(null);
 
+  /**
+   * Loads platform activity, then enriches the four most recently active projects.
+   * Per-project details use all-settled results so one missing endpoint does not
+   * hide other counts; cancellation is handled as expected control flow.
+   */
   const load = useCallback(async (abortSignal?: AbortSignal) => {
     if (mountedRef.current) setRefreshing(true);
     try {
@@ -316,6 +348,7 @@ export function OverviewPage() {
   // #208 point 5: single shared entry point for the poll tick AND manual refresh/retry clicks —
   // aborts whatever request is still in flight before starting a new one, so overlapping fan-outs
   // (interval firing while a manual refresh is pending, or vice versa) can't stack.
+  /** Replaces any active fan-out before a manual refresh or retry. */
   const runLoad = useCallback(() => {
     inFlightRef.current?.abort();
     const controller = new AbortController();
@@ -324,6 +357,7 @@ export function OverviewPage() {
     void load(controller.signal);
   }, [load]);
 
+  // Poll while mounted and abort the active fan-out when the selected range changes.
   useEffect(() => {
     mountedRef.current = true;
     const runLoadLoop = async () => {
@@ -338,6 +372,7 @@ export function OverviewPage() {
     return () => { mountedRef.current = false; inFlightRef.current?.abort(); clearInterval(iv); };
   }, [load]);
 
+  // Build the highest-priority health, failure, and queue items for the compact alert list.
   const attention = useMemo<AttentionItem[]>(() => {
     const items: AttentionItem[] = [];
     if (overview?.at_a_glance.health && overview.at_a_glance.health !== 'healthy') items.push({ key: 'health', severity: 'error', title: 'System health degraded', subtitle: 'Overview health is reporting degraded.', action: 'View projects', to: '/projects' });
@@ -345,6 +380,7 @@ export function OverviewPage() {
     for (const rollup of rollups) if (rollup.queuedCount > 0) items.push({ key: `queued-${rollup.project.project_id}`, severity: 'warning', title: `${rollup.queuedCount} queued ${rollup.queuedCount === 1 ? 'item' : 'items'}`, subtitle: rollup.project.name, time: rollup.lastActivityUtc, action: 'Open project', to: `/projects/${rollup.project.project_id}` });
     return items.slice(0, 5);
   }, [overview, rollups]);
+  // Group recent events by local calendar day for the activity timeline.
   const groupedActivity = useMemo(() => { const today = new Date().toDateString(); const groups = new Map<string, RecentActivityDto[]>(); for (const item of overview?.recent_activity ?? []) { const label = new Date(item.timestamp_utc).toDateString() === today ? 'Today' : new Date(item.timestamp_utc).toLocaleDateString(); groups.set(label, [...(groups.get(label) ?? []), item]); } return [...groups.entries()]; }, [overview]);
   const focusRollup = rollups[0];
   const health = overview?.at_a_glance.health === 'healthy' ? 'healthy' : 'degraded';

@@ -3,8 +3,10 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Maps provider lifecycle report records and their sandbox lease and Environment owner principals.</summary>
 internal static class EnvironmentProviderLifecycleReportModel
 {
+    /// <summary>Configures table names, validation constraints, indexes, and restricted owner-scoped relationships.</summary>
     public static void Configure(ModelBuilder modelBuilder)
     {
         modelBuilder.Entity<EnvironmentSandboxLeasePrincipalRow>(entity =>
@@ -132,6 +134,7 @@ internal static class EnvironmentProviderLifecycleReportModel
     }
 }
 
+/// <summary>Key fields from a sandbox lease used as the principal of a provider report relationship.</summary>
 internal sealed class EnvironmentSandboxLeasePrincipalRow
 {
     public string TenantId { get; set; } = string.Empty;
@@ -141,6 +144,7 @@ internal sealed class EnvironmentSandboxLeasePrincipalRow
     public long ResourceGeneration { get; set; }
 }
 
+/// <summary>Database row for a provider lifecycle event awaiting reconciliation.</summary>
 internal sealed class EnvironmentProviderLifecycleReportRow
 {
     public string TenantId { get; set; } = string.Empty;

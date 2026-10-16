@@ -4,6 +4,7 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Orchestrator.Core;
 
+/// <summary>Stable validation codes for Canvas descriptors, requests, bindings, and JSON schema checks.</summary>
 public enum CanvasContractValidationCode
 {
     InvalidDescriptor,
@@ -34,11 +35,13 @@ public enum CanvasContractValidationCode
     SchemaMismatch
 }
 
+/// <summary>A structured Canvas validation issue with a contract path.</summary>
 public sealed record CanvasContractValidationIssue(
     CanvasContractValidationCode Code,
     string Path,
     string Message);
 
+/// <summary>Validation result that contains a trusted copy of a value or one or more issues.</summary>
 public sealed class CanvasContractValidationResult<T> where T : class
 {
     private CanvasContractValidationResult(
@@ -50,6 +53,7 @@ public sealed class CanvasContractValidationResult<T> where T : class
     public ImmutableArray<CanvasContractValidationIssue> Issues { get; }
     public bool IsValid => Value is not null && Issues.IsEmpty;
 
+    /// <summary>Creates a successful result; only Core validators can construct it.</summary>
     internal static CanvasContractValidationResult<T> Success(T value) =>
         new(value ?? throw new ArgumentNullException(nameof(value)), []);
 
@@ -62,10 +66,15 @@ public sealed class CanvasContractValidationResult<T> where T : class
     }
 }
 
+/// <summary>
+/// Validates Canvas provider descriptors and owner requests before they cross the service boundary.
+/// Successful values clone mutable JSON and compare actions against the exact current binding.
+/// </summary>
 public static class CanvasContractValidator
 {
     private const string ReservedActionPrefix = "canvas.";
 
+    /// <summary>Checks descriptor identity, provider profile, unique actions, content requirements, and schemas.</summary>
     public static CanvasContractValidationResult<CanvasTypeDescriptor> ValidateDescriptorStructure(
         CanvasTypeDescriptor? descriptor)
     {
@@ -160,6 +169,7 @@ public static class CanvasContractValidator
         });
     }
 
+    /// <summary>Checks an open request against its selected descriptor and declared input schema.</summary>
     public static CanvasContractValidationResult<CanvasOpenRequest> ValidateOpenRequestStructure(
         CanvasOpenRequest? request,
         CanvasTypeDescriptor? descriptor)
@@ -218,6 +228,7 @@ public static class CanvasContractValidator
         });
     }
 
+    /// <summary>Checks that a read request identifies the currently bound instance and scope.</summary>
     public static CanvasContractValidationResult<CanvasReadRequest> ValidateReadRequestStructure(
         CanvasReadRequest? request,
         CanvasInstanceBinding? currentBinding)
@@ -250,6 +261,7 @@ public static class CanvasContractValidator
         });
     }
 
+    /// <summary>Checks action identity, current binding, declared action, idempotency key, and input schema.</summary>
     public static CanvasContractValidationResult<CanvasActionRequest> ValidateActionRequestStructure(
         CanvasActionRequest? request,
         CanvasInstanceBinding? currentBinding,
@@ -309,6 +321,7 @@ public static class CanvasContractValidator
         });
     }
 
+    /// <summary>Checks a close request against the exact current binding and its idempotency key.</summary>
     public static CanvasContractValidationResult<CanvasCloseRequest> ValidateCloseRequestStructure(
         CanvasCloseRequest? request,
         CanvasInstanceBinding? currentBinding)

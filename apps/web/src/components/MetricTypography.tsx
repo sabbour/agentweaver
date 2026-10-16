@@ -27,6 +27,7 @@ const useStyles = makeStyles({
   },
 });
 
+/** Renders a compact section heading for metric and dashboard panels. */
 export function MetricSectionHeading({
   title,
   subtitle,
@@ -46,6 +47,7 @@ export function MetricSectionHeading({
   );
 }
 
+/** Renders the title and optional supporting text used by metric cards. */
 export function MetricCardHeader({
   title,
   subtitle,
@@ -70,6 +72,7 @@ export function MetricCardHeader({
   );
 }
 
+/** Renders a metric-specific empty state with caller-provided explanation. */
 export function MetricEmptyState({
   children,
   className,

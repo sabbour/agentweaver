@@ -8,13 +8,22 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Resolves an immutable reviewed remote-tool snapshot by its accepted reference.
+/// </summary>
 internal interface IReviewedRemoteToolSnapshotResolver
 {
+    /// <summary>
+    /// Reads a snapshot only when the persisted snapshot matches the complete reference.
+    /// </summary>
     Task<ReviewedRemoteToolSnapshot?> ResolveAsync(
         ReviewedRemoteToolSnapshotReference reference,
         CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// Stores reviewed remote-tool snapshots as immutable JSON documents indexed by project and snapshot ID.
+/// </summary>
 internal sealed class ReviewedRemoteToolSnapshotStore : IReviewedRemoteToolSnapshotResolver
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -26,6 +35,10 @@ internal sealed class ReviewedRemoteToolSnapshotStore : IReviewedRemoteToolSnaps
     private readonly NpgsqlDataSource _dataSource;
     private readonly string _snapshots;
 
+    /// <summary>
+    /// Creates the store using a validated non-reserved PostgreSQL schema.
+    /// </summary>
+    /// <exception cref="ArgumentException">Thrown when the schema is invalid or reserved.</exception>
     public ReviewedRemoteToolSnapshotStore(NpgsqlDataSource dataSource, string schema)
     {
         ArgumentNullException.ThrowIfNull(dataSource);
@@ -41,6 +54,10 @@ internal sealed class ReviewedRemoteToolSnapshotStore : IReviewedRemoteToolSnaps
         _snapshots = $"\"{schema}\".reviewed_remote_tool_snapshots";
     }
 
+    /// <summary>
+    /// Persists a snapshot or verifies that an existing snapshot with the same key is identical.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when the project/snapshot key is already bound to different snapshot data.</exception>
     internal async Task<ReviewedRemoteToolSnapshotReference> PersistAsync(
         ReviewedRemoteToolSnapshot snapshot,
         CancellationToken cancellationToken)
@@ -76,6 +93,9 @@ internal sealed class ReviewedRemoteToolSnapshotStore : IReviewedRemoteToolSnaps
         return persisted.Snapshot.Reference;
     }
 
+    /// <summary>
+    /// Resolves the immutable snapshot only when its ID, digest, agent, and node match the supplied reference.
+    /// </summary>
     internal async Task<ReviewedRemoteToolSnapshot?> ResolveAsync(
         ReviewedRemoteToolSnapshotReference reference,
         CancellationToken cancellationToken)
@@ -93,11 +113,18 @@ internal sealed class ReviewedRemoteToolSnapshotStore : IReviewedRemoteToolSnaps
         return persisted.Snapshot;
     }
 
+    /// <summary>
+    /// Implements the snapshot resolver contract with the store's validated lookup.
+    /// </summary>
     Task<ReviewedRemoteToolSnapshot?> IReviewedRemoteToolSnapshotResolver.ResolveAsync(
         ReviewedRemoteToolSnapshotReference reference,
         CancellationToken cancellationToken) =>
         ResolveAsync(reference, cancellationToken);
 
+    /// <summary>
+    /// Reads and verifies the stored JSON snapshot against its indexed identity and digest fields.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown when the stored snapshot or its index is inconsistent.</exception>
     private async Task<PersistedSnapshot?> ReadRowAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -129,6 +156,9 @@ internal sealed class ReviewedRemoteToolSnapshotStore : IReviewedRemoteToolSnaps
         return new PersistedSnapshot(snapshot);
     }
 
+    /// <summary>
+    /// Adds the indexed identity parameters used when inserting a snapshot.
+    /// </summary>
     private static void AddSnapshotParameters(NpgsqlCommand command, ReviewedRemoteToolSnapshot snapshot)
     {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, snapshot.ProjectId);
@@ -138,8 +168,14 @@ internal sealed class ReviewedRemoteToolSnapshotStore : IReviewedRemoteToolSnaps
         command.Parameters.AddWithValue("node", NpgsqlDbType.Varchar, snapshot.NodeId);
     }
 
+    /// <summary>
+    /// Holds a snapshot document after it has been checked against its database index.
+    /// </summary>
     private sealed record PersistedSnapshot(ReviewedRemoteToolSnapshot Snapshot);
 
+    /// <summary>
+    /// Serialization shape for all immutable fields that contribute to a reviewed snapshot.
+    /// </summary>
     private sealed record SnapshotDocument(
         Guid SnapshotId,
         string ProjectId,
@@ -170,6 +206,9 @@ internal sealed class ReviewedRemoteToolSnapshotStore : IReviewedRemoteToolSnaps
         string PermissionPurpose,
         string PermissionMetadataJson)
     {
+        /// <summary>
+        /// Copies the canonical snapshot fields into their persistence representation.
+        /// </summary>
         public static SnapshotDocument From(ReviewedRemoteToolSnapshot snapshot) =>
             new(
                 snapshot.SnapshotId,
@@ -201,6 +240,9 @@ internal sealed class ReviewedRemoteToolSnapshotStore : IReviewedRemoteToolSnaps
                 snapshot.Permission.Purpose,
                 snapshot.Permission.CanonicalMetadataJson);
 
+        /// <summary>
+        /// Reconstructs the domain snapshot from its persisted fields.
+        /// </summary>
         public ReviewedRemoteToolSnapshot ToSnapshot() =>
             new(
                 SnapshotId,

@@ -196,6 +196,7 @@ export const BrowseFilesContext = createContext<((executionId: string) => void) 
 // Role → icon / description helpers (exported so pages can build node data)
 // ---------------------------------------------------------------------------
 
+/** Returns the user-facing description for a workflow role. */
 export function roleDescForRole(role: string): string {
   const map: Record<string, string> = {
     agent:       'AI Assistant',
@@ -213,6 +214,7 @@ export function roleDescForRole(role: string): string {
   return map[role] ?? role;
 }
 
+/** Selects the Fluent icon that represents a workflow role. */
 export function iconForRole(role: string): FluentIcon {
   const map: Record<string, FluentIcon> = {
     agent:       BotRegular,
@@ -234,6 +236,7 @@ export function iconForRole(role: string): FluentIcon {
 // Styles — shared card styles
 // ---------------------------------------------------------------------------
 
+/** Creates shared node, status, and timing styles for the workflow graph. */
 export const useNodeStyles = makeStyles({
   card: {
     display: 'flex',
@@ -707,6 +710,7 @@ function statusLabel(s: StepStatus): string {
 }
 
 /** Pick the colored top-accent class for a node given its status flags. */
+/** Maps a workflow status or role to its graph accent styling class. */
 export function accentClass(
   s: ReturnType<typeof useNodeStyles>,
   status: StepStatus,
@@ -724,6 +728,10 @@ export function accentClass(
   }[status];
 }
 
+/**
+ * Renders a workflow-step status badge from the status supplied by the graph node.
+ * It has no API dependency or local state.
+ */
 export function StatusBadge({
   status,
   isAwaiting,
@@ -786,6 +794,10 @@ function formatDuration(ms: number): string {
   return `${hrs}h ${m}m`;
 }
 
+/**
+ * Renders elapsed execution time from the node's start and optional completion timestamps.
+ * A timer effect updates active durations and cleans up when the node is no longer mounted.
+ */
 export function ElapsedTimer({ startedAt, completedAt }: { startedAt?: number; completedAt?: number }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -802,6 +814,7 @@ export function ElapsedTimer({ startedAt, completedAt }: { startedAt?: number; c
 // statusDescription helper (exported for use in page files)
 // ---------------------------------------------------------------------------
 
+/** Returns accessible explanatory text for a workflow step status, or `null` if unknown. */
 export function statusDescription(key: string, status: StepStatus): string | null {
   if (status === 'pending') return null;
   if (key === 'agent') {
@@ -855,6 +868,10 @@ export interface NodeDetailRow {
   mono?: boolean;
 }
 
+/**
+ * Renders the detail popover for a workflow graph node from its supplied node data.
+ * Contexts provide execution, session, and file-browsing actions; local state controls visibility.
+ */
 export function NodeDetailPopover({
   title,
   roleText,
@@ -934,6 +951,11 @@ export function NodeDetailPopover({
 // and a single status pill. All richer detail lives in the hover popover.
 // ---------------------------------------------------------------------------
 
+/**
+ * Renders one React Flow workflow node with role, status, timing, and detail affordances.
+ * Node data comes from the graph definition and execution state; context hooks provide navigation
+ * and related actions.
+ */
 export function WorkflowNode({ data, selected }: NodeProps) {
   const s = useNodeStyles();
   const {
@@ -1228,6 +1250,7 @@ export const workflowNodeTypes = { workflow: WorkflowNode };
 // Routed edges — quiet orthogonal paths with rounded corners
 // ---------------------------------------------------------------------------
 
+/** Stroke token used to distinguish workflow revision/loopback edges. */
 export const REVISION_EDGE_STROKE = 'var(--colorPaletteMarigoldForeground2)';
 const LOOPBACK_STROKE        = REVISION_EDGE_STROKE;
 const LOOPBACK_STROKE_ACTIVE = REVISION_EDGE_STROKE;
@@ -1238,6 +1261,7 @@ function markerId(prefix: string, id: string): string {
   return `${prefix}-${String(id).replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 }
 
+/** Renders a labeled loopback edge between workflow nodes from React Flow edge props. */
 export function LoopbackEdge({ id, sourceX, sourceY, targetX, targetY, label, data }: EdgeProps) {
   const allNodes = useNodes();
   const allEdges = useEdges();
@@ -1357,6 +1381,7 @@ export const workflowEdgeTypes = { loopback: LoopbackEdge, spine: SpineEdge };
 
 const SPINE_STROKE = 'var(--colorNeutralStroke1)';
 
+/** Renders the workflow graph's shared spine edge from React Flow edge props. */
 export function SpineEdge({
   id,
   sourceX,
@@ -1461,6 +1486,7 @@ export function SpineEdge({
 
 const STROKE_MUTED = 'var(--colorNeutralStroke2)';
 
+/** Creates a forward React Flow edge with the supplied identity and animation setting. */
 export function forwardEdge(id: string, source: string, target: string, animated = false): Edge {
   return {
     id,
@@ -1472,6 +1498,7 @@ export function forwardEdge(id: string, source: string, target: string, animated
   };
 }
 
+/** Creates a loopback React Flow edge with a label for the graph definition. */
 export function loopbackEdge(id: string, source: string, target: string, label: string): Edge {
   return { id, source, target, type: 'loopback', label };
 }
@@ -1480,6 +1507,7 @@ export function loopbackEdge(id: string, source: string, target: string, label: 
 // node's role (falling back to its id) so it is robust across descriptor id schemes. Tank adds
 // two coordinator loopbacks: rai→coordinator (re-dispatch on RAI flags) and review→coordinator
 // (request changes). GraphEdge carries no label field, so the renderer computes it here.
+/** Builds the user-facing label for a coordinator return edge. */
 export function coordinatorLoopbackLabel(sourceRole: string | undefined, sourceId: string | undefined): string {
   const role = (sourceRole ?? '').toLowerCase();
   if (role.includes('rai'))    return 'RAI flags';
@@ -1515,6 +1543,10 @@ const useInlinePanelStyles = makeStyles({
  * edge-routing pipeline used by the coordinator topology.
  */
 // eslint-disable-next-line react-refresh/only-export-components -- pure graph transform is unit-tested independently.
+/**
+ * Converts a workflow definition and execution state into positioned React Flow nodes and edges.
+ * It is a deterministic graph projection and performs no API request.
+ */
 export function buildWorkflowDefinitionGraph(
   graph: WorkflowGraphDto,
 ) {
@@ -1562,6 +1594,11 @@ export function buildWorkflowDefinitionGraph(
 /**
  * Fetches the static graph descriptor for a workflow definition and renders a
  * read-only ReactFlow graph. Intended for inline expansion in WorkflowsPage.
+ */
+/**
+ * Renders a workflow definition in an inline interactive graph panel.
+ * Definition data and execution callbacks come from props; graph state and detail UI use React
+ * Flow and the panel's local state.
  */
 export function WorkflowDefinitionInlinePanel({
   projectId,

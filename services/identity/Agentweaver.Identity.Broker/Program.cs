@@ -1,3 +1,5 @@
+// Composition root for Identity Broker: validates explicit security settings, registers
+// OAuth, owner and secret-store services, verifies persisted setup, and maps the host routes.
 extern alias AzureIdentity;
 
 using System.ComponentModel.DataAnnotations;

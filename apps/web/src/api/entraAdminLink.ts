@@ -1,15 +1,21 @@
 import type { AuthConfigResponse, AuthMode } from './types';
 
+/** An Entra administration destination and the label shown for it. */
 export interface EntraAdminLink {
   href: string;
   label: string;
 }
 
+/** Converts the server's authentication mode label to the browser contract. */
 export function authConfigModeToAuthMode(mode: AuthConfigResponse['mode'] | null | undefined): AuthMode | null {
   if (mode === 'Entra') return 'entra';
   return null;
 }
 
+/**
+ * Builds the most specific Entra administration link available from auth config.
+ * Returns `null` when required tenant or client identifiers are absent.
+ */
 export function buildEntraAdminLink(
   entra: AuthConfigResponse['entra'] | null | undefined,
 ): EntraAdminLink | null {

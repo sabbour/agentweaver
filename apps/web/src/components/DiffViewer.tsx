@@ -377,6 +377,10 @@ interface DiffViewerProps {
   filename?: string;
 }
 
+/**
+ * Renders a side-by-side or unified text diff from the diff content provided by its caller.
+ * It only presents the supplied comparison and does not load repository data or own state.
+ */
 export function DiffViewer({ diff, filename }: DiffViewerProps) {
   const styles = useStyles();
   const lang = detectLanguage(filename);

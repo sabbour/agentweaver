@@ -1,3 +1,7 @@
+/**
+ * Validates and deploys an images-only integration composition to the dedicated P0 environment.
+ * It verifies source-bound publication evidence before rollout and returns structured deployment results.
+ */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -41,6 +45,7 @@ function requiredString(value, name) {
   }
 }
 
+/** Parses integration deployment options and records whether execution was explicitly authorized. */
 export function parseIntegrationArgs(argv = []) {
   const values = {};
   let execute = false;
@@ -118,6 +123,7 @@ function manifestHash(manifest) {
   return hash(JSON.stringify(manifest));
 }
 
+/** Verifies the images-only receipt, provenance, and manifest against the exact selected source. */
 export function validateIntegrationPublication(receipt, manifest, provenance, sourceSha, sourceTree,
   preparedProvenanceSha256 = hash(JSON.stringify(provenance))) {
   if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) ||
@@ -230,6 +236,7 @@ export function validateIntegrationPublication(receipt, manifest, provenance, so
   });
 }
 
+/** Confirms that the remote workflow records and artifact metadata match the local publication receipt. */
 export async function verifyIntegrationPublicationRemote(receipt, sourceSha, { root, run }) {
   const namespace = `agentweaver-integration/${sourceSha}`;
   const repository = `repos/${REPOSITORY}`;
@@ -572,6 +579,10 @@ function readbackResources(runtimeManifest, images, acceptedDigests, target, roo
   };
 }
 
+/**
+ * Runs the integration publication checks and, when explicitly enabled, applies the deployment.
+ * Verification errors stop before mutation; deployment command failures are surfaced to the caller.
+ */
 export async function deployIntegration(options = {}, dependencies = {}) {
   const parsed = options.argv ? parseIntegrationArgs(options.argv) : options;
   if (!SHA.test(parsed.sourceSha ?? '')) fail('an exact lowercase source SHA is required');

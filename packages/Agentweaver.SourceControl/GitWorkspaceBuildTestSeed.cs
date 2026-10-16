@@ -4,29 +4,43 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.SourceControl;
 
+/// <summary>Verified immutable baseline files, bundle, package, and serialized seed for one BuildTest request.</summary>
 public sealed record GitWorkspaceBuildTestSeed(
     GitWorkspaceCapturedOutputManifest Baseline,
     ImmutableArray<byte> BundleBytes,
     ImmutableArray<byte> BaselinePackageBytes,
     ImmutableArray<byte> Bytes)
 {
+    /// <summary>Redacts seed bytes and repository content from diagnostic formatting.</summary>
     public override string ToString() => nameof(GitWorkspaceBuildTestSeed) + " [REDACTED]";
 }
 
+/// <summary>Parsed seed package and its original serialized bytes, with its digest.</summary>
 public sealed record GitWorkspaceBuildTestSeedDocument(
     GitWorkspaceCaptureDocument Baseline,
     byte[] BundleBytes,
     byte[] Bytes,
     string Sha256)
 {
+    /// <summary>Redacts repository seed bytes from diagnostic formatting.</summary>
     public override string ToString() => nameof(GitWorkspaceBuildTestSeedDocument) + " [REDACTED]";
 }
 
+/// <summary>
+/// Encodes and validates Source Control seed packages used to prepare a BuildTest workspace.
+/// The package binds an immutable baseline inventory, Git bundle, and baseline file package to an accepted source.
+/// </summary>
 public static class GitWorkspaceBuildTestSeedPackage
 {
     private static ReadOnlySpan<byte> Magic => "AWSEED02"u8;
     private const int HeaderBytes = 20;
 
+    /// <summary>Creates a bounded seed package after verifying the baseline package and regular-file inventory.</summary>
+    /// <param name="baseline">Verified baseline capture document.</param>
+    /// <param name="bundleBytes">Git bundle containing the baseline repository objects.</param>
+    /// <returns>Serialized seed bytes for the accepted command.</returns>
+    /// <exception cref="ArgumentException">The bundle or baseline metadata is invalid.</exception>
+    /// <exception cref="GitWorkspaceException">The seed exceeds the configured package limit.</exception>
     public static byte[] Create(GitWorkspaceCaptureDocument baseline, ReadOnlySpan<byte> bundleBytes)
     {
         ArgumentNullException.ThrowIfNull(baseline);
@@ -56,6 +70,11 @@ public static class GitWorkspaceBuildTestSeedPackage
         return bytes;
     }
 
+    /// <summary>Parses the exact accepted seed and verifies its source, baseline, bundle, and package digests.</summary>
+    /// <param name="bytes">Serialized seed bytes.</param>
+    /// <param name="source">Accepted source metadata and expected digests.</param>
+    /// <returns>A seed object whose sections have passed validation.</returns>
+    /// <exception cref="ArgumentException">The seed framing or any accepted source binding differs.</exception>
     public static GitWorkspaceBuildTestSeed Parse(
         ReadOnlySpan<byte> bytes,
         SandboxBuildTestWorkspaceSource source)
@@ -95,6 +114,7 @@ public static class GitWorkspaceBuildTestSeedPackage
             bytes.ToArray().ToImmutableArray());
     }
 
+    /// <summary>Extracts baseline file content from a package already verified against the seed manifest.</summary>
     internal static ImmutableArray<GitWorkspaceCapturedFile> ReadBaselineFiles(GitWorkspaceBuildTestSeed seed)
     {
         var package = seed.BaselinePackageBytes.ToArray();
@@ -113,6 +133,14 @@ public static class GitWorkspaceBuildTestSeedPackage
         return files.MoveToImmutable();
     }
 
+    /// <summary>
+    /// Ensures captured files preserve the baseline except for declared outputs and match output evidence.
+    /// </summary>
+    /// <param name="capture">Post-command output manifest.</param>
+    /// <param name="seed">Verified pre-command baseline.</param>
+    /// <param name="obligations">Accepted required and optional output declarations.</param>
+    /// <param name="evidence">Collector evidence corresponding by index to each obligation.</param>
+    /// <exception cref="GitWorkspaceException">Any identity, path, file, or evidence invariant is violated.</exception>
     public static void ValidateCapture(
         GitWorkspaceCapturedOutputManifest capture,
         GitWorkspaceBuildTestSeed seed,
@@ -178,6 +206,7 @@ public static class GitWorkspaceBuildTestSeedPackage
                 throw InvalidCapture();
     }
 
+    /// <summary>Creates the common corruption error returned for an inconsistent captured output.</summary>
     private static GitWorkspaceException InvalidCapture() =>
         new(GitWorkspaceFailureCode.CorruptWorkspace,
             "The BuildTest capture does not match its accepted baseline, declared outputs, or output receipt.");

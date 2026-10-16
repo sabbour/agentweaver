@@ -8,16 +8,26 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// A ready workflow action and its optional model work item.
+/// Platform and fixed-work actions have no model work item.
+/// </summary>
 internal sealed record MafExecutionAction(
     WorkflowStepDefinition Step,
     WorkPlanItem? WorkItem);
 
+/// <summary>
+/// The planner's ready actions, missing executors, failed dependencies, and completion result for a checkpoint.
+/// </summary>
 internal sealed record MafExecutionFrontier(
     ImmutableArray<MafExecutionAction> ReadyActions,
     ImmutableArray<string> UnavailableExecutorStepIds,
     ImmutableArray<string> FailedDependencyIds,
     bool IsComplete);
 
+/// <summary>
+/// A current child-session snapshot paired with the association it serves and its execution fence.
+/// </summary>
 internal sealed record MafExecutionChildSnapshot(
     string AssociationId,
     SessionIdentity Identity,
@@ -27,14 +37,23 @@ internal sealed record MafExecutionChildSnapshot(
     public bool Detached { get; init; }
 }
 
+/// <summary>
+/// Computes deterministic child identities, reconciles child lifecycle against checkpoint progress, and selects ready work.
+/// </summary>
 internal static class MafExecutionPlanner
 {
+    /// <summary>
+    /// Creates the deterministic child-session identifier for a parent plan association.
+    /// </summary>
     internal static string CreateChildSessionId(
         SessionIdentity parent,
         string workPlanId,
         string associationId) =>
         MafExecutionIds.CreateChildSessionId(parent, workPlanId, associationId);
 
+    /// <summary>
+    /// Creates a stable message ID so retrying dispatch for the same work association reuses the same addressed message.
+    /// </summary>
     internal static Guid CreateDispatchMessageId(
         SessionIdentity parent,
         string workPlanId,
@@ -47,9 +66,26 @@ internal static class MafExecutionPlanner
         return new Guid(SHA256.HashData(scope).AsSpan(0, 16));
     }
 
+    /// <summary>
+    /// Detects control characters that are not valid in a model prompt.
+    /// </summary>
     internal static bool HasUnsupportedPromptControls(string prompt) =>
         prompt.Any(character => char.IsControl(character) && character is not ('\r' or '\n' or '\t'));
 
+    /// <summary>
+    /// Creates a fixed-work association from the accepted role selection and a single activation revision.
+    /// </summary>
+    /// <param name="snapshot">The accepted workflow and plan.</param>
+    /// <param name="selectionContext">The role-to-agent and model selections authorized for the run.</param>
+    /// <param name="parent">The root session that owns this child.</param>
+    /// <param name="step">The fixed-work step being activated.</param>
+    /// <param name="acceptedSelectionHash">The digest of the accepted run selection.</param>
+    /// <param name="executionFence">The active execution fence.</param>
+    /// <param name="decisionStateVersion">The current accepted decision-state version.</param>
+    /// <param name="activationRevision">The positive revision that identifies this activation.</param>
+    /// <param name="childSessionId">The expected deterministic child-session ID.</param>
+    /// <returns>The immutable association that pins the selected agent, model, provider, and run authority.</returns>
+    /// <exception cref="CoordinationException">Thrown when the fixed step or role selection is missing, ambiguous, or stale.</exception>
     internal static MafExecutionFixedWorkAssociation CreateFixedWorkAssociation(
         WorkPlanSnapshot snapshot,
         WorkPlanRunSelectionContext selectionContext,
@@ -118,6 +154,9 @@ internal static class MafExecutionPlanner
             childSessionId);
     }
 
+    /// <summary>
+    /// Creates the stable identifier for one fixed-work step activation.
+    /// </summary>
     internal static string CreateFixedWorkAssociationId(
         SessionIdentity parent,
         string workPlanId,
@@ -125,6 +164,20 @@ internal static class MafExecutionPlanner
         long activationRevision) =>
         MafExecutionIds.CreateFixedWorkAssociationId(parent, workPlanId, stepId, activationRevision);
 
+    /// <summary>
+    /// Reconciles current child records into progress while enforcing identity, fence, and prior-result invariants.
+    /// </summary>
+    /// <param name="snapshot">The accepted plan whose child associations are being observed.</param>
+    /// <param name="progress">The checkpointed work and fixed-work status maps.</param>
+    /// <param name="parent">The root identity used to verify child-session IDs.</param>
+    /// <param name="children">Current owner snapshots for registered children.</param>
+    /// <param name="executionFence">The current root execution fence.</param>
+    /// <param name="fixedWorkAssociations">Persisted fixed-work associations, when present.</param>
+    /// <param name="pendingDispatchIds">Associations whose delivery request is not yet acknowledged.</param>
+    /// <param name="joinedResultIds">Associations whose terminal result was already joined.</param>
+    /// <returns>Progress updated only from admissible current child observations.</returns>
+    /// <exception cref="CoordinationException">Thrown when a child identity conflicts with its association or a completed checkpoint result is not supported by the owner snapshot.</exception>
+    /// <remarks>Detached children and pending dispatches are not reconciled; succeeded children must already have a joined result.</remarks>
     internal static MafExecutionProgress ReconcileChildren(
         WorkPlanSnapshot snapshot,
         MafExecutionProgress progress,
@@ -228,6 +281,21 @@ internal static class MafExecutionPlanner
         return progress with { WorkItems = reconciled, FixedWorkItems = reconciledFixed };
     }
 
+    /// <summary>
+    /// Builds the runnable frontier by applying dependency, executor, concurrency, and child-capacity rules.
+    /// </summary>
+    /// <param name="snapshot">The accepted workflow and work plan.</param>
+    /// <param name="progress">The checkpointed status for work items and workflow steps.</param>
+    /// <param name="registeredChildCount">The current number of child sessions registered for the plan.</param>
+    /// <param name="activeChildCount">The number of children currently consuming a concurrency slot.</param>
+    /// <param name="maximumChildren">The maximum child count allowed for the plan.</param>
+    /// <param name="maximumConcurrentChildren">The maximum number of concurrently active children.</param>
+    /// <param name="hasNonModelExecutor">Checks whether a platform step has an executor.</param>
+    /// <param name="fixedWorkAssociations">The persisted fixed-work associations, when present.</param>
+    /// <returns>Ready actions and any unavailable or failed dependency IDs.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when child counts exceed their configured bounds.</exception>
+    /// <exception cref="ArgumentException">Thrown when checkpoint progress references unknown work or steps.</exception>
+    /// <remarks>At most one non-model side effect is scheduled at a time; fixed and model work also respect available child slots.</remarks>
     internal static MafExecutionFrontier BuildFrontier(
         WorkPlanSnapshot snapshot,
         MafExecutionProgress progress,
@@ -353,6 +421,9 @@ internal static class MafExecutionPlanner
             stepStatuses.Values.All(status => status == MafExecutionTaskStatus.Succeeded));
     }
 
+    /// <summary>
+    /// Aggregates item or association statuses into the status of their workflow step.
+    /// </summary>
     private static MafExecutionTaskStatus StepStatus(
         WorkflowStepDefinition step,
         string workPlanId,
@@ -378,6 +449,9 @@ internal static class MafExecutionPlanner
         return AggregateStatus(statuses);
     }
 
+    /// <summary>
+    /// Applies failure-first aggregation, then success, running, and pending precedence to a status group.
+    /// </summary>
     private static MafExecutionTaskStatus AggregateStatus(MafExecutionTaskStatus[] statuses)
     {
         if (statuses.Length == 0)
@@ -393,6 +467,9 @@ internal static class MafExecutionPlanner
             : MafExecutionTaskStatus.Pending;
     }
 
+    /// <summary>
+    /// Rejects progress entries that do not refer to a plan item, platform step, or fixed-work association.
+    /// </summary>
     private static void ValidateProgress(
         MafExecutionProgress progress,
         IReadOnlyDictionary<string, WorkflowStepDefinition> steps,
@@ -424,6 +501,9 @@ internal static class MafExecutionPlanner
         }
     }
 
+    /// <summary>
+    /// Maps a child snapshot to running only when it has the current fence and remains active.
+    /// </summary>
     private static MafExecutionTaskStatus ObserveChild(
         MafExecutionChildSnapshot child,
         long executionFence)
@@ -437,6 +517,9 @@ internal static class MafExecutionPlanner
         };
     }
 
+    /// <summary>
+    /// Applies an admissible child observation without allowing terminal progress to move backwards.
+    /// </summary>
     private static ImmutableDictionary<string, MafExecutionTaskStatus> ReconcileStatus(
         ImmutableDictionary<string, MafExecutionTaskStatus> progress,
         string id,
@@ -452,6 +535,9 @@ internal static class MafExecutionPlanner
         return progress.SetItem(id, observed);
     }
 
+    /// <summary>
+    /// Identifies failed and indeterminate dependencies that prevent a dependent action from running.
+    /// </summary>
     private static bool IsTerminalFailure(MafExecutionTaskStatus status) =>
         status is MafExecutionTaskStatus.Failed or MafExecutionTaskStatus.Indeterminate;
 }

@@ -1,8 +1,11 @@
+// Resolves the API host at runtime and synchronizes short-lived auth state between open tabs.
+/** Runtime deployment settings that may be injected by the web host before the app bundle runs. */
 type RuntimeConfig = {
   API_URL?: string;
 };
 
 declare global {
+  /** Browser field populated by the host's runtime-config script. */
   interface Window {
     __AGENTWEAVER_CONFIG__?: RuntimeConfig;
   }
@@ -24,31 +27,41 @@ function resolveApiUrl(): string {
   return 'http://localhost:5000';
 }
 
+/** API origin used by HTTP clients; API routes add their own `/api` prefix. */
 export const API_URL = resolveApiUrl();
 
 // External integrations need an absolute URL. When API_URL is the deployed same-origin sentinel
 // (""), use the browser origin rather than producing a relative path.
+/** Resolves the public API host, using the browser origin for an empty deployment value and removing one trailing slash. */
 export function resolvePublicApiOrigin(apiUrl = API_URL): string {
   return (apiUrl || (typeof window !== 'undefined' ? window.location.origin : '')).replace(/\/$/, '');
 }
 
+/** Public MCP endpoint derived from the resolved API origin. */
 export const MCP_URL = `${resolvePublicApiOrigin()}/mcp`;
+/** Root-level Entra browser redirect endpoint; unlike API calls it has no `/api` prefix. */
 export const ENTRA_AUTHORIZE_URL = `${API_URL.replace(/\/$/, '')}/auth/entra/authorize`;
 
+/** Session-scoped storage key for the short-lived session token. */
 export const SESSION_TOKEN_STORAGE_KEY = 'agentweaver.sessionToken';
+/** Session-scoped storage key for the optional GitHub login associated with the token. */
 export const SESSION_LOGIN_STORAGE_KEY = 'agentweaver.sessionLogin';
+/** Same-tab event emitted when another tab makes valid session credentials available. */
 export const SESSION_AUTH_AVAILABLE_EVENT = 'agentweaver:session-auth-available';
+/** Same-tab event emitted when session credentials are cleared or rejected. */
 export const SESSION_AUTH_INVALID_EVENT = 'agentweaver:session-auth-invalid';
 
 const SESSION_AUTH_CHANNEL_NAME = 'agentweaver.session-auth';
 const SESSION_AUTH_REQUEST_TIMEOUT_MS = 300;
 
+/** Non-durable protocol messages used to synchronize session credentials between same-origin tabs. */
 type SessionAuthMessage =
   | { type: 'request'; requestId: string; rejectedToken?: string }
   | { type: 'response'; requestId: string; token: string; login: string | null }
   | { type: 'available' }
   | { type: 'clear' };
 
+/** Resolver and timeout retained while a peer tab answers a credential request. */
 type PendingSessionAuthRequest = {
   resolve: (restored: boolean) => void;
   timeoutId: number;
@@ -71,6 +84,7 @@ let sessionAuthChannel: BroadcastChannel | null | undefined;
 // tabs transfer the token transiently through BroadcastChannel only in response to a
 // nonce-bearing request; the token is never copied to localStorage, a JS-readable
 // cookie, URLs, or durable cross-tab storage.
+/** Opens the shared tab channel once and caches `null` when the browser blocks or lacks it. */
 function getSessionAuthChannel(): BroadcastChannel | null {
   if (sessionAuthChannel !== undefined) return sessionAuthChannel;
   if (typeof BroadcastChannel === 'undefined') {
@@ -87,6 +101,10 @@ function getSessionAuthChannel(): BroadcastChannel | null {
   return sessionAuthChannel;
 }
 
+/**
+ * Handles same-origin tab messages. A peer only receives a token in reply to a request,
+ * and a request naming a rejected token is not answered with that same credential.
+ */
 function handleSessionAuthMessage(event: MessageEvent<SessionAuthMessage>): void {
   const message = event.data;
   if (!message || typeof message !== 'object') return;
@@ -124,12 +142,14 @@ function handleSessionAuthMessage(event: MessageEvent<SessionAuthMessage>): void
   }
 }
 
+/** Stores credentials in this tab's session storage, replacing the optional login when absent. */
 function storeSessionAuth(token: string, login?: string | null): void {
   sessionStorage.setItem(SESSION_TOKEN_STORAGE_KEY, token);
   if (login) sessionStorage.setItem(SESSION_LOGIN_STORAGE_KEY, login);
   else sessionStorage.removeItem(SESSION_LOGIN_STORAGE_KEY);
 }
 
+/** Removes this tab's session token and associated login without notifying peer tabs. */
 function clearLocalSessionAuth(): void {
   sessionStorage.removeItem(SESSION_TOKEN_STORAGE_KEY);
   sessionStorage.removeItem(SESSION_LOGIN_STORAGE_KEY);
@@ -137,6 +157,7 @@ function clearLocalSessionAuth(): void {
 
 getSessionAuthChannel();
 
+/** Reads the current tab's token; storage access failures are treated as no active session. */
 export function getSessionToken(): string | null {
   try {
     return sessionStorage.getItem(SESSION_TOKEN_STORAGE_KEY);
@@ -145,6 +166,7 @@ export function getSessionToken(): string | null {
   }
 }
 
+/** Reads the optional current-tab login; storage access failures return `null`. */
 export function getSessionLogin(): string | null {
   try {
     return sessionStorage.getItem(SESSION_LOGIN_STORAGE_KEY);
@@ -153,6 +175,7 @@ export function getSessionLogin(): string | null {
   }
 }
 
+/** Saves credentials locally and announces availability to other tabs; blocked storage is ignored. */
 export function setSessionAuth(token: string, login?: string | null): void {
   try {
     storeSessionAuth(token, login);
@@ -162,6 +185,7 @@ export function setSessionAuth(token: string, login?: string | null): void {
   }
 }
 
+/** Updates the stored login only when both a login and a session token are present. */
 export function bindSessionLogin(login: string | null | undefined): void {
   if (!login || !getSessionToken()) return;
   try {
@@ -171,6 +195,7 @@ export function bindSessionLogin(login: string | null | undefined): void {
   }
 }
 
+/** Clears this tab's credentials and optionally asks peer tabs to clear their own copies. */
 export function clearSessionAuth(notifyPeers = false): void {
   try {
     clearLocalSessionAuth();
@@ -182,10 +207,15 @@ export function clearSessionAuth(notifyPeers = false): void {
   }
 }
 
+/** Notifies listeners in this tab that the current credentials are no longer valid. */
 export function notifySessionAuthInvalid(): void {
   window.dispatchEvent(new Event(SESSION_AUTH_INVALID_EVENT));
 }
 
+/**
+ * Requests a usable token from another open tab and resolves false if no peer answers promptly.
+ * The rejected token is sent as an exclusion so peers do not return the same invalid credential.
+ */
 export function requestSessionAuthFromPeer(rejectedToken?: string): Promise<boolean> {
   const channel = getSessionAuthChannel();
   if (!channel) return Promise.resolve(false);
@@ -201,6 +231,10 @@ export function requestSessionAuthFromPeer(rejectedToken?: string): Promise<bool
   });
 }
 
+/**
+ * Exchanges a one-time callback code for a session token, then strips auth material from browser history.
+ * Rejected exchanges and network failures leave the tab unauthenticated without throwing.
+ */
 export async function captureSessionAuthFromUrl(): Promise<void> {
   const params = new URLSearchParams(window.location.search);
   const auth = params.get('auth');

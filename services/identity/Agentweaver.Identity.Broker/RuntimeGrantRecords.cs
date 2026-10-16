@@ -3,12 +3,21 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Identity.Broker;
 
+/// <summary>
+/// Mutable pointer to the latest immutable runtime-grant revision. Authority mutations
+/// advance it atomically while the revisions preserve prior states.
+/// </summary>
 public sealed class RuntimeGrantHead
 {
     public Guid GrantId { get; set; }
     public long CurrentRevision { get; set; }
 }
 
+/// <summary>
+/// Immutable runtime credential verifier and authorization binding. It stores a hash,
+/// never the raw credential, together with the registration, audience, purpose and
+/// configuration snapshot required to validate future proofs.
+/// </summary>
 public sealed class RuntimeGrantRevision
 {
     public Guid GrantId { get; set; }
@@ -28,6 +37,7 @@ public sealed class RuntimeGrantRevision
     public Guid DeliveryOperationId { get; set; }
 }
 
+/// <summary>Records the request hash associated with a runtime-grant operation identifier.</summary>
 public sealed class RuntimeGrantOperation
 {
     public Guid OperationId { get; set; }
@@ -35,14 +45,20 @@ public sealed class RuntimeGrantOperation
     public required string RequestHash { get; set; }
 }
 
+/// <summary>
+/// Durable serialized result for an operation, so an identical retry can return the
+/// original receipt without repeating its mutation or credential issuance.
+/// </summary>
 public sealed class RuntimeGrantOperationReceipt
 {
     public Guid OperationId { get; set; }
     public required string ReceiptJson { get; set; }
 }
 
+/// <summary>Maps runtime-grant records and their database integrity constraints.</summary>
 internal static class RuntimeGrantModel
 {
+    /// <summary>Registers the grant tables, fixed hash formats, state ranges and relational keys.</summary>
     public static void Configure(ModelBuilder builder)
     {
         builder.Entity<RuntimeGrantHead>(entity =>

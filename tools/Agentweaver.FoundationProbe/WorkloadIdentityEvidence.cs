@@ -3,11 +3,14 @@ using System.Text.Json;
 
 namespace Agentweaver.FoundationProbe;
 
+/// <summary>Reads only the projected token claims needed to verify workload identity target binding.</summary>
 internal static class WorkloadIdentityEvidence
 {
     private const string ExpectedSubject = "system:serviceaccount:agentweaver-v1-p0:foundation-probe";
     private const string ExpectedAudience = "api://AzureADTokenExchange";
 
+    /// <summary>Validates environment identity settings and the projected token's issuer, subject, and sole audience.</summary>
+    /// <remarks>The JWT payload is decoded only for claim evidence; this helper does not validate its signature.</remarks>
     public static async Task<ProbeIdentityEvidence> ReadAndValidateAsync(
         ProbeTarget target,
         string tokenFilePath,
@@ -69,6 +72,7 @@ internal static class WorkloadIdentityEvidence
         }
     }
 
+    /// <summary>Reads an audience claim represented as one string or an array of strings.</summary>
     private static List<string> ReadAudiences(JsonElement root)
     {
         if (!root.TryGetProperty("aud", out var audience))

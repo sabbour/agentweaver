@@ -4,6 +4,7 @@ import { runIssueToMerge } from "./workflow.mjs";
 
 const cwd = fileURLToPath(new URL("../../../", import.meta.url));
 
+/** Register the repository-scoped issue delivery workflow and its validated input schema. */
 await joinSession({
   workflows: [defineWorkflow({
     meta: {

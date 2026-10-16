@@ -6,6 +6,7 @@ using System.Security.Cryptography.X509Certificates;
 
 namespace Agentweaver.Identity;
 
+/// <summary>Direct mTLS identity, endpoint, listener, and certificate-pin configuration for a runtime service pair.</summary>
 public sealed record RuntimeServiceTlsOptions
 {
     public string? LocalServiceName { get; init; }
@@ -19,6 +20,7 @@ public sealed record RuntimeServiceTlsOptions
     public string? PeerOwnerAddress { get; init; }
     public string[]? PeerCertificateSha256Pins { get; init; }
 
+    /// <summary>Checks service identities, principal IDs, certificate paths, ports, pins, and fixed HTTPS owner address.</summary>
     public RuntimeServiceTlsOptions Validate(string localServiceName, string peerServiceName)
     {
         if (LocalServiceName != localServiceName || PeerServiceName != peerServiceName ||
@@ -39,12 +41,17 @@ public sealed record RuntimeServiceTlsOptions
         return this with { PeerCertificateSha256Pins = pins.ToArray() };
     }
 
+    /// <summary>Checks for a 64-character hexadecimal certificate digest.</summary>
     internal static bool IsPin(string? value) =>
         value is { Length: 64 } && value.All(char.IsAsciiHexDigit);
 
     public override string ToString() => nameof(RuntimeServiceTlsOptions) + " [REDACTED]";
 }
 
+/// <summary>
+/// Loads the local certificate and applies mutual TLS, EKU, validity, and peer certificate
+/// pin checks to direct service connections.
+/// </summary>
 public sealed class RuntimeServiceTlsIdentity : IDisposable
 {
     public const SslProtocols AllowedProtocols = SslProtocols.Tls12 | SslProtocols.Tls13;
@@ -54,6 +61,8 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
     private readonly TimeProvider _timeProvider;
     private readonly RuntimeServiceTlsOptions _options;
 
+    /// <summary>Loads and validates a local client/server certificate against its declared fingerprint.</summary>
+    /// <exception cref="InvalidOperationException">The profile or local certificate is invalid.</exception>
     public RuntimeServiceTlsIdentity(
         RuntimeServiceTlsOptions options, string localServiceName, string peerServiceName,
         TimeProvider? timeProvider = null)
@@ -81,11 +90,13 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
     public string PeerServiceName => _options.PeerServiceName!;
     public Uri PeerOwnerAddress => new(_options.PeerOwnerAddress!, UriKind.Absolute);
 
+    /// <summary>Accepts a peer certificate only when chain validation and client EKU/pinning both pass.</summary>
     public bool AcceptClientCertificate(
         X509Certificate2? certificate, X509Chain? chain, SslPolicyErrors errors) =>
         chain is not null && errors == SslPolicyErrors.None &&
         AcceptPeerCertificate(certificate, ClientAuthentication);
 
+    /// <summary>Rejects peer connections that do not use the configured direct TLS listener and certificate.</summary>
     public void RequirePeerConnection(
         bool isHttps, SslProtocols? protocol, int localPort, X509Certificate2? certificate)
     {
@@ -94,6 +105,7 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
             throw new RuntimeAuthorizationException("runtime_remote_tool_result_service_peer_denied");
     }
 
+    /// <summary>Requires HTTPS with TLS 1.2 or 1.3 on the expected listener port.</summary>
     public static void RequireDirectTls(
         bool isHttps, SslProtocols? protocol, int localPort, int listenerPort)
     {
@@ -103,6 +115,7 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
             throw new RuntimeAuthorizationException("runtime_remote_tool_result_service_listener_denied");
     }
 
+    /// <summary>Builds a non-redirecting, revocation-checking TLS client pinned to the configured peer.</summary>
     public HttpClientHandler CreateHandler()
     {
         if (!HasCertificatePurpose(Certificate, ClientAuthentication, _timeProvider.GetUtcNow()))
@@ -121,12 +134,14 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
         return handler;
     }
 
+    /// <summary>Checks certificate validity, required EKU, and fixed-time SHA-256 pin equality.</summary>
     private bool AcceptPeerCertificate(X509Certificate2? certificate, string purpose) =>
         certificate is not null &&
         HasCertificatePurpose(certificate, purpose, _timeProvider.GetUtcNow()) &&
         _peerPins.Any(pin => CryptographicOperations.FixedTimeEquals(
             pin, SHA256.HashData(certificate.RawData)));
 
+    /// <summary>Checks the certificate time window, non-CA status, and required extended key usage.</summary>
     private static bool HasCertificatePurpose(
         X509Certificate2 certificate, string purpose, DateTimeOffset now) =>
         now >= certificate.NotBefore.ToUniversalTime() &&
@@ -136,5 +151,6 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
         certificate.Extensions.OfType<X509EnhancedKeyUsageExtension>()
             .Any(extension => extension.EnhancedKeyUsages.Cast<Oid>().Any(usage => usage.Value == purpose));
 
+    /// <summary>Disposes the loaded local certificate.</summary>
     public void Dispose() => Certificate.Dispose();
 }

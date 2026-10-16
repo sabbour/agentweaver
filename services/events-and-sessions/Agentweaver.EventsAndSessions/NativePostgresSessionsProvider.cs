@@ -9,6 +9,7 @@ using Npgsql;
 
 namespace Agentweaver.EventsAndSessions;
 
+/// <summary>Names the event-journal features the native PostgreSQL Sessions adapter can provide.</summary>
 public static class SessionsCapabilities
 {
     public const string Append = "sessions.events.append";
@@ -36,6 +37,7 @@ public sealed record PostgresSessionsProviderOptions(
     int PollIntervalMilliseconds = 250,
     int ReferenceRetentionDays = 365)
 {
+    /// <summary>Rejects unsupported schema names, resource identities, polling bounds, or retention periods.</summary>
     public void Validate()
     {
         if (!IsToken(ResourceId) || !IsToken(ExpectedDatabaseName) ||
@@ -80,6 +82,7 @@ public sealed class NativePostgresSessionsProvider
         ProviderHostingPattern.RemoteService,
         SessionsCapabilities.All);
 
+    /// <summary>Creates an enabled catalog registration for these validated Sessions options.</summary>
     public ProviderRegistration CreateRegistration(PostgresSessionsProviderOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -91,6 +94,8 @@ public sealed class NativePostgresSessionsProvider
             OptionsSchemaVersion);
     }
 
+    /// <summary>Resolves a candidate, verifies the live database identity, negotiates capabilities, and pins it to a run.</summary>
+    /// <returns>A provider result containing the immutable run binding, or a typed resolution/negotiation failure.</returns>
     public async Task<ProviderResult<PinnedProviderBinding>> ResolveNegotiateAndPinAsync(
         ProviderResolver resolver,
         ProviderResolutionRequest request,
@@ -123,6 +128,8 @@ public sealed class NativePostgresSessionsProvider
         return pinned;
     }
 
+    /// <summary>Checks the candidate against current options and confirms the configured schema and database.</summary>
+    /// <returns>The negotiated resource or a typed failure; cancellation is propagated.</returns>
     public async Task<ProviderResult<ResourceNegotiation>> NegotiateAsync(
         ProviderCandidate candidate,
         PostgresSessionsProviderOptions options,
@@ -169,6 +176,7 @@ public sealed class NativePostgresSessionsProvider
         }
     }
 
+    /// <summary>Records non-sensitive provider and hashed resource identity for diagnostics.</summary>
     private static void RecordPinnedBinding(ProviderCandidate candidate, PinnedProviderBinding binding)
     {
         try

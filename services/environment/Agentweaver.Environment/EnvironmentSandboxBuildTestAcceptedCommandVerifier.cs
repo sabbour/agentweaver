@@ -7,12 +7,14 @@ using Microsoft.AspNetCore.Authentication;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Reads accepted build/test commands and verifies their checkpoint and workspace-capture authority.</summary>
 public sealed class EnvironmentSandboxBuildTestAcceptedCommandVerifier(
     HttpClient client,
     IHttpContextAccessor contextAccessor,
     TimeProvider timeProvider,
     EnvironmentRuntimeBootstrapDeliveryOptions? options = null) : ISandboxBuildTestAcceptedCommandVerifier
 {
+    /// <summary>Loads an accepted command and its bounded workspace seed, then rechecks that the checkpoint is current.</summary>
     public async Task<SandboxBuildTestAcceptedCommand> ResolveAsync(
         SandboxBuildTestCheckpointReference checkpoint,
         CancellationToken cancellationToken)
@@ -44,6 +46,7 @@ public sealed class EnvironmentSandboxBuildTestAcceptedCommandVerifier(
         }
     }
 
+    /// <summary>Confirms the accepted command still has the same checkpoint identity and immutable content hash.</summary>
     public async Task VerifyCurrentAsync(
         SandboxBuildTestAcceptedCommand acceptedCommand, CancellationToken cancellationToken)
     {
@@ -59,6 +62,7 @@ public sealed class EnvironmentSandboxBuildTestAcceptedCommandVerifier(
         }
     }
 
+    /// <summary>Confirms that the orchestrator acknowledged the exact workspace capture from the accepted command.</summary>
     public async Task VerifyWorkspaceCaptureAcknowledgmentAsync(
         SandboxBuildTestAcceptedCommand acceptedCommand,
         SandboxBuildTestWorkspaceCaptureAcknowledgmentVerification verification,
@@ -87,6 +91,7 @@ public sealed class EnvironmentSandboxBuildTestAcceptedCommandVerifier(
         }
     }
 
+    /// <summary>Re-reads command metadata and rejects a changed checkpoint or immutable command hash.</summary>
     private async Task VerifyCurrentAsync(
         SandboxBuildTestAcceptedCommand acceptedCommand, RuntimeActorAuthorization actor,
         CancellationToken cancellationToken)
@@ -97,6 +102,7 @@ public sealed class EnvironmentSandboxBuildTestAcceptedCommandVerifier(
             throw new RuntimeAuthorizationException("buildtest_command_checkpoint_changed");
     }
 
+    /// <summary>Reads and validates accepted command metadata from the owner service.</summary>
     private async Task<SandboxBuildTestAcceptedCommand> ReadMetadataAsync(
         SandboxBuildTestCheckpointReference checkpoint, RuntimeActorAuthorization actor,
         CancellationToken cancellationToken)
@@ -110,6 +116,7 @@ public sealed class EnvironmentSandboxBuildTestAcceptedCommandVerifier(
         return command;
     }
 
+    /// <summary>Builds the owner-service route and query that pin the accepted checkpoint and execution fence.</summary>
     private static (string Path, string Query) CommandAddress(SandboxBuildTestCheckpointReference checkpoint) =>
         ($"/api/projects/{Uri.EscapeDataString(checkpoint.ProjectId)}" +
             $"/runs/{Uri.EscapeDataString(checkpoint.RunId)}/coordination/sessions/" +
@@ -121,6 +128,7 @@ public sealed class EnvironmentSandboxBuildTestAcceptedCommandVerifier(
             $"&executionFence={checkpoint.ExecutionFence.ToString(CultureInfo.InvariantCulture)}" +
             $"&acceptedSelectionHash={Uri.EscapeDataString(checkpoint.AcceptedSelectionHash)}");
 
+    /// <summary>Creates a temporary actor credential only from the current authenticated request.</summary>
     private async Task<RuntimeActorAuthorization> GetActorAsync(CancellationToken cancellationToken)
     {
         var context = contextAccessor.HttpContext

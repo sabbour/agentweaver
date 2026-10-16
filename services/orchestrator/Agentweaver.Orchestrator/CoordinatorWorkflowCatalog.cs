@@ -4,6 +4,9 @@ using Agentweaver.Orchestrator.Core;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Builds the workflow catalog and typed run limits from an accepted Projects selection.
+/// </summary>
 internal static class CoordinatorWorkflowCatalog
 {
     private const string BuiltInWorkflowId = "default";
@@ -46,6 +49,10 @@ internal static class CoordinatorWorkflowCatalog
     private static readonly ImmutableArray<WorkflowDefinition> RegisteredDefinitions =
         [BuiltInDefault];
 
+    /// <summary>
+    /// Returns the workflows available to this run, applying the configured default and any proposed generated workflow.
+    /// </summary>
+    /// <exception cref="CoordinationException">The project configuration or generated workflow reference is invalid.</exception>
     public static AuthorizedWorkflowCatalog ForSelection(
         EffectiveRunSelection selection,
         WorkflowDefinition? proposedGeneratedDefinition = null)
@@ -85,6 +92,10 @@ internal static class CoordinatorWorkflowCatalog
         return new AuthorizedWorkflowCatalog(selectedDefault, available);
     }
 
+    /// <summary>
+    /// Converts accepted casting, charters, and model selection into the immutable role context for work-plan validation.
+    /// </summary>
+    /// <exception cref="CoordinationException">Required project-configuration fields are missing or malformed.</exception>
     public static WorkPlanRunSelectionContext CreateRunSelectionContext(JsonElement selection)
     {
         var projectConfiguration = GetProjectConfiguration(selection);
@@ -105,15 +116,27 @@ internal static class CoordinatorWorkflowCatalog
         return new WorkPlanRunSelectionContext(roles, IsolationProviderBinding: null);
     }
 
+    /// <summary>
+    /// Reads the configured maximum number of child sessions, bounded to the supported range.
+    /// </summary>
     public static int ReadMaxChildren(JsonElement selection)
         => ReadRunLimit(selection, "maxChildren", minimum: 0, maximum: 100);
 
+    /// <summary>
+    /// Reads the configured maximum concurrent child count, bounded to the supported range.
+    /// </summary>
     public static int ReadMaxConcurrentChildren(JsonElement selection)
         => ReadRunLimit(selection, "maxConcurrentChildren", minimum: 1, maximum: 32);
 
+    /// <summary>
+    /// Reads the configured wall-time limit in seconds, bounded to the supported range.
+    /// </summary>
     public static int ReadMaxWallTimeSeconds(JsonElement selection)
         => ReadRunLimit(selection, "maxWallTimeSeconds", minimum: 60, maximum: 86400);
 
+    /// <summary>
+    /// Checks whether the run's elapsed wall time has reached its configured limit.
+    /// </summary>
     public static bool IsWallTimeLimitReached(
         DateTimeOffset runStartedAt,
         int maxWallTimeSeconds,
@@ -124,6 +147,10 @@ internal static class CoordinatorWorkflowCatalog
         return now >= runStartedAt.AddSeconds(maxWallTimeSeconds);
     }
 
+    /// <summary>
+    /// Reads optional model, tool, token, revision, and Copilot-credit limits from the accepted selection.
+    /// </summary>
+    /// <exception cref="CoordinationException">A configured limit is malformed or the soft credit limit exceeds the hard limit.</exception>
     public static (
         int? MaxModelTurns,
         int? MaxToolCalls,
@@ -146,6 +173,9 @@ internal static class CoordinatorWorkflowCatalog
         return (modelTurns, toolCalls, promptTokens, revisionAttempts, soft, hard);
     }
 
+    /// <summary>
+    /// Reads a required integer run limit and enforces its inclusive supported range.
+    /// </summary>
     private static int ReadRunLimit(
         JsonElement selection,
         string propertyName,
@@ -163,6 +193,9 @@ internal static class CoordinatorWorkflowCatalog
         return value;
     }
 
+    /// <summary>
+    /// Requires the accepted selection to contain an object-valued run-limits section.
+    /// </summary>
     private static JsonElement ReadRunLimits(JsonElement selection)
     {
         if (selection.ValueKind != JsonValueKind.Object ||
@@ -173,6 +206,9 @@ internal static class CoordinatorWorkflowCatalog
         return runLimits;
     }
 
+    /// <summary>
+    /// Reads an optional integer limit, returning null when it is absent or explicitly null.
+    /// </summary>
     private static int? ReadOptionalBoundedInt(
         JsonElement limits, string propertyName, int minimum, int maximum)
     {
@@ -185,6 +221,9 @@ internal static class CoordinatorWorkflowCatalog
         return result;
     }
 
+    /// <summary>
+    /// Reads an optional non-negative decimal limit.
+    /// </summary>
     private static decimal? ReadOptionalNonNegativeDecimal(JsonElement limits, string propertyName)
     {
         if (!limits.TryGetProperty(propertyName, out var value) || value.ValueKind == JsonValueKind.Null)
@@ -195,6 +234,9 @@ internal static class CoordinatorWorkflowCatalog
         return result;
     }
 
+    /// <summary>
+    /// Requires an object-valued project-configuration section in the accepted selection.
+    /// </summary>
     private static JsonElement GetProjectConfiguration(JsonElement selection)
     {
         if (selection.ValueKind != JsonValueKind.Object ||
@@ -206,6 +248,9 @@ internal static class CoordinatorWorkflowCatalog
         return projectConfiguration;
     }
 
+    /// <summary>
+    /// Reads an optional stable identifier from a JSON property.
+    /// </summary>
     private static string? ReadOptionalIdentifier(JsonElement element, string propertyName)
     {
         if (!element.TryGetProperty(propertyName, out var value) ||
@@ -219,6 +264,9 @@ internal static class CoordinatorWorkflowCatalog
         return value.GetString();
     }
 
+    /// <summary>
+    /// Reads unique workflow identifiers from the project's blueprint references.
+    /// </summary>
     private static ImmutableHashSet<string> ReadBlueprintWorkflowIds(JsonElement configuration)
     {
         if (!configuration.TryGetProperty("blueprintWorkflowReferences", out var references) ||
@@ -241,6 +289,9 @@ internal static class CoordinatorWorkflowCatalog
         return builder.ToImmutable();
     }
 
+    /// <summary>
+    /// Reads unique agent and role pairs whose project charters contain non-empty text.
+    /// </summary>
     private static ImmutableHashSet<(string AgentId, string RoleId)> ReadCharteredAgents(
         JsonElement configuration)
     {
@@ -266,6 +317,9 @@ internal static class CoordinatorWorkflowCatalog
         return builder.ToImmutable();
     }
 
+    /// <summary>
+    /// Reads agent-to-role assignments from the project's casting configuration.
+    /// </summary>
     private static ImmutableArray<(string AgentId, string RoleId)> ReadCasting(JsonElement configuration)
     {
         if (!configuration.TryGetProperty("casting", out var casting) ||
@@ -287,6 +341,9 @@ internal static class CoordinatorWorkflowCatalog
         return builder.ToImmutable();
     }
 
+    /// <summary>
+    /// Reads the selected model reference, returning an empty list when no valid reference is present.
+    /// </summary>
     private static ImmutableArray<string> ReadEffectiveModelReferences(JsonElement selection)
     {
         if (!selection.TryGetProperty("modelSelection", out var modelSelection) ||
@@ -296,6 +353,9 @@ internal static class CoordinatorWorkflowCatalog
         return [reference];
     }
 
+    /// <summary>
+    /// Reads a stable identifier property without throwing when the property is absent or invalid.
+    /// </summary>
     private static bool TryReadIdentifier(JsonElement element, string property, out string value)
     {
         value = string.Empty;
@@ -307,6 +367,9 @@ internal static class CoordinatorWorkflowCatalog
         return true;
     }
 
+    /// <summary>
+    /// Checks the shared bounded identifier syntax used by workflow and project references.
+    /// </summary>
     private static bool IsStableIdentifier(string? value) =>
         !string.IsNullOrWhiteSpace(value) &&
         value.Length <= WorkflowDomainLimits.MaximumIdentifierLength &&

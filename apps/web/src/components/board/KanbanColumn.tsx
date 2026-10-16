@@ -188,6 +188,11 @@ function intakeSummary(column: BoardColumnDto): string {
   return segments.join(' · ');
 }
 
+/**
+ * Renders one board column with its supplied tasks and task actions.
+ * Column/task data and mutation callbacks come from the board parent; local state supports
+ * column-level presentation rather than loading board data.
+ */
 export function KanbanColumn(props: KanbanColumnProps) {
   const styles = useStyles();
   const {

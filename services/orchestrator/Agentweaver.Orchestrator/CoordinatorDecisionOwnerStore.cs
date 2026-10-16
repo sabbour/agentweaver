@@ -11,6 +11,9 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Persists coordinator decision transitions, gates, action grants, and their outbox events.
+/// </summary>
 internal sealed class CoordinatorDecisionOwnerStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -32,6 +35,10 @@ internal sealed class CoordinatorDecisionOwnerStore
     private readonly TimeProvider _timeProvider;
     private readonly CoordinatorRunSelectionContextStore _runSelectionContexts;
 
+    /// <summary>
+    /// Creates the decision store for one validated schema and its run-selection context owner.
+    /// </summary>
+    /// <exception cref="ArgumentException">The schema name is invalid or reserved.</exception>
     public CoordinatorDecisionOwnerStore(
         NpgsqlDataSource dataSource,
         string schema,
@@ -62,6 +69,10 @@ internal sealed class CoordinatorDecisionOwnerStore
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
+    /// <summary>
+    /// Initializes or restores the decision state for an accepted root session.
+    /// </summary>
+    /// <remarks>A new root gets a version-one decision record and owner-issued grants in the same transaction.</remarks>
     public async Task<CoordinatorDecisionCurrentState> InitializeRootAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -78,6 +89,9 @@ internal sealed class CoordinatorDecisionOwnerStore
         return initialized;
     }
 
+    /// <summary>
+    /// Initializes or restores decision state using the transaction that accepted the root session.
+    /// </summary>
     internal async Task<CoordinatorDecisionCurrentState> InitializeRootInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -98,6 +112,9 @@ internal sealed class CoordinatorDecisionOwnerStore
             .ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Reads the owner binding, rehydrates the latest state, or writes the initial decision and grants.
+    /// </summary>
     private async Task<CoordinatorDecisionCurrentState> InitializeRootCoreAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -220,6 +237,10 @@ internal sealed class CoordinatorDecisionOwnerStore
         return new CoordinatorDecisionCurrentState(state, stateVersion, expectedBinding.AcceptedSelectionHash);
     }
 
+    /// <summary>
+    /// Reads and validates the current decision state while the backlog claim transaction holds owner locks.
+    /// </summary>
+    /// <remarks>The expected decision version and every run, selection, tenant, actor, and fence binding must still match.</remarks>
     internal async Task<CoordinatorDecisionCurrentState> ReadBacklogCurrentDecisionInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -346,6 +367,9 @@ internal sealed class CoordinatorDecisionOwnerStore
             restored.State, latest.StateVersion, persistedSelectionHash);
     }
 
+    /// <summary>
+    /// Reads the current root decision state and checks that persisted pending-gate rows match its envelope.
+    /// </summary>
     public async Task<CoordinatorDecisionCurrentState> ReadCurrentAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -382,6 +406,10 @@ internal sealed class CoordinatorDecisionOwnerStore
         return current;
     }
 
+    /// <summary>
+    /// Requires a confirmed work plan to remain current before MAF dispatch begins.
+    /// </summary>
+    /// <remarks>The owner binding, decision version, execution fence, plan identifier, and pinned selection context are checked transactionally.</remarks>
     internal async Task RequireCurrentDispatchStateInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -447,6 +475,9 @@ internal sealed class CoordinatorDecisionOwnerStore
                 "maf_execution_dispatch_stale", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Counts registered children for the supplied run session.
+    /// </summary>
     public async Task<int> ReadRegisteredChildCountAsync(
         SessionIdentity identity,
         CancellationToken cancellationToken)
@@ -460,6 +491,11 @@ internal sealed class CoordinatorDecisionOwnerStore
             connection, transaction: null, identity, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Validates, versions, and stores one decision transition with its gates, grants, and outbox event.
+    /// </summary>
+    /// <remarks>The owner binding is locked and checked before the expected-state-version compare-and-swap; accepted grants are issued in the same transaction.</remarks>
+    /// <exception cref="CoordinationException">The request is invalid, stale, conflicts with an idempotency key, or violates run limits.</exception>
     public async Task<CoordinatorDecisionPersistedResult> PersistTransitionAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -676,6 +712,10 @@ internal sealed class CoordinatorDecisionOwnerStore
             payload.TransitionValue);
     }
 
+    /// <summary>
+    /// Advances decision state to a new execution fence as part of a run failure or recovery transaction.
+    /// </summary>
+    /// <remarks>Current grants are superseded and any pinned provider binding is carried forward only to the immediate next fence.</remarks>
     internal async Task AdvanceExecutionFenceAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -822,9 +862,15 @@ internal sealed class CoordinatorDecisionOwnerStore
             connection, transaction, identity, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Computes a deterministic SHA-256 hash of the serialized decision command.
+    /// </summary>
     public static string ComputeCommandHash<T>(T command) =>
         Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(command, JsonOptions)));
 
+    /// <summary>
+    /// Captures current decision state and carries forward selection context only for unchanged plans.
+    /// </summary>
     private static CoordinatorDecisionStateEnvelope CaptureEnvelope(
         CoordinatorDecisionState state,
         CoordinatorDecisionBinding binding,
@@ -865,12 +911,19 @@ internal sealed class CoordinatorDecisionOwnerStore
         return captured;
     }
 
+    /// <summary>
+    /// Compares plans using the store's deterministic JSON serialization.
+    /// </summary>
     private static bool SamePlan(WorkPlan first, WorkPlan second) =>
         string.Equals(
             JsonSerializer.Serialize(first, JsonOptions),
             JsonSerializer.Serialize(second, JsonOptions),
             StringComparison.Ordinal);
 
+    /// <summary>
+    /// Resolves, cancels, or creates the database row corresponding to the current decision gate.
+    /// </summary>
+    /// <remarks>A pending gate must change exactly once when it is resolved or superseded.</remarks>
     private async Task UpdateGateRowsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -960,6 +1013,9 @@ internal sealed class CoordinatorDecisionOwnerStore
         await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Writes a decision event to the owner outbox in the caller's transaction.
+    /// </summary>
     private async Task InsertOutboxEventAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -982,6 +1038,9 @@ internal sealed class CoordinatorDecisionOwnerStore
         await insert.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Marks active grants for one session as superseded when its decision changes.
+    /// </summary>
     private async Task SupersedeCurrentGrantsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -998,6 +1057,9 @@ internal sealed class CoordinatorDecisionOwnerStore
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Supersedes every active grant in a run when its execution fence changes.
+    /// </summary>
     private async Task SupersedeRunCurrentGrantsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1015,6 +1077,10 @@ internal sealed class CoordinatorDecisionOwnerStore
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Issues short-lived grants for the actions legal in the new decision state and records corresponding events.
+    /// </summary>
+    /// <remarks>Each grant is bound to the actor, tenant, role revision, accepted selection, decision version, and execution fence.</remarks>
     private async Task IssueTransitionGrantsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1143,6 +1209,9 @@ internal sealed class CoordinatorDecisionOwnerStore
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Selects typed actions that are legal for the current gate, outcome, workflow, and plan state.
+    /// </summary>
     private static ImmutableArray<ActionGrantIntent> GetLegalActionIntents(
         CoordinatorDecisionState state)
     {
@@ -1170,6 +1239,9 @@ internal sealed class CoordinatorDecisionOwnerStore
         return intents.ToImmutable();
     }
 
+    /// <summary>
+    /// Counts non-root sessions through the supplied connection and optional transaction.
+    /// </summary>
     private async Task<int> ReadRegisteredChildCountAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -1189,6 +1261,9 @@ internal sealed class CoordinatorDecisionOwnerStore
             System.Globalization.CultureInfo.InvariantCulture);
     }
 
+    /// <summary>
+    /// Requires exactly one positive role revision for the project's requested permission.
+    /// </summary>
     private static long GetCurrentRoleRevision(
         ProjectsAuthorizationContext authorization,
         string projectId,
@@ -1207,6 +1282,9 @@ internal sealed class CoordinatorDecisionOwnerStore
         return revisions[0];
     }
 
+    /// <summary>
+    /// Reads a decision written with the supplied actor and idempotency key.
+    /// </summary>
     private async Task<CoordinatorDecisionPersistedRecord?> ReadByIdempotencyAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1233,6 +1311,9 @@ internal sealed class CoordinatorDecisionOwnerStore
             : null;
     }
 
+    /// <summary>
+    /// Reads the latest decision version for a session and optionally takes a share lock.
+    /// </summary>
     private async Task<CoordinatorDecisionPersistedRecord?> ReadLatestDecisionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -1257,6 +1338,9 @@ internal sealed class CoordinatorDecisionOwnerStore
             : null;
     }
 
+    /// <summary>
+    /// Requires zero or one persisted pending gate row and verifies it matches the restored decision state.
+    /// </summary>
     private async Task ValidatePendingGateRowsAsync(
         NpgsqlConnection connection,
         SessionIdentity identity,
@@ -1306,6 +1390,9 @@ internal sealed class CoordinatorDecisionOwnerStore
             throw InvalidPersistedState();
     }
 
+    /// <summary>
+    /// Deserializes a stored decision payload and maps corrupt JSON to the owner-state error.
+    /// </summary>
     private static CoordinatorDecisionPersistedRecord ReadDecisionRecord(NpgsqlDataReader reader)
     {
         try
@@ -1329,6 +1416,9 @@ internal sealed class CoordinatorDecisionOwnerStore
         }
     }
 
+    /// <summary>
+    /// Restores the latest decision or creates an empty state when no decision row exists.
+    /// </summary>
     private async Task<CoordinatorDecisionCurrentState> RehydrateCurrentAsync(
         CoordinatorDecisionBinding expectedBinding,
         CoordinatorDecisionPersistedRecord? latest,
@@ -1352,6 +1442,9 @@ internal sealed class CoordinatorDecisionOwnerStore
             expectedBinding.AcceptedSelectionHash);
     }
 
+    /// <summary>
+    /// Restores a decision envelope, resolving any pinned provider binding only from trusted persisted context.
+    /// </summary>
     private async Task<CoordinatorDecisionStateEnvelopeRestoreResult> RestoreEnvelopeAsync(
         CoordinatorDecisionStateEnvelope envelope,
         CoordinatorDecisionBinding expectedBinding,
@@ -1379,6 +1472,9 @@ internal sealed class CoordinatorDecisionOwnerStore
         return envelope.Restore(expectedBinding, ResolveBinding);
     }
 
+    /// <summary>
+    /// Compares persisted role selections and an optional provider binding with trusted run context.
+    /// </summary>
     private static bool MatchesSelectionContext(
         WorkPlanSelectionContextEnvelope? persisted,
         WorkPlanRunSelectionContext trusted,
@@ -1397,6 +1493,9 @@ internal sealed class CoordinatorDecisionOwnerStore
                persisted.IsolationProviderBinding.Matches(binding, runId);
     }
 
+    /// <summary>
+    /// Rejects pending gates or decision receipts addressed to a different actor.
+    /// </summary>
     private static void ValidateStateActor(CoordinatorDecisionState state, CoordinationActor actor)
     {
         if ((state.PendingGate is { } gate &&
@@ -1406,6 +1505,9 @@ internal sealed class CoordinatorDecisionOwnerStore
             throw InvalidPersistedState();
     }
 
+    /// <summary>
+    /// Builds a query for the accepted root, its run, tenant, selection, and writer binding.
+    /// </summary>
     private NpgsqlCommand CreateOwnerBindingCommand(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -1433,6 +1535,9 @@ internal sealed class CoordinatorDecisionOwnerStore
         return command;
     }
 
+    /// <summary>
+    /// Validates the owner row against the expected tenant, selection, and active root fence.
+    /// </summary>
     private static OwnerBinding ReadOwnerBinding(
         NpgsqlDataReader reader,
         string expectedSelectionHash,
@@ -1455,6 +1560,10 @@ internal sealed class CoordinatorDecisionOwnerStore
         return new OwnerBinding(runFence, selectionHash, tenantId);
     }
 
+    /// <summary>
+    /// Validates actor syntax, selection scope, and Projects permission before decision operations.
+    /// </summary>
+    /// <exception cref="CoordinationException">The actor or selection does not authorize the supplied root session.</exception>
     private static void ValidateInput(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -1497,9 +1606,15 @@ internal sealed class CoordinatorDecisionOwnerStore
             throw new CoordinationException("coordinator_selection_invalid", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Hashes the exact accepted selection snapshot used by the decision owner.
+    /// </summary>
     private static string HashSelection(EffectiveRunSelection selection) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(selection.Snapshot.GetRawText())));
 
+    /// <summary>
+    /// Adds the project, run, and session parameters shared by decision SQL commands.
+    /// </summary>
     private static void AddIdentity(NpgsqlCommand command, SessionIdentity identity)
     {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, identity.ProjectId);
@@ -1507,6 +1622,9 @@ internal sealed class CoordinatorDecisionOwnerStore
         command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
     }
 
+    /// <summary>
+    /// Validates a bounded stable identifier used as an idempotency key, request ID, or action kind.
+    /// </summary>
     private static void ValidateIdempotency(string value, string name)
     {
         CoordinationIdentity.ValidateIdentity(value, name);
@@ -1514,6 +1632,9 @@ internal sealed class CoordinatorDecisionOwnerStore
             throw new CoordinationException("coordinator_decision_invalid", StatusCodes.Status400BadRequest);
     }
 
+    /// <summary>
+    /// Maps a coordinator gate kind to its persisted category.
+    /// </summary>
     private static string GetGateKind(CoordinatorGateKind kind) => kind switch
     {
         CoordinatorGateKind.OutcomeConfirmation => "outcome",
@@ -1525,18 +1646,34 @@ internal sealed class CoordinatorDecisionOwnerStore
         _ => throw new CoordinationException("coordinator_gate_invalid", StatusCodes.Status400BadRequest)
     };
 
+    /// <summary>
+    /// Creates the fail-closed error used when durable decision state cannot be trusted.
+    /// </summary>
     private static CoordinationException InvalidPersistedState() =>
         new("coordinator_state_invalid", StatusCodes.Status503ServiceUnavailable);
 
+    /// <summary>
+    /// Holds the run fence, accepted selection hash, and tenant verified for a decision operation.
+    /// </summary>
     private sealed record OwnerBinding(long RunFence, string SelectionHash, string TenantId);
+
+    /// <summary>
+    /// Identifies one action and plan step for which a short-lived executable grant can be issued.
+    /// </summary>
     private sealed record ActionGrantIntent(string ActionId, string StepId);
 
+    /// <summary>
+    /// Defines the JSON payload stored for each immutable decision transition.
+    /// </summary>
     private sealed record PersistedDecisionPayload(
         CoordinatorDecisionStateEnvelope Envelope,
         bool TransitionAccepted,
         ImmutableArray<WorkflowValidationIssue> Issues,
         JsonElement? TransitionValue);
 
+    /// <summary>
+    /// Holds one decoded decision row and its state envelope.
+    /// </summary>
     private sealed record CoordinatorDecisionPersistedRecord(
         Guid DecisionId,
         string RequestId,
@@ -1549,11 +1686,17 @@ internal sealed class CoordinatorDecisionOwnerStore
         JsonElement? TransitionValue);
 }
 
+/// <summary>
+/// Returns current in-memory decision state with its durable version and accepted selection hash.
+/// </summary>
 internal sealed record CoordinatorDecisionCurrentState(
     CoordinatorDecisionState State,
     long StateVersion,
     string SelectionHash);
 
+/// <summary>
+/// Returns a persisted decision transition, including its accepted state and validation issues.
+/// </summary>
 internal sealed record CoordinatorDecisionPersistedResult(
     Guid DecisionId,
     long StateVersion,

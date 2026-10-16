@@ -8,6 +8,10 @@ using OpenIddict.Abstractions;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Serializes a reviewed remote-tool call and dispatches it to the environment owner over the configured service channel.
+/// The caller identity and pinned snapshot are checked both before and after the owner request.
+/// </summary>
 internal sealed class ReviewedRemoteToolTransportClient(
     HttpClient client,
     [FromKeyedServices(RemoteMcpCallVerificationComposition.TlsKey)] RuntimeServiceTlsOptions tlsOptions,
@@ -17,6 +21,10 @@ internal sealed class ReviewedRemoteToolTransportClient(
     private readonly Uri _ownerAddress = RuntimeOwnerHttpTransport.RequireOwnerAddress(new Uri(
         tlsOptions.Validate("Orchestrator", "Environment").PeerOwnerAddress!, UriKind.Absolute));
 
+    /// <summary>
+    /// Serializes the canonical arguments as a JSON-RPC tools/call request.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the call is not bound to the supplied snapshot.</exception>
     public byte[] SerializeCall(ReviewedRemoteToolSnapshot snapshot, ReviewedRemoteToolCall call)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
@@ -33,6 +41,11 @@ internal sealed class ReviewedRemoteToolTransportClient(
         });
     }
 
+    /// <summary>
+    /// Dispatches a validated native call to the environment owner and verifies the returned result envelope.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the call, snapshot, actor, or result is invalid or changed.</exception>
+    /// <exception cref="CoordinationException">Thrown when the environment owner is unavailable or times out.</exception>
     public async Task<ReviewedRemoteToolTransportResult> SendAsync(
         HttpContext context,
         RemoteToolResultProof proof,
@@ -102,6 +115,10 @@ internal sealed class ReviewedRemoteToolTransportClient(
         }
     }
 
+    /// <summary>
+    /// Requires the authenticated actor, tenant selector, issuer, and bearer expiry to match the result proof.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when authentication, subject, issuer, tenant, or expiry is invalid.</exception>
     private async Task<DateTimeOffset> RequireActorAsync(HttpContext context, RemoteToolResultProof proof)
     {
         var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
@@ -119,12 +136,18 @@ internal sealed class ReviewedRemoteToolTransportClient(
         return expiry.Value;
     }
 
+    /// <summary>
+    /// Returns a subject only when the principal contains exactly one subject claim.
+    /// </summary>
     private static string? SingleSubject(ClaimsPrincipal principal)
     {
         var subjects = principal.FindAll("sub").Take(2).ToArray();
         return subjects.Length == 1 ? subjects[0].Value : null;
     }
 
+    /// <summary>
+    /// Compares all identity fields in two reviewed snapshot references.
+    /// </summary>
     private static bool SameSnapshotReference(
         ReviewedRemoteToolSnapshotReference first, ReviewedRemoteToolSnapshotReference second) =>
         (first.ProjectId, first.SnapshotId, first.SnapshotDigest, first.AgentId, first.NodeId) ==

@@ -5,6 +5,7 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Orchestrator.Core;
 
+/// <summary>Canonical permission action and purpose metadata carried by a reviewed remote tool.</summary>
 public sealed class ReviewedRemoteToolPermissionMetadata
 {
     public ReviewedRemoteToolPermissionMetadata(
@@ -24,6 +25,7 @@ public sealed class ReviewedRemoteToolPermissionMetadata
     public string Digest { get; }
 }
 
+/// <summary>Exact remote MCP server release and metadata digest admitted by a registry.</summary>
 public sealed class ReviewedRemoteToolRegistryServerPin
 {
     public ReviewedRemoteToolRegistryServerPin(
@@ -42,6 +44,10 @@ public sealed class ReviewedRemoteToolRegistryServerPin
     public string MetadataSha256 { get; }
 }
 
+/// <summary>
+/// Immutable snapshot of a remote server connection, discovered tool, schema, and permission metadata.
+/// Its digest binds every field so later calls can be checked against the exact reviewed configuration.
+/// </summary>
 public sealed class ReviewedRemoteToolSnapshot
 {
     public ReviewedRemoteToolSnapshot(
@@ -148,6 +154,7 @@ public sealed class ReviewedRemoteToolSnapshot
     public string SnapshotDigest { get; }
     public ReviewedRemoteToolSnapshotReference Reference { get; }
 
+    // Serialize fields in a fixed order so the snapshot digest is stable across processes and JSON formatting.
     private byte[] WriteSnapshotDigestInput()
     {
         using var stream = new MemoryStream();
@@ -208,6 +215,7 @@ public sealed class ReviewedRemoteToolSnapshot
     }
 }
 
+/// <summary>Canonical arguments and identity for one native SDK call to a reviewed tool snapshot.</summary>
 public sealed class ReviewedRemoteToolCall
 {
     private ReviewedRemoteToolCall(
@@ -255,6 +263,10 @@ public sealed class ReviewedRemoteToolCall
     public string ToolSchemaDigest { get; }
     public string PermissionMetadataDigest { get; }
 
+    /// <summary>
+    /// Creates a call only when the agent, node, tool, and project match the reviewed snapshot.
+    /// Canonical arguments are hashed; event ID is deterministic for the run/session/step/native call ID.
+    /// </summary>
     public static ReviewedRemoteToolCall Create(
         ReviewedRemoteToolSnapshot snapshot,
         RemoteToolCallExecutionBinding executionBinding,
@@ -402,6 +414,7 @@ public sealed class ReviewedRemoteToolCall
     }
 }
 
+/// <summary>Accepted run and execution revisions captured when a remote tool call is dispatched.</summary>
 public sealed class RemoteToolCallExecutionBinding
 {
     public RemoteToolCallExecutionBinding(
@@ -466,6 +479,7 @@ public sealed class RemoteToolCallExecutionBinding
     public long ExecutionFence { get; }
 }
 
+/// <summary>Classification of returned MCP content before Guardrails receives it.</summary>
 public enum RemoteToolResultContentClass
 {
     Unknown,
@@ -475,6 +489,7 @@ public enum RemoteToolResultContentClass
     Mixed
 }
 
+/// <summary>Current grant authority for one runtime and execution binding.</summary>
 public sealed class RemoteToolCallAuthorityBinding
 {
     public RemoteToolCallAuthorityBinding(
@@ -562,11 +577,16 @@ public sealed class RemoteToolCallAuthorityBinding
         ExecutionFence == binding.ExecutionFence;
 }
 
+/// <summary>Only supported Guardrails stage for remote tool output.</summary>
 public enum RemoteToolGuardrailStage
 {
     ToolResult
 }
 
+/// <summary>
+/// Returned tool content bound to the original call and current authority. Construction rejects
+/// any authority whose runtime, actor, project, run, step, or revisions changed.
+/// </summary>
 public sealed class RemoteToolResultEnvelope<TContent>
 {
     public RemoteToolResultEnvelope(
@@ -608,8 +628,10 @@ public sealed class RemoteToolResultEnvelope<TContent>
     public TContent Content { get; }
 }
 
+/// <summary>Canonical JSON object serialization and SHA-256 helpers for reviewed tool evidence.</summary>
 internal static class ReviewedRemoteToolJson
 {
+    /// <summary>Parses an object, rejects duplicate keys, sorts keys recursively, and returns compact JSON.</summary>
     public static string CanonicalizeObject(string json, string parameterName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(json, parameterName);
@@ -630,6 +652,7 @@ internal static class ReviewedRemoteToolJson
         }
     }
 
+    /// <summary>Returns a lowercase SHA-256 digest for the supplied bytes.</summary>
     public static string Hash(ReadOnlySpan<byte> value) =>
         Convert.ToHexStringLower(SHA256.HashData(value));
 
@@ -677,8 +700,10 @@ internal static class ReviewedRemoteToolJson
     }
 }
 
+/// <summary>Shared validation rules for reviewed server, tool, and credential metadata.</summary>
 internal static class ReviewedRemoteToolContractValidation
 {
+    /// <summary>Requires bounded, non-empty text without control characters.</summary>
     public static string RequireText(string value, string parameterName)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 512 || value.Any(char.IsControl))
@@ -686,6 +711,7 @@ internal static class ReviewedRemoteToolContractValidation
         return value;
     }
 
+    /// <summary>Requires a lowercase 64-character SHA-256 digest.</summary>
     public static string RequireDigest(string value, string parameterName)
     {
         if (value is null || value.Length != 64 ||
@@ -694,9 +720,11 @@ internal static class ReviewedRemoteToolContractValidation
         return value;
     }
 
+    /// <summary>Validates text only when the optional value is present.</summary>
     public static string? RequireOptionalText(string? value, string parameterName) =>
         value is null ? null : RequireText(value, parameterName);
 
+    /// <summary>Restricts connection state to the owner-supported lifecycle values.</summary>
     public static string RequireConnectionState(string value, string parameterName)
     {
         value = RequireText(value, parameterName);
@@ -705,6 +733,7 @@ internal static class ReviewedRemoteToolContractValidation
             : throw new ArgumentException("A recognized remote MCP connection state is required.", parameterName);
     }
 
+    /// <summary>Restricts authentication to none or delegated OAuth.</summary>
     public static string RequireAuthenticationMode(string value, string parameterName)
     {
         value = RequireText(value, parameterName);
@@ -713,6 +742,7 @@ internal static class ReviewedRemoteToolContractValidation
             : throw new ArgumentException("A supported remote MCP authentication mode is required.", parameterName);
     }
 
+    /// <summary>Restricts remote transport to the supported Streamable HTTP profile.</summary>
     public static string RequireTransportProfile(string value, string parameterName)
     {
         value = RequireText(value, parameterName);

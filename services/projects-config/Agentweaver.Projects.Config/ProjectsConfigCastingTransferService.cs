@@ -3,8 +3,10 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Projects.Config;
 
+// Transfer operations preserve target settings and create a reviewable proposal; they never apply imported casting directly.
 public sealed partial class ProjectsConfigService
 {
+    /// <summary>Exports charters and casting from the current or a retained revision with a canonical content digest.</summary>
     public Task<ProjectCastingTransfer> ExportCastingTransferAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -47,6 +49,10 @@ public sealed partial class ProjectsConfigService
         }, cancellationToken);
     }
 
+    /// <summary>
+    /// Verifies transfer version and digest, merges only charters/casting into current target settings, and stages a proposal.
+    /// </summary>
+    /// <exception cref="ProjectConfigException">The transfer is malformed, tampered, incompatible, or based on a stale target revision.</exception>
     public Task<ProjectCastingProposal> ImportCastingTransferAsync(
         ProjectAuthorizationContext caller,
         string projectId,
@@ -102,6 +108,7 @@ public sealed partial class ProjectsConfigService
         }, cancellationToken);
     }
 
+    /// <summary>Validates transfer provenance and checks the digest over the exact versioned source payload.</summary>
     private static ProjectCastingTransferProvenance ValidateCastingTransfer(ProjectCastingTransfer transfer)
     {
         if (transfer.FormatVersion != ProjectCastingTransfer.CurrentFormatVersion)
@@ -136,6 +143,7 @@ public sealed partial class ProjectsConfigService
             transfer.ContentDigest);
     }
 
+    /// <summary>Hashes canonical transfer fields while excluding the digest field itself.</summary>
     private static string ComputeCastingTransferDigest(ProjectCastingTransfer transfer) =>
         HashFingerprint(new
         {

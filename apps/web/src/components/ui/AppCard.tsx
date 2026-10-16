@@ -37,6 +37,10 @@ export interface AppCardProps extends Omit<CardProps, 'appearance'> {
   interactive?: boolean;
 }
 
+/**
+ * Renders a styled application card around caller-provided content.
+ * Props control heading, actions, and card appearance; it has no data source or local state.
+ */
 export function AppCard({ interactive = false, className, ...rest }: AppCardProps) {
   const styles = useStyles();
   return (
