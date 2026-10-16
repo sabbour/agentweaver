@@ -619,6 +619,11 @@ Admission has two parts:
   check paginates closed PRs filtered by that base, independently of the
   repository's default `dev` branch. Dispatch at that exact merged result,
   not a pre-merge head or an arbitrary later `v1` commit.
+  It deliberately avoids `GET /repos/{owner}/{repo}/commits/{sha}/pulls`.
+  [GitHub's docs](https://docs.github.com/en/rest/commits/commits#list-pull-requests-associated-with-a-commit)
+  say that when a commit isn't on the default branch it returns both merged
+  and open PRs associated with the commit. That includes PRs where the commit
+  is only a head commit, so it can't prove the commit is `v1`'s merged result.
   It must not change the original release manifest or any
   product input; the publisher still compares the manifest, provenance, and
   every artifact hash with the original source.
