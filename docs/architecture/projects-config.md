@@ -327,9 +327,11 @@ release runtime List sets the five consumer revisions as explicit, non-secret
 `env` values and sets Cilium adapter version `1.0.0` by coordinator decision.
 These take precedence over same-named values from the service runtime ConfigMaps
 while preserving their `envFrom` entries for all other settings. The checked-in
-P0 ConfigMap snapshots and their unresolved inputs are documented in
+P0 ConfigMap snapshots and their value provenance are documented in
 [`deploy/k8s/README.md`](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md#p0-runtime-configmap-snapshots).
-The three service maps are marked incomplete and are not ready to apply:
+The Environment, Orchestrator, and Events maps have source-backed runtime
+configuration. Live preflight, PostgreSQL migration/role state, and external
+resource connectivity remain separate deployment and acceptance gates:
 
 | Registration | Existing input/config path | Required value and List wiring |
 | --- | --- | --- |
@@ -367,8 +369,8 @@ The table gives the exact non-secret schema inputs required by Agent Sandbox,
 Azure Files, and Copilot Cost; AGT's reader uses schema `1`. Cilium uses options
 schema `1`, as defined by `CiliumEgressProviderOptions`. Its Environment
 runtime ConfigMap snapshot supplies namespace and endpoint selectors through
-the separately mounted Cilium options file; unrelated Environment startup
-inputs remain incomplete.
+the separately mounted Cilium options file. Live Environment and database
+readiness are checked separately from these configuration snapshots.
 
 Selections follow the documented defaults: the catalog defaults Sessions,
 Messaging, Memory, Sandbox, Storage, Policy, and Source Control; selects Cilium

@@ -23,13 +23,21 @@ data:
           "Authority": "https://identity.example.invalid/",
           "Audience": "https://runtime.example.invalid/runtime/v1/configure"
         },
-        "ModelBindingsRevision": "p1-v1.0.0",
+        "ModelBindingsRevision": "p1-v1.0.1",
         "ModelBindings": {
           "reasoning": {
             "ModelId": "gpt-6.1-sol",
             "SourceMode": "HostedCopilot"
           },
           "coding": {
+            "ModelId": "gpt-6-luna",
+            "SourceMode": "HostedCopilot"
+          },
+          "gpt-6.1-sol": {
+            "ModelId": "gpt-6.1-sol",
+            "SourceMode": "HostedCopilot"
+          },
+          "gpt-6-luna": {
             "ModelId": "gpt-6-luna",
             "SourceMode": "HostedCopilot"
           }

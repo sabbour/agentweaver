@@ -3,10 +3,7 @@
   "kind": "ConfigMap",
   "metadata": {
     "name": "environment-runtime-config",
-    "namespace": "agentweaver-v1-p0",
-    "annotations": {
-      "agentweaver.io/runtime-config-status": "incomplete"
-    }
+    "namespace": "agentweaver-v1-p0"
   },
   "immutable": true,
   "data": {

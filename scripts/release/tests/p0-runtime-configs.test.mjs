@@ -59,8 +59,7 @@ test('P0 runtime ConfigMaps use immutable snapshots except for the operator-upda
     assert.equal(resource.kind, 'ConfigMap');
     assert.equal(resource.metadata.name, name);
     assert.equal(resource.metadata.namespace, namespace);
-    assert.equal(resource.metadata.annotations?.['agentweaver.io/runtime-config-status'],
-      ['environment-runtime-config', 'orchestrator-runtime-config'].includes(name) ? 'incomplete' : undefined);
+    assert.equal(resource.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
     assert.equal(resource.immutable, name !== 'events-and-sessions-runtime-config');
     assert.ok(Object.keys(resource.data).length > 0);
     for (const [key, value] of Object.entries(resource.data)) {
@@ -73,7 +72,7 @@ test('P0 runtime ConfigMaps use immutable snapshots except for the operator-upda
     }
   }
   for (const resource of [environment, orchestrator, events])
-    assert.ok(Object.keys(resource.data).every(key => /^[A-Za-z][A-Za-z0-9_]*$/.test(key)));
+    assert.ok(Object.keys(resource.data).every(key => /^[A-Za-z][A-Za-z0-9_.-]*$/.test(key)));
   assert.equal(events.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'], undefined);
 });
 
@@ -183,8 +182,13 @@ test('P0 service addresses and source-backed provider defaults are exact', () =>
   assert.equal(evt.EventsAndSessions__SessionMaterial__ContainerUri,
     'https://awv1p0blob.blob.core.windows.net/session-material');
 
-  const modelBindings = { reasoning: 'gpt-6.1-sol', coding: 'gpt-6-luna' };
-  assert.equal(evt.AgentHost__ModelBindingsRevision, 'p1-v1.0.0');
+  const modelBindings = {
+    reasoning: 'gpt-6.1-sol',
+    coding: 'gpt-6-luna',
+    'gpt-6.1-sol': 'gpt-6.1-sol',
+    'gpt-6-luna': 'gpt-6-luna',
+  };
+  assert.equal(evt.AgentHost__ModelBindingsRevision, 'p1-v1.0.1');
   for (const [reference, modelId] of Object.entries(modelBindings)) {
     assert.equal(evt[`AgentHost__ModelBindings__${reference}__ModelId`], modelId);
     assert.equal(evt[`AgentHost__ModelBindings__${reference}__SourceMode`], 'HostedCopilot');
@@ -196,10 +200,12 @@ test('P0 service addresses and source-backed provider defaults are exact', () =>
   const appSettings = agentHostYaml.split('  appsettings.json: |\n')[1]
     .split('\n').map(line => line.slice(4)).join('\n');
   const agentHost = JSON.parse(appSettings).AgentHost;
-  assert.equal(agentHost.ModelBindingsRevision, 'p1-v1.0.0');
+  assert.equal(agentHost.ModelBindingsRevision, 'p1-v1.0.1');
   assert.deepEqual(agentHost.ModelBindings, {
     reasoning: { ModelId: 'gpt-6.1-sol', SourceMode: 'HostedCopilot' },
     coding: { ModelId: 'gpt-6-luna', SourceMode: 'HostedCopilot' },
+    'gpt-6.1-sol': { ModelId: 'gpt-6.1-sol', SourceMode: 'HostedCopilot' },
+    'gpt-6-luna': { ModelId: 'gpt-6-luna', SourceMode: 'HostedCopilot' },
   });
 });
 
@@ -254,9 +260,11 @@ test('P0 values use approved labels and omit unknown resource identities', () =>
   assert.equal(events.data.EventsAndSessions__Cost__Copilot__ResourceGeneration, '1');
   assert.ok(!Object.keys(events.data).some(key =>
     key.startsWith('EventsAndSessions__Cost__Copilot__RateCard__ModelMultipliers__')));
-  assert.equal(events.data.AgentHost__ModelBindingsRevision, 'p1-v1.0.0');
+  assert.equal(events.data.AgentHost__ModelBindingsRevision, 'p1-v1.0.1');
   assert.equal(events.data.AgentHost__ModelBindings__reasoning__ModelId, 'gpt-6.1-sol');
   assert.equal(events.data.AgentHost__ModelBindings__coding__ModelId, 'gpt-6-luna');
+  assert.equal(events.data['AgentHost__ModelBindings__gpt-6.1-sol__ModelId'], 'gpt-6.1-sol');
+  assert.equal(events.data['AgentHost__ModelBindings__gpt-6-luna__ModelId'], 'gpt-6-luna');
   assert.ok(!Object.values(events.data).includes(
     '/subscriptions/90ab3701-83f0-4ba1-a90a-f2e68683adab/resourceGroups/aw-v1-p0/providers/Microsoft.DBforPostgreSQL/flexibleServers/aw-v1-p0-pg'));
 });
