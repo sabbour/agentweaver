@@ -7,6 +7,12 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
+  <!-- The resolver test checks that accepted GitHub selections preserve this reviewed catalog revision. -->
+  <ItemGroup>
+    <None Include="..\..\deploy\k8s\provider-catalogs\projects-config-provider-catalog.snapshot.json"
+          Link="provider-catalog\projects-config-provider-catalog.snapshot.json"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="10.0.1" PrivateAssets="all" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />

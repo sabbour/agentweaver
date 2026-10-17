@@ -252,6 +252,107 @@ and consumers fail closed if a selected candidate differs from the supplied cata
 Database migrations run through the separate `--migrate` operation; normal startup
 verifies that migrations have already been applied.
 
+### Checked-in P1 provider catalog
+
+The reviewed snapshot is
+[`deploy/k8s/provider-catalogs/projects-config-provider-catalog.snapshot.json`](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/provider-catalogs/projects-config-provider-catalog.snapshot.json),
+bound to release source `c24d0000fe5fc6163e4f38594c39dff782d3a46d`. Its immutable
+ConfigMap rendering is
+[`projects-config-provider-catalog.json`](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/provider-catalogs/projects-config-provider-catalog.json),
+named `projects-config-provider-catalog`. The .NET startup loader consumes the
+ConfigMap's flattened `Registrations__...` and `Defaults__...` keys after the
+runtime List adds the `ProjectsConfig__ProviderCatalog__` prefix to both
+Projects & Config and Orchestrator. The ConfigMap's product-source annotation
+identifies the published source used for the snapshot; the runtime List records
+the catalog PR merge commit on both consumer pods.
+
+The catalog registers the P1 Sessions, Memory, Sandbox, Storage, Policy, Source
+Control, Cost, and Cilium providers, plus the foundational Messaging provider
+whose runtime default is also defined by Events & Sessions. Cilium's
+`AdapterVersion` is `1.0.0`. Coordinator decision: adapter code version shipped
+in Environment 1.0.0. Its `OptionsRevision` uses the operator-selected
+bounded label `p1-v1.0.0` (the selected-label rule). The L3/L4 layer selection
+uses the Cilium provider.
+
+The Cilium namespace is `agentweaver-v1-p0`, the namespace used by the P0
+deployment policies. The checked-in `environment-agenthost-network.yaml`,
+`service-owner-network.yaml`, and `identity-broker/egress.yaml` policies define
+the endpoint selectors as the exact pair
+`k8s:io.kubernetes.pod.namespace=agentweaver-v1-p0` and
+`agentweaver.io/workload=<workload>`. The workload values are the names
+selected by those policies: `agenthost`, `environment`, `projects-config`,
+`gateway`, `mcp`, `orchestrator`, `knowledge`, `events-and-sessions`, and
+`identity-broker`. These selectors are runtime options, not catalog fields.
+Environment still requires `Namespace`, `AdapterVersion`, `OptionsRevision`,
+and `EndpointSelectors` at startup. The bootstrap List sets the decided
+adapter version and matching revision, and mounts the nested selector JSON
+from `environment-cilium-config`. Sessions,
+Messaging, and Memory use exact release-source revisions:
+`native-postgres-v1`,
+`native-postgres-messaging-v1`, and `native-postgres-memory-v1`. The Events &
+Sessions and Knowledge configuration readers define these defaults; the
+published contract table also records the Sessions and Messaging defaults.
+
+The remaining P1 consumers have no source default for `OptionsRevision`. Their
+catalog revision is therefore the operator-selected bounded label
+`p1-v1.0.0`, not evidence of an image, provider artifact, or deployment. The
+release runtime List sets the five consumer revisions as explicit, non-secret
+`env` values and sets Cilium adapter version `1.0.0` by coordinator decision.
+These take precedence over same-named values from the service runtime ConfigMaps
+while preserving their `envFrom` entries for all other settings. The checked-in
+P0 ConfigMap snapshots and their unresolved inputs are documented in
+[`deploy/k8s/README.md`](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md#p0-runtime-configmap-snapshots).
+The three service maps are marked incomplete and are not ready to apply:
+
+| Registration | Existing input/config path | Required value and List wiring |
+| --- | --- | --- |
+| `agent-sandbox` | `Environment__Sandbox__AgentSandbox__OptionsRevision` | `p1-v1.0.0`; bootstrap List sets an explicit Environment `env` value, overriding `environment-runtime-config` if present. |
+| `agent-sandbox` schema | `Environment__Sandbox__AgentSandbox__OptionsSchemaVersion` | `2`; `environment-runtime-config` remains available through `envFrom`. |
+| `azure-files-csi` | `Environment__Storage__AzureFiles__OptionsRevision` | `p1-v1.0.0`; bootstrap List sets an explicit Environment `env` value, overriding `environment-runtime-config` if present. |
+| `azure-files-csi` schema | `Environment__Storage__AzureFiles__OptionsSchemaVersion` | `1`; `environment-runtime-config` remains available through `envFrom`. |
+| `agt.dotnet-yaml` | `AgentGovernance__Policy__OptionsRevision` | `p1-v1.0.0`; bootstrap List sets an explicit Orchestrator `env` value, overriding `orchestrator-runtime-config` if present. |
+| `github` | Accepted run-selection `providers[].candidates[].optionsRevision` | `p1-v1.0.0`; Projects & Config copies the selected catalog candidate into this existing runtime input, and Orchestrator validates it against the catalog. |
+| `copilot.usage-cost` | `EventsAndSessions__Cost__Copilot__OptionsRevision` | `p1-v1.0.0`; bootstrap List sets an explicit Events & Sessions `env` value, overriding `events-and-sessions-runtime-config` if present. |
+| `copilot.usage-cost` schema | `EventsAndSessions__Cost__Copilot__OptionsSchemaVersion` | `1`; `events-and-sessions-runtime-config` remains available through `envFrom`. |
+| `cilium` | `Environment__NetworkPolicy__Cilium__AdapterVersion` | `1.0.0`; coordinator decision: adapter code version shipped in Environment 1.0.0. The List sets the matching explicit Environment value. |
+| `cilium` | `Environment__NetworkPolicy__Cilium__OptionsRevision` | `p1-v1.0.0`; selected-label rule. The List sets the matching explicit Environment value. |
+
+The runtime List wiring is in `scripts/release/runtime-list.mjs`:
+`createWorkload` adds the exact provider `OptionsRevision` values and the
+decided Cilium `AdapterVersion` to explicit
+service `env` entries and preserves the service-named ConfigMap `envFrom`.
+`validateRuntimeManifest` permits only those exact revision and adapter-version
+names and values. It mounts nested Cilium endpoint selectors from the immutable
+`environment-cilium-config` file because their `/` and `:` keys cannot be
+represented as Kubernetes environment variable names. The same provider
+catalog ConfigMap is supplied to Projects & Config and Orchestrator with the
+`ProjectsConfig__ProviderCatalog__` prefix.
+
+GitHub has no independent adapter-local or project-configuration revision
+setting. Its consumer input is nevertheless explicit: `ProjectsConfigService`
+copies the resolved catalog candidate's `OptionsRevision` into the accepted
+run-selection candidate, and `SourceControlProviderSelectionResolver.Resolve`
+requires a stable value and exact equality with the current catalog candidate.
+The catalog's `p1-v1.0.0` is therefore propagated through this existing
+non-secret runtime input; no separate GitHub runtime ConfigMap key is needed.
+
+The table gives the exact non-secret schema inputs required by Agent Sandbox,
+Azure Files, and Copilot Cost; AGT's reader uses schema `1`. Cilium uses options
+schema `1`, as defined by `CiliumEgressProviderOptions`. Its Environment
+runtime ConfigMap snapshot supplies namespace and endpoint selectors through
+the separately mounted Cilium options file; unrelated Environment startup
+inputs remain incomplete.
+
+Selections follow the documented defaults: the catalog defaults Sessions,
+Messaging, Memory, Sandbox, Storage, Policy, and Source Control; selects Cilium
+for the L3/L4 Network Policy layer; and maps the source-defined
+`copilot.nano_aiu` meter to `copilot.usage-cost`.
+It grants no project overrides, adds no ordered composite, and does not claim
+an L7 Network Policy provider. Provider registrations and revision labels do
+not establish that consumer configuration, resources, images, or runtime flows
+are deployed or ready. Consumers still fail closed when their configured
+revision or other required options do not match.
+
 Cost candidates remain selections, not producer authority. An opaque model-selection
 reference plus a selected meter key does not prove the effective SDK model/source.
 That proof belongs to the canonical model/producer owners. Existing selection GET

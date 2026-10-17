@@ -24,6 +24,8 @@ The Identity Service remains a ClusterIP Service.
 | `routing/identity-broker/` | Explicit Gateway namespace/policy, native certificates, HTTPS Gateway, Broker/Web/Gateway API/MCP HTTPRoutes, backend TLS policies, and narrow ingress policies. |
 | `acceptance/foundation-probe/` | #1784 executable Job and its own scoped egress overlay. |
 | `profiles/projects-config/` | Separately selected Projects runtime source renderer; requires existing catalog and TLS references and explicit runtime inputs. |
+| `provider-catalogs/` | Source-bound Projects & Config provider snapshot and immutable ConfigMap manifest. |
+| `runtime-configs/` | Non-secret immutable P0 runtime ConfigMaps and nested Environment Cilium options. |
 | `scripts/release/runtime-list.mjs` | Checked-in source for the nine shared-service Kubernetes `List`, rendered from validated publication images and explicit provider-catalog inputs. |
 
 The runtime listens with HTTPS on port 8443. Its ClusterIP Service exposes
@@ -71,6 +73,120 @@ migration job, or public route. Existing database roles, applied migrations,
 runtime rights, trusted TLS, and healthy owner flows remain unverified here.
 See [Projects & Config](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/projects-config.md)
 for the startup and acceptance boundary.
+
+### Projects & Config provider catalog
+
+The checked-in snapshot at
+`deploy/k8s/provider-catalogs/projects-config-provider-catalog.snapshot.json`
+is derived from the `v1.0.0` release source commit
+`c24d0000fe5fc6163e4f38594c39dff782d3a46d`. Its rendered, immutable
+ConfigMap manifest is
+`deploy/k8s/provider-catalogs/projects-config-provider-catalog.json`. It is
+named `projects-config-provider-catalog` in `agentweaver-v1-p0`; its
+`agentweaver.io/provider-catalog-product-source` annotation identifies the
+published source used to derive the registrations and defaults. Apply it
+separately only after the incomplete service maps below have authoritative
+values. Its `kubectl apply` command appears in the ordered operator handoff
+below; do not apply any of these manifests from this PR.
+
+The manifest uses the relative double-underscore keys expected by the
+Projects runtime profile; the profile adds the
+`ProjectsConfig__ProviderCatalog__` prefix. It registers Native Sessions,
+Native Memory, Agent Sandbox, Azure Files CSI, AGT Policy, GitHub, Copilot Cost,
+and Cilium, plus the foundational native Messaging provider. Cilium's
+`AdapterVersion` is `1.0.0`. Coordinator decision: adapter code version shipped
+in Environment 1.0.0. Its `OptionsRevision` is the selected bounded
+label `p1-v1.0.0`, and the L3/L4 layer selects Cilium.
+
+The namespace `agentweaver-v1-p0` and endpoint selectors are derived from
+`base/environment-agenthost-network.yaml`,
+`base/service-owner-network.yaml`, and `base/identity-broker/egress.yaml`.
+Each selector pins `k8s:io.kubernetes.pod.namespace` to that namespace and
+`agentweaver.io/workload` to the policy's exact workload label. Environment
+still requires these options through its separate runtime configuration,
+along with other startup inputs. The catalog and List entries do not prove
+that the service runtime ConfigMaps are complete. The bootstrap List supplies
+the catalog to both Projects & Config and Orchestrator, and records the
+catalog-review commit in each pod's
+`agentweaver.io/provider-catalog-source` annotation. Use the merge commit of
+this catalog PR as `--provider-catalog-source-commit`; do not substitute the
+published product source SHA used by the snapshot.
+
+Release-source defaults are used for Sessions, Messaging, and Memory. The other
+included P1 options revisions use the authorized bounded label
+`p1-v1.0.0`; this is not an artifact or deployment claim.
+
+The bootstrap List explicitly sets the five matching `p1-v1.0.0` revision
+values for Environment Sandbox, Storage, and Cilium, Orchestrator AGT Policy,
+and Events & Sessions Copilot Cost. It also sets the decided Cilium adapter
+version. These `env` entries override same-named `envFrom` values while
+preserving each existing runtime ConfigMap reference. The checked-in repository
+now includes runtime ConfigMap snapshots; their unresolved inputs are listed
+below.
+
+GitHub has no adapter-local or project-configuration revision setting, but its
+existing accepted run-selection input contains
+`providers[].candidates[].optionsRevision`. Projects & Config copies the
+catalog candidate's revision into that input, and Orchestrator checks it
+against the catalog before use. The bootstrap List passes the same catalog
+ConfigMap to Projects & Config and Orchestrator using the
+`ProjectsConfig__ProviderCatalog__` prefix. Exact keys and schema values for included providers are documented in
+[Projects & Config](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/projects-config.md#checked-in-p1-provider-catalog).
+The catalog defaults only documented providers, selects Cilium for the L3/L4
+Network Policy layer, maps Copilot Cost to the source-defined
+`copilot.nano_aiu` meter, and grants no project overrides. Consumer
+configuration and runtime readiness remain separate prerequisites. The
+catalog ConfigMap contains no credentials, endpoint values, or secret references.
+
+### P0 runtime ConfigMap snapshots
+
+The manifests under `deploy/k8s/runtime-configs/` are immutable and contain no
+credentials. The bootstrap List requires the three service-named
+`<service>-runtime-config` maps through `envFrom`. It also mounts
+`environment-cilium-config` read-only at
+`/app/appsettings.Production.json`. The nested Cilium selector keys contain
+`/` and `:`, so they are supplied as JSON rather than Kubernetes environment
+variable names. The List supplies Cilium `AdapterVersion` `1.0.0` by
+coordinator decision and the selected `OptionsRevision` `p1-v1.0.0`.
+
+The three service maps carry
+`agentweaver.io/runtime-config-status: incomplete`. Kubernetes does not enforce
+this annotation. Do not apply these manifests or run the bootstrap while any
+listed input remains unresolved. The Cilium-only map is complete for its
+options; it does not make the Environment runtime configuration deployable.
+
+| Manifest | Value provenance | Required inputs not yet authoritative |
+| --- | --- | --- |
+| `environment-runtime-config.json` | Database host, name, role, and tenant come from P0 handoff §7. The client ID is the live user-assigned identity matched to the handoff principal ID. The projected token path follows the checked-in runtime input profile. Broker authority/audience come from the existing non-secret `identity-broker-runtime-config`. Service addresses and ports come from the generated runtime List. Namespace, StorageClass, and RuntimeClass are the approved P0 AKS values. Provider IDs and schema versions come from the catalog and release-source options. | `Environment__Sandbox__AgentSandbox__CpuRequest`; `Environment__Sandbox__AgentSandbox__MemoryRequest`; `Environment__Sandbox__AgentSandbox__ReconciliationTimeoutSeconds`; `Environment__Sandbox__AgentSandbox__PollIntervalMilliseconds`; `Environment__Sandbox__AgentSandbox__StartupBudgets__ScheduledSeconds`; `Environment__Sandbox__AgentSandbox__StartupBudgets__ImageReadySeconds`; `Environment__Sandbox__AgentSandbox__StartupBudgets__StartedSeconds`; `Environment__Sandbox__AgentSandbox__StartupBudgets__ConfiguredSeconds`; `Environment__Sandbox__AgentSandbox__StartupBudgets__ReadySeconds`; `Environment__Sandbox__AgentSandbox__StartupBudgets__TotalSeconds`; `Environment__Storage__AzureFiles__MaximumCapacityGiB`; `Environment__Storage__AzureFiles__ProvisioningTimeoutSeconds`; `Environment__Storage__AzureFiles__PollIntervalMilliseconds`. |
+| `orchestrator-runtime-config.json` | Database and workload identity follow the same P0 handoff and live identity lookup. Schema is `orchestrator` from handoff §7. Issuer/audiences come from the existing non-secret Broker ConfigMap. Owner addresses come from the generated runtime List. The policy revision is the selected `p1-v1.0.0` runtime input. | `AgentGovernance__Policy__ResourceId`; `AgentGovernance__Policy__ResourceGeneration`; `AgentGovernance__Policy__PlatformPolicyDocuments`. The P0 resource-group inventory contains no AGT Policy resource; source contracts require a positive generation and default-deny policy documents but do not select their identity or content. |
+| `events-and-sessions-runtime-config.json` | Database, role, tenant, and schema follow handoff §7 and the live identity lookup. Issuer/audiences come from the Broker ConfigMap; owner addresses come from the runtime List. Sessions and Messaging revisions, schema, polling, retention, claim lease, and message lifetime use release-source defaults. Copilot Cost schema `1`, meter `copilot.nano_aiu`, unit `AIC`, and `1,000,000,000` nano-AIU per credit come from release-source code. | `EventsAndSessions__Provider__ResourceId`; `EventsAndSessions__Provider__ResourceGeneration`; `EventsAndSessions__SessionMaterial__ContainerUri`; `EventsAndSessions__Cost__Copilot__ResourceId`; `EventsAndSessions__Cost__Copilot__ResourceGeneration`; `EventsAndSessions__Cost__Copilot__RateCard__Id`; `EventsAndSessions__Cost__Copilot__RateCard__Version`; and `EventsAndSessions__Cost__Copilot__RateCard__ModelMultipliers__<model-id>` entries. The Blob container listing returned `403 AuthorizationFailure`; no container URI or cost resource/rate-card identity was inferred. |
+| `environment-cilium-config.json` | Namespace and endpoint selectors follow the checked-in P0 Cilium policies. Options schema `1` follows the release-source adapter contract. Adapter version is `1.0.0` by coordinator decision; options revision `p1-v1.0.0` is selected and supplied by the bootstrap List. | None for the Cilium options in this file. The separate Environment runtime map remains incomplete. |
+
+The P0 handoff supplies the PostgreSQL roles, schemas, and Entra principal IDs.
+Read-only Azure identity lookup supplied the corresponding client IDs; the
+PostgreSQL ARM inventory confirmed the server ID and the AKS metadata confirmed
+the P0 OIDC issuer. The Broker issuer is read from the non-secret
+`identity-broker-runtime-config`; no Secret data is needed for these inputs.
+The catalog snapshot's `sourceCommit` and ConfigMap annotation identify the
+published product source `c24d0000fe5fc6163e4f38594c39dff782d3a46d`. The deploy
+command's `--provider-catalog-source-commit` identifies the catalog review
+commit instead.
+
+After all missing values have authoritative sources, update the manifests,
+remove the `incomplete` annotations from the three service maps, and review the
+rendered data. The future apply order is:
+
+```powershell
+kubectl apply -f deploy\k8s\provider-catalogs\projects-config-provider-catalog.json
+kubectl apply -f deploy\k8s\runtime-configs\environment-runtime-config.json
+kubectl apply -f deploy\k8s\runtime-configs\environment-cilium-config.json
+kubectl apply -f deploy\k8s\runtime-configs\orchestrator-runtime-config.json
+kubectl apply -f deploy\k8s\runtime-configs\events-and-sessions-runtime-config.json
+```
+
+These commands are documented for the later operator handoff only; do not run
+them from this PR. The three service maps remain incomplete and none of these
+ConfigMaps has been applied.
 
 ## Managed routing candidate
 

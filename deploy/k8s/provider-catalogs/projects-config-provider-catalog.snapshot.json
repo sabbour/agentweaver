@@ -1,0 +1,200 @@
+{
+  "sourceCommit": "c24d0000fe5fc6163e4f38594c39dff782d3a46d",
+  "ProjectsConfig": {
+    "ProviderCatalog": {
+      "Registrations": [
+        {
+          "Seam": "Sessions",
+          "Id": "postgres.native-sessions",
+          "AdapterVersion": "1.0.0",
+          "OptionsSchemaVersion": 1,
+          "Hosting": "RemoteService",
+          "AdvertisedCapabilities": [
+            "sessions.events.append",
+            "sessions.events.replay",
+            "sessions.events.subscribe",
+            "sessions.objects.reference",
+            "sessions.tool_calls",
+            "sessions.policy.evaluations",
+            "sessions.decisions.accepted",
+            "sessions.effects.accepted",
+            "sessions.events.fork"
+          ],
+          "Enabled": true,
+          "OptionsRevision": "native-postgres-v1"
+        },
+        {
+          "Seam": "Messaging",
+          "Id": "postgres.native-messaging",
+          "AdapterVersion": "1.0.0",
+          "OptionsSchemaVersion": 1,
+          "Hosting": "RemoteService",
+          "AdvertisedCapabilities": [
+            "messaging.addressed.send",
+            "messaging.addressed.thread_order",
+            "messaging.addressed.claim",
+            "messaging.addressed.presentation",
+            "messaging.addressed.acknowledge",
+            "messaging.addressed.expiry",
+            "messaging.addressed.undeliverable",
+            "messaging.addressed.fencing",
+            "messaging.addressed.delivery_modes",
+            "messaging.addressed.correlation",
+            "messaging.addressed.purpose_notifications"
+          ],
+          "Enabled": true,
+          "OptionsRevision": "native-postgres-messaging-v1"
+        },
+        {
+          "Seam": "Memory",
+          "Id": "postgres.native-memory",
+          "AdapterVersion": "1.0.0",
+          "OptionsSchemaVersion": 1,
+          "Hosting": "RemoteService",
+          "AdvertisedCapabilities": [
+            "memory.records.read",
+            "memory.records.write",
+            "memory.records.search",
+            "memory.records.revisions",
+            "memory.proposals.promote",
+            "memory.context.compose",
+            "memory.accepted-effects.delivery"
+          ],
+          "Enabled": true,
+          "OptionsRevision": "native-postgres-memory-v1"
+        },
+        {
+          "Seam": "Sandbox",
+          "Id": "agent-sandbox",
+          "AdapterVersion": "1.0.0",
+          "OptionsSchemaVersion": 2,
+          "Hosting": "KubernetesController",
+          "AdvertisedCapabilities": [
+            "sandbox.isolation.vm",
+            "sandbox.workspace.pvc"
+          ],
+          "Enabled": true,
+          "OptionsRevision": "p1-v1.0.0"
+        },
+        {
+          "Seam": "Storage",
+          "Id": "azure-files-csi",
+          "AdapterVersion": "1.0.0",
+          "OptionsSchemaVersion": 1,
+          "Hosting": "KubernetesController",
+          "AdvertisedCapabilities": [
+            "workspace.access.rwo",
+            "workspace.access.rwx",
+            "workspace.access.rox",
+            "workspace.mount.read-only",
+            "workspace.flush.durable"
+          ],
+          "Enabled": true,
+          "OptionsRevision": "p1-v1.0.0"
+        },
+        {
+          "Seam": "Policy",
+          "Id": "agt.dotnet-yaml",
+          "AdapterVersion": "1.0.0",
+          "OptionsSchemaVersion": 1,
+          "Hosting": "InProcess",
+          "AdvertisedCapabilities": [
+            "policy.agent-actions.evaluate"
+          ],
+          "Enabled": true,
+          "OptionsRevision": "p1-v1.0.0"
+        },
+        {
+          "Seam": "SourceControl",
+          "Id": "github",
+          "AdapterVersion": "1.0.0",
+          "OptionsSchemaVersion": 1,
+          "Hosting": "InProcess",
+          "AdvertisedCapabilities": [
+            "repository.read",
+            "repository.checkout",
+            "issue.write",
+            "pull-request.read",
+            "pull-request.write",
+            "review.read",
+            "merge"
+          ],
+          "Enabled": true,
+          "OptionsRevision": "p1-v1.0.0"
+        },
+        {
+          "Seam": "Cost",
+          "Id": "copilot.usage-cost",
+          "AdapterVersion": "1.0.0",
+          "OptionsSchemaVersion": 1,
+          "Hosting": "InProcess",
+          "AdvertisedCapabilities": [
+            "cost.usage.price",
+            "cost.work.quote"
+          ],
+          "Enabled": true,
+          "OptionsRevision": "p1-v1.0.0"
+        },
+        {
+          "Seam": "NetworkPolicy",
+          "Id": "cilium",
+          "AdapterVersion": "1.0.0",
+          "OptionsSchemaVersion": 1,
+          "Hosting": "KubernetesController",
+          "AdvertisedCapabilities": [
+            "networkpolicy.l3l4",
+            "networkpolicy.fqdn",
+            "networkpolicy.cidr",
+            "networkpolicy.dns"
+          ],
+          "Enabled": true,
+          "OptionsRevision": "p1-v1.0.0"
+        }
+      ],
+      "Defaults": [
+        {
+          "Seam": "Sessions",
+          "ProviderId": "postgres.native-sessions"
+        },
+        {
+          "Seam": "Messaging",
+          "ProviderId": "postgres.native-messaging"
+        },
+        {
+          "Seam": "Memory",
+          "ProviderId": "postgres.native-memory"
+        },
+        {
+          "Seam": "Sandbox",
+          "ProviderId": "agent-sandbox"
+        },
+        {
+          "Seam": "Storage",
+          "ProviderId": "azure-files-csi"
+        },
+        {
+          "Seam": "Policy",
+          "ProviderId": "agt.dotnet-yaml"
+        },
+        {
+          "Seam": "SourceControl",
+          "ProviderId": "github"
+        }
+      ],
+      "PermittedOverrides": [],
+      "OrderedSelections": [],
+      "LayerSelections": [
+        {
+          "Layer": "L3L4",
+          "ProviderId": "cilium"
+        }
+      ],
+      "MeterSourceSelections": [
+        {
+          "MeterSource": "copilot.nano_aiu",
+          "ProviderId": "copilot.usage-cost"
+        }
+      ]
+    }
+  }
+}

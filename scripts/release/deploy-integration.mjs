@@ -667,10 +667,14 @@ export async function deployIntegration(options = {}, dependencies = {}) {
     entry.runtimeImage = image;
   }
   const runtimeImages = images.map(entry => entry.runtimeImage);
-  const providerCatalog = {
-    configMapName: parsed.providerCatalogConfigMapName,
-    sourceCommit: parsed.providerCatalogSourceCommit,
-  };
+  // A supplied runtime List carries its own catalog identity; generated Lists require explicit CLI values.
+  const providerCatalog = parsed.providerCatalogConfigMapName === undefined &&
+    parsed.providerCatalogSourceCommit === undefined
+    ? undefined
+    : {
+      configMapName: parsed.providerCatalogConfigMapName,
+      sourceCommit: parsed.providerCatalogSourceCommit,
+    };
   const generatedRuntimeList = brokerRunBinding || !runtimeDocument
     ? createRuntimeList(runtimeImages, parsed.target.namespace, providerCatalog, brokerRunBinding)
     : undefined;
@@ -678,8 +682,9 @@ export async function deployIntegration(options = {}, dependencies = {}) {
     fail('an opted-in Broker run-binding requires the exact generated runtime manifest');
   }
   const runtimeList = runtimeDocument ?? generatedRuntimeList;
+  // Keep the integration and final-release runtime paths bound to the same catalog contract.
   const runtimeManifest = validateRuntimeManifest(runtimeList, runtimeImages, parsed.target.namespace,
-    brokerRunBinding);
+    brokerRunBinding, providerCatalog);
   const targetInfo = await (dependencies.verifyTarget ?? verifyAzureTarget)(parsed.target, { root, run });
   (dependencies.verifyPrerequisites ?? verifyRuntimePrerequisites)(runtimeManifest, parsed.target, {
     root, run, brokerRunBinding,

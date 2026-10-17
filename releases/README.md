@@ -687,12 +687,57 @@ workspaces or a global `agentweaver` package.
 
 ## Local v1 release deployment
 
+### v1.0.0 pre-acceptance bootstrap
+
+The first v1.0.0 P0 rollout must happen before API, UI, and MCP persona evidence
+exists. Use the separate `release:deploy-bootstrap` path for that rollout. It
+accepts only the exact published v1.0.0 receipt, its immutable continuation
+completion receipt, and the tracked `releases/foundation.json` draft at the
+published source commit. It does not turn the draft into a release manifest or
+record release acceptance.
+
+The bootstrap path uses the same checked-in nine-service runtime List,
+publication image-digest checks, fixed P0 target checks, runtime prerequisites,
+readback, and checkpoint/resume behavior as `release:deploy`. It requires the
+reviewed provider-catalog ConfigMap name and source commit. Its default is
+read-only; `--execute` is still required for a rollout. Its result is labeled
+`pre-acceptance` and is not release or persona acceptance evidence.
+The source tree also contains non-secret runtime ConfigMap snapshots for the
+provider catalog and required P0 service inputs. The three service maps are
+currently marked incomplete; do not apply them or run the bootstrap until
+every unresolved value has an authoritative source. See the
+[P0 Kubernetes input inventory](../deploy/k8s/README.md#p0-runtime-configmap-snapshots)
+for value provenance and the future apply order. Use the catalog PR merge
+commit for `--provider-catalog-source-commit`; the snapshot records the
+published product source separately.
+
+```powershell
+npm run release:deploy-bootstrap -- v1.0.0 `
+  --manifest releases/foundation.json `
+  --publication <v1.0.0-publication.json> `
+  --completion <v1.0.0-continuation.json> `
+  --subscription-id 90ab3701-83f0-4ba1-a90a-f2e68683adab `
+  --tenant-id 72f988bf-86f1-41af-91ab-2d7cd011db47 `
+  --resource-group aw-v1-p0 `
+  --cluster aw-v1-p0-aks `
+  --namespace agentweaver-v1-p0 `
+  --node-min 2 `
+  --node-max 3 `
+  --provider-catalog-configmap <reviewed-configmap-name> `
+  --provider-catalog-source-commit <reviewed-40-character-source-sha>
+```
+
+After the P1 live acceptance checks complete, build a separate `stage: release`
+manifest from the tracked composition, the exact deployed source SHA, and the
+actual HTTPS API, UI, and MCP persona evidence URLs. Only then use the strict
+`release:deploy` gate. The bootstrap path does not relax that gate.
+
 `npm run release:deploy` is the operator-hosted, image-only Kubernetes rollout
 tool. It consumes an already published `v1.x.y` GitHub Release, the release-stage
-composition manifest, the matching immutable publication receipt, and a
-rendered runtime `List`. It is deliberately separate from `release:apply`,
-`release:pack`, and the existing publication workflow; it does not build or
-publish artifacts.
+composition manifest, the matching immutable publication receipt, and the
+generated or operator-supplied runtime `List`. It is deliberately separate
+from `release:apply`, `release:pack`, and the existing publication workflow;
+it does not build or publish artifacts.
 
 The command requires explicit subscription, tenant, resource group, AKS,
 namespace, and node-bound arguments. These must match the approved P0 target:

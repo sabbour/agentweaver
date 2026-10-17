@@ -16,9 +16,50 @@ const SERVICE_NAMES = Object.freeze([
   'projects-config',
 ]);
 
+/** Keeps each catalog revision equal to the consumer input used by the bootstrap List. */
+export const PROVIDER_OPTIONS_REVISION_RUNTIME_INPUTS = Object.freeze([
+  Object.freeze({
+    workload: 'environment',
+    name: 'Environment__Sandbox__AgentSandbox__OptionsRevision',
+    value: 'p1-v1.0.0',
+  }),
+  Object.freeze({
+    workload: 'environment',
+    name: 'Environment__Storage__AzureFiles__OptionsRevision',
+    value: 'p1-v1.0.0',
+  }),
+  Object.freeze({
+    workload: 'environment',
+    name: 'Environment__NetworkPolicy__Cilium__OptionsRevision',
+    value: 'p1-v1.0.0',
+  }),
+  Object.freeze({
+    workload: 'orchestrator',
+    name: 'AgentGovernance__Policy__OptionsRevision',
+    value: 'p1-v1.0.0',
+  }),
+  Object.freeze({
+    workload: 'events-and-sessions',
+    name: 'EventsAndSessions__Cost__Copilot__OptionsRevision',
+    value: 'p1-v1.0.0',
+  }),
+]);
+
+/** Pins the Agentweaver Cilium adapter version shipped in Environment 1.0.0. */
+export const PROVIDER_ADAPTER_VERSION_RUNTIME_INPUTS = Object.freeze([
+  Object.freeze({
+    workload: 'environment',
+    name: 'Environment__NetworkPolicy__Cilium__AdapterVersion',
+    value: '1.0.0',
+  }),
+]);
+
 const TARGET_NAMESPACE = 'agentweaver-v1-p0';
 const TLS_MODE = 0o440;
 const BACKEND_TLS_CA_CONFIGMAP = 'service-backend-ca';
+const ENVIRONMENT_CILIUM_CONFIGMAP = 'environment-cilium-config';
+const ENVIRONMENT_CILIUM_CONFIG_KEY = 'appsettings.Production.json';
+const ENVIRONMENT_CILIUM_CONFIG_PATH = '/app/appsettings.Production.json';
 /** Names and mount paths shared by broker run-binding runtime resources. */
 export const BROKER_RUN_BINDING_EGRESS_POLICY_NAME = 'identity-broker-projects-egress';
 export const BROKER_RUN_BINDING_INGRESS_POLICY_NAME = 'projects-config-broker-ingress';
@@ -179,6 +220,12 @@ function createWorkload(name, image, namespace, providerCatalog, agentHost, brok
   const volumes = [{ name: 'tmp', emptyDir: { sizeLimit: '64Mi' } }];
   const volumeMounts = [{ name: 'tmp', mountPath: '/tmp' }];
   const env = [{ name: 'ASPNETCORE_URLS', value: `${scheme}://+:${port}` }];
+  env.push(...PROVIDER_ADAPTER_VERSION_RUNTIME_INPUTS
+    .filter(({ workload }) => workload === name)
+    .map(({ name: envName, value }) => ({ name: envName, value })));
+  env.push(...PROVIDER_OPTIONS_REVISION_RUNTIME_INPUTS
+    .filter(({ workload }) => workload === name)
+    .map(({ name: envName, value }) => ({ name: envName, value })));
   const envFrom = [{
     configMapRef: { name: `${name}-runtime-config`, optional: false },
   }];
@@ -257,7 +304,26 @@ function createWorkload(name, image, namespace, providerCatalog, agentHost, brok
     }
   }
 
-  if (name === 'projects-config') {
+  if (name === 'environment') {
+    // Cilium endpoint-selector keys contain '/' and ':', which Kubernetes env vars cannot represent.
+    volumes.push({
+      name: 'cilium-options',
+      configMap: {
+        name: ENVIRONMENT_CILIUM_CONFIGMAP,
+        optional: false,
+        items: [{ key: ENVIRONMENT_CILIUM_CONFIG_KEY, path: ENVIRONMENT_CILIUM_CONFIG_KEY }],
+      },
+    });
+    volumeMounts.push({
+      name: 'cilium-options',
+      mountPath: ENVIRONMENT_CILIUM_CONFIG_PATH,
+      subPath: ENVIRONMENT_CILIUM_CONFIG_KEY,
+      readOnly: true,
+    });
+  }
+
+  if (['orchestrator', 'projects-config'].includes(name)) {
+    // Both services resolve and validate the same provider choices and source revision.
     envFrom.push({
       prefix: 'ProjectsConfig__ProviderCatalog__',
       configMapRef: { name: providerCatalog.configMapName, optional: false },
@@ -281,7 +347,7 @@ function createWorkload(name, image, namespace, providerCatalog, agentHost, brok
     labels: { ...labels },
   };
   const podMetadata = { labels: podLabels };
-  if (name === 'projects-config') {
+  if (['orchestrator', 'projects-config'].includes(name)) {
     podMetadata.annotations = { 'agentweaver.io/provider-catalog-source': providerCatalog.sourceCommit };
   }
   if (brokerRunBinding && ['identity-broker', 'projects-config'].includes(name)) {

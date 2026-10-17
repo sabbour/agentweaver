@@ -807,6 +807,30 @@ test('default integration dry-run verifies images and renders without applying r
   assert.equal(commands.length, 1);
 });
 
+test('supplied runtime List carries its own catalog identity when CLI catalog values are omitted', async t => {
+  const fixture = createFixture(t);
+  let runtimeManifest;
+  const dependencies = deploymentDependencies(fixture, (file, args, runOptions = {}) => {
+    assert.equal(file, 'kubectl');
+    assert.deepEqual(args, ['apply', '--dry-run=client', '--filename', '-']);
+    runtimeManifest = JSON.parse(runOptions.input);
+    return '';
+  });
+  await deployIntegration(deployOptions(fixture), dependencies);
+
+  // A caller-supplied List is validated against its paired catalog consumers and annotations.
+  const result = await deployIntegration(deployOptions(fixture, {
+    providerCatalogConfigMapName: undefined,
+    providerCatalogSourceCommit: undefined,
+    runtimeManifest,
+  }), dependencies);
+
+  assert.equal(result.renderedResources, 18);
+  assert.equal(runtimeManifest.items
+    .filter(item => item.kind === 'Deployment' && ['projects-config', 'orchestrator']
+      .includes(item.metadata.name)).length, 2);
+});
+
 test('Broker run-binding requires the exact generated runtime List and stays opt-in', async t => {
   const fixture = createFixture(t);
   const binding = runBinding();

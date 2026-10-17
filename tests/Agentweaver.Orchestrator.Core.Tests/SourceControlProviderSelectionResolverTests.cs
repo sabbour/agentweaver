@@ -48,6 +48,65 @@ public sealed class SourceControlProviderSelectionResolverTests
     }
 
     [Fact]
+    public void AcceptsTheGitHubRevisionFromTheCheckedInCatalogAsRuntimeSelectionInput()
+    {
+        // The accepted run-selection candidate must preserve the catalog's exact revision.
+        using var sourceSnapshot = JsonDocument.Parse(File.ReadAllText(Path.Combine(
+            AppContext.BaseDirectory,
+            "provider-catalog",
+            "projects-config-provider-catalog.snapshot.json")));
+        var registration = sourceSnapshot.RootElement
+            .GetProperty("ProjectsConfig")
+            .GetProperty("ProviderCatalog")
+            .GetProperty("Registrations")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("Id").GetString() == "github");
+        var revision = registration.GetProperty("OptionsRevision").GetString()!;
+        var adapterVersion = Version.Parse(registration.GetProperty("AdapterVersion").GetString()!);
+        var schemaVersion = registration.GetProperty("OptionsSchemaVersion").GetInt32();
+        var hosting = Enum.Parse<ProviderHostingPattern>(
+            registration.GetProperty("Hosting").GetString()!,
+            ignoreCase: true);
+        var capabilities = registration.GetProperty("AdvertisedCapabilities")
+            .EnumerateArray()
+            .Select(item => item.GetString()!)
+            .ToImmutableHashSet(StringComparer.Ordinal);
+        var descriptor = new ProviderDescriptor(
+            ProviderSeam.SourceControl,
+            "github",
+            adapterVersion,
+            schemaVersion,
+            hosting,
+            capabilities);
+        var catalog = ProviderCatalog.Create(
+            [new ProviderRegistration(descriptor, true, revision, schemaVersion)],
+            [new ProviderSelection(ProviderSeam.SourceControl, "github")],
+            []).Value!;
+        var required = ImmutableArray.Create(SourceControlCapabilities.RepositoryRead);
+        var effective = new EffectiveProviderCandidate(
+            ProviderSeam.SourceControl,
+            "github",
+            adapterVersion.ToString(),
+            schemaVersion,
+            revision,
+            hosting,
+            capabilities.Order(StringComparer.Ordinal).ToImmutableArray(),
+            required);
+
+        var resolved = SourceControlProviderSelectionResolver.Resolve(
+            Snapshot(new EffectiveProviderSelection(
+                ProviderCardinality.Exclusive,
+                ProviderSeam.SourceControl,
+                [effective])),
+            catalog,
+            new ProviderResolver(catalog));
+
+        Assert.Equal("p1-v1.0.0", revision);
+        Assert.Equal(revision, resolved.EffectiveCandidate.OptionsRevision);
+        Assert.Equal(revision, resolved.Candidate.OptionsRevision);
+    }
+
+    [Fact]
     public void PinsExactRepositoryNegotiationWithAcceptedRunAndSecretReferences()
     {
         var required = ImmutableArray.Create(
