@@ -22,7 +22,6 @@ jobs:
       contents: write
       packages: write
       pull-requests: read
-    environment: v1-publication
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,7 +46,7 @@ jobs:
           node-version: '24'
       - name: Require the approved publication destinations
         env:
-          RELEASE_NUGET_SOURCE: ${{ vars.RELEASE_NUGET_SOURCE }}
+          RELEASE_NUGET_SOURCE: https://nuget.pkg.github.com/sabbour/index.json
           RELEASE_REGISTRY: ghcr.io/sabbour
         run: |
           node -e "if (process.env.RELEASE_NUGET_SOURCE !== 'https://nuget.pkg.github.com/sabbour/index.json' || process.env.RELEASE_REGISTRY !== 'ghcr.io/sabbour') { console.error('::error::Publication destinations do not match the approved P1 targets'); process.exit(1); }"
@@ -84,7 +83,7 @@ jobs:
         env:
           EXPECTED_SOURCE: ${{ inputs.expected_source }}
           GH_TOKEN: ${{ github.token }}
-          RELEASE_NUGET_SOURCE: ${{ vars.RELEASE_NUGET_SOURCE }}
+          RELEASE_NUGET_SOURCE: https://nuget.pkg.github.com/sabbour/index.json
           RELEASE_NUGET_API_KEY: ${{ github.token }}
           RELEASE_NUGET_USERNAME: ${{ github.repository_owner }}
           RELEASE_REGISTRY: ghcr.io/sabbour

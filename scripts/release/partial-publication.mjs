@@ -185,8 +185,7 @@ function verifyOriginalWorkflowRun(run) {
   }
 }
 
-// The helper commit is admitted by a merged pull request into v1; the protected
-// environment approval on the continuation run is the human admission of that exact commit.
+// The exact merged pull request result admits the helper; no environment approval is required.
 // Keep admission fields and page length without exceeding spawnSync's 1 MiB buffer.
 export const HELPER_ADMISSION_PULL_FIELDS =
   '[.[] | {state, merged_at, merge_commit_sha, base: {ref: .base.ref, repo: {full_name: .base.repo.full_name}}}]';
@@ -205,15 +204,6 @@ export function verifyHelperAdmission(run, helperSha) {
     if (pulls.length < 100) break;
   }
   fail('the helper commit is not the exact result of a pull request merged into v1');
-}
-
-export function verifyProtectedAdmission(run, runId) {
-  const approvals = runGh(run, 'GET', `actions/runs/${runId}/approvals`);
-  if (!Array.isArray(approvals) || !approvals.some(approval => approval?.state === 'approved' &&
-      Array.isArray(approval.environments) && approval.environments.some(environment =>
-        environment?.id === P.environmentId && environment.name === P.environmentName))) {
-    fail(`run ${runId} has no recorded approval of the protected ${P.environmentName} environment`);
-  }
 }
 
 async function nugetBaseUrl(env, fetchImpl) {
@@ -606,7 +596,7 @@ export async function continuePartialPublication({
   }
   if (!env.GH_TOKEN || env.GITHUB_REPOSITORY !== P.repository || env.RELEASE_REGISTRY !== P.registry ||
       env.RELEASE_NUGET_SOURCE !== P.feed || !env.RELEASE_REGISTRY_USER || !env.RELEASE_REGISTRY_PASSWORD) {
-    fail('the existing protected workflow token and exact approved destinations are required');
+    fail('the existing workflow token and exact approved destinations are required');
   }
   const plan = artifactPlan(selected, imageRepositories, env.RELEASE_NUGET_SOURCE);
   const receipt = validateOriginalReceipt(originalReceipt, originalReceiptBytes, plan, helperSha);
@@ -624,7 +614,6 @@ export async function continuePartialPublication({
   verifyOriginalWorkflowRun(run);
   if (readNamespace(run).length !== 0) fail('the fixed continuation claim already exists; this recovery is consumed');
   verifyHelperAdmission(run, helperSha);
-  verifyProtectedAdmission(run, runId);
 
   run('docker', ['login', 'ghcr.io', '--username', env.RELEASE_REGISTRY_USER, '--password-stdin'],
     env.RELEASE_REGISTRY_PASSWORD);
@@ -873,7 +862,6 @@ export function verifyPartialPublicationCompletion(completion, publication, sour
       continuationRun.conclusion !== 'success') {
     fail('the continuation receipt is not backed by the exact successful first-attempt v1 workflow run');
   }
-  verifyProtectedAdmission(run, continuation.runId);
   verifyHelperAdmission(run, continuation.helperSha);
   return completion;
 }

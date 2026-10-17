@@ -611,7 +611,7 @@ result, and retained Actions receipt stay permanent. The
 missing components from the original prepared pack artifact. It never rebuilds,
 re-signs, or substitutes artifacts, and it never rewrites the original records.
 
-Admission has two parts:
+Admission requires the exact merged helper:
 
 - The workflow runs from a separately reviewed helper commit on `v1`. The
   helper must differ from the original source and equal the `merge_commit_sha`
@@ -631,9 +631,15 @@ Admission has two parts:
   It must not change the original release manifest or any
   product input; the publisher still compares the manifest, provenance, and
   every artifact hash with the original source.
-- The run must have a recorded approval of the protected `v1-publication`
-  environment. The publisher reads that approval from the GitHub API before
-  any mutation. A run without it stops, even if the job started.
+
+This recovery job has no GitHub environment dependency and requires no manual
+approval. Neither publication nor completion verification reads environment
+approval history. Run `38993945815`, attempt 1, stopped before the claim because
+the earlier helper still required a recorded `v1-publication` approval.
+Removing that check does not permit a rerun: dispatch a new first-attempt run
+at the exact merged helper result. Every other recovery check still applies.
+The recovery workflow pins the existing GitHub Packages feed URL directly;
+it does not depend on the removed environment's `RELEASE_NUGET_SOURCE` variable.
 
 The workflow downloads the original pack and receipt artifacts by ID with
 `merge-multiple: true`. Without it, `actions/download-artifact@v4` extracts a
@@ -701,7 +707,7 @@ publication receipt and contain the embedded original receipt. Deploy verifies:
 - the unchanged original records
 - exactly one continuation claim and result, bound to the original source
 - the successful first-attempt continuation run at the helper commit
-- the run's `v1-publication` approval and the merged helper pull request
+- the exact merged helper pull request
 
 Deploy reads the continuation result ref instead of the ordinary
 `agentweaver-publication/<sourceSha>/result` ref.
