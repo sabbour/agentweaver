@@ -912,10 +912,12 @@ test('receipt-triggered release workflow builds separate artifacts and publishes
   assert.doesNotMatch(workflow, /inputs\.publish|environment:|release:deploy|foundation_probe_sampler_replacement|agenthost_archive_diagnostic/);
 });
 
-test('only the publisher receives the Actions token and package-write permission for fixed GitHub destinations', () => {
+test('only the publisher receives write permissions and package credentials for fixed GitHub destinations', () => {
   const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8').replaceAll('\r\n', '\n');
   const publish = workflow.slice(workflow.indexOf('\n  publish:'));
   const beforePublish = workflow.slice(0, workflow.indexOf('\n  publish:'));
+  const validate = workflow.slice(workflow.indexOf('\n  validate:'), workflow.indexOf('\n  packages:'));
+  const buildJobs = workflow.slice(workflow.indexOf('\n  packages:'), workflow.indexOf('\n  publish:'));
   assert.match(publish, /permissions:\n      contents: write\n      packages: write/);
   assert.match(publish, /GH_TOKEN: \$\{\{ github\.token \}\}/);
   assert.match(publish, /RELEASE_NUGET_API_KEY: \$\{\{ github\.token \}\}/);
@@ -925,7 +927,10 @@ test('only the publisher receives the Actions token and package-write permission
   assert.match(publish, /RELEASE_REGISTRY_USER: \$\{\{ github\.repository_owner \}\}/);
   assert.match(publish, /RELEASE_REGISTRY_PASSWORD: \$\{\{ github\.token \}\}/);
   assert.doesNotMatch(publish, /environment:|secrets\.|RELEASE_REGISTRY_PASSWORD:.*\|\|/);
-  assert.doesNotMatch(beforePublish, /contents: write|packages: write|GH_TOKEN|RELEASE_NUGET_API_KEY/);
+  assert.match(validate, /permissions:\n      actions: read/);
+  assert.match(validate, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.doesNotMatch(beforePublish, /contents: write|packages: write|RELEASE_NUGET_API_KEY/);
+  assert.doesNotMatch(buildJobs, /GH_TOKEN|RELEASE_NUGET_API_KEY|RELEASE_REGISTRY_PASSWORD/);
 });
 
 test('confirmed initial replacement updates only the approved tag and preserves old index/platforms and history', t => {
@@ -1303,11 +1308,14 @@ for (const externalFailure of [false, true]) {
   });
 }
 
-test('publish alone has write permission and its token never goes into pack or Git source', () => {
+test('publish alone has write permission and build jobs never receive its publication token', () => {
   const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8').replaceAll('\r\n', '\n');
-  const [pack, publish] = workflow.split('\n  publish:');
-  assert.match(pack, /permissions:\n  contents: read/);
-  assert.doesNotMatch(pack, /contents: write|GH_TOKEN/);
+  const publishIndex = workflow.indexOf('\n  publish:');
+  const packageAndImageJobs = workflow.slice(workflow.indexOf('\n  packages:'), publishIndex);
+  const [beforePublish, publish] = workflow.split('\n  publish:');
+  assert.match(beforePublish, /permissions:\n  contents: read/);
+  assert.doesNotMatch(beforePublish, /contents: write|packages: write/);
+  assert.doesNotMatch(packageAndImageJobs, /GH_TOKEN|RELEASE_NUGET_API_KEY|RELEASE_REGISTRY_PASSWORD/);
   assert.match(publish, /permissions:\n      contents: write/);
   assert.match(publish, /GH_TOKEN: \$\{\{ github.token \}\}/);
 });
