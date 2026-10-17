@@ -51,11 +51,15 @@ test('pure renderer retains every required existing startup key and does not mut
   assert.equal(input.configuration.EventsAndSessions__Provider__ResourceGeneration, '1');
   assert.equal(input.configuration.EventsAndSessions__SessionMaterial__ContainerUri,
     'https://awv1p0blob.blob.core.windows.net/session-material');
-  assert.equal(input.configuration.AgentHost__ModelBindingsRevision, 'p1-v1.0.0');
+  assert.equal(input.configuration.AgentHost__ModelBindingsRevision, 'p1-v1.0.1');
   assert.equal(input.configuration.AgentHost__ModelBindings__reasoning__ModelId, 'gpt-6.1-sol');
   assert.equal(input.configuration.AgentHost__ModelBindings__reasoning__SourceMode, 'HostedCopilot');
   assert.equal(input.configuration.AgentHost__ModelBindings__coding__ModelId, 'gpt-6-luna');
   assert.equal(input.configuration.AgentHost__ModelBindings__coding__SourceMode, 'HostedCopilot');
+  assert.equal(input.configuration['AgentHost__ModelBindings__gpt-6.1-sol__ModelId'], 'gpt-6.1-sol');
+  assert.equal(input.configuration['AgentHost__ModelBindings__gpt-6.1-sol__SourceMode'], 'HostedCopilot');
+  assert.equal(input.configuration['AgentHost__ModelBindings__gpt-6-luna__ModelId'], 'gpt-6-luna');
+  assert.equal(input.configuration['AgentHost__ModelBindings__gpt-6-luna__SourceMode'], 'HostedCopilot');
   const before = structuredClone(input);
   const result = renderEventsProfile(input);
   assert.deepEqual(input, before);
