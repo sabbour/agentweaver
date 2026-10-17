@@ -143,25 +143,10 @@ test('refuses the original image SHA as the workflow source', () => {
     spawn: () => assert.fail('no command may run') }), error => error.diagnostic.failureCode === 'DIAGNOSTIC_SCOPE_INVALID');
 });
 
-test('release workflow routes the archive diagnostic alone, read-only, before Docker setup, with no build or publish', () => {
+test('regular release workflow no longer includes the one-off AgentHost archive diagnostic job', () => {
   const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8').replaceAll('\r\n', '\n');
-  const job = workflow.slice(workflow.indexOf('\n  diagnose-agenthost-archive:'), workflow.indexOf('\n  publish:'));
-  assert.match(workflow, /agenthost_archive_diagnostic:[\s\S]*?default: false/);
-  for (const name of ['pack', 'diagnose-probe-sampler', 'publish', 'publish-probe-sampler']) {
-    const start = workflow.indexOf(`\n  ${name}:`);
-    assert.match(workflow.slice(start, start + 400), /!inputs\.agenthost_archive_diagnostic/);
-  }
-  assert.match(job, /if: \$\{\{ inputs\.agenthost_archive_diagnostic \}\}/);
-  for (const guard of ['GITHUB_REPOSITORY', 'GITHUB_REF" = "refs/heads/v1', 'GITHUB_RUN_ATTEMPT" = "1',
-    'EXPECTED_SOURCE" = "$GITHUB_SHA', '"$PUBLISH" = "false"', '"$PLATFORM_ONLY" = "false"', '"$PROBE_SAMPLER_REPLACEMENT" = "false"'])
-    assert.ok(job.includes(guard), guard);
-  assert.ok(job.indexOf('GITHUB_RUN_ATTEMPT') < job.indexOf('setup-docker-action'));
-  assert.ok(job.indexOf('setup-docker-action') < job.indexOf('download-artifact'));
-  assert.match(job, /run-id: 38286624230\n\s+artifact-ids: 11763641424/);
-  assert.match(job, /docker\/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70/);
-  assert.match(job, /version: 'v29\.9\.0'/);
-  assert.match(job, /DOCKER_CONTEXT: default/);
-  assert.doesNotMatch(job, /docker (build|buildx|push|login|run)|buildx|: write|environment:|secrets\.|release:pack|publish\.mjs/);
+  assert.doesNotMatch(workflow, /diagnose-agenthost-archive|38286624230|11763641424/);
+  assert.match(workflow, /images:[\s\S]*?Build product Docker images/);
 });
 
 test('describeInspect marks missing fields', () => {

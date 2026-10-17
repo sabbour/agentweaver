@@ -410,19 +410,8 @@ test('local receipt failure still leaves both permanent results and sanitized ev
   assert.equal(f.pushCount(), 1);
 });
 
-test('recovery workflow uses the four existing inputs, skips pack and reuses the original artifact without stored credentials', () => {
+test('regular release workflow does not wire the historical Probe recovery helper', () => {
   const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8').replaceAll('\r\n', '\n');
-  const recovery = workflow.slice(workflow.indexOf('\n  publish-probe-sampler:'));
-  assert.match(workflow, /pack:\n\s+if: \$\{\{ !inputs\.foundation_probe_sampler_replacement && !inputs\.agenthost_archive_diagnostic \}\}/);
-  assert.match(recovery, /inputs\.publish && inputs\.foundation_probe_sampler_replacement && !inputs\.agenthost_archive_diagnostic/);
-  assert.match(recovery, /actions: read/);
-  assert.match(recovery, /contents: write/);
-  assert.match(recovery, /packages: write/);
-  assert.match(recovery, /run-id: 37409181340/);
-  assert.match(recovery, /name: v1-release-pack-f46cff3c65a97b76b78c9ea717ec8b2068d56de5-37409181340/);
-  assert.match(recovery, /probe-publication-recovery\.mjs artifacts\/release\/frozen-probe/);
-  assert.match(recovery, /test "\$GITHUB_RUN_ATTEMPT" = "1"/);
-  assert.doesNotMatch(recovery, /needs: pack|setup-dotnet|release:pack|environment:|secrets\.|publish\.mjs|DOCKER_CONFIG:/);
-  assert.match(recovery, /if: \$\{\{ always\(\) \}\}/);
-  assert.match(recovery, /v1-probe-recovery-receipt-\$\{\{ github.sha \}\}-\$\{\{ github.run_id \}\}/);
+  assert.doesNotMatch(workflow, /probe-publication-recovery\.mjs|publish-probe-sampler|expected_probe_digest/);
+  assert.match(workflow, /publish:[\s\S]*?needs: \[validate, packages, images\]/);
 });

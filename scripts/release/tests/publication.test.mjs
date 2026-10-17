@@ -501,9 +501,10 @@ test('a Debug-only pin is forced into the actual Release build and container pub
 
 test('pack upload and download use the same attempt-independent source/run identity', () => {
   const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8');
-  assert.equal((workflow.match(/name: v1-release-pack-\$\{\{ github.sha \}\}-\$\{\{ github.run_id \}\}/g) ?? []).length, 2);
-  assert.doesNotMatch(workflow, /name: v1-release-pack-.*github\.run_attempt/);
-  assert.match(workflow, /name: v1-release-pack-[^\n]+\n\s+overwrite: true/);
+  assert.equal((workflow.match(/name: v1-release-packages-\$\{\{ github.sha \}\}-\$\{\{ github.run_id \}\}/g) ?? []).length, 2);
+  assert.equal((workflow.match(/name: v1-release-images-\$\{\{ github.sha \}\}-\$\{\{ github.run_id \}\}/g) ?? []).length, 2);
+  assert.doesNotMatch(workflow, /name: v1-release-(?:packages|images)-.*github\.run_attempt/);
+  assert.equal((workflow.match(/name: v1-release-(?:packages|images)-[^\n]+\n\s+overwrite: true/g) ?? []).length, 2);
 });
 
 test('failed image preparation emits no complete provenance and rejects reuse of partial output', (t) => {
@@ -680,18 +681,12 @@ test('platform-only publication rejects full preparation and conflicting selecti
   assert.deepEqual(f.externalCalls, []);
 });
 
-test('platform selection defaults off and blocks both frozen Probe routes before artifact download', () => {
+test('product image preparation excludes the acceptance Probe and the regular pipeline has no incident jobs', () => {
   const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8');
-  assert.match(workflow, /platform_only:[\s\S]*?default: false/);
-  assert.equal((workflow.match(/args\+=\(--platform-only\); fi/g) ?? []).length, 2);
-  for (const name of ['diagnose-probe-sampler', 'publish-probe-sampler']) {
-    const start = workflow.indexOf(`\n  ${name}:`);
-    const end = workflow.indexOf('\n  publish:', start);
-    const job = workflow.slice(start, end === -1 ? undefined : end);
-    const guard = job.indexOf('test "$PLATFORM_ONLY" != "true"');
-    assert.ok(guard >= 0 && guard < job.indexOf('uses: actions/download-artifact@v4'));
-    assert.match(job, /PLATFORM_ONLY: \$\{\{ inputs\.platform_only \}\}/);
-  }
+  const images = workflow.slice(workflow.indexOf('\n  images:'), workflow.indexOf('\n  publish:'));
+  assert.match(images, /--images-only --platform-only/);
+  assert.doesNotMatch(workflow, /platform_only:|foundation_probe_sampler_replacement|diagnose-probe-sampler|diagnose-agenthost-archive|publish-probe-sampler/);
+  assert.doesNotMatch(workflow, /environment:|release:deploy/);
 });
 
 test('Probe-only preparation and publication preserve the existing hyphenated image and exclude other components', t => {
@@ -717,7 +712,7 @@ test('Probe-only preparation and publication preserve the existing hyphenated im
 
 test('Probe-only publication refuses a full preparation and contradictory selectors before any external effects', t => {
   const f = fixture(t, { foundationProbe: true });
-  assert.throws(() => f.prepare({ foundationProbeOnly: true, packagesOnly: true }), /mutually exclusive/);
+  assert.throws(() => f.prepare({ foundationProbeOnly: true, packagesOnly: true }), /cannot combine/);
   f.prepare();
   assert.throws(() => f.publish({ foundationProbeOnly: true }), /Foundation Probe-only manifest selection/);
   assert.throws(() => f.publish({ foundationProbeOnly: true, packagesOnly: true }), /mutually exclusive/);
@@ -898,105 +893,33 @@ test('sampler replacement rejects an unavailable preserved initial index before 
   assert.ok(!f.externalCalls.some(call => call.args[0] === 'push'));
 });
 
-test('existing Linux workflow defaults off and isolates the approved sampler route from ordinary protected publication', () => {
-  const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8');
-  assert.match(workflow, /foundation_probe_sampler_replacement:[\s\S]*?default: false/);
-  assert.match(workflow, /expected_probe_digest:[\s\S]*?default: ''/);
-  assert.match(workflow, /args\+=\(--foundation-probe-only\); fi/);
-  assert.match(workflow, /npm run release:pack -- "\$\{args\[@\]\}"/);
-  assert.match(workflow, /probe-publication-recovery\.mjs artifacts\/release\/frozen-probe/);
-  assert.match(workflow, /if: \$\{\{ inputs\.publish && inputs\.foundation_probe_sampler_replacement && !inputs\.agenthost_archive_diagnostic \}\}/);
-  assert.ok(workflow.includes(currentProbeDigest));
-  assert.equal((workflow.match(/fetch-depth: 0/g) ?? []).length, 5);
-  const ordinary = workflow.slice(workflow.indexOf('\n  publish:'), workflow.indexOf('\n  publish-probe-sampler:'));
-  const sampler = workflow.slice(workflow.indexOf('\n  publish-probe-sampler:'));
-  assert.match(ordinary, /permissions:\r?\n\s+contents: write\r?\n\s+packages: write/);
-  assert.match(ordinary, /environment: v1-publication/);
-  assert.match(ordinary, /inputs\.publish && !inputs\.foundation_probe_sampler_replacement/);
-  assert.match(ordinary, /RELEASE_REGISTRY: ghcr\.io\/sabbour/);
-  assert.match(ordinary, /RELEASE_REGISTRY_USER: \$\{\{ github\.repository_owner \}\}/);
-  assert.match(ordinary, /RELEASE_REGISTRY_PASSWORD: \$\{\{ github\.token \}\}/);
-  const publisherEngine = ordinary.slice(
-    ordinary.indexOf('name: Set up product Docker engine'),
-    ordinary.indexOf('name: Manually publish verified exact-source artifacts'),
-  );
-  assert.match(publisherEngine, /if: \$\{\{ inputs\.platform_only \}\}/);
-  assert.match(publisherEngine, /uses: docker\/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70/);
-  assert.match(publisherEngine, /version: 'v29\.9\.0'\s+set-host: true\s+daemon-config:[\s\S]*?"containerd-snapshotter": true/);
-  assert.ok(ordinary.indexOf('name: Set up product Docker engine') <
-    ordinary.indexOf('name: Manually publish verified exact-source artifacts'));
-  assert.doesNotMatch(
-    ordinary.slice(ordinary.indexOf('name: Manually publish verified exact-source artifacts')),
-    /DOCKER_CONTEXT:/,
-  );
-  assert.doesNotMatch(ordinary, /secrets\.RELEASE_REGISTRY_(?:USER|PASSWORD)/);
-  assert.match(sampler, /packages: write/);
-  assert.match(sampler, /RELEASE_REGISTRY: ghcr\.io\/sabbour/);
-  assert.match(sampler, /RELEASE_REGISTRY_USER: \$\{\{ github\.repository_owner \}\}/);
-  assert.match(sampler, /RELEASE_REGISTRY_PASSWORD: \$\{\{ github\.token \}\}/);
-  assert.doesNotMatch(sampler, /\benvironment:/);
-  assert.doesNotMatch(sampler, /secrets\.|RELEASE_NUGET|console\.log|echo.*TOKEN/);
+test('receipt-triggered release workflow builds separate artifacts and publishes without an approval gate', () => {
+  const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8').replaceAll('\r\n', '\n');
+  assert.match(workflow, /push:\n\s+branches: \[v1\]\n\s+paths:\n\s+-\s+'releases\/receipts\/\*\*'/);
+  assert.match(workflow, /workflow_dispatch:/);
+  assert.match(workflow, /packages:\n\s+needs: validate/);
+  assert.match(workflow, /images:\n\s+needs: validate/);
+  assert.match(workflow, /publish:\n\s+needs: \[validate, packages, images\]/);
+  assert.match(workflow, /--packages-only/);
+  assert.match(workflow, /--images-only --platform-only/);
+  assert.match(workflow, /merge-packs\.mjs/);
+  assert.doesNotMatch(workflow, /inputs\.publish|environment:|release:deploy|foundation_probe_sampler_replacement|agenthost_archive_diagnostic/);
 });
 
-test('ordinary release workflow scopes the existing Actions token to the approved GitHub Packages feed', () => {
+test('only the publisher receives the Actions token and package-write permission for fixed GitHub destinations', () => {
   const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8').replaceAll('\r\n', '\n');
-  const ordinary = workflow.slice(workflow.indexOf('\n  publish:'), workflow.indexOf('\n  publish-probe-sampler:'));
-  const beforeOrdinary = workflow.slice(0, workflow.indexOf('\n  publish:'));
-  assert.match(ordinary, /permissions:\n      contents: write\n      packages: write/);
-  assert.match(ordinary, /environment: v1-publication/);
-  assert.match(ordinary, /inputs\.publish && !inputs\.foundation_probe_sampler_replacement/);
-  assert.match(ordinary, /RELEASE_NUGET_API_KEY: \$\{\{ github\.token \}\}/);
-  assert.match(ordinary, /RELEASE_NUGET_USERNAME: \$\{\{ github\.repository_owner \}\}/);
-  assert.doesNotMatch(ordinary, /secrets\.RELEASE_NUGET_API_KEY|\|\|/);
-  assert.match(ordinary, /RELEASE_REGISTRY: ghcr\.io\/sabbour/);
-  assert.match(ordinary, /RELEASE_REGISTRY_USER: \$\{\{ github\.repository_owner \}\}/);
-  assert.match(ordinary, /RELEASE_REGISTRY_PASSWORD: \$\{\{ github\.token \}\}/);
-  assert.doesNotMatch(ordinary, /secrets\.RELEASE_REGISTRY_(?:USER|PASSWORD)|\|\|/);
-  assert.doesNotMatch(beforeOrdinary, /packages: write|RELEASE_NUGET_API_KEY/);
-  const guardStep = ordinary.indexOf('name: Require approved GitHub Packages destination');
-  const registryGuardStep = ordinary.indexOf('name: Require approved GHCR destination');
-  const artifactDownload = ordinary.indexOf('uses: actions/download-artifact@v4');
-  assert.ok(guardStep >= 0 && guardStep < artifactDownload);
-  assert.ok(registryGuardStep >= 0 && registryGuardStep < artifactDownload);
-  const guard = ordinary.match(/node -e "([^"]+)"/)?.[1];
-  assert.ok(guard);
-  const approvedFeed = 'https://nuget.pkg.github.com/sabbour/index.json';
-  for (const feed of [
-    approvedFeed, undefined, '', 'https://feed.example.invalid/v3/index.json',
-    'https://nuget.pkg.github.com/another-owner/index.json',
-    'http://nuget.pkg.github.com/sabbour/index.json',
-    `${approvedFeed}?credential=fake-secret`, `${approvedFeed}#fake-secret`, `${approvedFeed}/`,
-  ]) {
-    const env = { ...process.env };
-    delete env.RELEASE_NUGET_SOURCE;
-    if (feed !== undefined) env.RELEASE_NUGET_SOURCE = feed;
-    const result = spawnSync(process.execPath, ['-e', guard], { encoding: 'utf8', env });
-    assert.equal(result.status, feed === approvedFeed ? 0 : 1, String(feed));
-    assert.equal(result.stdout, '');
-    if (feed !== approvedFeed) {
-      assert.match(result.stderr, /::error::Publication feed does not match/);
-      if (feed) assert.ok(!result.stderr.includes(feed));
-    }
-  }
-  const registryGuardBlock = ordinary.slice(registryGuardStep, artifactDownload);
-  const registryGuard = registryGuardBlock.match(/node -e "([^"]+)"/)?.[1];
-  assert.ok(registryGuard);
-  const approvedRegistry = 'ghcr.io/sabbour';
-  for (const registry of [
-    approvedRegistry, undefined, '', 'ghcr.io/another-owner', 'https://ghcr.io/sabbour',
-    'ghcr.io/sabbour/agentweaver', 'ghcr.io/sabbour?token=fake-secret',
-  ]) {
-    const env = { ...process.env };
-    delete env.RELEASE_REGISTRY;
-    if (registry !== undefined) env.RELEASE_REGISTRY = registry;
-    const result = spawnSync(process.execPath, ['-e', registryGuard], { encoding: 'utf8', env });
-    assert.equal(result.status, registry === approvedRegistry ? 0 : 1, String(registry));
-    assert.equal(result.stdout, '');
-    if (registry !== approvedRegistry) {
-      assert.match(result.stderr, /::error::Publication registry does not match/);
-      if (registry) assert.ok(!result.stderr.includes(registry));
-    }
-  }
+  const publish = workflow.slice(workflow.indexOf('\n  publish:'));
+  const beforePublish = workflow.slice(0, workflow.indexOf('\n  publish:'));
+  assert.match(publish, /permissions:\n      contents: write\n      packages: write/);
+  assert.match(publish, /GH_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(publish, /RELEASE_NUGET_API_KEY: \$\{\{ github\.token \}\}/);
+  assert.match(publish, /RELEASE_NUGET_USERNAME: \$\{\{ github\.repository_owner \}\}/);
+  assert.match(publish, /RELEASE_NUGET_SOURCE: https:\/\/nuget\.pkg\.github\.com\/sabbour\/index\.json/);
+  assert.match(publish, /RELEASE_REGISTRY: ghcr\.io\/sabbour/);
+  assert.match(publish, /RELEASE_REGISTRY_USER: \$\{\{ github\.repository_owner \}\}/);
+  assert.match(publish, /RELEASE_REGISTRY_PASSWORD: \$\{\{ github\.token \}\}/);
+  assert.doesNotMatch(publish, /environment:|secrets\.|RELEASE_REGISTRY_PASSWORD:.*\|\|/);
+  assert.doesNotMatch(beforePublish, /contents: write|packages: write|GH_TOKEN|RELEASE_NUGET_API_KEY/);
 });
 
 test('confirmed initial replacement updates only the approved tag and preserves old index/platforms and history', t => {

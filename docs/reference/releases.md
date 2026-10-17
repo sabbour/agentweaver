@@ -106,12 +106,12 @@ The full manifest hash remains in the preparation receipt.
 The publisher rejects a receipt prepared with another component selection.
 This selection cannot combine with `--packages-only` or `--foundation-probe-only`.
 
-For a product build, the manual workflow first prepares its approved build inputs.
+For a product build, the automated v1 release workflow first prepares its approved build inputs.
 It pulls only the three source-pinned Microsoft base images.
 A standard locked npm install fills the cache for the runner's dependencies from the approved 467-entry Web lockfile.
 It retains the committed download destinations and npm's existing integrity checks.
 This preparation runs no dependency install scripts and adds no dependency.
-For `platform_only: true`, the workflow starts Docker Engine `v29.9.0` with the official `docker/setup-docker-action` `v5.5.0`, pinned to commit `2bf61fb9464cc67f0cbdeabed6aa0380accd1c70`.
+The image job starts Docker Engine `v29.9.0` with the official `docker/setup-docker-action` `v5.5.0`, pinned to commit `2bf61fb9464cc67f0cbdeabed6aa0380accd1c70`.
 The action enables `containerd-snapshotter` in its temporary Docker daemon.
 The action exports that daemon's Unix socket through `DOCKER_HOST`, so Docker commands use the temporary engine without changing context metadata.
 The default Buildx builder then uses the same local Docker Engine as the image pulls.
@@ -120,38 +120,33 @@ It also checks the shared store, image digests, and clean source before packing.
 The action stops its daemon at the end of the job and does not change the runner's preinstalled daemon.
 The runner still requires Buildx `0.13` or later. The workflow does not install Buildx or fetch a builder image.
 The existing offline Web install and image checks remain unchanged.
-These inputs are prepared on the build runner, not on a developer's machine.
-This preparation does not publish artifacts or deploy services.
+These inputs are prepared on the image runner, not on a developer's machine.
+The package and image jobs upload separate artifacts, bound to the same source SHA and manifest hash.
 
 ```mermaid
 flowchart LR
-  Manifest["Draft manifest with explicit dependency versions"] --> Plan["Plan 23 product versions at 1.0.0"]
-  Plan --> Apply["Applied source versions and preparation receipt"]
-  Apply --> Selection["Choose component selection"]
-  Selection --> Product["platform-only: product packages and service images"]
-  Selection --> Full["Default: all components, including the acceptance Probe"]
-  Product --> Inputs["Verify and cache approved build inputs on the same runner"]
-  Inputs --> Pack["Prepare exact-source artifacts and hashes"]
-  Full --> Pack
-  Pack --> Publish["Approved publication with the same selection"]
-  Publish --> Evidence["Actual registry digests"]
-  Evidence --> Deploy["Separately approved deployment and live checks"]
+  Receipt["Merged version-application receipt on v1"] --> Validate["Validate manifest and changesets"]
+  Validate --> Packages["Pack NuGet packages"]
+  Validate --> Images["Build product Docker images"]
+  Packages --> Artifacts["Upload exact-source artifacts"]
+  Images --> Artifacts
+  Artifacts --> Publish["Publish to GitHub Packages and GHCR; save receipt"]
 ```
 
 ## Publication boundary
 
-The manual publication workflow requires an explicit publish choice and environment approval. It publishes the prepared artifacts only.
-
-The `platform_only` workflow input defaults to `false`.
-It selects product preparation and matching ordinary publication.
-Both frozen Probe jobs reject a conflicting platform selection before downloading artifacts.
-The protected `v1-publication` environment remains required for ordinary publication.
+The v1 CI workflows run tests, build, lint, coverage, changeset, release-composition,
+and documentation checks on pull requests and pushes. A committed
+`releases/receipts/**` version-application receipt on `v1` triggers automatic
+publication. `workflow_dispatch` runs the same release path manually from `v1`.
+There is no publish toggle or environment approval. The Foundation Probe is
+excluded from product packages and images.
 
 P1 NuGet publication uses the existing Actions token only with
 `https://nuget.pkg.github.com/sabbour/index.json`.
-The ordinary publish job rejects another destination before artifact download.
-Only that job gains package-write permission; its existing contents-write permission remains.
-It requires manual publication and the protected environment's approval.
+The `publish` job fixes this feed and the `ghcr.io/sabbour` destination.
+Only that job receives `contents: write` and `packages: write`; the package and
+image jobs remain read-only.
 No stored NuGet key or external-feed credential fallback is added.
 The publisher writes a temporary `NuGet.Config` in the operating system's temp
 folder, binds the approved feed to the repository owner's username and the same
@@ -159,9 +154,12 @@ Actions token, and passes that file explicitly to `dotnet nuget push`. The
 directory and file are restricted to the runner user, then removed whether the
 push succeeds or fails. This does not read or change a developer's global NuGet
 settings, and the config is not included in release artifacts or receipts.
-Package access, environment configuration and actual publication require separate confirmation.
-The existing registry credential inputs and frozen Probe routes remain unchanged.
+Before any push, the publisher verifies source HEAD, manifest, selected components,
+and artifact hashes. It records immutable claim and result records and uploads the
+publication receipt for the local deployment tooling.
 
+GitHub Actions never deploys to Azure or AKS. Use the local `release:deploy`
+command for deployment and live acceptance.
 The source contains a prepared platform release composition, not an actual deployment or live acceptance gate. Release preparation does not prove Azure acceptance.
 
 ## One-use v1.0.0 completion

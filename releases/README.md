@@ -25,31 +25,23 @@ infrastructure-input hash from the same clean tracked source as its Docker build
 Both build paths embed those values; an `unbound` image cannot satisfy acceptance.
 The image repository remains `agentweaver-foundation-probe`, not the component
 ID's dotted lowercase form.
-Use `--foundation-probe-only` with both preparation and publication to select
-only this image. This option cannot combine with `--packages-only`.
-Selection does not change the full manifest hash or permit artifact substitution.
-It does not rebuild or publish the Broker image or eight NuGet packages.
+`--foundation-probe-only` remains a local selector for historical Probe
+maintenance. It is not part of automated product publication.
 
 Use `--platform-only` with both preparation and publication to exclude the
 acceptance-only Probe while retaining every product package and service image.
 This option cannot combine with `--packages-only` or `--foundation-probe-only`.
 Publication requires the same selection as the preparation receipt.
-The workflow input `platform_only` defaults to `false`.
-With this input enabled, both frozen Probe jobs reject the selection before
-they download an artifact or run the diagnostic or recovery helper.
-Ordinary product publication still requires the protected `v1-publication` environment.
+The automated release workflow always uses this product selection.
 `Agentweaver.Environment` is an executable service, not a library package.
 Preparation uses its existing SDK container configuration.
-These selections do not supply deployment configuration or permission to publish.
 
-For P1, the ordinary publish job uses its existing Actions token as the NuGet API key.
-Its only admitted feed is `https://nuget.pkg.github.com/sabbour/index.json`.
-The job rejects a missing or different feed before artifact download.
-It alone gains package-write permission and retains contents-write permission for durable receipts.
-Manual publication, exact-source checks and the protected `v1-publication` environment remain required.
-No stored NuGet secret or credential fallback for another feed is added.
-The registry credential inputs and separate frozen Probe jobs remain unchanged.
-Source wiring does not prove package access, environment setup or publication.
+The automated publisher uses `GITHUB_TOKEN` for the fixed NuGet feed
+`https://nuget.pkg.github.com/sabbour/index.json` and GHCR. Only its job has
+package-write and contents-write permissions. There is no approval environment,
+stored NuGet secret, or credential fallback for another feed. The token must
+already have access to the existing packages; this workflow does not change
+repository or package permissions.
 
 The user-confirmed initial Probe replacement is one exception to immutable tags.
 Only `ghcr.io/sabbour/agentweaver-foundation-probe:0.0.0` can replace its exact
@@ -90,37 +82,11 @@ The publisher preserves the previous manifest by digest and all historical recei
 It records the pushed digest before later verification can fail.
 This legacy attempt is consumed. The recovery route does not reuse its claims or receipts.
 
-The existing `v1 release pack` workflow runs this path on Linux.
-Set `foundation_probe_sampler_replacement: true` and the exact `expected_probe_digest`.
-With `publish: false` and sampler replacement selected, it runs only the frozen-image diagnostic.
-The diagnostic downloads the original artifact from run `37409181340`.
-It verifies the pinned archive, config, DLL, and `f46cff...` image-source metadata without rebuilding the Probe.
-The dispatch source identifies the admitted diagnostic helper, not a new image build.
-The diagnostic job uses only read permissions for contents, Actions, and packages.
-It permits Docker login, archive loading, config inspection, and the current manifest read.
-It never runs the publisher or writes claims, registry uploads, or tags.
-Its isolated credential directory is temporary and removed after the operations.
-The sanitized result gives only operation names, exit values, and error codes on the allow list.
-Successful login and reads do not prove package-write permission or identify the original failure.
-
-The same workflow has one more default-off input, `agenthost_archive_diagnostic`.
-It checks only the saved AgentHost archive from run `38286624230` (artifact `11763641424`).
-It is not a rebuild, a publication, or an acceptance result.
-Leave `publish`, `platform_only`, and Probe replacement off. The job refuses any other setting.
-It skips preparation, Probe, and publication jobs.
-It needs `refs/heads/v1`, the exact dispatch source, and the first run attempt.
-The dispatch source must differ from the original image source `6b036e11ff211f96cfddcd837be9b5bce75ddb34`.
-The job checks the archive SHA256 before it loads the archive. It then runs only `docker load` and `docker image inspect`.
-The sanitized result gives only field names on the allow list, true or false comparisons, and digests.
-It never prints raw inspect output, environment values, full config, or arbitrary labels.
-A well-formed image that does not match gives false comparisons. Malformed data is a failure.
-Ordinary `publish: false` without sampler replacement still prepares release artifacts.
-With `publish: true` and sampler replacement selected, the workflow runs only the separately approved recovery attempt.
-Both sampler selections skip preparation. The recovery job downloads the same original artifact from run `37409181340`.
-It never rebuilds the image or substitutes an image from the publisher helper source.
-The shared verifier checks the pinned archive, provenance, config, DLL, and original image-source metadata.
-The image source remains `f46cff3c65a97b76b78c9ea717ec8b2068d56de5`.
-The dispatch source identifies the final admitted publisher helper SHA.
+The former release workflow also carried one-off Probe-sampler and
+AgentHost-archive diagnostic and recovery jobs pinned to incident artifacts.
+Those jobs are retired and are not part of automated product publication.
+The helper scripts and permanent claims remain as historical records; they do
+not run from the new release pipeline.
 
 The fixed recovery claim namespace is
 `agentweaver-publication/foundation-probe-0.0.0-sampler-recovery-attempt-2`.
@@ -149,13 +115,10 @@ The publisher removes only its newly created temporary Docker credential directo
 Failure consumes acknowledged claims and stops without automatic retry, claim reuse, or claim deletion.
 The operator then reads the tag independently and preserves the original and new receipts.
 
-The sampler-only job has no GitHub environment.
-It uses the ephemeral GitHub token with contents-write, Actions-read, and package-write permissions for this fixed route.
-The token must already have write access to the existing package.
-This route does not authorize new persistent package grants.
-Ordinary publication retains the protected `v1-publication` environment.
-Use the final admitted helper SHA, not the original image-source SHA, for the recovery dispatch.
-These options do not authorize publication, deployment, consent, or fixture creation.
+The historical sampler recovery used the ephemeral Actions token for this
+fixed route and did not grant persistent package access. The current
+go-forward release workflow has no approval environment; the one-use v1.0.0
+partial-publication continuation remains documented separately below.
 
 This draft contains applied source versions, not published artifacts or deployed
 persona evidence. It cannot be published as an accepted platform release.
@@ -229,8 +192,8 @@ contain `evidence` with a lowercase 40-character `sourceSha` and a matching AKS
 at that source SHA. Each run must have an HTTPS evidence URL. This validates
 evidence *references*, not their authenticity or success. Verify deployment
 and test results externally before publication. `draft` forbids `evidence`, so
-it cannot claim unearned exact-SHA validation. The manual workflow publishes
-artifacts only.
+it cannot claim unearned exact-SHA validation. The automated release workflow publishes the prepared artifacts only; it does
+not prove deployment or live acceptance.
 Platform release composition, chart wiring, and deployment gates remain future work.
 
 ## Historical foundation additions
@@ -316,8 +279,9 @@ the Azure Blob transport adapter.
 ## Release planning and package preparation
 
 Dependency-free Node scripts prepare component versions and locked package/image artifacts.
-The plan, apply, and pack commands do not publish or deploy artifacts.
-The manual workflow has a separate publication choice.
+The plan, apply, and pack commands do not publish or deploy artifacts. The
+GitHub release workflow automatically publishes the merged version bump's
+packages and images.
 
 - `npm run release:plan` reads `releases/foundation.json` and every pending
   `.changeset/*.md` record. It computes the highest-severity semver bump per
@@ -448,14 +412,9 @@ or update the draft composition.
 npm run release:integration-pack -- --integration-source-sha <full-source-sha>
 ```
 
-The manually dispatched `.github/workflows/v1-integration-images.yml` workflow
-requires the `v1` branch and an `expected_source` equal to the workflow SHA.
-Its default `publish: false` prepares and uploads the images only. Selecting
-`publish: true` runs a separate job in the `v1-publication` environment. That
-job publishes the exact source-SHA tags and creates immutable claim and result
-records; its `integration-publication.json` receipt is uploaded separately.
-The local publication command requires the same explicit image-only and
-confirmation flags:
+The former GitHub integration-image workflow has been removed. This source-SHA
+publication path is available only through the local command, with explicit
+image-only and confirmation flags:
 
 ```powershell
 npm run release:integration-publish -- <full-source-sha> --integration-images-only --confirm-integration-publication
@@ -492,114 +451,45 @@ This integration mode is not a release or acceptance result. The existing
 published v1 release composition and its full publication evidence. Add
 `--execute` only after the read-only preflight passes and when you intend a rollout.
 
-The manually dispatched `v1 release pack` GitHub Actions workflow
-(`.github/workflows/v1-release-pack.yml`) validates and prepares the exact dispatch source.
-Dispatch requires the `v1` branch and an `expected_source` equal to the full dispatch SHA.
-The default `publish: false` uploads artifacts only.
-For `platform_only: true`, the pack job first runs `npm run release:prepare-build-inputs`.
-This step requires the exact clean source and the approved Web lockfile hash
-`a6e3ac6dc04086969ba78898057bda4273c3f5491185d15437143cddaef214db`.
-It pulls only the three digest-pinned Microsoft images in the AgentHost and Web Dockerfiles.
-It validates all 467 locked Web dependency entries and their committed HTTPS URLs.
-Only the existing Microsoft npm feeds and `registry.npmjs.org` are permitted.
-It runs standard `npm ci --ignore-scripts --no-audit --no-fund --no-progress`.
-Registry-host replacement is disabled, and npm retains its locked SHA1 and SHA512 integrity checks.
-This install fills npm's cache for the runner's platform; it does not claim every optional-platform tarball was fetched.
-It runs no dependency install scripts and adds no cache library or dependency.
-Its isolated cache is outside the checkout and also supplies the existing offline Web install.
-For `platform_only: true`, the workflow starts Docker Engine `v29.9.0` with the official `docker/setup-docker-action` `v5.5.0`.
-The action is pinned to commit `2bf61fb9464cc67f0cbdeabed6aa0380accd1c70`.
-The action enables `containerd-snapshotter` in its temporary Docker daemon.
-The action exports that daemon's Unix socket through `DOCKER_HOST`, so Docker commands use the temporary engine without changing context metadata.
-The pack job then uses the default Docker Buildx builder.
-Preparation reads the standard `docker buildx inspect default` output and requires exactly one `Driver: docker` and one `Endpoint: default` entry.
-Image pulls, the Buildx build, and the Web build use the same Docker Engine.
-Preparation still rejects another builder, a missing shared image store, or a wrong local image digest.
-The action stops its daemon at the end of the job and does not change the runner's preinstalled daemon.
-The product path still requires Buildx `0.13` or later. It does not install Buildx or fetch a builder image.
-The packer's offline, immutable-image, exact-source, and clean-tree guards remain unchanged.
-Other selections and the frozen Probe jobs retain their existing paths.
-Build-input preparation does not publish, deploy, or change registry credentials.
-Pack artifact names bind the source SHA and workflow run ID, not the attempt number.
-Rerunning failed publication jobs uses the successful pack job's artifact.
-A full rerun replaces that run's pack artifact; a redispatch has a different run ID.
-Neither path bypasses the durable publication claim.
+### Automated GitHub publication
 
-### Manual artifact publication
+The existing `v1-ci.yml` and `v1-docs-ci.yml` workflows run on pull requests and
+pushes to `v1`. They retain the test, build, lint, coverage, release-composition,
+changeset, and documentation checks. A product version-application receipt
+committed to `v1` triggers `.github/workflows/v1-release-pack.yml`; select the
+`v1` branch to run the same pipeline manually as a fallback.
 
-Publication is a separate manual operation, not authorization to deploy or release the platform.
-The workflow's `publish: true` choice runs the `v1-publication` environment job.
-Repository owners can configure approval on that environment.
-This change does not modify environment policy or branch protection.
+The release workflow validates the composition and changeset coverage, then
+starts two independent jobs. `packages` creates the NuGet package artifacts.
+`images` prepares the approved pinned build inputs and builds the product Docker
+images without the acceptance-only Foundation Probe. Each job uploads its
+source-bound artifacts. `publish` waits for both jobs, verifies that their
+source SHA, manifest hash, selected components, and artifact files agree, then
+publishes those exact outputs to GitHub Packages and `ghcr.io/sabbour`.
+The publisher rechecks artifact hashes and image contracts before its first
+external write.
 
-Configure `RELEASE_NUGET_SOURCE` as an environment variable. The product
-publication job fixes the registry destination to `ghcr.io/sabbour` and checks
-that exact value before downloading artifacts. Its existing `GITHUB_TOKEN` is
-used for both GitHub Packages and GHCR; no separate registry credential secrets
-or alternate account token are used. The job remains behind the protected
-`v1-publication` environment. If the token cannot publish to the existing
-packages, publication fails; this workflow change does not grant or verify
-package access or prove that published images are publicly pullable.
-For GitHub Packages, set `RELEASE_NUGET_USERNAME` to the package owner. The
-publisher binds that username and the existing token to the named feed in a
-temporary `NuGet.Config`, passes it explicitly to `dotnet nuget push`, and
-removes the restricted temporary file after success or failure. The protected
-P1 workflow still accepts only the exact `sabbour` feed above. Other manual
-publisher callers may use a non-GitHub HTTPS feed with only an API key; the
-NuGet username applies only to GitHub Packages. This is not a fallback in the
-protected workflow.
-`RELEASE_REGISTRY` is a lowercase registry host, optionally followed by a
-lowercase repository namespace/path for other callers. The host is used for
-Docker login; the full value prefixes each component image path. Schemes,
-credentials, query/fragment suffixes, empty path elements, and traversal
-segments are rejected.
-Feed URLs must use HTTPS without embedded credentials or query tokens.
-Feed fragments are also forbidden.
-The script suppresses subprocess output and passes the registry password through stdin.
-Credentials do not enter source files, provenance, or receipts.
-The runner uses an isolated Docker configuration under ignored `artifacts/`.
+The release workflow runs automatically. It has no publish toggle and no
+environment approval. Only `publish` receives `contents: write` and
+`packages: write`; the other jobs remain read-only. It uses `GITHUB_TOKEN` for
+the fixed NuGet feed `https://nuget.pkg.github.com/sabbour/index.json` and GHCR.
+It writes the publication receipt and immutable claim/result records consumed
+by the local deployment tooling. GitHub Actions never deploys to Azure or AKS.
+Use the local `release:deploy` command for deployment and live acceptance.
 
-Before publication, the script verifies source HEAD, source manifest, and every artifact hash.
-Only the publication job receives `contents: write` and a scoped `GH_TOKEN`.
-The repository is selected by `GITHUB_REPOSITORY`.
-The pack job and top-level workflow permissions remain read-only.
-After validation, the script atomically creates a GitHub annotated-tag claim at
-`refs/tags/agentweaver-publication/<sourceSha>/claim`.
-The claim binds the source commit, provenance hash, planned component versions,
-artifact hashes, and credential-free publication destinations.
-Only the successful ref creator proceeds to external operations.
-Existing claim or result refs, ambiguous responses, and API errors block publication.
-The script never overwrites or deletes these refs.
-It pushes packages with native `dotnet nuget push`.
-It loads prepared service images with Docker, then pushes their exact version tags.
-For `Agentweaver.Web`, publication revalidates the committed source and prepared
-image provenance, then checks the loaded image ID, `linux/amd64` platform, and
-source/version labels before registry login, tagging, or push.
-`publication.json` records package hashes and actual immutable registry digests at the source SHA.
-The workflow uploads that receipt separately.
-The script does not modify the draft composition or fabricate deployment evidence.
+```mermaid
+flowchart LR
+  Bump["Merged version bump and receipt"] --> Validate["Validate composition and changesets"]
+  Validate --> Packages["Pack NuGet packages"]
+  Validate --> Images["Build product Docker images"]
+  Packages --> Artifacts["Upload source-bound artifacts"]
+  Images --> Artifacts
+  Artifacts --> Publish["Publish packages and images; save receipt"]
+```
 
-External publication cannot roll back atomically.
-An error leaves `status: "partial"` and the confirmed publication results in the receipt.
-An immutable annotated-tag result at
-`refs/tags/agentweaver-publication/<sourceSha>/result` records the terminal receipt
-and the exact claim object ID.
-It retains source, provenance, destination, and published-artifact bindings.
-Local `publication.json` and uploaded Actions receipts supplement this durable record.
-An existing claim blocks repeated publication even when no result or local receipt exists.
-Expired Actions artifacts do not permit another publication attempt.
-Concurrent publishers race on atomic ref creation; the loser performs no external operations.
-Result or local receipt persistence failures remain explicit.
-If publication also fails, the error retains both failures.
-The permanent claim remains in place and blocks automatic retry.
-Before any reconciliation, inspect the feed, registry, claim, and result independently.
-This tooling provides no automatic claim deletion, retry, or duplicate-skipping path.
-Do not treat partial receipts as completed publication.
-
-This candidate supplies the manual path but publishes no artifacts.
-Released composition acceptance still requires actual digests and exact-source API/UI/MCP deployment proof.
+The [saved job graph](./v1-release-pipeline.mmd) contains the same diagram.
 See the [release design](../docs/architecture/design/services-and-release.md#fresh-release-tooling)
-for the remaining platform release and deployment gates.
+for the local release and deployment gates.
 
 ### One-use v1.0.0 partial publication continuation
 

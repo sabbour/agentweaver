@@ -35,16 +35,20 @@ render using the original product working directory. The fixture rejects a
 helper HEAD in that product directory, dirty source, and a missing completion
 proof; ordinary publication still rejects a mismatched release HEAD.
 These tests do not execute a live deployment or grant release approval.
-Workflow source checks verify job-local package permission, the approved GitHub
-Packages feed, and the exact `ghcr.io/sabbour` destination guard. They execute
-both destination guards locally with accepted and rejected values. They do not
-authenticate a token, publish a package, prove package-write access, or prove
-that published images are publicly pullable.
+Workflow source checks verify the receipt-based automatic trigger, separate
+package and image jobs, the publisher's dependency on both, exact artifact
+identity, fixed GitHub destinations, job-local write permission, and the
+absence of an approval environment or deployment step. Merge tests reject
+different sources, incomplete component selections, and unlisted files before
+the publisher receives artifacts. They do not authenticate a token, publish a
+package, prove package-write access, or prove that images are publicly pullable.
 Release build-input checks bind the three image references and all 467 dependencies to the approved source.
 They reject source drift, wrong image digests, an isolated builder, and dependency integrity failures before packing.
 A builder fixture uses standard `docker buildx inspect default` text output and rejects missing, duplicate, or unexpected driver and endpoint fields.
-A workflow source check requires the pinned Docker setup action on the `platform_only` path.
-It also requires `set-host: true`, which makes the action export its local socket through `DOCKER_HOST` before input preparation. The check rejects attempts to update the reserved `default` context.
+A workflow source check requires the pinned Docker setup action on the product
+image job. It also requires `set-host: true`, which makes the action export its
+local socket through `DOCKER_HOST` before input preparation. The check rejects
+attempts to update the reserved `default` context.
 These source checks do not start Docker or prove runner storage behavior.
 A local npm fixture checks a standard locked install followed by offline cache consumption for both existing integrity algorithms.
 These checks run no product image build or publication.

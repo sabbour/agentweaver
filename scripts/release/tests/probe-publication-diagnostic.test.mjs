@@ -189,14 +189,8 @@ test('publication command reports an allowlisted stage and code without native o
     () => ({ status: 0, stdout: 'raw bytes\n', stderr: '' })), 'raw bytes\n');
 });
 
-test('workflow diagnostic is isolated, read-only and pinned to the original artifact without a build or publisher', () => {
+test('regular release workflow no longer downloads the frozen Probe diagnostic artifact', () => {
   const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8').replaceAll('\r\n', '\n');
-  const diagnostic = workflow.slice(workflow.indexOf('\n  diagnose-probe-sampler:'), workflow.indexOf(  '\n  diagnose-agenthost-archive:'));
-    assert.match(workflow, /pack:\n\s+if: \$\{\{ !inputs\.foundation_probe_sampler_replacement && !inputs\.agenthost_archive_diagnostic \}\}/);
-    assert.match(diagnostic, /!inputs\.publish && inputs\.foundation_probe_sampler_replacement && !inputs\.agenthost_archive_diagnostic/);
-  for (const permission of ['contents', 'actions', 'packages']) assert.match(diagnostic, new RegExp(`${permission}: read`));
-  assert.match(diagnostic, /github-token: \$\{\{ github.token \}\}/);
-  assert.match(diagnostic, /run-id: 37409181340/);
-  assert.match(diagnostic, /name: v1-release-pack-f46cff3c65a97b76b78c9ea717ec8b2068d56de5-37409181340/);
-  assert.doesNotMatch(diagnostic, /: write|environment:|publish\.mjs|release:pack|setup-dotnet|upload-artifact|secrets\.|--confirm-publication/);
+  assert.doesNotMatch(workflow, /diagnose-probe-sampler|publish-probe-sampler|37409181340|foundation_probe_sampler_replacement/);
+  assert.match(workflow, /images:[\s\S]*?--images-only --platform-only/);
 });
