@@ -220,6 +220,8 @@ only the known priced subtotal. It rejects other meters and non-AIC units.
 These observed totals do not prove future accounting-source finality.
 An optional `DispatchId` and up to 512 `RequiredReceipts` request an observed accounting join.
 References must have unique source and event IDs with exact runtime attribution.
+Hosted-Copilot snapshots also require run and per-agent totals to include every
+represented receipt; native-turn accounting uses the same check.
 `RepresentedReceipts` contains the matching immutable source and ledger receipts.
 Events checks actual registration, source, platform message, accounting hash, and price under the same transaction.
 Optional `NativeTurn` carries the expected recorded native receipt; it is omitted from historical requests.
