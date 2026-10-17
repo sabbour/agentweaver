@@ -702,18 +702,12 @@ test('integration deployment arguments default to read-only and require an exact
   assert.throws(() => parseIntegrationArgs(missingCatalog), /--provider-catalog-configmap is required/);
 });
 
-test('manual workflow prepares by default and gates image-only publication on explicit selection', () => {
-  const workflow = readFileSync(path.join(root, '.github', 'workflows', 'v1-integration-images.yml'), 'utf8');
-  assert.match(workflow, /workflow_dispatch:/);
-  assert.match(workflow, /expected_source:[\s\S]*required: true[\s\S]*type: string/);
-  assert.match(workflow, /publish:[\s\S]*default: false[\s\S]*type: boolean/);
-  assert.match(workflow, /test "\$GITHUB_REF" = "refs\/heads\/v1"/);
-  assert.match(workflow, /test "\$EXPECTED_SOURCE" = "\$GITHUB_SHA"/);
-  assert.match(workflow, /release:integration-pack -- --integration-source-sha/);
-  assert.match(workflow, /if: \$\{\{ inputs\.publish \}\}/);
-  assert.match(workflow, /environment: v1-publication/);
-  assert.match(workflow, /--integration-images-only --confirm-integration-publication/);
-  assert.doesNotMatch(workflow, /release:publish(?:\s|$)/);
+test('source-only integration deployment remains local without a separate GitHub publication workflow', () => {
+  const workflowPath = path.join(root, '.github', 'workflows', 'v1-integration-images.yml');
+  assert.throws(() => readFileSync(workflowPath, 'utf8'), { code: 'ENOENT' });
+  const releaseWorkflow = readFileSync(path.join(root, '.github', 'workflows', 'v1-release-pack.yml'), 'utf8');
+  assert.doesNotMatch(releaseWorkflow, /release:integration-pack|integration-source-sha/);
+  assert.match(releaseWorkflow, /name: Agentweaver v1 release publication/);
 });
 
 test('immutable publication claim must match the exact source, provenance, and image plan', async t => {

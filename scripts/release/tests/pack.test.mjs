@@ -7,6 +7,8 @@ import test from 'node:test';
 import { packComponents, selectIntegrationImageComponents } from '../pack.mjs';
 
 const csproj = (version) => `<Project><PropertyGroup><Version>${version}</Version></PropertyGroup></Project>`;
+const serviceCsproj = (version) =>
+  `<Project><PropertyGroup><Version>${version}</Version><ContainerBaseImage>mcr.microsoft.com/dotnet/runtime@sha256:${'a'.repeat(64)}</ContainerBaseImage></PropertyGroup></Project>`;
 
 const manifestBase = () => ({
   schemaVersion: 1,
@@ -56,6 +58,10 @@ function fakeDotnet(calls, { onBuild } = {}) {
       const name = path.basename(project, '.csproj');
       writeFileSync(path.join(outDir, `${name}.0.1.0.nupkg`), `fake package for ${name}`);
     }
+    if (args[0] === 'publish') {
+      const archiveArg = args.find(arg => arg.startsWith('-p:ContainerArchiveOutputPath='));
+      if (archiveArg) writeFileSync(archiveArg.slice('-p:ContainerArchiveOutputPath='.length), 'fake image archive');
+    }
   };
 }
 
@@ -98,6 +104,29 @@ test('packages-only preparation leaves service images out while retaining the fu
   assert.deepEqual(calls.map(([verb]) => verb), ['restore', 'build', 'pack', 'restore', 'build', 'pack']);
   assert.ok(!existsSync(path.join(outDir, 'Svc.0.1.0.tar.gz')));
   assert.equal(provenance.manifestSha256, createHash('sha256').update(JSON.stringify(manifest)).digest('hex'));
+});
+
+test('images-only preparation builds product service images without packages', t => {
+  const dir = initRepo(t);
+  mkdirSync(path.join(dir, 'services', 'Svc'), { recursive: true });
+  writeFileSync(path.join(dir, 'services', 'Svc', 'Svc.csproj'), serviceCsproj('0.1.0'));
+  writeFileSync(path.join(dir, 'services', 'Svc', 'packages.lock.json'), '{"version":1,"dependencies":{}}');
+  git(dir, 'add', '.');
+  git(dir, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'add service');
+  const manifest = manifestBase();
+  manifest.components.push({
+    id: 'Svc', kind: 'service', version: '0.1.0', project: 'services/Svc/Svc.csproj',
+  });
+  const calls = [];
+  const outDir = path.join(dir, 'artifacts', 'release', 'images');
+  const provenance = packComponents(manifest, {
+    root: dir, dotnet: fakeDotnet(calls), outDir, imagesOnly: true, platformOnly: true,
+  });
+
+  assert.deepEqual(provenance.components.map(({ id }) => id), ['Svc']);
+  assert.deepEqual(provenance.artifacts.map(({ kind }) => kind), ['image']);
+  assert.deepEqual(calls.map(([verb]) => verb), ['restore', 'build', 'publish']);
+  assert.ok(existsSync(path.join(outDir, 'Svc.0.1.0.tar.gz')));
 });
 
 test('platform-only preparation excludes only the acceptance Probe', t => {

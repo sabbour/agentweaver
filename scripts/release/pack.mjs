@@ -326,6 +326,7 @@ export function packComponents(manifest, {
   now = () => new Date(),
   outDir,
   packagesOnly = false,
+  imagesOnly = false,
   foundationProbeOnly = false,
   platformOnly = false,
   integrationSourceSha,
@@ -335,13 +336,15 @@ export function packComponents(manifest, {
   if (integrationImagesOnly && !sha.test(integrationSourceSha)) {
     fail('selection', 'integration image preparation requires an exact 40-character source SHA');
   }
-  if (integrationImagesOnly && (packagesOnly || foundationProbeOnly || platformOnly)) {
+  if (integrationImagesOnly && (packagesOnly || imagesOnly || foundationProbeOnly || platformOnly)) {
     fail('selection', 'integration images-only preparation cannot combine with another selection');
   }
-  if (packagesOnly && foundationProbeOnly) fail('selection', 'package-only and Foundation Probe-only preparation are mutually exclusive');
+  if (packagesOnly && (imagesOnly || foundationProbeOnly)) {
+    fail('selection', 'package-only preparation cannot combine with image-only or Foundation Probe-only preparation');
+  }
   if (platformOnly && (packagesOnly || foundationProbeOnly))
     fail('selection', 'platform-only preparation cannot combine with package-only or Foundation Probe-only preparation');
-  const components = integrationImagesOnly
+  const compositionComponents = integrationImagesOnly
     ? selectIntegrationImageComponents(manifest)
     : platformOnly
     ? manifest.components.filter(component => component.id !== 'Agentweaver.FoundationProbe')
@@ -350,6 +353,10 @@ export function packComponents(manifest, {
     : packagesOnly
     ? manifest.components.filter((component) => component.kind !== 'service')
     : manifest.components;
+  // The release workflow builds package and image outputs independently; platform-only image packs omit the acceptance Probe.
+  const components = imagesOnly
+    ? compositionComponents.filter((component) => component.kind === 'service')
+    : compositionComponents;
   if (components.length === 0) fail('manifest.components', 'no components to prepare');
   if (integrationImagesOnly && (manifest.stage !== 'draft' || manifest.evidence !== undefined)) {
     fail('manifest', 'integration image preparation requires a tracked draft manifest with no deployment evidence');
@@ -821,13 +828,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     ]);
     const manifestArg = args.find((arg, index) => !arg.startsWith('--') && !excludedIndices.has(index));
     const packagesOnly = args.includes('--packages-only');
+    const imagesOnly = args.includes('--images-only');
     const foundationProbeOnly = args.includes('--foundation-probe-only');
     const platformOnly = args.includes('--platform-only');
     if (!manifestArg || (outIndex >= 0 && !args[outIndex + 1])) {
-      fail('usage', 'node scripts/release/pack.mjs <manifest.json> [--packages-only | --foundation-probe-only | --platform-only | --integration-source-sha <sha>] [--out <dir>]');
+      fail('usage', 'node scripts/release/pack.mjs <manifest.json> [--packages-only | --images-only [--platform-only] | --foundation-probe-only | --platform-only | --integration-source-sha <sha>] [--out <dir>]');
     }
     const provenance = packComponentsFromFile(manifestArg, {
-      root: repositoryRoot, outDir: out, packagesOnly, foundationProbeOnly, platformOnly, integrationSourceSha,
+      root: repositoryRoot, outDir: out, packagesOnly, imagesOnly, foundationProbeOnly, platformOnly, integrationSourceSha,
     });
     console.log(`Packed ${provenance.components.length} component(s) at source ${provenance.sourceSha} into ${out}`);
     for (const artifact of provenance.artifacts) {

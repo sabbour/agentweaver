@@ -516,21 +516,23 @@ One component record binds a Docker-save archive and measured OCI archive to the
 Publication rechecks both archives, actual OCI byte sizes, source/tree labels, and the pinned native runtime before registry login.
 The saved OCI digest remains separate from the actual published registry digest.
 Gateway and MCP use the existing digest-pinned SDK container pattern.
-A separate manual workflow can publish those artifacts and record registry digests.
-Partial-publication receipts do not prove completed publication.
-The Environment manifest entry selects its executable service image rather than a library package.
-The default-off `platform_only` workflow input excludes only the acceptance Probe.
-Preparation and publication must use the same selection and full manifest hash.
-It cannot combine with the frozen Probe diagnostic or replacement paths.
-The ordinary protected publication environment remains required.
-The separately approved Probe recovery consumes one new permanent attempt and reuses the original frozen image.
-Its image-source SHA remains separate from the admitted publisher helper SHA.
-Historical claims and receipts remain unchanged. A partial recovery cannot authorize another push.
-Preparation does not carry existing release/deployment evidence across version changes.
+
+The automated v1 release workflow runs when a version-application receipt is
+committed to `v1`. It validates the manifest and changeset coverage, then
+builds NuGet packages and product Docker images in separate jobs. The image job
+uses the approved build inputs and excludes the acceptance-only Probe. The
+publisher waits for both jobs, verifies their source SHA, manifest hash, and
+artifacts, then writes immutable publication claim/result records and the
+receipt used by local deployment tooling. Only the publisher has
+`contents: write` and `packages: write`. The workflow has no approval
+environment and never deploys to Azure or AKS. The one-time partial-publication
+continuation remains a separate recovery path; its historical receipts do not
+prove completed publication. Preparation does not carry existing
+release/deployment evidence across version changes.
 See the [command contract](../../../releases/README.md#release-planning-and-package-preparation).
 
-This candidate does not publish artifacts, release a platform composition, or deploy to Azure.
-The existing released-composition requirement still includes actual immutable images and exact-source API/UI/MCP deployment proof.
+The released-composition requirement still includes actual immutable images
+and exact-source API/UI/MCP deployment proof.
 
 The existing 0.x release guidance remains in force for 0.x releases while that line continues. The
 new release model does not imply that 0.x stops shipping or that 1.0 gains data migration tooling.
@@ -545,12 +547,9 @@ image config must carry the source SHA, exact Git tree SHA, and component
 version. NuGet packages, FoundationProbe, final-release evidence, and GitHub
 Releases are outside this path.
 
-The manual `v1-integration-images.yml` workflow checks that the dispatch is on
-`v1` and that the supplied source SHA matches the workflow commit. It prepares
-images by default. Only an explicit `publish: true` selection starts the
-separate `v1-publication` job, which publishes source-SHA tags and writes
-immutable claim and result records. The local publisher has its own required
-image-only and confirmation flags.
+There is no separate GitHub workflow for these integration images. The local
+publisher has required image-only and confirmation flags and creates immutable
+claim and result records for the source-SHA tags.
 
 `release:deploy-integration` checks the tracked draft manifest, prepared
 provenance, immutable publication result, and actual anonymous GHCR image
@@ -660,8 +659,8 @@ remain operator-owned.
 flowchart LR
   subgraph Integration["Source-only integration flow"]
     Source["Clean exact source SHA and tree"] --> Prepare["Prepare 10 SHA-tagged images with source/tree/version config labels"]
-    Prepare -->|"default workflow path"| Prepared["Upload prepared images"]
-    Prepare -->|"explicit publish: true"| PublishImages["Publish images and immutable claim/result"]
+    Prepare --> Prepared["Local prepared images"]
+    Prepare -->|"explicit local publish command"| PublishImages["Publish images and immutable claim/result"]
     PublishImages --> IntegrationCheck["Verify receipt and actual GHCR configs"]
     IntegrationCheck --> IntegrationDryRun["Default read-only P0 preflight"]
     IntegrationDryRun -->|"explicit --execute"| IntegrationApply["Apply only nine shared services"]

@@ -1,88 +1,82 @@
-name: v1 release pack
+name: Agentweaver v1 release publication
 
 on:
+  push:
+    branches: [v1]
+    paths:
+      - 'releases/receipts/**'
   workflow_dispatch:
-    inputs:
-      expected_source:
-        description: Exact v1 workflow source SHA (diagnostics reuse the pinned original image)
-        required: true
-        type: string
-      publish:
-        description: Publish packages/images manually after approval (false with sampler=true runs only the frozen diagnostic)
-        required: true
-        default: false
-        type: boolean
-      platform_only:
-        description: Prepare or publish product components without the acceptance-only Foundation Probe
-        required: true
-        default: false
-        type: boolean
-      foundation_probe_sampler_replacement:
-        description: Select only the frozen Probe path (false diagnoses; true consumes the separately approved recovery attempt)
-        required: true
-        default: false
-        type: boolean
-      expected_probe_digest:
-        description: Exact approved current Probe digest, required only for sampler replacement
-        required: false
-        default: ''
-        type: string
-      agenthost_archive_diagnostic:
-        description: Check only the saved AgentHost archive from retained run 38286624230 (not a rebuild, publication or acceptance; leave publish, platform_only and Probe replacement off)
-        required: false
-        default: false
-        type: boolean
 
 permissions:
   contents: read
 
 jobs:
-  pack:
-    if: ${{ !inputs.foundation_probe_sampler_replacement && !inputs.agenthost_archive_diagnostic }}
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: false
       - name: Require the v1 branch
-        if: ${{ github.ref != 'refs/heads/v1' }}
         run: |
-          echo "::error::v1 release pack must be dispatched from refs/heads/v1 (got $GITHUB_REF); refusing to run off-branch." >&2
-          exit 1
-      - name: Require exact dispatch source
-        env:
-          EXPECTED_SOURCE: ${{ inputs.expected_source }}
-          PROBE_SAMPLER_REPLACEMENT: ${{ inputs.foundation_probe_sampler_replacement }}
-          EXPECTED_PROBE_DIGEST: ${{ inputs.expected_probe_digest }}
-          PLATFORM_ONLY: ${{ inputs.platform_only }}
-        run: |
-          test "$EXPECTED_SOURCE" = "$GITHUB_SHA" || { echo "::error::Dispatch source mismatch"; exit 1; }
-          if [ "$PLATFORM_ONLY" = "true" ] && [ "$PROBE_SAMPLER_REPLACEMENT" = "true" ]; then
-            echo "::error::Platform publication cannot select a Probe replacement" >&2
+          test "$GITHUB_REF" = "refs/heads/v1" || {
+            echo "::error::Release publication must run from refs/heads/v1 (got $GITHUB_REF)." >&2
             exit 1
-          fi
-          if [ "$PROBE_SAMPLER_REPLACEMENT" = "true" ]; then
-            test "$EXPECTED_PROBE_DIGEST" = "sha256:835d5b8899f2a8956faf24d46a934ec745d91ff83363d77f22f2859c2f743969" || { echo "::error::Probe current digest mismatch"; exit 1; }
-          else
-            test -z "$EXPECTED_PROBE_DIGEST" || { echo "::error::Probe digest requires sampler replacement intent"; exit 1; }
-          fi
+          }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Validate release composition and changeset coverage
+        if: ${{ github.event_name == 'push' }}
+        env:
+          RELEASE_BASE_SHA: ${{ github.event.before }}
+          RELEASE_HEAD_SHA: ${{ github.sha }}
+        run: npm run release:validate -- --ci
+      - name: Validate release composition
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: npm run release:validate
+
+  packages:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
-        if: ${{ github.ref == 'refs/heads/v1' }}
         with:
           global-json-file: global.json
       - uses: actions/setup-node@v4
-        if: ${{ github.ref == 'refs/heads/v1' }}
         with:
           node-version: '24'
-      - name: Validate release composition
-        if: ${{ github.ref == 'refs/heads/v1' }}
-        run: npm run release:validate
+      - name: Pack NuGet packages
+        run: npm run release:pack -- --packages-only --out artifacts/release/packages
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v1-release-packages-${{ github.sha }}-${{ github.run_id }}
+          overwrite: true
+          path: artifacts/release/packages/
+          if-no-files-found: error
+          retention-days: 30
+
+  images:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
       - name: Set up product Docker engine
-        id: product-docker
         uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
-        if: ${{ github.ref == 'refs/heads/v1' && inputs.platform_only }}
         with:
           version: 'v29.9.0'
           set-host: true
@@ -92,136 +86,29 @@ jobs:
                 "containerd-snapshotter": true
               }
             }
-      - uses: docker/setup-buildx-action@v3
-        if: ${{ github.ref == 'refs/heads/v1' && !inputs.platform_only }}
       - name: Prepare approved product build inputs
-        if: ${{ github.ref == 'refs/heads/v1' && inputs.platform_only }}
         env:
-          EXPECTED_SOURCE: ${{ inputs.expected_source }}
+          EXPECTED_SOURCE: ${{ github.sha }}
           DOCKER_CONTEXT: default
           npm_config_cache: ${{ runner.temp }}/agentweaver-release-npm-cache
           npm_config_update_notifier: 'false'
         run: npm run release:prepare-build-inputs
-      - name: Prepare locked package and image artifacts (no publish)
-        if: ${{ github.ref == 'refs/heads/v1' }}
+      - name: Build product Docker images
         env:
-          PROBE_SAMPLER_REPLACEMENT: ${{ inputs.foundation_probe_sampler_replacement }}
-          PLATFORM_ONLY: ${{ inputs.platform_only }}
-        run: |
-          args=()
-          if [ "$PLATFORM_ONLY" = "true" ]; then
-            export DOCKER_CONTEXT=default BUILDX_BUILDER=default
-            export npm_config_cache="$RUNNER_TEMP/agentweaver-release-npm-cache"
-          fi
-          if [ "$PROBE_SAMPLER_REPLACEMENT" = "true" ]; then args+=(--foundation-probe-only); fi
-          if [ "$PLATFORM_ONLY" = "true" ]; then args+=(--platform-only); fi
-          npm run release:pack -- "${args[@]}"
+          DOCKER_CONTEXT: default
+          BUILDX_BUILDER: default
+          npm_config_cache: ${{ runner.temp }}/agentweaver-release-npm-cache
+        run: npm run release:pack -- --images-only --platform-only --out artifacts/release/images
       - uses: actions/upload-artifact@v4
-        if: ${{ github.ref == 'refs/heads/v1' && !cancelled() }}
         with:
-          name: v1-release-pack-${{ github.sha }}-${{ github.run_id }}
+          name: v1-release-images-${{ github.sha }}-${{ github.run_id }}
           overwrite: true
-          path: artifacts/release/pack/
+          path: artifacts/release/images/
           if-no-files-found: error
           retention-days: 30
-  diagnose-probe-sampler:
-    if: ${{ !inputs.publish && inputs.foundation_probe_sampler_replacement && !inputs.agenthost_archive_diagnostic }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      actions: read
-      packages: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-      - name: Require exact v1 diagnostic source and frozen target
-        env:
-          EXPECTED_SOURCE: ${{ inputs.expected_source }}
-          EXPECTED_PROBE_DIGEST: ${{ inputs.expected_probe_digest }}
-          PLATFORM_ONLY: ${{ inputs.platform_only }}
-        run: |
-          test "$PLATFORM_ONLY" != "true" || { echo "::error::Platform publication cannot select a Probe diagnostic"; exit 1; }
-          test "$GITHUB_REF" = "refs/heads/v1" || { echo "::error::Diagnostic requires v1"; exit 1; }
-          test "$EXPECTED_SOURCE" = "$GITHUB_SHA" || { echo "::error::Diagnostic source mismatch"; exit 1; }
-          test "$EXPECTED_PROBE_DIGEST" = "sha256:835d5b8899f2a8956faf24d46a934ec745d91ff83363d77f22f2859c2f743969" || { echo "::error::Diagnostic target mismatch"; exit 1; }
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - uses: actions/download-artifact@v4
-        with:
-          github-token: ${{ github.token }}
-          run-id: 37409181340
-          name: v1-release-pack-f46cff3c65a97b76b78c9ea717ec8b2068d56de5-37409181340
-          path: artifacts/release/frozen-probe/
-      - name: Diagnose only login, load, config and current manifest
-        env:
-          EXPECTED_SOURCE: ${{ inputs.expected_source }}
-          EXPECTED_PROBE_DIGEST: ${{ inputs.expected_probe_digest }}
-          PUBLISH: 'false'
-          PROBE_SAMPLER_REPLACEMENT: 'true'
-          RELEASE_REGISTRY_USER: ${{ github.repository_owner }}
-          RELEASE_REGISTRY_PASSWORD: ${{ github.token }}
-        run: node scripts/release/probe-publication-diagnostic.mjs artifacts/release/frozen-probe
-  diagnose-agenthost-archive:
-    if: ${{ inputs.agenthost_archive_diagnostic }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-      - name: Require exact v1 source, first attempt and no conflicting modes
-        env:
-          EXPECTED_SOURCE: ${{ inputs.expected_source }}
-          PUBLISH: ${{ inputs.publish }}
-          PLATFORM_ONLY: ${{ inputs.platform_only }}
-          PROBE_SAMPLER_REPLACEMENT: ${{ inputs.foundation_probe_sampler_replacement }}
-          EXPECTED_PROBE_DIGEST: ${{ inputs.expected_probe_digest }}
-        run: |
-          test "$GITHUB_REPOSITORY" = "sabbour/agentweaver" || { echo "::error::Diagnostic requires sabbour/agentweaver"; exit 1; }
-          test "$GITHUB_EVENT_NAME" = "workflow_dispatch" || { echo "::error::Diagnostic requires dispatch"; exit 1; }
-          test "$GITHUB_REF" = "refs/heads/v1" || { echo "::error::Diagnostic requires v1"; exit 1; }
-          test "$GITHUB_RUN_ATTEMPT" = "1" || { echo "::error::Diagnostic cannot be re-run"; exit 1; }
-          test "$EXPECTED_SOURCE" = "$GITHUB_SHA" || { echo "::error::Diagnostic source mismatch"; exit 1; }
-          test "$GITHUB_SHA" != "6b036e11ff211f96cfddcd837be9b5bce75ddb34" || { echo "::error::Workflow source must differ from the original image source"; exit 1; }
-          test "$PUBLISH" = "false" && test "$PLATFORM_ONLY" = "false" && test "$PROBE_SAMPLER_REPLACEMENT" = "false" && test -z "$EXPECTED_PROBE_DIGEST" || { echo "::error::Archive diagnostic cannot be combined with publish, platform_only or Probe inputs"; exit 1; }
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - name: Set up product Docker engine
-        uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
-        with:
-          version: 'v29.9.0'
-          set-host: true
-          daemon-config: |
-            {
-              "features": {
-                "containerd-snapshotter": true
-              }
-            }
-      - uses: actions/download-artifact@v4
-        with:
-          github-token: ${{ github.token }}
-          run-id: 38286624230
-          artifact-ids: 11763641424
-          path: artifacts/release/saved-agenthost/
-      - name: Verify hash, load and inspect only the saved AgentHost archive
-        env:
-          EXPECTED_SOURCE: ${{ inputs.expected_source }}
-          DOCKER_CONTEXT: default
-        run: node scripts/release/agenthost-archive-diagnostic.mjs artifacts/release/saved-agenthost
+
   publish:
-    needs: pack
-    if: ${{ inputs.publish && !inputs.foundation_probe_sampler_replacement && !inputs.agenthost_archive_diagnostic }}
+    needs: [validate, packages, images]
     concurrency:
       group: v1-product-publication-${{ github.repository }}
       cancel-in-progress: false
@@ -229,35 +116,28 @@ jobs:
     permissions:
       contents: write
       packages: write
-    environment: v1-publication
     steps:
       - uses: actions/checkout@v4
         with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Require approved GitHub Packages destination
-        env:
-          RELEASE_NUGET_SOURCE: ${{ vars.RELEASE_NUGET_SOURCE }}
-        run: |
-          node -e "if (process.env.RELEASE_NUGET_SOURCE !== 'https://nuget.pkg.github.com/sabbour/index.json') { console.error('::error::Publication feed does not match the approved P1 GitHub Packages destination'); process.exit(1); }"
-      - name: Require approved GHCR destination
-        env:
-          RELEASE_REGISTRY: ghcr.io/sabbour
-        run: |
-          node -e "if (process.env.RELEASE_REGISTRY !== 'ghcr.io/sabbour') { console.error('::error::Publication registry does not match the approved GHCR destination'); process.exit(1); }"
       - uses: actions/download-artifact@v4
         with:
-          name: v1-release-pack-${{ github.sha }}-${{ github.run_id }}
-          path: artifacts/release/pack/
+          name: v1-release-packages-${{ github.sha }}-${{ github.run_id }}
+          path: artifacts/release/packages/
+      - uses: actions/download-artifact@v4
+        with:
+          name: v1-release-images-${{ github.sha }}-${{ github.run_id }}
+          path: artifacts/release/images/
+      - name: Merge source-bound package and image packs
+        run: node scripts/release/merge-packs.mjs releases/foundation.json artifacts/release/packages artifacts/release/images artifacts/release/publish --platform-only
       - name: Set up product Docker engine
-        if: ${{ inputs.platform_only }}
         uses: docker/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70
         with:
           version: 'v29.9.0'
@@ -268,79 +148,21 @@ jobs:
                 "containerd-snapshotter": true
               }
             }
-      - name: Manually publish verified exact-source artifacts
+      - name: Publish packages and images to GitHub Packages and GHCR
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_NUGET_SOURCE: ${{ vars.RELEASE_NUGET_SOURCE }}
+          RELEASE_NUGET_SOURCE: https://nuget.pkg.github.com/sabbour/index.json
           RELEASE_NUGET_API_KEY: ${{ github.token }}
           RELEASE_NUGET_USERNAME: ${{ github.repository_owner }}
           RELEASE_REGISTRY: ghcr.io/sabbour
           RELEASE_REGISTRY_USER: ${{ github.repository_owner }}
           RELEASE_REGISTRY_PASSWORD: ${{ github.token }}
           DOCKER_CONFIG: ${{ github.workspace }}/artifacts/docker-config
-          PLATFORM_ONLY: ${{ inputs.platform_only }}
-        run: |
-          args=()
-          if [ "$PLATFORM_ONLY" = "true" ]; then args+=(--platform-only); fi
-          node scripts/release/publish.mjs releases/foundation.json artifacts/release/pack "$GITHUB_SHA" --confirm-publication "${args[@]}"
+        run: node scripts/release/publish.mjs releases/foundation.json artifacts/release/publish "$GITHUB_SHA" --confirm-publication --platform-only
       - uses: actions/upload-artifact@v4
         if: ${{ always() }}
         with:
           name: v1-publication-receipt-${{ github.sha }}-${{ github.run_attempt }}
-          path: artifacts/release/pack/publication.json
-          if-no-files-found: warn
-          retention-days: 30
-  publish-probe-sampler:
-    if: ${{ inputs.publish && inputs.foundation_probe_sampler_replacement && !inputs.agenthost_archive_diagnostic }}
-    concurrency:
-      group: v1-product-publication-${{ github.repository }}
-      cancel-in-progress: false
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      actions: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - name: Require exact v1 recovery source and frozen target
-        env:
-          EXPECTED_SOURCE: ${{ inputs.expected_source }}
-          EXPECTED_PROBE_DIGEST: ${{ inputs.expected_probe_digest }}
-          PLATFORM_ONLY: ${{ inputs.platform_only }}
-        run: |
-          test "$PLATFORM_ONLY" != "true" || { echo "::error::Platform publication cannot select a Probe replacement"; exit 1; }
-          test "$GITHUB_REF" = "refs/heads/v1" || { echo "::error::Recovery requires v1"; exit 1; }
-          test "$EXPECTED_SOURCE" = "$GITHUB_SHA" || { echo "::error::Recovery source mismatch"; exit 1; }
-          test "$GITHUB_RUN_ATTEMPT" = "1" || { echo "::error::Recovery cannot rerun"; exit 1; }
-          test "$EXPECTED_PROBE_DIGEST" = "sha256:835d5b8899f2a8956faf24d46a934ec745d91ff83363d77f22f2859c2f743969" || { echo "::error::Recovery target mismatch"; exit 1; }
-      - uses: actions/download-artifact@v4
-        with:
-          github-token: ${{ github.token }}
-          run-id: 37409181340
-          name: v1-release-pack-f46cff3c65a97b76b78c9ea717ec8b2068d56de5-37409181340
-          path: artifacts/release/frozen-probe/
-      - name: Consume only the separately approved frozen Probe recovery attempt
-        env:
-          EXPECTED_SOURCE: ${{ inputs.expected_source }}
-          EXPECTED_PROBE_DIGEST: ${{ inputs.expected_probe_digest }}
-          PUBLISH: 'true'
-          PROBE_SAMPLER_REPLACEMENT: 'true'
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_REGISTRY: ghcr.io/sabbour
-          RELEASE_REGISTRY_USER: ${{ github.repository_owner }}
-          RELEASE_REGISTRY_PASSWORD: ${{ github.token }}
-        run: node scripts/release/probe-publication-recovery.mjs artifacts/release/frozen-probe
-      - uses: actions/upload-artifact@v4
-        if: ${{ always() }}
-        with:
-          name: v1-probe-recovery-receipt-${{ github.sha }}-${{ github.run_id }}
-          path: artifacts/release/frozen-probe/publication.json
+          path: artifacts/release/publish/publication.json
           if-no-files-found: warn
           retention-days: 30
