@@ -373,6 +373,44 @@ public sealed class RuntimeUsageSourceReceiptTests
             RuntimeUsageCostSnapshotContract.ValidateReceipt(receipt, request));
     }
 
+    [Fact]
+    public void CostSnapshotRejectsTotalsThatUnderstateARepresentedPricedReceipt()
+    {
+        var native = Receipt();
+        var reference = AccountingReference(native, unpriced: false);
+        var request = new RuntimeUsageCostSnapshotRequest(1, native.Registration, native.Usage.SdkSource!)
+        {
+            DispatchId = Guid.NewGuid(), RequiredReceipts = [reference]
+        };
+        var receipt = CostSnapshot(request, 5, 1) with
+        {
+            DispatchId = request.DispatchId,
+            RepresentedReceipts = [reference]
+        };
+        var originalAmount = receipt.CopilotTotals.Amounts[0];
+        var understatedAmount = originalAmount with
+        {
+            Amount = 0,
+            PricedEvents = 0,
+            UnpricedEvents = 1
+        };
+        var originalAgent = receipt.CopilotTotals.Agents[0];
+        var totals = receipt.CopilotTotals with
+        {
+            IsFullyPriced = false,
+            Amounts = [understatedAmount],
+            Agents = [originalAgent with
+            {
+                IsFullyPriced = false,
+                Amounts = [understatedAmount]
+            }]
+        };
+
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageCostSnapshotContract.ValidateReceipt(
+                receipt with { CopilotTotals = totals }, request));
+    }
+
     private static RuntimeUsageCostSnapshotReceipt CostSnapshot(
         RuntimeUsageCostSnapshotRequest request, decimal amount, long events, bool modelRateAvailable = true)
     {

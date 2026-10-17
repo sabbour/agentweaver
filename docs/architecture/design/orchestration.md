@@ -168,15 +168,17 @@ Merge intent for non-empty output sets. The bounded C3/MAF source composition is
 admitted. Whole-producer runtime acceptance remains pending. Positive evidence is
 accepted only after current owner rereads and exact serializer reconstruction.
 Workflow-bound native sends now prepare through the current source owner.
-Configured hosted credit limits also require real Events pricing before root acceptance or backlog claim.
+Configured hosted credit limits also require a valid Events admission receipt before root acceptance or backlog claim.
 Events resolves the concrete model through the same versioned server-owned map as AgentHost.
 The acceptance transaction retains the model, connection, selection hash, and Cost receipt in the existing outbox.
+An explicit `Unpriced` quote does not block acceptance; only the known priced subtotal counts toward the limit.
 It rechecks current Projects authority after remote waits and before root or claim commit.
 The Host registration carries that immutable model pin and rejects a different local binding before SDK startup.
-Configured hosted credit limits require actual Events pricing before dispatch start and again at native begin.
+Configured hosted credit limits require an Events cost snapshot before dispatch start and again at native begin.
+An explicit `Unpriced` quote remains admissible and visible, but does not count toward the priced subtotal.
 The Host completes an observed source-to-ledger receipt join before returning output.
 MAF rereads that completed dispatch and verifies the output hash before retaining the result.
-Explicit unpriced accounting permits uncapped output, not free capped admission.
+Explicit unpriced accounting does not establish a zero cost; it remains visible and outside the priced subtotal.
 The partial native report does not assert accounting-source finality.
 For each claim, the current owner lock covers enumeration of all admitted captures
 for the accepted root and selection, then each typed proof and pin is reread in the

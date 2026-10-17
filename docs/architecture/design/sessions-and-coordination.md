@@ -38,12 +38,14 @@ For configured hosted credit limits, root acceptance and backlog claim use one
 run-admission transaction boundary.
 Before either writes a root, Events reads the trusted Projects selection and resolves
 the same versioned model map as AgentHost.
-Its real Cost quote and observed Copilot totals must be priced.
+Events validates the Cost quote and observed Copilot totals.
 The owner commits the accepted model, connection, selection hash, and Cost receipt
 through its existing outbox with the root.
 Authority is rechecked after waits and before root or claim commit.
 Identical accepted-root replay retains the original receipt without repricing.
-Missing pricing or a changed model pin cannot authorize capped work.
+An explicit `Unpriced` quote does not block root acceptance or backlog claim; only
+the known priced subtotal counts toward credit limits. A changed model pin still
+cannot authorize capped work.
 This source path does not claim live PostgreSQL or native model availability.
 
 Mapped child spawn checks the latest root decision envelope under the root-session

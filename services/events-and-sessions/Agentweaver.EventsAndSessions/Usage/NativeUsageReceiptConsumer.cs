@@ -508,7 +508,8 @@ internal sealed class NativeUsageReceiptConsumer(
     private CostPrice Price(UsageSubmission usage, RunCostBinding pinned)
     {
         if (pinned.Binding is null)
-            return new(null, null, CostDisposition.Unpriced, null, pinned.UnpricedReason);
+            return new(null, UnpricedUnit(usage.ModelBinding.MeterSource),
+                CostDisposition.Unpriced, null, pinned.UnpricedReason);
         var verified = bindings?.VerifyPinned(
             usage.ModelBinding.MeterSource, usage.Attribution.RunId, pinned.Binding);
         if (provider is null || verified?.IsSuccess != true)
@@ -520,7 +521,8 @@ internal sealed class NativeUsageReceiptConsumer(
     private CostPrice Quote(string modelId, string runId, RunCostBinding pinned)
     {
         if (pinned.Binding is null)
-            return new(null, null, CostDisposition.Unpriced, null, pinned.UnpricedReason);
+            return new(null, CopilotCostProvider.AiCreditUnit,
+                CostDisposition.Unpriced, null, pinned.UnpricedReason);
         var verified = bindings?.VerifyPinned(SdkMeterSources.CopilotNanoAiu, runId, pinned.Binding);
         if (provider is null || verified?.IsSuccess != true)
             return new(null, pinned.Binding.RateCard.Unit, CostDisposition.Unpriced,
@@ -551,6 +553,10 @@ internal sealed class NativeUsageReceiptConsumer(
             ? new(pinned.Binding, true, null)
             : new(pinned.Binding, false, quote.UnpricedReason ?? "cost-quote-invalid");
     }
+
+    /// <summary>Keeps the known Copilot accounting unit visible without assigning a price.</summary>
+    private static string? UnpricedUnit(string meterSource) =>
+        meterSource == SdkMeterSources.CopilotNanoAiu ? CopilotCostProvider.AiCreditUnit : null;
 
     private static async Task AcquireCostLockAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction,

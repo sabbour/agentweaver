@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Agentweaver.Abstractions;
+using Agentweaver.EventsAndSessions.Cost;
 using Agentweaver.Identity;
 using Npgsql;
 using NpgsqlTypes;
@@ -189,6 +190,10 @@ public sealed class PostgresUsageLedger : IUsageLedger
                 var unit = reader.IsDBNull(2)
                     ? reader.IsDBNull(3) ? null : reader.GetString(3)
                     : reader.GetString(2);
+                // Older unpriced Copilot rows may predate persistence of their known unit.
+                if (unit is null && disposition == CostDisposition.Unpriced &&
+                    meterSource == SdkMeterSources.CopilotNanoAiu)
+                    unit = CopilotCostProvider.AiCreditUnit;
                 var amount = reader.IsDBNull(10) ? (decimal?)null : reader.GetDecimal(10);
 
                 agent.AddUsage(
