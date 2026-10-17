@@ -95,6 +95,7 @@ public sealed class CoordinatorRunAdmissionTests
             TokensPerRateUnit = 1_000_000m,
             CreditsPerCurrencyUnit = 100m,
             LongContextThresholdTokens = 272_000,
+            ContentHash = new string('a', 64),
             ModelTokenRates = ImmutableDictionary<string, CostModelTokenRates>.Empty
                 .WithComparers(StringComparer.Ordinal)
                 .Add("gpt-6.1-sol", new(
@@ -113,6 +114,9 @@ public sealed class CoordinatorRunAdmissionTests
             RuntimeAcceptedModelSelection.Read(scope.Snapshot),
             resolver.Pin("accepted-reference", ModelSourceMode.HostedCopilot),
             binding, new(0, "AIC", CostDisposition.Estimate, card, null),
-            new(selection.Authorization.TenantId, scope.ProjectId, scope.RunId, observed == 0 ? 0 : 1, true, agents, amounts));
+            new(selection.Authorization.TenantId, scope.ProjectId, scope.RunId, observed == 0 ? 0 : 1, true, agents, amounts))
+        {
+            RateCardContentHash = card.ContentHash
+        };
     }
 }
