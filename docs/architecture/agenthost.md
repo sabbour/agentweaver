@@ -168,6 +168,8 @@ AgentHost and the enabled Events native consumer load the same server-owned
 `AgentHost:ModelBindings` map and required `AgentHost:ModelBindingsRevision`.
 The shared resolver lives in Identity without an SDK dependency.
 It resolves the accepted reference to its concrete model ID; a reference is not a model ID.
+Lookup is ordinal and exact: a binding under an alias does not satisfy a task
+default that references the concrete model ID.
 It snapshots the map and hashes its canonical model, provider, header, enabled-state, and BYOK
 reasoning-capability values.
 The accepted `ModelBindingPin` retains that revision, hash, reference, model ID, source mode,
