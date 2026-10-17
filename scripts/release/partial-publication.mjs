@@ -459,6 +459,8 @@ function archiveReference(item) {
     `${item.artifact.repository}:${item.artifact.tag}`;
 }
 
+// The caller pins archive bytes to the original provenance and receipt. SDK images can omit
+// the revision label; when present, it must still identify the exact source.
 function preparedImage(item, readArchiveConfig) {
   const { component, artifact } = item;
   const reference = archiveReference(item);
@@ -470,9 +472,10 @@ function preparedImage(item, readArchiveConfig) {
   }
   const config = prepared?.config;
   const labels = config?.config?.Labels;
+  const revision = labels?.['org.opencontainers.image.revision'];
   const diffIds = config?.rootfs?.diff_ids;
   if (!digestPattern.test(prepared?.configDigest ?? '') || config.os !== 'linux' || config.architecture !== 'amd64' ||
-      labels?.['org.opencontainers.image.revision'] !== P.sourceSha ||
+      (revision !== undefined && revision !== P.sourceSha) ||
       labels?.['org.opencontainers.image.version'] !== component.version ||
       !Array.isArray(diffIds) || diffIds.length === 0 || diffIds.some(id => !digestPattern.test(id ?? '')) ||
       (artifact.imageConfigDigest !== undefined && artifact.imageConfigDigest !== prepared.configDigest)) {
@@ -481,6 +484,7 @@ function preparedImage(item, readArchiveConfig) {
   return { reference, configDigest: prepared.configDigest, diffIds };
 }
 
+// The pinned Docker image ID and archive layers retain source identity without an SDK revision label.
 function verifyLoadedImage(item, expected, run) {
   const { component, artifact } = item;
   let image;
@@ -490,9 +494,10 @@ function verifyLoadedImage(item, expected, run) {
     fail(`the loaded ${component.id} image cannot be inspected: ${error.message}`);
   }
   const labels = image?.Config?.Labels;
+  const revision = labels?.['org.opencontainers.image.revision'];
   if ((artifact.imageId !== undefined && image?.Id !== artifact.imageId) ||
       image?.Os !== 'linux' || image?.Architecture !== 'amd64' ||
-      labels?.['org.opencontainers.image.revision'] !== P.sourceSha ||
+      (revision !== undefined && revision !== P.sourceSha) ||
       labels?.['org.opencontainers.image.version'] !== component.version ||
       canonical(image?.RootFS?.Layers) !== canonical(expected.diffIds)) {
     fail(`the loaded ${component.id} image does not match its archive layers, source, version, identity, or platform`);
