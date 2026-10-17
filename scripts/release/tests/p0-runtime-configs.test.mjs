@@ -12,6 +12,33 @@ const broker = 'https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.
 const tokenFile = '/var/run/secrets/azure/tokens/azure-identity-token';
 const host = 'aw-v1-p0-pg.postgres.database.azure.com';
 const database = 'agentweaver';
+const runtimeActionIds = [
+  'model.turn',
+  'tool.read',
+  'tool.write',
+  'exec.shell',
+  'exec.read',
+  'exec.write',
+  'exec.stop',
+];
+const approvedPlatformPolicy = [
+  'apiVersion: governance.toolkit/v1',
+  'version: "1.0"',
+  'name: p1-platform-baseline',
+  'scope: global',
+  'default_action: deny',
+  'rules:',
+  ...runtimeActionIds.flatMap(actionId => {
+    const ruleName = actionId.replaceAll('.', '-');
+    return [
+      `  - name: allow-${ruleName}`,
+      `    condition: "action_id == '${actionId}'"`,
+      '    action: allow',
+      '    priority: 100',
+    ];
+  }),
+  '',
+].join('\n');
 const serviceAddress = (name, port = 8443) =>
   `https://${name}.${namespace}.svc.cluster.local:${port}/`;
 const manifest = (name) => JSON.parse(readFileSync(
@@ -48,6 +75,8 @@ test('P0 runtime ConfigMaps remain immutable, incomplete, and free of placeholde
   }
   for (const resource of [environment, orchestrator, events])
     assert.ok(Object.keys(resource.data).every(key => /^[A-Za-z][A-Za-z0-9_]*$/.test(key)));
+  assert.equal(events.metadata.annotations['agentweaver.io/runtime-config-incomplete-reason'],
+    'Provider and cost resource IDs and generations remain unsourced; HostedCopilot also requires a compatible model rate entry, tracked in #2037.');
 });
 
 test('P0 PostgreSQL roles, projected identities, and issuer use the exact approved inputs', () => {
@@ -83,9 +112,34 @@ test('P0 service addresses and source-backed provider defaults are exact', () =>
   assert.equal(env.Environment__Sandbox__AgentSandbox__WorkspaceStorageProviderId, 'azure-files-csi');
   assert.equal(env.Environment__Sandbox__AgentSandbox__RuntimeClassName, 'kata-vm-isolation');
   assert.equal(env.Environment__Sandbox__AgentSandbox__ExpectedRuntimeHandler, 'kata');
+  assert.equal(env.Environment__Sandbox__AgentSandbox__CpuRequest, '1');
+  assert.equal(env.Environment__Sandbox__AgentSandbox__MemoryRequest, '2Gi');
+  assert.match(readFileSync(path.join(root, 'deploy', 'k8s', 'base', 'limitrange.yaml'), 'utf8')
+    .replaceAll('\r\n', '\n'), /max:\n\s+cpu:\s+"1"\n\s+memory:\s+2Gi/);
+  assert.equal(env.Environment__Sandbox__AgentSandbox__ReconciliationTimeoutSeconds, '600');
+  assert.equal(env.Environment__Sandbox__AgentSandbox__PollIntervalMilliseconds, '250');
+  assert.deepEqual({
+    scheduled: env.Environment__Sandbox__AgentSandbox__StartupBudgets__ScheduledSeconds,
+    imageReady: env.Environment__Sandbox__AgentSandbox__StartupBudgets__ImageReadySeconds,
+    started: env.Environment__Sandbox__AgentSandbox__StartupBudgets__StartedSeconds,
+    configured: env.Environment__Sandbox__AgentSandbox__StartupBudgets__ConfiguredSeconds,
+    ready: env.Environment__Sandbox__AgentSandbox__StartupBudgets__ReadySeconds,
+    total: env.Environment__Sandbox__AgentSandbox__StartupBudgets__TotalSeconds,
+  }, {
+    scheduled: '30', imageReady: '90', started: '30', configured: '30', ready: '30', total: '180',
+  });
   assert.equal(env.Environment__Storage__AzureFiles__OptionsSchemaVersion, '1');
   assert.equal(env.Environment__Storage__AzureFiles__Namespace, namespace);
   assert.equal(env.Environment__Storage__AzureFiles__StorageClassName, 'azurefile-csi');
+  assert.equal(env.Environment__Storage__AzureFiles__MaximumCapacityGiB, '100');
+  assert.equal(env.Environment__Storage__AzureFiles__ProvisioningTimeoutSeconds, '600');
+  assert.equal(env.Environment__Storage__AzureFiles__PollIntervalMilliseconds, '250');
+
+  const policy = orchestrator.data;
+  assert.equal(policy.AgentGovernance__Policy__ResourceId, 'agt-policy:p1-v1.0.0');
+  assert.equal(policy.AgentGovernance__Policy__ResourceGeneration, '1');
+  assert.equal(policy.AgentGovernance__Policy__OptionsRevision, 'p1-v1.0.0');
+  assert.equal(policy.AgentGovernance__Policy__PlatformPolicyDocuments__0, approvedPlatformPolicy);
   assert.match(readFileSync(path.join(root, 'services', 'environment',
     'Agentweaver.Environment', 'EnvironmentDbContext.cs'), 'utf8'),
   /public const string Schema = "environment";/);
@@ -119,6 +173,26 @@ test('P0 service addresses and source-backed provider defaults are exact', () =>
   assert.equal(evt.ProjectsConfig__AuthorizationContext__Audience, broker);
   assert.equal(evt.EventsAndSessions__OrchestratorOwner__OwnerBaseAddress, serviceAddress('orchestrator'));
   assert.equal(evt.EventsAndSessions__OrchestratorOwner__Audience, broker);
+  assert.equal(evt.EventsAndSessions__SessionMaterial__ContainerUri,
+    'https://awv1p0blob.blob.core.windows.net/session-material');
+
+  const modelBindings = { reasoning: 'gpt-6.1-sol', coding: 'gpt-6-luna' };
+  assert.equal(evt.AgentHost__ModelBindingsRevision, 'p1-v1.0.0');
+  for (const [reference, modelId] of Object.entries(modelBindings)) {
+    assert.equal(evt[`AgentHost__ModelBindings__${reference}__ModelId`], modelId);
+    assert.equal(evt[`AgentHost__ModelBindings__${reference}__SourceMode`], 'HostedCopilot');
+  }
+  const agentHostYaml = readFileSync(
+    path.join(root, 'deploy', 'k8s', 'profiles', 'agenthost', 'runtime-config.example.yaml'),
+    'utf8').replaceAll('\r\n', '\n');
+  const appSettings = agentHostYaml.split('  appsettings.json: |\n')[1]
+    .split('\n').map(line => line.slice(4)).join('\n');
+  const agentHost = JSON.parse(appSettings).AgentHost;
+  assert.equal(agentHost.ModelBindingsRevision, 'p1-v1.0.0');
+  assert.deepEqual(agentHost.ModelBindings, {
+    reasoning: { ModelId: 'gpt-6.1-sol', SourceMode: 'HostedCopilot' },
+    coding: { ModelId: 'gpt-6-luna', SourceMode: 'HostedCopilot' },
+  });
 });
 
 test('nested Cilium selectors match the existing source policies and contain no env-unsafe keys', () => {
@@ -161,30 +235,13 @@ test('nested Cilium selectors match the existing source policies and contain no 
 });
 
 test('unknown P0 required values are omitted rather than invented', () => {
-  const missingEnvironment = [
-    ...['CpuRequest', 'MemoryRequest', 'ReconciliationTimeoutSeconds',
-      'PollIntervalMilliseconds', 'StartupBudgets__ScheduledSeconds',
-      'StartupBudgets__ImageReadySeconds', 'StartupBudgets__StartedSeconds',
-      'StartupBudgets__ConfiguredSeconds', 'StartupBudgets__ReadySeconds',
-      'StartupBudgets__TotalSeconds'].map(key => `Environment__Sandbox__AgentSandbox__${key}`),
-    ...['MaximumCapacityGiB', 'ProvisioningTimeoutSeconds', 'PollIntervalMilliseconds']
-      .map(key => `Environment__Storage__AzureFiles__${key}`),
-  ];
-  for (const key of missingEnvironment)
-    assert.ok(!Object.hasOwn(environment.data, key), key);
   for (const key of ['ContainerImage', 'ContainerImagePlatform', 'ContainerImageCompressedPullBytes',
     'OptionsRevision']) {
     assert.ok(!Object.hasOwn(environment.data, `Environment__Sandbox__AgentSandbox__${key}`));
   }
-  for (const key of ['ResourceId', 'ResourceGeneration', 'PlatformPolicyDocuments']) {
-    assert.ok(!Object.keys(orchestrator.data).some(name =>
-      name === `AgentGovernance__Policy__${key}` ||
-      name.startsWith(`AgentGovernance__Policy__${key}__`)), key);
-  }
   for (const key of [
     'EventsAndSessions__Provider__ResourceId',
     'EventsAndSessions__Provider__ResourceGeneration',
-    'EventsAndSessions__SessionMaterial__ContainerUri',
   ]) {
     assert.ok(!Object.hasOwn(events.data, key), key);
   }
@@ -199,6 +256,9 @@ test('unknown P0 required values are omitted rather than invented', () => {
   }
   assert.ok(!Object.keys(events.data).some(key =>
     key.startsWith('EventsAndSessions__Cost__Copilot__RateCard__ModelMultipliers__')));
+  assert.equal(events.data.AgentHost__ModelBindingsRevision, 'p1-v1.0.0');
+  assert.equal(events.data.AgentHost__ModelBindings__reasoning__ModelId, 'gpt-6.1-sol');
+  assert.equal(events.data.AgentHost__ModelBindings__coding__ModelId, 'gpt-6-luna');
   assert.ok(!Object.values(events.data).includes(
     '/subscriptions/90ab3701-83f0-4ba1-a90a-f2e68683adab/resourceGroups/aw-v1-p0/providers/Microsoft.DBforPostgreSQL/flexibleServers/aw-v1-p0-pg'));
 });

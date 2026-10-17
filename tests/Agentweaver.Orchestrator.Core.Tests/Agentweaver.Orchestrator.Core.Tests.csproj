@@ -12,6 +12,9 @@
     <None Include="..\..\deploy\k8s\provider-catalogs\projects-config-provider-catalog.snapshot.json"
           Link="provider-catalog\projects-config-provider-catalog.snapshot.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\deploy\k8s\runtime-configs\orchestrator-runtime-config.json"
+          Link="runtime-configs\orchestrator-runtime-config.json"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="coverlet.collector" Version="10.0.1" PrivateAssets="all" />

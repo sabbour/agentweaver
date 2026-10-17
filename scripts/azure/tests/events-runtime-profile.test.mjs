@@ -23,7 +23,6 @@ function fixture() {
     ProjectsConfig__AuthorizationContext__Audience: 'projects-test-audience',
     EventsAndSessions__OrchestratorOwner__OwnerBaseAddress: 'https://orchestrator.agentweaver-v1-p0.svc.cluster.local:8443/',
     EventsAndSessions__OrchestratorOwner__Audience: 'core-test-audience',
-    EventsAndSessions__SessionMaterial__ContainerUri: 'https://awv1p0blob.blob.core.windows.net/test-session-material',
   });
   return input;
 }
@@ -43,6 +42,13 @@ test('example is deliberately incomplete and cannot render a deployable profile'
 
 test('pure renderer retains every required existing startup key and does not mutate input', () => {
   const input = fixture();
+  assert.equal(input.configuration.EventsAndSessions__SessionMaterial__ContainerUri,
+    'https://awv1p0blob.blob.core.windows.net/session-material');
+  assert.equal(input.configuration.AgentHost__ModelBindingsRevision, 'p1-v1.0.0');
+  assert.equal(input.configuration.AgentHost__ModelBindings__reasoning__ModelId, 'gpt-6.1-sol');
+  assert.equal(input.configuration.AgentHost__ModelBindings__reasoning__SourceMode, 'HostedCopilot');
+  assert.equal(input.configuration.AgentHost__ModelBindings__coding__ModelId, 'gpt-6-luna');
+  assert.equal(input.configuration.AgentHost__ModelBindings__coding__SourceMode, 'HostedCopilot');
   const before = structuredClone(input);
   const result = renderEventsProfile(input);
   assert.deepEqual(input, before);

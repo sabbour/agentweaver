@@ -152,17 +152,42 @@ coordinator decision and the selected `OptionsRevision` `p1-v1.0.0`.
 The three service maps carry
 `agentweaver.io/runtime-config-status: incomplete`. Kubernetes does not enforce
 this annotation, but runtime preflight rejects any referenced ConfigMap with
-this marker. Remove it only after resolving every required input. Do not apply
+this marker. This change records approved values but does not run a live runtime
+preflight. Keep the markers while any required input remains unresolved. The
+deployment preflight reads the applied ConfigMaps, so it cannot run against
+these un-applied source files while their markers are present. Do not apply
 these manifests or run the bootstrap while any listed input remains unresolved.
 The Cilium-only map is complete for its options; it does not make the Environment
 runtime configuration deployable.
 
 | Manifest | Value provenance | Required inputs not yet authoritative |
 | --- | --- | --- |
-| `environment-runtime-config.json` | Database host, name, role, and tenant come from P0 handoff §7. The client ID is the live user-assigned identity matched to the handoff principal ID. The projected token path follows the checked-in runtime input profile. Broker authority/audience come from the existing non-secret `identity-broker-runtime-config`. Service addresses and ports come from the generated runtime List. Namespace, StorageClass, and RuntimeClass are the approved P0 AKS values. Provider IDs and schema versions come from the catalog and release-source options. | `Environment__Sandbox__AgentSandbox__CpuRequest`; `Environment__Sandbox__AgentSandbox__MemoryRequest`; `Environment__Sandbox__AgentSandbox__ReconciliationTimeoutSeconds`; `Environment__Sandbox__AgentSandbox__PollIntervalMilliseconds`; `Environment__Sandbox__AgentSandbox__StartupBudgets__ScheduledSeconds`; `Environment__Sandbox__AgentSandbox__StartupBudgets__ImageReadySeconds`; `Environment__Sandbox__AgentSandbox__StartupBudgets__StartedSeconds`; `Environment__Sandbox__AgentSandbox__StartupBudgets__ConfiguredSeconds`; `Environment__Sandbox__AgentSandbox__StartupBudgets__ReadySeconds`; `Environment__Sandbox__AgentSandbox__StartupBudgets__TotalSeconds`; `Environment__Storage__AzureFiles__MaximumCapacityGiB`; `Environment__Storage__AzureFiles__ProvisioningTimeoutSeconds`; `Environment__Storage__AzureFiles__PollIntervalMilliseconds`. |
-| `orchestrator-runtime-config.json` | Database and workload identity follow the same P0 handoff and live identity lookup. Schema is `orchestrator` from handoff §7. Issuer/audiences come from the existing non-secret Broker ConfigMap. Owner addresses come from the generated runtime List. The policy revision is the selected `p1-v1.0.0` runtime input. | `AgentGovernance__Policy__ResourceId`; `AgentGovernance__Policy__ResourceGeneration`; `AgentGovernance__Policy__PlatformPolicyDocuments`. The P0 resource-group inventory contains no AGT Policy resource; source contracts require a positive generation and default-deny policy documents but do not select their identity or content. |
-| `events-and-sessions-runtime-config.json` | Database, role, tenant, and schema follow handoff §7 and the live identity lookup. Issuer/audiences come from the Broker ConfigMap; owner addresses come from the runtime List. Sessions and Messaging revisions, schema, polling, retention, claim lease, and message lifetime use release-source defaults. Copilot Cost schema `1`, meter `copilot.nano_aiu`, unit `AIC`, and `1,000,000,000` nano-AIU per credit come from release-source code. | `EventsAndSessions__Provider__ResourceId`; `EventsAndSessions__Provider__ResourceGeneration`; `EventsAndSessions__Cost__Copilot__ResourceId`; `EventsAndSessions__Cost__Copilot__ResourceGeneration`; `EventsAndSessions__Cost__Copilot__RateCard__Id`; `EventsAndSessions__Cost__Copilot__RateCard__Version`; and `EventsAndSessions__Cost__Copilot__RateCard__ModelMultipliers__<model-id>` entries. `EventsAndSessions__SessionMaterial__ContainerUri` is a runtime requirement only when `EventsAndSessions:RemoteToolResults:Tls` is configured; the checked-in P0 runtime ConfigMap omits it because that TLS section is absent. The separate Events profile renderer still requires an explicit URI as a List-generation input. The Blob container listing returned `403 AuthorizationFailure`; no cost resource/rate-card identity was inferred.|
+| `environment-runtime-config.json` | Database host, name, role, and tenant come from P0 handoff §7. The client ID is the live user-assigned identity matched to the handoff principal ID. The projected token path follows the checked-in runtime input profile. Broker authority/audience come from the existing non-secret `identity-broker-runtime-config`. Service addresses and ports come from the generated runtime List. Namespace, StorageClass, and RuntimeClass are the approved P0 AKS values. Approved sizing: 1 CPU and 2 GiB per Sandbox, 600-second reconciliation and provisioning timeouts, 250-ms polls, startup budgets 30/90/30/30/30/180 seconds, and a 100-GiB Azure Files cap. These values pass the Agent Sandbox and Azure Files validators; the checked-in namespace LimitRange permits the 2-GiB container limit. Provider IDs, schema versions, image receipt inputs, and options revisions come from the catalog and bootstrap List. | No additional snapshot values are awaiting a source. The runtime preflight has not been run, so this map remains marked incomplete. |
+| `orchestrator-runtime-config.json` | Database and workload identity follow the same P0 handoff and live identity lookup. Schema is `orchestrator` from handoff §7. Issuer/audiences come from the existing non-secret Broker ConfigMap. Owner addresses come from the generated runtime List. The approved AGT Policy resource is `agt-policy:p1-v1.0.0`, generation `1`, revision `p1-v1.0.0`. The platform document defaults to deny and has one exact `action_id ==` allow rule for each ID in `RuntimeActionContract.ActionIds`: `model.turn`, `tool.read`, `tool.write`, `exec.shell`, `exec.read`, `exec.write`, and `exec.stop`. The provider test validates and evaluates this document. The `grant_id != '' and fence != ''` expression did not allow a request with the runtime's numeric fence, so the policy uses the explicit catalog-action fallback. `ExecutableActionGuard` checks the current grant and fence before policy evaluation. | No additional snapshot values are awaiting a source. The runtime preflight has not been run, so this map remains marked incomplete. |
+| `events-and-sessions-runtime-config.json` | Database, role, tenant, and schema follow handoff §7 and the live identity lookup. Issuer/audiences come from the Broker ConfigMap; owner addresses come from the runtime List. Sessions and Messaging revisions, schema, polling, retention, claim lease, and message lifetime use release-source defaults. Copilot Cost schema `1`, meter `copilot.nano_aiu`, unit `AIC`, and `1,000,000,000` nano-AIU per credit come from release-source code. The shared model map binds `reasoning` to `gpt-6.1-sol` and `coding` to `gpt-6-luna` as `HostedCopilot` at revision `p1-v1.0.0`; the AgentHost profile uses the same map. The approved Session Material URI is `https://awv1p0blob.blob.core.windows.net/session-material`; the Events profile renderer requires and uses this explicit input. The container and role grant are separate prerequisites and were not changed here. | `EventsAndSessions__Provider__ResourceId`; `EventsAndSessions__Provider__ResourceGeneration`; `EventsAndSessions__Cost__Copilot__ResourceId`; `EventsAndSessions__Cost__Copilot__ResourceGeneration`; `EventsAndSessions__Cost__Copilot__RateCard__Id`; `EventsAndSessions__Cost__Copilot__RateCard__Version`; and `EventsAndSessions__Cost__Copilot__RateCard__ModelMultipliers__gpt-6.1-sol` / `EventsAndSessions__Cost__Copilot__RateCard__ModelMultipliers__gpt-6-luna`. These resource identities and a compatible provider-published rate card are not available in the checked-in inputs; an earlier read-only Blob listing returned `403 AuthorizationFailure`, so no identity was inferred. |
 | `environment-cilium-config.json` | Namespace and endpoint selectors follow the checked-in P0 Cilium policies. Options schema `1` follows the release-source adapter contract. Adapter version is `1.0.0` by coordinator decision; options revision `p1-v1.0.0` is selected and supplied by the bootstrap List. | None for the Cilium options in this file. The separate Environment runtime map remains incomplete. |
+
+The platform default model is `gpt-6.1-sol` through the `reasoning` reference;
+a project can override it with `gpt-6-luna` through `coding`. Projects & Config
+stores these selections in its database, so this snapshot change does not write
+or migrate that state. v1 resolves one model per run from the project selection
+or platform default; it has no task-type-based or per-agent model routing yet
+([#2035](https://github.com/sabbour/agentweaver/issues/2035)).
+The requested `high` reasoning effort is not applied in v1 because the runtime
+binding path has no setting for it
+([#2036](https://github.com/sabbour/agentweaver/issues/2036)).
+
+GitHub's [Models and pricing](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing)
+page was checked on 2026-10-17. It publishes per-token prices for these models,
+not values compatible with v1's scalar Copilot `ModelMultipliers`; this change
+does not add guessed multipliers or a placeholder rate card. Recorded usage is
+priced from GitHub-reported, model-weighted nano-AIU. A scalar multiplier is a
+required model-presence marker, not a price; it affects unweighted estimates,
+not measured usage cost. Without a model entry, the current v1.0.0 admission
+path rejects HostedCopilot runs. Provider-published per-token pricing and admission for unpriced models
+are tracked in [#2037](https://github.com/sabbour/agentweaver/issues/2037);
+Foundry rate-card support is tracked in [#1924](https://github.com/sabbour/agentweaver/issues/1924).
+Live HostedCopilot acceptance therefore requires v1.0.1 with #2037.
 
 The P0 handoff supplies the PostgreSQL roles, schemas, and Entra principal IDs.
 Read-only Azure identity lookup supplied the corresponding client IDs; the
@@ -174,9 +199,13 @@ published product source `c24d0000fe5fc6163e4f38594c39dff782d3a46d`. The deploy
 command's `--provider-catalog-source-commit` identifies the catalog review
 commit instead.
 
-After all missing values have authoritative sources, update the manifests,
-remove the `incomplete` annotations from the three service maps, and review the
-rendered data. The future apply order is:
+After every listed unsourced value has an authoritative source, run the
+repository's local configuration checks and review the rendered data. Remove an
+`incomplete` annotation only for maps whose inputs are fully sourced and pass
+those checks. Apply the completed maps only with separate deployment approval;
+the live runtime preflight then checks the applied ConfigMaps and other
+Kubernetes prerequisites before acceptance. This PR does not apply any map or
+run that preflight. The future apply order is:
 
 ```powershell
 kubectl apply -f deploy\k8s\provider-catalogs\projects-config-provider-catalog.json

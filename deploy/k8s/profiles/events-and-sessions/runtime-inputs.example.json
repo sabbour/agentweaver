@@ -13,6 +13,11 @@
     "EventsAndSessions__Database__WorkloadIdentity__TokenFilePath": "/var/run/secrets/azure/tokens/azure-identity-token",
     "EventsAndSessions__Provider__DatabaseName": "agentweaver",
     "EventsAndSessions__Provider__Schema": "events_sessions",
+    "AgentHost__ModelBindingsRevision": "p1-v1.0.0",
+    "AgentHost__ModelBindings__reasoning__ModelId": "gpt-6.1-sol",
+    "AgentHost__ModelBindings__reasoning__SourceMode": "HostedCopilot",
+    "AgentHost__ModelBindings__coding__ModelId": "gpt-6-luna",
+    "AgentHost__ModelBindings__coding__SourceMode": "HostedCopilot",
     "Identity__Issuer": null,
     "Identity__Audience": null,
     "EventsAndSessions__Provider__ResourceId": null,
@@ -23,6 +28,6 @@
     "ProjectsConfig__AuthorizationContext__Audience": null,
     "EventsAndSessions__OrchestratorOwner__OwnerBaseAddress": null,
     "EventsAndSessions__OrchestratorOwner__Audience": null,
-    "EventsAndSessions__SessionMaterial__ContainerUri": null
+    "EventsAndSessions__SessionMaterial__ContainerUri": "https://awv1p0blob.blob.core.windows.net/session-material"
   }
 }

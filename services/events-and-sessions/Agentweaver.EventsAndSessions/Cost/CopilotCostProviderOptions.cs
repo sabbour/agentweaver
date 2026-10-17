@@ -3,7 +3,11 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.EventsAndSessions.Cost;
 
-/// <summary>Configures the immutable Copilot AI-credit rate card and its run-scoped resource identity.</summary>
+/// <summary>
+/// Configures the immutable Copilot AI-credit rate card and its run-scoped resource identity.
+/// Measured usage is priced from GitHub-reported, model-weighted nano-AIU; model multipliers gate
+/// model eligibility and affect only unweighted estimates.
+/// </summary>
 public sealed record CopilotCostProviderOptions(
     string ResourceId,
     long ResourceGeneration,

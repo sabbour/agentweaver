@@ -1,5 +1,8 @@
 using System.Collections.Immutable;
+using System.Globalization;
+using System.Text.Json;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Orchestrator.Core;
 using Agentweaver.Providers;
 using Xunit;
@@ -225,6 +228,55 @@ public sealed class AgtPolicyProviderTests
 
         Assert.Equal(PolicyEvaluationOutcome.Allow, result.Outcome);
         Assert.Equal(PolicyEvaluationReasonCode.Allowed, result.ReasonCode);
+    }
+
+    [Fact]
+    public void P0PlatformBaselineIsDefaultDenyAndAllowsOnlyCatalogActions()
+    {
+        var configPath = Path.Combine(
+            AppContext.BaseDirectory,
+            "runtime-configs",
+            "orchestrator-runtime-config.json");
+        using var manifest = JsonDocument.Parse(File.ReadAllText(configPath));
+        var data = manifest.RootElement.GetProperty("data");
+        var options = new AgtPolicyProviderOptions(
+            data.GetProperty("AgentGovernance__Policy__ResourceId").GetString()!,
+            long.Parse(
+                data.GetProperty("AgentGovernance__Policy__ResourceGeneration").GetString()!,
+                CultureInfo.InvariantCulture),
+            data.GetProperty("AgentGovernance__Policy__OptionsRevision").GetString()!,
+            [data.GetProperty("AgentGovernance__Policy__PlatformPolicyDocuments__0").GetString()!]);
+        var provider = new AgtPolicyProvider();
+
+        options.Validate();
+        // The guard supplies a numeric fence; explicit catalog rules keep this policy fail-closed.
+        foreach (var actionId in RuntimeActionContract.ActionIds)
+        {
+            var allowed = provider.Evaluate(
+                options,
+                new AgtPolicyEvaluationRequest(
+                    "actor-1",
+                    actionId,
+                    new Dictionary<string, object>(StringComparer.Ordinal)
+                    {
+                        ["grant_id"] = "grant-1",
+                        ["fence"] = 1L
+                    }));
+            Assert.Equal(PolicyEvaluationOutcome.Allow, allowed.Outcome);
+        }
+
+        var denied = provider.Evaluate(
+            options,
+            new AgtPolicyEvaluationRequest(
+                "actor-1",
+                "unknown.runtime-action",
+                new Dictionary<string, object>(StringComparer.Ordinal)
+                {
+                    ["grant_id"] = "grant-1",
+                    ["fence"] = 1L
+                }));
+
+        Assert.Equal(PolicyEvaluationOutcome.Deny, denied.Outcome);
     }
 
     [Fact]
