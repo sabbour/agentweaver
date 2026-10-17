@@ -151,12 +151,12 @@ test('the Orchestrator host is registered as a prepared service with all project
   assert.deepEqual(fixture.compatibility
     .filter(({ consumer }) => consumer === host.id)
     .map(({ dependency, versions }) => [dependency, versions]), [
-    ['Agentweaver.Identity', ['0.0.0', '0.1.0', '1.0.0']],
-    ['Agentweaver.Orchestrator.Core', ['0.0.0', '0.1.0', '1.0.0']],
-    ['Agentweaver.Abstractions', ['0.0.0', '0.1.0', '1.0.0']],
-    ['Agentweaver.Persistence.Postgres', ['0.0.0', '0.1.0', '1.0.0']],
-    ['Agentweaver.Providers', ['0.0.0', '0.1.0', '1.0.0']],
-    ['Agentweaver.SourceControl', ['0.0.0', '0.1.0', '1.0.0']],
+    ['Agentweaver.Identity', ['0.0.0', '0.1.0', '1.0.0', '1.1.0']],
+    ['Agentweaver.Orchestrator.Core', ['0.0.0', '0.1.0', '1.0.0', '1.1.0']],
+    ['Agentweaver.Abstractions', ['0.0.0', '0.1.0', '1.0.0', '1.1.0']],
+    ['Agentweaver.Persistence.Postgres', ['0.0.0', '0.1.0', '1.0.0', '1.0.1']],
+    ['Agentweaver.Providers', ['0.0.0', '0.1.0', '1.0.0', '1.0.1']],
+    ['Agentweaver.SourceControl', ['0.0.0', '0.1.0', '1.0.0', '1.0.1']],
   ]);
   assert.equal(check(fixture).stage, 'draft');
 });
@@ -245,11 +245,14 @@ test('draft dependency declarations allow pure version preparation without chang
   }
   const preparedManifest = JSON.parse(prepared.files.get(receipt.manifestPath));
   assert.equal(preparedManifest.stage, 'draft');
-  assert.deepEqual(preparedManifest.compatibility, fixture.compatibility);
-  assert.deepEqual(preparedManifest.components, sourceManifest.components.map(component => ({
-    ...component, version: preparedVersions.get(component.id) ?? component.version,
-  })));
-  assert.deepEqual(preparedManifest, fixture);
+  assert.deepEqual(preparedManifest.compatibility, sourceManifest.compatibility);
+  const expectedPreparedManifest = {
+    ...sourceManifest,
+    components: sourceManifest.components.map(component => ({
+      ...component, version: preparedVersions.get(component.id) ?? component.version,
+    })),
+  };
+  assert.deepEqual(preparedManifest, expectedPreparedManifest);
   for (const [file, original] of sourceSnapshot) {
     assert.deepEqual(readFileSync(path.join(root, file)), original, file);
   }
