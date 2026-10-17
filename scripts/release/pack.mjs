@@ -1,12 +1,7 @@
 /**
- * Builds and measures release artifacts locally from an exact source revision.
- * It writes artifacts and provenance receipts to an output directory but does not publish or deploy them.
+ * Builds manifest components and records source, version, and artifact hashes.
+ * It prepares local or workflow artifacts only; publication is a separate action.
  */
-// Dependency-free artifact preparation: runs a locked `dotnet restore` + `build` + `pack`/container
-// publish sequence for each manifest component into a fresh, per-run output
-// directory, then records a provenance receipt (source SHA, component versions, and a SHA-256 hash
-// of every artifact it produced). This never publishes or pushes anywhere — it only prepares local
-// artifacts for a human to inspect and manually publish. See releases/README.md.
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';

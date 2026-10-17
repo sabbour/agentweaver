@@ -5,8 +5,14 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSy
 import path from 'node:path';
 import test from 'node:test';
 import { applyPlan } from '../apply.mjs';
-import { diffChanges, resolveCiComparisonBase, resolveMergeBase, validateChangesets } from '../changesets.mjs';
+import {
+  diffChanges, requireFreshVersionApplicationReceipt, resolveCiComparisonBase, resolveMergeBase,
+  validateChangesets,
+} from '../changesets.mjs';
 import { createPlan, planChecksum } from '../plan.mjs';
+import {
+  readPublicationPackageComponents, resolveVersionApplicationSourceSha, selectPublicationPackageComponents,
+} from '../publication-selection.mjs';
 
 const csproj = (version, references = []) => `<Project><PropertyGroup><Version>${version}</Version></PropertyGroup>` +
   (references.length
@@ -104,6 +110,7 @@ test('plans and applies a single-component bump, keeping mirrors and compatibili
   const result = applyPlan(plan, manifestPath(dir), { root: dir });
   assert.deepEqual(result.applied, ['Pkg.A']);
   assert.deepEqual(result.skipped, []);
+  assert.deepEqual(readPublicationPackageComponents(dir, plan.sourceSha), ['Pkg.A']);
 
   const updated = readManifest(dir);
   assert.equal(updated.components.find((c) => c.id === 'Pkg.A').version, '0.2.0');
@@ -117,6 +124,21 @@ test('plans and applies a single-component bump, keeping mirrors and compatibili
 
   const changelog = readFileSync(path.join(dir, 'releases', 'CHANGELOG.md'), 'utf8');
   assert.match(changelog, /Pkg\.A.*0\.1\.0 -> 0\.2\.0 \(minor\)/);
+});
+
+test('publication package selection includes bumped packages and excludes bumped services', () => {
+  const manifest = manifestBase();
+  manifest.components[0].version = '0.2.0';
+  manifest.components.push({
+    id: 'Svc', kind: 'service', version: '1.1.0', project: 'services/Svc/Svc.csproj',
+  });
+  assert.deepEqual(selectPublicationPackageComponents(manifest, { components: [
+    { id: 'Pkg.A', toVersion: '0.2.0' },
+    { id: 'Svc', toVersion: '1.1.0' },
+  ] }), ['Pkg.A']);
+  assert.throws(() => selectPublicationPackageComponents(manifest, { components: [
+    { id: 'Pkg.A', toVersion: '0.3.0' },
+  ] }), /does not match the current manifest/);
 });
 
 test('records the initial baseline without a bump, then plans later published changes with normal semver', (t) => {
@@ -615,17 +637,23 @@ function integratedPreparationFixture(t, { corruption, integratedExtra = false, 
   };
 }
 
-for (const eventName of ['pull_request', 'push']) {
+for (const eventName of ['pull_request', 'push', 'workflow_dispatch']) {
   test(`CI comparison retains the genuine preparation receipt on an integrated ${eventName} merge`, t => {
     const f = integratedPreparationFixture(t);
     assert.equal(resolveMergeBase(f.dir, f.target), f.target);
     assert.equal(resolveMergeBase(f.dir, f.target, f.authoredHead), f.planSource);
     const ancestorSha = resolveCiComparisonBase(f.dir, f.context(eventName));
     assert.equal(ancestorSha, f.planSource);
+    if (eventName !== 'pull_request') {
+      assert.equal(resolveVersionApplicationSourceSha(f.dir, {
+        eventName, testedSourceSha: f.tested, baseSha: f.target,
+      }), f.planSource);
+    }
     const changes = diffChanges(f.dir, ancestorSha);
     assert.ok(changes.some(({ file, status }) => file === '.changeset/add-feature.md' && status === 'D'));
     assert.ok(changes.some(({ file, status }) => file === '.changeset/archive/add-feature.md' && status === 'A'));
     assert.doesNotThrow(() => validateChangesets(readManifest(f.dir), { root: f.dir, changes, ancestorSha }));
+    assert.equal(requireFreshVersionApplicationReceipt(changes), `releases/receipts/${f.planSource}.json`);
     assert.equal(git(f.dir, 'rev-parse', 'HEAD'), f.tested);
     assert.notEqual(f.tested, f.authoredHead);
   });
@@ -676,8 +704,8 @@ test('CI comparison preserves linear push coverage and rejects missing or mismat
     { ...f.context('pull_request'), baseSha: 'e'.repeat(40) },
     { ...f.context('push'), baseSha: f.planSource },
     { ...f.context('push'), sourceHeadSha: f.authoredHead },
-    { ...f.context('push'), eventName: 'workflow_dispatch' },
     { ...f.context('push'), testedSourceSha: '' },
+    { ...f.context('workflow_dispatch'), sourceHeadSha: f.authoredHead },
   ]) assert.throws(() => resolveCiComparisonBase(f.dir, context), /CI source/);
   git(f.dir, 'switch', '--detach', '-q', f.authoredHead);
   assert.throws(() => resolveCiComparisonBase(f.dir, { ...linear, baseSha: 'e'.repeat(40) }), /cannot establish/);
@@ -725,6 +753,12 @@ test('CI validation CLI uses verified event history while retaining the integrat
     const fixedContext = run('--ci');
     assert.equal(fixedContext.status, 0, fixedContext.stderr);
     assert.match(fixedContext.stdout, /with diff coverage/);
+    const requiredReceipt = run('--ci', '--require-version-application-receipt');
+    assert.equal(requiredReceipt.status, 0, requiredReceipt.stderr);
+    assert.throws(() => requireFreshVersionApplicationReceipt([]), /exactly one newly added/);
+    assert.throws(() => requireFreshVersionApplicationReceipt([
+      { status: 'A', file: 'releases/receipts/not-a-receipt.txt' },
+    ]), /exactly one newly added/);
     assert.equal(git(f.dir, 'rev-parse', 'HEAD'), f.tested);
     options.env.GITHUB_SHA = f.authoredHead;
     const mismatched = run('--ci');

@@ -456,18 +456,20 @@ published v1 release composition and its full publication evidence. Add
 The existing `v1-ci.yml` and `v1-docs-ci.yml` workflows run on pull requests and
 pushes to `v1`. They retain the test, build, lint, coverage, release-composition,
 changeset, and documentation checks. A product version-application receipt
-committed to `v1` triggers `.github/workflows/v1-release-pack.yml`; select the
-`v1` branch to run the same pipeline manually as a fallback. Before building or
-publishing, the release workflow waits for both CI workflows to pass on the
-exact source commit.
+committed to `v1` triggers `.github/workflows/v1-release-pack.yml`. A manual
+`workflow_dispatch` fallback uses the same validation and requires a fresh
+receipt, so it must target the version-application commit that added that
+receipt. Before building or publishing, the release workflow waits for both CI
+workflows to pass on the exact source commit.
 
 The release workflow validates the composition and changeset coverage, then
 starts two independent jobs. `packages` creates the NuGet package artifacts.
-`images` prepares the approved pinned build inputs and builds the product Docker
+`images` prepares the source-pinned build inputs and builds the product Docker
 images without the acceptance-only Foundation Probe. Each job uploads its
 source-bound artifacts. `publish` waits for both jobs, verifies that their
 source SHA, manifest hash, selected components, and artifact files agree, then
-publishes those exact outputs to GitHub Packages and `ghcr.io/sabbour`.
+publishes only NuGet packages whose versions changed in the verified receipt,
+plus all ten product service images, to GitHub Packages and `ghcr.io/sabbour`.
 The publisher rechecks artifact hashes and image contracts before its first
 external write.
 
@@ -486,7 +488,7 @@ flowchart LR
   Validate --> Images["Build product Docker images"]
   Packages --> Artifacts["Upload source-bound artifacts"]
   Images --> Artifacts
-  Artifacts --> Publish["Publish packages and images; save receipt"]
+  Artifacts --> Publish["Publish changed packages and images; save receipt"]
 ```
 
 The [saved job graph](./v1-release-pipeline.mmd) contains the same diagram.

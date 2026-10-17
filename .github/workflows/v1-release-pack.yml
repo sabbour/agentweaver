@@ -12,6 +12,8 @@ permissions:
 
 jobs:
   validate:
+    outputs:
+      release_base_sha: ${{ steps.release-base.outputs.sha }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
@@ -28,6 +30,25 @@ jobs:
             echo "::error::Release publication must run from refs/heads/v1 (got $GITHUB_REF)." >&2
             exit 1
           }
+      - name: Resolve version-application base
+        id: release-base
+        env:
+          PUSH_BASE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            base_sha="$PUSH_BASE_SHA"
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            base_sha="$(git rev-parse "${GITHUB_SHA}^")"
+          else
+            echo "::error::Release publication requires a v1 push or manual dispatch." >&2
+            exit 1
+          fi
+          if ! [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Cannot resolve the version-application base commit." >&2
+            exit 1
+          fi
+          echo "sha=$base_sha" >> "$GITHUB_OUTPUT"
       - name: Wait for CI and documentation checks on this source
         env:
           GH_TOKEN: ${{ github.token }}
@@ -52,15 +73,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Validate release composition and changeset coverage
-        if: ${{ github.event_name == 'push' }}
+      - name: Validate release composition, changeset coverage, and receipt
         env:
-          RELEASE_BASE_SHA: ${{ github.event.before }}
-          RELEASE_HEAD_SHA: ${{ github.sha }}
-        run: npm run release:validate -- --ci
-      - name: Validate release composition
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        run: npm run release:validate
+          RELEASE_BASE_SHA: ${{ steps.release-base.outputs.sha }}
+        run: npm run release:validate -- --ci --require-version-application-receipt
 
   packages:
     needs: validate
@@ -111,7 +127,7 @@ jobs:
                 "containerd-snapshotter": true
               }
             }
-      - name: Prepare approved product build inputs
+      - name: Prepare pinned product build inputs
         env:
           EXPECTED_SOURCE: ${{ github.sha }}
           DOCKER_CONTEXT: default
@@ -182,6 +198,7 @@ jobs:
           RELEASE_REGISTRY: ghcr.io/sabbour
           RELEASE_REGISTRY_USER: ${{ github.repository_owner }}
           RELEASE_REGISTRY_PASSWORD: ${{ github.token }}
+          RELEASE_BASE_SHA: ${{ needs.validate.outputs.release_base_sha }}
           DOCKER_CONFIG: ${{ github.workspace }}/artifacts/docker-config
         run: node scripts/release/publish.mjs releases/foundation.json artifacts/release/publish "$GITHUB_SHA" --confirm-publication --platform-only
       - uses: actions/upload-artifact@v4

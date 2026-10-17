@@ -202,9 +202,9 @@ export function resolveCiComparisonBase(root, {
   baseSha = process.env.RELEASE_BASE_SHA,
   sourceHeadSha = process.env.RELEASE_HEAD_SHA,
 } = {}) {
-  if (!['pull_request', 'push'].includes(eventName) ||
+  if (!['pull_request', 'push', 'workflow_dispatch'].includes(eventName) ||
       !sha.test(testedSourceSha ?? '') || !sha.test(baseSha ?? '')) {
-    fail('CI source', 'expected a pull_request or push event with full tested and base commit SHAs');
+    fail('CI source', 'expected a pull_request, push, or workflow_dispatch event with full tested and base commit SHAs');
   }
   const git = (...args) => execFileSync('git', args, {
     cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
@@ -222,14 +222,15 @@ export function resolveCiComparisonBase(root, {
       }
       authoredHead = sourceHeadSha;
     } else {
-      if (sourceHeadSha) fail('CI source', 'push comparison must derive authored history from the tested commit parents');
+      if (sourceHeadSha) fail('CI source', 'push and manual comparisons must derive authored history from the tested commit parents');
+      // For a merge commit, compare its authored second parent with the event's first-parent base.
       if (parents.length === 2 && parents[0] === baseSha) {
         authoredHead = parents[1];
       } else if (parents.length === 1) {
         git('merge-base', '--is-ancestor', baseSha, testedSourceSha);
         authoredHead = testedSourceSha;
       } else {
-        fail('CI source', 'tested push must have linear history or ordered merge parents [before, authored head]');
+        fail('CI source', 'tested push or manual dispatch must have linear history or ordered merge parents [before, authored head]');
       }
     }
     return resolveMergeBase(root, baseSha, authoredHead);
@@ -348,6 +349,15 @@ export function creditReceiptedComponents(root, changes, componentIds, ancestorS
     }
   }
   return credited;
+}
+
+// Publication must be triggered by exactly one receipt added in the compared source diff.
+export function requireFreshVersionApplicationReceipt(changes) {
+  const receipts = changes.filter(({ status, file }) => status === 'A' && receiptName.test(file));
+  if (receipts.length !== 1) {
+    fail('release receipt', 'expected exactly one newly added version-application receipt in the source diff');
+  }
+  return receipts[0].file;
 }
 
 /**

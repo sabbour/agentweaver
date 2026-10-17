@@ -297,7 +297,7 @@ test('a draft or altered product manifest cannot pass published-release validati
     id !== 'Agentweaver.FoundationProbe' && kind === 'service').length, 10);
 });
 
-test('publication provenance must prove exactly the 23 product components and all ten GHCR digests', () => {
+test('publication provenance must prove every product image and validates any included package receipts', () => {
   const manifest = releaseManifest();
   const receipt = publicationReceipt(manifest);
   const images = validatePublicationReceipt(receipt, manifest, sourceSha);
@@ -307,9 +307,14 @@ test('publication provenance must prove exactly the 23 product components and al
   assert.equal(agentHost.sandboxImage,
     `ghcr.io/sabbour/${componentImageRepository(agentHost.id)}@sha256:${'a'.repeat(64)}`);
   assert.equal(agentHost.compressedPullBytes, 123456);
-  const missing = structuredClone(receipt);
-  missing.published.pop();
-  assert.throws(() => validatePublicationReceipt(missing, manifest, sourceSha), /exact 23-component/);
+  const packagesOmitted = structuredClone(receipt);
+  packagesOmitted.planned = packagesOmitted.planned.filter(({ kind }) => kind === 'image');
+  packagesOmitted.published = packagesOmitted.published.filter(({ kind }) => kind === 'image');
+  assert.equal(validatePublicationReceipt(packagesOmitted, manifest, sourceSha).length, 10);
+  const missingImage = structuredClone(packagesOmitted);
+  missingImage.planned.pop();
+  missingImage.published.pop();
+  assert.throws(() => validatePublicationReceipt(missingImage, manifest, sourceSha), /every product service image/);
   const wrongDigest = structuredClone(receipt);
   wrongDigest.published.find(({ id }) => id === 'Agentweaver.Web').image =
     `ghcr.io/sabbour/agentweaver-web@sha256:${'f'.repeat(64)}`;
