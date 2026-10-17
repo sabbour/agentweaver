@@ -929,6 +929,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         Assert.False(totals.IsFullyPriced);
         var amount = Assert.Single(totals.Amounts);
         Assert.Equal(1, amount.UnpricedEvents);
+        Assert.Equal(0, amount.PricedEvents);
         Assert.Equal(0, amount.Amount);
         Assert.Equal(new long[] { 1, 1, 1, 1 }, await ReadPersistedCountsAsync());
 

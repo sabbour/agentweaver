@@ -626,9 +626,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ["EventsAndSessions__Cost__Copilot__ResourceGeneration"] =
                 enableHostedCopilotRunAdmission ? "1" : null,
             ["EventsAndSessions__Cost__Copilot__OptionsRevision"] =
-                enableHostedCopilotRunAdmission ? "native-cost-v1" : null,
+                enableHostedCopilotRunAdmission ? PublishedCopilotRateCardFixture.OptionsRevision : null,
             ["EventsAndSessions__Cost__Copilot__OptionsSchemaVersion"] =
                 enableHostedCopilotRunAdmission ? "2" : null,
+            ["EventsAndSessions__Cost__Copilot__RateCard__Json"] =
+                enableHostedCopilotRunAdmission ? PublishedCopilotRateCardFixture.RateCardJson : null,
             ["Identity__Issuer"] = IdentityBrokerWebApplicationFactory.Issuer,
             ["Identity__Audience"] = "https://api.test",
             ["Identity__SecretRedemption__Audience"] = "https://broker-redemption.test",

@@ -294,8 +294,9 @@ apply only above the listed input-token threshold.
 The model IDs above are the rate-card keys. Pricing applies only when a key exactly
 matches the model ID returned by the Copilot SDK. The source defines one AI credit
 as $0.01 USD. The snapshot records the source URL and retrieval date so earlier
-usage is not repriced when GitHub changes rates. The adapter and PostgreSQL ledger
-do not establish SDK producer authority.
+usage is not repriced when GitHub changes rates. Keep the adapter options revision
+aligned with the provider catalog; the rate-card version identifies each pricing
+snapshot. The adapter and PostgreSQL ledger do not establish SDK producer authority.
 The separate runtime pipeline requires a current registration, original validated bearer,
 and purpose-bound observe credential before it commits actual SDK measurements.
 Events accepts only the resulting immutable source receipt reference.

@@ -30,6 +30,7 @@ const requiredConfiguration = [
   ...Object.keys(fixedConfiguration),
   'AgentHost__ModelBindingsRevision',
   'EventsAndSessions__Cost__Copilot__OptionsSchemaVersion',
+  'EventsAndSessions__Cost__Copilot__OptionsRevision',
   'EventsAndSessions__Cost__Copilot__ResourceId',
   'EventsAndSessions__Cost__Copilot__ResourceGeneration',
   'Identity__Issuer',
@@ -170,8 +171,9 @@ export function renderEventsProfile(input) {
   positiveInteger(Number(resolvedData.EventsAndSessions__Provider__ResourceGeneration),
     Number.MAX_SAFE_INTEGER, 'Events Sessions resource generation');
   if (resolvedData.EventsAndSessions__Cost__Copilot__OptionsSchemaVersion !== '2' ||
+      !/^[A-Za-z0-9._:-]{1,128}$/.test(resolvedData.EventsAndSessions__Cost__Copilot__OptionsRevision) ||
       !/^[A-Za-z0-9._:-]{1,256}$/.test(resolvedData.EventsAndSessions__Cost__Copilot__ResourceId))
-    throw new Error('Copilot Cost requires the supported schema and a valid resource ID.');
+    throw new Error('Copilot Cost requires the supported schema, options revision, and resource ID.');
   if (!/^[1-9][0-9]*$/.test(resolvedData.EventsAndSessions__Cost__Copilot__ResourceGeneration))
     throw new Error('Copilot Cost resource generation must be a positive integer string.');
   positiveInteger(Number(resolvedData.EventsAndSessions__Cost__Copilot__ResourceGeneration),

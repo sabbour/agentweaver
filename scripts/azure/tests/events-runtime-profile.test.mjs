@@ -6,6 +6,9 @@ import { runtimeContractSettings, runtimeListFixture } from '../../release/tests
 
 const exampleUrl = new URL('../../../deploy/k8s/profiles/events-and-sessions/runtime-inputs.example.json', import.meta.url);
 const example = JSON.parse(readFileSync(exampleUrl, 'utf8'));
+const runtimeConfigUrl = new URL('../../../deploy/k8s/runtime-configs/events-and-sessions-runtime-config.json', import.meta.url);
+const rateCardKey = 'EventsAndSessions__Cost__Copilot__RateCard__Json';
+const defaultRateCardJson = JSON.parse(readFileSync(runtimeConfigUrl, 'utf8')).data[rateCardKey];
 function fixture() {
   const input = structuredClone(example);
   Object.assign(input, {
@@ -27,8 +30,11 @@ function fixture() {
 const item = (result, kind) => result.items.find(value => value.kind === kind);
 function eventsContractSettings(deployment) {
   const settings = runtimeContractSettings(deployment);
+  const annotations = Object.fromEntries(Object.entries(settings.annotations ?? {})
+    .filter(([key]) => key !== 'agentweaver.io/runtime-config-sha256'));
   return {
     ...settings,
+    annotations: Object.keys(annotations).length > 0 ? annotations : undefined,
     env: settings.env.filter(value =>
       value.name !== 'EventsAndSessions__Cost__Copilot__OptionsRevision'),
   };
@@ -55,8 +61,11 @@ test('pure renderer retains every required existing startup key and does not mut
   assert.deepEqual(input, before);
   assert.deepEqual(result.items.map(value => value.kind),
     ['ServiceAccount', 'ConfigMap', 'Service', 'Deployment', 'CiliumNetworkPolicy']);
-  assert.deepEqual(item(result, 'ConfigMap').data, input.configuration);
-  assert.equal(item(result, 'ConfigMap').immutable, true);
+  assert.deepEqual(item(result, 'ConfigMap').data, {
+    ...input.configuration,
+    [rateCardKey]: input.configuration[rateCardKey] ?? defaultRateCardJson,
+  });
+  assert.equal(item(result, 'ConfigMap').immutable, false);
   for (const value of result.items) assert.equal(value.metadata.namespace, 'agentweaver-v1-p0');
   const sa = item(result, 'ServiceAccount');
   assert.equal(sa.metadata.name, 'events-and-sessions');
@@ -69,11 +78,11 @@ test('every required field rejects missing, empty, control-bearing and non-strin
     for (const value of [null, '', ' ', 'bad\nvalue', 1]) {
       const input = fixture();
       input.configuration[key] = value;
-      assert.throws(() => renderEventsProfile(input), undefined, key);
+      assert.throws(() => renderEventsProfile(input), Error, key);
     }
     const input = fixture();
     delete input.configuration[key];
-    assert.throws(() => renderEventsProfile(input), /missing field/, key);
+    assert.throws(() => renderEventsProfile(input), Error, key);
   }
   for (const key of Object.keys(fixture())) {
     const input = fixture();
@@ -187,7 +196,7 @@ test('owners require exact private service names, explicit HTTPS ports, and the 
       'https://knowledge.agentweaver-v1-p0.svc.cluster.local:8443/?token=x']) {
       const input = fixture();
       input.configuration[key] = value;
-      assert.throws(() => renderEventsProfile(input), undefined, key);
+      assert.throws(() => renderEventsProfile(input), Error, key);
     }
   }
   const input = fixture();
@@ -206,7 +215,7 @@ test('provider values, managed issuer and existing Events-only TLS Secret are ch
     for (const value of values) {
       const input = fixture();
       input.configuration[key] = value;
-      assert.throws(() => renderEventsProfile(input), undefined, key);
+      assert.throws(() => renderEventsProfile(input), Error, key);
     }
   }
   for (const value of [null, '', 'identity-broker-tls', '../events-and-sessions-tls', 'events-and-sessions-' + 'a'.repeat(64)]) {

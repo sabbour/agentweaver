@@ -287,11 +287,15 @@ public sealed class RuntimeUsageSourceReceiptTests
             RuntimeNativeTurnContract.AccountingSnapshotRequest(recorded, wrong));
     }
 
+    // Pinned-card identity stays auditable on both priced and Unpriced accounting receipts.
     private static RuntimeUsageCostReceiptReference AccountingReference(RuntimeUsageSourceReceipt native, bool unpriced) =>
         new(native.ReceiptId, new(native.Usage.EventId, native.Usage.Attribution, new string('f', 64),
             unpriced ? CostDisposition.Unpriced : CostDisposition.Estimate,
-            unpriced ? null : 5, unpriced ? null : "AIC", unpriced ? "unknown-cost" : null,
-            unpriced ? null : "card", unpriced ? null : "1", DateTimeOffset.UtcNow));
+            unpriced ? null : 5, "AIC", unpriced ? "unknown-cost" : null,
+            "card", "2026-10-17", DateTimeOffset.UtcNow)
+        {
+            RateCardContentHash = new string('a', 64)
+        });
 
     [Theory]
     [InlineData(0, 0)]
@@ -354,6 +358,64 @@ public sealed class RuntimeUsageSourceReceiptTests
     }
 
     [Fact]
+    public void LegacyUnpricedSnapshotWithOmittedAmountGroupsStillReplays()
+    {
+        var native = Receipt();
+        var request = new RuntimeUsageCostSnapshotRequest(1, native.Registration, native.Usage.SdkSource!);
+        var scope = request.Registration.Binding;
+        var card = new CostRateCard(
+            "legacy-copilot-card", "v1", SdkMeterSources.CopilotNanoAiu, "AIC",
+            1_000_000_000m,
+            ImmutableDictionary<string, decimal>.Empty.Add("gpt-6.1-sol", 1m));
+        var binding = new CostBinding(
+            SdkMeterSources.CopilotNanoAiu, "copilot.usage-cost", "1.0.0", 1,
+            "cost-options", "cost", 1, ImmutableHashSet<string>.Empty, card);
+        var totals = new UsageRunTotals(scope.TenantId, scope.ProjectId, scope.RunId, 1, false,
+            [new(scope.AgentId, 1, null, null, null, null, null, null, false, [])], []);
+        var legacyCardJson = new
+        {
+            card.Id,
+            card.Version,
+            card.MeterSource,
+            card.Unit,
+            card.NanoUnitsPerUnit,
+            card.ModelMultipliers
+        };
+        // This fixture preserves the pre-token-rate JSON shape, including its omitted Unpriced amount groups.
+        var legacyJson = JsonSerializer.Serialize(new
+        {
+            ContractVersion = 1,
+            SourceHash = RuntimeUsageSourceReceiptContract.HashSource(request.Registration, request.Source),
+            Binding = new
+            {
+                binding.MeterSource,
+                binding.ProviderId,
+                binding.AdapterVersion,
+                binding.OptionsSchemaVersion,
+                binding.OptionsRevision,
+                binding.ResourceId,
+                binding.ResourceGeneration,
+                binding.NegotiatedCapabilities,
+                RateCard = legacyCardJson
+            },
+            Quote = new
+            {
+                Amount = (decimal?)null,
+                Unit = "AIC",
+                Disposition = CostDisposition.Unpriced,
+                RateCard = legacyCardJson,
+                UnpricedReason = "model-rate-unavailable"
+            },
+            CopilotTotals = totals
+        });
+        var snapshot = JsonSerializer.Deserialize<RuntimeUsageCostSnapshotReceipt>(legacyJson)!;
+
+        Assert.DoesNotContain("ModelTokenRates", legacyJson);
+        Assert.DoesNotContain("RateCardContentHash", legacyJson);
+        Assert.Equal(0, RuntimeUsageCostSnapshotContract.ValidateReceipt(snapshot, request));
+    }
+
+    [Fact]
     public void CostSnapshotCarriesAndValidatesTheExactRateCardContentHash()
     {
         var native = Receipt();
@@ -367,6 +429,45 @@ public sealed class RuntimeUsageSourceReceiptTests
         Assert.Throws<RuntimeAuthorizationException>(() =>
             RuntimeUsageCostSnapshotContract.ValidateReceipt(
                 roundTrip with { RateCardContentHash = new string('b', 64) }, request));
+    }
+
+    [Fact]
+    public void PublishedRateCardSnapshotRejectsRemovedCardAndReceiptHashes()
+    {
+        var native = Receipt();
+        var reference = AccountingReference(native, unpriced: false);
+        var request = new RuntimeUsageCostSnapshotRequest(1, native.Registration, native.Usage.SdkSource!)
+        {
+            DispatchId = Guid.NewGuid(),
+            RequiredReceipts = [reference]
+        };
+        var snapshot = CostSnapshot(request, 5, 1) with
+        {
+            DispatchId = request.DispatchId,
+            RepresentedReceipts = [reference]
+        };
+        var tampered = snapshot with
+        {
+            RateCardContentHash = null,
+            Binding = snapshot.Binding! with
+            {
+                RateCard = snapshot.Binding!.RateCard with { ContentHash = null }
+            },
+            Quote = snapshot.Quote with
+            {
+                RateCard = snapshot.Quote.RateCard! with { ContentHash = null }
+            },
+            RepresentedReceipts =
+            [
+                reference with
+                {
+                    Accounting = reference.Accounting with { RateCardContentHash = null }
+                }
+            ]
+        };
+
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageCostSnapshotContract.ValidateReceipt(tampered, request));
     }
 
     [Fact]
@@ -432,6 +533,7 @@ public sealed class RuntimeUsageSourceReceiptTests
     [InlineData("missing-agent")]
     [InlineData("tampered-total")]
     [InlineData("unpriced-total-amount")]
+    [InlineData("unpriced-omitted-amounts")]
     public void MalformedOrTamperedCostSnapshotFailsClosed(string fault)
     {
         var native = Receipt();
@@ -492,6 +594,21 @@ public sealed class RuntimeUsageSourceReceiptTests
                         {
                             Amount = 1
                         }]
+                    }]
+                }
+            },
+            "unpriced-omitted-amounts" => receipt with
+            {
+                Quote = new(null, "AIC", CostDisposition.Unpriced, receipt.Binding!.RateCard,
+                    "model-rate-unavailable"),
+                CopilotTotals = receipt.CopilotTotals with
+                {
+                    IsFullyPriced = false,
+                    Amounts = [],
+                    Agents = [receipt.CopilotTotals.Agents[0] with
+                    {
+                        IsFullyPriced = false,
+                        Amounts = []
                     }]
                 }
             },
@@ -563,7 +680,7 @@ public sealed class RuntimeUsageSourceReceiptTests
 
     private static RuntimeUsageCostSnapshotReceipt CostSnapshot(
         RuntimeUsageCostSnapshotRequest request, decimal amount, long events, bool modelRateAvailable = true,
-        bool includeContentHash = false)
+        bool includeContentHash = true)
     {
         var card = PublishedCard(
             modelRateAvailable ? request.Source.ModelId : "gpt-6.1-sol", includeContentHash);
@@ -588,8 +705,21 @@ public sealed class RuntimeUsageSourceReceiptTests
         };
     }
 
-    private static CostRateCard PublishedCard(string modelId, bool includeContentHash = false) =>
-        new("card", "2026-10-17", SdkMeterSources.CopilotNanoAiu, "AIC", 1_000_000_000m,
+    /// <summary>Builds a test card from GitHub-published rates for the two configured Copilot models.</summary>
+    private static CostRateCard PublishedCard(string modelId, bool includeContentHash = true)
+    {
+        var tokenRates = modelId switch
+        {
+            "gpt-6.1-sol" => new CostModelTokenRates(
+                new CostTokenRates(2m, 0.1m, 2.5m, 10m),
+                new CostTokenRates(4m, 0.2m, 5m, 15m)),
+            "gpt-6-luna" => new CostModelTokenRates(
+                new CostTokenRates(0.1m, 0.01m, 0.125m, 0.5m),
+                new CostTokenRates(0.2m, 0.02m, 0.25m, 0.75m)),
+            _ => throw new ArgumentOutOfRangeException(nameof(modelId), modelId,
+                "No GitHub-published test rate is defined for this model.")
+        };
+        return new("card", "2026-10-17", SdkMeterSources.CopilotNanoAiu, "AIC", 1_000_000_000m,
             ImmutableDictionary<string, decimal>.Empty)
         {
             ProviderSourceUrl = "https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing",
@@ -602,10 +732,9 @@ public sealed class RuntimeUsageSourceReceiptTests
             ContentHash = includeContentHash ? new string('a', 64) : null,
             ModelTokenRates = ImmutableDictionary<string, CostModelTokenRates>.Empty
                 .WithComparers(StringComparer.Ordinal)
-                .Add(modelId, new(
-                    new(2m, 0.1m, 2.5m, 10m),
-                    new(4m, 0.2m, 5m, 15m)))
+                .Add(modelId, tokenRates)
         };
+    }
 
     [Fact]
     public void NativeAdmissionBindsPlatformIntentBeforeAnyNativeIdsExist()
@@ -1163,7 +1292,7 @@ public sealed class RuntimeUsageSourceReceiptTests
             {
                 ModelSelectionReference = "accepted-model",
                 ModelSourceMode = ModelSourceMode.HostedCopilot,
-                ModelBindingPin = new(1, "accepted-model", "native-model", ModelSourceMode.HostedCopilot,
+                ModelBindingPin = new(1, "accepted-model", "gpt-6-luna", ModelSourceMode.HostedCopilot,
                     "model-bindings-v1", new string('c', 64)),
                 PlacementProviderId = "sandbox-platform",
                 EnvironmentLifecycleGeneration = 1,
@@ -1174,7 +1303,7 @@ public sealed class RuntimeUsageSourceReceiptTests
             RuntimeRegistrationState.Active, DateTimeOffset.UtcNow.AddMinutes(1));
         var source = new SdkSessionFacts(
             registration.RuntimeInstanceId, RuntimeContractValidation.NativeSessionId(registration.Binding),
-            "1.0.11+source", "runtime-v1", "accepted-model", "native-model", new string('b', 64),
+            "1.0.11+source", "runtime-v1", "accepted-model", "gpt-6-luna", new string('b', 64),
             2.5m, "hosted-copilot", SdkMeterSources.CopilotNanoAiu, registration.Binding.AcceptedSelectionHash, 1)
         {
             ModelBindingPin = registration.Binding.ModelBindingPin,

@@ -26,6 +26,7 @@
     "EventsAndSessions__Messaging__ClaimLeaseSeconds": "120",
     "EventsAndSessions__Messaging__MaximumMessageLifetimeDays": "1",
     "EventsAndSessions__Cost__Copilot__OptionsSchemaVersion": "2",
+    "EventsAndSessions__Cost__Copilot__OptionsRevision": "p1-v1.0.0",
     "EventsAndSessions__Cost__Copilot__ResourceId": "copilot-cost:p1-v1.0.0",
     "EventsAndSessions__Cost__Copilot__ResourceGeneration": "1",
     "AgentHost__ModelBindingsRevision": "p1-v1.0.0",
