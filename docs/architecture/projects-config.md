@@ -190,6 +190,13 @@ does not produce a receipt.
   and complex work to `gpt-6.1-sol` at High reasoning effort. Code-writing and
   straightforward work use `gpt-6-luna` at High effort. Platform administrators
   can replace these built-in task defaults.
+- A platform configuration that omits `modelTaskDefaults`, including one saved
+  before task routes existed, gets the built-in routes. If a project has no
+  project-wide `ModelSelection` pin and its available model references don't
+  include `gpt-6.1-sol` and `gpt-6-luna`, such as on a single-model or
+  BYOK-only platform, replace the task defaults with available references or
+  set `modelTaskDefaults` to an empty list. Otherwise, run acceptance fails with
+  `model_selection_unavailable`.
 - `ProjectConfiguration.ModelSelection` is a project-wide run pin. When set,
   it selects one model and effort for every task, preserving 0.x behavior.
   Otherwise, Projects starts with the platform-wide model, applies platform
