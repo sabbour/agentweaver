@@ -725,6 +725,35 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task HostedTokenPricedUsageIsFullyPricedWithoutNanoAiu()
+    {
+        var native = NativeReceipt();
+        // Complete token measurements can use the published rates when the SDK omits Nano AIU.
+        var usage = native.Usage with
+        {
+            Measurement = native.Usage.Measurement with { ProviderUnits = null, ProviderUnit = null },
+            SdkAccounting = null
+        };
+        var receipt = native with
+        {
+            Usage = usage,
+            CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(native.Registration, usage)
+        };
+
+        var acknowledgment = await NativeConsumer().AppendAsync(receipt, _ => Task.CompletedTask, default);
+
+        Assert.Equal(CostDisposition.Estimate, acknowledgment.Accounting.Disposition);
+        Assert.Equal(CopilotCostProvider.AiCreditUnit, acknowledgment.Accounting.Unit);
+        Assert.NotNull(acknowledgment.Accounting.Amount);
+        var totals = await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1");
+        Assert.True(totals.IsFullyPriced);
+        var amount = Assert.Single(totals.Amounts);
+        Assert.Equal(1, amount.PricedEvents);
+        Assert.Equal(0, amount.UnpricedEvents);
+        Assert.Equal(acknowledgment.Accounting.Amount, amount.Amount);
+    }
+
+    [Fact]
     public async Task UsageMustReferenceAnExistingNativeSession()
     {
         var usage = UsageContractTests.Submission() with

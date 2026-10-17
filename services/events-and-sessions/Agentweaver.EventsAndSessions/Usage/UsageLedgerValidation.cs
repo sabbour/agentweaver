@@ -102,7 +102,7 @@ internal static class UsageLedgerValidation
         UsageSubmission submission, CostDisposition disposition) =>
         disposition != CostDisposition.Unpriced && HasCompleteSdkAccounting(submission);
 
-    /// <summary>Checks that native source mode and measurements agree without treating unknown fields as zero.</summary>
+    /// <summary>Checks native source measurements without treating missing values as zero.</summary>
     internal static bool HasCompleteSdkAccounting(UsageSubmission submission)
     {
         ArgumentNullException.ThrowIfNull(submission);
@@ -110,6 +110,12 @@ internal static class UsageLedgerValidation
             return submission.SdkAccounting is null;
         if (submission.ModelBinding.MeterSource != submission.SdkSource.MeterSource)
             return false;
+        var measurement = submission.Measurement;
+        var hasReportedCopilotNanoAiu = measurement.ProviderUnits is not null &&
+            measurement.ProviderUnit == "nano_aiu";
+        var hasCompleteCopilotTokenMeasurements = measurement.ProviderUnits is null &&
+            (measurement.ProviderUnit is null or "tokens" or "nano_aiu") &&
+            HasCompleteCopilotTokenMeasurements(measurement);
         var identity = submission.SdkAccounting?.Identity;
         return submission.SdkSource.SourceMode switch
         {
@@ -121,8 +127,7 @@ internal static class UsageLedgerValidation
                 submission.Measurement.OutputTokens is not null,
             "hosted-copilot" =>
                 submission.SdkSource.MeterSource == SdkMeterSources.CopilotNanoAiu &&
-                submission.Measurement.ProviderUnits is not null &&
-                submission.Measurement.ProviderUnit == "nano_aiu" &&
+                (hasReportedCopilotNanoAiu || hasCompleteCopilotTokenMeasurements) &&
                 (identity is null ||
                  identity.Sequence > 0 &&
                  identity.SourceSessionId == submission.SdkSource.SdkSessionId &&
@@ -131,6 +136,11 @@ internal static class UsageLedgerValidation
             _ => false
         };
     }
+
+    /// <summary>Requires every token category used by the published Copilot rates.</summary>
+    private static bool HasCompleteCopilotTokenMeasurements(UsageMeasurement measurement) =>
+        measurement.InputTokens is not null && measurement.OutputTokens is not null &&
+        measurement.CachedTokens is not null && measurement.CacheWriteTokens is not null;
 
     /// <summary>Accepts bounded, non-whitespace SDK accounting identity values.</summary>
     private static bool IsAccountingIdentityText(string? value) =>

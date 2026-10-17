@@ -888,10 +888,14 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
                 }, new string('e', 64), CostDisposition.Unpriced, null, null, "controlled-cost", null, null,
                 DateTimeOffset.UnixEpoch));
         var request = new RuntimeNativeTurnAccountingRequest(null!, recorded, [reference]);
+        // Unpriced usage stays in the Copilot totals even though its amount remains unknown.
+        var amount = new UsageAmountTotal(SdkMeterSources.CopilotNanoAiu, "AIC", 0, 0, 1);
+        var totals = new UsageRunTotals(scope.TenantId, scope.ProjectId, scope.RunId, 1, false,
+            [new(scope.AgentId, 1, null, null, null, null, null, null, false, [amount])], [amount]);
         var snapshot = new RuntimeUsageCostSnapshotReceipt(1,
             RuntimeUsageSourceReceiptContract.HashSource(registration, recorded.Admission.Source),
             null, new(null, null, CostDisposition.Unpriced, null, "controlled-cost"),
-            new(scope.TenantId, scope.ProjectId, scope.RunId, 0, true, [], []))
+            totals)
         {
             DispatchId = recorded.Admission.MessageId, RepresentedReceipts = [reference]
         };

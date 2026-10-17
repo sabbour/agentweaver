@@ -144,9 +144,9 @@ public static class RuntimeUsageCostSnapshotContract
 
             var recordedEvents = totals.Amounts.Sum(amount =>
                 checked(amount.PricedEvents + amount.UnpricedEvents));
-            var isFullyPriced = totals.Amounts.All(amount => amount.UnpricedEvents == 0) &&
-                totals.Agents.All(agent => agent.IsFullyPriced);
+            var isFullyPriced = AmountsAreFullyPriced(totals.Amounts);
             if (recordedEvents != totals.Events || totals.IsFullyPriced != isFullyPriced ||
+                totals.Agents.Any(agent => agent.IsFullyPriced != AmountsAreFullyPriced(agent.Amounts)) ||
                 totals.Agents.Sum(agent => agent.Events) != totals.Events || !RunAmountsMatchAgents(totals))
                 throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
 
@@ -220,9 +220,9 @@ public static class RuntimeUsageCostSnapshotContract
         try
         {
             var recordedEvents = totals.Amounts.Sum(amount => checked(amount.PricedEvents + amount.UnpricedEvents));
-            var isFullyPriced = totals.Amounts.All(amount => amount.UnpricedEvents == 0) &&
-                totals.Agents.All(agent => agent.IsFullyPriced);
+            var isFullyPriced = AmountsAreFullyPriced(totals.Amounts);
             if (recordedEvents != totals.Events || totals.IsFullyPriced != isFullyPriced ||
+                totals.Agents.Any(agent => agent.IsFullyPriced != AmountsAreFullyPriced(agent.Amounts)) ||
                 totals.Agents.Sum(agent => agent.Events) != totals.Events ||
                 !RunAmountsMatchAgents(totals))
                 throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
@@ -283,6 +283,10 @@ public static class RuntimeUsageCostSnapshotContract
         amount.UnpricedEvents >= 0 &&
         amount.Amount >= 0 &&
         (amount.PricedEvents > 0 || amount.Amount == 0);
+
+    /// <summary>Derives pricing completeness from explicit Unpriced event counts.</summary>
+    private static bool AmountsAreFullyPriced(ImmutableArray<UsageAmountTotal> amounts) =>
+        amounts.All(amount => amount.UnpricedEvents == 0);
 
     /// <summary>Checks run amounts against agent subtotals before they reach credit-limit enforcement.</summary>
     private static bool RunAmountsMatchAgents(UsageRunTotals totals)
@@ -539,10 +543,7 @@ public static class RuntimeUsageSourceReceiptContract
             model.ModelReference != source.ModelSelectionReference || model.ModelId != source.ModelId ||
             model.MeterSource != source.MeterSource || model.SelectionRevision != binding.ContextRevision ||
             measurement.RequestCount is not null ||
-            measurement.ProviderUnit != (source.SourceMode == "hosted-copilot" ? "nano_aiu" : "tokens") ||
-            source.SourceMode == "byok" &&
-                (measurement.ProviderUnits is not null || measurement.InputTokens is null ||
-                 measurement.OutputTokens is null) ||
+            !HasSupportedMeasurementShape(source, measurement) ||
             measurement.InputTokens < 0 || measurement.OutputTokens < 0 ||
             measurement.CachedTokens < 0 || measurement.CacheWriteTokens < 0 ||
             measurement.ReasoningTokens < 0 || measurement.ProviderUnits < 0 ||
@@ -554,6 +555,18 @@ public static class RuntimeUsageSourceReceiptContract
             usage.EventId != SdkUsageIdentity.Create(source.RuntimeInstanceId, source.SdkSessionId, sdkEventId))
             throw new RuntimeAuthorizationException("runtime_usage_event_invalid");
         ValidateAccounting(source, usage.SdkAccounting, measurement.ProviderUnits);
+    }
+
+    /// <summary>Accepts hosted Nano AIU or token usage and the existing BYOK token shape.</summary>
+    private static bool HasSupportedMeasurementShape(SdkSessionFacts source, UsageMeasurement measurement)
+    {
+        if (source.SourceMode == "hosted-copilot")
+            return measurement.ProviderUnit == "nano_aiu" ||
+                (measurement.ProviderUnits is null &&
+                 (measurement.ProviderUnit is null or "tokens"));
+        return source.SourceMode == "byok" && measurement.ProviderUnit == "tokens" &&
+            measurement.ProviderUnits is null && measurement.InputTokens is not null &&
+            measurement.OutputTokens is not null;
     }
 
     /// <summary>Checks optional SDK accounting state and its source-session identity.</summary>
