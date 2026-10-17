@@ -1,0 +1,154 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "50664e006b07fd187cbe086288dbbbf0e1584f38",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "34459d5648926df52db937fff150af14a8d98233c48bb0c9b217571a62e04550",
+  "appliedAt": "2026-10-17T21:54:16.861Z",
+  "components": [
+    {
+      "id": "Agentweaver.Abstractions",
+      "fromVersion": "1.1.0",
+      "toVersion": "1.1.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.AgentRuntime",
+      "fromVersion": "1.1.0",
+      "toVersion": "1.1.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Identity",
+      "fromVersion": "1.1.0",
+      "toVersion": "1.2.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.ObjectStore.AzureBlob",
+      "fromVersion": "1.0.1",
+      "toVersion": "1.0.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Orchestrator.Core",
+      "fromVersion": "1.1.0",
+      "toVersion": "1.1.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Persistence.Postgres",
+      "fromVersion": "1.0.1",
+      "toVersion": "1.0.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Providers",
+      "fromVersion": "1.0.1",
+      "toVersion": "1.0.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Providers.Sandbox.AgentSandbox",
+      "fromVersion": "1.1.0",
+      "toVersion": "1.1.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Providers.Storage.AzureFiles",
+      "fromVersion": "1.0.1",
+      "toVersion": "1.0.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Secrets.AzureKeyVault",
+      "fromVersion": "1.0.1",
+      "toVersion": "1.0.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.SourceControl",
+      "fromVersion": "1.0.1",
+      "toVersion": "1.0.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Telemetry",
+      "fromVersion": "1.0.1",
+      "toVersion": "1.0.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Telemetry.AzureMonitor",
+      "fromVersion": "1.0.1",
+      "toVersion": "1.0.2",
+      "bump": "patch"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/republication-abstractions-2026-10-17.md",
+      "archivedPath": ".changeset/archive/republication-abstractions-2026-10-17.md",
+      "sha256": "0fa987b7078a61c2e9d21b00e744722ddaeea77117569829e816ca855fcc4d8e"
+    },
+    {
+      "sourcePath": ".changeset/republication-agent-runtime-2026-10-17.md",
+      "archivedPath": ".changeset/archive/republication-agent-runtime-2026-10-17.md",
+      "sha256": "133e4794e09db39c00562d49a55e39fd23609a04b67c86634ca6e221cab2c4de"
+    },
+    {
+      "sourcePath": ".changeset/republication-identity-2026-10-17.md",
+      "archivedPath": ".changeset/archive/republication-identity-2026-10-17.md",
+      "sha256": "6098ac97a1226f53bde7b743369cd0351cc262eb170d5c8007019e8dc62fb23e"
+    },
+    {
+      "sourcePath": ".changeset/republication-key-vault-2026-10-17.md",
+      "archivedPath": ".changeset/archive/republication-key-vault-2026-10-17.md",
+      "sha256": "26d158712e8332acab4b534eb12bf1f4ce683b7bab47036034387b2a542c65df"
+    },
+    {
+      "sourcePath": ".changeset/republication-object-store-azure-blob-2026-10-17.md",
+      "archivedPath": ".changeset/archive/republication-object-store-azure-blob-2026-10-17.md",
+      "sha256": "d1c395c8be2fa3945c4b9075776f77029012cc8135a36183ad4ef8ff18d4cf85"
+    },
+    {
+      "sourcePath": ".changeset/republication-orchestrator-core-2026-10-17.md",
+      "archivedPath": ".changeset/archive/republication-orchestrator-core-2026-10-17.md",
+      "sha256": "82fa04e74abb65176805d0b14081358a29f3f787cf3216ee85d1c423eb96bb95"
+    },
+    {
+      "sourcePath": ".changeset/republication-postgres-2026-10-17.md",
+      "archivedPath": ".changeset/archive/republication-postgres-2026-10-17.md",
+      "sha256": "d9f1d5e49957255355e92b6388fe5d894c06ff0a16da28b679b43b9c767c9005"
+    },
+    {
+      "sourcePath": ".changeset/republication-providers-2026-10-17.md",
+      "archivedPath": ".changeset/archive/republication-providers-2026-10-17.md",
+      "sha256": "91b8fdd3cad6513479c91cc35d3e1afcff3d15e8e892dc0dea9a13f492f23316"
+    },
+    {
+      "sourcePath": ".changeset/republication-sandbox-agent-sandbox-2026-10-17.md",
+      "archivedPath": ".changeset/archive/republication-sandbox-agent-sandbox-2026-10-17.md",
+      "sha256": "9310cb435ea465dd9ddba0e41562a8eb63f04a04ca85eb60f15d6b2434a9e571"
+    },
+    {
+      "sourcePath": ".changeset/republication-source-control-2026-10-17.md",
+      "archivedPath": ".changeset/archive/republication-source-control-2026-10-17.md",
+      "sha256": "4fced3b5b236a95f7a0488635a4a17c36c2b15e28b6d6017f7fa861845ec9bd5"
+    },
+    {
+      "sourcePath": ".changeset/republication-storage-azure-files-2026-10-17.md",
+      "archivedPath": ".changeset/archive/republication-storage-azure-files-2026-10-17.md",
+      "sha256": "97df606aade485b8c3948a9f5e8462c05125d5ddfe8ba967d27cf91a8bb67bac"
+    },
+    {
+      "sourcePath": ".changeset/republication-telemetry-2026-10-17.md",
+      "archivedPath": ".changeset/archive/republication-telemetry-2026-10-17.md",
+      "sha256": "90512de5107e40a4e59c7c7ce152fb44c075661bc2f4eb3f31e7a23062465341"
+    },
+    {
+      "sourcePath": ".changeset/republication-telemetry-azure-monitor-2026-10-17.md",
+      "archivedPath": ".changeset/archive/republication-telemetry-azure-monitor-2026-10-17.md",
+      "sha256": "de961d09dd9388be112cc8e2084efbc3eb132e00659120bd39df41b21b146880"
+    }
+  ]
+}
