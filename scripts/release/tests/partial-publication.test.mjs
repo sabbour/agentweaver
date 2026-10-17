@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -17,6 +18,7 @@ import {
   verifyRegistryWriteAccess,
 } from '../partial-publication.mjs';
 import { PARTIAL_PUBLICATION as P } from '../partial-publication-contract.mjs';
+import { readDockerArchiveConfig } from '../docker-archive.mjs';
 import { measureAgentHostArchiveSync } from '../measure-agenthost-image.mjs';
 import { deployRelease, validatePublicationReceipt } from '../deploy.mjs';
 import { WEB_LOCK_PATH } from '../validate.mjs';
@@ -160,6 +162,32 @@ function preparedConfig(id) {
   };
 }
 
+function writeDockerArchive(archive, imageReference, config) {
+  const directory = mkdtempSync(path.join(tmpdir(), 'partial-publication-archive-'));
+  try {
+    const layerDirectory = path.join(directory, 'layer');
+    const layerArchive = path.join(directory, 'layer.tar');
+    mkdirSync(layerDirectory);
+    writeFileSync(path.join(layerDirectory, 'layer.txt'), 'synthetic image layer');
+    execFileSync('tar', ['-cf', layerArchive, 'layer.txt'], { cwd: layerDirectory });
+    const layerBytes = readFileSync(layerArchive);
+    const layerDigest = `sha256:${sha(layerBytes)}`;
+    config.rootfs.diff_ids = [layerDigest];
+    const layerPath = `${layerDigest.slice(7)}/layer.tar`;
+    mkdirSync(path.dirname(path.join(directory, layerPath)), { recursive: true });
+    writeFileSync(path.join(directory, layerPath), layerBytes);
+    const configBytes = Buffer.from(JSON.stringify(config));
+    const configPath = `${sha(configBytes)}.json`;
+    writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify([{
+      Config: configPath, RepoTags: [imageReference], Layers: [layerPath],
+    }]));
+    writeFileSync(path.join(directory, configPath), configBytes);
+    execFileSync('tar', ['-czf', archive, 'manifest.json', configPath, layerPath], { cwd: directory });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 const idForReference = (world, reference) =>
   world.selected.find(item => item.localImageReference === reference)?.component.id;
 
@@ -267,6 +295,90 @@ test('without approval history, continuation publishes only the eleven missing a
   rmSync(path.join(directory, 'continuation.json'));
   await assert.rejects(continuePartialPublication(options(world, directory, { runId: '40000000002' })),
     /recovery is consumed/);
+}));
+
+test('continuation accepts an SDK image archive without a revision label but rejects conflicting archive and loaded labels', withDirectory(async directory => {
+  const world = newWorld();
+  const item = world.selected.find(value => value.component.id === 'Agentweaver.Identity.Broker');
+  const reference = item.localImageReference;
+  const version = item.component.version;
+  const labels = { 'org.opencontainers.image.version': version };
+  const config = {
+    architecture: 'amd64',
+    config: { Labels: labels },
+    os: 'linux',
+    rootfs: { type: 'layers', diff_ids: [] },
+  };
+  const archive = path.join(directory, 'broker.tar.gz');
+  writeDockerArchive(archive, reference, config);
+  const diffIds = config.rootfs.diff_ids;
+  item.file = archive;
+  const readArchiveConfig = (file, imageReference) => file === archive
+    ? readDockerArchiveConfig(file, imageReference)
+    : preparedConfig(idForReference(world, imageReference));
+  const brokerRemote = `${world.imageRepositories.get(item.component.id)}:${version}`;
+  const originalRun = world.run;
+  world.run = (bin, args, input) => {
+    if (bin === 'docker' && args[0] === 'image' && args[1] === 'inspect' && args.at(-1) === reference) {
+      return JSON.stringify({
+        Os: 'linux', Architecture: 'amd64', Config: { Labels: labels }, RootFS: { Layers: diffIds },
+      });
+    }
+    if (bin === 'docker' && args[0] === 'push' && args[1] === brokerRemote) {
+      const output = originalRun(bin, args, input);
+      world.images.set(brokerRemote, {
+        ...world.images.get(brokerRemote),
+        configDigest: readDockerArchiveConfig(archive, reference).configDigest,
+        layerCount: diffIds.length,
+      });
+      return output;
+    }
+    return originalRun(bin, args, input);
+  };
+
+  const receipt = await continuePartialPublication(options(world, directory, { readArchiveConfig }));
+  assert.equal(receipt.status, 'published');
+  assert.equal(receipt.published.find(value => value.id === item.component.id).configDigest,
+    readDockerArchiveConfig(archive, reference).configDigest);
+
+  const conflictingWorld = newWorld();
+  const conflictingDirectory = path.join(directory, 'conflicting');
+  mkdirSync(conflictingDirectory);
+  const conflictingRead = (file, imageReference) => {
+    const value = preparedConfig(idForReference(conflictingWorld, imageReference));
+    value.config.config.Labels['org.opencontainers.image.revision'] = 'f'.repeat(40);
+    return value;
+  };
+  await assert.rejects(
+    continuePartialPublication(options(conflictingWorld, conflictingDirectory, { readArchiveConfig: conflictingRead })),
+    /prepared Agentweaver.Identity.Broker archive is not the exact source-bound linux\/amd64 image/,
+  );
+
+  const loadedConflictWorld = newWorld();
+  const loadedConflictDirectory = path.join(directory, 'loaded-conflicting');
+  mkdirSync(loadedConflictDirectory);
+  loadedConflictWorld.selected.find(value => value.component.id === item.component.id).file = archive;
+  const loadedConflictRun = loadedConflictWorld.run;
+  loadedConflictWorld.run = (bin, args, input) => {
+    if (bin === 'docker' && args[0] === 'image' && args[1] === 'inspect' && args.at(-1) === reference) {
+      return JSON.stringify({
+        Os: 'linux',
+        Architecture: 'amd64',
+        Config: { Labels: { ...labels, 'org.opencontainers.image.revision': 'f'.repeat(40) } },
+        RootFS: { Layers: diffIds },
+      });
+    }
+    return loadedConflictRun(bin, args, input);
+  };
+  await assert.rejects(
+    continuePartialPublication(options(loadedConflictWorld, loadedConflictDirectory, {
+      readArchiveConfig: (file, imageReference) => file === archive
+        ? readDockerArchiveConfig(file, imageReference)
+        : preparedConfig(idForReference(loadedConflictWorld, imageReference)),
+    })),
+    /loaded Agentweaver.Identity.Broker image does not match its archive layers, source, version, identity, or platform/,
+  );
+  assert.deepEqual(mutations(loadedConflictWorld), []);
 }));
 
 const preflightRejections = [

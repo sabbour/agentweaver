@@ -675,9 +675,14 @@ Only an explicit registry "manifest unknown" (or buildx `<reference>: not
 found`) answer proves that an image is absent. Authorization, rate-limit,
 transport, and other errors stop the run. The workflow uses the same Docker
 29.9.0 containerd image store as the original publication, so loaded image IDs
-are comparable. Each prepared image archive must
-match its source revision, version, and `linux/amd64` config. Its loaded layers
-must also match the archive's `diff_ids`.
+are comparable. Before it creates the claim, the publisher verifies each
+archive hash against the pinned original provenance and receipt. The archive
+config must use `linux/amd64`, carry the planned component-version label, and
+contain non-empty valid `rootfs.diff_ids`. Some .NET SDK images omit
+`org.opencontainers.image.revision`; if an archive or its loaded image has
+that label, it must equal the original source SHA. The pinned archive hash and
+provenance bind images without that label to the original build. Loaded images
+must retain the archive's platform, version, any revision label, and layers.
 
 The run then creates the one-use claim at
 `refs/tags/agentweaver-publication-continuation/1.0.0/<sourceSha>/claim`.
