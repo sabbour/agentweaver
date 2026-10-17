@@ -101,9 +101,6 @@ internal sealed class NativeUsageReceiptConsumer(
             .ConfigureAwait(false);
         if (totals.Events < request.MinimumAccountingRevision)
             throw new NativeUsageReconciliationException("runtime_usage_reconciliation_stale");
-        if (!totals.IsFullyPriced)
-            throw new NativeUsageReconciliationException("runtime_usage_reconciliation_unpriced");
-
         var receipt = new RuntimeUsageCostReconciliationReceipt(
             1,
             request.CostTurnId,
@@ -545,7 +542,7 @@ internal sealed class NativeUsageReceiptConsumer(
             return new(pinned.Binding, false, "pinned-cost-binding-unavailable");
 
         var quote = provider.Quote(
-            new CostQuoteRequest(modelId, 1m, CostQuoteBasis.UnweightedAiCredits),
+            new CostQuoteRequest(modelId, 0m, CostQuoteBasis.ProviderWeightedNanoAiu),
             pinned.Binding);
         return quote.Disposition == CostDisposition.Estimate &&
                quote.Amount is not null &&

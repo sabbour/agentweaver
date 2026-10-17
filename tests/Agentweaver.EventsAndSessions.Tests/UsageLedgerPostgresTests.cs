@@ -53,7 +53,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var consumer = NativeConsumer();
         var first = await consumer.AppendAsync(receipt, _ => Task.CompletedTask, default);
         Assert.False(first.IsDuplicate);
-        Assert.Equal(0.00123456725m, first.Accounting.Amount);
+        Assert.Equal(0.01572m, first.Accounting.Amount);
         Assert.Equal(CostDisposition.Estimate, first.Accounting.Disposition);
         var restarted = NativeConsumer();
         var replays = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ =>
@@ -77,7 +77,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var agent = Assert.Single(totals.Agents);
         Assert.Equal(5, agent.CacheWriteTokens);
         Assert.Null(agent.RequestCount);
-        Assert.Equal(0.00123456725m, Assert.Single(totals.Amounts).Amount);
+        Assert.Equal(0.01572m, Assert.Single(totals.Amounts).Amount);
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var counts = new NpgsqlCommand($"""
             SELECT (SELECT count(*) FROM "{_schema}".usage_ledger),
@@ -98,7 +98,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         await CreateSessionAsync("project-1", "preflight-run", "session-1");
         var preflights = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ =>
             NativeConsumer().PreflightAsync(
-                "tenant-1", "project-1", "preflight-run", SdkMeterSources.CopilotNanoAiu, "native-model",
+                "tenant-1", "project-1", "preflight-run", SdkMeterSources.CopilotNanoAiu, "gpt-6.1-sol",
                 _ => Task.CompletedTask, default)));
 
         Assert.All(preflights, preflight =>
@@ -107,7 +107,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
             Assert.NotNull(preflight.Binding);
             Assert.Null(preflight.UnpricedReason);
         });
-        Assert.Equal("native-copilot-card", preflights[0].Binding!.RateCard.Id);
+        Assert.Equal(CopilotPublishedRateCard.Current.Id, preflights[0].Binding!.RateCard.Id);
         var totals = await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "preflight-run");
         Assert.Equal(0, totals.Events);
         Assert.Empty(totals.Amounts);
@@ -155,6 +155,32 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
                 "tenant-1", "project-1", "run-1", secondSend, _ => Task.CompletedTask, default));
         Assert.Equal("runtime_usage_reconciliation_mismatch", mismatch.Code);
         Assert.Equal(firstAck.SourceReceiptId, Assert.Single(mismatch.SourceReceiptIds));
+    }
+
+    [Fact]
+    public async Task NativeCostReconciliationKeepsUnpricedUsageVisibleOutsideThePricedSubtotal()
+    {
+        var consumer = NativeConsumer();
+        var pricedSource = NativeReceipt();
+        var priced = await consumer.AppendAsync(pricedSource, _ => Task.CompletedTask, default);
+        var unpriced = await consumer.AppendAsync(
+            NativeReceipt(sessionId: "session-2", modelId: "unknown-model"),
+            _ => Task.CompletedTask, default);
+        var request = ReconciliationRequest(pricedSource, priced, minimumAccountingRevision: 2);
+
+        var result = await consumer.ReconcileAsync(
+            "tenant-1", "project-1", "run-1", request, _ => Task.CompletedTask, default);
+
+        RuntimeUsageCostReconciliationContract.ValidateReceipt(
+            result, request, "tenant-1", "project-1", "run-1");
+        Assert.Equal(2, result.CopilotTotals.Events);
+        Assert.False(result.CopilotTotals.IsFullyPriced);
+        var amount = Assert.Single(result.CopilotTotals.Amounts);
+        Assert.Equal(priced.Accounting.Amount!.Value, amount.Amount);
+        Assert.Equal(1, amount.PricedEvents);
+        Assert.Equal(1, amount.UnpricedEvents);
+        Assert.Equal(CostDisposition.Unpriced, unpriced.Accounting.Disposition);
+        Assert.Equal("model-rate-unavailable", unpriced.Accounting.UnpricedReason);
     }
 
     [Fact]
@@ -219,17 +245,19 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task NativeCostReconciliationRejectsUnpricedRequiredReceipts()
+    public async Task NativeCostReconciliationPreservesUnpricedRequiredReceipts()
     {
         var source = NativeReceipt(missingMeasurements: true);
         var acknowledgment = await NativeConsumer().AppendAsync(source, _ => Task.CompletedTask, default);
-        var error = await Assert.ThrowsAsync<NativeUsageReconciliationException>(() =>
-            NativeConsumer().ReconcileAsync(
-                "tenant-1", "project-1", "run-1", ReconciliationRequest(source, acknowledgment),
-                _ => Task.CompletedTask, default));
+        var receipt = await NativeConsumer().ReconcileAsync(
+            "tenant-1", "project-1", "run-1", ReconciliationRequest(source, acknowledgment),
+            _ => Task.CompletedTask, default);
 
-        Assert.Equal("runtime_usage_reconciliation_unpriced", error.Code);
-        Assert.Equal(acknowledgment.SourceReceiptId, Assert.Single(error.SourceReceiptIds));
+        Assert.Equal(acknowledgment.SourceReceiptId,
+            Assert.Single(receipt.RepresentedReceipts).SourceReceiptId);
+        Assert.Equal(CostDisposition.Unpriced,
+            Assert.Single(receipt.RepresentedReceipts).Accounting.Disposition);
+        Assert.False(receipt.CopilotTotals.IsFullyPriced);
     }
 
     [Fact]
@@ -249,7 +277,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     {
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             NativeConsumer().PreflightAsync(
-                "tenant-1", "project-1", "recheck-failure", SdkMeterSources.CopilotNanoAiu, "native-model",
+                "tenant-1", "project-1", "recheck-failure", SdkMeterSources.CopilotNanoAiu, "gpt-6.1-sol",
                 _ => Task.FromException(new InvalidOperationException("selection changed")), default));
 
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
@@ -266,10 +294,10 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var unconfigured = new NativeUsageReceiptConsumer(_fixture.DataSource, options, _ledger);
 
         var first = await unconfigured.PreflightAsync(
-            "tenant-1", "project-1", "unpriced-pin", SdkMeterSources.CopilotNanoAiu, "native-model",
+            "tenant-1", "project-1", "unpriced-pin", SdkMeterSources.CopilotNanoAiu, "gpt-6.1-sol",
             _ => Task.CompletedTask, default);
         var second = await NativeConsumer().PreflightAsync(
-            "tenant-1", "project-1", "unpriced-pin", SdkMeterSources.CopilotNanoAiu, "native-model",
+            "tenant-1", "project-1", "unpriced-pin", SdkMeterSources.CopilotNanoAiu, "gpt-6.1-sol",
             _ => Task.CompletedTask, default);
 
         Assert.False(first.IsPriced);
@@ -778,7 +806,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task RunAdmissionUsesTheConcreteRealCostQuoteWithoutCreatingNativeOrUsageRows()
+    public async Task RunAdmissionAcceptsAndPreservesAnUnknownUnpricedModel()
     {
         var selection = RunAdmissionSelection();
         var request = new RuntimeRunAdmissionRequest(1, RuntimeRunAdmissionContract.SelectionHash(selection));
@@ -788,11 +816,16 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var projects = new AdmissionProjectsClient(AdmissionAuthority());
         var owner = new AdmissionSelectionHandler(_ => selection);
         using var client = new HttpClient(owner);
-        var receipt = await AdmissionService(client, projects, clock).ReadAsync(
+        var receipt = await AdmissionService(client, projects, clock, modelId: "unknown-model").ReadAsync(
             context, "project-1", "run-1", request, default);
-        var replay = await AdmissionService(client, projects, clock).ReadAsync(
+        var replay = await AdmissionService(client, projects, clock, modelId: "unknown-model").ReadAsync(
             context, "project-1", "run-1", request, default);
-        Assert.Equal("native-model", receipt.ModelBindingPin.ModelId);
+        Assert.Equal("unknown-model", receipt.ModelBindingPin.ModelId);
+        Assert.Equal(CostDisposition.Unpriced, receipt.Quote.Disposition);
+        Assert.Null(receipt.Quote.Amount);
+        Assert.Equal("model-rate-unavailable", receipt.Quote.UnpricedReason);
+        Assert.NotNull(receipt.Quote.RateCard);
+        Assert.Empty(receipt.Quote.RateCard.ModelMultipliers);
         Assert.Equal(receipt.ModelBindingPin, replay.ModelBindingPin);
         var binding = Assert.IsType<CostBinding>(receipt.CostBinding);
         var replayBinding = Assert.IsType<CostBinding>(replay.CostBinding);
@@ -813,6 +846,16 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
             receipt, request, "tenant-1", "project-1", "run-1", selection));
         Assert.Equal(0, RuntimeRunAdmissionContract.ValidateReceipt(
             replay, request, "tenant-1", "project-1", "run-1", selection));
+        var accounting = await NativeConsumer().AppendAsync(
+            NativeReceipt(modelId: "unknown-model"), _ => Task.CompletedTask, default);
+        Assert.Equal(CostDisposition.Unpriced, accounting.Accounting.Disposition);
+        Assert.Null(accounting.Accounting.Amount);
+        Assert.Equal("model-rate-unavailable", accounting.Accounting.UnpricedReason);
+        var totals = await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1");
+        Assert.False(totals.IsFullyPriced);
+        var amount = Assert.Single(totals.Amounts);
+        Assert.Equal(1, amount.UnpricedEvents);
+        Assert.Equal(0, amount.Amount);
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var counts = new NpgsqlCommand($"""
             SELECT (SELECT count(*) FROM "{_schema}".usage_ledger),
@@ -824,6 +867,42 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         Assert.True(await reader.ReadAsync());
         Assert.All(Enumerable.Range(0, 3), column => Assert.Equal(0L, reader.GetInt64(column)));
         Assert.Equal(1L, reader.GetInt64(3));
+    }
+
+    [Theory]
+    [InlineData("gpt-6.1-sol", 0.01572)]
+    [InlineData("gpt-6-luna", 0.0007895)]
+    public async Task RunAdmissionAndNativeReceiptUseThePublishedTokenPrice(
+        string modelId, decimal expectedAmount)
+    {
+        var selection = RunAdmissionSelection();
+        var request = new RuntimeRunAdmissionRequest(1, RuntimeRunAdmissionContract.SelectionHash(selection));
+        var clock = new AdmissionClock(DateTimeOffset.UtcNow);
+        using var services = AdmissionAuthentication(clock.GetUtcNow().AddMinutes(1));
+        var context = AdmissionContext(services);
+        var projects = new AdmissionProjectsClient(AdmissionAuthority());
+        var owner = new AdmissionSelectionHandler(_ => selection);
+        using var client = new HttpClient(owner);
+
+        var admission = await AdmissionService(client, projects, clock, modelId: modelId).ReadAsync(
+            context, "project-1", "run-1", request, default);
+        Assert.Equal(0, RuntimeRunAdmissionContract.ValidateReceipt(
+            admission, request, "tenant-1", "project-1", "run-1", selection));
+        Assert.Equal(CostDisposition.Estimate, admission.Quote.Disposition);
+        Assert.Equal(0, admission.Quote.Amount);
+        Assert.True(admission.CostBinding!.RateCard.ModelTokenRates.ContainsKey(modelId));
+
+        var recorded = await NativeConsumer().AppendAsync(
+            NativeReceipt(modelId: modelId), _ => Task.CompletedTask, default);
+        Assert.Equal(CostDisposition.Estimate, recorded.Accounting.Disposition);
+        Assert.Equal(expectedAmount, recorded.Accounting.Amount);
+        Assert.Null(recorded.Accounting.UnpricedReason);
+        var totals = await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1");
+        Assert.True(totals.IsFullyPriced);
+        var amount = Assert.Single(totals.Amounts);
+        Assert.Equal(expectedAmount, amount.Amount);
+        Assert.Equal(1, amount.PricedEvents);
+        Assert.Equal(0, amount.UnpricedEvents);
     }
 
     [Theory]
@@ -896,11 +975,11 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
 
     private RuntimeRunAdmissionService AdmissionService(
         HttpClient client, IProjectsAuthorizationContextClient projects, TimeProvider clock,
-        string ownerAddress = "https://projects.test/") =>
+        string ownerAddress = "https://projects.test/", string modelId = "gpt-6.1-sol") =>
         new(client, new(ownerAddress, "events-api", "https://identity.test/"), projects, NativeConsumer(),
             new RuntimeModelBindingsResolver("model-bindings-v1", new Dictionary<string, RuntimeModelBinding>
             {
-                ["accepted-native-reference"] = new("native-model", ModelSourceMode.HostedCopilot)
+                ["accepted-native-reference"] = new(modelId, ModelSourceMode.HostedCopilot)
             }), clock);
 
     private static ProjectsAuthorizationContextResponse AdmissionAuthority(params string[] permissions) =>
@@ -1090,8 +1169,11 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         {
             Assert.Equal(CostDisposition.Unpriced, reference.Accounting.Disposition);
             Assert.Null(reference.Accounting.Amount);
-            Assert.Throws<RuntimeAuthorizationException>(() =>
-                RuntimeUsageCostSnapshotContract.ValidateReceipt(snapshot, request));
+            var amount = Assert.Single(snapshot.CopilotTotals.Amounts);
+            Assert.Equal(0, amount.Amount);
+            Assert.Equal(0, amount.PricedEvents);
+            Assert.Equal(1, amount.UnpricedEvents);
+            Assert.Equal(0, RuntimeUsageCostSnapshotContract.ValidateReceipt(snapshot, request));
         }
         else
             Assert.Equal(reference.Accounting.Amount,
@@ -1385,9 +1467,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var options = new PostgresSessionsProviderOptions(
             "native-postgres", "test", 1, _schema, "native-options", 1);
         var provider = new CopilotCostProvider(new(
-            "native-cost", 1, "cost-options-v1", 1,
-            new("native-copilot-card", "1", SdkMeterSources.CopilotNanoAiu, "AIC", 1_000_000_000m,
-                ImmutableDictionary<string, decimal>.Empty.Add("native-model", 2.5m))));
+            "native-cost", 1, "cost-options-v1", CopilotCostProvider.OptionsSchemaVersion));
         var catalog = ProviderCatalog.Create(
             [provider.CreateRegistration()], [], [],
             meterSourceSelections: [new(SdkMeterSources.CopilotNanoAiu, CopilotCostProvider.ProviderId)]);
@@ -1424,7 +1504,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     }
 
     private static RuntimeUsageSourceReceipt NativeReceipt(
-        bool missingMeasurements = false, string modelId = "native-model", string sessionId = "session-1",
+        bool missingMeasurements = false, string modelId = "gpt-6.1-sol", string sessionId = "session-1",
         bool withoutA2AMessageId = false)
     {
         var registration = new RuntimeRegistration(

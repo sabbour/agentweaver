@@ -3,11 +3,7 @@
   "kind": "ConfigMap",
   "metadata": {
     "name": "events-and-sessions-runtime-config",
-    "namespace": "agentweaver-v1-p0",
-    "annotations": {
-      "agentweaver.io/runtime-config-status": "incomplete",
-      "agentweaver.io/runtime-config-incomplete-reason": "Provider and cost resource IDs and generations remain unsourced; HostedCopilot also requires a compatible model rate entry, tracked in #2037."
-    }
+    "namespace": "agentweaver-v1-p0"
   },
   "immutable": true,
   "data": {
@@ -21,16 +17,17 @@
     "EventsAndSessions__Provider__Schema": "events_sessions",
     "EventsAndSessions__Provider__OptionsSchemaVersion": "1",
     "EventsAndSessions__Provider__OptionsRevision": "native-postgres-v1",
+    "EventsAndSessions__Provider__ResourceId": "events-sessions-provider:p1-v1.0.0",
+    "EventsAndSessions__Provider__ResourceGeneration": "1",
     "EventsAndSessions__Provider__PollIntervalMilliseconds": "250",
     "EventsAndSessions__Provider__ReferenceRetentionDays": "365",
     "EventsAndSessions__Messaging__OptionsSchemaVersion": "1",
     "EventsAndSessions__Messaging__OptionsRevision": "native-postgres-messaging-v1",
     "EventsAndSessions__Messaging__ClaimLeaseSeconds": "120",
     "EventsAndSessions__Messaging__MaximumMessageLifetimeDays": "1",
-    "EventsAndSessions__Cost__Copilot__OptionsSchemaVersion": "1",
-    "EventsAndSessions__Cost__Copilot__RateCard__MeterSource": "copilot.nano_aiu",
-    "EventsAndSessions__Cost__Copilot__RateCard__Unit": "AIC",
-    "EventsAndSessions__Cost__Copilot__RateCard__NanoUnitsPerUnit": "1000000000",
+    "EventsAndSessions__Cost__Copilot__OptionsSchemaVersion": "2",
+    "EventsAndSessions__Cost__Copilot__ResourceId": "copilot-cost:p1-v1.0.0",
+    "EventsAndSessions__Cost__Copilot__ResourceGeneration": "1",
     "AgentHost__ModelBindingsRevision": "p1-v1.0.0",
     "AgentHost__ModelBindings__reasoning__ModelId": "gpt-6.1-sol",
     "AgentHost__ModelBindings__reasoning__SourceMode": "HostedCopilot",

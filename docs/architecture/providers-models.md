@@ -232,12 +232,33 @@ provenance. The native Projects run-selection routes retain the source key,
 adapter/options versions, options revision and capabilities without claiming
 SDK producer authority or admitting usage writes.
 
-The `copilot.usage-cost` source adapter prices reported `nano_aiu` values in AI
-credits (`AIC`). One AIC contains `1_000_000_000` nano-AIU. Reported nano-AIU already
-includes model weighting, so usage pricing does not apply the multiplier again.
-Pre-flight quotes apply the multiplier only to explicitly unweighted AI credits.
-Each binding includes an explicit immutable rate-card version. Missing units,
-unsupported sources, and unknown model rates return `Unpriced`, not a zero price.
+The `copilot.usage-cost` source adapter prices reported input, cached-input,
+cache-write, and output tokens directly in AI credits (`AIC`) using a provider-owned
+immutable rate-card snapshot. The published card carries default and long-context
+per-million-token USD rates, its context threshold, `1 AIC = $0.01 USD`, and its
+source URL, snapshot version, and retrieval date. The current snapshot cites
+[GitHub's official Copilot model-pricing documentation](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing),
+retrieved 2026-10-17. Copilot configuration no longer supplies scalar multipliers,
+and prices are not inferred from legacy multipliers. Missing token measurements,
+unsupported sources, unavailable context tiers, and unknown model rates return an
+explicit `Unpriced` result with a reason, never a zero price. A valid `Unpriced`
+model quote does not block run admission or dispatch; its recorded usage remains
+visible but does not count toward credit limits, while priced usage continues to
+count. Malformed or tampered receipts still fail closed.
+
+GitHub publishes the following USD rates per 1 million tokens. The default tier
+applies through 272,000 input tokens; the long-context tier applies above that
+threshold.
+
+| Model | Tier | Input | Cached input | Cache write | Output |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `gpt-6.1-sol` | Default | $2.00 | $0.10 | $2.50 | $10.00 |
+| `gpt-6.1-sol` | Long context | $4.00 | $0.20 | $5.00 | $15.00 |
+| `gpt-6-luna` | Default | $0.10 | $0.01 | $0.125 | $0.50 |
+| `gpt-6-luna` | Long context | $0.20 | $0.02 | $0.25 | $0.75 |
+
+The source defines one AI credit as $0.01 USD. The snapshot records the source
+URL and retrieval date so earlier usage is not repriced when GitHub changes rates.
 The adapter and PostgreSQL ledger do not establish SDK producer authority.
 The separate runtime pipeline requires a current registration, original validated bearer,
 and purpose-bound observe credential before it commits actual SDK measurements.

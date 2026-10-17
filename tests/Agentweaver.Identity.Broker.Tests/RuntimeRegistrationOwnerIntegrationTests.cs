@@ -1142,7 +1142,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(intent.MessageId, accounted.Recorded.Admission.MessageId);
         Assert.Equal(intent.MessageId, accounted.Snapshot.DispatchId);
         if (accountNativeUsage is null)
-            Assert.Equal(0.00123456725m, Assert.Single(accounted.Snapshot.CopilotTotals.Amounts).Amount);
+        {
+            Assert.Empty(accounted.Snapshot.CopilotTotals.Amounts);
+            Assert.Equal(CostDisposition.Unpriced, accounted.Snapshot.Quote.Disposition);
+        }
         else
             Assert.Equal(Assert.Single(references), Assert.Single(accounted.Snapshot.RepresentedReceipts));
         await nativeOwner.RequireNativeTurnAccountedAsync(context, session.Registration, message, answer,
@@ -1198,8 +1201,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.Equal(binding.ExecutionFence, finalDispatch.ExecutionFence);
             Assert.True(finalDispatch.OwnerRevision > observedDispatch.OwnerRevision);
             Assert.Equal("completed", finalDispatch.State);
-            Assert.Equal(binding.ModelSourceMode == ModelSourceMode.Byok ? "unpriced" : "priced",
-                finalDispatch.AccountingState);
+            Assert.Equal("unpriced", finalDispatch.AccountingState);
 
             var persistedObservationState = await ReadRuntimeObservationPersistenceStateAsync(
                 ownerSchema, binding.ProjectId, binding.RunId, cancellationToken);
@@ -1220,7 +1222,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 var persistedCreditGuard = Assert.IsType<RuntimeObservationCreditGuard>(
                     persistedObservationState.CreditGuard);
                 var initialCreditGuard = Assert.IsType<RuntimeObservationCreditGuard>(expectedCreditGuard);
-                Assert.Equal(0.00123456725m, persistedCreditGuard.CopilotAicFloor);
+                Assert.Equal(0m, persistedCreditGuard.CopilotAicFloor);
                 Assert.Equal(1L, persistedCreditGuard.AccountedThroughLedgerEventCount);
                 Assert.Equal(initialCreditGuard.LedgerDigest, persistedCreditGuard.LedgerDigest);
                 Assert.True(persistedCreditGuard.GuardRevision > initialCreditGuard.GuardRevision);
@@ -1421,13 +1423,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ["EventsAndSessions__Cost__Copilot__ResourceId"] = "native-copilot-cost",
             ["EventsAndSessions__Cost__Copilot__ResourceGeneration"] = "1",
             ["EventsAndSessions__Cost__Copilot__OptionsRevision"] = "native-cost-v1",
-            ["EventsAndSessions__Cost__Copilot__OptionsSchemaVersion"] = "1",
-            ["EventsAndSessions__Cost__Copilot__RateCard__Id"] = "native-sdk-card",
-            ["EventsAndSessions__Cost__Copilot__RateCard__Version"] = "1",
-            ["EventsAndSessions__Cost__Copilot__RateCard__MeterSource"] = SdkMeterSources.CopilotNanoAiu,
-            ["EventsAndSessions__Cost__Copilot__RateCard__Unit"] = "AIC",
-            ["EventsAndSessions__Cost__Copilot__RateCard__NanoUnitsPerUnit"] = "1000000000",
-            ["EventsAndSessions__Cost__Copilot__RateCard__ModelMultipliers__controlled-model"] = "2.5"
+            ["EventsAndSessions__Cost__Copilot__OptionsSchemaVersion"] = "2"
         });
         var objects = new RuntimeMaterialObjects();
         await using var factory = new EventsIntegrationFactory(
@@ -1453,8 +1449,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.False(accepted.IsDuplicate);
         Assert.Equal(sourceReceipt.Usage.EventId, accepted.Accounting.EventId);
         Assert.Equal(sourceReceipt.Usage.Attribution, accepted.Accounting.Attribution);
-        Assert.Equal(byok ? (decimal?)null : 0.00123456725m, accepted.Accounting.Amount);
-        Assert.Equal(byok ? CostDisposition.Unpriced : CostDisposition.Estimate, accepted.Accounting.Disposition);
+        Assert.Null(accepted.Accounting.Amount);
+        Assert.Equal(CostDisposition.Unpriced, accepted.Accounting.Disposition);
+        Assert.NotNull(accepted.Accounting.UnpricedReason);
         await AssertNativeHistoryImmutabilityAsync(eventsSchema,
             [("usage_source_receipts", "source_receipt_id"), ("usage_run_cost_bindings", "meter_source")],
             "reject_usage_receipt_mutation");
@@ -1484,7 +1481,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             Assert.False(totals.IsFullyPriced);
         }
         else
-            Assert.Equal(0.00123456725m, Assert.Single(totals.Amounts).Amount);
+        {
+            Assert.False(totals.IsFullyPriced);
+            var amount = Assert.Single(totals.Amounts);
+            Assert.Equal(0m, amount.Amount);
+            Assert.Equal(0, amount.PricedEvents);
+            Assert.Equal(1, amount.UnpricedEvents);
+        }
         await using var source = NpgsqlDataSource.Create(_connectionString);
         await using var connection = await source.OpenConnectionAsync();
         await using var check = new NpgsqlCommand($"""

@@ -340,7 +340,7 @@ The three service maps are marked incomplete and are not ready to apply:
 | `agt.dotnet-yaml` | `AgentGovernance__Policy__OptionsRevision` | `p1-v1.0.0`; bootstrap List sets an explicit Orchestrator `env` value, overriding `orchestrator-runtime-config` if present. |
 | `github` | Accepted run-selection `providers[].candidates[].optionsRevision` | `p1-v1.0.0`; Projects & Config copies the selected catalog candidate into this existing runtime input, and Orchestrator validates it against the catalog. |
 | `copilot.usage-cost` | `EventsAndSessions__Cost__Copilot__OptionsRevision` | `p1-v1.0.0`; bootstrap List sets an explicit Events & Sessions `env` value, overriding `events-and-sessions-runtime-config` if present. |
-| `copilot.usage-cost` schema | `EventsAndSessions__Cost__Copilot__OptionsSchemaVersion` | `1`; `events-and-sessions-runtime-config` remains available through `envFrom`. |
+| `copilot.usage-cost` schema | `EventsAndSessions__Cost__Copilot__OptionsSchemaVersion` | `2`; `events-and-sessions-runtime-config` remains available through `envFrom`. Published Copilot token rates are provider-owned, not configured in the catalog. |
 | `cilium` | `Environment__NetworkPolicy__Cilium__AdapterVersion` | `1.0.0`; coordinator decision: adapter code version shipped in Environment 1.0.0. The List sets the matching explicit Environment value. |
 | `cilium` | `Environment__NetworkPolicy__Cilium__OptionsRevision` | `p1-v1.0.0`; selected-label rule. The List sets the matching explicit Environment value. |
 

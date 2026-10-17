@@ -62,7 +62,7 @@ public static class RuntimeRunAdmissionContract
 
     /// <summary>
     /// Checks tenant, project, run, selection and hosted-model bindings, then validates the
-    /// initial priced Copilot snapshot and returns its total amount.
+    /// initial Copilot snapshot and returns its known priced subtotal.
     /// </summary>
     public static decimal ValidateReceipt(
         RuntimeRunAdmissionReceipt receipt, RuntimeRunAdmissionRequest request,

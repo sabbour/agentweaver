@@ -175,10 +175,13 @@ null because the SDK callback does not report them. Nullable measurements remain
 unknown rather than zero.
 
 The runtime source mode comes from the immutable platform or project selection.
-Hosted Copilot retains weighted nano-AIU under `copilot.nano_aiu`.
-BYOK retains native token measurements under `byok.tokens`, without Copilot units or a hosted multiplier.
+Hosted Copilot retains its `copilot.nano_aiu` source identity, while pricing uses
+the SDK's reported input, cached-input, cache-write, and output token counts.
+BYOK retains native token measurements under `byok.tokens`, without Copilot units
+or a hosted multiplier.
 Without an admitted Cost provider, BYOK accounting remains `Unpriced`.
-Unknown cost cannot satisfy a hard cost bound.
+Only priced usage counts toward Copilot credit limits. Unpriced usage remains
+visible with its reason and event count; it is not treated as zero-priced usage.
 
 The standalone `AzureCostProvider` accepts an explicitly configured, versioned
 rate card with model-scoped standard input/output token rates and a declared
@@ -200,9 +203,12 @@ The optional `copilot-run-admission` route accepts only the accepted-selection h
 Events reads the actual selection from its fixed Projects owner with the original bearer.
 It requires current `ReadRunSelection` and `AcceptRunSelection` for the exact signed project/run.
 The shared resolver supplies the concrete enabled hosted model; caller model IDs are not accepted.
-The existing Cost lock and transaction bind the real zero-work quote and Copilot-only totals.
+The existing Cost lock and transaction bind the zero-work quote and Copilot-only totals.
 Events rereads Projects selection and authority before committing that Cost pin.
-Unknown or unpriced pricing rejects; no SDK session, usage event, source receipt, or ledger row is invented.
+An explicit `Unpriced` quote for a model without a published rate does not block run
+admission or dispatch. It remains distinct from a zero-price estimate; malformed or
+tampered pricing receipts still fail closed. No SDK session, usage event, source receipt,
+or ledger row is invented during admission.
 Orchestrator persists the typed admission receipt with root acceptance through its existing outbox.
 Backlog claim uses the same acceptance transaction.
 An identical accepted-root replay uses that immutable receipt without repricing earlier admission.
@@ -222,18 +228,26 @@ that measurement total unknown. An unpriced entry makes the run or agent pricing
 incomplete. Rate changes never reprice earlier entries. Exact totals that exceed
 the numeric range fail rather than round or wrap.
 
-Hosted native entries with valid `copilot.nano_aiu` source and measured units count as priced.
+Hosted Copilot entries are priced from their complete token measurements against the
+provider's pinned published rate card, not by applying a model multiplier to nano-AIU.
 Optional SDK accounting identity and status do not control pricing completeness.
 Supplied identity text, source session, and positive sequence remain validated.
 BYOK pricing uses the actual `tokens` measurement shape and the existing price disposition.
 Hosted credit status does not determine BYOK token-pricing completeness.
 Neither a fully priced subtotal nor a native usage watermark proves complete dispatch membership.
 
-`CopilotCostProvider` prices SDK-reported `nano_aiu` values in AI credits (`AIC`).
-One AIC contains `1_000_000_000` nano-AIU. Those reported units already include
-model weighting. Only quotes with an explicit unweighted basis apply a model
-multiplier. The adapter requires an immutable rate card and exact provider,
-configuration, resource, and capability bindings.
+`CopilotCostProvider` prices reported input, cached-input, cache-write, and output
+tokens directly in AI credits (`AIC`). Its immutable provider-supplied rate card
+records per-million-token USD rates for default and long-context tiers, the
+long-context threshold, `1 AIC = $0.01 USD`, and the source URL, snapshot version,
+and retrieval date. The current snapshot is sourced from
+[GitHub's official Copilot model-pricing documentation](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing),
+retrieved 2026-10-17. No scalar model multipliers or inferred prices are used.
+Unknown models, missing token categories, and unavailable context-tier rates remain
+explicitly `Unpriced` with a reason; this does not block admission or dispatch.
+Unpriced usage is recorded and visible but excluded from credit-limit totals.
+Known priced usage continues to count. The adapter requires an immutable rate card
+and exact provider, configuration, resource, and capability bindings.
 
 `IUsageLedger.AppendAsync` remains a low-level storage contract without caller authorization.
 The optional HTTP consumer uses a different, reference-only admission path.
@@ -262,8 +276,8 @@ the run's first Cost binding or explicit unavailable reason.
 Before runtime readiness, Events can preflight that immutable binding against the
 effective model from the current Orchestrator-owned SDK source snapshot. It uses
 the existing Cost provider quote path without recording usage or exposing the
-quote amount. An unavailable binding or quote remains `Unpriced` and prevents
-the runtime from becoming ready.
+quote amount. A valid explicit `Unpriced` result, including a model without a
+published rate, remains visible but does not prevent readiness or dispatch.
 The SDK source still does not prove per-turn usage-to-A2A affinity for arbitrary or
 legacy callbacks. Workflow-bound positive-hard-capped Hosted Copilot activation uses
 the prepared dispatch and begin path with current whole-run priced totals; it denies
@@ -287,7 +301,8 @@ the existing run-pinned binding, a zero-work quote for the actual SDK model, and
 It uses the same Cost lock and transaction as native receipt ingestion.
 This quote does not create a usage event or accounting receipt.
 An empty observed set is zero only when the pinned provider can price that model.
-Unpriced Copilot entries remain incomplete. Other meters do not affect Copilot credit limits.
+Unpriced Copilot entries remain incomplete and visible, but are excluded from the
+priced subtotal used by Copilot credit limits. Other meters do not affect Copilot credit limits.
 The snapshot endpoint rechecks current signed run authority before it commits.
 An optional dispatch ID and at most 512 required references request an observed accounting join.
 Events reads each immutable source receipt, accounting receipt, and ledger row in the same transaction.
@@ -300,8 +315,10 @@ A wrong non-null message ID or an event after native completion fails.
 Without native proof, the existing exact raw-message check remains unchanged.
 The response returns only those verified references as `RepresentedReceipts`.
 Missing rows reject the join; altered references cannot substitute another receipt.
-Observed validation permits an explicit `Unpriced` receipt.
-The separate capped-admission validator still requires a valid quote and fully priced Copilot totals.
+Observed validation permits an explicit `Unpriced` receipt. Admission and credit-limit
+validation accept well-formed `Unpriced` quote and usage shapes, retain their reasons
+and event counts, and use only the known priced subtotal; malformed or tampered
+receipts remain rejected.
 This path neither fetches a Source GET manifest nor writes synthetic usage.
 These routes are enabled only with `EventsAndSessions:RuntimeUsage:Enabled`.
 The [AgentHost candidate](agenthost.md) waits for the observed join and durable owner completion before it returns workflow output.

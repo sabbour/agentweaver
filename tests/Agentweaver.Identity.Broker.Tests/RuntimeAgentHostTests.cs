@@ -1286,21 +1286,20 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Fact]
-    public async Task UnpricedCostPreflightCleansPreparedSessionBeforeReadinessOrModelSend()
+    public async Task UnpricedCostPreflightDoesNotBlockReadinessOrNativeDispatch()
     {
-        await using var fixture = new HostFixture(hardCreditLimit: 100m) { CostPreflightPriced = false };
+        await using var fixture = new HostFixture(hardCreditLimit: 100m, workflowBound: true)
+        {
+            CostPreflightPriced = false
+        };
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
-        await fixture.DeliverAsync(timeout.Token);
+        var message = fixture.Message(fixture.Proof(await fixture.ConfigureAsync(timeout.Token)));
 
-        Assert.Equal("runtime_cost_preflight_unpriced",
-            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
-                fixture.Host.ConfigureAsync(fixture.Configure, fixture.Actor, timeout.Token))).Code);
         Assert.Equal(1, fixture.CostPreflightRequests);
-        Assert.Equal(1, fixture.SourceRevocations);
-        Assert.DoesNotContain(fixture.Sdk.Requests, request => request.Method == "session.send");
-        Assert.Equal("runtime_host_not_ready",
-            (await Assert.ThrowsAsync<RuntimeAuthorizationException>(() =>
-                fixture.Host.ReadinessAsync(timeout.Token))).Code);
+        Assert.Equal(fixture.Sdk.AssistantResponse,
+            Assert.Single((await fixture.Host.SendAsync(message, fixture.Actor, timeout.Token)).Parts).Text);
+        Assert.Single(fixture.NativeAdmissions);
+        Assert.Single(fixture.Sdk.Requests, request => request.Method == "session.send");
     }
 
     [Fact]
@@ -2546,7 +2545,7 @@ public sealed class RuntimeAgentHostTests
         public int Accounted { get; private set; }
         public int Rotations { get; private set; }
         public int CostPreflightRequests { get; private set; }
-        public bool CostPreflightPriced { get; set; } = true;
+        public bool CostPreflightPriced { get; set; }
         public bool CostPreflightSourceHashMismatch { get; set; }
         public bool FailFixedCreditGuardWrite { get; set; }
         public HttpStatusCode? FixedCreditNoSendWriteFailureStatus { get; set; }
@@ -2923,9 +2922,22 @@ public sealed class RuntimeAgentHostTests
                     throw new InvalidOperationException("The exact registered runtime source is required.");
                 CostPreflightRequests++;
                 var rateCard = new CostRateCard(
-                    "fixture-rate-card", "1", _facts.MeterSource, "AIC", 1m,
-                    ImmutableDictionary<string, decimal>.Empty.WithComparers(StringComparer.Ordinal)
-                        .Add(_facts.ModelId, 1m));
+                    "github-copilot-models-and-pricing", "2026-10-17", _facts.MeterSource, "AIC",
+                    1_000_000_000m, ImmutableDictionary<string, decimal>.Empty.WithComparers(StringComparer.Ordinal))
+                {
+                    ProviderSourceUrl = "https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing",
+                    SnapshotVersion = "2026-10-17",
+                    RetrievedOn = new DateOnly(2026, 10, 17),
+                    TokenRateCurrency = "USD",
+                    TokensPerRateUnit = 1_000_000m,
+                    CreditsPerCurrencyUnit = 100m,
+                    LongContextThresholdTokens = 272_000,
+                    ModelTokenRates = ImmutableDictionary<string, CostModelTokenRates>.Empty
+                        .WithComparers(StringComparer.Ordinal)
+                        .Add("gpt-6.1-sol", new(
+                            new(2m, 0.1m, 2.5m, 10m),
+                            new(4m, 0.2m, 5m, 15m)))
+                };
                 var costBinding = new CostBinding(
                     _facts.MeterSource, "fixture.cost", "1.0.0", 1, "fixture-revision",
                     "fixture-resource", 1,
@@ -2937,7 +2949,8 @@ public sealed class RuntimeAgentHostTests
                     CostPreflightSourceHashMismatch
                         ? new string('f', 64)
                         : RuntimeUsageSourceReceiptContract.HashSource(Registration, _facts),
-                    costBinding, CostPreflightPriced, CostPreflightPriced ? null : "fixture-unpriced");
+                    costBinding, CostPreflightPriced,
+                    CostPreflightPriced ? null : "model-rate-unavailable");
                 NativePathEvents.Enqueue("preflight");
                 return Response(request, receipt);
             }

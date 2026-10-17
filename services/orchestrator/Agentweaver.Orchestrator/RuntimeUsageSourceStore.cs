@@ -492,18 +492,19 @@ internal sealed class RuntimeUsageSourceStore(
         var observed = RuntimeUsageCostSnapshotContract.ValidateReceipt(snapshot, new(1, registration, source));
         var binding = registration.Binding;
         var limits = EvaluateObservedCreditLimits(binding, observed);
-        var card = snapshot.Binding!.RateCard;
         var costIdentity = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(new
         {
-            snapshot.Binding.MeterSource, snapshot.Binding.ProviderId, snapshot.Binding.AdapterVersion,
-            snapshot.Binding.OptionsSchemaVersion, snapshot.Binding.OptionsRevision,
-            snapshot.Binding.ResourceId, snapshot.Binding.ResourceGeneration,
-            capabilities = snapshot.Binding.NegotiatedCapabilities.Order(StringComparer.Ordinal),
-            rateCard = new
-            {
-                card.Id, card.Version, card.MeterSource, card.Unit, card.NanoUnitsPerUnit,
-                models = card.ModelMultipliers.OrderBy(model => model.Key, StringComparer.Ordinal)
-            }
+            meterSource = snapshot.Binding?.MeterSource,
+            providerId = snapshot.Binding?.ProviderId,
+            adapterVersion = snapshot.Binding?.AdapterVersion,
+            optionsSchemaVersion = snapshot.Binding?.OptionsSchemaVersion,
+            optionsRevision = snapshot.Binding?.OptionsRevision,
+            resourceId = snapshot.Binding?.ResourceId,
+            resourceGeneration = snapshot.Binding?.ResourceGeneration,
+            capabilities = snapshot.Binding?.NegotiatedCapabilities.Order(StringComparer.Ordinal),
+            rateCard = snapshot.Binding is { } pinnedBinding
+                ? CostRateCardContract.SerializeCanonical(pinnedBinding.RateCard)
+                : null
         }));
         var digest = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(snapshot.CopilotTotals));
         await using (var insert = new NpgsqlCommand($"""

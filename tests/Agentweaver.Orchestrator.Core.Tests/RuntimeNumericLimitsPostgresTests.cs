@@ -698,7 +698,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             RuntimeCredentialState.Active, new string('a', 64), registration.ExpiresAt, DateTimeOffset.UtcNow);
         var source = new SdkSessionFacts(registration.RuntimeInstanceId,
             RuntimeContractValidation.NativeSessionId(binding), "1.0.18", "1.0.97", "model:selected",
-            "controlled-model", new string('c', 64), 1, "hosted-copilot", SdkMeterSources.CopilotNanoAiu,
+            "gpt-6.1-sol", new string('c', 64), 1, "hosted-copilot", SdkMeterSources.CopilotNanoAiu,
             binding.AcceptedSelectionHash, registration.Revision);
         await RegisterCurrentSourceAsync(index, registration, grant, source);
         var prompt = $"Execute work item {index}.";
@@ -718,7 +718,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             RuntimeCredentialState.Active, new string('a', 64), registration.ExpiresAt, DateTimeOffset.UtcNow);
         var source = new SdkSessionFacts(registration.RuntimeInstanceId,
             RuntimeContractValidation.NativeSessionId(binding), "1.0.18", "1.0.97", "model:selected",
-            "controlled-model", new string('c', 64), 1, "hosted-copilot", SdkMeterSources.CopilotNanoAiu,
+            "gpt-6.1-sol", new string('c', 64), 1, "hosted-copilot", SdkMeterSources.CopilotNanoAiu,
             binding.AcceptedSelectionHash, registration.Revision);
         await RegisterCurrentSourceAsync(index, registration, grant, source);
     }
@@ -1082,8 +1082,21 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             token.ThrowIfCancellationRequested();
             var card = new CostRateCard("numeric-rate-card", rateVersion, source.MeterSource, "AIC",
                 1_000_000_000m,
-                ImmutableDictionary<string, decimal>.Empty.WithComparers(StringComparer.Ordinal)
-                    .Add(source.ModelId, 1m));
+                ImmutableDictionary<string, decimal>.Empty.WithComparers(StringComparer.Ordinal))
+            {
+                ProviderSourceUrl = "https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing",
+                SnapshotVersion = "2026-10-17",
+                RetrievedOn = new DateOnly(2026, 10, 17),
+                TokenRateCurrency = "USD",
+                TokensPerRateUnit = 1_000_000m,
+                CreditsPerCurrencyUnit = 100m,
+                LongContextThresholdTokens = 272_000,
+                ModelTokenRates = ImmutableDictionary<string, CostModelTokenRates>.Empty
+                    .WithComparers(StringComparer.Ordinal)
+                    .Add(source.ModelId, new(
+                        new(2m, 0.1m, 2.5m, 10m),
+                        new(4m, 0.2m, 5m, 15m)))
+            };
             var binding = new CostBinding(source.MeterSource, "copilot.usage-cost", "1.0.0", 1,
                 "numeric-cost-options", "numeric-cost-resource", 1,
                 ImmutableHashSet<string>.Empty.WithComparer(StringComparer.Ordinal), card);

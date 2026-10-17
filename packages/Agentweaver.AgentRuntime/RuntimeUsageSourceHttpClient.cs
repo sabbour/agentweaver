@@ -256,14 +256,14 @@ public sealed class RuntimeUsageSourceHttpClient(
     }
 }
 
-/// <summary>Requires an owner cost-preflight receipt proving the selected model is priced.</summary>
+/// <summary>Validates owner cost-preflight identity while preserving an explicit Unpriced result.</summary>
 internal sealed class RuntimeUsageCostPreflightHttpClient(
     HttpClient client, Uri eventsAddress, RuntimeActorAuthorization actor)
 {
     private readonly Uri _address = RuntimeOwnerHttpTransport.RequireOwnerAddress(eventsAddress);
 
-    /// <summary>Validates cost-preflight evidence against the runtime binding and SDK source facts.</summary>
-    internal async Task EnsurePricedAsync(
+    /// <summary>Validates cost-preflight evidence without making a missing rate a dispatch gate.</summary>
+    internal async Task ValidateAsync(
         AuthorizedRuntimeSession session, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(session);
@@ -288,7 +288,5 @@ internal sealed class RuntimeUsageCostPreflightHttpClient(
             receipt.AcceptedSelectionHash != facts.AcceptedSelectionHash ||
             receipt.SourceReceiptHash != RuntimeUsageSourceReceiptContract.HashSource(registration, facts))
             throw new RuntimeAuthorizationException("runtime_cost_preflight_source_mismatch");
-        if (!receipt.IsPriced)
-            throw new RuntimeAuthorizationException("runtime_cost_preflight_unpriced");
     }
 }

@@ -149,18 +149,7 @@ internal static class UsageLedgerValidation
             throw new ArgumentException("Cost binding schema and resource generations must be positive.", nameof(binding));
 
         ArgumentNullException.ThrowIfNull(binding.RateCard);
-        var card = binding.RateCard;
-        ValidateIdentifier(card.Id, nameof(card.Id), 256);
-        ValidateIdentifier(card.Version, nameof(card.Version), 128);
-        ValidateIdentifier(card.MeterSource, nameof(card.MeterSource), 256);
-        ValidateIdentifier(card.Unit, nameof(card.Unit), 128);
-        RequireNonNegative(card.NanoUnitsPerUnit, nameof(card.NanoUnitsPerUnit));
-        ArgumentNullException.ThrowIfNull(card.ModelMultipliers);
-        foreach (var multiplier in card.ModelMultipliers)
-        {
-            ValidateIdentifier(multiplier.Key, nameof(card.ModelMultipliers), 512);
-            RequireNonNegative(multiplier.Value, nameof(card.ModelMultipliers));
-        }
+        CostRateCardContract.Validate(binding.RateCard);
 
         ArgumentNullException.ThrowIfNull(binding.NegotiatedCapabilities);
         foreach (var capability in binding.NegotiatedCapabilities)
@@ -287,16 +276,11 @@ internal static class UsageLedgerCanonicalizer
 
     /// <summary>Serializes a rate card in canonical key order for stable identity checks.</summary>
     public static string SerializeRateCard(CostRateCard card)
-    {
-        using var stream = new MemoryStream();
-        using (var writer = new Utf8JsonWriter(stream))
-            WriteRateCard(writer, card);
-        return Encoding.UTF8.GetString(stream.ToArray());
-    }
+        => CostRateCardContract.SerializeCanonical(card);
 
     /// <summary>Compares rate-card contents rather than object identity.</summary>
     public static bool RateCardsEqual(CostRateCard left, CostRateCard right) =>
-        string.Equals(SerializeRateCard(left), SerializeRateCard(right), StringComparison.Ordinal);
+        CostRateCardContract.Equals(left, right);
 
     /// <summary>Writes the pinned provider and capabilities in deterministic order.</summary>
     private static void WriteBinding(Utf8JsonWriter writer, CostBinding binding)
@@ -321,20 +305,7 @@ internal static class UsageLedgerCanonicalizer
 
     /// <summary>Writes rate-card values and model rates in deterministic key order.</summary>
     private static void WriteRateCard(Utf8JsonWriter writer, CostRateCard card)
-    {
-        writer.WriteStartObject();
-        writer.WriteString("id", card.Id);
-        writer.WriteString("version", card.Version);
-        writer.WriteString("meterSource", card.MeterSource);
-        writer.WriteString("unit", card.Unit);
-        WriteNumber(writer, "nanoUnitsPerUnit", card.NanoUnitsPerUnit);
-        writer.WritePropertyName("modelMultipliers");
-        writer.WriteStartObject();
-        foreach (var (model, multiplier) in card.ModelMultipliers.OrderBy(item => item.Key, StringComparer.Ordinal))
-            WriteNumber(writer, model, multiplier);
-        writer.WriteEndObject();
-        writer.WriteEndObject();
-    }
+        => writer.WriteRawValue(CostRateCardContract.SerializeCanonical(card), skipInputValidation: true);
 
     /// <summary>Writes a nullable integer as a number or explicit JSON null.</summary>
     private static void WriteNullableNumber(Utf8JsonWriter writer, string name, long? value)
