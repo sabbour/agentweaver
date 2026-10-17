@@ -63,7 +63,9 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ["platform-model"] = new("controlled-model", ModelSourceMode.Byok,
                 new("azure", new Uri("https://byok.test/"), "responses", "2025-04-01-preview"))
             {
-                PromptCapacityTokens = 20000
+                PromptCapacityTokens = 20000,
+                // BYOK bindings must declare supported efforts; the native factory rejects unlisted efforts.
+                SupportedReasoningEfforts = ["low", "medium", "high", "xhigh"]
             }
         });
 
