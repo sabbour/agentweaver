@@ -22,7 +22,8 @@ public sealed class CopilotCostTests
     private static CopilotCostProviderOptions Options(
         long generation = 7,
         string revision = "copilot-options-v1",
-        decimal nanoUnitsPerAic = 1_000_000_000m) =>
+        decimal nanoUnitsPerAic = 1_000_000_000m,
+        ImmutableDictionary<string, decimal>? modelRates = null) =>
         new(
             "copilot-meter-resource",
             generation,
@@ -34,15 +35,16 @@ public sealed class CopilotCostTests
                 CopilotCostProvider.MeterSource,
                 CopilotCostProvider.AiCreditUnit,
                 nanoUnitsPerAic,
-                ModelRates));
+                modelRates ?? ModelRates));
 
     private static (CopilotCostProvider Provider, CopilotCostProviderBinder Binder, CostBinding Binding)
         Create(
             string revision = "copilot-options-v1",
             long generation = 7,
-            ILogger<CopilotCostProviderBinder>? logger = null)
+            ILogger<CopilotCostProviderBinder>? logger = null,
+            ImmutableDictionary<string, decimal>? modelRates = null)
     {
-        var provider = new CopilotCostProvider(Options(generation, revision));
+        var provider = new CopilotCostProvider(Options(generation, revision, modelRates: modelRates));
         var catalogResult = ProviderCatalog.Create(
             [provider.CreateRegistration()],
             [],
@@ -128,6 +130,32 @@ public sealed class CopilotCostTests
         Assert.Null(price.UnpricedReason);
         Assert.Equal(3m, price.RateCard!.ModelMultipliers["gpt-4o"]);
         Assert.Equal(1_000_000_000m, price.RateCard.NanoUnitsPerUnit);
+    }
+
+    [Fact]
+    public void MeasuredUsagePriceDoesNotChangeWithModelMultiplierValues()
+    {
+        static ImmutableDictionary<string, decimal> Rates(decimal multiplier) =>
+            ImmutableDictionary.CreateRange(StringComparer.Ordinal, new[]
+            {
+                new KeyValuePair<string, decimal>("gpt-6.1-sol", multiplier),
+                new KeyValuePair<string, decimal>("gpt-6-luna", multiplier)
+            });
+
+        var (oneMultiplier, _, oneBinding) = Create(modelRates: Rates(1m));
+        var (threeMultiplier, _, threeBinding) = Create(modelRates: Rates(3m));
+        var usage = new UsageMeasurement(
+            120, 30, 5, 0, 1, 1_234_567_890.125m,
+            CopilotCostProvider.NanoAiuUnit, 17.5m);
+
+        foreach (var modelId in new[] { "gpt-6.1-sol", "gpt-6-luna" })
+        {
+            var one = oneMultiplier.Price(usage, Model(modelId), oneBinding);
+            var three = threeMultiplier.Price(usage, Model(modelId), threeBinding);
+
+            Assert.Equal(1.234567890125m, one.Amount);
+            Assert.Equal(one.Amount, three.Amount);
+        }
     }
 
     [Fact]

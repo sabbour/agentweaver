@@ -33,6 +33,23 @@ public sealed class RuntimeRunAdmissionContractTests
     }
 
     [Theory]
+    [InlineData("reasoning", "gpt-6.1-sol")]
+    [InlineData("coding", "gpt-6-luna")]
+    public void AdmissionAcceptsBothApprovedHostedModelBindingsWithPresentRateEntries(
+        string modelReference, string modelId)
+    {
+        var multiplier = modelReference == "reasoning" ? 1m : 3m;
+        var selection = Selection(modelReference);
+        var request = new RuntimeRunAdmissionRequest(1, RuntimeRunAdmissionContract.SelectionHash(selection));
+        var receipt = Receipt(selection, modelId, multiplier);
+
+        Assert.Equal(0, RuntimeRunAdmissionContract.ValidateReceipt(
+            receipt, request, "tenant", "project", "run", selection));
+        Assert.Equal(modelId, receipt.ModelBindingPin.ModelId);
+        Assert.Equal(multiplier, receipt.CostBinding!.RateCard.ModelMultipliers[modelId]);
+    }
+
+    [Theory]
     [InlineData("scope")]
     [InlineData("hash")]
     [InlineData("connection")]
@@ -96,32 +113,37 @@ public sealed class RuntimeRunAdmissionContractTests
                 RuntimeRunAdmissionContract.ValidateSelectionScope(document.RootElement, "project", "run")).Code);
     }
 
-    private static JsonElement Selection() => JsonSerializer.SerializeToElement(new
+    private static JsonElement Selection(string modelReference = "accepted-reference") =>
+        JsonSerializer.SerializeToElement(new
     {
         projectId = "project", runId = "run", projectRevision = 1, projectConfigurationRevision = 1,
         platformRuntimeRevision = 1, contextRevision = "context-v1",
         projectConfiguration = new { },
         modelSelection = new
         {
-            reference = "accepted-reference", sourceMode = "hostedCopilot",
+            reference = modelReference, sourceMode = "hostedCopilot",
             connectionId = "11111111-1111-1111-1111-111111111111"
         }
     });
 
-    private static RuntimeRunAdmissionReceipt Receipt(JsonElement selection)
+    private static RuntimeRunAdmissionReceipt Receipt(
+        JsonElement selection,
+        string modelId = "concrete-model",
+        decimal multiplier = 2.5m)
     {
+        var modelReference = selection.GetProperty("modelSelection").GetProperty("reference").GetString()!;
         var resolver = new RuntimeModelBindingsResolver("model-bindings-v1",
             new Dictionary<string, RuntimeModelBinding>
             {
-                ["accepted-reference"] = new("concrete-model", ModelSourceMode.HostedCopilot)
+                [modelReference] = new(modelId, ModelSourceMode.HostedCopilot)
             });
         var card = new CostRateCard("card", "1", SdkMeterSources.CopilotNanoAiu, "AIC", 1_000_000_000,
-            ImmutableDictionary<string, decimal>.Empty.Add("concrete-model", 2.5m));
+            ImmutableDictionary<string, decimal>.Empty.Add(modelId, multiplier));
         var binding = new CostBinding(SdkMeterSources.CopilotNanoAiu, "copilot.usage-cost",
             "1.0.0", 1, "options-v1", "resource", 1,
             ImmutableHashSet.Create("cost.usage.price", "cost.work.quote"), card);
         return new(1, "tenant", "project", "run", RuntimeRunAdmissionContract.SelectionHash(selection),
-            RuntimeAcceptedModelSelection.Read(selection), resolver.Pin("accepted-reference", ModelSourceMode.HostedCopilot),
+            RuntimeAcceptedModelSelection.Read(selection), resolver.Pin(modelReference, ModelSourceMode.HostedCopilot),
             binding, new(0, "AIC", CostDisposition.Estimate, card, null),
             new("tenant", "project", "run", 0, true, [], []));
     }

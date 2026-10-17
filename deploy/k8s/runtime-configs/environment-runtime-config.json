@@ -25,8 +25,21 @@
     "Environment__Sandbox__AgentSandbox__WorkspaceStorageProviderId": "azure-files-csi",
     "Environment__Sandbox__AgentSandbox__RuntimeClassName": "kata-vm-isolation",
     "Environment__Sandbox__AgentSandbox__ExpectedRuntimeHandler": "kata",
+    "Environment__Sandbox__AgentSandbox__CpuRequest": "1",
+    "Environment__Sandbox__AgentSandbox__MemoryRequest": "2Gi",
+    "Environment__Sandbox__AgentSandbox__ReconciliationTimeoutSeconds": "600",
+    "Environment__Sandbox__AgentSandbox__PollIntervalMilliseconds": "250",
+    "Environment__Sandbox__AgentSandbox__StartupBudgets__ScheduledSeconds": "30",
+    "Environment__Sandbox__AgentSandbox__StartupBudgets__ImageReadySeconds": "90",
+    "Environment__Sandbox__AgentSandbox__StartupBudgets__StartedSeconds": "30",
+    "Environment__Sandbox__AgentSandbox__StartupBudgets__ConfiguredSeconds": "30",
+    "Environment__Sandbox__AgentSandbox__StartupBudgets__ReadySeconds": "30",
+    "Environment__Sandbox__AgentSandbox__StartupBudgets__TotalSeconds": "180",
     "Environment__Storage__AzureFiles__OptionsSchemaVersion": "1",
     "Environment__Storage__AzureFiles__Namespace": "agentweaver-v1-p0",
-    "Environment__Storage__AzureFiles__StorageClassName": "azurefile-csi"
+    "Environment__Storage__AzureFiles__StorageClassName": "azurefile-csi",
+    "Environment__Storage__AzureFiles__MaximumCapacityGiB": "100",
+    "Environment__Storage__AzureFiles__ProvisioningTimeoutSeconds": "600",
+    "Environment__Storage__AzureFiles__PollIntervalMilliseconds": "250"
   }
 }

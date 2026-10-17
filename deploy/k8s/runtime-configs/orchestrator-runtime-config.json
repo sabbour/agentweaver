@@ -22,6 +22,10 @@
     "EventsAndSessions__Authorization__OwnerBaseAddress": "https://events-and-sessions.agentweaver-v1-p0.svc.cluster.local:8443/",
     "EventsAndSessions__Authorization__Audience": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
     "Identity__SecretRedemption__OwnerBaseAddress": "https://identity-broker.agentweaver-v1-p0.svc.cluster.local:443/",
-    "Identity__SecretRedemption__Audience": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/"
+    "Identity__SecretRedemption__Audience": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
+    "AgentGovernance__Policy__ResourceId": "agt-policy:p1-v1.0.0",
+    "AgentGovernance__Policy__ResourceGeneration": "1",
+    "AgentGovernance__Policy__OptionsRevision": "p1-v1.0.0",
+    "AgentGovernance__Policy__PlatformPolicyDocuments__0": "apiVersion: governance.toolkit/v1\nversion: \"1.0\"\nname: p1-platform-baseline\nscope: global\ndefault_action: deny\nrules:\n  - name: allow-model-turn\n    condition: \"action_id == 'model.turn'\"\n    action: allow\n    priority: 100\n  - name: allow-tool-read\n    condition: \"action_id == 'tool.read'\"\n    action: allow\n    priority: 100\n  - name: allow-tool-write\n    condition: \"action_id == 'tool.write'\"\n    action: allow\n    priority: 100\n  - name: allow-exec-shell\n    condition: \"action_id == 'exec.shell'\"\n    action: allow\n    priority: 100\n  - name: allow-exec-read\n    condition: \"action_id == 'exec.read'\"\n    action: allow\n    priority: 100\n  - name: allow-exec-write\n    condition: \"action_id == 'exec.write'\"\n    action: allow\n    priority: 100\n  - name: allow-exec-stop\n    condition: \"action_id == 'exec.stop'\"\n    action: allow\n    priority: 100\n"
   }
 }

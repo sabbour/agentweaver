@@ -14,7 +14,7 @@ spec:
         memory: 128Mi
       max:
         cpu: "1"
-        memory: 1Gi
+        memory: 2Gi
       min:
         cpu: 25m
         memory: 32Mi

@@ -17,6 +17,11 @@ const fixedConfiguration = {
   EventsAndSessions__Database__WorkloadIdentity__TokenFilePath: '/var/run/secrets/azure/tokens/azure-identity-token',
   EventsAndSessions__Provider__DatabaseName: 'agentweaver',
   EventsAndSessions__Provider__Schema: 'events_sessions',
+  AgentHost__ModelBindingsRevision: 'p1-v1.0.0',
+  AgentHost__ModelBindings__reasoning__ModelId: 'gpt-6.1-sol',
+  AgentHost__ModelBindings__reasoning__SourceMode: 'HostedCopilot',
+  AgentHost__ModelBindings__coding__ModelId: 'gpt-6-luna',
+  AgentHost__ModelBindings__coding__SourceMode: 'HostedCopilot',
 };
 const requiredConfiguration = [
   ...Object.keys(fixedConfiguration),
