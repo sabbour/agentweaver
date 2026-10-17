@@ -192,7 +192,9 @@ public sealed class CopilotCostProvider : ICostProvider
         if (!_rateCard.ModelTokenRates.TryGetValue(modelId, out var modelRates))
             return Unpriced("model-rate-unavailable");
 
-        var longContext = usage.InputTokens.Value > _rateCard.LongContextThresholdTokens!.Value;
+        var threshold = modelRates.LongContextThresholdTokens ?? _rateCard.LongContextThresholdTokens;
+        var longContext = modelRates.LongContext is not null &&
+            threshold is not null && usage.InputTokens.Value > threshold.Value;
         var rates = longContext ? modelRates.LongContext : modelRates.DefaultContext;
         if (rates is null)
             return Unpriced("context-tier-rate-unavailable");

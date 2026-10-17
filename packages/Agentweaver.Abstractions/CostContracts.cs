@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Agentweaver.Abstractions;
 
@@ -44,6 +45,10 @@ public sealed record CostRateCard(
 
     /// <summary>Input-token count above which the long-context rates apply.</summary>
     public long? LongContextThresholdTokens { get; init; }
+
+    /// <summary>SHA-256 of the exact runtime rate-card document, when supplied.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ContentHash { get; init; }
 }
 
 /// <summary>Token prices for one context tier, expressed per card-defined rate unit.</summary>
@@ -56,7 +61,12 @@ public sealed record CostTokenRates(
 /// <summary>Published token prices for the default and long-context tiers.</summary>
 public sealed record CostModelTokenRates(
     CostTokenRates? DefaultContext,
-    CostTokenRates? LongContext);
+    CostTokenRates? LongContext)
+{
+    /// <summary>Model-specific input-token threshold for the long-context tier.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public long? LongContextThresholdTokens { get; init; }
+}
 
 /// <summary>Validates and canonically serializes provider-owned cost rate cards.</summary>
 public static class CostRateCardContract
@@ -84,7 +94,7 @@ public static class CostRateCardContract
             if (card.ProviderSourceUrl is not null || card.SnapshotVersion is not null ||
                 card.RetrievedOn is not null || card.TokenRateCurrency is not null ||
                 card.TokensPerRateUnit is not null || card.CreditsPerCurrencyUnit is not null ||
-                card.LongContextThresholdTokens is not null)
+                card.LongContextThresholdTokens is not null || card.ContentHash is not null)
                 throw new ArgumentException("Token-rate metadata requires at least one published model rate.", nameof(card));
             return;
         }
@@ -97,15 +107,28 @@ public static class CostRateCardContract
             card.TokenRateCurrency is not { Length: 3 } currency ||
             !currency.All(character => character is >= 'A' and <= 'Z') ||
             card.TokensPerRateUnit is not > 0 ||
-            card.CreditsPerCurrencyUnit is not > 0 ||
-            card.LongContextThresholdTokens is not > 0)
+            card.CreditsPerCurrencyUnit is not > 0)
             throw new ArgumentException("Published token rates require complete source and unit metadata.", nameof(card));
+
+        if (card.ContentHash is { } contentHash &&
+            (contentHash.Length != 64 ||
+             contentHash.Any(character => character is not (>= '0' and <= '9') and not (>= 'a' and <= 'f'))))
+            throw new ArgumentException("A rate-card content hash must be lowercase SHA-256 hex.", nameof(card));
+        if (card.LongContextThresholdTokens is <= 0 ||
+            card.LongContextThresholdTokens is not null &&
+            card.ModelTokenRates.Values.Any(model =>
+                model is not null && model.LongContextThresholdTokens is not null))
+            throw new ArgumentException("Legacy rate-card thresholds must be positive and cannot be mixed with model thresholds.", nameof(card));
 
         foreach (var model in card.ModelTokenRates)
         {
             RequireIdentifier(model.Key, nameof(card.ModelTokenRates), 512);
             if (model.Value is null ||
-                model.Value.DefaultContext is null && model.Value.LongContext is null)
+                model.Value.DefaultContext is null && model.Value.LongContext is null ||
+                model.Value.LongContext is null && model.Value.LongContextThresholdTokens is not null ||
+                model.Value.LongContext is not null && card.LongContextThresholdTokens is null &&
+                    model.Value.LongContextThresholdTokens is not > 0 ||
+                model.Value.LongContextThresholdTokens is <= 0)
                 throw new ArgumentException("Each published model requires at least one context tier.", nameof(card));
             ValidateTokenRates(model.Value.DefaultContext, nameof(card.ModelTokenRates));
             ValidateTokenRates(model.Value.LongContext, nameof(card.ModelTokenRates));
@@ -138,7 +161,10 @@ public static class CostRateCardContract
                 writer.WriteString("tokenRateCurrency", card.TokenRateCurrency);
                 WriteNumber(writer, "tokensPerRateUnit", card.TokensPerRateUnit!.Value);
                 WriteNumber(writer, "creditsPerCurrencyUnit", card.CreditsPerCurrencyUnit!.Value);
-                writer.WriteNumber("longContextThresholdTokens", card.LongContextThresholdTokens!.Value);
+                if (card.LongContextThresholdTokens is { } threshold)
+                    writer.WriteNumber("longContextThresholdTokens", threshold);
+                if (card.ContentHash is { } contentHash)
+                    writer.WriteString("contentHash", contentHash);
                 writer.WritePropertyName("modelTokenRates");
                 writer.WriteStartObject();
                 foreach (var (model, tiers) in card.ModelTokenRates.OrderBy(item => item.Key, StringComparer.Ordinal))
@@ -147,6 +173,8 @@ public static class CostRateCardContract
                     writer.WriteStartObject();
                     WriteTokenRates(writer, "defaultContext", tiers.DefaultContext);
                     WriteTokenRates(writer, "longContext", tiers.LongContext);
+                    if (tiers.LongContextThresholdTokens is { } modelThreshold)
+                        writer.WriteNumber("longContextThresholdTokens", modelThreshold);
                     writer.WriteEndObject();
                 }
                 writer.WriteEndObject();

@@ -91,6 +91,24 @@ public sealed class RuntimeModelBindingsResolverTests
     }
 
     [Fact]
+    public void NewHostedCopilotModelsCanBeEnabledByChangingTheConfiguredBinding()
+    {
+        // Stable references can target new SDK-listed model IDs without a compiled model catalog.
+        var resolver = new RuntimeModelBindingsResolver("model-bindings-v2",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["reasoning"] = new("gpt-5-mini", ModelSourceMode.HostedCopilot),
+                ["coding"] = new("gpt-6-luna", ModelSourceMode.HostedCopilot)
+            });
+
+        var pin = resolver.Pin("reasoning", ModelSourceMode.HostedCopilot);
+
+        Assert.Equal("reasoning", pin.ModelSelectionReference);
+        Assert.Equal("gpt-5-mini", pin.ModelId);
+        Assert.Equal("model-bindings-v2", pin.ConfigurationRevision);
+    }
+
+    [Fact]
     public void AcceptedSelectionDecoderPreservesAHostedModelEffortPin()
     {
         var pin = Resolver().Pin("accepted-reference", ModelSourceMode.HostedCopilot, "low");

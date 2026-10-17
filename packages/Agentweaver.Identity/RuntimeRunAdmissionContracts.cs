@@ -20,7 +20,11 @@ public sealed record RuntimeRunAdmissionReceipt(
     RuntimeModelBindingPin ModelBindingPin,
     CostBinding? CostBinding,
     CostPrice Quote,
-    UsageRunTotals CopilotTotals);
+    UsageRunTotals CopilotTotals)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RateCardContentHash { get; init; }
+}
 
 /// <summary>Validates run admission requests, selection scope, and priced Copilot receipts.</summary>
 public static class RuntimeRunAdmissionContract
@@ -82,6 +86,10 @@ public static class RuntimeRunAdmissionContract
             pin.ModelSelectionReference != model.Reference || pin.SourceMode != model.SourceMode ||
             pin.ReasoningEffort != model.ReasoningEffort ||
             model.ModelBindingPin is { } acceptedPin && pin != acceptedPin)
+            throw new RuntimeAuthorizationException("runtime_run_admission_invalid");
+        if (receipt.RateCardContentHash is { } contentHash)
+            RuntimeContractValidation.ValidateHash(contentHash);
+        if (receipt.RateCardContentHash != receipt.CostBinding?.RateCard?.ContentHash)
             throw new RuntimeAuthorizationException("runtime_run_admission_invalid");
         RuntimeModelBindingsResolver.ValidatePin(pin);
         return RuntimeUsageCostSnapshotContract.ValidatePricedCopilotSnapshot(

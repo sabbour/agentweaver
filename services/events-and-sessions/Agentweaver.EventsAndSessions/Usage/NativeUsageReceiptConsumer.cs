@@ -59,7 +59,10 @@ internal sealed class NativeUsageReceiptConsumer(
         var totals = await ledger.GetCopilotRunTotalsWithinTransactionAsync(
             connection, transaction, tenantId, projectId, runId, cancellationToken).ConfigureAwait(false);
         var receipt = new RuntimeRunAdmissionReceipt(
-            1, tenantId, projectId, runId, request.AcceptedSelectionHash, model, modelPin, pinned.Binding, quote, totals);
+            1, tenantId, projectId, runId, request.AcceptedSelectionHash, model, modelPin, pinned.Binding, quote, totals)
+        {
+            RateCardContentHash = pinned.Binding?.RateCard?.ContentHash
+        };
         RuntimeRunAdmissionContract.ValidateReceipt(receipt, request, tenantId, projectId, runId, selection);
         await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -90,7 +93,8 @@ internal sealed class NativeUsageReceiptConsumer(
             costBinding.MeterSource != request.MeterSource ||
             costBinding.RateCard.Id != request.RateCardId ||
             costBinding.RateCard.Version != request.RateCardVersion ||
-            costBinding.RateCard.Unit != request.RateCardUnit)
+            costBinding.RateCard.Unit != request.RateCardUnit ||
+            costBinding.RateCard.ContentHash != request.RateCardContentHash)
             throw new NativeUsageReconciliationException("runtime_usage_reconciliation_binding_mismatch");
 
         var references = await ReadCostReceiptReferencesAsync(
@@ -121,7 +125,10 @@ internal sealed class NativeUsageReceiptConsumer(
             request.RateCardUnit,
             totals.Events,
             references,
-            totals);
+            totals)
+        {
+            RateCardContentHash = costBinding.RateCard.ContentHash
+        };
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
         return receipt;
@@ -250,7 +257,9 @@ internal sealed class NativeUsageReceiptConsumer(
             RuntimeUsageSourceReceiptContract.HashSource(request.Registration, request.Source),
             pinned.Binding, quote, totals)
         {
-            DispatchId = request.DispatchId, RepresentedReceipts = represented
+            DispatchId = request.DispatchId,
+            RepresentedReceipts = represented,
+            RateCardContentHash = pinned.Binding?.RateCard?.ContentHash
         };
         RuntimeUsageCostSnapshotContract.ValidateObservedReceipt(receipt, request);
         await revalidateCurrentAuthority(cancellationToken).ConfigureAwait(false);
@@ -269,7 +278,7 @@ internal sealed class NativeUsageReceiptConsumer(
                 SELECT source.source_receipt_json, source.source_payload_hash, source.accounting_receipt_json,
                     ledger.canonical_input_hash, (ledger.payload->'usage')::text,
                     ledger.price_disposition, ledger.price_amount, ledger.price_unit, ledger.unpriced_reason,
-                    ledger.rate_card_id, ledger.rate_card_version, ledger.recorded_at
+                    ledger.rate_card_id, ledger.rate_card_version, ledger.recorded_at, ledger.cost_binding
                 FROM {_receipts} source
                 JOIN {_ledger} ledger ON ledger.event_id = source.event_id
                 WHERE source.source_receipt_id = @receipt AND source.event_id = @event
@@ -283,6 +292,7 @@ internal sealed class NativeUsageReceiptConsumer(
             RuntimeUsageSourceReceiptContract.Validate(source);
             var accounting = Deserialize<UsageAccountingReceipt>(reader.GetString(2));
             var usage = Deserialize<UsageSubmission>(reader.GetString(4));
+            var ledgerBinding = reader.IsDBNull(12) ? null : Deserialize<CostBinding>(reader.GetString(12));
             if (source.ReceiptId != reference.SourceReceiptId || source.Registration != request.Registration ||
                 source.Usage.SdkSource != request.Source ||
                 (source.Usage.A2AMessageId != request.DispatchId &&
@@ -299,6 +309,7 @@ internal sealed class NativeUsageReceiptConsumer(
                 accounting.UnpricedReason != (reader.IsDBNull(8) ? null : reader.GetString(8)) ||
                 accounting.RateCardId != (reader.IsDBNull(9) ? null : reader.GetString(9)) ||
                 accounting.RateCardVersion != (reader.IsDBNull(10) ? null : reader.GetString(10)) ||
+                accounting.RateCardContentHash != ledgerBinding?.RateCard?.ContentHash ||
                 accounting.RecordedAt != reader.GetFieldValue<DateTimeOffset>(11))
                 throw new RuntimeAuthorizationException("runtime_usage_accounting_mismatch");
             represented.Add(new(source.ReceiptId, accounting));
@@ -415,6 +426,7 @@ internal sealed class NativeUsageReceiptConsumer(
             accounting.Disposition.ToString() == priceDisposition &&
             accounting.Amount == priceAmount && accounting.Unit == priceUnit &&
             accounting.RateCardId == rateCardId && accounting.RateCardVersion == rateCardVersion &&
+            accounting.RateCardContentHash == request.RateCardContentHash &&
             binding.TenantId == tenantId && binding.ProjectId == projectId && binding.RunId == runId &&
             binding.SessionId == request.SessionId && binding.TurnId == request.RuntimeTurnId &&
             binding.ExecutionFence == request.ExecutionFence &&
@@ -434,6 +446,7 @@ internal sealed class NativeUsageReceiptConsumer(
             usage.ModelBinding.ModelId == request.ModelId && usage.ModelBinding.MeterSource == request.MeterSource &&
             rateCardId == request.RateCardId && rateCardVersion == request.RateCardVersion &&
             rateCardUnit == request.RateCardUnit &&
+            ledgerBinding?.RateCard?.ContentHash == request.RateCardContentHash &&
             ledgerBinding is not null && CostBindingsEqual(ledgerBinding, pinnedBinding);
     }
 

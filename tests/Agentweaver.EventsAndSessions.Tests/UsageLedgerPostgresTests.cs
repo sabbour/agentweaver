@@ -107,7 +107,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
             Assert.NotNull(preflight.Binding);
             Assert.Null(preflight.UnpricedReason);
         });
-        Assert.Equal(CopilotPublishedRateCard.Current.Id, preflights[0].Binding!.RateCard.Id);
+        Assert.Equal("github-copilot-published", preflights[0].Binding!.RateCard.Id);
         var totals = await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "preflight-run");
         Assert.Equal(0, totals.Events);
         Assert.Empty(totals.Amounts);
@@ -1583,8 +1583,13 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     {
         var options = new PostgresSessionsProviderOptions(
             "native-postgres", "test", 1, _schema, "native-options", 1);
-        var provider = new CopilotCostProvider(new(
-            "native-cost", 1, "cost-options-v1", CopilotCostProvider.OptionsSchemaVersion));
+        var provider = new CopilotCostProvider(
+            CopilotCostTests.CreateTestOptions() with
+            {
+                ResourceId = "native-cost",
+                ResourceGeneration = 1,
+                OptionsRevision = "cost-options-v1"
+            });
         var catalog = ProviderCatalog.Create(
             [provider.CreateRegistration()], [], [],
             meterSourceSelections: [new(SdkMeterSources.CopilotNanoAiu, CopilotCostProvider.ProviderId)]);
@@ -1622,7 +1627,10 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
             accounting.RateCardVersion!,
             accounting.Unit!,
             minimumAccountingRevision,
-            [new(acknowledgment.SourceReceiptId, accounting)]);
+            [new(acknowledgment.SourceReceiptId, accounting)])
+        {
+            RateCardContentHash = accounting.RateCardContentHash
+        };
     }
 
     private static RuntimeUsageSourceReceipt NativeReceipt(

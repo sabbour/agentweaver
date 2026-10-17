@@ -234,33 +234,68 @@ SDK producer authority or admitting usage writes.
 
 The `copilot.usage-cost` source adapter prices reported input, cached-input,
 cache-write, and output tokens directly in AI credits (`AIC`) using a provider-owned
-immutable rate-card snapshot. The published card carries default and long-context
-per-million-token USD rates, its context threshold, `1 AIC = $0.01 USD`, and its
-source URL, snapshot version, and retrieval date. The current snapshot cites
+immutable rate-card snapshot. The operator supplies the versioned JSON document
+through `EventsAndSessions:Cost:Copilot:RateCard:Json`; startup validates its strict
+schema and hashes the exact document. The cost binding, snapshots, and accounting
+receipts retain the card version and content hash, so changing the ConfigMap does
+not reprice earlier usage. The default card cites
 [GitHub's official Copilot model-pricing documentation](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing),
-retrieved 2026-10-17. Complete token measurements can be priced when the SDK omits
-Nano AIU. Copilot configuration no longer supplies scalar multipliers, and prices
-are not inferred from legacy multipliers. Missing token measurements,
-unsupported sources, unavailable context tiers, and unknown model rates return an
-explicit `Unpriced` result with a reason, never a zero price. A valid `Unpriced`
-model quote does not block run admission or dispatch; its recorded usage remains
-visible but does not count toward credit limits, while priced usage continues to
-count. Malformed or tampered receipts still fail closed.
+retrieved 2026-10-17. It contains the 33 models and published token categories listed
+below. Complete token measurements can be priced when the SDK omits Nano AIU.
+Copilot configuration does not supply scalar multipliers, and prices are not
+inferred from legacy multipliers. Missing token measurements, unsupported sources,
+unavailable context tiers, and unknown model rates return an explicit `Unpriced`
+result with a reason, never a zero price. A valid `Unpriced` quote does not itself block
+run admission or dispatch; its recorded usage remains visible but does not count
+toward credit limits, while priced usage continues to count. Malformed or tampered
+receipts still fail closed.
 
-GitHub publishes the following USD rates per 1 million tokens. The default tier
-applies through 272,000 input tokens; the long-context tier applies above that
-threshold.
+GitHub publishes the following USD rates per 1 million tokens. Values use the order
+input / cached input / cache write / output. A dash means the source marks the rate
+or long-context tier as not applicable; it is not a zero price. Long-context rates
+apply only above the listed input-token threshold.
 
-| Model | Tier | Input | Cached input | Cache write | Output |
-| --- | --- | ---: | ---: | ---: | ---: |
-| `gpt-6.1-sol` | Default | $2.00 | $0.10 | $2.50 | $10.00 |
-| `gpt-6.1-sol` | Long context | $4.00 | $0.20 | $5.00 | $15.00 |
-| `gpt-6-luna` | Default | $0.10 | $0.01 | $0.125 | $0.50 |
-| `gpt-6-luna` | Long context | $0.20 | $0.02 | $0.25 | $0.75 |
+| Model ID | Default rates | Long-context threshold | Long-context rates |
+| --- | --- | ---: | --- |
+| `gpt-5-mini` | $0.25 / $0.025 / — / $2.00 | — | — |
+| `gpt-5.3-codex` | $1.75 / $0.175 / — / $14.00 | — | — |
+| `gpt-5.4` | $2.50 / $0.25 / — / $15.00 | 272K | $5.00 / $0.50 / — / $22.50 |
+| `gpt-5.4-mini` | $0.75 / $0.075 / — / $4.50 | — | — |
+| `gpt-5.4-nano` | $0.20 / $0.02 / — / $1.25 | — | — |
+| `gpt-5.5` | $5.00 / $0.50 / — / $30.00 | 272K | $10.00 / $1.00 / — / $45.00 |
+| `gpt-5.6-luna` | $0.20 / $0.02 / $0.25 / $1.20 | 200K | $0.40 / $0.04 / $0.50 / $1.80 |
+| `gpt-5.6-sol` | $4.00 / $0.40 / $5.00 / $20.00 | 272K | $8.00 / $0.80 / $10.00 / $30.00 |
+| `gpt-5.6-terra` | $2.00 / $0.20 / $2.50 / $12.00 | 272K | $4.00 / $0.40 / $5.00 / $18.00 |
+| `gpt-6-astra` | $10.00 / $1.00 / $12.50 / $50.00 | 272K | $20.00 / $2.00 / $25.00 / $75.00 |
+| `gpt-6-luna` | $0.10 / $0.01 / $0.125 / $0.50 | 272K | $0.20 / $0.02 / $0.25 / $0.75 |
+| `gpt-6-sol` | $2.00 / $0.20 / $2.50 / $10.00 | 272K | $4.00 / $0.40 / $5.00 / $15.00 |
+| `gpt-6.1-sol` | $2.00 / $0.10 / $2.50 / $10.00 | 272K | $4.00 / $0.20 / $5.00 / $15.00 |
+| `claude-haiku-4.5` | $1.00 / $0.10 / $1.25 / $5.00 | — | — |
+| `claude-haiku-5.5` | $0.10 / $0.01 / $0.125 / $0.50 | 100K | $0.50 / $0.05 / $0.625 / $2.50 |
+| `claude-sonnet-4` | $3.00 / $0.30 / $3.75 / $15.00 | — | — |
+| `claude-sonnet-4.6` | $3.00 / $0.30 / $3.75 / $15.00 | — | — |
+| `claude-opus-4.8` | $5.00 / $0.50 / $6.25 / $25.00 | — | — |
+| `claude-opus-5` | $5.00 / $0.50 / $6.25 / $25.00 | — | — |
+| `claude-opus-5.5` | $4.00 / $0.20 / $5.00 / $20.00 | — | — |
+| `claude-sonnet-5` | $2.00 / $0.20 / $2.50 / $10.00 | — | — |
+| `claude-sonnet-5.5` | $2.00 / $0.10 / $2.50 / $10.00 | — | — |
+| `claude-opus-4.8-fast` | $10.00 / $1.00 / $12.50 / $50.00 | — | — |
+| `claude-fable-5` | $10.00 / $1.00 / $12.50 / $50.00 | — | — |
+| `claude-fable-5.1` | $10.00 / $0.25 / $12.50 / $50.00 | — | — |
+| `gemini-3.7-flash` | $0.75 / $0.075 / — / $3.75 | — | — |
+| `gemini-3.8-flash` | $0.75 / $0.075 / — / $3.75 | — | — |
+| `gemini-4-argon` | $2.00 / $0.10 / — / $10.00 | — | — |
+| `mai-code-1.1-flash` | $0.20 / $0.02 / — / $1.20 | — | — |
+| `grok-4.5` | $2.00 / $0.50 / — / $6.00 | 200K | $4.00 / $1.00 / — / $12.00 |
+| `grok-4.6` | $2.00 / $0.50 / — / $6.00 | 200K | $4.00 / $1.00 / — / $12.00 |
+| `grok-4.7` | $2.00 / $0.50 / — / $6.00 | 200K | $4.00 / $1.00 / — / $12.00 |
+| `kimi-k3` | $3.00 / $0.30 / — / $15.00 | — | — |
 
-The source defines one AI credit as $0.01 USD. The snapshot records the source
-URL and retrieval date so earlier usage is not repriced when GitHub changes rates.
-The adapter and PostgreSQL ledger do not establish SDK producer authority.
+The model IDs above are the rate-card keys. Pricing applies only when a key exactly
+matches the model ID returned by the Copilot SDK. The source defines one AI credit
+as $0.01 USD. The snapshot records the source URL and retrieval date so earlier
+usage is not repriced when GitHub changes rates. The adapter and PostgreSQL ledger
+do not establish SDK producer authority.
 The separate runtime pipeline requires a current registration, original validated bearer,
 and purpose-bound observe credential before it commits actual SDK measurements.
 Events accepts only the resulting immutable source receipt reference.

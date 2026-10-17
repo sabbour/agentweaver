@@ -243,12 +243,18 @@ records per-million-token USD rates for default and long-context tiers, the
 long-context threshold, `1 AIC = $0.01 USD`, and the source URL, snapshot version,
 and retrieval date. The current snapshot is sourced from
 [GitHub's official Copilot model-pricing documentation](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing),
-retrieved 2026-10-17. No scalar model multipliers or inferred prices are used.
-Unknown models, missing token categories, and unavailable context-tier rates remain
+retrieved 2026-10-17. The default snapshot contains the 33 models listed on that
+page. The operator supplies its strict, versioned JSON through
+`EventsAndSessions:Cost:Copilot:RateCard:Json` in runtime configuration. Startup
+validates the schema and hashes the exact JSON text; each cost binding, snapshot,
+and accounting receipt retains the rate-card version and content hash. Updating the
+ConfigMap and rolling out the service loads new rates without a product rebuild.
+No runtime price fetch, scalar multiplier, or inferred price is used. Unknown
+model rates, missing token categories, and unavailable context-tier rates remain
 explicitly `Unpriced` with a reason; this does not block admission or dispatch.
 Unpriced usage is recorded and visible but excluded from credit-limit totals.
-Known priced usage continues to count. The adapter requires an immutable rate card
-and exact provider, configuration, resource, and capability bindings.
+Known priced usage continues to count. The adapter requires an immutable rate-card
+snapshot and exact provider, configuration, resource, and capability bindings.
 
 `IUsageLedger.AppendAsync` remains a low-level storage contract without caller authorization.
 The optional HTTP consumer uses a different, reference-only admission path.

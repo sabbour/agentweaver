@@ -48,7 +48,7 @@ const orchestrator = manifest('orchestrator-runtime-config');
 const events = manifest('events-and-sessions-runtime-config');
 const cilium = manifest('environment-cilium-config');
 
-test('P0 runtime ConfigMaps remain immutable and free of placeholders and credentials', () => {
+test('P0 runtime ConfigMaps use immutable snapshots except for the operator-updatable Events map', () => {
   for (const [name, resource] of [
     ['environment-runtime-config', environment],
     ['orchestrator-runtime-config', orchestrator],
@@ -61,7 +61,7 @@ test('P0 runtime ConfigMaps remain immutable and free of placeholders and creden
     assert.equal(resource.metadata.namespace, namespace);
     assert.equal(resource.metadata.annotations?.['agentweaver.io/runtime-config-status'],
       ['environment-runtime-config', 'orchestrator-runtime-config'].includes(name) ? 'incomplete' : undefined);
-    assert.equal(resource.immutable, true);
+    assert.equal(resource.immutable, name !== 'events-and-sessions-runtime-config');
     assert.ok(Object.keys(resource.data).length > 0);
     for (const [key, value] of Object.entries(resource.data)) {
       assert.equal(typeof value, 'string', `${name}: ${key}`);
@@ -166,7 +166,14 @@ test('P0 service addresses and source-backed provider defaults are exact', () =>
   assert.equal(evt.EventsAndSessions__Cost__Copilot__OptionsSchemaVersion, '2');
   assert.equal(evt.EventsAndSessions__Cost__Copilot__ResourceId, 'copilot-cost:p1-v1.0.0');
   assert.equal(evt.EventsAndSessions__Cost__Copilot__ResourceGeneration, '1');
-  assert.ok(!Object.keys(evt).some(key => key.startsWith('EventsAndSessions__Cost__Copilot__RateCard__')));
+  const copilotRateCard = JSON.parse(evt.EventsAndSessions__Cost__Copilot__RateCard__Json);
+  assert.equal(copilotRateCard.schemaVersion, 1);
+  assert.equal(copilotRateCard.id, 'github-copilot-published');
+  assert.equal(copilotRateCard.version, '2026-10-17');
+  assert.equal(Object.keys(copilotRateCard.modelTokenRates).length, 33);
+  assert.equal(copilotRateCard.modelTokenRates['gpt-5.6-luna'].longContextThresholdTokens, 200000);
+  assert.equal(copilotRateCard.modelTokenRates['claude-haiku-5.5'].longContextThresholdTokens, 100000);
+  assert.equal(copilotRateCard.modelTokenRates['gpt-5-mini'].longContext, null);
   assert.equal(evt.EventsAndSessions__Knowledge__BaseAddress, serviceAddress('knowledge'));
   assert.equal(evt.ProjectsConfig__BaseAddress, serviceAddress('projects-config'));
   assert.equal(evt.ProjectsConfig__AuthorizationContext__OwnerBaseAddress, serviceAddress('projects-config'));
@@ -185,6 +192,7 @@ test('P0 service addresses and source-backed provider defaults are exact', () =>
   const agentHostYaml = readFileSync(
     path.join(root, 'deploy', 'k8s', 'profiles', 'agenthost', 'runtime-config.example.yaml'),
     'utf8').replaceAll('\r\n', '\n');
+  assert.match(agentHostYaml, /^immutable: false$/m);
   const appSettings = agentHostYaml.split('  appsettings.json: |\n')[1]
     .split('\n').map(line => line.slice(4)).join('\n');
   const agentHost = JSON.parse(appSettings).AgentHost;

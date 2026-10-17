@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Text.Json;
 using Agentweaver.Abstractions;
 using Agentweaver.EventsAndSessions.Cost;
 using Agentweaver.Providers;
@@ -12,6 +13,50 @@ namespace Agentweaver.EventsAndSessions.Tests;
 
 public sealed class CopilotCostTests
 {
+    private const string TestRateCardJson = """
+        {
+          "schemaVersion": 1,
+          "id": "github-copilot-published",
+          "version": "2026-10-17",
+          "meterSource": "copilot.nano_aiu",
+          "unit": "AIC",
+          "nanoUnitsPerUnit": 1000000000,
+          "providerSourceUrl": "https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing",
+          "snapshotVersion": "2026-10-17",
+          "retrievedOn": "2026-10-17",
+          "tokenRateCurrency": "USD",
+          "tokensPerRateUnit": 1000000,
+          "creditsPerCurrencyUnit": 100,
+          "modelTokenRates": {
+            "gpt-5-mini": {
+              "defaultContext": { "input": 0.25, "cachedInput": 0.025, "cacheWrite": null, "output": 2 },
+              "longContext": null,
+              "longContextThresholdTokens": null
+            },
+            "gpt-5.6-luna": {
+              "defaultContext": { "input": 0.2, "cachedInput": 0.02, "cacheWrite": 0.25, "output": 1.2 },
+              "longContext": { "input": 0.4, "cachedInput": 0.04, "cacheWrite": 0.5, "output": 1.8 },
+              "longContextThresholdTokens": 200000
+            },
+            "gpt-6-luna": {
+              "defaultContext": { "input": 0.1, "cachedInput": 0.01, "cacheWrite": 0.125, "output": 0.5 },
+              "longContext": { "input": 0.2, "cachedInput": 0.02, "cacheWrite": 0.25, "output": 0.75 },
+              "longContextThresholdTokens": 272000
+            },
+            "gpt-6.1-sol": {
+              "defaultContext": { "input": 2, "cachedInput": 0.1, "cacheWrite": 2.5, "output": 10 },
+              "longContext": { "input": 4, "cachedInput": 0.2, "cacheWrite": 5, "output": 15 },
+              "longContextThresholdTokens": 272000
+            },
+            "claude-haiku-5.5": {
+              "defaultContext": { "input": 0.1, "cachedInput": 0.01, "cacheWrite": 0.125, "output": 0.5 },
+              "longContext": { "input": 0.5, "cachedInput": 0.05, "cacheWrite": 0.625, "output": 2.5 },
+              "longContextThresholdTokens": 100000
+            }
+          }
+        }
+        """;
+
     private static CopilotCostProviderOptions Options(
         long generation = 7,
         string revision = "copilot-options-v1") =>
@@ -19,7 +64,12 @@ public sealed class CopilotCostTests
             "copilot-meter-resource",
             generation,
             revision,
-            CopilotCostProvider.OptionsSchemaVersion);
+            CopilotCostProvider.OptionsSchemaVersion)
+        {
+            RateCard = CopilotRateCardConfiguration.Parse(TestRateCardJson)
+        };
+
+    internal static CopilotCostProviderOptions CreateTestOptions() => Options();
 
     private static (CopilotCostProvider Provider, CopilotCostProviderBinder Binder, CostBinding Binding)
         Create(
@@ -56,8 +106,12 @@ public sealed class CopilotCostTests
             .Build().GetSection("Cost");
         var options = CopilotCostProviderOptions.FromConfiguration(section);
         Assert.NotNull(options);
-        Assert.Equal(Options(), options);
-        Assert.Same(CopilotPublishedRateCard.Current, options.RateCard);
+        Assert.Equal(Options().ResourceId, options.ResourceId);
+        Assert.Equal(Options().ResourceGeneration, options.ResourceGeneration);
+        Assert.Equal(Options().OptionsRevision, options.OptionsRevision);
+        Assert.Equal(Options().OptionsSchemaVersion, options.OptionsSchemaVersion);
+        Assert.True(CostRateCardContract.Equals(
+            CopilotRateCardConfiguration.Parse(TestRateCardJson), options.RateCard));
         Assert.Equal("github-copilot-published", options.RateCard.Id);
         Assert.Equal("2026-10-17", options.RateCard.Version);
         Assert.Empty(options.RateCard.ModelMultipliers);
@@ -65,6 +119,8 @@ public sealed class CopilotCostTests
         Assert.Equal("2026-10-17", options.RateCard.RetrievedOn!.Value.ToString("yyyy-MM-dd"));
         Assert.Equal(2.00m, options.RateCard.ModelTokenRates["gpt-6.1-sol"].DefaultContext!.Input);
         Assert.Equal(0.02m, options.RateCard.ModelTokenRates["gpt-6-luna"].LongContext!.CachedInput);
+        Assert.Equal(64, options.RateCard.ContentHash!.Length);
+        Assert.Null(options.RateCard.ModelTokenRates["gpt-5-mini"].LongContext);
         Assert.Null(CopilotCostProviderOptions.FromConfiguration(
             new ConfigurationBuilder().Build().GetSection("Cost")));
     }
@@ -83,15 +139,108 @@ public sealed class CopilotCostTests
     }
 
     [Fact]
+    public void ConfiguredCostProviderRequiresItsRuntimeRateCard()
+    {
+        var values = ConfigurationValues();
+        values.Remove("Cost:RateCard:Json");
+        var section = new ConfigurationBuilder().AddInMemoryCollection(values)
+            .Build().GetSection("Cost");
+
+        Assert.Throws<ArgumentException>(() => CopilotCostProviderOptions.FromConfiguration(section));
+    }
+
+    [Fact]
     public void RejectsTokenRateProvenanceWithoutPublishedModelRates()
     {
-        var incompleteCard = CopilotPublishedRateCard.Current with
+        var card = Options().RateCard;
+        var incompleteCard = card with
         {
             ModelTokenRates = ImmutableDictionary<string, CostModelTokenRates>.Empty
-                .WithComparers(StringComparer.Ordinal)
+                .WithComparers(StringComparer.Ordinal),
+            ContentHash = null
         };
 
         Assert.Throws<ArgumentException>(() => CostRateCardContract.Validate(incompleteCard));
+    }
+
+    [Fact]
+    public void RuntimeRateCardSchemaIsStrictAndHashesExactDocumentText()
+    {
+        var first = CopilotRateCardConfiguration.Parse(TestRateCardJson);
+        var withWhitespace = CopilotRateCardConfiguration.Parse(TestRateCardJson + "\n");
+
+        Assert.NotEqual(first.ContentHash, withWhitespace.ContentHash);
+        Assert.Throws<ArgumentException>(() =>
+            CopilotRateCardConfiguration.Parse(TestRateCardJson.Replace(
+                "\"schemaVersion\": 1", "\"schemaVersion\": 2", StringComparison.Ordinal)));
+        Assert.Throws<ArgumentException>(() =>
+            CopilotRateCardConfiguration.Parse(TestRateCardJson.Replace(
+                "\"unit\": \"AIC\",",
+                "\"unit\": \"AIC\", \"unexpected\": true,",
+                StringComparison.Ordinal)));
+        Assert.Throws<ArgumentException>(() =>
+            CopilotRateCardConfiguration.Parse(TestRateCardJson.Replace(
+                "\"unit\": \"AIC\",",
+                "\"unit\": \"AIC\", \"unit\": \"AIC\",",
+                StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    public void LoadsAllThirtyThreeModelsFromTheDeploymentRuntimeConfig()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        string? configPath = null;
+        while (directory is not null)
+        {
+            var candidate = Path.Combine(
+                directory.FullName, "deploy", "k8s", "runtime-configs", "events-and-sessions-runtime-config.json");
+            if (File.Exists(candidate))
+            {
+                configPath = candidate;
+                break;
+            }
+            directory = directory.Parent;
+        }
+        Assert.NotNull(configPath);
+
+        using var config = JsonDocument.Parse(File.ReadAllText(configPath!));
+        var json = config.RootElement.GetProperty("data")
+            .GetProperty("EventsAndSessions__Cost__Copilot__RateCard__Json").GetString();
+        var card = CopilotRateCardConfiguration.Parse(json!);
+        var configuredOptions = CopilotCostProviderOptions.FromConfiguration(
+            new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Cost:ResourceId"] = "deployment-cost-resource",
+                ["Cost:ResourceGeneration"] = "1",
+                ["Cost:OptionsRevision"] = "deployment-card-v1",
+                ["Cost:OptionsSchemaVersion"] = CopilotCostProvider.OptionsSchemaVersion.ToString(),
+                ["Cost:RateCard:Json"] = json
+            }).Build().GetSection("Cost"));
+
+        Assert.Equal(33, card.ModelTokenRates.Count);
+        Assert.Equal(card.ContentHash, configuredOptions!.RateCard.ContentHash);
+        Assert.Equal(0.025m, card.ModelTokenRates["gpt-5-mini"].DefaultContext!.CachedInput);
+        Assert.Equal(200_000L, card.ModelTokenRates["gpt-5.6-luna"].LongContextThresholdTokens);
+        Assert.Equal(100_000L, card.ModelTokenRates["claude-haiku-5.5"].LongContextThresholdTokens);
+        Assert.Equal(200_000L, card.ModelTokenRates["grok-4.7"].LongContextThresholdTokens);
+        Assert.Null(card.ModelTokenRates["claude-sonnet-4"].LongContext);
+    }
+
+    [Fact]
+    public void AccountingReceiptAndLedgerCanonicalInputBindTheExactCardHash()
+    {
+        var (_, _, binding) = Create();
+        var price = new CostPrice(0.1m, "AIC", CostDisposition.Estimate, binding.RateCard, null);
+        var usage = new UsageSubmission(
+            Guid.NewGuid(), DateTimeOffset.UtcNow,
+            new("tenant", "project", "run", "session", "agent"),
+            Model(), new(10, 5, 0, 0, 1, null, null, null) { CacheWriteTokens = 0 });
+        var entry = new UsageLedgerEntry(
+            usage, binding, price, DateTimeOffset.UtcNow, new string('a', 64));
+
+        Assert.Equal(binding.RateCard.ContentHash, new UsageIngestionResult(entry, false).Receipt.RateCardContentHash);
+        var canonical = UsageLedgerCanonicalizer.Serialize(usage, binding, price);
+        Assert.Contains(binding.RateCard.ContentHash!, canonical, StringComparison.Ordinal);
     }
 
     private static Dictionary<string, string?> ConfigurationValues() => new()
@@ -99,7 +248,8 @@ public sealed class CopilotCostTests
         ["Cost:ResourceId"] = "copilot-meter-resource",
         ["Cost:ResourceGeneration"] = "7",
         ["Cost:OptionsRevision"] = "copilot-options-v1",
-        ["Cost:OptionsSchemaVersion"] = CopilotCostProvider.OptionsSchemaVersion.ToString()
+        ["Cost:OptionsSchemaVersion"] = CopilotCostProvider.OptionsSchemaVersion.ToString(),
+        ["Cost:RateCard:Json"] = TestRateCardJson
     };
 
     [Fact]
@@ -125,6 +275,29 @@ public sealed class CopilotCostTests
 
         var luna = provider.Price(usage, Model("gpt-6-luna"), binding);
         Assert.Equal(0.00376m, luna.Amount);
+    }
+
+    [Fact]
+    public void UsesPerModelLongContextThresholdsAndKeepsDefaultOnlyModelsOnDefaultRates()
+    {
+        var (provider, _, binding) = Create();
+        var noOtherTokens = new UsageMeasurement(200_000, 0, 0, 0, 1, null, null, null)
+        {
+            CacheWriteTokens = 0
+        };
+
+        var atLunaThreshold = provider.Price(noOtherTokens, Model("gpt-5.6-luna"), binding);
+        var pastLunaThreshold = provider.Price(
+            noOtherTokens with { InputTokens = 200_001 }, Model("gpt-5.6-luna"), binding);
+        var belowSolThreshold = provider.Price(
+            noOtherTokens with { InputTokens = 200_001 }, Model("gpt-6.1-sol"), binding);
+        var defaultOnlyLongInput = provider.Price(
+            noOtherTokens with { InputTokens = 272_001 }, Model("gpt-5-mini"), binding);
+
+        Assert.Equal(4m, atLunaThreshold.Amount);
+        Assert.Equal(8.00004m, pastLunaThreshold.Amount);
+        Assert.Equal(40.0002m, belowSolThreshold.Amount);
+        Assert.Equal(6.800025m, defaultOnlyLongInput.Amount);
     }
 
     [Fact]
@@ -166,6 +339,9 @@ public sealed class CopilotCostTests
         AssertUnpriced(provider.Price(complete, Model("unknown"), binding), "model-rate-unavailable");
         AssertUnpriced(provider.Price(complete, Model(source: "other"), binding),
             "meter-source-mismatch");
+        AssertUnpriced(provider.Price(
+                complete with { CacheWriteTokens = 1 }, Model("gpt-5-mini"), binding),
+            "token-rate-unavailable-cache-write");
         AssertUnpriced(provider.Quote(
             new CostQuoteRequest("unknown", 0m, CostQuoteBasis.ProviderWeightedNanoAiu), binding),
             "model-rate-unavailable");
