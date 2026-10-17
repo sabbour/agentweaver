@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator.Core;
 
 namespace Agentweaver.Orchestrator;
@@ -30,7 +31,10 @@ internal static class CoordinatorWorkflowCatalog
                 ["worktree", "sandboxed"],
                 ["sandbox.workspace.write"],
                 null,
-                null),
+                null)
+            {
+                ModelTaskKind = ModelTaskKind.CodeWriting
+            },
             new WorkflowStepDefinition(
                 "build-test",
                 "Record a typed platform build-and-test request.",
@@ -93,7 +97,7 @@ internal static class CoordinatorWorkflowCatalog
     }
 
     /// <summary>
-    /// Converts accepted casting, charters, and model selection into the immutable role context for work-plan validation.
+    /// Converts accepted casting, charters, model references, and task routes into the immutable run-selection context.
     /// </summary>
     /// <exception cref="CoordinationException">Required project-configuration fields are missing or malformed.</exception>
     public static WorkPlanRunSelectionContext CreateRunSelectionContext(JsonElement selection)
@@ -101,7 +105,7 @@ internal static class CoordinatorWorkflowCatalog
         var projectConfiguration = GetProjectConfiguration(selection);
         var charteredAgents = ReadCharteredAgents(projectConfiguration);
         var casting = ReadCasting(projectConfiguration);
-        var models = ReadEffectiveModelReferences(selection);
+        var (models, modelTaskSelections) = ReadEffectiveModelSelections(selection);
         var roles = casting
             .Where(item => charteredAgents.Contains((item.AgentId, item.RoleId)))
             .GroupBy(item => item.RoleId, StringComparer.Ordinal)
@@ -113,7 +117,10 @@ internal static class CoordinatorWorkflowCatalog
                 ImmutableArray<string>.Empty))
             .OrderBy(role => role.RoleId, StringComparer.Ordinal)
             .ToImmutableArray();
-        return new WorkPlanRunSelectionContext(roles, IsolationProviderBinding: null);
+        return new WorkPlanRunSelectionContext(roles, IsolationProviderBinding: null)
+        {
+            ModelTaskSelections = modelTaskSelections
+        };
     }
 
     /// <summary>
@@ -341,17 +348,166 @@ internal static class CoordinatorWorkflowCatalog
         return builder.ToImmutable();
     }
 
-    /// <summary>
-    /// Reads the selected model reference, returning an empty list when no valid reference is present.
-    /// </summary>
-    private static ImmutableArray<string> ReadEffectiveModelReferences(JsonElement selection)
+    /// <summary>Reads accepted model references and task routes, rejecting malformed or unaccepted route data.</summary>
+    private static (ImmutableArray<string> References, ImmutableArray<ModelTaskSelectionReference> TaskSelections)
+        ReadEffectiveModelSelections(JsonElement selection)
     {
-        if (!selection.TryGetProperty("modelSelection", out var modelSelection) ||
-            modelSelection.ValueKind != JsonValueKind.Object ||
-            !TryReadIdentifier(modelSelection, "reference", out var reference))
-            return [];
-        return [reference];
+        var references = new HashSet<string>(StringComparer.Ordinal);
+        var identities = new HashSet<(string Reference, string ReasoningEffort)>();
+        var seenModelSelectionIdentities = new HashSet<(string Reference, string ReasoningEffort)>();
+        (string Reference, string ReasoningEffort)? primarySelection = null;
+        if (selection.TryGetProperty("modelSelection", out var modelSelection))
+        {
+            primarySelection = ReadModelSelectionIdentity(modelSelection);
+            references.Add(primarySelection.Value.Reference);
+            identities.Add(primarySelection.Value);
+        }
+
+        if (selection.TryGetProperty("modelSelections", out var modelSelections))
+        {
+            if (modelSelections.ValueKind != JsonValueKind.Array ||
+                modelSelections.GetArrayLength() > ModelTaskSelectionLimits.MaximumAcceptedSelections)
+                throw InvalidSelectionSnapshot();
+            foreach (var model in modelSelections.EnumerateArray())
+            {
+                if (model.ValueKind != JsonValueKind.Object ||
+                    !model.TryGetProperty("selection", out var configuredSelection))
+                    throw InvalidSelectionSnapshot();
+                var identity = ReadModelSelectionIdentity(configuredSelection);
+                if (!seenModelSelectionIdentities.Add(identity))
+                    throw InvalidSelectionSnapshot();
+                references.Add(identity.Reference);
+                identities.Add(identity);
+            }
+        }
+
+        var acceptedIdentities = identities.ToImmutableHashSet();
+        if (!selection.TryGetProperty("modelTaskSelections", out var routes))
+        {
+            if (primarySelection is null && acceptedIdentities.Count == 1)
+                primarySelection = acceptedIdentities.Single();
+            var legacyRoutes = primarySelection is null
+                ? ImmutableArray<ModelTaskSelectionReference>.Empty
+                : Enum.GetValues<ModelTaskKind>()
+                    .Select(taskKind => new ModelTaskSelectionReference(
+                        taskKind,
+                        null,
+                        null,
+                        primarySelection.Value.Reference,
+                        primarySelection.Value.ReasoningEffort))
+                    .ToImmutableArray();
+            return (references.Order(StringComparer.Ordinal).ToImmutableArray(), legacyRoutes);
+        }
+
+        if (routes.ValueKind != JsonValueKind.Array ||
+            routes.GetArrayLength() > ModelTaskSelectionLimits.MaximumRoutes)
+            throw InvalidSelectionSnapshot();
+
+        var taskSelections = ImmutableArray.CreateBuilder<ModelTaskSelectionReference>();
+        var routeScopes = new HashSet<(ModelTaskKind TaskKind, string? RoleId, string? AgentId)>();
+        foreach (var route in routes.EnumerateArray())
+        {
+            var parsed = ReadModelTaskSelection(route);
+            if (!acceptedIdentities.Contains((parsed.ModelSelectionReference, parsed.ReasoningEffort)) ||
+                !routeScopes.Add((parsed.TaskKind, parsed.RoleId, parsed.AgentId)))
+                throw InvalidSelectionSnapshot();
+            taskSelections.Add(parsed);
+        }
+        return (references.Order(StringComparer.Ordinal).ToImmutableArray(),
+            taskSelections.ToImmutable());
     }
+
+    /// <summary>Parses one route with exact field names and a supported task-kind token.</summary>
+    private static ModelTaskSelectionReference ReadModelTaskSelection(JsonElement route)
+    {
+        if (route.ValueKind != JsonValueKind.Object)
+            throw InvalidSelectionSnapshot();
+        var properties = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        foreach (var property in route.EnumerateObject())
+        {
+            if (property.Name is not ("taskKind" or "roleId" or "agentId" or
+                    "modelSelectionReference" or "reasoningEffort") ||
+                !properties.TryAdd(property.Name, property.Value))
+                throw InvalidSelectionSnapshot();
+        }
+
+        if (!properties.TryGetValue("taskKind", out var taskKindValue) ||
+            taskKindValue.ValueKind != JsonValueKind.String ||
+            !TryReadModelTaskKind(taskKindValue.GetString(), out var taskKind) ||
+            !properties.TryGetValue("modelSelectionReference", out var referenceValue) ||
+            referenceValue.ValueKind != JsonValueKind.String ||
+            !IsOpaqueReference(referenceValue.GetString()))
+            throw InvalidSelectionSnapshot();
+
+        var roleId = ReadOptionalRouteIdentifier(properties, "roleId");
+        var agentId = ReadOptionalRouteIdentifier(properties, "agentId");
+        var reasoningEffort = ReadOptionalReasoningEffort(properties);
+        return new ModelTaskSelectionReference(
+            taskKind, roleId, agentId, referenceValue.GetString()!, reasoningEffort);
+    }
+
+    /// <summary>Reads an optional stable selector from one task route.</summary>
+    private static string? ReadOptionalRouteIdentifier(
+        IReadOnlyDictionary<string, JsonElement> properties,
+        string propertyName)
+    {
+        if (!properties.TryGetValue(propertyName, out var value) ||
+            value.ValueKind == JsonValueKind.Null)
+            return null;
+        if (value.ValueKind != JsonValueKind.String ||
+            !IsStableIdentifier(value.GetString()))
+            throw InvalidSelectionSnapshot();
+        return value.GetString();
+    }
+
+    /// <summary>Reads a route's optional effort, defaulting omitted legacy values to High.</summary>
+    private static string ReadOptionalReasoningEffort(
+        IReadOnlyDictionary<string, JsonElement> properties)
+    {
+        if (!properties.TryGetValue("reasoningEffort", out var value))
+            return "high";
+        if (value.ValueKind != JsonValueKind.String ||
+            !ModelTaskSelectionResolver.IsValidReasoningEffort(value.GetString()))
+            throw InvalidSelectionSnapshot();
+        return value.GetString()!;
+    }
+
+    /// <summary>Parses only named task-kind values supported by the workflow contract.</summary>
+    private static bool TryReadModelTaskKind(string? value, out ModelTaskKind taskKind)
+    {
+        taskKind = default;
+        if (!Enum.TryParse(value, ignoreCase: true, out taskKind) ||
+            !Enum.IsDefined(taskKind))
+            return false;
+        return string.Equals(
+            JsonNamingPolicy.CamelCase.ConvertName(taskKind.ToString()),
+            value,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Reads the accepted reference and effort identity from one model-selection object.</summary>
+    private static (string Reference, string ReasoningEffort) ReadModelSelectionIdentity(
+        JsonElement modelSelection)
+    {
+        if (modelSelection.ValueKind != JsonValueKind.Object ||
+            !modelSelection.TryGetProperty("reference", out var reference) ||
+            reference.ValueKind != JsonValueKind.String ||
+            !IsOpaqueReference(reference.GetString()))
+            throw InvalidSelectionSnapshot();
+        var reasoningEffort = "high";
+        if (modelSelection.TryGetProperty("reasoningEffort", out var suppliedEffort))
+        {
+            if (suppliedEffort.ValueKind != JsonValueKind.String ||
+                !ModelTaskSelectionResolver.IsValidReasoningEffort(suppliedEffort.GetString()))
+                throw InvalidSelectionSnapshot();
+            reasoningEffort = suppliedEffort.GetString()!;
+        }
+        return (reference.GetString()!, reasoningEffort);
+    }
+
+    /// <summary>Creates the fail-closed error for malformed accepted run-selection snapshots.</summary>
+    private static CoordinationException InvalidSelectionSnapshot() =>
+        new("projects_run_selection_contract_invalid", StatusCodes.Status502BadGateway);
 
     /// <summary>
     /// Reads a stable identifier property without throwing when the property is absent or invalid.
@@ -375,4 +531,11 @@ internal static class CoordinatorWorkflowCatalog
         value.Length <= WorkflowDomainLimits.MaximumIdentifierLength &&
         value.All(character => char.IsAsciiLetterOrDigit(character) ||
             character is '.' or '_' or '-' or ':');
+
+    /// <summary>Checks bounded, nonblank reference text without constraining provider syntax.</summary>
+    private static bool IsOpaqueReference(string? value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        value.Length <= WorkflowDomainLimits.MaximumIdentifierLength &&
+        string.Equals(value, value.Trim(), StringComparison.Ordinal) &&
+        !value.Any(char.IsControl);
 }

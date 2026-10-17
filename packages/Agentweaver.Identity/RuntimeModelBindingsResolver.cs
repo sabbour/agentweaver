@@ -50,14 +50,28 @@ public sealed class RuntimeModelBindingsResolver
         var capacities = _bindings.Where(item => item.Value.PromptCapacityTokens is not null)
             .OrderBy(item => item.Key, StringComparer.Ordinal)
             .Select(item => new { Reference = item.Key, item.Value.PromptCapacityTokens }).ToArray();
-        ConfigurationHash = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(
-            capacities.Length == 0 ? (object)models : new { Models = models, PromptCapacities = capacities }));
+        var reasoningEfforts = _bindings.Where(item => !item.Value.SupportedReasoningEfforts.IsEmpty)
+            .OrderBy(item => item.Key, StringComparer.Ordinal)
+            .Select(item => new
+            {
+                Reference = item.Key,
+                SupportedReasoningEfforts = item.Value.SupportedReasoningEfforts
+                    .OrderBy(effort => effort, StringComparer.Ordinal).ToArray()
+            }).ToArray();
+        object configuration = (capacities.Length, reasoningEfforts.Length) switch
+        {
+            (0, 0) => models,
+            (_, 0) => new { Models = models, PromptCapacities = capacities },
+            (0, _) => new { Models = models, SupportedReasoningEfforts = reasoningEfforts },
+            _ => new { Models = models, PromptCapacities = capacities, SupportedReasoningEfforts = reasoningEfforts }
+        };
+        ConfigurationHash = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(configuration));
     }
 
     /// <summary>Revision supplied by the host for this model binding snapshot.</summary>
     public string ConfigurationRevision { get; }
 
-    /// <summary>Stable digest of normalized models and prompt-capacity settings.</summary>
+    /// <summary>Stable digest of normalized models, prompt capacities, and supported reasoning efforts.</summary>
     public string ConfigurationHash { get; }
 
     /// <summary>Returns an enabled binding only when its source mode and optional accepted pin match.</summary>
@@ -75,18 +89,23 @@ public sealed class RuntimeModelBindingsResolver
         if (acceptedPin is not null)
         {
             ValidatePin(acceptedPin);
-            if (acceptedPin != CreatePin(reference, model))
+            if (acceptedPin != CreatePin(reference, model, acceptedPin.ReasoningEffort))
                 throw new RuntimeAuthorizationException("runtime_model_binding_pin_mismatch");
         }
         return model;
     }
 
     /// <summary>Builds a pin for the exact resolved model and configuration revision.</summary>
-    public RuntimeModelBindingPin Pin(string reference, ModelSourceMode sourceMode) =>
-        CreatePin(reference, Resolve(reference, sourceMode));
+    public RuntimeModelBindingPin Pin(
+        string reference, ModelSourceMode sourceMode, string reasoningEffort = "high")
+    {
+        ValidateReasoningEffort(reasoningEffort);
+        return CreatePin(reference, Resolve(reference, sourceMode), reasoningEffort);
+    }
 
-    private RuntimeModelBindingPin CreatePin(string reference, RuntimeModelBinding model) =>
-        new(1, reference, model.ModelId, model.SourceMode, ConfigurationRevision, ConfigurationHash)
+    private RuntimeModelBindingPin CreatePin(
+        string reference, RuntimeModelBinding model, string reasoningEffort = "high") =>
+        new(1, reference, model.ModelId, model.SourceMode, ConfigurationRevision, ConfigurationHash, reasoningEffort)
         {
             ProviderType = model.Provider?.Type
         };
@@ -97,11 +116,18 @@ public sealed class RuntimeModelBindingsResolver
         ArgumentNullException.ThrowIfNull(pin);
         if (pin.ContractVersion != 1 || !Enum.IsDefined(pin.SourceMode) ||
             pin.SourceMode == ModelSourceMode.HostedCopilot && pin.ProviderType is not null ||
-            pin.SourceMode == ModelSourceMode.Byok && pin.ProviderType is not ("azure" or "openai" or "anthropic"))
+            pin.SourceMode == ModelSourceMode.Byok && pin.ProviderType is not ("azure" or "openai" or "anthropic") ||
+            pin.ReasoningEffort is not ("low" or "medium" or "high" or "xhigh"))
             throw new RuntimeAuthorizationException("runtime_model_binding_pin_invalid");
         RuntimeContractValidation.ValidateIdentifier(pin.ModelSelectionReference);
         RuntimeContractValidation.ValidateIdentifier(pin.ModelId);
         RuntimeContractValidation.ValidateIdentifier(pin.ConfigurationRevision);
         RuntimeContractValidation.ValidateHash(pin.ConfigurationHash);
+    }
+
+    private static void ValidateReasoningEffort(string reasoningEffort)
+    {
+        if (reasoningEffort is not ("low" or "medium" or "high" or "xhigh"))
+            throw new RuntimeAuthorizationException("runtime_model_reasoning_effort_invalid");
     }
 }

@@ -79,6 +79,12 @@ public sealed record WorkflowStepDefinition(
     FixedWorkSpecification? FixedWork,
     WorkflowPlatformGate? PlatformGate)
 {
+    /// <summary>
+    /// Task category used to resolve this step's accepted model; omitted legacy values mean straightforward work.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ModelTaskKind? ModelTaskKind { get; init; }
+
     public WorkflowBuildTestCommand? BuildTestCommand { get; init; }
 }
 
@@ -124,7 +130,11 @@ public sealed record RoleRunSelection(
 /// <summary>Selections used to bind a proposed plan to the run's authorized roles and pinned Sandbox provider.</summary>
 public sealed record WorkPlanRunSelectionContext(
     ImmutableArray<RoleRunSelection> Roles,
-    PinnedProviderBinding? IsolationProviderBinding);
+    PinnedProviderBinding? IsolationProviderBinding)
+{
+    /// <summary>Accepted task, role, and agent model routes carried with this run's immutable selection context.</summary>
+    public ImmutableArray<ModelTaskSelectionReference> ModelTaskSelections { get; init; } = [];
+}
 
 /// <summary>Stable validation codes for workflow, coordinator, and WorkPlan contract failures.</summary>
 public enum WorkflowValidationCode
@@ -140,6 +150,7 @@ public enum WorkflowValidationCode
     InvalidStepOrder,
     DuplicateStepOrder,
     InvalidStepMode,
+    InvalidModelTaskKind,
     InvalidCardinality,
     InvalidStepRole,
     DuplicateStepRole,

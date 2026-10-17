@@ -58,7 +58,7 @@ internal sealed record PendingCoordinatorRunSelectionBinding(
     WorkPlanRunSelectionContext Context);
 
 /// <summary>
-/// Resolves, pins, and persists the provider and role selections used to validate a coordinator work plan.
+/// Resolves and pins provider, role, and task-model selections used to validate a coordinator work plan.
 /// </summary>
 internal sealed class CoordinatorRunSelectionContextStore
 {
@@ -158,7 +158,10 @@ internal sealed class CoordinatorRunSelectionContextStore
 
         var baseContext = CoordinatorWorkflowCatalog.CreateRunSelectionContext(selection.Snapshot);
         var roleContext = CreateAuthorizedRoles(baseContext.Roles, provider.IsolationChoices);
-        var context = new WorkPlanRunSelectionContext(roleContext, pinned.Value);
+        var context = new WorkPlanRunSelectionContext(roleContext, pinned.Value)
+        {
+            ModelTaskSelections = baseContext.ModelTaskSelections
+        };
         var pendingBinding = new PendingCoordinatorRunSelectionBinding(
             selection,
             executionFence,
@@ -239,7 +242,10 @@ internal sealed class CoordinatorRunSelectionContextStore
         if (!RolesMatch(expectedRoles, persisted.Roles))
             throw BindingUnavailable("The durable role-selection context does not match the accepted run selection.");
 
-        return new WorkPlanRunSelectionContext(persisted.Roles, pinned.Value);
+        return new WorkPlanRunSelectionContext(persisted.Roles, pinned.Value)
+        {
+            ModelTaskSelections = baseContext.ModelTaskSelections
+        };
     }
 
     /// <summary>
@@ -260,7 +266,10 @@ internal sealed class CoordinatorRunSelectionContextStore
         if (executionFence <= 0 ||
             pendingBinding.ExecutionFence != executionFence ||
             !SelectionMatches(pendingBinding.Selection, selection) ||
-            !RolesMatch(pendingBinding.Roles, pendingBinding.Context.Roles))
+            !RolesMatch(pendingBinding.Roles, pendingBinding.Context.Roles) ||
+            !TaskSelectionsMatch(
+                CoordinatorWorkflowCatalog.CreateRunSelectionContext(selection.Snapshot).ModelTaskSelections,
+                pendingBinding.Context.ModelTaskSelections))
             throw new CoordinationException(
                 "coordinator_sandbox_binding_stale", StatusCodes.Status409Conflict);
 
@@ -491,6 +500,16 @@ internal sealed class CoordinatorRunSelectionContextStore
     private static bool RolesMatch(
         ImmutableArray<RoleRunSelection> expected,
         ImmutableArray<RoleRunSelection> persisted) =>
+        !expected.IsDefault &&
+        !persisted.IsDefault &&
+        string.Equals(
+            JsonSerializer.Serialize(expected, JsonOptions),
+            JsonSerializer.Serialize(persisted, JsonOptions),
+            StringComparison.Ordinal);
+
+    private static bool TaskSelectionsMatch(
+        ImmutableArray<ModelTaskSelectionReference> expected,
+        ImmutableArray<ModelTaskSelectionReference> persisted) =>
         !expected.IsDefault &&
         !persisted.IsDefault &&
         string.Equals(

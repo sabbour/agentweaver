@@ -82,6 +82,9 @@ public static class WorkflowDefinitionValidator
             if (!Enum.IsDefined(step.Mode))
                 Add(issues, WorkflowValidationCode.InvalidStepMode, path + ".mode",
                     "Step mode must be fixed, open, or platform.");
+            if (step.ModelTaskKind is { } modelTaskKind && !Enum.IsDefined(modelTaskKind))
+                Add(issues, WorkflowValidationCode.InvalidModelTaskKind, path + ".modelTaskKind",
+                    "Model task kind is not supported.");
 
             ValidateCardinality(step, path, issues);
             ValidateStringIds(step.AllowedRoles, path + ".allowedRoles",

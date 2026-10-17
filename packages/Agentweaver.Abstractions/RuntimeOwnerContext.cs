@@ -38,6 +38,8 @@ public sealed record RuntimeOwnerContext(
     /// <summary>Source mode authorized for the selected model, when explicitly pinned.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ModelSourceMode? ModelSourceMode { get; init; }
+    /// <summary>Reasoning effort selected for this exact work item.</summary>
+    public string ReasoningEffort { get; init; } = "high";
     /// <summary>Full immutable model binding used to detect a changed runtime configuration.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeModelBindingPin? ModelBindingPin { get; init; }

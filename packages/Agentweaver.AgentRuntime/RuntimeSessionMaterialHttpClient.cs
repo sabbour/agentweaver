@@ -100,6 +100,9 @@ public sealed class RuntimeSessionMaterialHttpClient(
             material.ModelId != session.Facts.ModelId ||
             material.ModelSelectionReference != session.Facts.ModelSelectionReference ||
             material.MaxPromptTokens != session.Facts.MaxPromptTokens ||
+            material.ReasoningEffort != session.Facts.ReasoningEffort ||
+            material.ModelBindingPin != session.Facts.ModelBindingPin ||
+            material.ResolvedModelBindingPin != session.Facts.ResolvedModelBindingPin ||
             material.RemoteToolResultProof is not null)
             throw new RuntimeAuthorizationException("runtime_material_receipt_invalid");
         return receipt;
@@ -128,10 +131,15 @@ public sealed class RuntimeSessionMaterialHttpClient(
                 .ConfigureAwait(false);
             if (!RuntimeWorkspaceResumeHttpClient.SameJson(recordedCache.Material, expectedCache))
                 throw new RuntimeAuthorizationException("runtime_resume_cache_receipt_invalid");
-            return new(identity, binding.TenantId, recordedCache, Array.Empty<(string Role, string Content)>());
+            return new(identity, binding.TenantId, recordedCache, Array.Empty<(string Role, string Content)>())
+            {
+                PreviousModelBinding = recordedCache.Material.Reference.Material
+            };
         }
         var turns = new List<(string Role, string Content)>();
         SessionEventEnvelope? latestCache = null;
+        SessionMaterialBinding? previousModelBinding = null;
+        long previousModelBindingPosition = 0;
         long lastPosition = 0;
         long lastTurnPosition = 0;
         long totalContentBytes = 0;
@@ -164,15 +172,45 @@ public sealed class RuntimeSessionMaterialHttpClient(
                     if (material.Material.Reference != turn.Content ||
                         material.Material.Position != recorded.Position ||
                         material.Material.Reference.Material!.TenantId != binding.TenantId ||
+                        material.Material.Reference.Material.AcceptedSelectionHash !=
+                            binding.AcceptedSelectionHash ||
                         (totalContentBytes += material.Bytes.Length) > SessionMaterialValidation.MaximumBytes)
                         throw new RuntimeAuthorizationException("runtime_journal_turn_invalid");
                     turns.Add((turn.Role, Utf8.GetString(material.Bytes)));
                     lastTurnPosition = recorded.Position;
+                    if (recorded.Position > previousModelBindingPosition)
+                    {
+                        previousModelBinding = material.Material.Reference.Material;
+                        previousModelBindingPosition = recorded.Position;
+                    }
                     turnMaterial = material.Material;
                     turnContentSha256 = RuntimeContractValidation.Hash(material.Bytes);
                 }
-                else if (recorded.Payload is CacheReferenceSessionPayload)
+                else if (recorded.Payload is CacheReferenceSessionPayload cacheReference)
+                {
+                    if (recorded.ObjectReferences is not [{ Reference: var storedReference }] ||
+                        !RuntimeWorkspaceResumeHttpClient.SameJson(storedReference, cacheReference.Cache))
+                        throw new RuntimeAuthorizationException("runtime_journal_cache_invalid");
+                    try
+                    {
+                        SessionMaterialValidation.Validate(cacheReference.Cache);
+                    }
+                    catch (ArgumentException)
+                    {
+                        throw new RuntimeAuthorizationException("runtime_journal_cache_invalid");
+                    }
+                    var cacheBinding = cacheReference.Cache.Material!;
+                    if (cacheBinding.Kind != SessionMaterialKind.SdkCache ||
+                        cacheBinding.TenantId != binding.TenantId ||
+                        cacheBinding.AcceptedSelectionHash != binding.AcceptedSelectionHash)
+                        throw new RuntimeAuthorizationException("runtime_journal_cache_invalid");
                     latestCache = recorded;
+                    if (recorded.Position > previousModelBindingPosition)
+                    {
+                        previousModelBinding = cacheBinding;
+                        previousModelBindingPosition = recorded.Position;
+                    }
+                }
 
                 var journalEntry = JsonSerializer.SerializeToUtf8Bytes(
                     new RuntimeSessionJournalHashEntry(recorded, turnMaterial, turnContentSha256), JournalJson);
@@ -210,7 +248,8 @@ public sealed class RuntimeSessionMaterialHttpClient(
                 lastPosition, Convert.ToHexStringLower(journalHash.GetHashAndReset()));
         return new RuntimeSessionRecovery(identity, binding.TenantId, cache, turns)
         {
-            JournalEvidence = journalEvidence
+            JournalEvidence = journalEvidence,
+            PreviousModelBinding = previousModelBinding
         };
     }
 
@@ -233,12 +272,18 @@ public sealed class RuntimeSessionMaterialHttpClient(
             actor, null, 2 * SessionMaterialValidation.MaximumBytes, allowNotFound: true, cancellationToken)
             .ConfigureAwait(false);
         if (result is null)
-            return new(identity, binding.TenantId, null, Array.Empty<(string Role, string Content)>());
+            return new(identity, binding.TenantId, null, Array.Empty<(string Role, string Content)>())
+            {
+                PreviousConfigurationBinding = ReadPreviousConfigurationBinding(request)
+            };
 
         ValidateRead(result, identity, expected.EventId, SessionMaterialKind.SdkCache);
         if (!RuntimeWorkspaceResumeHttpClient.SameJson(result.Material, expected))
             throw new RuntimeAuthorizationException("runtime_resume_cache_receipt_invalid");
-        return new(identity, binding.TenantId, result, Array.Empty<(string Role, string Content)>());
+        return new(identity, binding.TenantId, result, Array.Empty<(string Role, string Content)>())
+        {
+            PreviousConfigurationBinding = ReadPreviousConfigurationBinding(request)
+        };
     }
 
     /// <summary>Rebuilds bounded turn history through the flushed journal position in a resume manifest.</summary>
@@ -351,7 +396,8 @@ public sealed class RuntimeSessionMaterialHttpClient(
             RuntimeResumeNativeCacheState.PendingUntilAuthorizedTurn).ValidateFor(request);
         return new RuntimeSessionRecovery(identity, binding.TenantId, null, turns)
         {
-            JournalRebuild = receipt
+            JournalRebuild = receipt,
+            PreviousConfigurationBinding = ReadPreviousConfigurationBinding(request)
         };
     }
 
@@ -378,7 +424,10 @@ public sealed class RuntimeSessionMaterialHttpClient(
                 material.SdkVersion != facts.SdkVersion ||
                 material.RuntimeVersion != facts.RuntimeVersion ||
                 material.ModelSelectionReference != facts.ModelSelectionReference ||
-                material.ModelId != facts.ModelId)
+                material.ModelId != facts.ModelId ||
+                material.ReasoningEffort != facts.ReasoningEffort ||
+                material.ModelBindingPin != facts.ModelBindingPin ||
+                material.ResolvedModelBindingPin != facts.ResolvedModelBindingPin)
                 throw new RuntimeAuthorizationException("runtime_material_read_binding_invalid");
         }
         return result;
@@ -416,6 +465,12 @@ public sealed class RuntimeSessionMaterialHttpClient(
             RuntimeContractValidation.Hash(result.Bytes) != result.Material.Reference.Material.Sha256)
             throw new RuntimeAuthorizationException("runtime_material_read_invalid");
     }
+
+    /// <summary>Reads the original model pin from the resume receipt's durable configuration acknowledgment.</summary>
+    private static SessionMaterialBinding ReadPreviousConfigurationBinding(
+        RuntimeResumeBootstrapRequest request) =>
+        RuntimeResumeBootstrapRequest.RequireConfigurationAcknowledgment(
+            request.Resume.SourceRelease.HostReceipt).Reference.Material!;
 
     /// <summary>Checks the receipt contract version, event position, and material reference.</summary>
     private static void Validate(SessionMaterialAcknowledgment receipt)

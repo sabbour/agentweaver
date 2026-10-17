@@ -140,6 +140,46 @@ public sealed class RuntimeAgentHostTests
     }
 
     [Fact]
+    public async Task CachelessOrdinaryRecoveryChecksTheRecordedModelBindingBeforeJournalRebuild()
+    {
+        await using var fixture = new HostFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var material = fixture.MaterialClient();
+        await using var session = await fixture.ConfigureSessionAsync(material, timeout.Token);
+        await session.RegisterUsageAsync(fixture.SourceClient(), timeout.Token);
+        var turn = await session.CommitTurnContentAsync(
+            material, Guid.NewGuid(), "user", "A prior request.", timeout.Token);
+        fixture.AddJournalTurn(turn, "user");
+        _ = await fixture.Sdk.InvokeNativeFilesAsync(
+            "sessionFs.writeFile", "state/events.jsonl", "opaque native events\n", timeout.Token);
+        var cache = await session.CommitNativeCacheAsync(material, Guid.NewGuid(), timeout.Token);
+        fixture.MissingMaterialId = cache.EventId;
+
+        var recovery = await material.ReadRecoveryAsync(session.Registration, timeout.Token);
+
+        Assert.Null(recovery.Cache);
+        Assert.Equal("controlled-model", recovery.PreviousModelBinding?.ModelId);
+        var changedBindings = new RuntimeModelBindingsResolver("model-bindings-v2",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.HostedCopilot)
+            });
+        await using var replacement = new ControlledCopilotRuntime();
+        var factory = new RuntimeCopilotSessionFactory(
+            replacement.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))),
+            changedBindings);
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => factory.CreateAsync(
+            session.Registration with { RuntimeInstanceId = Guid.NewGuid() },
+            session.Registration.Binding.ModelSelectionReference!, RuntimeCopilotSessionTests.SdkCredential(),
+            _ => Task.CompletedTask, timeout.Token, recovery));
+
+        Assert.Equal("runtime_recovery_model_binding_mismatch", failure.Code);
+        Assert.DoesNotContain(replacement.Requests, request => request.Method is "session.create" or "session.resume");
+    }
+
+    [Fact]
     public async Task ResumeRecoveryReadsOnlyTheExactManifestCacheAcknowledgment()
     {
         await using var fixture = new HostFixture();
@@ -2398,6 +2438,11 @@ public sealed class RuntimeAgentHostTests
                         sourceMode == ModelSourceMode.Byok
                             ? new RuntimeByokProvider("openai", new Uri("https://byok.test/v1"), "responses")
                             : null)
+                    {
+                        SupportedReasoningEfforts = sourceMode == ModelSourceMode.Byok
+                            ? ["low", "medium", "high", "xhigh"]
+                            : []
+                    }
                 });
             if (sourceMode == ModelSourceMode.Byok)
                 Registration = Registration with
@@ -2418,6 +2463,7 @@ public sealed class RuntimeAgentHostTests
             {
                 ModelCredentialReference = b.ModelCredentialReference,
                 ModelBindingPin = b.ModelBindingPin,
+                ReasoningEffort = b.ReasoningEffort,
                 ModelSourceMode = b.ModelSourceMode, ModelConnectionId = b.ModelConnectionId,
                 ModelConnectionScope = b.ModelConnectionScope, WorkflowStepId = b.WorkflowStepId,
                 MaxModelTurns = b.MaxModelTurns, MaxToolCalls = b.MaxToolCalls,
@@ -3183,7 +3229,10 @@ public sealed class RuntimeAgentHostTests
                         {
                             MaxPromptTokens = MaterialPromptCapacityChanged &&
                                 material.Kind != SessionMaterialKind.RuntimeConfiguration
-                                ? (_facts.MaxPromptTokens ?? 1024) + 1 : _facts.MaxPromptTokens
+                                ? (_facts.MaxPromptTokens ?? 1024) + 1 : _facts.MaxPromptTokens,
+                            ReasoningEffort = _facts.ReasoningEffort,
+                            ModelBindingPin = Configure.Registration.Binding.ModelBindingPin,
+                            ResolvedModelBindingPin = _facts.ResolvedModelBindingPin
                         }
                     });
                 _material[material.EventId] = new(receipt, material.Bytes);

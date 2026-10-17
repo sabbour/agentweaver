@@ -34,6 +34,14 @@ public sealed record SdkSessionFacts(
     /// <summary>Prompt limit active when the SDK session was created, if one was configured.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? MaxPromptTokens { get; init; }
+    /// <summary>Reasoning effort requested and verified for the active model session.</summary>
+    public string ReasoningEffort { get; init; } = "high";
+    /// <summary>Accepted immutable model binding used to create or resume the session.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeModelBindingPin? ModelBindingPin { get; init; }
+    /// <summary>Current server-owned model binding resolved for this session.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeModelBindingPin? ResolvedModelBindingPin { get; init; }
     /// <summary>Provider-specific configuration identity for a BYOK session; contains no credential.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public SdkByokProviderFacts? ByokProvider { get; init; }

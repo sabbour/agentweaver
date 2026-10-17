@@ -162,6 +162,25 @@ uses the runtime library, not a new general model resolver. The library maps acc
 models through a registered connection and SDK catalog.
 This source does not declare deployed model-vendor support.
 
+Platform defaults route planning, review, design, security, creative writing, and
+complex work to `gpt-6.1-sol` at High effort. They route code-writing and
+straightforward work to `gpt-6-luna` at High effort. Platform and project
+configuration can override the model reference and reasoning effort by task,
+role, or agent. An explicit project model selection pins every route for that
+project, preserving the 0.x run-pin behavior. The accepted run stores the
+resolved task/role/agent routes and each distinct model/effort selection.
+Every reference must be present in the immutable run context; an unavailable
+reference fails run acceptance instead of falling back.
+
+The accepted reasoning effort is passed to the native Copilot SDK session and
+is recorded in the runtime binding and durable session material. An accepted
+`ModelBindingPin`, when present, must match that effort. AgentHost also resolves
+a separate server-owned pin for the exact reference, source mode, and effort;
+resume and usage evidence must match it. Before session creation or resume,
+AgentHost checks the requested effort against the selected model's capabilities.
+BYOK model bindings must list supported efforts explicitly. Unsupported or
+unknown effort fails closed; the runtime does not downgrade effort.
+
 GitHub Copilot and BYOK remain distinct SDK modes. A selected `SecretRef` is not
 proof of the credential's format, current ownership, refresh, or SDK purpose.
 Copilot requires its supported GitHub credential path; BYOK requires an explicit

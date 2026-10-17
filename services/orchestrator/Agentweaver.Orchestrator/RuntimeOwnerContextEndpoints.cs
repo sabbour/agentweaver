@@ -65,10 +65,13 @@ public static partial class CoordinationEndpoints
             throw new CoordinationException("runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
         var plan = validatedPlan.Value;
         string agentId;
+        string roleId;
         string modelSelectionReference;
         string workflowStepId;
+        ModelTaskSelectionReference modelTaskSelection;
         MafExecutionCheckpointStore? execution = null;
         MafExecutionFixedWorkAssociation? fixedAssociation = null;
+        // Derive the route from accepted task and assignment data; a work item cannot override it.
         if (owner.WorkPlanItemId is { } workPlanItemId)
         {
             var workPlanItem = plan.Plan.Items.FirstOrDefault(item =>
@@ -77,8 +80,23 @@ public static partial class CoordinationEndpoints
                 string.IsNullOrWhiteSpace(workPlanItem.ModelSelectionReference))
                 throw new CoordinationException("runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
             agentId = workPlanItem.AgentId;
-            modelSelectionReference = workPlanItem.ModelSelectionReference;
+            roleId = workPlanItem.RoleId;
             workflowStepId = workPlanItem.WorkflowStepId;
+            var step = plan.Workflow.Definition.Steps.FirstOrDefault(item =>
+                string.Equals(item.Id, workflowStepId, StringComparison.Ordinal));
+            if (step is null)
+                throw new CoordinationException("runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
+            modelTaskSelection = ModelTaskSelectionResolver.ResolveSelection(
+                step.ModelTaskKind ?? ModelTaskKind.Straightforward,
+                roleId,
+                agentId,
+                selectionContext.ModelTaskSelections)
+                ?? throw new CoordinationException(
+                    "runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
+            if (!string.Equals(modelTaskSelection.ModelSelectionReference,
+                    workPlanItem.ModelSelectionReference, StringComparison.Ordinal))
+                throw new CoordinationException("runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
+            modelSelectionReference = modelTaskSelection.ModelSelectionReference;
         }
         else
         {
@@ -96,11 +114,26 @@ public static partial class CoordinationEndpoints
                     sessionId, owner.AcceptedSelectionHash, owner.ExecutionFence, decision.StateVersion))
                 throw new CoordinationException("runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
             agentId = fixedAssociation.AgentId;
-            modelSelectionReference = fixedAssociation.ModelSelectionReference;
             workflowStepId = fixedAssociation.StepId;
+            var step = plan.Workflow.Definition.Steps.FirstOrDefault(item =>
+                string.Equals(item.Id, workflowStepId, StringComparison.Ordinal));
+            if (step?.FixedWork is null)
+                throw new CoordinationException("runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
+            roleId = step.FixedWork.RoleId;
+            modelTaskSelection = ModelTaskSelectionResolver.ResolveSelection(
+                step.ModelTaskKind ?? ModelTaskKind.Straightforward,
+                roleId,
+                agentId,
+                selectionContext.ModelTaskSelections)
+                ?? throw new CoordinationException(
+                    "runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
+            if (!string.Equals(modelTaskSelection.ModelSelectionReference,
+                    fixedAssociation.ModelSelectionReference, StringComparison.Ordinal))
+                throw new CoordinationException("runtime_owner_work_plan_unavailable", StatusCodes.Status409Conflict);
+            modelSelectionReference = modelTaskSelection.ModelSelectionReference;
         }
         var modelSelection = ReadModelSelection(
-            selection.Selection.Snapshot, modelSelectionReference);
+            selection.Selection.Snapshot, modelTaskSelection);
         var runAdmission = await store.ReadRunAdmissionAsync(actor, selection, cancellationToken)
             .ConfigureAwait(false);
         await RequireUnchangedAuthorizedSelectionAsync(
@@ -123,6 +156,8 @@ public static partial class CoordinationEndpoints
             var currentWorkPlanItem = currentConfirmedPlan.Plan.Items.FirstOrDefault(item =>
                 string.Equals(item.Id, currentWorkPlanItemId, StringComparison.Ordinal));
             if (currentWorkPlanItem is null ||
+                !string.Equals(currentWorkPlanItem.RoleId, roleId, StringComparison.Ordinal) ||
+                !string.Equals(currentWorkPlanItem.WorkflowStepId, workflowStepId, StringComparison.Ordinal) ||
                 !string.Equals(currentWorkPlanItem.AgentId, agentId, StringComparison.Ordinal) ||
                 !string.Equals(currentWorkPlanItem.ModelSelectionReference, modelSelectionReference,
                     StringComparison.Ordinal))
@@ -171,9 +206,16 @@ public static partial class CoordinationEndpoints
             owner.StateVersion, decision.StateVersion)
         {
             WorkflowStepId = workflowStepId,
+            ReasoningEffort = modelTaskSelection.ReasoningEffort,
             ModelCredentialReference = modelSelection.CredentialReference,
             ModelSourceMode = modelSelection.SourceMode,
-            ModelBindingPin = runAdmission?.ModelBindingPin ?? modelSelection.ModelBindingPin,
+            ModelBindingPin = runAdmission?.ModelBindingPin is { } runPin &&
+                              string.Equals(runPin.ModelSelectionReference, modelSelectionReference,
+                                  StringComparison.Ordinal) &&
+                              string.Equals(runPin.ReasoningEffort, modelTaskSelection.ReasoningEffort,
+                                  StringComparison.Ordinal)
+                ? runPin
+                : modelSelection.ModelBindingPin,
             ModelConnectionId = modelSelection.ConnectionId,
             ModelConnectionScope = modelSelection.ConnectionScope,
             MaxModelTurns = budgetLimits.MaxModelTurns,
@@ -224,25 +266,15 @@ public static partial class CoordinationEndpoints
         return FixedAssociationsMatch(expected, association);
     }
 
-    /// <summary>
-    /// Reads the accepted model selection and requires its reference to match the work association.
-    /// </summary>
-    /// <exception cref="CoordinationException">Thrown when the accepted model reference is missing, changed, or invalid.</exception>
+    /// <summary>Reads the exact accepted model and effort selected for this workflow task.</summary>
+    /// <exception cref="CoordinationException">Thrown when the accepted model route is missing or invalid.</exception>
     private static RuntimeAcceptedModelSelection ReadModelSelection(
-        JsonElement snapshot, string expectedModelReference)
+        JsonElement snapshot, ModelTaskSelectionReference expectedSelection)
     {
-        if (snapshot.ValueKind != JsonValueKind.Object ||
-            !snapshot.TryGetProperty("modelSelection", out var modelSelection) ||
-            modelSelection.ValueKind != JsonValueKind.Object ||
-            !modelSelection.TryGetProperty("reference", out var reference) ||
-            reference.ValueKind != JsonValueKind.String ||
-            !string.Equals(reference.GetString(), expectedModelReference, StringComparison.Ordinal))
-            throw new CoordinationException(
-                "runtime_owner_model_selection_unavailable", StatusCodes.Status409Conflict);
-
         try
         {
-            var accepted = RuntimeAcceptedModelSelection.Read(snapshot);
+            var accepted = RuntimeAcceptedModelSelection.Read(
+                snapshot, expectedSelection.ModelSelectionReference, expectedSelection.ReasoningEffort);
             return accepted;
         }
         catch (RuntimeAuthorizationException exception)

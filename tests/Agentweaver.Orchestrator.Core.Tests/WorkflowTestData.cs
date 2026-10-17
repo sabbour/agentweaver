@@ -130,8 +130,9 @@ internal static class WorkflowTestData
 
     public static WorkPlanRunSelectionContext SelectionContext(
         PinnedProviderBinding? binding = null,
-        string[]? engineerIsolationChoices = null) =>
-        new(
+        string[]? engineerIsolationChoices = null,
+        ModelTaskSelectionReference[]? modelTaskSelections = null) =>
+        new WorkPlanRunSelectionContext(
         [
             new RoleRunSelection(
                 "engineer",
@@ -141,7 +142,7 @@ internal static class WorkflowTestData
             new RoleRunSelection(
                 "researcher",
                 ["agent-2"],
-                ["model:provider/beta"],
+                ["model:provider/alpha", "model:provider/beta"],
                 ["worktree", "sandboxed"]),
             new RoleRunSelection(
                 "planner",
@@ -149,7 +150,15 @@ internal static class WorkflowTestData
                 [],
                 ["worktree"])
         ],
-        binding ?? PinnedSandboxBinding());
+        binding ?? PinnedSandboxBinding())
+        {
+            ModelTaskSelections =
+            [
+                .. (modelTaskSelections ??
+                    [new ModelTaskSelectionReference(
+                        ModelTaskKind.Straightforward, null, null, "model:provider/alpha")])
+            ]
+        };
 
     public static PinnedProviderBinding PinnedSandboxBinding(
         string providerId = "sandbox.test",

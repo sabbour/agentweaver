@@ -13,7 +13,7 @@ sequenceDiagram
     O->>C: Accept run ID, expected revisions, immutable context
     C->>DB: Recheck active membership and Orchestrator role; lock run ID and project/platform heads
     DB-->>C: Project configuration and platform defaults at expected revisions
-    C->>C: Select project model or platform default; fail closed if unavailable
+    C->>C: Resolve task, role, and agent model routes; fail closed if unavailable
     C->>P: Resolve allowed provider candidates and capabilities
     P-->>C: Candidate metadata or explicit resolution failure
     C->>C: Check egress subset and run-limit narrowing
@@ -186,10 +186,30 @@ does not produce a receipt.
 
 ## Selection and persistence rules
 
-- A project model-selection reference takes precedence over the platform
-  reference. If the explicit project reference is absent from the supplied
-  immutable selection context, run selection fails closed. It does not fall
-  back to the platform model.
+- Platform defaults route planning, review, design, security, creative writing,
+  and complex work to `gpt-6.1-sol` at High reasoning effort. Code-writing and
+  straightforward work use `gpt-6-luna` at High effort. Platform administrators
+  can replace these built-in task defaults.
+- `ProjectConfiguration.ModelSelection` is a project-wide run pin. When set,
+  it selects one model and effort for every task, preserving 0.x behavior.
+  Otherwise, Projects starts with the platform-wide model, applies platform
+  task, role, and agent defaults, then applies project task, role, and agent
+  overrides. Within each configuration layer, an agent override takes
+  precedence over its role, and a role override takes precedence over its task
+  default.
+- The accepted run snapshot stores each selected model binding and its reasoning
+  effort. It includes global routes and routes for configured role and agent
+  overrides that apply to the accepted cast. Orchestrator resolves each WorkPlan
+  item to the most-specific accepted route. The model reference and effort stay
+  fixed across dispatch and resume.
+- Every selected reference must appear in
+  `RunSelectionContext.AvailableModelSelectionReferences`. A missing reference
+  fails run acceptance with `model_selection_unavailable`; Projects does not
+  substitute the platform model or another available reference.
+- Omitted reasoning effort resolves to `high`. AgentHost passes that effort to
+  the native Copilot SDK and checks the selected model's advertised support
+  before session creation or resume. Unsupported effort fails closed; BYOK
+  requires explicit server-configured supported-effort evidence.
 - Project configuration can name an optional `defaultWorkflowId`. Orchestrator accepts it only when it resolves to a server-registered workflow in the accepted selection's authorized catalog; project workflow references narrow that catalog when present. An unknown or unauthorized default falls back to the validated built-in workflow. The field is an identifier, not a workflow definition or an authority grant.
 - `SecretRef` values can be persisted as references. Credential values are not part of configuration or run-selection snapshots.
 - Optional `reviewedRemoteToolSnapshots` contains exact project-scoped snapshot references. Null omission preserves older configuration bytes. Duplicate references and references to another project are rejected. The accepted run retains these references, not mutable current project settings.

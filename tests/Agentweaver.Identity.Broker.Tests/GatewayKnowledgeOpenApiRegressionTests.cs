@@ -68,6 +68,33 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
     }
 
     [Fact]
+    public async Task ServedOpenApiDocumentsOptionalTaskModelSelectionOnWorkflowSteps()
+    {
+        using var rsa = RSA.Create(2048);
+        await using var gateway = await GatewayResourceServer.StartAsync(
+            new RsaSecurityKey(rsa),
+            () => new HttpClientHandler(),
+            (_, _, _) => throw new InvalidOperationException(
+                "The OpenAPI endpoint must not call an owner."));
+
+        using var response = await gateway.Client.GetAsync("/openapi/v1.json");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var step = document.RootElement.GetProperty("components").GetProperty("schemas")
+            .GetProperty("WorkflowStepDefinition");
+        var required = step.GetProperty("required").EnumerateArray()
+            .Select(item => item.GetString()!).ToArray();
+        var modelTaskKind = step.GetProperty("properties").GetProperty("modelTaskKind");
+        var choices = modelTaskKind.GetProperty("anyOf")[0].GetProperty("enum")
+            .EnumerateArray().Select(item => item.GetString()!).ToArray();
+
+        Assert.DoesNotContain("modelTaskKind", required);
+        Assert.Equal(
+            ["planning", "review", "design", "security", "creativeWriting", "complex", "codeWriting", "straightforward"],
+            choices);
+    }
+
+    [Fact]
     public async Task KnowledgeLifecycleRoutesExposeStrictTransferContractsAndRequestBounds()
     {
         using var rsa = RSA.Create(2048);

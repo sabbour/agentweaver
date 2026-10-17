@@ -108,6 +108,17 @@ public sealed record SessionMaterialBinding(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? MaxPromptTokens { get; init; }
 
+    /// <summary>Reasoning effort bound to the durable SDK material.</summary>
+    public string ReasoningEffort { get; init; } = "high";
+
+    /// <summary>Exact model binding accepted when the durable SDK material was captured.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeModelBindingPin? ModelBindingPin { get; init; }
+
+    /// <summary>Current server-owned model binding resolved when the durable SDK material was captured.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RuntimeModelBindingPin? ResolvedModelBindingPin { get; init; }
+
     /// <summary>Current-call proof required only for Remote MCP result material.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RemoteToolResultProof? RemoteToolResultProof { get; init; }
@@ -208,7 +219,13 @@ public static class SessionMaterialValidation
         if (material.ContractVersion != 1 || !Enum.IsDefined(material.Kind) ||
             material.RuntimeInstanceId == Guid.Empty || material.RegistrationRevision <= 0 ||
             material.ExecutionFence <= 0 || reference.ByteLength is not (> 0 and <= MaximumBytes) ||
-            reference.Purpose != Purpose(material.Kind) || material.MaxPromptTokens is < 1 or > 200000)
+            reference.Purpose != Purpose(material.Kind) || material.MaxPromptTokens is < 1 or > 200000 ||
+            material.ReasoningEffort is not ("low" or "medium" or "high" or "xhigh") ||
+            material.ModelBindingPin is { } modelPin && !MatchesModelBindingPin(modelPin, material) ||
+            material.ResolvedModelBindingPin is { } resolvedPin &&
+                !MatchesModelBindingPin(resolvedPin, material) ||
+            material.ModelBindingPin is { } acceptedPin &&
+                material.ResolvedModelBindingPin is { } currentPin && acceptedPin != currentPin)
             throw new ArgumentException("The recorded session material binding is invalid.");
         if (material.Kind == SessionMaterialKind.RemoteToolResult)
         {
@@ -407,4 +424,20 @@ public static class SessionMaterialValidation
                 character is not ('.' or '_' or '-' or ':' or '+')))
             throw new ArgumentException("An exact SDK and model binding is required.");
     }
+
+    private static bool MatchesModelBindingPin(
+        RuntimeModelBindingPin pin, SessionMaterialBinding material) =>
+        pin.ContractVersion == 1 &&
+        Enum.IsDefined(pin.SourceMode) &&
+        pin.ModelSelectionReference == material.ModelSelectionReference &&
+        pin.ModelId == material.ModelId &&
+        pin.ReasoningEffort == material.ReasoningEffort &&
+        pin.ConfigurationRevision is { Length: > 0 and <= 256 } revision &&
+        revision.All(character => char.IsAsciiLetterOrDigit(character) ||
+            character is '.' or '_' or '-' or ':' or '+') &&
+        (pin.SourceMode == ModelSourceMode.HostedCopilot
+            ? pin.ProviderType is null
+            : pin.ProviderType is "azure" or "openai" or "anthropic") &&
+        pin.ConfigurationHash is { Length: 64 } hash &&
+        hash.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
 }

@@ -168,6 +168,9 @@ public sealed class RuntimeCredentialEndpointTests(PostgresContainerFixture post
             {
                 ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.Byok,
                     new RuntimeByokProvider("openai", new Uri("https://byok.test/v1"), "responses"))
+                {
+                    SupportedReasoningEfforts = ["low", "medium", "high", "xhigh"]
+                }
             });
         owner.Registration = owner.Registration with
         {

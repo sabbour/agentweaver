@@ -1486,6 +1486,11 @@ internal sealed class CoordinatorDecisionOwnerStore
             !string.Equals(
                 JsonSerializer.Serialize(persisted.Roles, JsonOptions),
                 JsonSerializer.Serialize(trusted.Roles, JsonOptions),
+                StringComparison.Ordinal) ||
+            persisted.ModelTaskSelections.IsDefault ||
+            !string.Equals(
+                JsonSerializer.Serialize(persisted.ModelTaskSelections, JsonOptions),
+                JsonSerializer.Serialize(trusted.ModelTaskSelections, JsonOptions),
                 StringComparison.Ordinal))
             return false;
         return persisted.IsolationProviderBinding is null ||

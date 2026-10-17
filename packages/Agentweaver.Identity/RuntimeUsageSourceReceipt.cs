@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Agentweaver.Abstractions;
+using Agentweaver.AgentRuntime;
 
 namespace Agentweaver.Identity;
 
@@ -404,6 +405,8 @@ public static class RuntimeUsageSourceReceiptContract
             source.SdkSessionId != RuntimeContractValidation.NativeSessionId(binding) ||
             source.ModelSelectionReference != binding.ModelSelectionReference ||
             binding.ModelBindingPin is { } modelPin && source.ModelId != modelPin.ModelId ||
+            source.ReasoningEffort != binding.ReasoningEffort ||
+            source.ModelBindingPin != binding.ModelBindingPin ||
             source.AcceptedSelectionHash != binding.AcceptedSelectionHash ||
             !MatchesSourceMode(binding.ModelSourceMode, source) ||
             source.ModelMultiplier < 0 ||
@@ -412,6 +415,19 @@ public static class RuntimeUsageSourceReceiptContract
                 (source.MaxPromptTokens is null or < 1 || source.MaxPromptTokens > promptLimit))
             throw new RuntimeAuthorizationException("runtime_usage_binding_invalid");
         RuntimeContractValidation.ValidateHash(source.CatalogHash);
+        var resolvedPin = source.ResolvedModelBindingPin;
+        if (resolvedPin is not null)
+        {
+            RuntimeModelBindingsResolver.ValidatePin(resolvedPin);
+            if (resolvedPin.ModelSelectionReference != binding.ModelSelectionReference ||
+                resolvedPin.ModelId != source.ModelId ||
+                resolvedPin.SourceMode != binding.ModelSourceMode ||
+                resolvedPin.ReasoningEffort != binding.ReasoningEffort ||
+                binding.ModelBindingPin is { } acceptedPin && resolvedPin != acceptedPin)
+                throw new RuntimeAuthorizationException("runtime_model_binding_pin_mismatch");
+        }
+        else if (binding.ModelBindingPin is not null || binding.ReasoningEffort != "high")
+            throw new RuntimeAuthorizationException("runtime_model_binding_pin_required");
         if (binding.ModelSourceMode == ModelSourceMode.Byok)
         {
             if (binding.ModelBindingPin is not { } pin || source.ByokProvider is not { } provider ||

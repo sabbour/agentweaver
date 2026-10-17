@@ -62,6 +62,7 @@ public static class WorkflowScopeDiffer
 
     private static bool Equivalent(WorkflowStepDefinition left, WorkflowStepDefinition right) =>
         left.Mode == right.Mode &&
+        left.ModelTaskKind == right.ModelTaskKind &&
         left.Order == right.Order &&
         string.Equals(left.Purpose, right.Purpose, StringComparison.Ordinal) &&
         left.Cardinality == right.Cardinality &&

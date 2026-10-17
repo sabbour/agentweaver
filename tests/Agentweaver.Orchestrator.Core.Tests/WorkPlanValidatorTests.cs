@@ -1,3 +1,4 @@
+using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator.Core;
 using Xunit;
 
@@ -127,6 +128,93 @@ public sealed class WorkPlanValidatorTests
             issue.Code == WorkflowValidationCode.ModelSelectionNotEligible);
         Assert.Contains(result.Issues, issue =>
             issue.Code == WorkflowValidationCode.IsolationChoiceNotAllowed);
+    }
+
+    [Fact]
+    public void ModelSelectionMustMatchTheMostSpecificTaskRoleAndAgentRoute()
+    {
+        var step = WorkflowTestData.Open("implement", 0, []) with
+        {
+            ModelTaskKind = ModelTaskKind.CodeWriting
+        };
+        var workflow = WorkflowTestData.Snapshot(
+            WorkflowTestData.Definition(WorkflowDefinitionOrigin.BuiltIn, step));
+        var context = WorkflowTestData.SelectionContext(
+            modelTaskSelections:
+            [
+                new(ModelTaskKind.CodeWriting, null, null, "model:provider/alpha"),
+                new(ModelTaskKind.CodeWriting, "engineer", null, "model:provider/alpha"),
+                new(ModelTaskKind.CodeWriting, "engineer", "agent-1", "model:provider/beta")
+            ]);
+
+        var agentRoute = WorkPlanValidator.ValidateAndSnapshot(
+            workflow,
+            WorkflowTestData.Plan(
+                WorkflowTestData.Item("agent-route", modelSelection: "model:provider/beta")),
+            context);
+        var roleRoute = WorkPlanValidator.ValidateAndSnapshot(
+            workflow,
+            WorkflowTestData.Plan(
+                WorkflowTestData.Item("role-route", modelSelection: "model:provider/alpha")),
+            context);
+
+        Assert.True(agentRoute.IsValid, string.Join("; ", agentRoute.Issues.Select(issue => issue.Message)));
+        Assert.Null(roleRoute.Value);
+        Assert.Contains(roleRoute.Issues, issue =>
+            issue.Code == WorkflowValidationCode.ModelSelectionNotEligible);
+    }
+
+    [Fact]
+    public void RejectsMalformedOrAmbiguousTaskModelRoutes()
+    {
+        var workflow = WorkflowTestData.Snapshot();
+        var context = WorkflowTestData.SelectionContext(
+            modelTaskSelections:
+            [
+                new(ModelTaskKind.Straightforward, null, null, "model:provider/alpha"),
+                new(ModelTaskKind.Straightforward, null, null, "model:provider/beta")
+            ]);
+
+        var result = WorkPlanValidator.ValidateAndSnapshot(
+            workflow,
+            WorkflowTestData.Plan(WorkflowTestData.Item("work")),
+            context);
+
+        Assert.Null(result.Value);
+        Assert.Contains(result.Issues, issue =>
+            issue.Code == WorkflowValidationCode.InvalidSelectionContext &&
+            issue.Path.StartsWith("selectionContext.modelTaskSelections", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void NullTaskModelRouteFailsValidationWithoutAbortingThePlanCheck()
+    {
+        var result = WorkPlanValidator.ValidateAndSnapshot(
+            WorkflowTestData.Snapshot(),
+            WorkflowTestData.Plan(WorkflowTestData.Item("work")),
+            WorkflowTestData.SelectionContext(modelTaskSelections: [null!]));
+
+        Assert.Null(result.Value);
+        Assert.Contains(result.Issues, issue =>
+            issue.Code == WorkflowValidationCode.InvalidSelectionContext);
+    }
+
+    [Fact]
+    public void UnsupportedReasoningEffortInvalidatesTaskRouteContext()
+    {
+        var result = WorkPlanValidator.ValidateAndSnapshot(
+            WorkflowTestData.Snapshot(),
+            WorkflowTestData.Plan(WorkflowTestData.Item("work")),
+            WorkflowTestData.SelectionContext(
+                modelTaskSelections:
+                [
+                    new(ModelTaskKind.Straightforward, null, null, "model:provider/alpha", "none")
+                ]));
+
+        Assert.Null(result.Value);
+        Assert.Contains(result.Issues, issue =>
+            issue.Code == WorkflowValidationCode.InvalidSelectionContext &&
+            issue.Path == "selectionContext.modelTaskSelections[0]");
     }
 
     [Fact]

@@ -340,10 +340,11 @@ internal sealed record CoordinatorDecisionStateEnvelopeRestoreResult(
 }
 
 /// <summary>
-/// Persists the roles and exact provider binding required to revalidate a work plan after restart.
+/// Persists eligible roles, task model routes, and the exact provider binding required to revalidate work after restart.
 /// </summary>
 internal sealed record WorkPlanSelectionContextEnvelope(
     ImmutableArray<RoleRunSelection> Roles,
+    ImmutableArray<ModelTaskSelectionReference> ModelTaskSelections,
     PinnedProviderBindingEnvelope? IsolationProviderBinding)
 {
     /// <summary>
@@ -357,24 +358,25 @@ internal sealed record WorkPlanSelectionContextEnvelope(
             return null;
         return new WorkPlanSelectionContextEnvelope(
             context.Roles,
+            context.ModelTaskSelections,
             PinnedProviderBindingEnvelope.Capture(context.IsolationProviderBinding));
     }
 
     /// <summary>
-    /// Restores role selection and resolves any pinned provider binding from trusted persistence.
+    /// Restores role and task selections and resolves any pinned provider binding from trusted persistence.
     /// </summary>
     public SelectionContextRestoreResult Restore(
         string runId,
         Func<PinnedProviderBindingEnvelope, PinnedProviderBinding?>? pinnedBindingResolver,
         string path)
     {
-        if (Roles.IsDefault)
+        if (Roles.IsDefault || ModelTaskSelections.IsDefault)
             return new SelectionContextRestoreResult(null,
             [
                 new WorkflowValidationIssue(
                     WorkflowValidationCode.InvalidSelectionContext,
-                    path + ".roles",
-                    "Persisted selection roles must be initialized.")
+                    Roles.IsDefault ? path + ".roles" : path + ".modelTaskSelections",
+                    "Persisted role and task model selections must be initialized.")
             ]);
 
         PinnedProviderBinding? binding = null;
@@ -393,7 +395,10 @@ internal sealed record WorkPlanSelectionContextEnvelope(
         }
 
         return new SelectionContextRestoreResult(
-            new WorkPlanRunSelectionContext(Roles, binding),
+            new WorkPlanRunSelectionContext(Roles, binding)
+            {
+                ModelTaskSelections = ModelTaskSelections
+            },
             []);
     }
 }

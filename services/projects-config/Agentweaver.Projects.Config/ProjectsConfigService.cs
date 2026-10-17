@@ -53,7 +53,14 @@ public sealed record EffectiveRunSelection(
     ProjectConfiguration ProjectConfiguration,
     ImmutableArray<NetworkEgressRule> EgressBaseline,
     ImmutableArray<NetworkEgressRule>? ProjectEgressNarrowing,
-    ImmutableArray<NetworkEgressRule> RequiredEgress);
+    ImmutableArray<NetworkEgressRule> RequiredEgress)
+{
+    /// <summary>Resolved settings for every model reference available to this run.</summary>
+    public ImmutableArray<EffectiveModelSelection> ModelSelections { get; init; } = [];
+
+    /// <summary>Default model reference for each task, role, and agent combination.</summary>
+    public ImmutableArray<ModelTaskSelectionReference> ModelTaskSelections { get; init; } = [];
+}
 
 /// <summary>
 /// Owns project configuration revisions and the immutable run-selection snapshot stored in the Projects schema.
@@ -559,7 +566,7 @@ public sealed partial class ProjectsConfigService
             .ConfigureAwait(false);
         var defaults = Deserialize<PlatformRuntimeDefaults>(platformVersion.ConfigurationJson);
 
-        var model = ResolveModelSelection(projectConfiguration, defaults, request.Context);
+        var modelSelections = ResolveModelSelections(projectConfiguration, defaults, request.Context);
         var providers = ResolveProviders(projectConfiguration, request.Context);
         var egress = ProjectConfigurationValidator.ResolveEgress(
             defaults.EgressBaseline,
@@ -573,14 +580,18 @@ public sealed partial class ProjectsConfigService
             project.ConfigurationRevision,
             platformHead.CurrentRevision,
             request.Context.Revision,
-            model,
+            modelSelections.PrimarySelection,
             providers,
             egress,
             limits,
             projectConfiguration,
             defaults.EgressBaseline,
             projectConfiguration.EgressNarrowing,
-            ProjectConfigurationValidator.ValidateEgressRules(request.Context.RequiredEgress));
+            ProjectConfigurationValidator.ValidateEgressRules(request.Context.RequiredEgress))
+        {
+            ModelSelections = modelSelections.EffectiveSelections,
+            ModelTaskSelections = modelSelections.TaskSelections
+        };
         var record = new ProjectRunSelectionRecord
         {
             RunId = runId,
@@ -888,25 +899,203 @@ public sealed partial class ProjectsConfigService
             revision.CreatedAt);
     }
 
-    /// <summary>Selects the explicit project model or platform default and fails closed if the immutable context lacks it.</summary>
-    private static ModelSelectionSettings ResolveModelSelection(
+    /// <summary>Resolves global task routes and configured overrides for eligible cast assignments.</summary>
+    internal static ResolvedModelSelections ResolveModelSelections(
         ProjectConfiguration project,
         PlatformRuntimeDefaults platform,
         RunSelectionContext context)
     {
-        var selected = project.ModelSelection ?? platform.ModelSelection;
-        if (selected is null)
+        var targets = new HashSet<(string? RoleId, string? AgentId)> { (null, null) };
+        var castingByAgent = project.Casting.ToDictionary(item => item.AgentId, StringComparer.Ordinal);
+        var eligibleRoles = project.Casting.Select(item => item.Role).ToHashSet(StringComparer.Ordinal);
+        foreach (var roleId in project.ModelRoleOverrides.Select(item => item.RoleId)
+                     .Concat(platform.ModelRoleDefaults.Select(item => item.RoleId)))
+            if (eligibleRoles.Contains(roleId))
+                targets.Add((roleId, null));
+        foreach (var agentId in project.ModelAgentOverrides.Select(item => item.AgentId)
+                     .Concat(platform.ModelAgentDefaults.Select(item => item.AgentId)))
+            if (castingByAgent.TryGetValue(agentId, out var cast))
+                targets.Add((cast.Role, cast.AgentId));
+
+        var taskKinds = Enum.GetValues<ModelTaskKind>();
+        if (targets.Count > ModelTaskSelectionLimits.MaximumRoutes / taskKinds.Length)
             throw new ProjectConfigException(
-                "model_selection_unavailable",
-                "No project or platform model selection is configured.",
+                "model_selection_limit_exceeded",
+                $"A run may contain at most {ModelTaskSelectionLimits.MaximumRoutes} task model routes.",
                 StatusCodes.Status422UnprocessableEntity);
-        if (!context.AvailableModelSelectionReferences.Contains(selected.Reference))
-            throw new ProjectConfigException(
-                "model_selection_unavailable",
-                $"The configured model selection '{selected.Reference}' is unavailable in this run's immutable selection context.",
-                StatusCodes.Status422UnprocessableEntity);
-        return selected;
+        var taskSelections = ImmutableArray.CreateBuilder<ModelTaskSelectionReference>();
+        var effectiveByIdentity = new Dictionary<(string Reference, string Effort), EffectiveModelSelection>();
+        var connectionScope = project.ModelSelection is not null
+            ? ProjectAuthorityResourceType.Project
+            : ProjectAuthorityResourceType.Platform;
+        foreach (var taskKind in taskKinds)
+        foreach (var target in targets
+                     .OrderBy(item => item.RoleId, StringComparer.Ordinal)
+                     .ThenBy(item => item.AgentId, StringComparer.Ordinal))
+        {
+            var selection = ResolveTaskModelSelection(project, platform, taskKind, target.RoleId, target.AgentId);
+            if (!context.AvailableModelSelectionReferences.Contains(selection.Reference))
+                throw new ProjectConfigException(
+                    "model_selection_unavailable",
+                    $"The configured model selection '{selection.Reference}' is unavailable in this run's immutable selection context.",
+                    StatusCodes.Status422UnprocessableEntity);
+
+            var effort = selection.ReasoningEffort ?? "high";
+            var normalized = selection with { ReasoningEffort = effort };
+            var key = (normalized.Reference, effort);
+            if (effectiveByIdentity.TryGetValue(key, out var existing))
+                effectiveByIdentity[key] = MergeEffectiveSelection(existing, normalized, connectionScope);
+            else
+                effectiveByIdentity.Add(key, new EffectiveModelSelection(normalized, connectionScope));
+            if (effectiveByIdentity.Count > ModelTaskSelectionLimits.MaximumAcceptedSelections)
+                throw new ProjectConfigException(
+                    "model_selection_limit_exceeded",
+                    $"A run may contain at most {ModelTaskSelectionLimits.MaximumAcceptedSelections} distinct model selections.",
+                    StatusCodes.Status422UnprocessableEntity);
+            taskSelections.Add(new ModelTaskSelectionReference(
+                taskKind, target.RoleId, target.AgentId, normalized.Reference, effort));
+        }
+
+        var resolvedTasks = taskSelections
+            .OrderBy(item => item.TaskKind)
+            .ThenBy(item => item.RoleId, StringComparer.Ordinal)
+            .ThenBy(item => item.AgentId, StringComparer.Ordinal)
+            .ToImmutableArray();
+        var effectiveSelections = effectiveByIdentity
+            .OrderBy(item => item.Key.Reference, StringComparer.Ordinal)
+            .ThenBy(item => item.Key.Effort, StringComparer.Ordinal)
+            .Select(item => item.Value)
+            .ToImmutableArray();
+        var primary = project.ModelSelection is { } projectSelection
+            ? NormalizeModelSelection(projectSelection) ?? throw new InvalidOperationException(
+                "The explicit project model selection is missing.")
+            : resolvedTasks.FirstOrDefault(item =>
+                  item.TaskKind == ModelTaskKind.Planning && item.RoleId is null && item.AgentId is null) is { } planning
+                ? effectiveByIdentity[(planning.ModelSelectionReference, planning.ReasoningEffort)].Selection
+                : throw new ProjectConfigException(
+                    "model_selection_unavailable",
+                    "No task-based model selection is configured for this run.",
+                    StatusCodes.Status422UnprocessableEntity);
+        return new ResolvedModelSelections(primary, effectiveSelections, resolvedTasks);
     }
+
+    /// <summary>Applies project and platform model layers, preserving explicit project-wide selection precedence.</summary>
+    private static ModelSelectionSettings ResolveTaskModelSelection(
+        ProjectConfiguration project,
+        PlatformRuntimeDefaults platform,
+        ModelTaskKind taskKind,
+        string? roleId,
+        string? agentId)
+    {
+        var selected = NormalizeModelSelection(project.ModelSelection ?? platform.ModelSelection);
+        if (project.ModelSelection is not null)
+            return selected ?? throw new InvalidOperationException(
+                "The explicit project model selection is missing.");
+
+        selected = ApplyModelOverride(
+            selected,
+            platform.ModelTaskDefaults.FirstOrDefault(item => item.TaskKind == taskKind)?.Selection);
+        if (roleId is not null)
+            selected = ApplyModelOverride(
+                selected,
+                platform.ModelRoleDefaults.FirstOrDefault(item => item.RoleId == roleId)?.Selection);
+        if (agentId is not null)
+            selected = ApplyModelOverride(
+                selected,
+                platform.ModelAgentDefaults.FirstOrDefault(item => item.AgentId == agentId)?.Selection);
+        selected = ApplyModelOverride(
+            selected,
+            project.ModelTaskOverrides.FirstOrDefault(item => item.TaskKind == taskKind)?.Selection);
+        if (roleId is not null)
+            selected = ApplyModelOverride(
+                selected,
+                project.ModelRoleOverrides.FirstOrDefault(item => item.RoleId == roleId)?.Selection);
+        if (agentId is not null)
+            selected = ApplyModelOverride(
+                selected,
+                project.ModelAgentOverrides.FirstOrDefault(item => item.AgentId == agentId)?.Selection);
+        return selected ?? throw new ProjectConfigException(
+            "model_selection_unavailable",
+            $"No model selection is configured for task '{taskKind}'.",
+            StatusCodes.Status422UnprocessableEntity);
+    }
+
+    /// <summary>Applies a partial model override and clears any stale pin when its model or effort changes.</summary>
+    private static ModelSelectionSettings? ApplyModelOverride(
+        ModelSelectionSettings? current,
+        ModelSelectionOverride? modelOverride)
+    {
+        if (modelOverride is null)
+            return current;
+        var reference = modelOverride.Reference ?? current?.Reference;
+        if (reference is null)
+            throw new ProjectConfigException(
+                "model_selection_unavailable",
+                "A model selection override requires a base model reference.",
+                StatusCodes.Status422UnprocessableEntity);
+        var effort = modelOverride.ReasoningEffort ??
+                     modelOverride.ModelBindingPin?.ReasoningEffort ??
+                     current?.ReasoningEffort ?? "high";
+        var changed = current is null || current.Reference != reference ||
+                      (current.ReasoningEffort ?? "high") != effort;
+        return new ModelSelectionSettings(
+            reference,
+            current?.CredentialReference,
+            modelOverride.ModelBindingPin?.SourceMode ?? current?.SourceMode,
+            current?.ConnectionId)
+        {
+            ReasoningEffort = effort,
+            ModelBindingPin = modelOverride.ModelBindingPin ?? (changed ? null : current?.ModelBindingPin)
+        };
+    }
+
+    /// <summary>Normalizes omitted reasoning effort to the platform's High default.</summary>
+    private static ModelSelectionSettings? NormalizeModelSelection(ModelSelectionSettings? selection) =>
+        selection is null
+            ? null
+            : selection with
+            {
+                ReasoningEffort = selection.ReasoningEffort ?? selection.ModelBindingPin?.ReasoningEffort ?? "high"
+            };
+
+    /// <summary>Coalesces identical routes without dropping a pin or merging conflicting bindings.</summary>
+    private static EffectiveModelSelection MergeEffectiveSelection(
+        EffectiveModelSelection existing,
+        ModelSelectionSettings incoming,
+        ProjectAuthorityResourceType incomingConnectionScope)
+    {
+        var current = existing.Selection;
+        if (existing.ConnectionScope != incomingConnectionScope ||
+            current.CredentialReference is not null && incoming.CredentialReference is not null &&
+                current.CredentialReference != incoming.CredentialReference ||
+            current.SourceMode is not null && incoming.SourceMode is not null &&
+                current.SourceMode != incoming.SourceMode ||
+            current.ConnectionId is not null && incoming.ConnectionId is not null &&
+                current.ConnectionId != incoming.ConnectionId ||
+            current.ModelBindingPin is { } currentPin &&
+                incoming.ModelBindingPin is { } incomingPin && currentPin != incomingPin)
+            throw new ProjectConfigException(
+                "model_selection_conflict",
+                "Routes with the same model reference and reasoning effort must use one compatible model binding.",
+                StatusCodes.Status422UnprocessableEntity);
+
+        return existing with
+        {
+            Selection = current with
+            {
+                CredentialReference = current.CredentialReference ?? incoming.CredentialReference,
+                SourceMode = current.SourceMode ?? incoming.SourceMode,
+                ConnectionId = current.ConnectionId ?? incoming.ConnectionId,
+                ModelBindingPin = current.ModelBindingPin ?? incoming.ModelBindingPin
+            }
+        };
+    }
+
+    /// <summary>Resolved base selection, immutable model bindings, and route matrix for one accepted run.</summary>
+    internal sealed record ResolvedModelSelections(
+        ModelSelectionSettings PrimarySelection,
+        ImmutableArray<EffectiveModelSelection> EffectiveSelections,
+        ImmutableArray<ModelTaskSelectionReference> TaskSelections);
 
     /// <summary>Resolves provider candidates by seam cardinality and preserves all selected candidate/version metadata.</summary>
     private ImmutableArray<EffectiveProviderSelection> ResolveProviders(

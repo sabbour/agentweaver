@@ -73,6 +73,231 @@ public sealed class RuntimeSessionRecoveryTests
         }
     }
 
+    [Theory]
+    [InlineData("effort")]
+    [InlineData("model-binding")]
+    public async Task RecoveryRejectsAChangedReasoningOrModelBindingBeforeNativeResume(string change)
+    {
+        var originalBindings = new RuntimeModelBindingsResolver("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.HostedCopilot)
+            });
+        var registration = RuntimeCopilotSessionTests.Registration();
+        registration = registration with
+        {
+            Binding = registration.Binding with
+            {
+                ReasoningEffort = "high",
+                ModelBindingPin = originalBindings.Pin(
+                    "accepted-model-reference", ModelSourceMode.HostedCopilot, "high")
+            }
+        };
+        var originalRuntime = new ControlledCopilotRuntime();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        SdkSessionFacts facts;
+        await using (var original = originalRuntime)
+        await using (var session = await new RuntimeCopilotSessionFactory(
+            original.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))),
+            originalBindings).CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!,
+            RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token))
+            facts = session.Facts;
+
+        var recovery = Recovery(registration, facts, NativeArchive("state/events.jsonl", "opaque events"));
+        var replacementBindings = change == "model-binding"
+            ? new RuntimeModelBindingsResolver("model-bindings-v2",
+                new Dictionary<string, RuntimeModelBinding>
+                {
+                    ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.HostedCopilot)
+                })
+            : originalBindings;
+        var replacementPin = replacementBindings.Pin("accepted-model-reference", ModelSourceMode.HostedCopilot,
+            change == "effort" ? "low" : "high");
+        var replacementRegistration = registration with
+        {
+            RuntimeInstanceId = Guid.NewGuid(),
+            Binding = registration.Binding with
+            {
+                ReasoningEffort = change == "effort" ? "low" : "high",
+                ModelBindingPin = replacementPin
+            }
+        };
+        await using var replacement = new ControlledCopilotRuntime();
+        var factory = new RuntimeCopilotSessionFactory(replacement.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), replacementBindings);
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => factory.CreateAsync(
+            replacementRegistration, registration.Binding.ModelSelectionReference!,
+            RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token, recovery));
+
+        Assert.Equal("runtime_recovery_model_binding_mismatch", failure.Code);
+        Assert.DoesNotContain(replacement.Requests, request => request.Method is "session.create" or "session.resume");
+    }
+
+    [Fact]
+    public async Task UnpinnedHostedRouteRecoveryRejectsChangedServerModelMap()
+    {
+        var originalBindings = new RuntimeModelBindingsResolver("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.HostedCopilot)
+            });
+        var registration = RuntimeCopilotSessionTests.Registration() with
+        {
+            Binding = RuntimeCopilotSessionTests.Registration().Binding with { ReasoningEffort = "medium" }
+        };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        SdkSessionFacts facts;
+        await using (var original = new ControlledCopilotRuntime
+        {
+            ExpectedReasoningEffort = "medium",
+            EffectiveReasoningEffort = "medium"
+        })
+        await using (var session = await new RuntimeCopilotSessionFactory(
+            original.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))),
+            originalBindings).CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!,
+            RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token))
+            facts = session.Facts;
+
+        Assert.Null(registration.Binding.ModelBindingPin);
+        Assert.NotNull(facts.ResolvedModelBindingPin);
+        var recovery = Recovery(registration, facts, NativeArchive("state/events.jsonl", "opaque events"));
+        var changedBindings = new RuntimeModelBindingsResolver("model-bindings-v2",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.HostedCopilot)
+            });
+        await using var replacement = new ControlledCopilotRuntime
+        {
+            ExpectedReasoningEffort = "medium",
+            EffectiveReasoningEffort = "medium"
+        };
+        var factory = new RuntimeCopilotSessionFactory(replacement.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), changedBindings);
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => factory.CreateAsync(
+            registration with { RuntimeInstanceId = Guid.NewGuid() },
+            registration.Binding.ModelSelectionReference!, RuntimeCopilotSessionTests.SdkCredential(),
+            _ => Task.CompletedTask, timeout.Token, recovery));
+
+        Assert.Equal("runtime_recovery_model_binding_mismatch", failure.Code);
+        Assert.DoesNotContain(replacement.Requests, request => request.Method is "session.create" or "session.resume");
+    }
+
+    [Fact]
+    public async Task JournalRebuildRejectsChangedServerModelMapWhenNativeCacheIsMissing()
+    {
+        var originalBindings = new RuntimeModelBindingsResolver("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.HostedCopilot)
+            });
+        var registration = RuntimeCopilotSessionTests.Registration();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        SdkSessionFacts facts;
+        await using (var original = new ControlledCopilotRuntime
+        {
+            ExpectedReasoningEffort = "high",
+            EffectiveReasoningEffort = "high"
+        })
+        await using (var session = await new RuntimeCopilotSessionFactory(
+            original.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))),
+            originalBindings).CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!,
+            RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token))
+            facts = session.Facts;
+
+        var recovery = new RuntimeSessionRecovery(
+            new(registration.Binding.ProjectId, registration.Binding.RunId, registration.Binding.SessionId),
+            registration.Binding.TenantId,
+            null,
+            [("user", "previous request"), ("assistant", "previous response")])
+        {
+            JournalEvidence = new(17, new string('a', 64)),
+            PreviousConfigurationBinding = ConfigurationBinding(registration, facts)
+        };
+        var changedBindings = new RuntimeModelBindingsResolver("model-bindings-v2",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.HostedCopilot)
+            });
+        await using var replacement = new ControlledCopilotRuntime
+        {
+            ExpectedReasoningEffort = "high",
+            EffectiveReasoningEffort = "high"
+        };
+        var factory = new RuntimeCopilotSessionFactory(
+            replacement.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))),
+            changedBindings);
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => factory.CreateAsync(
+            registration with { RuntimeInstanceId = Guid.NewGuid() },
+            registration.Binding.ModelSelectionReference!, RuntimeCopilotSessionTests.SdkCredential(),
+            _ => Task.CompletedTask, timeout.Token, recovery));
+
+        Assert.Equal("runtime_recovery_model_binding_mismatch", failure.Code);
+        Assert.DoesNotContain(replacement.Requests, request => request.Method is "session.create" or "session.resume");
+    }
+
+    [Fact]
+    public async Task ConfiguredReasoningEffortIsPreservedByNativeSessionResume()
+    {
+        var models = new RuntimeModelBindingsResolver("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.HostedCopilot)
+            });
+        var registration = RuntimeCopilotSessionTests.Registration();
+        registration = registration with
+        {
+            Binding = registration.Binding with
+            {
+                ReasoningEffort = "low",
+                ModelBindingPin = models.Pin("accepted-model-reference", ModelSourceMode.HostedCopilot, "low")
+            }
+        };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        SdkSessionFacts facts;
+        await using (var original = new ControlledCopilotRuntime
+        {
+            ExpectedReasoningEffort = "low",
+            EffectiveReasoningEffort = "low"
+        })
+        await using (var session = await new RuntimeCopilotSessionFactory(
+            original.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))),
+            models).CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!,
+            RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token))
+            facts = session.Facts;
+
+        var recovery = Recovery(registration, facts, NativeArchive("state/events.jsonl", "opaque events"));
+        await using var replacement = new ControlledCopilotRuntime
+        {
+            ExpectedReasoningEffort = "low",
+            EffectiveReasoningEffort = "low"
+        };
+        var replacementRegistration = registration with { RuntimeInstanceId = Guid.NewGuid() };
+        var factory = new RuntimeCopilotSessionFactory(replacement.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), models);
+        await using var resumed = await factory.CreateAsync(
+            replacementRegistration, registration.Binding.ModelSelectionReference!,
+            RuntimeCopilotSessionTests.SdkCredential(), _ => Task.CompletedTask, timeout.Token, recovery);
+
+        Assert.Equal(RuntimeSessionRecoveryMode.NativeCache, resumed.RecoveryMode);
+        Assert.Equal("low", resumed.Facts.ReasoningEffort);
+        Assert.Equal("low", Assert.Single(replacement.Requests,
+            request => request.Method == "session.resume")
+            .Parameters.GetProperty("reasoningEffort").GetString());
+        Assert.DoesNotContain(replacement.Requests, request => request.Method == "session.create");
+    }
+
     [Fact]
     public void JournalPageDeserializesTheReadOnlyEnvelopeAndTypedTurnPayload()
     {
@@ -309,12 +534,29 @@ public sealed class RuntimeSessionRecoveryTests
     }
 
     private static RuntimeSessionRecovery Recovery(
-        RuntimeRegistration registration, SdkSessionFacts facts, byte[] bytes) =>
-        new(new(registration.Binding.ProjectId, registration.Binding.RunId, registration.Binding.SessionId),
-            registration.Binding.TenantId, Cache(registration, facts, bytes),
+        RuntimeRegistration registration, SdkSessionFacts facts, byte[] bytes)
+    {
+        var cache = Cache(registration, facts, bytes);
+        return new(new(registration.Binding.ProjectId, registration.Binding.RunId, registration.Binding.SessionId),
+            registration.Binding.TenantId, cache,
             [("user", "previous user request"), ("assistant", "previous answer")])
         {
-            JournalEvidence = new(17, new string('a', 64))
+            JournalEvidence = new(17, new string('a', 64)),
+            PreviousModelBinding = cache.Material.Reference.Material
+        };
+    }
+
+    private static SessionMaterialBinding ConfigurationBinding(
+        RuntimeRegistration registration, SdkSessionFacts facts) =>
+        new(1, SessionMaterialKind.RuntimeConfiguration, registration.Binding.TenantId, new string('b', 64),
+            registration.RuntimeInstanceId, registration.Revision, registration.Binding.ExecutionFence,
+            registration.Binding.AcceptedSelectionHash, facts.SdkVersion, facts.RuntimeVersion,
+            facts.ModelSelectionReference, facts.ModelId)
+        {
+            MaxPromptTokens = facts.MaxPromptTokens,
+            ReasoningEffort = facts.ReasoningEffort,
+            ModelBindingPin = facts.ModelBindingPin,
+            ResolvedModelBindingPin = facts.ResolvedModelBindingPin
         };
 
     private static SessionMaterialReadResult Cache(
@@ -329,7 +571,10 @@ public sealed class RuntimeSessionRecoveryTests
                     registration.Binding.AcceptedSelectionHash, facts.SdkVersion, facts.RuntimeVersion,
                     facts.ModelSelectionReference, facts.ModelId)
                 {
-                    MaxPromptTokens = facts.MaxPromptTokens
+                    MaxPromptTokens = facts.MaxPromptTokens,
+                    ReasoningEffort = facts.ReasoningEffort,
+                    ModelBindingPin = facts.ModelBindingPin,
+                    ResolvedModelBindingPin = facts.ResolvedModelBindingPin
                 }
             }), bytes);
 

@@ -119,7 +119,14 @@ public sealed class RuntimeOwnerContextTests
         };
         var context = new WorkPlanRunSelectionContext(
             [new RoleRunSelection("engineer", ["agent-1"], ["model:provider/alpha"], ["worktree"])],
-            WorkflowTestData.PinnedSandboxBinding());
+            WorkflowTestData.PinnedSandboxBinding())
+        {
+            ModelTaskSelections =
+            [
+                new(Agentweaver.Abstractions.ModelTaskKind.Straightforward, null, null,
+                    "model:provider/alpha")
+            ]
+        };
         var validated = WorkPlanValidator.ValidateAndSnapshot(
             WorkflowTestData.Snapshot(WorkflowTestData.Definition(WorkflowDefinitionOrigin.BuiltIn, step)),
             WorkflowTestData.Plan(), context);

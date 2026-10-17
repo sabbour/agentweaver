@@ -45,11 +45,14 @@ public static class RuntimeContractValidation
         if (binding.ModelSourceMode is { } modelSourceMode &&
             (!Enum.IsDefined(modelSourceMode) || binding.ModelSelectionReference is null))
             throw new RuntimeAuthorizationException("runtime_binding_invalid");
+        if (binding.ReasoningEffort is not ("low" or "medium" or "high" or "xhigh"))
+            throw new RuntimeAuthorizationException("runtime_binding_invalid");
         if (binding.ModelBindingPin is { } modelBindingPin)
         {
             Agentweaver.AgentRuntime.RuntimeModelBindingsResolver.ValidatePin(modelBindingPin);
             if (modelBindingPin.ModelSelectionReference != binding.ModelSelectionReference ||
-                modelBindingPin.SourceMode != binding.ModelSourceMode)
+                modelBindingPin.SourceMode != binding.ModelSourceMode ||
+                modelBindingPin.ReasoningEffort != binding.ReasoningEffort)
                 throw new RuntimeAuthorizationException("runtime_model_binding_pin_mismatch");
         }
         if (binding.ModelCredentialReference is { } modelCredentialReference)

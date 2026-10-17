@@ -39,6 +39,8 @@ public sealed record RuntimeBinding(
     public SecretRef? ModelCredentialReference { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ModelSourceMode? ModelSourceMode { get; init; }
+    /// <summary>Reasoning effort authorized for the selected runtime model.</summary>
+    public string ReasoningEffort { get; init; } = "high";
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeModelBindingPin? ModelBindingPin { get; init; }
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

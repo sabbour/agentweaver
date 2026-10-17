@@ -1,3 +1,4 @@
+using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator.Core;
 using Xunit;
 
@@ -39,6 +40,23 @@ public sealed class WorkflowDefinitionValidatorTests
             issue.Code == WorkflowValidationCode.DuplicateStepId);
         Assert.Contains(result.Issues, issue =>
             issue.Code == WorkflowValidationCode.InvalidStepId);
+    }
+
+    [Fact]
+    public void RejectsUnsupportedModelTaskKindWithoutCreatingSnapshot()
+    {
+        var step = WorkflowTestData.Open("implement", 0, []) with
+        {
+            ModelTaskKind = (ModelTaskKind)999
+        };
+
+        var result = WorkflowDefinitionValidator.ValidateAndSnapshot(
+            WorkflowTestData.Definition(WorkflowDefinitionOrigin.BuiltIn, step));
+
+        Assert.Null(result.Value);
+        Assert.Contains(result.Issues, issue =>
+            issue.Code == WorkflowValidationCode.InvalidModelTaskKind &&
+            issue.Path == "definition.steps[0].modelTaskKind");
     }
 
     [Fact]
