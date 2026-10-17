@@ -15,9 +15,12 @@ import { useCallback, useRef, useState } from 'react';
  * it attaches/detaches correctly regardless of conditional rendering.
  */
 export const MIN_ZOOM = 0.5;
+/** Maximum zoom scale available to the board viewport. */
 export const MAX_ZOOM = 1;
+/** Increment used by the board zoom controls and Ctrl-wheel interaction. */
 export const ZOOM_STEP = 0.1;
 
+/** Clamps a graph zoom value to the supported minimum and maximum bounds. */
 export const clampZoom = (z: number, max = MAX_ZOOM): number =>
   Math.min(max, Math.max(MIN_ZOOM, Math.round(z * 100) / 100));
 
@@ -41,6 +44,10 @@ export interface CtrlScrollZoom {
   maxZoom: number;
 }
 
+/**
+ * Binds Ctrl/trackpad wheel input to zoom updates for the configured board viewport.
+ * The hook uses caller-provided refs/state callbacks and cleans up its event listener on unmount.
+ */
 export function useCtrlScrollZoom(options?: CtrlScrollZoomOptions): CtrlScrollZoom {
   const effectiveMax = options?.maxZoom ?? MAX_ZOOM;
   const [zoom, setZoom] = useState(1);
@@ -105,6 +112,10 @@ export interface ZoomControlsProps {
 }
 
 /** A compact segmented zoom control: optional fit button, −/+ buttons, and a live % readout. */
+/**
+ * Renders accessible zoom-in, zoom-out, and reset controls for the current graph scale.
+ * Scale and update callbacks are supplied by the parent; no data is fetched.
+ */
 export function ZoomControls({ zoom, onZoomIn, onZoomOut, onFit, maxZoom = MAX_ZOOM }: ZoomControlsProps) {
   const styles = useControlStyles();
   return (

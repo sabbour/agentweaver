@@ -112,6 +112,7 @@ import type {
   AutomationActivationStatus,
 } from './types';
 
+/** Adds the confirmed provider execution key header when an operation has one. */
 const providerHeaders = (providerKey?: string): Record<string, string> | undefined =>
   providerKey ? { 'If-Model-Provider-Key': providerKey } : undefined;
 
@@ -121,22 +122,27 @@ export interface SkillUploadItem {
   relativePath?: string;
 }
 
+/** Narrows parsed JSON to a non-null object before reading contract fields. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+/** Validates string-array fields in skill and blueprint API responses. */
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
+/** Accepts the nullable optional string fields used by skill wire contracts. */
 function isOptionalString(value: unknown): value is string | null | undefined {
   return value === undefined || value === null || typeof value === 'string';
 }
 
+/** Narrows the API's skill availability field to a supported status. */
 function isSkillStatus(value: unknown): value is 'active' | 'missing' | 'malformed' {
   return value === 'active' || value === 'missing' || value === 'malformed';
 }
 
+/** Validates the complete list-row shape before trusting a skill response. */
 function isSkillDto(value: unknown): value is SkillDto {
   return isRecord(value)
     && typeof value.id === 'string'
@@ -154,6 +160,7 @@ function isSkillDto(value: unknown): value is SkillDto {
     && typeof value.updated_at === 'string';
 }
 
+/** Validates full skill instructions, resources, provenance, and metadata. */
 function isSkillDetailDto(value: unknown): value is SkillDetailDto {
   return isRecord(value)
     && typeof value.id === 'string'
@@ -174,6 +181,7 @@ function isSkillDetailDto(value: unknown): value is SkillDetailDto {
     && typeof value.updated_at === 'string';
 }
 
+/** Validates a blueprint-default preview before the UI offers its digest for apply. */
 export function isBlueprintSkillDefaultsPreviewResponse(value: unknown): value is BlueprintSkillDefaultsPreviewResponse {
   return isRecord(value)
     && typeof value.blueprint_id === 'string'
@@ -193,6 +201,7 @@ export function isBlueprintSkillDefaultsPreviewResponse(value: unknown): value i
         || assignment.action === 'blocked'));
 }
 
+/** Validates the apply result, including stale/invalid outcomes and nullable preview. */
 export function isApplyBlueprintSkillDefaultsResponse(value: unknown): value is ApplyBlueprintSkillDefaultsResponse {
   return isRecord(value)
     && (value.outcome === 'applied' || value.outcome === 'stale' || value.outcome === 'invalid')
@@ -201,6 +210,7 @@ export function isApplyBlueprintSkillDefaultsResponse(value: unknown): value is 
     && (value.preview === null || isBlueprintSkillDefaultsPreviewResponse(value.preview));
 }
 
+/** Returns a validated apply result or throws when the server response violates its contract. */
 export function parseApplyBlueprintSkillDefaultsResponse(payload: unknown): ApplyBlueprintSkillDefaultsResponse {
   if (!isApplyBlueprintSkillDefaultsResponse(payload)) {
     throw new TypeError('Invalid apply blueprint skill defaults response.');
@@ -208,6 +218,7 @@ export function parseApplyBlueprintSkillDefaultsResponse(payload: unknown): Appl
   return payload;
 }
 
+/** Parses a skill list without accepting partial or malformed entries. */
 function parseSkillList(payload: unknown): SkillDto[] {
   if (!Array.isArray(payload)) throw new TypeError('Invalid skill list response.');
 
@@ -219,11 +230,13 @@ function parseSkillList(payload: unknown): SkillDto[] {
   return skills;
 }
 
+/** Parses a full skill response or throws a TypeError on a contract mismatch. */
 function parseSkillDetail(payload: unknown): SkillDetailDto {
   if (!isSkillDetailDto(payload)) throw new TypeError('Invalid skill detail response.');
   return payload;
 }
 
+/** Validates the blueprint fields needed by the v1 browser. */
 function isBlueprint(value: unknown): value is Blueprint {
   return isRecord(value)
     && typeof value.id === 'string'
@@ -235,6 +248,7 @@ function isBlueprint(value: unknown): value is Blueprint {
     && typeof value.sandbox_profile === 'string';
 }
 
+/** Builds pagination query parameters without overriding server defaults when options are absent. */
 // Pagination contract (`.squad/decisions/inbox/niobe-pagination-contract.md`): `page`/`page_size`
 // query params, 1-based page, page_size default 25 / max 100 (server-clamped). Builds the query
 // string for a paged list request; returns '' when no paging options were supplied so callers that
@@ -247,6 +261,7 @@ function pagingQuery(options?: PagedRequestOptions): string {
   return qs ? `?${qs}` : '';
 }
 
+/** Accepts either supported blueprint-list envelope and drops malformed entries. */
 export function normalizeBlueprintList(payload: unknown): Blueprint[] {
   const list = Array.isArray(payload)
     ? payload
@@ -257,11 +272,13 @@ export function normalizeBlueprintList(payload: unknown): Blueprint[] {
   return list.filter(isBlueprint);
 }
 
+/** HTTP failure carrying its status, raw body, and best-effort parsed JSON payload. */
 export class ApiError extends Error {
   readonly status: number;
   readonly body: string;
   readonly payload: unknown;
 
+  /** Preserves response details and parses JSON when possible; malformed bodies yield a null payload. */
   constructor(status: number, body: string) {
     super(`API error ${status}: ${body}`);
     this.name = 'ApiError';
@@ -275,10 +292,12 @@ export class ApiError extends Error {
   }
 }
 
+/** Represents a review conflict that includes the current run status for retry UI. */
 export class RetriableReviewError extends Error {
   readonly serverMessage: string;
   readonly runStatus: string;
 
+  /** Stores the server's retry message and the run state that caused the conflict. */
   constructor(serverMessage: string, runStatus: string) {
     super(serverMessage);
     this.name = 'RetriableReviewError';
@@ -287,6 +306,7 @@ export class RetriableReviewError extends Error {
   }
 }
 
+/** Opaque durable job links required to resume workflow generation after polling stops. */
 export interface WorkflowGenerationHandle {
   jobId: string;
   statusUrl: string;
@@ -294,6 +314,7 @@ export interface WorkflowGenerationHandle {
   aiExecutionContext?: AiExecutionContext | null;
 }
 
+/** Completed workflow draft or a still-running durable generation job. */
 export type WorkflowGenerationOutcome =
   | {
       status: 'completed';
@@ -307,6 +328,7 @@ export type WorkflowGenerationOutcome =
       job: WorkflowGenerationHandle;
     };
 
+/** Raw job status shape returned by the workflow-generation endpoints. */
 interface WorkflowGenerationJob {
   job_id: string;
   status: string;
@@ -316,12 +338,19 @@ interface WorkflowGenerationJob {
   ai_execution_context?: AiExecutionContext | null;
 }
 
+/**
+ * REST client for the legacy project/run API used by the existing application.
+ * Methods encode path parameters and share JSON, cookie, bearer-token, session
+ * recovery, and ApiError handling through request(); special endpoints document
+ * their own response or retry behavior next to the method.
+ */
 export class AgentweaverApiClient {
   private readonly baseUrl: string;
   private readonly sessionTokenProvider: () => string | null;
   private readonly supportsSessionRecovery: boolean;
   private sessionRecovery: Promise<boolean> | null = null;
 
+  /** Configures the API origin and token source; only the default source enables peer recovery. */
   constructor(baseUrl: string, sessionTokenProvider: (() => string | null) | string = getSessionToken) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.supportsSessionRecovery = sessionTokenProvider === getSessionToken;
@@ -335,10 +364,12 @@ export class AgentweaverApiClient {
     return token ? { Authorization: `Bearer ${token}` } : {};
   }
 
+  /** Reads the run detail used by run pages and status surfaces. */
   getRun(runId: string): Promise<RunDetail> {
     return this.request<RunDetail>('GET', `/runs/${encodeURIComponent(runId)}`);
   }
 
+  /** Reads the effective permission decision and supporting evidence for a run. */
   getRunEffectivePermissions(runId: string): Promise<import('./types').EffectivePermissionInspection> {
     return this.request<import('./types').EffectivePermissionInspection>(
       'GET',
@@ -346,6 +377,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Reads the execution identity projection bound to a run. */
   getRunExecutionIdentity(runId: string): Promise<import('./types').ExecutionIdentityProjection> {
     return this.request<import('./types').ExecutionIdentityProjection>(
       'GET',
@@ -353,6 +385,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Reads the diagnostic explanation for a run's terminal state. */
   getRunTerminalDiagnostic(runId: string): Promise<import('./types').RunTerminalDiagnostic> {
     return this.request<import('./types').RunTerminalDiagnostic>(
       'GET',
@@ -360,6 +393,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Requests a retry of a run, optionally pinning the confirmed AI execution key. */
   retryRun(runId: string, providerKey?: string): Promise<RetryRunResponse> {
     return this.request<RetryRunResponse>(
       'POST',
@@ -382,6 +416,7 @@ export class AgentweaverApiClient {
     return this.request<PersistedRunEvent[]>('GET', `/runs/${encodeURIComponent(runId)}/events${suffix}`);
   }
 
+  /** Reads pending tool and human approval requests for a run. */
   getPendingApprovals(runId: string): Promise<import('./types').PendingApprovalsResponse> {
     return this.request<import('./types').PendingApprovalsResponse>(
       'GET',
@@ -389,10 +424,12 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Reads per-agent token totals reported for a run. */
   getRunTokenBreakdown(runId: string): Promise<import('./types').RunAgentTokenBreakdownDto> {
     return this.request<import('./types').RunAgentTokenBreakdownDto>('GET', `/runs/${encodeURIComponent(runId)}/token-breakdown`);
   }
 
+  /** Reads one paged trace segment; pass the returned cursor to continue chronologically. */
   getRunTraces(runId: string, options?: { cursor?: string; pageSize?: number }): Promise<import('./types').RunTraceDto> {
     const parameters = new URLSearchParams();
     if (options?.cursor) parameters.set('cursor', options.cursor);
@@ -401,16 +438,19 @@ export class AgentweaverApiClient {
     return this.request<import('./types').RunTraceDto>('GET', `/metrics/runs/${encodeURIComponent(runId)}/traces${query}`);
   }
 
+  /** Reads the sandbox policy associated with a repository path. */
   getSandboxPolicy(repositoryPath: string): Promise<SandboxPolicy> {
     const encoded = encodeURIComponent(repositoryPath);
     return this.request<SandboxPolicy>('GET', `/sandbox-policy?repository_path=${encoded}`);
   }
 
+  /** Lists files changed by a run, optionally filtered by the API's file group. */
   getRunFiles(runId: string, filter?: string): Promise<WorkspaceFileEntry[]> {
     const query = filter ? `?filter=${encodeURIComponent(filter)}` : '';
     return this.request<WorkspaceFileEntry[]>('GET', `/runs/${encodeURIComponent(runId)}/files${query}`);
   }
 
+  /** Reads the diff for one run-worktree path, encoding path segments independently. */
   getRunFileDiff(runId: string, path: string): Promise<WorkspaceFileDiff> {
     const encoded = path.split('/').map(encodeURIComponent).join('/');
     return this.request<WorkspaceFileDiff>('GET', `/runs/${encodeURIComponent(runId)}/files/${encoded}`);
@@ -424,11 +464,13 @@ export class AgentweaverApiClient {
     return this.request<WorkspaceFileEntry[]>('GET', `/runs/${encodeURIComponent(runId)}/assembly/files${query}`);
   }
 
+  /** Reads one assembled integration-branch file diff for a coordinator run. */
   getAssemblyFileDiff(runId: string, path: string): Promise<WorkspaceFileDiff> {
     const encoded = path.split('/').map(encodeURIComponent).join('/');
     return this.request<WorkspaceFileDiff>('GET', `/runs/${encodeURIComponent(runId)}/assembly/files/${encoded}`);
   }
 
+  /** Lists the coordinator's assembled workspace tree from the integration branch. */
   getAssemblyWorkspace(runId: string): Promise<WorkspaceNode[]> {
     return this.request<WorkspaceNode[]>('GET', `/runs/${encodeURIComponent(runId)}/assembly/workspace`);
   }
@@ -441,39 +483,47 @@ export class AgentweaverApiClient {
     return this.request<WorkspaceFileContent>('GET', `/runs/${encodeURIComponent(runId)}/assembly/content/${encoded}`);
   }
 
+  /** Reads source content for one run-worktree file. */
   getRunFileContent(runId: string, path: string): Promise<WorkspaceFileContent> {
     const encoded = path.split('/').map(encodeURIComponent).join('/');
     return this.request<WorkspaceFileContent>('GET', `/runs/${encodeURIComponent(runId)}/files/${encoded}/content`);
   }
 
+  /** Lists the saved output revisions for a run. */
   getOutputRevisionHistory(runId: string): Promise<import('./types').OutputRevision[]> {
     return this.request<import('./types').OutputRevision[]>('GET', `/runs/${encodeURIComponent(runId)}/output-revisions`);
   }
 
+  /** Reads metadata for one saved output revision. */
   getOutputRevision(runId: string, revisionId: string): Promise<import('./types').OutputRevision> {
     return this.request<import('./types').OutputRevision>(
       'GET', `/runs/${encodeURIComponent(runId)}/output-revisions/${encodeURIComponent(revisionId)}`);
   }
 
+  /** Reads one file from a saved output revision. */
   getOutputRevisionFile(runId: string, revisionId: string, path: string): Promise<import('./types').OutputRevisionFile> {
     const encoded = path.split('/').map(encodeURIComponent).join('/');
     return this.request<import('./types').OutputRevisionFile>(
       'GET', `/runs/${encodeURIComponent(runId)}/output-revisions/${encodeURIComponent(revisionId)}/files/${encoded}`);
   }
 
+  /** Compares two saved output revisions and returns the server's comparison result. */
   compareOutputRevisions(runId: string, before: string, after: string): Promise<import('./types').OutputRevisionComparison> {
     return this.request<import('./types').OutputRevisionComparison>(
       'GET', `/runs/${encodeURIComponent(runId)}/output-revisions/${encodeURIComponent(before)}/compare/${encodeURIComponent(after)}`);
   }
 
+  /** Lists the files and directories in a run's workspace. */
   getRunWorkspace(runId: string): Promise<WorkspaceNode[]> {
     return this.request<WorkspaceNode[]>('GET', `/runs/${encodeURIComponent(runId)}/workspace`);
   }
 
+  /** Requests the server to commit and merge the reviewed run output. */
   commitRun(runId: string): Promise<CommitResponse> {
     return this.request<CommitResponse>('POST', `/runs/${encodeURIComponent(runId)}/commit`, {});
   }
 
+  /** Requests another implementation pass with owner feedback and optional provider confirmation. */
   requestChanges(runId: string, comment: string, providerKey?: string): Promise<RequestChangesResponse> {
     return this.request<RequestChangesResponse>(
       'POST',
@@ -484,6 +534,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Saves the sandbox policy and returns the server's normalized policy. */
   updateSandboxPolicy(policy: SandboxPolicy): Promise<SandboxPolicy> {
     return this.request<SandboxPolicy>('PUT', '/sandbox-policy', policy);
   }
@@ -491,33 +542,40 @@ export class AgentweaverApiClient {
   // Projects
   // Paginated per the pagination contract (`.squad/decisions/inbox/niobe-pagination-contract.md`):
   // the server always returns the `{ items, page, page_size, total_count, total_pages }` envelope.
+  /** Lists the current user's projects using the server's paged response envelope. */
   listProjects(options?: PagedRequestOptions): Promise<PagedResult<Project>> {
     return this.request<PagedResult<Project>>('GET', `/projects${pagingQuery(options)}`, undefined, options?.signal);
   }
 
+  /** Reads one project by its identifier. */
   getProject(projectId: string): Promise<Project> {
     return this.request<Project>('GET', `/projects/${encodeURIComponent(projectId)}`);
   }
 
+  /** Creates a project from its submitted name and configuration. */
   createProject(req: CreateProjectRequest): Promise<Project> {
     return this.request<Project>('POST', '/projects', req);
   }
 
+  /** Lists temporary GitHub repository selections available to the current user. */
   listGitHubRepositorySelections(): Promise<GitHubRepositorySelectionListResponse> {
     return this.request<GitHubRepositorySelectionListResponse>('GET', '/github/repository-selections');
   }
 
+  /** Requests an opaque selection code for a repository name; the code is later exchanged by the API. */
   issueGitHubRepositorySelection(fullName: string): Promise<GitHubRepositorySelectionCodeResponse> {
     return this.request<GitHubRepositorySelectionCodeResponse>('POST', '/github/repository-selections', {
       full_name: fullName,
     });
   }
 
+  /** Reads available blueprints and normalizes the supported server response shapes. */
   listBlueprints(): Promise<Blueprint[]> {
     return this.request<Blueprint[] | ListBlueprintsResponse>('GET', '/blueprints')
       .then(normalizeBlueprintList);
   }
 
+  /** Starts durable blueprint generation and reuses the supplied idempotency key for that job. */
   generateBlueprint(
     description: string,
     targetRepository?: string | null,
@@ -533,6 +591,7 @@ export class AgentweaverApiClient {
     });
   }
 
+  /** Reads the current status of a blueprint-generation job. */
   getBlueprintGenerationJob(jobId: string): Promise<BlueprintGenerationJob> {
     return this.request<BlueprintGenerationJob>(
       'GET',
@@ -540,6 +599,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Reads the completed result for a blueprint-generation job. */
   getBlueprintGenerationResult(jobId: string): Promise<GenerateBlueprintResponse> {
     return this.request<GenerateBlueprintResponse>(
       'GET',
@@ -547,6 +607,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Requests cancellation and returns the job's resulting status. */
   cancelBlueprintGeneration(jobId: string): Promise<BlueprintGenerationJob> {
     return this.request<BlueprintGenerationJob>(
       'POST',
@@ -554,6 +615,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Requests a retry of a failed or retryable blueprint-generation job. */
   retryBlueprintGeneration(jobId: string): Promise<BlueprintGenerationJob> {
     return this.request<BlueprintGenerationJob>(
       'POST',
@@ -561,18 +623,22 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Requests a blueprint suggestion for the supplied repository reference. */
   suggestBlueprint(repository: string): Promise<SuggestBlueprintResponse> {
     return this.request<SuggestBlueprintResponse>('POST', '/blueprints/suggest', { repository });
   }
 
+  /** Changes the display name of a project. */
   renameProject(projectId: string, name: string): Promise<void> {
     return this.request<void>('PATCH', `/projects/${encodeURIComponent(projectId)}`, { name });
   }
 
+  /** Replaces provider settings for one project. */
   updateProjectProviderSettings(projectId: string, req: UpdateProjectProviderSettingsRequest): Promise<void> {
     return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/provider-settings`, req);
   }
 
+  /** Saves preview settings and returns the server's normalized settings state. */
   updateProjectPreviewSettings(
     projectId: string,
     req: import('./types').UpdateProjectPreviewSettingsRequest,
@@ -584,6 +650,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Reads the prerequisites that determine whether unattended execution is ready. */
   getUnattendedReadiness(projectId: string): Promise<UnattendedReadiness> {
     return this.request<UnattendedReadiness>(
       'GET',
@@ -591,6 +658,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Reads the project's automation activation state. */
   getAutomationStatus(projectId: string): Promise<AutomationActivationStatus> {
     return this.request<AutomationActivationStatus>(
       'GET',
@@ -598,6 +666,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Requests automation activation and returns the owner's resulting status. */
   activateAutomation(projectId: string): Promise<AutomationActivationStatus> {
     return this.request<AutomationActivationStatus>(
       'POST',
@@ -606,6 +675,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Requests automation deactivation and returns the owner's resulting status. */
   deactivateAutomation(projectId: string): Promise<AutomationActivationStatus> {
     return this.request<AutomationActivationStatus>(
       'POST',
@@ -614,6 +684,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Begins project-scoped Copilot authorization and returns the Broker redirect details. */
   beginProjectCopilotAuthorization(projectId: string, returnRouteKey?: string): Promise<{
     authorization_url: string;
     transaction_id: string;
@@ -624,6 +695,7 @@ export class AgentweaverApiClient {
     });
   }
 
+  /** Starts a project GitHub App installation authorization. */
   beginProjectRepoAppInstallation(projectId: string): Promise<{
     installation_url: string;
     transaction_id: string;
@@ -636,6 +708,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Reads the project's Copilot authorization status. */
   getProjectCopilotConnection(projectId: string): Promise<ProjectCopilotConnection> {
     return this.request<ProjectCopilotConnection>(
       'GET',
@@ -643,15 +716,18 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Deletes a project using the API's explicit confirmation query. */
   deleteProject(projectId: string): Promise<void> {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}?confirm=true`);
   }
 
+  /** Starts a run for the project and returns the submitted run status. */
   startProjectRun(projectId: string, req: CreateProjectRunRequest): Promise<SubmitRunResponse> {
     return this.request<SubmitRunResponse>('POST', `/projects/${encodeURIComponent(projectId)}/runs`, req);
   }
 
   // Paginated per the pagination contract — server always returns the paged envelope.
+  /** Lists project runs in the server-paged response format. */
   listProjectRuns(projectId: string, options?: PagedRequestOptions): Promise<PagedResult<WorkflowRunDto>> {
     return this.request<PagedResult<WorkflowRunDto>>(
       'GET',
@@ -661,6 +737,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Lists filtered runs, retaining the legacy limit alias when pageSize is not supplied. */
   getProjectRuns(projectId: string, options?: {
     agentName?: string;
     terminalOnly?: boolean;
@@ -689,26 +766,32 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Deletes a run record and its API-managed history. */
   deleteRun(runId: string): Promise<void> {
     return this.request<void>('DELETE', `/runs/${encodeURIComponent(runId)}`);
   }
 
+  /** Requests cancellation and reports whether the run was already terminal. */
   cancelRun(runId: string): Promise<{ run_id: string; status: string; cancelled: boolean; already_terminal: boolean }> {
     return this.request('POST', `/runs/${encodeURIComponent(runId)}/cancel`, {});
   }
 
+  /** Archives a run through the server's lifecycle endpoint. */
   archiveRun(runId: string): Promise<void> {
     return this.request<void>('POST', `/runs/${encodeURIComponent(runId)}/archive`, {});
   }
 
+  /** Reads API server version and capability information. */
   getServerInfo(): Promise<ServerInfo> {
     return this.request<ServerInfo>('GET', '/server/info');
   }
 
+  /** Reads the current browser session without using a cached response. */
   getAuthSession(): Promise<AuthSessionResponse> {
     return this.request<AuthSessionResponse>('GET', '/auth/session', undefined, undefined, undefined, 'no-store');
   }
 
+  /** Prepares an operation-scoped provider confirmation for a project or run action. */
   prepareAiExecutionContext(
     operation: string,
     projectId?: string,
@@ -721,6 +804,7 @@ export class AgentweaverApiClient {
     });
   }
 
+  /** Reads the public authentication configuration used to initialize sign-in. */
   getAuthConfig(): Promise<AuthConfigResponse> {
     return this.request<AuthConfigResponse>('GET', '/auth/config');
   }
@@ -728,6 +812,7 @@ export class AgentweaverApiClient {
   // Deployment-wide "bring your own key" inference provider configuration.
   // Multiple providers can be configured and their keys kept at once; exactly one may be
   // marked active (active_provider_id) — a null active id means GitHub Copilot mode.
+  /** Lists deployment-level BYOK providers without caching the admin response. */
   listByokProviders(): Promise<ByokProviderListResponse> {
     return this.request<ByokProviderListResponse>(
       'GET',
@@ -739,50 +824,62 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Adds a deployment-level inference provider configuration. */
   addByokProvider(req: ByokProviderRequest): Promise<ByokProviderConfig> {
     return this.request<ByokProviderConfig>('POST', '/admin/byok-providers', req);
   }
 
+  /** Replaces one deployment-level inference provider configuration. */
   updateByokProvider(id: string, req: ByokProviderRequest): Promise<ByokProviderConfig> {
     return this.request<ByokProviderConfig>('PUT', `/admin/byok-providers/${encodeURIComponent(id)}`, req);
   }
 
+  /** Removes a deployment-level inference provider configuration. */
   removeByokProvider(id: string): Promise<void> {
     return this.request<void>('DELETE', `/admin/byok-providers/${encodeURIComponent(id)}`);
   }
 
+  /** Selects one deployment-level BYOK provider as active. */
   activateByokProvider(id: string): Promise<void> {
     return this.request<void>('POST', `/admin/byok-providers/${encodeURIComponent(id)}/activate`);
   }
 
+  /** Clears the active deployment-level BYOK provider selection. */
   deactivateByokProviders(): Promise<void> {
     return this.request<void>('POST', '/admin/byok-providers/deactivate');
   }
 
+  /** Reads the signed-in user's AI provider preference and access state. */
   getUserAiAccess(): Promise<UserAiAccessStatus> {
     return this.request<UserAiAccessStatus>('GET', '/account/ai-access');
   }
 
+  /** Saves the user's BYOK configuration without exposing an active-provider flag. */
   setUserByokProvider(req: ByokProviderRequest): Promise<Omit<ByokProviderConfig, 'is_active'>> {
     return this.request<Omit<ByokProviderConfig, 'is_active'>>('PUT', '/account/ai-access/byok', req);
   }
 
+  /** Removes the signed-in user's BYOK configuration. */
   removeUserByokProvider(): Promise<void> {
     return this.request<void>('DELETE', '/account/ai-access/byok');
   }
 
+  /** Selects whether the user prefers GitHub Copilot or their BYOK provider. */
   setUserAiPreference(preference: 'github-copilot' | 'byok'): Promise<void> {
     return this.request<void>('POST', `/account/ai-access/preference/${preference}`);
   }
 
+  /** Starts authorization for the signed-in user's Copilot access. */
   beginUserCopilotAuthorization(): Promise<{ authorization_url: string }> {
     return this.request<{ authorization_url: string }>('POST', '/account/ai-access/copilot/begin');
   }
 
+  /** Disconnects the signed-in user's Copilot connection. */
   disconnectUserCopilot(): Promise<void> {
     return this.request<void>('POST', '/account/ai-access/copilot/disconnect');
   }
 
+  /** Begins authorization of the deployment-wide default Copilot connection. */
   beginPlatformDefaultCopilotAuthorization(): Promise<{
     authorization_url: string;
     transaction_id: string;
@@ -791,6 +888,7 @@ export class AgentweaverApiClient {
     return this.request('POST', '/admin/platform-default-copilot/begin', {});
   }
 
+  /** Reads deployment-wide default Copilot status without caching the response. */
   getPlatformDefaultCopilotConnection(): Promise<PlatformDefaultCopilotConnection> {
     return this.request<PlatformDefaultCopilotConnection>(
       'GET',
@@ -802,63 +900,77 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Removes the deployment-wide default Copilot connection. */
   disconnectPlatformDefaultCopilotConnection(): Promise<void> {
     return this.request<void>('POST', '/admin/platform-default-copilot/disconnect', {});
   }
 
+  /** Starts user-level GitHub App authorization and returns its short-lived transaction details. */
   beginRepoAppAuthorization(returnRouteKey?: string): Promise<{ authorization_url: string; transaction_id: string; expires_at: string }> {
     return this.request('POST', '/auth/github/repo-app/authorizations', {
       ...(returnRouteKey ? { return_route_key: returnRouteKey } : {}),
     });
   }
 
+  /** Reads the current user's GitHub App connection status. */
   getRepoAppConnectionStatus(): Promise<RepoAppConnectionStatus> {
     return this.request<RepoAppConnectionStatus>('GET', '/auth/github/repo-app/authorization/status');
   }
 
+  /** Ends the server-side session associated with the current browser. */
   signOutSession(): Promise<void> {
     return this.request<void>('POST', '/auth/session/sign-out', {});
   }
 
   // Post-creation GitHub connection for a currently-unconnected (blank-origin) project.
+  /** Lists GitHub owners available for connecting a newly created project. */
   listProjectRepositoryOwners(projectId: string): Promise<RepositoryOwner[]> {
     return this.request<RepositoryOwner[]>('GET', `/projects/${encodeURIComponent(projectId)}/github/repository-owners`);
   }
 
+  /** Creates and connects a GitHub repository for a project. */
   createProjectRepository(projectId: string, req: CreateProjectRepositoryRequest): Promise<ConnectedRepository> {
     return this.request<ConnectedRepository>('POST', `/projects/${encodeURIComponent(projectId)}/github/repository`, req);
   }
 
+  /** Connects an existing GitHub repository to a project. */
   connectProjectRepository(projectId: string, req: ConnectProjectRepositoryRequest): Promise<ConnectedRepository> {
     return this.request<ConnectedRepository>('POST', `/projects/${encodeURIComponent(projectId)}/github/repository/connection`, req);
   }
 
+  /** Reads project access and role-assignment information for its owner. */
   getProjectAccessOverview(projectId: string): Promise<ProjectAccessOverview> {
     return this.request<ProjectAccessOverview>('GET', `/projects/${encodeURIComponent(projectId)}/access`);
   }
 
+  /** Grants a project role to the submitted principal. */
   createProjectRoleAssignment(projectId: string, req: CreateProjectRoleAssignmentRequest): Promise<void> {
     return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/role-assignments`, req);
   }
 
+  /** Removes one project role assignment by its server-issued identifier. */
   deleteProjectRoleAssignment(projectId: string, assignmentId: string): Promise<void> {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/role-assignments/${encodeURIComponent(assignmentId)}`);
   }
 
   // Catalog
+  /** Reads the role catalog used when building a project team. */
   getRoles(): Promise<RoleDto[]> {
     return this.request<RoleDto[]>('GET', '/catalog/roles');
   }
 
   // Casting
+  /** Reads available team templates. */
   getTemplates(): Promise<TeamTemplateDto[]> {
     return this.request<TeamTemplateDto[]>('GET', '/casting/templates');
   }
 
+  /** Lists casting universes configured for a project. */
   getUniverses(projectId: string): Promise<{ universes: string[] }> {
     return this.request<{ universes: string[] }>('GET', `/projects/${encodeURIComponent(projectId)}/casting/universes`);
   }
 
+  /** Requests a team proposal, optionally passing the confirmed provider execution key. */
   createProposal(projectId: string, req: CreateProposalRequest, providerKey?: string): Promise<CastProposalDto> {
     return this.request<CastProposalDto>(
       'POST',
@@ -869,53 +981,65 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Reads one project casting proposal. */
   getProposal(projectId: string, proposalId: string): Promise<CastProposalDto> {
     return this.request<CastProposalDto>('GET', `/projects/${encodeURIComponent(projectId)}/casting/proposals/${encodeURIComponent(proposalId)}`);
   }
 
+  /** Updates an unconfirmed proposal with owner edits. */
   amendProposal(projectId: string, proposalId: string, req: AmendProposalRequest): Promise<CastProposalDto> {
     return this.request<CastProposalDto>('PATCH', `/projects/${encodeURIComponent(projectId)}/casting/proposals/${encodeURIComponent(proposalId)}`, req);
   }
 
+  /** Confirms a proposal and submits its explicit confirmation payload. */
   confirmProposal(projectId: string, proposalId: string, req: ConfirmProposalRequest): Promise<void> {
     return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/casting/proposals/${encodeURIComponent(proposalId)}/confirm`, req);
   }
 
+  /** Rejects a casting proposal by removing it through the API. */
   rejectProposal(projectId: string, proposalId: string): Promise<void> {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/casting/proposals/${encodeURIComponent(proposalId)}`);
   }
 
   // Team
+  /** Reads the current project roster. */
   getTeam(projectId: string): Promise<TeamDto> {
     return this.request<TeamDto>('GET', `/projects/${encodeURIComponent(projectId)}/team`);
   }
 
+  /** Reads a team member's charter text and metadata. */
   getMemberCharter(projectId: string, memberName: string): Promise<CharterDto> {
     return this.request<CharterDto>('GET', `/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}/charter`);
   }
 
+  /** Replaces a team member's charter content. */
   updateMemberCharter(projectId: string, memberName: string, content: string): Promise<void> {
     return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}/charter`, { content });
   }
 
+  /** Adds a member to the project team. */
   addMember(projectId: string, req: AddMemberRequest): Promise<TeamMemberDto> {
     return this.request<TeamMemberDto>('POST', `/projects/${encodeURIComponent(projectId)}/team/members`, req);
   }
 
+  /** Removes a member from the project team. */
   removeMember(projectId: string, memberName: string): Promise<void> {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}`);
   }
 
+  /** Changes a team member's role and returns the updated member. */
   reroleMember(projectId: string, memberName: string, req: ReroleRequest): Promise<TeamMemberDto> {
     return this.request<TeamMemberDto>('PATCH', `/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}`, req);
   }
 
+  /** Reads the activity history for a team member. */
   getMemberHistory(projectId: string, memberName: string): Promise<HistoryDto> {
     return this.request<HistoryDto>('GET', `/projects/${encodeURIComponent(projectId)}/team/members/${encodeURIComponent(memberName)}/history`);
   }
 
   // Paginated per the pagination contract — existing `status`/`type`/`agent` filters (if any)
   // are applied server-side before paging.
+  /** Lists project decisions, with optional server-side pagination. */
   getDecisions(projectId: string, options?: PagedRequestOptions): Promise<PagedResult<import('./types').DecisionDto>> {
     return this.request<PagedResult<import('./types').DecisionDto>>(
       'GET',
@@ -925,6 +1049,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Lists decisions awaiting triage in the project inbox. */
   getDecisionsInbox(projectId: string, options?: PagedRequestOptions): Promise<PagedResult<import('./types').DecisionInboxEntryDto>> {
     return this.request<PagedResult<import('./types').DecisionInboxEntryDto>>(
       'GET',
@@ -934,6 +1059,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Lists addressed agent messages, optionally limited to one run. */
   getAddressedMessages(projectId: string, runId?: string): Promise<import('./types').AddressedMessageDto[]> {
     const query = runId ? `?run_id=${encodeURIComponent(runId)}` : '';
     return this.request<import('./types').AddressedMessageDto[]>(
@@ -942,6 +1068,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Lists revision history for one decision. */
   getDecisionRevisions(
     projectId: string,
     decisionId: string,
@@ -955,6 +1082,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Restores a prior decision revision only if its current revision matches expectedRevision. */
   restoreDecision(
     projectId: string,
     decisionId: string,
@@ -968,18 +1096,22 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Merges one inbox entry into the durable decision store. */
   mergeDecisionInboxEntry(projectId: string, entryId: string): Promise<void> {
     return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/decisions/inbox/${encodeURIComponent(entryId)}/merge`, {});
   }
 
+  /** Promotes one inbox entry for use as project knowledge. */
   promoteDecisionInboxEntry(projectId: string, entryId: string): Promise<void> {
     return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/decisions/inbox/${encodeURIComponent(entryId)}/promote`, {});
   }
 
+  /** Rejects one decision inbox entry. */
   rejectDecisionInboxEntry(projectId: string, entryId: string): Promise<void> {
     return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/decisions/inbox/${encodeURIComponent(entryId)}/reject`, {});
   }
 
+  /** Lists a single agent's memory records in pages. */
   getAgentMemory(projectId: string, agentName: string, options?: PagedRequestOptions): Promise<PagedResult<import('./types').AgentMemoryDto>> {
     return this.request<PagedResult<import('./types').AgentMemoryDto>>(
       'GET',
@@ -989,6 +1121,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Searches project memory with optional query, type, tag, and status filters. */
   getProjectMemory(
     projectId: string,
     options?: PagedRequestOptions & { query?: string; type?: string; tags?: string; status?: string },
@@ -1009,6 +1142,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Lists project session history in pages. */
   getProjectSessions(projectId: string, options?: PagedRequestOptions): Promise<PagedResult<import('./types').SessionHistoryDto>> {
     return this.request<PagedResult<import('./types').SessionHistoryDto>>(
       'GET',
@@ -1018,6 +1152,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Creates a memory record for one project agent. */
   createAgentMemory(
     projectId: string,
     agentName: string,
@@ -1026,6 +1161,7 @@ export class AgentweaverApiClient {
     return this.request<import('./types').AgentMemoryDto>('POST', `/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory`, body);
   }
 
+  /** Updates one memory record against its expected revision to avoid overwriting newer edits. */
   updateAgentMemory(
     projectId: string,
     agentName: string,
@@ -1044,6 +1180,7 @@ export class AgentweaverApiClient {
     return this.request<import('./types').AgentMemoryDto>('PUT', `/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory/${encodeURIComponent(memoryId)}`, body);
   }
 
+  /** Lists revision history for a specific agent memory record. */
   getAgentMemoryRevisions(
     projectId: string,
     agentName: string,
@@ -1058,6 +1195,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Reads a pair of revisions for one memory record for client-side comparison. */
   compareAgentMemoryRevisions(
     projectId: string,
     agentName: string,
@@ -1072,6 +1210,7 @@ export class AgentweaverApiClient {
     return this.request('GET', `/projects/${encodeURIComponent(projectId)}/agents/${encodeURIComponent(agentName)}/memory/${encodeURIComponent(memoryId)}/compare?${query}`);
   }
 
+  /** Restores a prior memory revision only when the current revision matches expectedRevision. */
   restoreAgentMemory(
     projectId: string,
     agentName: string,
@@ -1087,22 +1226,27 @@ export class AgentweaverApiClient {
   }
 
   // Skills (issues #51/#56) — per-project catalog + agent assignments.
+  /** Lists and validates the project's skill catalog. */
   listSkills(projectId: string): Promise<import('./types').SkillDto[]> {
     return this.request<unknown>('GET', `/projects/${encodeURIComponent(projectId)}/skills`).then(parseSkillList);
   }
 
+  /** Reads and validates one skill's instructions and resource content. */
   getSkill(projectId: string, skillId: string): Promise<import('./types').SkillDetailDto> {
     return this.request<unknown>('GET', `/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillId)}`).then(parseSkillDetail);
   }
 
+  /** Removes one skill from the project's catalog. */
   deleteSkill(projectId: string, skillId: string): Promise<void> {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillId)}`);
   }
 
+  /** Creates a project skill from owner-supplied instructions. */
   createSkill(projectId: string, body: import('./types').CreateSkillRequest): Promise<import('./types').SkillAcquisitionResponse> {
     return this.request<import('./types').SkillAcquisitionResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skills`, body);
   }
 
+  /** Generates a skill draft from a description using the confirmed provider key when supplied. */
   generateSkill(projectId: string, description: string, providerKey?: string): Promise<import('./types').GeneratedSkillDraft> {
     return this.request<import('./types').GeneratedSkillDraft>(
       'POST',
@@ -1113,31 +1257,38 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Reconciles the project catalog with its connected repository skills. */
   syncSkills(projectId: string): Promise<import('./types').SkillAcquisitionResponse> {
     return this.request<import('./types').SkillAcquisitionResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skills/sync`, {});
   }
 
+  /** Discovers and validates repository skills without importing them. */
   previewSkillImport(projectId: string, repoUrl: string): Promise<import('./types').SkillImportPreviewResponse> {
     return this.request<import('./types').SkillImportPreviewResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skills/import/preview`, { repoUrl });
   }
 
+  /** Imports selected discovered skills, or all candidates when locations are omitted. */
   importSkills(projectId: string, repoUrl: string, locations?: string[]): Promise<import('./types').SkillAcquisitionResponse> {
     return this.request<import('./types').SkillAcquisitionResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skills/import`, { repoUrl, locations });
   }
 
   // Project-scoped list: built-in config marketplaces + this project's user-added URL sources.
+  /** Lists built-in and project-added skill marketplace sources. */
   listSkillMarketplaces(projectId: string): Promise<import('./types').SkillMarketplaceDto[]> {
     return this.request<import('./types').SkillMarketplaceDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces`);
   }
 
+  /** Adds a repository-backed marketplace source to the project. */
   addSkillMarketplaceSource(projectId: string, body: import('./types').AddSkillMarketplaceSourceRequest): Promise<import('./types').SkillMarketplaceDto> {
     return this.request<import('./types').SkillMarketplaceDto>('POST', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/sources`, body);
   }
 
+  /** Removes one project-added marketplace source. */
   removeSkillMarketplaceSource(projectId: string, name: string): Promise<void> {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/sources/${encodeURIComponent(name)}`);
   }
 
+  /** Searches a marketplace page, optionally using the confirmed provider execution key. */
   browseSkillMarketplace(projectId: string, marketplace: string, query?: string, page?: number, pageSize?: number, providerKey?: string): Promise<import('./types').SkillMarketplaceBrowseResponse> {
     return this.request<import('./types').SkillMarketplaceBrowseResponse>(
       'POST',
@@ -1148,6 +1299,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Imports selected marketplace candidate locations into the project catalog. */
   importMarketplaceSkills(projectId: string, marketplace: string, locations: string[]): Promise<import('./types').SkillAcquisitionResponse> {
     return this.request<import('./types').SkillAcquisitionResponse>('POST', `/projects/${encodeURIComponent(projectId)}/skill-marketplaces/${encodeURIComponent(marketplace)}/import`, { locations });
   }
@@ -1155,6 +1307,7 @@ export class AgentweaverApiClient {
   // Multipart upload of skill file(s)/folder/archive. Bypasses request<T> to send FormData.
   // Accepts plain File objects (single-file / file-picker uploads) or {file, relativePath}
   // pairs (folder drag-and-drop) so nested SKILL.md directories survive the round-trip.
+  /** Uploads skill files as multipart form data, preserving optional folder-relative paths. */
   async uploadSkills(
     projectId: string,
     files: Array<File | SkillUploadItem>,
@@ -1183,18 +1336,22 @@ export class AgentweaverApiClient {
     return text ? JSON.parse(text) as import('./types').SkillAcquisitionResponse : { results: [], marked_missing: [] };
   }
 
+  /** Lists skill-to-agent assignments for the project. */
   listSkillAssignments(projectId: string): Promise<import('./types').SkillAssignmentDto[]> {
     return this.request<import('./types').SkillAssignmentDto[]>('GET', `/projects/${encodeURIComponent(projectId)}/skills/assignments`);
   }
 
+  /** Assigns one project skill to a team agent. */
   assignSkill(projectId: string, skillId: string, agentName: string): Promise<void> {
     return this.request<void>('PUT', `/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillId)}/assignments/${encodeURIComponent(agentName)}`, {});
   }
 
+  /** Removes one skill-to-agent assignment. */
   unassignSkill(projectId: string, skillId: string, agentName: string): Promise<void> {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/skills/${encodeURIComponent(skillId)}/assignments/${encodeURIComponent(agentName)}`);
   }
 
+  /** Previews default skills and returns the digest required to apply that exact proposal. */
   previewBlueprintSkillDefaults(
     projectId: string,
     blueprintId: string,
@@ -1206,6 +1363,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Applies defaults only against the preview digest; validates the server response before returning. */
   async applyBlueprintSkillDefaults(
     projectId: string,
     blueprintId: string,
@@ -1220,15 +1378,18 @@ export class AgentweaverApiClient {
   }
 
   // Sync
+  /** Reads the current team synchronization preview. */
   getSyncStatus(projectId: string): Promise<SyncStatusDto> {
     return this.request<SyncStatusDto>('GET', `/projects/${encodeURIComponent(projectId)}/team/sync`);
   }
 
+  /** Commits the submitted team synchronization choices. */
   commitSync(projectId: string, req: SyncCommitRequest): Promise<SyncCommitResponseDto> {
     return this.request<SyncCommitResponseDto>('POST', `/projects/${encodeURIComponent(projectId)}/team/sync`, req);
   }
 
   // Orchestration (Feature 008 — Squad Coordinator Agent)
+  /** Starts a coordinator run with optional workflow, approval, and provider settings. */
   startOrchestration(
     projectId: string,
     goal: string,
@@ -1255,25 +1416,30 @@ export class AgentweaverApiClient {
 
   // Project Workspace browsing (read-only). The backend exposes the project repo
   // at its current branch plus active run worktree branches as selectable refs.
+  /** Lists repository and active-worktree refs available for read-only project browsing. */
   getProjectWorkspaceRefs(projectId: string): Promise<WorkspaceRefsResponse> {
     return this.request<WorkspaceRefsResponse>('GET', `/projects/${encodeURIComponent(projectId)}/workspace/refs`);
   }
 
+  /** Lists a project workspace tree at the selected ref, or the current default ref. */
   getProjectWorkspace(projectId: string, ref?: string): Promise<WorkspaceNode[]> {
     const query = ref ? `?ref=${encodeURIComponent(ref)}` : '';
     return this.request<WorkspaceNode[]>('GET', `/projects/${encodeURIComponent(projectId)}/workspace${query}`);
   }
 
+  /** Reads project workspace file content at a selected ref, encoding each path segment. */
   getProjectWorkspaceFileContent(projectId: string, path: string, ref?: string): Promise<WorkspaceFileContent> {
     const encoded = path.split('/').map(encodeURIComponent).join('/');
     const query = ref ? `?ref=${encodeURIComponent(ref)}` : '';
     return this.request<WorkspaceFileContent>('GET', `/projects/${encodeURIComponent(projectId)}/workspace/files/${encoded}/content${query}`);
   }
 
+  /** Reads the current outcome specification for a run. */
   getOutcomeSpec(runId: string): Promise<OutcomeSpec> {
     return this.request<OutcomeSpec>('GET', `/runs/${encodeURIComponent(runId)}/outcome-spec`);
   }
 
+  /** Confirms the proposed outcome, optionally allowing the server to promote tasks. */
   confirmOutcomeSpec(runId: string, allowTaskPromotion = false, providerKey?: string): Promise<OutcomeSpec | null> {
     return this.request<OutcomeSpec | null>(
       'POST',
@@ -1284,6 +1450,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Sends owner feedback and requests a revised outcome specification. */
   reviseOutcomeSpec(runId: string, feedback: string, providerKey?: string): Promise<OutcomeSpec | null> {
     return this.request<OutcomeSpec | null>(
       'POST',
@@ -1296,6 +1463,7 @@ export class AgentweaverApiClient {
 
   // Coordinator steering (Feature 008 Phase 2). The /steer endpoint is added by the
   // backend team in parallel; this codes against the agreed contract.
+  /** Sends an owner steering instruction to an active coordinator run. */
   steerCoordinator(coordinatorRunId: string, req: SteerCoordinatorRequest, providerKey?: string): Promise<SteerCoordinatorResponse> {
     return this.request<SteerCoordinatorResponse>(
       'POST',
@@ -1329,6 +1497,7 @@ export class AgentweaverApiClient {
   //   sealed with a genuinely terminal run.completed event (a real end-of-conversation, not
   //   mere inactivity) — the server refuses to revive a sealed run instead of silently
   //   flipping it back to in-progress.
+  /** Creates a durable operator-assistant run; the server enforces ownership and concurrency limits. */
   createAssistantRun(req: CreateAssistantRunRequest, providerKey?: string): Promise<CreateAssistantRunResponse> {
     return this.request<CreateAssistantRunResponse>(
       'POST',
@@ -1339,6 +1508,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Adds a message to an assistant run; terminal-stream conflicts are reported by the API. */
   sendAssistantMessage(
     assistantRunId: string,
     req: SendAssistantMessageRequest,
@@ -1355,6 +1525,7 @@ export class AgentweaverApiClient {
 
   // GET /api/assistant/runs?limit=50 — the caller's own assistant conversations,
   // newest-first (Tank's #346 follow-up endpoint). Powers the Sessions page.
+  /** Lists the current user's assistant conversations, newest first. */
   listAssistantRuns(limit = 50): Promise<ListAssistantRunsResponse> {
     return this.request<ListAssistantRunsResponse>(
       'GET', `/assistant/runs?limit=${encodeURIComponent(String(limit))}`);
@@ -1363,10 +1534,12 @@ export class AgentweaverApiClient {
   // Coordinator topology REST seed (Feature 008 Phase 2). The SSE topology snapshot is
   // emitted before the stream connects, so the page seeds nodes/edges from these on mount,
   // then applies SSE deltas on top (snapshot-race fix). 404 when the run has no plan yet.
+  /** Reads a coordinator's work plan as the initial topology snapshot. */
   getWorkPlan(coordinatorRunId: string): Promise<WorkPlanResponse> {
     return this.request<WorkPlanResponse>('GET', `/runs/${encodeURIComponent(coordinatorRunId)}/work-plan`);
   }
 
+  /** Lists current child-run status for the coordinator. */
   getCoordinatorChildren(coordinatorRunId: string): Promise<CoordinatorChildResponse[]> {
     return this.request<CoordinatorChildResponse[]>('GET', `/runs/${encodeURIComponent(coordinatorRunId)}/children`);
   }
@@ -1375,6 +1548,7 @@ export class AgentweaverApiClient {
   // Posts the backend AssemblyReviewRequest shape ({ approved, request_changes, feedback }) derived
   // from a friendlier decision verb. approve -> merge/scribe/complete; request_changes -> re-dispatch;
   // decline -> assembly_declined.
+  /** Converts the owner decision into the assembly review contract and submits it. */
   reviewAssembly(coordinatorRunId: string, decision: AssemblyReviewDecision, comment?: string, providerKey?: string): Promise<void> {
     const body: AssemblyReviewRequest = {
       approved: decision === 'approve',
@@ -1395,6 +1569,7 @@ export class AgentweaverApiClient {
   // the run that ASKED the question: for a coordinator child question/approval that means the
   // childRunId from the event payload, NOT the coordinator run id. 404 = no pending question,
   // 409 = run not InProgress.
+  /** Answers a pending question on the run that owns the request ID. */
   answerQuestion(runId: string, requestId: string, answer: string): Promise<AnswerQuestionResponse> {
     return this.request<AnswerQuestionResponse>(
       'POST',
@@ -1405,22 +1580,27 @@ export class AgentweaverApiClient {
 
   // Live per-run option toggles. auto-approve cascades to a coordinator's children; autopilot is
   // coordinator-only. Both 404 (not found) / 403 (not owner) / 409 (run not active).
+  /** Toggles tool auto-approval for a run; coordinator settings cascade to children. */
   setAutoApprove(runId: string, enabled: boolean): Promise<AutoApproveResponse> {
     return this.request<AutoApproveResponse>('POST', `/runs/${encodeURIComponent(runId)}/auto-approve`, { enabled });
   }
 
+  /** Toggles coordinator autopilot; the API rejects unsupported or inactive runs. */
   setAutopilot(runId: string, enabled: boolean): Promise<AutopilotResponse> {
     return this.request<AutopilotResponse>('POST', `/runs/${encodeURIComponent(runId)}/autopilot`, { enabled });
   }
 
+  /** Approves a pending tool request at the requested persistence scope. */
   approveTool(runId: string, requestId: string, scope: 'once' | 'run' | 'always' | 'tool'): Promise<void> {
     return this.request<void>('POST', `/runs/${encodeURIComponent(runId)}/tool-approvals`, { request_id: requestId, scope });
   }
 
+  /** Denies one pending tool request. */
   denyTool(runId: string, requestId: string): Promise<void> {
     return this.request<void>('POST', `/runs/${encodeURIComponent(runId)}/tool-denials`, { request_id: requestId });
   }
 
+  /** Retries one preview approval and returns the new pending request identity. */
   retryPreviewApproval(runId: string, requestId: string): Promise<{
     run_id: string;
     request_id: string;
@@ -1435,16 +1615,19 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Approves the shell command identified by its server-provided hash. */
   approveShell(runId: string, commandHash: string): Promise<void> {
     return this.request<void>('POST', `/runs/${encodeURIComponent(runId)}/shell-approvals`, { command_hash: commandHash });
   }
 
+  /** Denies the shell command identified by its server-provided hash. */
   denyShell(runId: string, commandHash: string): Promise<void> {
     return this.request<void>('POST', `/runs/${encodeURIComponent(runId)}/shell-denials`, { command_hash: commandHash });
   }
 
   // Dynamic graph descriptor (Feature 008 Phase 3). Returns null on 404 so the caller
   // can fall back to the hardcoded executor graph until the backend endpoint ships.
+  /** Reads the run graph, returning null on 404 so callers can use their fallback graph. */
   async getRunGraph(runId: string): Promise<GraphDescriptor | null> {
     try {
       return await this.request<GraphDescriptor>('GET', `/runs/${encodeURIComponent(runId)}/graph`);
@@ -1456,27 +1639,33 @@ export class AgentweaverApiClient {
 
   // Backlog & Workflow Kanban board (Feature 009). Thin pass-throughs to the
   // snake_case backlog endpoints — all ordering/claim/validation logic lives server-side.
+  /** Reads the project board and optionally includes terminal task history. */
   getBoard(projectId: string, includeTerminalHistory = false): Promise<BoardDto> {
     const query = includeTerminalHistory ? '?include_terminal_history=true' : '';
     return this.request<BoardDto>('GET', `/projects/${encodeURIComponent(projectId)}/board${query}`);
   }
 
+  /** Reads the project's workflow stage definitions. */
   getWorkflowStages(projectId: string): Promise<WorkflowStagesResponse> {
     return this.request<WorkflowStagesResponse>('GET', `/projects/${encodeURIComponent(projectId)}/workflow-stages`);
   }
 
+  /** Creates a task in the project's backlog. */
   captureBacklogTask(projectId: string, body: { title: string; description?: string | null }): Promise<BacklogTaskDto> {
     return this.request<BacklogTaskDto>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/tasks`, body);
   }
 
+  /** Reads one backlog task. */
   getBacklogTask(projectId: string, taskId: string): Promise<BacklogTaskDto> {
     return this.request<BacklogTaskDto>('GET', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}`);
   }
 
+  /** Updates a backlog task's title and description. */
   editBacklogTask(projectId: string, taskId: string, body: { title: string; description?: string | null }): Promise<BacklogTaskDto> {
     return this.request<BacklogTaskDto>('PATCH', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}`, body);
   }
 
+  /** Previews or saves dependency changes against the task's expected revision. */
   editBacklogDependencies(
     projectId: string,
     taskId: string,
@@ -1490,38 +1679,47 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Deletes a backlog task. */
   deleteBacklogTask(projectId: string, taskId: string): Promise<void> {
     return this.request<void>('DELETE', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}`);
   }
 
+  /** Archives a backlog task without deleting its history. */
   archiveBacklogTask(projectId: string, taskId: string): Promise<void> {
     return this.request<void>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/archive`, {});
   }
 
+  /** Moves a task into the ready queue at an optional target index. */
   moveTaskToReady(projectId: string, taskId: string, targetIndex?: number): Promise<BacklogTaskDto> {
     return this.request<BacklogTaskDto>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/ready`, { target_index: targetIndex ?? null });
   }
 
+  /** Moves a ready task back to the backlog at an optional target index. */
   moveTaskToBacklog(projectId: string, taskId: string, targetIndex?: number): Promise<BacklogTaskDto> {
     return this.request<BacklogTaskDto>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/backlog`, { target_index: targetIndex ?? null });
   }
 
+  /** Reorders one task at the supplied list index. */
   reorderBacklogTask(projectId: string, taskId: string, targetIndex: number): Promise<BacklogTaskDto> {
     return this.request<BacklogTaskDto>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/tasks/${encodeURIComponent(taskId)}/reorder`, { target_index: targetIndex });
   }
 
+  /** Moves every eligible backlog task to ready and returns the moved count. */
   sendAllBacklogToReady(projectId: string): Promise<{ moved: number }> {
     return this.request<{ moved: number }>('POST', `/projects/${encodeURIComponent(projectId)}/backlog/ready-all`, {});
   }
 
+  /** Reads backlog settings that control task intake and ordering. */
   getBacklogSettings(projectId: string): Promise<BacklogSettingsDto> {
     return this.request<BacklogSettingsDto>('GET', `/projects/${encodeURIComponent(projectId)}/backlog/settings`);
   }
 
+  /** Saves backlog settings and returns the server's resulting values. */
   setBacklogSettings(projectId: string, settings: BacklogSettingsDto): Promise<BacklogSettingsDto> {
     return this.request<BacklogSettingsDto>('PUT', `/projects/${encodeURIComponent(projectId)}/backlog/settings`, settings);
   }
 
+  /** Submits a run review; a server conflict with a retryable body becomes RetriableReviewError. */
   async submitReview(runId: string, approved: boolean, providerKey?: string): Promise<ReviewResponse> {
     const body: ReviewRequest = { approved };
     const headers: Record<string, string> = {
@@ -1595,6 +1793,7 @@ export class AgentweaverApiClient {
     }
   }
 
+  /** Reads selected cluster topology layers; returns null when the optional endpoint is absent. */
   async getClusterTopology(
     layers: import('./types').KubernetesTopologyLayer[] = ['runtime'],
   ): Promise<import('./types').KubernetesTopologyDto | null> {
@@ -1628,14 +1827,17 @@ export class AgentweaverApiClient {
     return this.request<import('./types').WorkflowGrammar>('GET', '/workflows/grammar');
   }
 
+  /** Lists discovered workflow definitions and their validation status. */
   listWorkflows(projectId: string): Promise<import('./types').WorkflowListResponse> {
     return this.request<import('./types').WorkflowListResponse>('GET', `/projects/${encodeURIComponent(projectId)}/workflows`);
   }
 
+  /** Re-reads the project's workflow files and returns the refreshed list. */
   syncWorkflows(projectId: string): Promise<import('./types').WorkflowListResponse> {
     return this.request<import('./types').WorkflowListResponse>('POST', `/projects/${encodeURIComponent(projectId)}/workflows/sync`, {});
   }
 
+  /** Reads one complete project workflow definition. */
   getWorkflow(projectId: string, workflowId: string): Promise<import('./types').WorkflowDetailDto> {
     return this.request<import('./types').WorkflowDetailDto>('GET', `/projects/${encodeURIComponent(projectId)}/workflows/${encodeURIComponent(workflowId)}`);
   }
@@ -1671,6 +1873,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Starts a workflow run immediately using the optional confirmed provider key. */
   runWorkflowNow(projectId: string, workflowId: string, providerKey?: string): Promise<{ task_id: string }> {
     return this.request<{ task_id: string }>(
       'POST',
@@ -1723,6 +1926,7 @@ export class AgentweaverApiClient {
     return this.resolveWorkflowGeneration(job, executionContext);
   }
 
+  /** Rechecks a durable generation job and returns either pending state or its completed draft. */
   async resumeWorkflowGeneration(handle: WorkflowGenerationHandle): Promise<WorkflowGenerationOutcome> {
     const job = await this.request<WorkflowGenerationJob>('GET', handle.statusUrl.replace(/^\/api/, ''));
     if (job.status === 'queued' || job.status === 'running') {
@@ -1777,6 +1981,7 @@ export class AgentweaverApiClient {
   // caller (e.g. DashboardPage) already fetches the full metrics DTO separately via `getProjectMetrics`.
   // `signal` (#208 point 5): forwarded to `fetch` so callers can abort in-flight requests on
   // unmount/range-change instead of leaving them to complete and update unmounted state.
+  /** Reads project dashboard data, optionally skipping its metrics fan-out and supporting abort. */
   getProjectDashboard(projectId: string, options?: { includeMetrics?: boolean; signal?: AbortSignal }): Promise<import('./types').ProjectDashboardDto> {
     const query = new URLSearchParams();
     if (options?.includeMetrics === false) query.set('includeMetrics', 'false');
@@ -1789,6 +1994,7 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Reads project metrics for an optional date range and forwards cancellation. */
   getProjectMetrics(projectId: string, from?: string, to?: string, signal?: AbortSignal): Promise<import('./types').ProjectMetricsDto> {
     const query = new URLSearchParams();
     if (from) query.set('from', from);
@@ -1802,20 +2008,24 @@ export class AgentweaverApiClient {
     );
   }
 
+  /** Reads the global overview and forwards cancellation to the HTTP request. */
   getOverview(signal?: AbortSignal): Promise<import('./types').OverviewDto> {
     return this.request<import('./types').OverviewDto>('GET', '/overview', undefined, signal);
   }
 
   // #247 — global notification center: pending Human Review (+ future Tool Approval) requests.
+  /** Reads pending notifications for the signed-in user. */
   getNotifications(signal?: AbortSignal): Promise<import('./types').NotificationsResponseDto> {
     return this.request<import('./types').NotificationsResponseDto>('GET', '/notifications', undefined, signal);
   }
 
+  /** Dismisses one notification for the current user. */
   dismissNotification(notificationId: string): Promise<void> {
     return this.request<void>('POST', `/notifications/${encodeURIComponent(notificationId)}/dismiss`);
   }
 
   // Workspace file tree scoped to the project sandbox (Feature 014, FR-001).
+  /** Lists workspace paths available for spec decomposition. */
   getWorkspaceFiles(projectId: string): Promise<WorkspaceFileNode[]> {
     return this.request<WorkspaceFileNode[]>('GET', `/projects/${encodeURIComponent(projectId)}/workspace/files`);
   }
@@ -1823,6 +2033,7 @@ export class AgentweaverApiClient {
   // Decompose a spec file into proposed backlog items (Feature 014, FR-003/004).
   // filePath=null uses the project's confirmed outcome spec stored on the server (requires runId).
   // confirm=false → dry-run preview; confirm=true → create the tasks.
+  /** Previews or confirms decomposition of a spec into backlog items. */
   decomposeSpec(projectId: string, filePath: string | null, confirm: boolean, runId?: string | null, ref?: string, providerKey?: string): Promise<DecomposeResponse> {
     return this.request<DecomposeResponse>(
       'POST',
@@ -1834,14 +2045,17 @@ export class AgentweaverApiClient {
   }
 
   // Sandbox port-forward (017-preview): tunnel a sandbox pod port to the API server.
+  /** Opens a tunnel from a sandbox service port for this run. */
   startPortForward(runId: string, targetPort: number): Promise<PortForwardSessionDto> {
     return this.request<PortForwardSessionDto>('POST', `/runs/${encodeURIComponent(runId)}/sandbox/port-forward`, { targetPort });
   }
 
+  /** Stops one port-forward session belonging to the run. */
   stopPortForward(runId: string, sessionId: string): Promise<{ session_id: string; stopped: boolean }> {
     return this.request<{ session_id: string; stopped: boolean }>('DELETE', `/runs/${encodeURIComponent(runId)}/sandbox/port-forward/${encodeURIComponent(sessionId)}`);
   }
 
+  /** Sends an authenticated keepalive request and throws ApiError when it is rejected. */
   async pingKeepalive(keepaliveUrl: string): Promise<void> {
     const headers = this.authHeaders();
     const response = await fetch(this.apiUrl(keepaliveUrl), { method: 'POST', headers, credentials: 'include' });
@@ -1849,16 +2063,23 @@ export class AgentweaverApiClient {
     if (!response.ok) throw this.createApiError(response.status, text);
   }
 
+  /** Lists port-forward sessions and accepts either supported response envelope. */
   async listPortForwards(runId: string): Promise<PortForwardSessionDto[]> {
     const response = await this.request<PortForwardSessionDto[] | { sessions?: PortForwardSessionDto[] }>('GET', `/runs/${encodeURIComponent(runId)}/sandbox/port-forward`);
     return Array.isArray(response) ? response : (response.sessions ?? []);
   }
 
   // System runtime info — kubernetes context and pod name (Spec 006).
+  /** Reads the current Kubernetes context and runtime pod information. */
   getSystemRuntime(): Promise<RuntimeInfo> {
     return this.request<RuntimeInfo>('GET', '/system/runtime');
   }
 
+  /**
+   * Sends one authenticated JSON request, retries once after eligible session recovery,
+   * and throws ApiError for non-success responses. Abort signals and provider headers
+   * are forwarded; a provider-connection requirement is emitted as a browser event.
+   */
   private async request<T>(
     method: string,
     path: string,
@@ -1916,6 +2137,7 @@ export class AgentweaverApiClient {
     return null as T;
   }
 
+  /** Shares a single peer session-recovery attempt across concurrent unauthorized requests. */
   private recoverSessionAuth(rejectedToken: string | null): Promise<boolean> {
     if (this.sessionRecovery) return this.sessionRecovery;
     if (this.sessionTokenProvider() === rejectedToken) {
@@ -1928,6 +2150,7 @@ export class AgentweaverApiClient {
     return this.sessionRecovery;
   }
 
+  /** Creates the standard HTTP error and announces provider-connection requirements to the UI. */
   private createApiError(status: number, body: string): ApiError {
     const error = new ApiError(status, body);
     if (typeof window !== 'undefined' && isModelProviderConnectionRequirement(error.payload)) {
@@ -1939,6 +2162,7 @@ export class AgentweaverApiClient {
     return error;
   }
 
+  /** Preserves absolute service URLs and prefixes relative paths with the API base path. */
   private apiUrl(pathOrUrl: string): string {
     if (/^[a-z][a-z\d+\-.]*:\/\//i.test(pathOrUrl)) return pathOrUrl;
     const path = pathOrUrl.startsWith('/') ? pathOrUrl : `/${pathOrUrl}`;

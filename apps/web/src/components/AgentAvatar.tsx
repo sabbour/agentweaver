@@ -3,6 +3,11 @@ import {
   tokens,
 } from '@fluentui/react-components';
 import type { FluentIcon } from '@fluentui/react-icons';
+
+/**
+ * Shared agent avatar: renders a deterministic pixel-art face from the agent name and optional
+ * built-in or role badge. It uses no API data; size, shape, retired styling, and badge are props.
+ */
 const useStyles = makeStyles({
   root: {
     position: 'relative',
@@ -73,6 +78,11 @@ interface AgentAvatarProps {
   badgeTitle?: string;
 }
 
+/**
+ * Renders a deterministic 5×5 avatar with an optional built-in or role badge.
+ * `name` controls the generated pixels and color; `size`, `circle`, `isRetired`, and badge props
+ * control its presentation. It has no remote data source or state.
+ */
 export function AgentAvatar({
   name,
   size = 40,

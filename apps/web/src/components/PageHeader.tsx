@@ -27,6 +27,10 @@ const useStyles = makeStyles({
   },
 });
 
+/**
+ * Renders a page title with optional supporting text and caller-provided actions.
+ * All content is passed through props; the component has no data request or local state.
+ */
 export function PageHeader({
   title,
   subtitle,

@@ -4,6 +4,8 @@ import { ApiError } from '../api/client';
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import type { Project } from '../api/types';
 import type { ReactNode } from 'react';
+
+/** Project-list data and actions shared by pages below {@link ProjectListProvider}. */
 interface ProjectListState {
   projects: Project[];
   loading: boolean;
@@ -16,6 +18,7 @@ interface ProjectListState {
 
 const ProjectListContext = createContext<ProjectListState | null>(null);
 
+/** Fetches all project pages and provides the resulting list to child components. */
 export function ProjectListProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -78,6 +81,7 @@ export function ProjectListProvider({ children }: { children: ReactNode }) {
   );
 }
 
+/** Reads the shared project list; throws when used outside its provider. */
 export function useProjectList(): ProjectListState {
   const ctx = useContext(ProjectListContext);
   if (!ctx) throw new Error('useProjectList must be used inside ProjectListProvider');

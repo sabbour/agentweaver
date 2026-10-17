@@ -5,6 +5,7 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Prepares and verifies the Environment and Sandbox placement used to resume a retained runtime workspace.</summary>
 public sealed class EnvironmentRuntimeWorkspaceResumeManager(
     IEnvironmentLifecycleStore lifecycle,
     ISandboxLeaseStore leases,
@@ -21,6 +22,10 @@ public sealed class EnvironmentRuntimeWorkspaceResumeManager(
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
+    /// <summary>
+    /// Advances the lifecycle, reapplies and verifies egress, provisions the resume placement, and returns its context.
+    /// The request must not yet include restored-workspace evidence.
+    /// </summary>
     public async Task<RuntimeWorkspaceResumePlacementReceipt> PrepareAsync(
         RuntimeWorkspaceResumeRequest request,
         RuntimeActorAuthorization actor,
@@ -99,6 +104,9 @@ public sealed class EnvironmentRuntimeWorkspaceResumeManager(
         }
     }
 
+    /// <summary>
+    /// Verifies restored workspace evidence against stable placement snapshots, the host, and the policy generation.
+    /// </summary>
     public async Task<RuntimeWorkspaceResumeVerificationReceipt> VerifyAsync(
         RuntimeWorkspaceResumeRequest request,
         RuntimeActorAuthorization actor,
@@ -142,6 +150,7 @@ public sealed class EnvironmentRuntimeWorkspaceResumeManager(
         }
     }
 
+    /// <summary>Requires the original lease, flush receipt, policy selection, and retained volume to remain consistent.</summary>
     private async Task<SandboxLeaseSnapshot> ReadSourceAsync(
         RuntimeWorkspaceResumeRequest request,
         EnvironmentGenerationFence currentFence,
@@ -191,9 +200,11 @@ public sealed class EnvironmentRuntimeWorkspaceResumeManager(
         return lease;
     }
 
+    /// <summary>Creates a stage-specific idempotency key bound to the resume and source manifest operations.</summary>
     private static string OperationKey(RuntimeWorkspaceResumeRequest request, string stage) =>
         $"resume:{request.OperationId:N}:{request.SourceManifest.ManifestId:N}:{stage}";
 
+    /// <summary>Compares placement and resume evidence as JSON values rather than by formatting.</summary>
     private static bool SameJson<T>(T left, T right) =>
         JsonElement.DeepEquals(
             JsonSerializer.SerializeToElement(left, JsonOptions), JsonSerializer.SerializeToElement(right, JsonOptions));

@@ -9,6 +9,7 @@ import {
   NotificationPattern,
   ServiceOverviewPattern,
 } from '..';
+/** Combines overview cards, notifications, feedback, and an acknowledged delete confirmation. */
 export function ServiceOverviewFeedbackExample() {
   const [acknowledgedDelete, setAcknowledgedDelete] = useState(false);
 

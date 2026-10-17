@@ -7,11 +7,13 @@ import {
 } from './config';
 import type { BrokerConsentPrompt, BrokerTokenResponse } from './contracts';
 
+/** Project and run scope captured when a Gateway authorization flow begins. */
 export interface RunBinding {
   projectId: string;
   runId: string;
 }
 
+/** PKCE state and scope saved locally while a Broker authorization is in progress. */
 export interface AuthorizationTransaction {
   state: string;
   verifier: string;
@@ -19,6 +21,7 @@ export interface AuthorizationTransaction {
   binding: RunBinding | null;
 }
 
+/** Identity Broker and OAuth settings required to construct or complete authorization. */
 export interface AuthorizationConfig {
   brokerUrl: string;
   clientId: string;
@@ -26,11 +29,13 @@ export interface AuthorizationConfig {
   scopes: string[];
 }
 
+/** Authorization code and state accepted after a callback is verified. */
 export interface AuthorizationResult {
   code: string;
   state: string;
 }
 
+/** Same-origin popup message discriminator for Identity Broker callbacks. */
 export const IDENTITY_CALLBACK_MESSAGE_TYPE = 'agentweaver.identity.callback';
 const IDENTITY_CALLBACK_PARAMETER_NAMES = new Set([
   'state',
@@ -45,6 +50,7 @@ const IDENTITY_CALLBACK_ERROR_LIMIT = 256;
 const IDENTITY_CALLBACK_DESCRIPTION_LIMIT = 2048;
 const IDENTITY_CALLBACK_ISSUER_LIMIT = 2048;
 
+/** Exact success or error response accepted from the Identity Broker callback window. */
 export type AuthorizationCallbackMessage =
   | { type: typeof IDENTITY_CALLBACK_MESSAGE_TYPE; state: string; code: string }
   | {
@@ -60,8 +66,10 @@ declare global {
   }
 }
 
+/** Browser-session key for the pending PKCE verifier, state, redirect, and run binding. */
 export const AUTH_TRANSACTION_STORAGE_KEY = 'agentweaver.oauth.transaction';
 
+/** Returns the configured Broker client settings used by the v1 authorization flow. */
 export function defaultAuthorizationConfig(): AuthorizationConfig {
   return {
     brokerUrl: brokerBaseUrl,
@@ -71,11 +79,13 @@ export function defaultAuthorizationConfig(): AuthorizationConfig {
   };
 }
 
+/** Creates a cryptographically random base64url PKCE verifier. */
 export function randomVerifier(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   return base64Url(bytes);
 }
 
+/** Creates the independent OAuth state value used to bind the callback to its request. */
 export function randomState(): string {
   return randomVerifier();
 }
@@ -86,11 +96,13 @@ function base64Url(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+/** Hashes a PKCE verifier with SHA-256 and encodes the challenge as base64url. */
 export async function pkceChallenge(verifier: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
   return base64Url(new Uint8Array(digest));
 }
 
+/** Builds the Broker authorization URL, including the exact project/run binding when present. */
 export function buildAuthorizeUrl(
   config: AuthorizationConfig,
   transaction: AuthorizationTransaction,
@@ -111,6 +123,7 @@ export function buildAuthorizeUrl(
   return url.toString();
 }
 
+/** Parses an authorization URL response and rejects callbacks with a different state. */
 export function parseAuthorizationResult(
   responseUrl: string,
   expectedState: string,
@@ -131,6 +144,7 @@ export function parseAuthorizationResult(
   return { code: code!, state: state! };
 }
 
+/** Validates a cross-window authorization message and its bounded field set. */
 export function parseAuthorizationCallbackMessage(
   value: unknown,
 ): AuthorizationCallbackMessage | undefined {
@@ -165,6 +179,7 @@ export function parseAuthorizationCallbackMessage(
   return undefined;
 }
 
+/** Validates callback query parameters and, when supplied, the exact configured HTTPS issuer. */
 export function parseAuthorizationCallbackParameters(
   search: string,
   expectedIssuer: string = brokerIssuer,
@@ -231,6 +246,7 @@ function isHttpsIssuer(value: unknown): value is string {
     !url.hash;
 }
 
+/** True for a Broker consent challenge with the fields required by the consent endpoint. */
 export function isConsentPrompt(value: unknown): value is BrokerConsentPrompt {
   if (!value || typeof value !== 'object') return false;
   const prompt = value as Partial<BrokerConsentPrompt>;
@@ -242,6 +258,7 @@ export function isConsentPrompt(value: unknown): value is BrokerConsentPrompt {
     typeof prompt.csrf_token === 'string';
 }
 
+/** Exchanges an authorization code using the transaction's PKCE verifier. */
 export async function exchangeAuthorizationCode(
   config: AuthorizationConfig,
   transaction: AuthorizationTransaction,
@@ -265,6 +282,7 @@ export async function exchangeAuthorizationCode(
   return await readTokenResponse(response);
 }
 
+/** Exchanges a refresh token and validates the Broker's bearer-token response. */
 export async function refreshBrokerToken(
   config: AuthorizationConfig,
   refreshToken: string,
@@ -299,6 +317,7 @@ async function readTokenResponse(response: Response): Promise<BrokerTokenRespons
   return result as unknown as BrokerTokenResponse;
 }
 
+/** Posts an explicit consent decision with the Broker antiforgery token and no redirect following. */
 export async function submitBrokerConsent(
   config: AuthorizationConfig,
   prompt: BrokerConsentPrompt,
@@ -331,6 +350,7 @@ export async function submitBrokerConsent(
   return response;
 }
 
+/** Persists the short-lived PKCE transaction in session storage, never the bearer tokens. */
 export function storeAuthorizationTransaction(
   transaction: AuthorizationTransaction,
   storage: Storage = sessionStorage,
@@ -338,6 +358,7 @@ export function storeAuthorizationTransaction(
   storage.setItem(AUTH_TRANSACTION_STORAGE_KEY, JSON.stringify(transaction));
 }
 
+/** Reads and minimally validates the saved PKCE transaction; malformed data returns null. */
 export function readAuthorizationTransaction(
   storage: Storage = sessionStorage,
 ): AuthorizationTransaction | null {
@@ -356,6 +377,7 @@ export function readAuthorizationTransaction(
   }
 }
 
+/** Removes the locally saved PKCE transaction after completion, cancellation, or sign-out. */
 export function clearAuthorizationTransaction(storage: Storage = sessionStorage): void {
   storage.removeItem(AUTH_TRANSACTION_STORAGE_KEY);
 }

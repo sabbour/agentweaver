@@ -16,6 +16,10 @@ using OpenIddict.Abstractions;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Coordinates MAF work-plan dispatch, BuildTest execution, and runtime-host message delivery.
+/// The endpoints revalidate accepted selection and decision state around each durable or remote side effect.
+/// </summary>
 public static partial class CoordinationEndpoints
 {
     private static readonly JsonSerializerOptions RuntimeHostJsonOptions = new(JsonSerializerDefaults.Web)
@@ -25,6 +29,9 @@ public static partial class CoordinationEndpoints
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
+    /// <summary>
+    /// Creates the checkpoint binding for one accepted session and selected model.
+    /// </summary>
     internal static MafCheckpointBinding CreateExecutionCheckpointBinding(
         SessionIdentity identity,
         CoordinationActor actor,
@@ -40,6 +47,10 @@ public static partial class CoordinationEndpoints
             CacheReference: null,
             StoreName: MafExecutionCheckpointContract.StoreName);
 
+    /// <summary>
+    /// Advances a confirmed work plan by reconciling children, executing eligible platform steps, and dispatching ready work.
+    /// </summary>
+    /// <remarks>The handler persists dispatch intents before calling child hosts, rechecks authorization before completion, and appends an output witness only after the final frontier is complete.</remarks>
     private static Task<IResult> DispatchCoordinatorWorkPlanAsync(
         string projectId,
         string runId,
@@ -1171,6 +1182,15 @@ public static partial class CoordinationEndpoints
             });
         }, cancellationToken);
 
+    /// <summary>
+    /// Creates the authorization reference for checking a BuildTest intent against current decision state.
+    /// </summary>
+    /// <param name="intent">The persisted command intent.</param>
+    /// <param name="progress">Current non-model step progress.</param>
+    /// <param name="identity">The expected session identity.</param>
+    /// <param name="decision">The current decision and selection binding.</param>
+    /// <returns>The command's checkpoint reference updated to the current decision version.</returns>
+    /// <exception cref="CoordinationException">Thrown when the command belongs to another session, fence, or selection, or a running command has a stale decision version.</exception>
     internal static SandboxBuildTestCheckpointReference CreateBuildTestDispatchAuthorizationReference(
         MafExecutionBuildTestIntent intent,
         MafExecutionProgress progress,
@@ -1187,6 +1207,17 @@ public static partial class CoordinationEndpoints
         return intent.CheckpointReference() with { DecisionStateVersion = decision.StateVersion };
     }
 
+    /// <summary>
+    /// Prepares a checkpoint that marks a model or fixed-work association running and records its pending dispatch.
+    /// </summary>
+    /// <param name="latest">The latest checkpoint, or <see langword="null"/> before the first checkpoint.</param>
+    /// <param name="workPlanId">The accepted plan ID.</param>
+    /// <param name="decisionStateVersion">The decision version authorizing the dispatch.</param>
+    /// <param name="associationId">The work-item or fixed-work association ID.</param>
+    /// <param name="fixedAssociation">The fixed-work binding, when this is a fixed action.</param>
+    /// <param name="intent">The deterministic pending message intent, when dispatch is being recorded.</param>
+    /// <returns>The next checkpoint state, or <see langword="null"/> when an identical or completed association is already present.</returns>
+    /// <exception cref="CoordinationException">Thrown when plan, progress, fixed association, or retry intent conflicts with persisted state.</exception>
     internal static MafExecutionCheckpoint? PrepareRunningCheckpoint(
         MafExecutionCheckpointSnapshot? latest,
         string workPlanId,
@@ -1285,6 +1316,13 @@ public static partial class CoordinationEndpoints
         };
     }
 
+    /// <summary>
+    /// Adds a new BuildTest intent and marks its platform step running in the next checkpoint revision.
+    /// </summary>
+    /// <param name="latest">The checkpoint being extended.</param>
+    /// <param name="intent">The immutable accepted command intent.</param>
+    /// <returns>The next state, or <see langword="null"/> for an exact idempotent replay.</returns>
+    /// <exception cref="CoordinationException">Thrown when the command is bound to a stale plan, revision, decision, or concurrent platform step.</exception>
     internal static MafExecutionCheckpoint? PrepareBuildTestCheckpoint(
         MafExecutionCheckpointSnapshot latest,
         MafExecutionBuildTestIntent intent)
@@ -1321,6 +1359,14 @@ public static partial class CoordinationEndpoints
         return next;
     }
 
+    /// <summary>
+    /// Stores terminal BuildTest evidence and advances the platform step from running to its owner-derived status.
+    /// </summary>
+    /// <param name="latest">The checkpoint containing the running intent.</param>
+    /// <param name="intent">The immutable intent whose owner operation completed.</param>
+    /// <param name="operation">The operation snapshot returned by the environment owner.</param>
+    /// <returns>The next checkpoint, or <see langword="null"/> while the operation is running or after an exact terminal replay.</returns>
+    /// <exception cref="CoordinationException">Thrown when the intent or repeated terminal evidence conflicts with checkpoint state.</exception>
     internal static MafExecutionCheckpoint? PrepareBuildTestCompletionCheckpoint(
         MafExecutionCheckpointSnapshot latest,
         MafExecutionBuildTestIntent intent,
@@ -1362,6 +1408,9 @@ public static partial class CoordinationEndpoints
         return next;
     }
 
+    /// <summary>
+    /// Produces the bounded JSON summary of terminal BuildTest status and output evidence used in dependent prompts.
+    /// </summary>
     internal static string BuildTestResultSummary(MafBuildTestTerminalReceipt receipt) =>
         JsonSerializer.Serialize(new
         {
@@ -1383,6 +1432,15 @@ public static partial class CoordinationEndpoints
             receipt.FailureCode
         });
 
+    /// <summary>
+    /// Checks whether a dispatch response exactly replays a result already stored for the same deterministic intent.
+    /// </summary>
+    /// <param name="state">The current checkpoint state.</param>
+    /// <param name="intent">The dispatch intent being completed.</param>
+    /// <param name="expectedIntent">The intent rebuilt from current checkpoint contents.</param>
+    /// <param name="response">The returned child response.</param>
+    /// <returns><see langword="true"/> when the identical response is already recorded and no pending intent remains.</returns>
+    /// <exception cref="CoordinationException">Thrown when pending intent or result state conflicts with the replay.</exception>
     internal static bool IsCompletedDispatchReplay(
         MafExecutionCheckpoint state,
         MafExecutionDispatchIntent intent,
@@ -1414,6 +1472,14 @@ public static partial class CoordinationEndpoints
         return true;
     }
 
+    /// <summary>
+    /// Decides whether a pending dispatch should be sent again or is already complete.
+    /// </summary>
+    /// <param name="state">The current checkpoint state.</param>
+    /// <param name="intent">The intent the caller wants to send.</param>
+    /// <param name="expectedIntent">The deterministic intent rebuilt from the current checkpoint.</param>
+    /// <returns><see langword="true"/> only for a matching pending intent with running progress; <see langword="false"/> for a completed result.</returns>
+    /// <exception cref="CoordinationException">Thrown when intent, result, and progress state conflict.</exception>
     internal static bool ShouldSendDispatchIntent(
         MafExecutionCheckpoint state, MafExecutionDispatchIntent intent, MafExecutionDispatchIntent expectedIntent)
     {
@@ -1439,6 +1505,9 @@ public static partial class CoordinationEndpoints
         throw new CoordinationException("maf_execution_dispatch_intent_conflict", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Compares a persisted fixed-work association with a retry candidate across all pinned fields and outputs.
+    /// </summary>
     private static bool FixedAssociationsMatch(
         MafExecutionFixedWorkAssociation expected,
         MafExecutionFixedWorkAssociation actual) =>
@@ -1464,6 +1533,13 @@ public static partial class CoordinationEndpoints
         expected.Specification.DeclaredOutputs.SequenceEqual(
             actual.Specification.DeclaredOutputs, StringComparer.Ordinal);
 
+    /// <summary>
+    /// Resolves a runtime-host route only from a valid HTTPS configure endpoint and a runtime API path.
+    /// </summary>
+    /// <param name="configureEndpoint">The registered host's HTTPS configure endpoint.</param>
+    /// <param name="path">A runtime API path under the supported versioned prefix.</param>
+    /// <returns>The validated absolute HTTPS endpoint.</returns>
+    /// <exception cref="CoordinationException">Thrown when the base URI or path could change the trusted host destination.</exception>
     internal static Uri RuntimeHostEndpoint(Uri configureEndpoint, string path)
     {
         if (!RuntimeContractValidation.IsHttpsEndpoint(configureEndpoint) ||
@@ -1475,6 +1551,19 @@ public static partial class CoordinationEndpoints
         return endpoint;
     }
 
+    /// <summary>
+    /// Sends a bounded, no-store request to a runtime host and validates its status, route, and JSON contract.
+    /// </summary>
+    /// <typeparam name="TResponse">The expected response contract.</typeparam>
+    /// <param name="client">The HTTP client configured for runtime-host calls.</param>
+    /// <param name="endpoint">The validated HTTPS runtime-host endpoint.</param>
+    /// <param name="actor">The short-lived bearer credential and tenant selector.</param>
+    /// <param name="body">The optional JSON request body; a non-null body uses POST.</param>
+    /// <param name="allowNotReady">Whether the known not-ready response should return <see langword="null"/>.</param>
+    /// <param name="cancellationToken">Cancels the remote request.</param>
+    /// <returns>The response body, or <see langword="null"/> for an explicitly allowed not-ready result.</returns>
+    /// <exception cref="CoordinationException">Thrown on redirects, cache violations, rejected statuses, malformed JSON, or uncertain transport outcomes.</exception>
+    /// <remarks>Redirects are rejected and the original bearer is never forwarded to a different URI.</remarks>
     internal static async Task<TResponse?> SendRuntimeHostAsync<TResponse>(
         HttpClient client,
         Uri endpoint,
@@ -1561,6 +1650,11 @@ public static partial class CoordinationEndpoints
         }
     }
 
+    /// <summary>
+    /// Validates readiness evidence and sends one addressed message to the registered runtime host.
+    /// </summary>
+    /// <returns>The host's non-null A2A response.</returns>
+    /// <exception cref="CoordinationException">Thrown when readiness is stale or the runtime host request fails validation.</exception>
     internal static async Task<RuntimeA2AResponse> SendRuntimeHostMessageAsync(
         HttpClient client,
         RuntimeRegistration registration,
@@ -1584,6 +1678,13 @@ public static partial class CoordinationEndpoints
                 "maf_execution_host_unavailable", StatusCodes.Status503ServiceUnavailable);
     }
 
+    /// <summary>
+    /// Verifies that readiness and its observation grant are current for this runtime registration.
+    /// </summary>
+    /// <param name="receipt">The host readiness receipt.</param>
+    /// <param name="registration">The active registration that must match the receipt.</param>
+    /// <param name="timeProvider">The clock used to check grant and registration expiry.</param>
+    /// <exception cref="CoordinationException">Thrown when startup phases, registration, image, fence, or observation grant are invalid or expired.</exception>
     internal static void ValidateHostReadiness(
         RuntimeHostReadinessReceipt receipt,
         RuntimeRegistration registration,
@@ -1614,5 +1715,8 @@ public static partial class CoordinationEndpoints
                 "maf_execution_host_readiness_invalid", StatusCodes.Status503ServiceUnavailable);
     }
 
+    /// <summary>
+    /// Error response contract used to recognize the runtime host's explicit not-ready result.
+    /// </summary>
     private sealed record RuntimeHostError(string Code);
 }

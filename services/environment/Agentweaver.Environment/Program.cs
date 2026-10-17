@@ -15,6 +15,7 @@ using Npgsql;
 using WorkloadIdentityCredential = AzureIdentity::Azure.Identity.WorkloadIdentityCredential;
 using static Program;
 
+// Starts the Environment API, or runs the explicitly requested database migration path before host startup.
 var runMigrations = args.Length == 1 && args[0] == "--migrate";
 if (args.Contains("--migrate", StringComparer.Ordinal) && !runMigrations)
     throw new ArgumentException("The --migrate command must be used by itself.", nameof(args));
@@ -264,14 +265,17 @@ static AzureFilesCsiOptions ReadAzureFilesOptions(IConfiguration configuration)
         section.GetValue("PollIntervalMilliseconds", 0)).Validate();
 }
 
+/// <summary>Signs Kubernetes API calls with the projected service-account token and validates the cluster CA.</summary>
 internal sealed class KubernetesServiceAccountHandler : DelegatingHandler
 {
     private readonly string _tokenFile;
 
+    /// <summary>Creates a handler that reads the projected service-account token from the specified file.</summary>
     internal KubernetesServiceAccountHandler(HttpMessageHandler innerHandler, string tokenFile)
         : base(innerHandler) =>
         _tokenFile = tokenFile;
 
+    /// <summary>Creates a redirect-disabled Kubernetes client handler using the projected token and CA files.</summary>
     public static HttpMessageHandler Create(string tokenFile, string caFile)
     {
         if (!Path.IsPathFullyQualified(tokenFile) || !Path.IsPathFullyQualified(caFile))
@@ -286,6 +290,7 @@ internal sealed class KubernetesServiceAccountHandler : DelegatingHandler
             tokenFile);
     }
 
+    /// <summary>Loads the projected bearer token for each request and rejects redirects to avoid credential forwarding.</summary>
     protected override async Task<HttpResponseMessage> SendAsync(
         HttpRequestMessage request,
         CancellationToken cancellationToken)
@@ -303,6 +308,7 @@ internal sealed class KubernetesServiceAccountHandler : DelegatingHandler
         return response;
     }
 
+    /// <summary>Validates the cluster certificate using normal TLS checks or the configured custom root CA.</summary>
     private static bool ValidateClusterCertificate(
         X509Certificate? certificate,
         X509Chain? peerChain,
@@ -330,8 +336,10 @@ internal sealed class KubernetesServiceAccountHandler : DelegatingHandler
     }
 }
 
+/// <summary>Provides test-visible configuration readers for the Environment service's Sandbox providers.</summary>
 public partial class Program
 {
+    /// <summary>Reads and validates the complete AgentSandbox provider configuration, including startup budgets.</summary>
     public static AgentSandboxOptions ReadSandboxOptions(IConfiguration configuration)
     {
         var section = configuration.GetSection("Environment:Sandbox:AgentSandbox");
@@ -363,6 +371,7 @@ public partial class Program
         }.Validate();
     }
 
+    /// <summary>Reads an optional accepted BuildTest profile and restores its immutable allowlist arrays.</summary>
     private static SandboxBuildTestAcceptedExecutionOptions? ReadBuildTestProfile(IConfigurationSection section)
     {
         if (!section.Exists())
@@ -381,6 +390,7 @@ public partial class Program
         };
     }
 
+    /// <summary>Returns a required configuration value or fails startup with the missing setting name.</summary>
     internal static string Required(string? value, string name) =>
         !string.IsNullOrWhiteSpace(value)
             ? value

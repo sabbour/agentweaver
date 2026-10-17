@@ -22,6 +22,7 @@ const items = [
   },
 ];
 
+/** Demonstrates independently collapsible sections with optional supporting detail. */
 export function AccordionExample() {
   return <AzureAccordion items={items} defaultOpenItems={['dependencies']} multiple ariaLabel="Accordion example" />;
 }

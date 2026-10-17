@@ -5,6 +5,7 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity;
 
+/// <summary>Durable owner receipt for one usage submission attributed to a runtime SDK source.</summary>
 public sealed record RuntimeUsageSourceReceipt(
     int ContractVersion,
     Guid ReceiptId,
@@ -13,12 +14,15 @@ public sealed record RuntimeUsageSourceReceipt(
     string CanonicalPayloadHash,
     DateTimeOffset RecordedAt);
 
+/// <summary>Request to retrieve one stored usage receipt by its exact receipt ID.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeUsageReceiptReferenceRequest(Guid ReceiptId);
 
+/// <summary>Owner acknowledgment that a source usage receipt was accounted, possibly as a duplicate.</summary>
 public sealed record RuntimeUsageAccountingAcknowledgment(
     Guid SourceReceiptId, UsageAccountingReceipt Accounting, bool IsDuplicate);
 
+/// <summary>Request for an immutable cost snapshot over a bounded set of accounting receipts.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeUsageCostSnapshotRequest(
     int ContractVersion, RuntimeRegistration Registration, SdkSessionFacts Source)
@@ -29,6 +33,7 @@ public sealed record RuntimeUsageCostSnapshotRequest(
     public RuntimeNativeTurnRecordedReceipt? NativeTurn { get; init; }
 }
 
+/// <summary>Owner response with pricing and totals for the exact required receipt set.</summary>
 public sealed record RuntimeUsageCostSnapshotReceipt(
     int ContractVersion, string SourceHash, CostBinding? Binding, CostPrice Quote, UsageRunTotals CopilotTotals)
 {
@@ -36,10 +41,13 @@ public sealed record RuntimeUsageCostSnapshotReceipt(
     public ImmutableArray<RuntimeUsageCostReceiptReference> RepresentedReceipts { get; init; } = [];
 }
 
+/// <summary>Validates usage cost snapshot requests, receipts, and hosted-Copilot pricing results.</summary>
 public static class RuntimeUsageCostSnapshotContract
 {
+    /// <summary>Maximum number of accounting receipt references accepted per snapshot.</summary>
     public const int MaximumReceiptReferences = 512;
 
+    /// <summary>Validates scope, uniqueness, attribution, and optional native-turn binding.</summary>
     public static void ValidateRequest(RuntimeUsageCostSnapshotRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -79,6 +87,7 @@ public static class RuntimeUsageCostSnapshotContract
             RuntimeNativeTurnContract.ValidateAccountingSnapshot(request, recorded);
     }
 
+    /// <summary>Requires a snapshot to return exactly the receipts in its request, without substitution.</summary>
     public static void ValidateObservedReceipt(
         RuntimeUsageCostSnapshotReceipt receipt, RuntimeUsageCostSnapshotRequest request)
     {
@@ -102,6 +111,7 @@ public static class RuntimeUsageCostSnapshotContract
             throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
     }
 
+    /// <summary>Requires a fully priced hosted-Copilot snapshot and returns its total AIC amount.</summary>
     public static decimal ValidateReceipt(
         RuntimeUsageCostSnapshotReceipt receipt, RuntimeUsageCostSnapshotRequest request)
     {
@@ -114,6 +124,7 @@ public static class RuntimeUsageCostSnapshotContract
             request.Source.ModelId, scope.TenantId, scope.ProjectId, scope.RunId);
     }
 
+    /// <summary>Checks rate card identity, model multiplier, complete totals, and arithmetic consistency.</summary>
     public static decimal ValidatePricedCopilotSnapshot(
         CostBinding? binding, CostPrice quote, UsageRunTotals copilotTotals,
         string modelId, string tenantId, string projectId, string runId)
@@ -152,10 +163,12 @@ public static class RuntimeUsageCostSnapshotContract
     }
 }
 
+/// <summary>One source receipt and accounting receipt represented by a cost snapshot.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeUsageCostReceiptReference(
     Guid SourceReceiptId, UsageAccountingReceipt Accounting);
 
+/// <summary>Request to reconcile one model turn's usage against its owner accounting revision.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeUsageCostReconciliationRequest(
     int ContractVersion,
@@ -175,6 +188,7 @@ public sealed record RuntimeUsageCostReconciliationRequest(
     long MinimumAccountingRevision,
     ImmutableArray<RuntimeUsageCostReceiptReference> RequiredReceipts);
 
+/// <summary>Owner receipt proving the exact turn usage has been represented at an accounting revision.</summary>
 public sealed record RuntimeUsageCostReconciliationReceipt(
     int ContractVersion,
     Guid CostTurnId,
@@ -197,10 +211,13 @@ public sealed record RuntimeUsageCostReconciliationReceipt(
     ImmutableArray<RuntimeUsageCostReceiptReference> RepresentedReceipts,
     UsageRunTotals CopilotTotals);
 
+/// <summary>Validates model-turn cost reconciliation requests and exact represented receipt sets.</summary>
 public static class RuntimeUsageCostReconciliationContract
 {
+    /// <summary>Maximum number of accounting receipts accepted in a reconciliation request.</summary>
     public const int MaximumReceiptReferences = 512;
 
+    /// <summary>Checks model, rate-card, turn, revisions, and unique receipt identities.</summary>
     public static void ValidateRequest(RuntimeUsageCostReconciliationRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -250,6 +267,7 @@ public static class RuntimeUsageCostReconciliationContract
         }
     }
 
+    /// <summary>Requires owner totals and represented receipts to match the reconciliation request.</summary>
     public static void ValidateReceipt(
         RuntimeUsageCostReconciliationReceipt receipt,
         RuntimeUsageCostReconciliationRequest request,
@@ -294,6 +312,7 @@ public static class RuntimeUsageCostReconciliationContract
     }
 }
 
+/// <summary>Creates, hashes, and validates SDK source receipts and their usage submissions.</summary>
 public static class RuntimeUsageSourceReceiptContract
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -302,6 +321,7 @@ public static class RuntimeUsageSourceReceiptContract
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
+    /// <summary>Checks the receipt version, ID, usage binding, and canonical payload digest.</summary>
     public static void Validate(RuntimeUsageSourceReceipt receipt)
     {
         ArgumentNullException.ThrowIfNull(receipt);
@@ -313,6 +333,7 @@ public static class RuntimeUsageSourceReceiptContract
             throw new RuntimeAuthorizationException("runtime_usage_receipt_hash_invalid");
     }
 
+    /// <summary>Validates source, attribution, model, measurement, and event identity against registration.</summary>
     public static void ValidateUsage(RuntimeRegistration registration, UsageSubmission usage)
     {
         ArgumentNullException.ThrowIfNull(usage);
@@ -347,6 +368,7 @@ public static class RuntimeUsageSourceReceiptContract
         ValidateAccounting(source, usage.SdkAccounting, measurement.ProviderUnits);
     }
 
+    /// <summary>Checks optional SDK accounting state and its source-session identity.</summary>
     public static void ValidateAccounting(
         SdkSessionFacts source, SdkUsageAccountingObservation? accounting, decimal? reportedNanoAiu)
     {
@@ -368,6 +390,7 @@ public static class RuntimeUsageSourceReceiptContract
         }
     }
 
+    /// <summary>Requires active placement and exact model/source fields for the current registration.</summary>
     public static void ValidateSource(RuntimeRegistration registration, SdkSessionFacts source)
     {
         RuntimeContractValidation.Validate(registration);
@@ -413,14 +436,17 @@ public static class RuntimeUsageSourceReceiptContract
         _ => false
     };
 
+    /// <summary>Hashes the canonical registration and usage submission.</summary>
     public static string Hash(RuntimeRegistration registration, UsageSubmission usage) =>
         RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(
             new CanonicalSourceUsage(registration, usage), JsonOptions));
 
+    /// <summary>Hashes the registration and SDK source facts used by usage receipts.</summary>
     public static string HashSource(RuntimeRegistration registration, SdkSessionFacts source) =>
         RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(
             new { Registration = registration, Source = source }, JsonOptions));
 
+    /// <summary>Maps an SDK observation into a scoped usage submission and validates the result.</summary>
     public static UsageSubmission CreateUsage(
         RuntimeRegistration registration, SdkSessionFacts source, SdkUsageObservation observation)
     {
@@ -460,5 +486,6 @@ public static class RuntimeUsageSourceReceiptContract
             throw new RuntimeAuthorizationException("runtime_usage_source_invalid");
     }
 
+    /// <summary>Fixed property shape for canonical usage receipt hashing.</summary>
     private sealed record CanonicalSourceUsage(RuntimeRegistration Registration, UsageSubmission Usage);
 }

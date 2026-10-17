@@ -3,8 +3,10 @@ using StackExchange.Redis;
 
 namespace Agentweaver.Knowledge;
 
+/// <summary>A Redis hash field name and value returned by bounded namespace scans.</summary>
 public sealed record RedisMemoryHashField(string Name, string Value);
 
+/// <summary>Server configuration and INFO data used to check Redis durability and topology.</summary>
 public sealed record RedisMemoryServerSnapshot(
     ImmutableDictionary<string, string> Configuration,
     ImmutableDictionary<string, string> Server,
@@ -12,29 +14,37 @@ public sealed record RedisMemoryServerSnapshot(
     ImmutableDictionary<string, string> Replication,
     ImmutableDictionary<string, string> Cluster);
 
+/// <summary>Redis operations required by the Memory document store, isolated for deterministic testing.</summary>
 public interface IRedisMemoryCommandClient
 {
+    /// <summary>Reads the Redis configuration and INFO snapshots needed to check resource compatibility.</summary>
     Task<RedisMemoryServerSnapshot> ReadServerSnapshotAsync(CancellationToken cancellationToken);
 
+    /// <summary>Returns the remaining TTL for a key, or null when the key has no expiry.</summary>
     Task<TimeSpan?> GetKeyTimeToLiveAsync(string key, CancellationToken cancellationToken);
 
+    /// <summary>Scans keys matching the supplied pattern.</summary>
     Task<IReadOnlyList<string>> ScanKeysAsync(string pattern, CancellationToken cancellationToken);
 
+    /// <summary>Scans all fields from one hash.</summary>
     Task<IReadOnlyList<RedisMemoryHashField>> ScanHashAsync(
         string key,
         CancellationToken cancellationToken);
 
+    /// <summary>Reads named hash fields, optionally rejecting any field-level expiry.</summary>
     Task<IReadOnlyList<string?>> ReadHashFieldsAsync(
         string key,
         IReadOnlyList<string> fields,
         bool checkFieldExpiration,
         CancellationToken cancellationToken);
 
+    /// <summary>Reads the TTL for each named hash field in the same order.</summary>
     Task<IReadOnlyList<long>> ReadHashFieldTtlsAsync(
         string key,
         IReadOnlyList<string> fields,
         CancellationToken cancellationToken);
 
+    /// <summary>Executes the atomic batch script for one key and returns its provider status value.</summary>
     Task<long> ExecuteBatchScriptAsync(
         string script,
         string key,
@@ -42,6 +52,7 @@ public interface IRedisMemoryCommandClient
         CancellationToken cancellationToken);
 }
 
+/// <summary>Executes bounded Redis commands and scripts for the Memory document store.</summary>
 public sealed class RedisMemoryCommandClient : IRedisMemoryCommandClient, IDisposable
 {
     private static readonly string[] RequiredConfiguration =
@@ -72,6 +83,7 @@ public sealed class RedisMemoryCommandClient : IRedisMemoryCommandClient, IDispo
     private readonly int _databaseNumber;
     private readonly Uri _endpoint;
 
+    /// <summary>Creates a lazy Redis connection using the validated endpoint and database.</summary>
     public RedisMemoryCommandClient(
         Func<IConnectionMultiplexer> connectionFactory,
         RedisMemoryOptions options)
@@ -88,6 +100,7 @@ public sealed class RedisMemoryCommandClient : IRedisMemoryCommandClient, IDispo
     private IDatabase Database => _connection.Value.GetDatabase(_databaseNumber);
     private IServer Server => _connection.Value.GetServer(_endpoint.Host, _endpoint.Port);
 
+    /// <summary>Reads the configuration and server sections required to verify Redis durability.</summary>
     public async Task<RedisMemoryServerSnapshot> ReadServerSnapshotAsync(
         CancellationToken cancellationToken)
     {
@@ -117,6 +130,7 @@ public sealed class RedisMemoryCommandClient : IRedisMemoryCommandClient, IDispo
             cluster);
     }
 
+    /// <summary>Reads a key's TTL so the store can reject expiring document hashes.</summary>
     public async Task<TimeSpan?> GetKeyTimeToLiveAsync(
         string key,
         CancellationToken cancellationToken)
@@ -127,6 +141,7 @@ public sealed class RedisMemoryCommandClient : IRedisMemoryCommandClient, IDispo
         return result;
     }
 
+    /// <summary>Scans matching keys, failing closed if the global scan exceeds its configured bound.</summary>
     public async Task<IReadOnlyList<string>> ScanKeysAsync(
         string pattern,
         CancellationToken cancellationToken)
@@ -144,6 +159,7 @@ public sealed class RedisMemoryCommandClient : IRedisMemoryCommandClient, IDispo
         return keys;
     }
 
+    /// <summary>Scans one project's hash, failing closed when its field count exceeds the supported bound.</summary>
     public async Task<IReadOnlyList<RedisMemoryHashField>> ScanHashAsync(
         string key,
         CancellationToken cancellationToken)
@@ -160,6 +176,7 @@ public sealed class RedisMemoryCommandClient : IRedisMemoryCommandClient, IDispo
         return fields;
     }
 
+    /// <summary>Reads requested hash fields atomically while optionally rejecting field-level expiration.</summary>
     public async Task<IReadOnlyList<string?>> ReadHashFieldsAsync(
         string key,
         IReadOnlyList<string> fields,
@@ -181,6 +198,7 @@ public sealed class RedisMemoryCommandClient : IRedisMemoryCommandClient, IDispo
             item.IsNull ? null : item.ToString()).ToArray();
     }
 
+    /// <summary>Reads hash-field TTLs in one command for the requested names.</summary>
     public async Task<IReadOnlyList<long>> ReadHashFieldTtlsAsync(
         string key,
         IReadOnlyList<string> fields,
@@ -199,6 +217,7 @@ public sealed class RedisMemoryCommandClient : IRedisMemoryCommandClient, IDispo
         return values.Select(item => (long)item).ToArray();
     }
 
+    /// <summary>Runs the supplied atomic batch script against one project hash.</summary>
     public async Task<long> ExecuteBatchScriptAsync(
         string script,
         string key,
@@ -214,6 +233,7 @@ public sealed class RedisMemoryCommandClient : IRedisMemoryCommandClient, IDispo
         return (long)result;
     }
 
+    /// <summary>Flattens a Redis INFO section into a case-insensitive key/value map.</summary>
     private async Task<ImmutableDictionary<string, string>> ReadInfoAsync(string section)
     {
         var groups = await Server.InfoAsync(section).ConfigureAwait(false);
@@ -221,6 +241,7 @@ public sealed class RedisMemoryCommandClient : IRedisMemoryCommandClient, IDispo
             .ToImmutableDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
     }
 
+    /// <summary>Disposes the multiplexer only if a command caused the lazy connection to be created.</summary>
     public void Dispose()
     {
         if (_connection.IsValueCreated)

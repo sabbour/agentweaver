@@ -17,6 +17,7 @@ using Npgsql;
 using AzureCliCredential = AzureIdentity::Azure.Identity.AzureCliCredential;
 using AzureCliCredentialOptions = AzureIdentity::Azure.Identity.AzureCliCredentialOptions;
 
+// Performs a reviewed, source-bound initialization or a narrowly scoped continuation; all other arguments are rejected.
 if (args.Length == 1 && args[0] == "--plan")
 {
     Console.WriteLine(await RunLocalAsync("node",
@@ -50,6 +51,7 @@ if (!Regex.IsMatch(sourceSha, "^[0-9a-f]{40}$") ||
         !Regex.IsMatch(priorPlanHash!, "^[0-9a-f]{64}$") ||
         !Regex.IsMatch(priorReceiptHash!, "^[0-9a-f]{64}$"))))
     throw new ArgumentException("Full lowercase source, Core merge, and plan hashes are required.");
+// Never initialize from a dirty or stale checkout, and require the separately reviewed Core merge to be an ancestor.
 var worktreeStatus = await RunLocalAsync("git", ["status", "--porcelain", "--untracked-files=all"]);
 var statusEntries = worktreeStatus.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 var invalidStatus = continuationMode
@@ -75,6 +77,7 @@ if (!Regex.IsMatch(migratorSource, @"Enumerable\.Range\(1,\s*16\)\.Concat\(\[18,
     throw new InvalidOperationException("Reviewed Core 016/018/021 migration wiring is required before initialization; 017 is not permitted.");
 
 var planJson = await RunLocalAsync("node", ["scripts/azure/lib/p1-postgres-plan.mjs", "--json"]);
+// The reviewed plan hash binds every later role, schema, relation, and grant decision to source output.
 var planHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(planJson))).ToLowerInvariant();
 if (planHash != expectedPlanHash)
     throw new InvalidOperationException("The reviewed plan hash differs from the exact source plan.");
@@ -87,6 +90,7 @@ InitializerChecks.AssertOwnerOnlyObjectPlan(plan.Services);
 
 if (continuationMode)
 {
+    // A continuation may proceed only when the prior durable receipt proves the exact failed prefix on this same target.
     var oldPlanSource = await RunLocalAsync("git",
         ["show", $"{priorSourceSha}:scripts/azure/lib/p1-postgres-plan.mjs"]);
     var previousPlanJson = await RunLocalAsync("node",
@@ -136,6 +140,7 @@ if (continuationMode)
     InitializerChecks.AssertContinuationReceipt(priorEntries, priorSourceSha!, coreMergeSha, priorPlanHash!);
 }
 Directory.CreateDirectory(Path.GetDirectoryName(receiptPath)!);
+// Create the receipt once and flush every stage so an interruption never looks like an unrecorded success.
 await using var receipt = new FileStream(receiptPath, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
 async Task RecordAsync(string stage)
 {
@@ -150,6 +155,7 @@ using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(10));
 var cancellationToken = cancellation.Token;
 try
 {
+    // The token and both connections are constrained to the validated Entra operator and PostgreSQL target.
     var token = await new AzureCliCredential(new AzureCliCredentialOptions { TenantId = plan.Target.TenantId })
         .GetTokenAsync(new TokenRequestContext(["https://ossrdbms-aad.database.windows.net/.default"]), cancellationToken);
     NpgsqlDataSource CreateSource(string database)
@@ -205,6 +211,7 @@ try
 
     if (continuationMode)
     {
+        // Re-read the principal mappings and Projects-only prefix before creating any remaining schemas.
         principals = await P1PostgresContinuation.ReadPrincipalsAsync(
             principalConnection, null, plan, cancellationToken);
         var expectedGrantorOids = InitializerChecks.CaptureMembershipGrantors(
@@ -221,6 +228,7 @@ try
     }
     else
     {
+        // Fresh initialization accepts only an empty target, then verifies role mappings before committing role setup.
         await RecordAsync("fresh_target_checked");
         await using var transaction = await principalConnection.BeginTransactionAsync(cancellationToken);
         IReadOnlyDictionary<string, uint> expectedGrantorOids =
@@ -265,6 +273,7 @@ try
 
     if (continuationMode)
     {
+        // Each continuation stage revalidates the prior state; failures require explicit operator reconciliation.
         var completedServices = new List<ServicePlan>();
         async Task VerifyContinuationStateAsync()
         {
@@ -356,6 +365,7 @@ try
         return 0;
     }
 
+    // Fresh execution migrates and verifies each service before granting only its planned runtime privileges.
     List<uint> connectedRoles = [];
     foreach (var service in plan.Services)
     {
@@ -406,14 +416,17 @@ catch (Exception error)
     return 1;
 }
 
+// Quotes identifiers using the same source-checked rules as the invariant helpers.
 static string Quote(string value) => InitializerChecks.Quote(value);
 
+// Executes one command in the transaction selected by the caller.
 static async Task ExecuteAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction, string sql, CancellationToken cancellationToken)
 {
     await using var command = new NpgsqlCommand(sql, connection, transaction);
     await command.ExecuteNonQueryAsync(cancellationToken);
 }
 
+// Runs a local source-controlled planning command and fails with its stderr when it exits unsuccessfully.
 static async Task<string> RunLocalAsync(string name, string[] arguments)
 {
     var settings = new ProcessStartInfo(name) { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
@@ -426,6 +439,7 @@ static async Task<string> RunLocalAsync(string name, string[] arguments)
     return (await output).Trim();
 }
 
+// Reads the pre-existing ACL and protected-object boundary for the target database.
 static Task<ExistingBoundary> ReadExistingBoundaryAsync(NpgsqlConnection connection, NpgsqlTransaction? transaction,
     PostgresPlan plan, CancellationToken cancellationToken)
 {
@@ -433,6 +447,7 @@ static Task<ExistingBoundary> ReadExistingBoundaryAsync(NpgsqlConnection connect
         cancellationToken, new NpgsqlParameter("schemas", plan.Services.Select(item => item.Schema).ToArray()));
 }
 
+// Rechecks operator identity, grants, and public/default authority before each write stage.
 static async Task AssertPreflightAsync(NpgsqlConnection connection, PostgresPlan plan,
     ExistingBoundary baseline, uint operatorOid, CancellationToken cancellationToken)
 {
@@ -445,11 +460,13 @@ static async Task AssertPreflightAsync(NpgsqlConnection connection, PostgresPlan
     InitializerChecks.AssertPreflight(state with { Boundary = current });
 }
 
+// Reads the planned Entra principal mappings inside the caller's current transaction.
 static Task<RuntimePrincipal[]> ReadPrincipalsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
     PostgresPlan plan, CancellationToken cancellationToken) =>
     ReadJsonAsync<RuntimePrincipal[]>(connection, transaction, InitializerChecks.PrincipalReadbackQuery(),
         cancellationToken, new NpgsqlParameter("roles", plan.Services.Select(item => item.Role).ToArray()));
 
+// Verifies function ACL readback against the exact role and service plan.
 static async Task AssertFunctionGrantsAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
     ServicePlan service, uint ownerOid, uint runtimeOid, CancellationToken cancellationToken)
 {
@@ -471,6 +488,7 @@ static async Task AssertFunctionGrantsAsync(NpgsqlConnection connection, NpgsqlT
     InitializerChecks.AssertFunctions(service, functions, ownerOid, runtimeOid);
 }
 
+// Converts one source query result to a typed contract, rejecting missing or invalid readbacks.
 static async Task<T> ReadJsonAsync<T>(NpgsqlConnection connection, NpgsqlTransaction? transaction,
     string sql, CancellationToken cancellationToken, params NpgsqlParameter[] parameters)
 {
@@ -482,6 +500,7 @@ static async Task<T> ReadJsonAsync<T>(NpgsqlConnection connection, NpgsqlTransac
         ?? throw new InvalidOperationException("The required ownership and privilege facts are missing.");
 }
 
+// Verifies runtime role flags and every planned schema, table, column, owner-only object, and trigger grant.
 static async Task transactionCheckAsync(NpgsqlConnection connection, NpgsqlTransaction transaction,
     ServicePlan service, uint ownerOid, uint runtimeOid, CancellationToken cancellationToken)
 {
@@ -560,6 +579,7 @@ static async Task transactionCheckAsync(NpgsqlConnection connection, NpgsqlTrans
     InitializerChecks.AssertMutationDenialGuards(service, mutationGuards, ownerOid, runtimeOid);
 }
 
+// Reads mutation-denial trigger metadata and source for the protected tables of one service.
 static Task<MutationGuardState[]> ReadMutationGuardStatesAsync(NpgsqlConnection connection,
     NpgsqlTransaction transaction, ServicePlan service, CancellationToken cancellationToken)
 {

@@ -1,10 +1,17 @@
+/**
+ * Verifies AgentHost build provenance, archive bytes, measurements, and loaded-image metadata.
+ * Release packing and publication use these checks to ensure the same source-bound image is carried through.
+ */
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync } from 'node:fs';
 import path from 'node:path';
 import { measureAgentHostArchiveSync } from './measure-agenthost-image.mjs';
 
+/** Manifest identifier for the AgentHost component. */
 export const AGENTHOST_ID = 'Agentweaver.AgentHost';
+/** Project file included in the AgentHost source and archive verification boundary. */
 export const AGENTHOST_PROJECT = 'services/agenthost/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj';
+/** Dockerfile used to build the AgentHost container image. */
 export const AGENTHOST_DOCKERFILE = 'services/agenthost/Agentweaver.AgentHost/Dockerfile';
 const runtimePath = 'services/agenthost/Agentweaver.AgentHost/runtime-manifest.json';
 const inputDirectories = [
@@ -17,6 +24,7 @@ const reject = message => { throw new Error(`AgentHost image: ${message}`); };
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const equal = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 
+/** Resolves the AgentHost source tree at an exact commit and hashes its approved input files. */
 export function readAgentHostSource(root, sourceSha, git) {
   const sourceTree = git('rev-parse', `${sourceSha}^{tree}`);
   if (!/^[a-f0-9]{40}$/.test(sourceTree)) reject('an exact source tree is required');
@@ -52,6 +60,7 @@ export function readAgentHostSource(root, sourceSha, git) {
   return { sourceSha, sourceTree, files, baseImages, runtime };
 }
 
+/** Reads stable archive metadata and content hashes while rejecting non-regular archive files. */
 export function agentHostArchiveMetadata(file, relativePath, configDigest) {
   if (!lstatSync(file).isFile()) reject(`archive must be a regular file: ${relativePath}`);
   const descriptor = openSync(file, 'r');
@@ -73,6 +82,7 @@ export function agentHostArchiveMetadata(file, relativePath, configDigest) {
   }
 }
 
+/** Re-reads the measured archives and rejects any byte or metadata change after measurement. */
 export function verifyAgentHostArchives(archives, directory) {
   for (const archive of [archives.docker, archives.oci]) {
     if (!equal(archive, agentHostArchiveMetadata(path.join(directory, archive.path), archive.path, archive.configDigest)))
@@ -80,6 +90,7 @@ export function verifyAgentHostArchives(archives, directory) {
   }
 }
 
+/** Checks that the measurement receipt matches the exact source, component version, and image platform. */
 export function verifyAgentHostMeasurement(measured, source, version) {
   if (measured?.kind !== 'agenthost-image' || measured.schemaVersion !== 1 ||
       measured.sourceSha !== source.sourceSha || measured.sourceTree !== source.sourceTree ||
@@ -90,6 +101,7 @@ export function verifyAgentHostMeasurement(measured, source, version) {
     reject('measured OCI bytes, size, source/tree, version, or image identity do not match');
 }
 
+/** Verifies that runtime-reported AgentHost versions and layout match the built runtime manifest. */
 export function verifyAgentHostRuntimeStatus(status, runtime) {
   if (status?.sdkVersion !== runtime.sdkVersion || status.runtimeVersion !== runtime.runtimeVersion ||
       status.ProtocolVersion !== 3 || status.nativeDistribution !== '/app/native' ||
@@ -104,6 +116,7 @@ export function verifyAgentHostRuntimeStatus(status, runtime) {
 // Docker reports its image ID as the OCI config digest (classic store) or as the OCI platform
 // manifest digest (containerd store). Both are proven by the measured archive bytes, because the
 // measured manifest names the measured config. Any other ID is refused.
+/** Accepts only a loaded image ID already recorded as the measured config or manifest digest. */
 export function verifiedLoadedImageId(image, measured) {
   const id = image?.Id;
   if (id === measured.image.configDigest) return { id, kind: 'config' };
@@ -111,6 +124,7 @@ export function verifiedLoadedImageId(image, measured) {
   return null;
 }
 
+/** Inspects a locally loaded image and verifies its labels, digest, source, and runtime contract. */
 export function verifyLoadedAgentHostImage(imageReference, measured, source, version, docker) {
   verifyAgentHostMeasurement(measured, source, version);
   const image = JSON.parse(docker(['image', 'inspect', '--format', '{{json .}}', imageReference]));
@@ -133,6 +147,10 @@ export function verifyLoadedAgentHostImage(imageReference, measured, source, ver
   return { runtime: verifyAgentHostRuntimeStatus(status, source.runtime), loadedImageId: loaded.id, loadedImageIdKind: loaded.kind };
 }
 
+/**
+ * Validates an AgentHost artifact record against its measured archives and source provenance.
+ * Returns verified artifact metadata or rejects missing, altered, or inconsistent evidence.
+ */
 export function validateAgentHostArtifact(component, artifact, record, root, directory, sourceSha, git,
   measure = measureAgentHostArchiveSync, integrationImagesOnly = false) {
   const source = readAgentHostSource(root, sourceSha, git);

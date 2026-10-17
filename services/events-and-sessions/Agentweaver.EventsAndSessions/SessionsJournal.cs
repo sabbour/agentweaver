@@ -12,6 +12,9 @@ using NpgsqlTypes;
 
 namespace Agentweaver.EventsAndSessions;
 
+/// <summary>
+/// Owns the PostgreSQL run journal, immutable Sessions provider pins, event replay, and journal-backed object references.
+/// </summary>
 public sealed class PostgresSessionsJournal : ISessionsJournal
 {
     public const int MaximumPageSize = 200;
@@ -40,6 +43,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
     private readonly TimeSpan _pollInterval;
     private readonly TimeSpan _referenceRetention;
 
+    /// <summary>Creates a journal for one validated schema and its configured replay and retention bounds.</summary>
     public PostgresSessionsJournal(
         NpgsqlDataSource dataSource,
         PostgresSessionsProviderOptions options,
@@ -62,6 +66,8 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         _referenceRetention = TimeSpan.FromDays(options.ReferenceRetentionDays);
     }
 
+    /// <summary>Creates a session and pins its run's provider in the same database transaction.</summary>
+    /// <returns>The new session or the existing record when the same session identity was already created.</returns>
     public async Task<SessionRecord> CreateSessionAsync(
         ClaimsPrincipal principal,
         string sessionId,
@@ -99,6 +105,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             await insertBinding.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        // The unique project/run provider row is immutable; concurrent session creation must agree with its saved value.
         var storedBinding = await ReadProviderBindingAsync(
             connection, transaction, identity.ProjectId, identity.RunId, lockRow: true, cancellationToken);
         if (storedBinding is null)
@@ -146,6 +153,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         return existing;
     }
 
+    /// <summary>Reads the saved provider pin after confirming that the caller owns the requested session.</summary>
     public async Task<SessionProviderBinding> GetProviderBindingAsync(
         ClaimsPrincipal principal,
         string sessionId,
@@ -161,6 +169,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             "A stored session does not have its immutable provider binding.");
     }
 
+    /// <summary>Reads a run's existing provider pin without creating a session or binding.</summary>
     public async Task<SessionProviderBinding> GetRunProviderBindingAsync(
         ClaimsPrincipal principal,
         string projectId,
@@ -175,6 +184,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         return binding ?? throw new SessionNotFoundException("The project run does not exist.");
     }
 
+    /// <summary>Appends an ordinary event, denying owner-only receipt and producer-owned material payloads.</summary>
     public async Task<SessionAppendResult> AppendAsync(
         ClaimsPrincipal principal,
         string sessionId,
@@ -194,6 +204,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         return await AppendCoreAsync(identity, input, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Appends a typed producer material event after storage and authority callbacks succeed.</summary>
     internal Task<SessionAppendResult> AppendMaterialAsync(
         ClaimsPrincipal principal, string sessionId, AppendSessionEvent input,
         Func<CancellationToken, Task> persistMaterial,
@@ -234,6 +245,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             cancellationToken, validateBeforeCommit, persistMaterial);
     }
 
+    /// <summary>Reads an event by exact session and event identity for a protected material lookup.</summary>
     internal async Task<SessionEventEnvelope> ReadMaterialEventAsync(
         ClaimsPrincipal principal, string sessionId, Guid eventId, CancellationToken cancellationToken)
     {
@@ -246,6 +258,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         return envelope;
     }
 
+    /// <summary>Persists a verified produced-run capture and returns its journal position and replay status.</summary>
     internal async Task<ProducedRunCaptureAcknowledgment> AppendProducedRunCaptureAsync(
         ClaimsPrincipal principal,
         string sessionId,
@@ -282,6 +295,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             result.IsDuplicate);
     }
 
+    /// <summary>Reads and validates a committed produced-run capture event and its package reference.</summary>
     internal async Task<ProducedRunCaptureJournalEntry> ReadProducedRunCaptureEventAsync(
         ClaimsPrincipal principal,
         string sessionId,
@@ -309,6 +323,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         return new(payload.Capture, envelope.Position);
     }
 
+    /// <summary>Appends an owner-issued policy receipt after current admission is checked before commit.</summary>
     internal async Task<SessionAppendResult> AppendPolicyEvaluationAsync(
         ClaimsPrincipal principal,
         string sessionId,
@@ -340,6 +355,9 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             identity, input, cancellationToken, validateBeforeCommit).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Atomically admits an event, advances its run-wide position, writes references and outbox state, then commits.
+    /// </summary>
     private async Task<SessionAppendResult> AppendCoreAsync(
         SessionIdentity identity,
         AppendSessionEvent input,
@@ -379,6 +397,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             if (await compare.ExecuteScalarAsync(cancellationToken) is not true)
                 throw new SessionEventConflictException(
                     "The event identity was already used for a different immutable event.");
+            // A duplicate acknowledgment is returned only for identical canonical content; a changed retry conflicts.
             if (persistMaterial is not null)
                 await persistMaterial(cancellationToken).ConfigureAwait(false);
             if (validateBeforeCommit is not null)
@@ -387,6 +406,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             return new SessionAppendResult(duplicate, IsDuplicate: true);
         }
 
+        // The caller stores external bytes before this transaction commits the journal reference to those bytes.
         if (persistMaterial is not null)
             await persistMaterial(cancellationToken).ConfigureAwait(false);
         var position = await AdvanceRunPositionAsync(
@@ -455,12 +475,15 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             outboxPayload,
             occurredAt), cancellationToken);
 
+        // Recheck revocable authority after waits and immediately before the durable commit.
         if (validateBeforeCommit is not null)
             await validateBeforeCommit(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken);
         return new SessionAppendResult(envelope, IsDuplicate: false);
     }
 
+    /// <summary>Creates a new session linked to one committed source event and records an idempotent lineage receipt.</summary>
+    /// <exception cref="SessionEventConflictException">The source cursor, target, or reused idempotency key conflicts.</exception>
     public async Task<SessionForkResult> ForkFromExplicitEventAsync(
         ClaimsPrincipal principal,
         string sourceSessionId,
@@ -505,6 +528,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             throw new SessionContractVersionException(
                 "The committed source event version cannot be read by this Sessions journal.");
 
+        // The fork request is bound to the exact source event and provider pin, not just a session name.
         var providerBindingHash = HashProviderBinding(binding);
         var commandHash = HashForkRequest(source, request, sourcePosition, providerBindingHash);
         var replay = await ReadExistingForkAsync(
@@ -537,6 +561,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             createdAt = reader.GetFieldValue<DateTimeOffset>(0);
         }
 
+        // Source event, provider hash, cursor, actor, and idempotency key remain immutable lineage evidence.
         var lineage = new SessionForkLineage(
             source,
             sourceEvent.EventId,
@@ -598,6 +623,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             IsDuplicate: false);
     }
 
+    /// <summary>Appends the sender-side journal event inside the caller's message transaction.</summary>
     internal async Task<SessionEventEnvelope> AppendAddressedMessageAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -703,6 +729,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         return envelope;
     }
 
+    /// <summary>Reads one session's events after its opaque cursor, including only visible ancestor ranges.</summary>
     public async Task<SessionEventPage> ReplayAsync(
         ClaimsPrincipal principal,
         SessionEventPageRequest request,
@@ -721,6 +748,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             connection, scope, identity.SessionId, afterPosition, request.Limit, request.Cursor, cancellationToken);
     }
 
+    /// <summary>Reads a run-wide ordered page after checking the caller's exact project/run scope.</summary>
     public async Task<SessionEventPage> ReplayRunAsync(
         ClaimsPrincipal principal,
         SessionRunEventPageRequest request,
@@ -738,6 +766,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             connection, scope, null, afterPosition, request.Limit, request.Cursor, cancellationToken);
     }
 
+    /// <summary>Loads up to one extra row to determine whether another page exists, then encodes the last position.</summary>
     private async Task<SessionEventPage> ReadEventPageAsync(
         NpgsqlConnection connection,
         SessionRunScope scope,
@@ -811,6 +840,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         return new SessionEventPage(immutable, next, hasMore);
     }
 
+    /// <summary>Polls bounded session pages and yields a reconnect cursor for each committed event.</summary>
     public async IAsyncEnumerable<SessionEventDelivery> SubscribeAsync(
         ClaimsPrincipal principal,
         SessionSubscriptionRequest request,
@@ -847,6 +877,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         }
     }
 
+    /// <summary>Polls bounded run-wide pages until the caller's event or duration limit is reached.</summary>
     public async IAsyncEnumerable<SessionEventDelivery> SubscribeRunAsync(
         ClaimsPrincipal principal,
         SessionRunSubscriptionRequest request,
@@ -885,6 +916,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         }
     }
 
+    /// <summary>Reads a session and the current run position, optionally locking the session row.</summary>
     private async Task<SessionRecord?> ReadSessionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -909,6 +941,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             reader.GetInt64(4));
     }
 
+    /// <summary>Loads the exact provider pin and negotiated capabilities saved for a project/run pair.</summary>
     private async Task<SessionProviderBinding?> ReadProviderBindingAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -944,6 +977,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             capabilities);
     }
 
+    /// <summary>Reads the last assigned event position or reports that the project run does not exist.</summary>
     private async Task<long> ReadRunPositionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -963,6 +997,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             : throw new SessionNotFoundException("The project run does not exist.");
     }
 
+    /// <summary>Increments the single run-wide sequence in the caller's transaction.</summary>
     private async Task<long> AdvanceRunPositionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -984,6 +1019,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             : throw new SessionNotFoundException("The project run does not exist.");
     }
 
+    /// <summary>Reads one stored event by project/run/event key.</summary>
     private async Task<SessionEventEnvelope?> ReadEventByIdAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,
@@ -1005,6 +1041,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         return await reader.ReadAsync(cancellationToken) ? ReadEvent(reader) : null;
     }
 
+    /// <summary>Deserializes the stored payload and its references into the journal contract.</summary>
     private static SessionEventEnvelope ReadEvent(NpgsqlDataReader reader)
     {
         var identity = new SessionIdentity(reader.GetString(1), reader.GetString(2), reader.GetString(3));
@@ -1017,6 +1054,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             reader.GetInt64(4), reader.GetFieldValue<DateTimeOffset>(7), payload, references);
     }
 
+    /// <summary>Requires the current schema and an event payload whose declared version supports its shape.</summary>
     private static void ValidateInput(AppendSessionEvent input)
     {
         ArgumentNullException.ThrowIfNull(input);
@@ -1028,6 +1066,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         _ = SessionEventPayloadValidation.ValidateAndGetReferences(input.Payload);
     }
 
+    /// <summary>Rejects self-forks and requests without bounded source cursors and idempotency keys.</summary>
     private static void ValidateForkRequest(
         SessionIdentity source,
         SessionIdentity target,
@@ -1041,6 +1080,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             throw new ArgumentException("The explicit-event fork request is invalid.", nameof(request));
     }
 
+    /// <summary>Returns an existing fork only when its scoped idempotency key still matches the canonical command hash.</summary>
     private async Task<SessionForkResult?> ReadExistingForkAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1101,6 +1141,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         return new SessionForkResult(target, lineage, IsDuplicate: true);
     }
 
+    /// <summary>Hashes the full source, target, cursor, provider pin, and cursor version for fork replay comparison.</summary>
     private static string HashForkRequest(
         SessionIdentity source,
         SessionForkRequest request,
@@ -1119,6 +1160,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             providerBindingHash
         }, JsonOptions)));
 
+    /// <summary>Hashes every immutable provider pin field included in fork lineage evidence.</summary>
     private static string HashProviderBinding(SessionProviderBinding binding) =>
         Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(new
         {
@@ -1134,11 +1176,13 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
                 .OrderBy(value => value, StringComparer.Ordinal)
         }, JsonOptions)));
 
+    /// <summary>Serializes event contract and identity fields into the canonical immutable replay payload.</summary>
     private static JsonElement CreateCanonicalInput(SessionIdentity identity, AppendSessionEvent input) =>
         JsonSerializer.SerializeToElement(new CanonicalInput(
             input.SchemaVersion, input.EventVersion, input.EventId,
             identity.ProjectId, identity.RunId, identity.SessionId, input.Payload), JsonOptions);
 
+    /// <summary>Derives deterministic inbox, outbox, and retention identities from project/run/event scope.</summary>
     private static ScopedEventIdentity CreateScopedEventIdentity(SessionIdentity identity, Guid eventId)
     {
         var identityBytes = Encoding.UTF8.GetBytes(
@@ -1151,18 +1195,21 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             scopedId);
     }
 
+    /// <summary>Enforces the replay page size bound.</summary>
     private static void ValidatePageRequest(SessionEventPageRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
         ValidatePageRequest(request.Limit);
     }
 
+    /// <summary>Rejects limits outside the supported page range.</summary>
     private static void ValidatePageRequest(int limit)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(limit, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(limit, MaximumPageSize);
     }
 
+    /// <summary>Bounds a live subscription to prevent unbounded database polling.</summary>
     private static void ValidateSubscriptionBounds(int maximumEvents, int maximumDurationSeconds)
     {
         if (maximumEvents is < 1 or > MaximumSubscriptionEvents)
@@ -1173,12 +1220,15 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
                 "Live subscriptions are bounded to five minutes.");
     }
 
+    /// <summary>Decodes a cursor bound to one session, project, and run.</summary>
     private static long DecodeCursor(string? cursor, SessionIdentity identity) =>
         DecodeCursor(cursor, identity.ProjectId, identity.RunId, identity.SessionId);
 
+    /// <summary>Decodes a cursor bound to a project/run stream rather than a session stream.</summary>
     private static long DecodeRunCursor(string? cursor, SessionRunScope scope) =>
         DecodeCursor(cursor, scope.ProjectId, scope.RunId, sessionId: null);
 
+    /// <summary>Validates cursor version and scope before returning its last-seen position.</summary>
     private static long DecodeCursor(
         string? cursor, string projectId, string runId, string? sessionId)
     {
@@ -1206,6 +1256,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         }
     }
 
+    /// <summary>Encodes a session-specific position as an opaque URL-safe cursor.</summary>
     private static string EncodeCursor(SessionIdentity identity, long position)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(
@@ -1213,6 +1264,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
 
+    /// <summary>Encodes a run-wide position as an opaque URL-safe cursor.</summary>
     private static string EncodeRunCursor(SessionRunScope scope, long position)
     {
         var bytes = JsonSerializer.SerializeToUtf8Bytes(
@@ -1220,11 +1272,13 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
     }
 
+    /// <summary>Requires the authenticated project/run claims and returns their validated scope.</summary>
     private static SessionRunScope RequireScope(ClaimsPrincipal principal)
     {
         return RequireScope(principal, out _);
     }
 
+    /// <summary>Returns the validated scope and actor subject or rejects malformed identity claims.</summary>
     private static SessionRunScope RequireScope(ClaimsPrincipal principal, out string? actorId)
     {
         if (!SessionIdentityClaims.TryGetScope(principal, out var scope, out actorId) || scope is null)
@@ -1232,12 +1286,14 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         return scope.Value;
     }
 
+    /// <summary>Rejects reads where the requested run differs from the signed caller scope.</summary>
     private static void RequireRequestedRun(SessionRunScope scope, string projectId, string runId)
     {
         if (scope.ProjectId != projectId || scope.RunId != runId)
             throw new SessionAccessDeniedException("The requested event stream belongs to a different project or run.");
     }
 
+    /// <summary>Returns 404 for a missing session and denies any identity mismatch.</summary>
     private static void RequireOwnedSession(SessionRecord? session, SessionIdentity identity)
     {
         if (session is null)
@@ -1246,6 +1302,7 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
             throw new SessionAccessDeniedException("The session belongs to a different project or run.");
     }
 
+    /// <summary>Adds the three-part project/run/session key to a parameterized command.</summary>
     private static void AddIdentity(NpgsqlCommand command, SessionIdentity identity)
     {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, identity.ProjectId);
@@ -1253,23 +1310,27 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         command.Parameters.AddWithValue("session", NpgsqlDbType.Varchar, identity.SessionId);
     }
 
+    /// <summary>Adds the project/run key used by an immutable provider binding row.</summary>
     private static void AddBindingIdentity(NpgsqlCommand command, SessionProviderBinding binding)
     {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.ProjectId);
         command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, binding.RunId);
     }
 
+    /// <summary>Normalizes stored timestamps to UTC PostgreSQL timestamp precision.</summary>
     private static DateTimeOffset NormalizeTimestamp(DateTimeOffset timestamp)
     {
         var utc = timestamp.ToUniversalTime();
         return new DateTimeOffset(utc.Ticks - utc.Ticks % 10, TimeSpan.Zero);
     }
 
+    /// <summary>Represents the versioned stream scope and last-seen position encoded in a replay cursor.</summary>
     private sealed record CursorData(string ProjectId, string RunId, string? SessionId, long Position)
     {
         public int Version { get; init; } = CursorVersion;
     }
 
+    /// <summary>Contains immutable database lineage fields needed to reconstruct an idempotent fork response.</summary>
     private sealed record StoredFork(
         string TargetSessionId,
         string SourceSessionId,
@@ -1282,8 +1343,10 @@ public sealed class PostgresSessionsJournal : ISessionsJournal
         string SourceCursor,
         string CommandHash);
 
+    /// <summary>Groups deterministic IDs used to admit, publish, and retain one event.</summary>
     private sealed record ScopedEventIdentity(Guid OutboxId, string MessageId, string RetentionOwnerId);
 
+    /// <summary>Defines the exact event fields included in canonical duplicate comparison.</summary>
     private sealed record CanonicalInput(
         int SchemaVersion,
         int EventVersion,

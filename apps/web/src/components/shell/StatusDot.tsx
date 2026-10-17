@@ -27,6 +27,10 @@ const LABELS: Record<HealthState, string> = {
   unreachable: 'API unreachable',
 };
 
+/**
+ * Renders the shared live service-status dot using status data from the status API.
+ * An effect updates the displayed health and cleans up its polling/listener work on unmount.
+ */
 export function StatusDot() {
   const styles = useStyles();
   const [state, setState] = useState<HealthState>('unknown');

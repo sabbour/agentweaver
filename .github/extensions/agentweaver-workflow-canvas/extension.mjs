@@ -9,6 +9,7 @@ const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
 let observer;
 let context;
 
+/** Register the repository workflow observation canvas and its read-only actions. */
 await joinSession({
   canvases: [createCanvas({
     id: "repository-workflows",

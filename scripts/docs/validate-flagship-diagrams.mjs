@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 
+/** Read PNG pixel dimensions from the fixed header fields used by this visual check. */
 function pngDimensions(buffer) {
   if (buffer.length < 24 || buffer.toString('ascii', 1, 4) !== 'PNG') {
     throw new Error('not a PNG');
@@ -12,15 +13,18 @@ function pngDimensions(buffer) {
   return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
 }
 
+/** Read a cell's width and height from the generated editable XML. */
 function geometry(xml, id) {
   const cell = xml.match(new RegExp(`<mxCell[^>]*id="${id}"[\\s\\S]*?<mxGeometry[^>]*width="([^"]+)"[^>]*height="([^"]+)"`));
   return cell ? { width: Number(cell[1]), height: Number(cell[2]) } : null;
 }
 
+/** Count editable draw.io cells that declare one generated Fluent role. */
 function countRole(xml, role) {
   return [...xml.matchAll(new RegExp(`fluentRole="${role}"`, 'g'))].length;
 }
 
+/** Check a flagship image for size, diagram-content, aspect-ratio, and embedded-text limits. */
 export function inspectFlagship(name, xml, png, embedWidthPx = 960) {
   const issues = [];
   const dimensions = pngDimensions(png);

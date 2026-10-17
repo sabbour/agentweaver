@@ -3,12 +3,16 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Owner service addresses used for runtime registration, configuration delivery, and event reads.</summary>
 public sealed record EnvironmentRuntimeBootstrapDeliveryOptions(
     Uri OrchestratorOwnerAddress, Uri BrokerOwnerAddress)
 {
     public Uri? EventsOwnerAddress { get; init; }
 }
 
+/// <summary>
+/// Coordinates runtime host configuration and credential delivery with current registration and Sandbox placement.
+/// </summary>
 public sealed partial class EnvironmentRuntimeBootstrapDelivery(
     HttpClient client,
     EnvironmentRuntimeBootstrapDeliveryOptions options,
@@ -21,6 +25,10 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
     private readonly RuntimeRegistrationHttpClient _owner = new(
         client, options.OrchestratorOwnerAddress);
 
+    /// <summary>
+    /// Activates the current runtime host and validates its readiness receipt against current registration and placement.
+    /// Resume activation additionally requires the exact accepted resume bootstrap request.
+    /// </summary>
     public async Task<RuntimeHostReadinessReceipt> ActivateAsync(
         RuntimeHostConfigureRequest request, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
     {
@@ -79,6 +87,7 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
         return receipt;
     }
 
+    /// <summary>Delivers a short-lived configuration credential only while its broker grant and placement remain current.</summary>
     public async Task<RuntimeBootstrapDeliveryReceipt> DeliverAsync(
         RuntimeBootstrapDeliveryRequest request,
         RuntimeActorAuthorization actor,
@@ -127,6 +136,7 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
         return receipt;
     }
 
+    /// <summary>Reads an active, unexpired registration and requires its actor credential to remain usable.</summary>
     private async Task<RuntimeRegistration> ReadCurrentAsync(
         Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -137,6 +147,7 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
         return registration;
     }
 
+    /// <summary>Resolves and compares all current placement, lease, profile, image, and endpoint bindings.</summary>
     private async Task<EnvironmentRuntimeBootstrapContext> ReadPlacementAsync(
         RuntimeRegistration registration, RuntimeActorAuthorization actor, CancellationToken token)
     {
@@ -164,15 +175,18 @@ public sealed partial class EnvironmentRuntimeBootstrapDelivery(
         return placement;
     }
 
+    /// <summary>Requires a broker grant to remain within the registration's revision and expiry bounds.</summary>
     private static void RequireGrant(RuntimeGrantReceipt grant, RuntimeRegistration registration)
     {
         if (grant.RegistrationRevision != registration.Revision || grant.ExpiresAt > registration.ExpiresAt)
             throw new RuntimeAuthorizationException("runtime_delivery_binding_invalid");
     }
 
+    /// <summary>Invalidates the temporary runtime credential when the delivery scope exits.</summary>
     private sealed class CredentialLifetime(SecretCredential credential) : IDisposable
     {
         public SecretCredential Credential { get; } = credential;
+        /// <summary>Invalidates the short-lived credential when the owning delivery scope is disposed.</summary>
         public void Dispose() => Credential.Invalidate();
     }
 }

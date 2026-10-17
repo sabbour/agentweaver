@@ -1,5 +1,6 @@
 const $ = (id) => document.getElementById(id);
 let model;
+/** Browser-side rendering and polling for the repository workflow observation panel. */
 const el = (tag, value, className) => {
   const node = document.createElement(tag);
   if (value !== undefined) node.textContent = String(value);
@@ -18,6 +19,7 @@ const node = (title, detail) => {
 const date = (ms) => ms ? new Date(ms).toLocaleString() : "Unknown";
 const active = (status) => status === "running" || status === "pending";
 
+/** Render a sanitized repository workflow snapshot into the panel DOM. */
 function render(data) {
   model = data;
   const observedRuns = data.sessions.reduce((sum, session) => sum + session.runs.length, 0);
@@ -69,6 +71,8 @@ function render(data) {
     $("runs").append(card);
   }
 }
+
+/** Fetch panel state, optionally request an owner refresh, and update the visible status. */
 async function load(refresh = false) {
   $("refresh").disabled = true;
   try {

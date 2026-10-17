@@ -16,6 +16,7 @@ import type { Scenario } from './types';
  * spins an ElapsedTimer interval. The player's run-token scheduler owns all time
  * and each node shows a static authored `duration` string instead.
  */
+/** Curated workflow examples rendered by the landing-page scenario player. */
 export const SCENARIOS: Scenario[] = [
   {
     id: 'product-feature',

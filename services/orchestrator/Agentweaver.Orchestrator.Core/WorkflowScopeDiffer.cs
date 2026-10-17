@@ -2,8 +2,10 @@ using System.Collections.Immutable;
 
 namespace Agentweaver.Orchestrator.Core;
 
+/// <summary>Produces deterministic scope changes used to decide whether a coordinator confirmation is required.</summary>
 public static class WorkflowScopeDiffer
 {
+    /// <summary>Compares workflow identity, limits, and step contracts by stable IDs.</summary>
     public static WorkflowDefinitionScopeDiff Compare(
         WorkflowDefinitionSnapshot previous,
         WorkflowDefinitionSnapshot next)
@@ -26,6 +28,7 @@ public static class WorkflowScopeDiffer
             previous.Definition.MaximumWorkItems != next.Definition.MaximumWorkItems);
     }
 
+    /// <summary>Compares work items, workflow definition scope, and exact pinned provider binding.</summary>
     public static WorkPlanScopeDiff Compare(WorkPlanSnapshot previous, WorkPlanSnapshot next)
     {
         ArgumentNullException.ThrowIfNull(previous);

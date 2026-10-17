@@ -27,6 +27,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { AddressedMessageDto, AgentMemoryDto, AgentMemoryRevisionDto, DecisionDto, DecisionInboxEntryDto, DecisionRevisionDto, PagedResult, SessionHistoryDto } from '../api/types';
 
+/**
+ * Project knowledge workspace for decisions, addressed messages, agent memories,
+ * and session summaries. Data is loaded per tab and edits use revision-aware API
+ * operations so historical versions can be restored without replacing history.
+ */
 const useStyles = makeStyles({
   breadcrumbLink: {
     color: tokens.colorNeutralForeground2,
@@ -108,11 +113,13 @@ const useStyles = makeStyles({
   },
 });
 
+/** Converts known API failures and other thrown values to readable messages. */
 function formatApiError(err: unknown): string {
   if (err instanceof ApiError) return `API error ${err.status}: ${err.body || 'Request failed'}`;
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Reads stored issue lists as JSON when possible, with newline data as a fallback. */
 function parseActiveIssues(value?: string | null): string[] {
   if (!value) return [];
   try {
@@ -127,6 +134,8 @@ export function MemoriesPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
 
+  // Each tab has its own paged cache. Null means not loaded yet; an empty array is a
+  // completed query with no rows, allowing tab changes to reuse data safely.
   const [selectedTab, setSelectedTab] = useState<'decisions' | 'messages' | 'memory' | 'sessions'>('decisions');
   const [messages, setMessages] = useState<AddressedMessageDto[] | null>(null);
   const [decisions,   setDecisions]   = useState<DecisionDto[] | null>(null);
@@ -162,6 +171,10 @@ export function MemoriesPage() {
   const [memoryHistory, setMemoryHistory] = useState<Record<string, PagedResult<AgentMemoryRevisionDto>>>({});
   const [decisionHistory, setDecisionHistory] = useState<Record<string, PagedResult<DecisionRevisionDto>>>({});
 
+  /**
+   * Loads accepted decisions and pending proposals together. If a mutation empties
+   * a non-first inbox page, move to the last still-valid page before rendering.
+   */
   const loadDecisionsPage = useCallback(async () => {
     if (!projectId) return;
     const [d, initialInbox] = await Promise.all([
@@ -184,6 +197,8 @@ export function MemoriesPage() {
     setInboxTotalCount(nextInbox.total_count);
   }, [decisionsPage, decisionsPageSize, inboxPage, inboxPageSize, projectId]);
 
+  // Load only the selected tab and retain its result for later visits; reloadKey and
+  // pagination/filter dependencies explicitly invalidate the corresponding cache.
   useEffect(() => {
     if (!projectId) return;
     const loadTabData = async () => {
@@ -252,6 +267,7 @@ export function MemoriesPage() {
     void loadTabData();
   }, [projectId, selectedTab, decisions, inbox, messages, memory, sessions, reloadKey, loadDecisionsPage, memoryPage, memoryPageSize, sessionsPage, sessionsPageSize, appliedMemoryQuery, memoryStatus]);
 
+  /** Clears only the active tab's cache before asking its effect to load it again. */
   const retryLoad = () => {
     if (selectedTab === 'decisions') {
       setDecisions(null);
@@ -267,17 +283,20 @@ export function MemoriesPage() {
     setReloadKey((key) => key + 1);
   };
 
+  /** Invalidates both decision lists because inbox actions can affect either. */
   const refreshDecisions = () => {
     setDecisions(null);
     setInbox(null);
     setReloadKey((key) => key + 1);
   };
 
+  /** Invalidates the memory list after a create, update, or restore operation. */
   const refreshMemory = () => {
     setMemory(null);
     setReloadKey((key) => key + 1);
   };
 
+  /** Applies one decision-inbox action and refreshes accepted and pending lists. */
   const runInboxAction = async (entryId: string, action: 'merge' | 'promote' | 'reject') => {
     if (!projectId || busyAction) return;
     setBusyAction(`${action}:${entryId}`);
@@ -294,6 +313,7 @@ export function MemoriesPage() {
     }
   };
 
+  /** Creates a durable memory entry after checking all required input locally. */
   const createMemory = async () => {
     if (!projectId || !newAgentName.trim() || !newType.trim() || !newContent.trim()) return;
     setBusyAction('create-memory');
@@ -315,6 +335,10 @@ export function MemoriesPage() {
     setEditContent(entry.content);
   };
 
+  /**
+   * Saves a new memory revision using the displayed revision as the expected version;
+   * concurrent edits are returned as errors instead of silently overwriting.
+   */
   const updateMemory = async (entry: AgentMemoryDto) => {
     if (!projectId || !editType.trim() || !editContent.trim()) return;
     setBusyAction(`update-memory:${entry.id}`);
@@ -335,6 +359,7 @@ export function MemoriesPage() {
     }
   };
 
+  /** Toggles or appends pages of revision history for a memory entry. */
   const loadMemoryHistory = async (entry: AgentMemoryDto, page = 1) => {
     if (!projectId || busyAction) return;
     if (page === 1 && memoryHistory[entry.id]) {
@@ -363,6 +388,7 @@ export function MemoriesPage() {
     }
   };
 
+  /** Restores historical memory content as a new revision, then refreshes the list. */
   const restoreMemory = async (entry: AgentMemoryDto, revision: number) => {
     if (!projectId || busyAction) return;
     setBusyAction(`restore:${entry.id}:${revision}`);
@@ -382,6 +408,7 @@ export function MemoriesPage() {
     }
   };
 
+  /** Toggles or appends pages of revisions for one accepted decision. */
   const loadDecisionHistory = async (entry: DecisionDto, page = 1) => {
     if (!projectId || busyAction) return;
     if (page === 1 && decisionHistory[entry.id]) {
@@ -409,6 +436,7 @@ export function MemoriesPage() {
     }
   };
 
+  /** Restores a prior decision version as a new revision, then refreshes decisions. */
   const restoreDecision = async (entry: DecisionDto, revision: number) => {
     if (!projectId || busyAction) return;
     setBusyAction(`decision-restore:${entry.id}:${revision}`);

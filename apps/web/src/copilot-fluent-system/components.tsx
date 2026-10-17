@@ -1,3 +1,4 @@
+/** Shared React primitives for the Copilot Fluent System, including navigation, data, form, and agent surfaces. */
 import type { KeyboardEvent, ReactElement, ReactNode } from 'react';
 import { cloneElement, Fragment, useEffect, useId, useMemo, useRef, useState } from 'react';
 import {
@@ -116,15 +117,18 @@ import type {
   AzfTone,
 } from './types';
 import { AzureIcon } from './icons';
+/** Chooses a consistent button appearance, keeping destructive actions outlined unless explicitly overridden. */
 function buttonAppearance(action?: Pick<AzfAction, 'appearance' | 'destructive'>) {
   if (action?.destructive) return 'outline' as const;
   return action?.appearance ?? 'subtle';
 }
 
+/** Converts text-like labels to readable option text and uses a safe generic label for rich content. */
 function optionText(label: ReactNode) {
   return typeof label === 'string' || typeof label === 'number' ? String(label) : 'Option';
 }
 
+/** Sorts rows by the selected column's supplied value, using date or numeric-aware text comparison. */
 function defaultSort<T>(items: T[], columns: AzfColumn<T>[], sortState?: AzfSortState) {
   if (!sortState) return items;
   const column = columns.find((candidate) => candidate.columnId === sortState.columnId);
@@ -143,6 +147,7 @@ function defaultSort<T>(items: T[], columns: AzfColumn<T>[], sortState?: AzfSort
   });
 }
 
+/** Renders an action and disables it while unavailable or loading. */
 function renderAction(action: AzfAction, defaultAppearance?: AzfAction['appearance']) {
   const icon = action.loading ? <Spinner size="tiny" /> : action.icon;
   const button = (
@@ -168,6 +173,7 @@ function renderAction(action: AzfAction, defaultAppearance?: AzfAction['appearan
     : button;
 }
 
+/** Wraps plain empty-state text in the standard empty-state component. */
 function renderStateContent(emptyState: ReactNode) {
   if (typeof emptyState === 'string' || typeof emptyState === 'number') {
     return <AzureEmptyState compact title={String(emptyState)} />;
@@ -175,14 +181,17 @@ function renderStateContent(emptyState: ReactNode) {
   return emptyState;
 }
 
+/** Provides an accessible text label for the copied state. */
 function copyStatusText(label: ReactNode) {
   return typeof label === 'string' || typeof label === 'number' ? String(label) : 'Copied';
 }
 
+/** An AzfAction with a selectable icon-button size. */
 export interface IconActionButtonProps extends AzfAction {
   size?: 'small' | 'medium' | 'large';
 }
 
+/** Renders a labeled icon action with loading and disabled states. */
 export function IconActionButton({ size = 'medium', ...action }: IconActionButtonProps) {
   return (
     <Tooltip content={action.label} relationship="label">
@@ -199,6 +208,7 @@ export function IconActionButton({ size = 'medium', ...action }: IconActionButto
   );
 }
 
+/** Tone, icon, and label inputs for a compact status indicator. */
 export interface StatusIconTextProps {
   status?: AzfTone;
   icon?: ReactNode;
@@ -206,6 +216,7 @@ export interface StatusIconTextProps {
   className?: string;
 }
 
+/** Pairs content with a semantic icon, choosing a default glyph from its tone. */
 export function StatusIconText({ status = 'neutral', icon, children, className }: StatusIconTextProps) {
   const fallback = status === 'success'
     ? <CheckmarkCircleRegular />
@@ -223,6 +234,7 @@ export function StatusIconText({ status = 'neutral', icon, children, className }
   );
 }
 
+/** Title, summary, resource menu, and action slots for a resource blade header. */
 export interface BladeHeaderProps {
   title: ReactNode;
   subtitle?: ReactNode;
@@ -243,6 +255,7 @@ export interface BladeHeaderProps {
   className?: string;
 }
 
+/** Renders the resource title and commands, moving excess actions into an overflow menu. */
 export function BladeHeader({
   title,
   subtitle,
@@ -367,12 +380,14 @@ export function BladeHeader({
  * colorNeutralBackground1 bg, 1px colorBrandStroke2 border, 8px radius,
  * 4px/8px padding, caption-1 (12px) label.
  */
+/** One suggested prompt and its optional click callback. */
 export interface CopilotPromptRibbonPromptItem {
   id: string;
   label: string;
   onClick?: () => void;
 }
 
+/** Suggested prompts and optional open action for the inline Copilot ribbon. */
 export interface CopilotPromptRibbonProps {
   prompts: CopilotPromptRibbonPromptItem[];
   onOpen?: () => void;
@@ -380,6 +395,7 @@ export interface CopilotPromptRibbonProps {
   className?: string;
 }
 
+/** Renders a Copilot entry action followed by the supplied prompt buttons. */
 export function CopilotPromptRibbon({ prompts, onOpen, label = 'Copilot', className }: CopilotPromptRibbonProps) {
   return (
     <div className={mergeClasses('azf-row azf-copilot-prompt-ribbon', className)}>
@@ -405,12 +421,14 @@ export function CopilotPromptRibbon({ prompts, onOpen, label = 'Copilot', classN
   );
 }
 
+/** Signed-in persona content displayed in the optional navigation header. */
 export interface PortalTopNavPerson {
   name: ReactNode;
   secondaryText?: ReactNode;
   icon?: ReactNode;
 }
 
+/** Branding, search, commands, content slots, and persona for the optional top navigation. */
 export interface PortalTopNavProps {
   brand?: {
     product: ReactNode;
@@ -432,6 +450,7 @@ export interface PortalTopNavProps {
   className?: string;
 }
 
+/** Renders optional brand, search, command, content, and persona regions. */
 export function PortalTopNav({
   brand,
   startActions = [],
@@ -513,6 +532,7 @@ export function PortalTopNav({
   );
 }
 
+/** Router-compatible link shape that the rail decorates with navigation state and content. */
 type PortalRailLinkElement = ReactElement<{
   className?: string;
   children?: ReactNode;
@@ -525,6 +545,7 @@ type PortalRailLinkElement = ReactElement<{
   'data-disabled'?: boolean;
 }>;
 
+/** One selectable navigation item; links can be supplied as a router-aware element. */
 export interface PortalRailItem {
   id: string;
   label: string;
@@ -535,6 +556,7 @@ export interface PortalRailItem {
   link?: PortalRailLinkElement;
 }
 
+/** A labeled set of rail items, optionally anchored to the bottom of the navigation. */
 export interface PortalRailSection {
   id: string;
   label?: ReactNode;
@@ -543,6 +565,7 @@ export interface PortalRailSection {
   anchorBottom?: boolean;
 }
 
+/** Optional brand label and navigation target for the rail header. */
 export interface PortalRailBrand {
   label: string;
   icon?: ReactElement;
@@ -551,6 +574,7 @@ export interface PortalRailBrand {
   ariaLabel?: string;
 }
 
+/** Sections, brand, collapse state, and header/footer slots for the navigation rail. */
 export interface PortalRailProps {
   items?: PortalRailItem[];
   sections?: PortalRailSection[];
@@ -574,6 +598,7 @@ export interface PortalRailProps {
   className?: string;
 }
 
+/** Clones a caller-provided link while preserving its props and applying rail styling and children. */
 function withPortalRailLink(
   link: PortalRailLinkElement,
   className: string,
@@ -587,6 +612,7 @@ function withPortalRailLink(
   });
 }
 
+/** Renders grouped navigation with optional brand, collapse control, header slot, and pinned footer. */
 export function PortalRail({
   items,
   sections,
@@ -740,6 +766,7 @@ export function PortalRail({
   );
 }
 
+/** Ordered shell slots and body semantics for a complete product surface. */
 export interface PortalLayoutProps {
   topNav?: ReactNode;
   rail?: ReactNode;
@@ -758,6 +785,7 @@ export interface PortalLayoutProps {
   contentClassName?: string;
 }
 
+/** Arranges optional shell regions around a host-owned body and preserves body semantics. */
 export function PortalLayout({
   topNav,
   rail,
@@ -809,6 +837,7 @@ export function PortalLayout({
   );
 }
 
+/** Primary and secondary actions plus optional title and host content for a command bar. */
 export interface CommandBarProps {
   title?: ReactNode;
   description?: ReactNode;
@@ -819,6 +848,7 @@ export interface CommandBarProps {
   ariaLabel?: string;
 }
 
+/** Renders primary toolbar actions and secondary action buttons in separate groups. */
 export function CommandBar({
   title,
   description,
@@ -862,6 +892,7 @@ export function CommandBar({
   );
 }
 
+/** Nested service groups and controlled selection, search, and favorite callbacks. */
 export interface ServiceMenuProps {
   groups: AzfServiceMenuGroup[];
   selectedId?: string;
@@ -875,10 +906,12 @@ export interface ServiceMenuProps {
   className?: string;
 }
 
+/** Flattens a nested service-menu item tree while recording each child depth. */
 function flattenMenuItem(item: AzfServiceMenuItem, depth = 0): Array<AzfServiceMenuItem & { depth: number }> {
   return [{ ...item, depth }, ...(item.items ?? []).flatMap((child) => flattenMenuItem(child, depth + 1))];
 }
 
+/** Renders searchable nested navigation and forwards selection and favorite changes to the host. */
 export function ServiceMenu({
   groups,
   selectedId,
@@ -962,6 +995,7 @@ export function ServiceMenu({
   );
 }
 
+/** Title, action list, and host content for a data toolbar. */
 export interface DataToolbarProps {
   title?: ReactNode;
   actions?: AzfAction[];
@@ -970,6 +1004,7 @@ export interface DataToolbarProps {
   ariaLabel?: string;
 }
 
+/** Adapts data-toolbar props to the shared command bar. */
 export function DataToolbar({ title, actions = [], children, className, ariaLabel = 'Data actions' }: DataToolbarProps) {
   return (
     <CommandBar title={title} primaryActions={actions} className={mergeClasses('azf-toolbar', className)} ariaLabel={ariaLabel}>
@@ -978,8 +1013,10 @@ export function DataToolbar({ title, actions = [], children, className, ariaLabe
   );
 }
 
+/** Alias for CommandBar, retained as a descriptive import name for portal layouts. */
 export const PortalCommandBar = CommandBar;
 
+/** Selected filters, optional search input, and extra filter controls. */
 export interface FilterBarProps {
   filters: AzfFilter[];
   searchValue?: string;
@@ -989,6 +1026,7 @@ export interface FilterBarProps {
   className?: string;
 }
 
+/** Renders search only when a search callback is supplied, plus the current filter chips. */
 export function FilterBar({
   filters,
   searchValue,
@@ -1027,6 +1065,7 @@ export function FilterBar({
   );
 }
 
+/** Message, optional icon, and recovery action for an empty result surface. */
 export interface AzureEmptyStateProps {
   title: ReactNode;
   body?: ReactNode;
@@ -1036,6 +1075,7 @@ export interface AzureEmptyStateProps {
   className?: string;
 }
 
+/** Renders an empty-result message with optional detail, icon, and next action. */
 export function AzureEmptyState({
   title,
   body,
@@ -1056,6 +1096,7 @@ export function AzureEmptyState({
   );
 }
 
+/** Metric rows and optional navigation or click behavior for a resource summary card. */
 export interface AzureSummaryCardProps {
   title: ReactNode;
   icon?: ReactNode;
@@ -1124,6 +1165,7 @@ export function AzureSummaryCard({
   );
 }
 
+/** Labeled property rows and an optional heading for a detail card. */
 export interface AzurePropertyListProps {
   title?: ReactNode;
   items: AzfPropertyItem[];
@@ -1151,6 +1193,7 @@ export function AzurePropertyList({ title, items, className }: AzurePropertyList
   );
 }
 
+/** Typed rows, column renderers, sorting, selection, loading, and empty/error states. */
 export interface AzureDataGridProps<T> {
   items: T[];
   columns: AzfColumn<T>[];
@@ -1169,6 +1212,7 @@ export interface AzureDataGridProps<T> {
   className?: string;
 }
 
+/** Renders typed rows with optional sorting, row selection, loading, and error/empty states. */
 export function AzureDataGrid<T>({
   items,
   columns,
@@ -1274,6 +1318,7 @@ export function AzureDataGrid<T>({
   );
 }
 
+/** Label, helper text, validation, status, and input content for one form row. */
 export interface FormFieldRowProps {
   label: ReactNode;
   htmlFor?: string;
@@ -1287,6 +1332,7 @@ export interface FormFieldRowProps {
   className?: string;
 }
 
+/** Renders one labeled control with optional information, hint, validation, and status. */
 export function FormFieldRow({
   label,
   htmlFor,
@@ -1327,6 +1373,7 @@ export function FormFieldRow({
   );
 }
 
+/** Controlled tag rows, resource choices, validation messages, and edit callbacks. */
 export interface ResourceTagEditorProps {
   rows: AzfResourceTagRow[];
   resources: AzfOption[];
@@ -1338,6 +1385,7 @@ export interface ResourceTagEditorProps {
   className?: string;
 }
 
+/** Renders controlled tag rows and reports edits, additions, and removals through callbacks. */
 export function ResourceTagEditor({
   rows,
   resources,
@@ -1422,6 +1470,7 @@ export function ResourceTagEditor({
   );
 }
 
+/** Optional copy and action for a low-emphasis feedback footer. */
 export interface FeedbackFooterProps {
   title?: ReactNode;
   body?: ReactNode;
@@ -1430,6 +1479,7 @@ export interface FeedbackFooterProps {
   icon?: ReactNode;
 }
 
+/** Renders feedback copy and an optional low-emphasis action. */
 export function FeedbackFooter({
   title = 'Tell us how this surface worked for you.',
   body,
@@ -1451,6 +1501,7 @@ export function FeedbackFooter({
   );
 }
 
+/** Primary and optional secondary form actions with feedback content. */
 export interface FormFooterProps {
   primaryAction: AzfAction;
   secondaryAction?: AzfAction;
@@ -1458,6 +1509,7 @@ export interface FormFooterProps {
   className?: string;
 }
 
+/** Renders primary and optional secondary actions with optional feedback. */
 export function FormFooter({ primaryAction, secondaryAction, feedback, className }: FormFooterProps) {
   return (
     <footer className={mergeClasses('azf-row azf-form-footer', className)}>
@@ -1470,6 +1522,7 @@ export function FormFooter({ primaryAction, secondaryAction, feedback, className
   );
 }
 
+/** Paging state, page-size choices, and callbacks for a result list. */
 export interface PagerProps extends AzfPagerState {
   pageSizeOptions?: number[];
   onPageChange?: (page: number) => void;
@@ -1477,6 +1530,7 @@ export interface PagerProps extends AzfPagerState {
   className?: string;
 }
 
+/** Displays a clamped page range and forwards page or page-size changes to the host. */
 export function Pager({
   page,
   pageSize,
@@ -1517,6 +1571,7 @@ export function Pager({
   );
 }
 
+/** Accordion items and initial interaction options for collapsible content. */
 export interface AzureAccordionProps {
   items: readonly AzfAccordionItem[];
   ariaLabel?: string;
@@ -1527,6 +1582,7 @@ export interface AzureAccordionProps {
   className?: string;
 }
 
+/** Adapts system accordion item data to Fluent accordion rows. */
 export function AzureAccordion({
   items,
   ariaLabel = 'Accordion',
@@ -1559,15 +1615,18 @@ export function AzureAccordion({
   );
 }
 
+/** Builds plain code-line text from its explicit text or token contents. */
 function lineText(line: AzfCodeSnippetLine) {
   if (line.text != null) return line.text;
   return (line.tokens ?? []).map((token) => token.text).join('');
 }
 
+/** Returns the token syntax tone, defaulting unclassified text to plain. */
 function tokenTone(token: AzfCodeSnippetToken) {
   return token.tone ?? 'plain';
 }
 
+/** Value, labels, optional copy implementation, and controlled or internal copied state. */
 export interface CopyButtonProps {
   value: string;
   label?: ReactNode;
@@ -1580,6 +1639,7 @@ export interface CopyButtonProps {
   className?: string;
 }
 
+/** Copies through the supplied callback or browser clipboard and silently clears copied state on failure. */
 export function CopyButton({
   value,
   label,
@@ -1640,6 +1700,7 @@ export function CopyButton({
   );
 }
 
+/** Tokenized lines and optional copy, title, and viewport settings. */
 export interface CodeSnippetProps {
   lines: readonly AzfCodeSnippetLine[];
   title?: ReactNode;
@@ -1650,6 +1711,7 @@ export interface CodeSnippetProps {
   className?: string;
 }
 
+/** Renders numbered, optionally tokenized lines and derives clipboard text when no copy value is supplied. */
 export function CodeSnippet({
   lines,
   title,
@@ -1706,6 +1768,7 @@ export function CodeSnippet({
   );
 }
 
+/** One notification row with status tone, timestamp, unread marker, and actions. */
 export interface NotificationPaneItem {
   id: string;
   title: ReactNode;
@@ -1716,6 +1779,7 @@ export interface NotificationPaneItem {
   actions?: AzfAction[];
 }
 
+/** Notification items, empty state, footer, and inline or flyout presentation. */
 export interface NotificationPaneProps {
   title?: ReactNode;
   items: NotificationPaneItem[];
@@ -1725,6 +1789,7 @@ export interface NotificationPaneProps {
   className?: string;
 }
 
+/** Renders a notification list with an empty state, status, actions, and optional footer. */
 export function NotificationPane({
   title = 'Notifications',
   items,
@@ -1761,6 +1826,7 @@ export function NotificationPane({
   );
 }
 
+/** Controlled prompt value, send/stop callbacks, run state, attachments, and optional agent controls. */
 export interface CopilotComposerProps {
   value: string;
   onChange: (value: string) => void;
@@ -1779,6 +1845,7 @@ export interface CopilotComposerProps {
   className?: string;
 }
 
+/** Renders a controlled prompt editor; sending requires nonblank text and running state exposes stop. */
 export function CopilotComposer({
   value,
   onChange,
@@ -1869,6 +1936,7 @@ export function CopilotComposer({
   );
 }
 
+/** Collects single- or multi-select response choices and submits only after a choice is selected. */
 function ChoicePart({ part }: { part: Extract<AzfResponsePart, { type: 'choices' }> }) {
   const [selected, setSelected] = useState<string[]>([]);
   const toggle = (id: string, checked: boolean) => setSelected((current) => (checked ? [...current, id] : current.filter((value) => value !== id)));
@@ -1899,6 +1967,7 @@ function ChoicePart({ part }: { part: Extract<AzfResponsePart, { type: 'choices'
   );
 }
 
+/** Response segments, optional actions, loading state, and error content. */
 export interface CopilotResponseProps {
   parts: AzfResponsePart[];
   actions?: AzfAction[];
@@ -1907,11 +1976,13 @@ export interface CopilotResponseProps {
   className?: string;
 }
 
+/** Wraps plain text response values in Fluent text and preserves caller-supplied React content. */
 function renderResponseContent(content: ReactNode) {
   if (typeof content === 'string' || typeof content === 'number') return <Text>{content}</Text>;
   return content;
 }
 
+/** Renders the Copilot identity and optional generated-content notice. */
 function CopilotResponseHeader({
   title = 'Copilot',
   badge = 'AI-generated content may be incorrect',
@@ -1936,6 +2007,7 @@ function CopilotResponseHeader({
   );
 }
 
+/** Renders text, choice, and confirmation segments plus loading, error, and response actions. */
 export function CopilotResponse({ parts, actions = [], loading, error, className }: CopilotResponseProps) {
   return (
     <div className={mergeClasses('azf-stack azf-gap-s', className)}>
@@ -1999,6 +2071,7 @@ export function CopilotResponse({ parts, actions = [], loading, error, className
   );
 }
 
+/** Controlled inline prompt popover, suggestions, status, and submit/dismiss callbacks. */
 export interface InlineCopilotProps {
   open: boolean;
   trigger: ReactElement;
@@ -2017,6 +2090,7 @@ export interface InlineCopilotProps {
   className?: string;
 }
 
+/** Renders an externally controlled prompt popover with suggestions, validation, and submit state. */
 export function InlineCopilot({
   open,
   trigger,
@@ -2104,10 +2178,12 @@ export function InlineCopilot({
   );
 }
 
+/** Artifact metadata displayed as an actionable pill. */
 export interface ArtifactPillProps {
   artifact: AzfArtifact;
 }
 
+/** Renders artifact metadata with the supplied open action. */
 export function ArtifactPill({ artifact }: ArtifactPillProps) {
   // Anatomy per Figma ".Artifact pill (CoT)" node 27865:11293 (file q2TdO4dVcMhNWYp0N6Bc05):
   // 34px white pill, colorNeutralStroke1 border, 8px (XLarge) radius; 20px leading icon; title
@@ -2127,6 +2203,7 @@ export function ArtifactPill({ artifact }: ArtifactPillProps) {
   );
 }
 
+/** Step state, approval callbacks, and optionally controlled accordion expansion. */
 export interface AgenticProgressProps {
   steps: AzfAgentStep[];
   onApprove?: (stepId: string) => void;
@@ -2137,6 +2214,7 @@ export interface AgenticProgressProps {
   className?: string;
 }
 
+/** Maps an agent step state to the semantic tone used by progress indicators. */
 function stepTone(step: AzfAgentStep): AzfTone {
   if (step.status === 'complete') return 'success';
   if (step.status === 'warning' || step.needsInput) return 'warning';
@@ -2144,6 +2222,7 @@ function stepTone(step: AzfAgentStep): AzfTone {
   return 'info';
 }
 
+/** Renders steps in an expandable list and forwards approval and expansion events to the host. */
 export function AgenticProgress({ steps, onApprove, onDeny, defaultOpenItems, openItems, onToggleItems, className }: AgenticProgressProps) {
   return (
     <Accordion
@@ -2188,6 +2267,7 @@ export function AgenticProgress({ steps, onApprove, onDeny, defaultOpenItems, op
   );
 }
 
+/** Run steps, artifacts, approval callbacks, and initial activity-view settings. */
 export interface ChainOfThoughtProps {
   title?: ReactNode;
   subtitle?: ReactNode;
@@ -2212,6 +2292,7 @@ const COT_BADGE_TONE: Record<NonNullable<AzfStepBadge['tone']>, string> = {
 // symbols: neutral circle-check when complete, the Copilot loader dot while running (Figma
 // "Circle_Loader"), a filled warning triangle when the step needs input, an error circle on
 // failure, and a hollow circle when pending.
+/** Selects the activity-row glyph from the step status and approval requirement. */
 function cotStatusIcon(step: AzfAgentStep): ReactNode {
   if (step.needsInput || step.status === 'warning') {
     return <WarningFilled className="azf-cot__status azf-cot__status--warning" aria-hidden="true" />;
@@ -2228,6 +2309,7 @@ function cotStatusIcon(step: AzfAgentStep): ReactNode {
   return <CircleRegular className="azf-cot__status azf-cot__status--pending" aria-hidden="true" />;
 }
 
+/** Inputs for one activity row, including optional host callbacks for an approval checkpoint. */
 interface CotStepRowProps {
   step: AzfAgentStep;
   open: boolean;
@@ -2237,6 +2319,7 @@ interface CotStepRowProps {
   onRequestChanges?: (stepId: string, feedback: string) => void;
 }
 
+/** Renders one activity step and collects change-request text before calling the host callback. */
 function CotStepRow({ step, open, onToggle, onApprove, onDeny, onRequestChanges }: CotStepRowProps) {
   const hasSub = Boolean(step.body || step.needsInput);
   const titleId = `azf-cot-step-${step.id}`;
@@ -2337,6 +2420,7 @@ function CotStepRow({ step, open, onToggle, onApprove, onDeny, onRequestChanges 
   );
 }
 
+/** Renders artifact metadata with optional download and open actions. */
 function CotArtifactRow({ artifact }: { artifact: AzfArtifact }) {
   const metaParts = [artifact.type, artifact.size].filter(Boolean);
   return (
@@ -2373,6 +2457,7 @@ function CotArtifactRow({ artifact }: { artifact: AzfArtifact }) {
 // RIGHT, semantic badges only where the spec shows them, and an inline (not MessageBar) approval
 // block with body + disclaimer + primary Approve / secondary Deny. Every value maps to a Fluent v9
 // token harvested from the design's get_design_context / get_variable_defs output.
+/** Renders activity steps or artifacts; approval and change requests are delegated to host callbacks. */
 export function ChainOfThought({
   title = 'Reasoning',
   subtitle,
@@ -2489,6 +2574,7 @@ export function ChainOfThought({
   );
 }
 
+/** One tab with an identifier, label, optional description, and status. */
 export interface AzureTab {
   id: string;
   label: ReactNode;
@@ -2500,6 +2586,7 @@ export interface AzureTab {
   disabled?: boolean;
 }
 
+/** Tab items, selected value, orientation, and selection callback. */
 export interface AzureTabListProps {
   tabs: AzureTab[];
   selectedValue: string;
@@ -2509,6 +2596,7 @@ export interface AzureTabListProps {
   className?: string;
 }
 
+/** Renders selectable tabs with status markers and reports the selected tab ID. */
 export function AzureTabList({ tabs, selectedValue, onTabSelect, orientation = 'horizontal', ariaLabel, className }: AzureTabListProps) {
   return (
     <TabList
@@ -2547,6 +2635,7 @@ export function AzureTabList({ tabs, selectedValue, onTabSelect, orientation = '
   );
 }
 
+/** One wizard step with descriptive text and optional status or disabled state. */
 export interface AzureStep {
   id: string;
   label: ReactNode;
@@ -2555,6 +2644,7 @@ export interface AzureStep {
   disabled?: boolean;
 }
 
+/** Steps, current selection, and callback for a step-navigation list. */
 export interface AzureStepListProps {
   steps: AzureStep[];
   selectedValue: string;
@@ -2564,6 +2654,7 @@ export interface AzureStepListProps {
   ariaLabel?: string;
 }
 
+/** Renders wizard steps with completion and warning state indicators. */
 export function AzureStepList({
   steps,
   selectedValue,
@@ -2596,6 +2687,7 @@ export function AzureStepList({
   );
 }
 
+/** Trigger, help copy, optional actions, and visual tone for contextual help. */
 export interface HelpPopoverProps {
   trigger: ReactElement;
   title?: ReactNode;
@@ -2604,6 +2696,7 @@ export interface HelpPopoverProps {
   tone?: 'light' | 'brand' | 'dark';
 }
 
+/** Renders contextual help in a popover with optional follow-up actions. */
 export function HelpPopover({ trigger, title, body, actions = [], tone = 'light' }: HelpPopoverProps) {
   const titleId = useId();
   return (
@@ -2618,8 +2711,10 @@ export function HelpPopover({ trigger, title, body, actions = [], tone = 'light'
   );
 }
 
+/** Alias for HelpPopover, used for contextual callouts with the same popover contract. */
 export const CalloutPopover = HelpPopover;
 
+/** Form content and optional message/footer with a host submission callback. */
 export interface AzureFormProps {
   children: ReactNode;
   message?: ReactNode;
@@ -2628,6 +2723,7 @@ export interface AzureFormProps {
   onSubmit?: () => void;
 }
 
+/** Prevents browser form navigation and invokes the optional host submit callback. */
 export function AzureForm({ children, message, footer, className, onSubmit }: AzureFormProps) {
   return (
     <form
@@ -2644,6 +2740,7 @@ export function AzureForm({ children, message, footer, className, onSubmit }: Az
   );
 }
 
+/** Resource details, consequences, acknowledgement gate, and confirmation callbacks. */
 export interface DeleteResourceDialogProps {
   resourceName: string;
   trigger: ReactElement;
@@ -2662,6 +2759,7 @@ export interface DeleteResourceDialogProps {
   onCancel?: () => void;
 }
 
+/** Shows deletion consequences and blocks confirmation while busy or until acknowledgement is checked. */
 export function DeleteResourceDialog({
   resourceName,
   trigger,
@@ -2715,9 +2813,11 @@ export function DeleteResourceDialog({
   );
 }
 
+/** Alias for DeleteResourceDialog, retained for callers that use confirmation terminology. */
 export const DeleteConfirmationDialog = DeleteResourceDialog;
 
 // --- Azure Slider (Figma 28472:10338) ---------------------------------------
+/** Numeric range, controlled or default value, formatting, and optional label. */
 export interface AzureSliderProps {
   value?: number;
   defaultValue?: number;
@@ -2736,6 +2836,7 @@ export interface AzureSliderProps {
   ariaLabel?: string;
 }
 
+/** Renders a controlled or locally controlled numeric slider and reports value changes. */
 export function AzureSlider({
   value,
   defaultValue,
@@ -2796,6 +2897,7 @@ export function AzureSlider({
 }
 
 // --- Progress bar with labels (Figma 28174:7417 / animated 28209:4560) -------
+/** Progress values, label, detail text, and indeterminate or required state. */
 export interface ProgressBarWithLabelProps {
   value?: number;
   max?: number;
@@ -2809,6 +2911,7 @@ export interface ProgressBarWithLabelProps {
   className?: string;
 }
 
+/** Renders labeled progress; an omitted value or explicit flag selects indeterminate mode. */
 export function ProgressBarWithLabel({
   value,
   max = 1,
@@ -2856,6 +2959,7 @@ export function ProgressBarWithLabel({
 }
 
 // --- File upload (Figma 25412:31783) ----------------------------------------
+/** Upload presentation state and callbacks for choosing, uploading, or removing files. */
 export interface FileUploadProps {
   label?: ReactNode;
   state?: AzfFileUploadState;
@@ -2872,6 +2976,7 @@ export interface FileUploadProps {
   className?: string;
 }
 
+/** Forwards chosen or dropped files to the host and displays the supplied upload state. */
 export function FileUpload({
   label = 'Upload file',
   state = 'default',
@@ -2986,6 +3091,7 @@ export function FileUpload({
 }
 
 // --- Filterable combo box (Figma 25248:8173) --------------------------------
+/** Options, controlled selection, filtering behavior, and single- or multi-select callbacks. */
 export interface FilterableComboBoxProps {
   options: AzfOption[];
   value?: string;
@@ -3004,6 +3110,7 @@ export interface FilterableComboBoxProps {
   ariaLabel?: string;
 }
 
+/** Filters options from local query text and reports selection through the configured callbacks. */
 export function FilterableComboBox({
   options,
   value,
@@ -3092,6 +3199,7 @@ export function FilterableComboBox({
 }
 
 // --- Azure toolbar (Figma 29553:7576) ---------------------------------------
+/** Action buttons, optional dividers, size, and toolbar accessibility label. */
 export interface AzureToolbarProps {
   actions: AzfAction[];
   topOfPage?: boolean;
@@ -3101,6 +3209,7 @@ export interface AzureToolbarProps {
   children?: ReactNode;
 }
 
+/** Renders action buttons and converts divider marker actions into toolbar dividers. */
 export function AzureToolbar({
   actions,
   topOfPage = false,
@@ -3135,11 +3244,13 @@ export function AzureToolbar({
   );
 }
 
+/** Identifier and label for one selectable filter pill. */
 export interface AzfFilterPill {
   id: string;
   label: string;
 }
 
+/** Visible and overflow filter pills with selected state and toggle callback. */
 export interface FilterPillsProps {
   pills: AzfFilterPill[];
   selectedIds: string[];
@@ -3150,6 +3261,7 @@ export interface FilterPillsProps {
   className?: string;
 }
 
+/** Renders selected filter toggles and an optional popover for overflow filters. */
 export function FilterPills({
   pills,
   selectedIds,
@@ -3205,6 +3317,7 @@ export function FilterPills({
   );
 }
 
+/** Labeled essential value with optional link and tags. */
 export interface AzfEssentialProperty {
   id: string;
   label: string;
@@ -3213,6 +3326,7 @@ export interface AzfEssentialProperty {
   tags?: string[];
 }
 
+/** Essential properties, accordion initial state, and one- or two-column layout. */
 export interface EssentialsGridProps {
   properties: AzfEssentialProperty[];
   title?: string;
@@ -3221,6 +3335,7 @@ export interface EssentialsGridProps {
   className?: string;
 }
 
+/** Renders essential properties in a collapsible one- or two-column definition list. */
 export function EssentialsGrid({
   properties,
   title = 'Essentials',

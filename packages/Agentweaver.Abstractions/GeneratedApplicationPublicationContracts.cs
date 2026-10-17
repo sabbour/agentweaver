@@ -2,14 +2,24 @@ using System.Globalization;
 
 namespace Agentweaver.Abstractions;
 
+/// <summary>Version and credential purpose shared by generated-application publication owners.</summary>
 public static class GeneratedApplicationPublicationContract
 {
+    /// <summary>Publication contract version currently accepted.</summary>
     public const int ContractVersion = 1;
+    /// <summary>Identity redemption purpose for the configured registry publishing credential.</summary>
     public const string RegistryCredentialPurpose = "generated-application.registry-publish";
 }
 
+/// <summary>
+/// Immutable source and authorization pins for publication. It binds the operation to
+/// a captured repository output, current Environment fence, actor, selection, and owner revisions.
+/// </summary>
 public sealed record GeneratedApplicationPublicationSourceBinding
 {
+    /// <summary>Creates a binding after validating source identity, revisions, hashes, and Git object IDs.</summary>
+    /// <exception cref="ArgumentException">A source pin is malformed or unbounded.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">A revision, fence, or resource generation is invalid.</exception>
     public GeneratedApplicationPublicationSourceBinding(
         EnvironmentGenerationFence environmentFence,
         string sourceSessionId,
@@ -74,6 +84,11 @@ public sealed record GeneratedApplicationPublicationSourceBinding
         OutputTreeSha = ValidateGitObjectId(outputTreeSha, nameof(outputTreeSha));
     }
 
+    /// <summary>
+    /// Builds a binding from a validated Source Control capture and current owner context,
+    /// rejecting a different tenant, project, run, actor, or accepted selection.
+    /// </summary>
+    /// <exception cref="ArgumentException">The capture and current Environment authority do not match.</exception>
     public static GeneratedApplicationPublicationSourceBinding FromCurrentCapture(
         EnvironmentGenerationFence environmentFence,
         ProducedRunCaptureProof capture,
@@ -145,6 +160,7 @@ public sealed record GeneratedApplicationPublicationSourceBinding
     public long OwnerStateVersion { get; }
     public long DecisionStateVersion { get; }
     public string CaptureId { get; }
+    /// <summary>Digest of the full source proof, including all repository and output pins.</summary>
     public string SourceProofSha256 { get; }
     public string SourceManifestSha256 { get; }
     public string SourcePackageSha256 { get; }
@@ -157,6 +173,7 @@ public sealed record GeneratedApplicationPublicationSourceBinding
     public string BaseSha { get; }
     public string OutputTreeSha { get; }
 
+    /// <summary>Compares every source and authority pin to prevent mutation between publication stages.</summary>
     public bool Matches(GeneratedApplicationPublicationSourceBinding? other) =>
         other is not null &&
         EnvironmentFence == other.EnvironmentFence &&
@@ -184,9 +201,11 @@ public sealed record GeneratedApplicationPublicationSourceBinding
         BaseSha == other.BaseSha &&
         OutputTreeSha == other.OutputTreeSha;
 
+    /// <summary>Digest of the current owner identity and revision/fence proof.</summary>
     public string OwnerReadProofSha256 =>
         GeneratedApplicationPublicationValidation.ComputeOwnerReadProofSha256(this);
 
+    /// <summary>Validates a SHA-256 string and stores its canonical lowercase representation.</summary>
     private static string NormalizeHash(string? value, string paramName)
     {
         if (value is not { Length: 64 } ||
@@ -195,6 +214,7 @@ public sealed record GeneratedApplicationPublicationSourceBinding
         return value.ToLowerInvariant();
     }
 
+    /// <summary>Checks a bounded provider-style identifier.</summary>
     private static string ValidateIdentifier(string? value, int maximumLength, string paramName)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > maximumLength ||
@@ -204,6 +224,7 @@ public sealed record GeneratedApplicationPublicationSourceBinding
         return value;
     }
 
+    /// <summary>Checks bounded nonempty text without control characters.</summary>
     private static string ValidateText(string? value, int maximumLength, string paramName)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > maximumLength ||
@@ -212,6 +233,7 @@ public sealed record GeneratedApplicationPublicationSourceBinding
         return value;
     }
 
+    /// <summary>Validates a Git object ID and stores its lowercase representation.</summary>
     private static string ValidateGitObjectId(string? value, string paramName)
     {
         if (value is not { Length: 40 or 64 } ||
@@ -221,8 +243,11 @@ public sealed record GeneratedApplicationPublicationSourceBinding
     }
 }
 
+/// <summary>OCI artifact reference and measured image identity exported by the Build/Test executor.</summary>
 public sealed record GeneratedApplicationOciArtifact
 {
+    /// <summary>Creates an artifact reference and validates the image digest, platform, and compressed size.</summary>
+    /// <exception cref="ArgumentException">An artifact reference or image identity is invalid.</exception>
     public GeneratedApplicationOciArtifact(
         string artifactStoreId,
         string handle,
@@ -244,6 +269,7 @@ public sealed record GeneratedApplicationOciArtifact
     public string Platform { get; }
     public long CompressedBytes { get; }
 
+    /// <summary>Checks an opaque artifact-store identifier or handle.</summary>
     private static string ValidateIdentifier(string? value, string paramName)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 512 || value.Any(char.IsControl))
@@ -252,6 +278,7 @@ public sealed record GeneratedApplicationOciArtifact
     }
 }
 
+/// <summary>Outcome of a generated application build and test operation.</summary>
 public enum GeneratedApplicationBuildTestOutcome
 {
     Succeeded,
@@ -259,8 +286,15 @@ public enum GeneratedApplicationBuildTestOutcome
     TestsFailed
 }
 
+/// <summary>
+/// Immutable Build/Test evidence for one publication operation. Only a successful outcome
+/// may include an exported OCI artifact.
+/// </summary>
 public sealed record GeneratedApplicationBuildTestEvidence
 {
+    /// <summary>Creates evidence bound to an exact request fingerprint and source binding.</summary>
+    /// <exception cref="ArgumentException">The evidence identity, fingerprint, outcome, or artifact does not match.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The outcome or completion time is invalid.</exception>
     public GeneratedApplicationBuildTestEvidence(
         Guid operationId,
         string operationRequestFingerprint,
@@ -307,6 +341,7 @@ public sealed record GeneratedApplicationBuildTestEvidence
     public GeneratedApplicationOciArtifact? Artifact { get; }
     public DateTimeOffset CompletedAt { get; }
 
+    /// <summary>Checks a bounded immutable evidence reference.</summary>
     private static string ValidateReference(string value, string paramName)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 512 || value.Any(char.IsControl))
@@ -315,8 +350,11 @@ public sealed record GeneratedApplicationBuildTestEvidence
     }
 }
 
+/// <summary>Build/Test executor input with an operation ID and canonical publication fingerprint.</summary>
 public sealed record GeneratedApplicationBuildTestRequest
 {
+    /// <summary>Creates a stable operation request after requiring a nonempty operation ID.</summary>
+    /// <exception cref="ArgumentException">The operation ID is empty or publication request is null.</exception>
     public GeneratedApplicationBuildTestRequest(
         Guid operationId,
         GeneratedApplicationPublicationRequest publication)
@@ -333,15 +371,20 @@ public sealed record GeneratedApplicationBuildTestRequest
     public string RequestFingerprint { get; }
 }
 
+/// <summary>Executes and returns evidence for the requested application build and tests.</summary>
 public interface IGeneratedApplicationBuildTestExecutor
 {
+    /// <summary>Runs Build/Test for the exact publication request and returns its evidence.</summary>
     Task<GeneratedApplicationBuildTestEvidence> ExecuteAsync(
         GeneratedApplicationBuildTestRequest request,
         CancellationToken cancellationToken);
 }
 
+/// <summary>Requested source-bound publication target and caller-provided idempotency key.</summary>
 public sealed record GeneratedApplicationPublicationRequest
 {
+    /// <summary>Creates a publication request for one source capture and configured registry target.</summary>
+    /// <exception cref="ArgumentException">The application, target, or idempotency key is invalid.</exception>
     public GeneratedApplicationPublicationRequest(
         GeneratedApplicationPublicationSourceBinding source,
         string applicationId,
@@ -362,6 +405,7 @@ public sealed record GeneratedApplicationPublicationRequest
     public string RegistryTargetId { get; }
     public string IdempotencyKey { get; }
 
+    /// <summary>Validates an identifier using the publication target's allowed character set.</summary>
     private static string ValidateIdentifier(string value, string paramName)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 128 ||
@@ -371,6 +415,7 @@ public sealed record GeneratedApplicationPublicationRequest
         return value;
     }
 
+    /// <summary>Checks a bounded human-readable application identifier.</summary>
     private static string ValidateText(string value, int maximumLength, string paramName)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > maximumLength ||
@@ -380,8 +425,15 @@ public sealed record GeneratedApplicationPublicationRequest
     }
 }
 
+/// <summary>
+/// Expiring, decision-backed approval for one exact source capture, application, registry
+/// target, and successful Build/Test evidence digest.
+/// </summary>
 public sealed record GeneratedApplicationPublicationApproval
 {
+    /// <summary>Creates an approval only when its references and digests are well formed.</summary>
+    /// <exception cref="ArgumentException">A decision, source, application, target, or evidence digest is invalid.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The approval expiry is missing.</exception>
     public GeneratedApplicationPublicationApproval(
         string decisionReference,
         string decisionSha256,
@@ -424,6 +476,7 @@ public sealed record GeneratedApplicationPublicationApproval
     public string BuildTestEvidenceSha256 { get; }
     public DateTimeOffset ExpiresAt { get; }
 
+    /// <summary>Checks the approval is for the exact publication request and successful build evidence.</summary>
     public bool BindsTo(
         GeneratedApplicationPublicationRequest request,
         GeneratedApplicationBuildTestEvidence evidence) =>
@@ -433,8 +486,14 @@ public sealed record GeneratedApplicationPublicationApproval
         BuildTestEvidenceSha256 == evidence.EvidenceSha256;
 }
 
+/// <summary>Validated registry push request combining one publication, exact Build/Test evidence, and approval.</summary>
 public sealed record GeneratedApplicationRegistryPublishRequest
 {
+    /// <summary>
+    /// Creates a registry request only when operation fingerprint, successful artifact evidence,
+    /// source binding, and approval all refer to the same operation.
+    /// </summary>
+    /// <exception cref="ArgumentException">The operation, evidence, artifact, or approval is stale or mismatched.</exception>
     public GeneratedApplicationRegistryPublishRequest(
         Guid operationId,
         string requestFingerprint,
@@ -473,8 +532,12 @@ public sealed record GeneratedApplicationRegistryPublishRequest
     public GeneratedApplicationOciArtifact Artifact { get; }
 }
 
+/// <summary>Provider-measured registry digest and time for one publication operation.</summary>
 public sealed record GeneratedApplicationRegistryPublishResult
 {
+    /// <summary>Creates a result after checking its operation fingerprint, target, image digest, and timestamp.</summary>
+    /// <exception cref="ArgumentException">An operation or image identity is malformed.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The timestamp is missing.</exception>
     public GeneratedApplicationRegistryPublishResult(
         Guid operationId,
         string requestFingerprint,
@@ -507,6 +570,7 @@ public sealed record GeneratedApplicationRegistryPublishResult
     public DateTimeOffset MeasuredAt { get; }
 }
 
+/// <summary>Registry observation states used when reconciling a publication with uncertain outcome.</summary>
 public enum GeneratedApplicationRegistryObservationState
 {
     ExactDigestPresent,
@@ -515,8 +579,15 @@ public enum GeneratedApplicationRegistryObservationState
     Unknown
 }
 
+/// <summary>
+/// Read-only registry observation for one operation. A measured digest is required only
+/// when an object was found, whether exact or conflicting.
+/// </summary>
 public sealed record GeneratedApplicationRegistryObservation
 {
+    /// <summary>Creates an observation bound to the publication request and observed registry state.</summary>
+    /// <exception cref="ArgumentException">The operation, target, state, or digest is inconsistent.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The state or observation time is invalid.</exception>
     public GeneratedApplicationRegistryObservation(
         Guid operationId,
         string requestFingerprint,
@@ -560,19 +631,23 @@ public sealed record GeneratedApplicationRegistryObservation
     public DateTimeOffset ObservedAt { get; }
 }
 
+/// <summary>Provider boundary that publishes an approved artifact or observes registry state for reconciliation.</summary>
 public interface IGeneratedApplicationRegistryPublisher
 {
+    /// <summary>Pushes the approved artifact using the supplied short-lived registry credential.</summary>
     Task<GeneratedApplicationRegistryPublishResult> PublishAsync(
         GeneratedApplicationRegistryPublishRequest request,
         SecretCredential credential,
         CancellationToken cancellationToken);
 
+    /// <summary>Reads registry state without publishing, to resolve an uncertain previous publish attempt.</summary>
     Task<GeneratedApplicationRegistryObservation> ObserveAsync(
         GeneratedApplicationRegistryPublishRequest request,
         SecretCredential credential,
         CancellationToken cancellationToken);
 }
 
+/// <summary>Durable states of the owner-managed build, approval, publish, and reconciliation flow.</summary>
 public enum GeneratedApplicationPublicationOperationState
 {
     BuildTestReserved,
@@ -591,6 +666,7 @@ public enum GeneratedApplicationPublicationOperationState
     Failed
 }
 
+/// <summary>Persisted publication request state and evidence owned by the publication service.</summary>
 public sealed record GeneratedApplicationPublicationOperation(
     Guid OperationId,
     GeneratedApplicationPublicationRequest Request,
@@ -603,16 +679,20 @@ public sealed record GeneratedApplicationPublicationOperation(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
 
+/// <summary>Reservation response for a publication operation, including idempotent replay state.</summary>
 public sealed record GeneratedApplicationPublicationReservation(
     GeneratedApplicationPublicationOperation Operation,
     bool Replayed);
 
+/// <summary>Completion response for a publication operation, including idempotent replay state.</summary>
 public sealed record GeneratedApplicationPublicationCompletion(
     GeneratedApplicationPublicationOperation Operation,
     bool Replayed);
 
+/// <summary>Fingerprint and digest functions shared by generated-application publication owners.</summary>
 public static class GeneratedApplicationPublicationValidation
 {
+    /// <summary>Returns whether the input is a 64-character hexadecimal SHA-256 digest.</summary>
     public static bool IsSha256(string? value) =>
         value is { Length: 64 } && value.All(Uri.IsHexDigit);
 
@@ -621,6 +701,8 @@ public static class GeneratedApplicationPublicationValidation
         value.StartsWith("sha256:", StringComparison.Ordinal) &&
         value[7..].All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
+    /// <summary>Computes a deterministic digest over target and every source/owner pin in the request.</summary>
+    /// <exception cref="ArgumentNullException">The request is null.</exception>
     public static string Fingerprint(GeneratedApplicationPublicationRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -660,6 +742,8 @@ public static class GeneratedApplicationPublicationValidation
             System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(material)));
     }
 
+    /// <summary>Hashes a validated capture's source and output evidence for approval binding.</summary>
+    /// <exception cref="ArgumentException">The capture proof is invalid.</exception>
     public static string ComputeSourceProofSha256(ProducedRunCaptureProof capture)
     {
         ArgumentNullException.ThrowIfNull(capture);
@@ -695,6 +779,7 @@ public static class GeneratedApplicationPublicationValidation
             System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(material)));
     }
 
+    /// <summary>Hashes current Environment owner and revision pins for a read-proof check.</summary>
     public static string ComputeOwnerReadProofSha256(
         GeneratedApplicationPublicationSourceBinding source)
     {

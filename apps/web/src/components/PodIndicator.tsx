@@ -44,6 +44,10 @@ interface PodIndicatorProps {
  * Renders a compact pod pill above/over an agent card.
  * Renders nothing when podName is falsy (local/dev mode).
  */
+/**
+ * Renders a concise status indicator for a pod from status props supplied by its parent.
+ * Styling reflects the provided status; this component does not poll or keep local state.
+ */
 export function PodIndicator({ podName }: PodIndicatorProps) {
   const s = useStyles();
   if (!podName) return null;

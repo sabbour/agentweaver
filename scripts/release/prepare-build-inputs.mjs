@@ -1,3 +1,7 @@
+/**
+ * Checks and prepares the pinned local inputs needed for reproducible release builds.
+ * This step verifies source, package-lock, and container base-image pins before build preparation.
+ */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -5,7 +9,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+/** Approved package-lock digest required by the release build input gate. */
 export const approvedWebLockSha256 = 'a6e3ac6dc04086969ba78898057bda4273c3f5491185d15437143cddaef214db';
+/** Immutable container base-image references accepted by release build preparation. */
 export const approvedBaseImages = Object.freeze([
   'mcr.microsoft.com/dotnet/sdk:10.0.401-noble@sha256:e70cdb7f80b0348f5cb85f19a8f670fca061f033d57eed12fa003d58b0e06317',
   'mcr.microsoft.com/dotnet/aspnet:10.0.12-noble@sha256:0fa044f682cb7d93a5a90401a00c626c66f7b00b86922be9441f869eae039f80',
@@ -16,6 +22,7 @@ const approvedHosts = new Set([
   'ms-feed-2.pkgs.visualstudio.com', 'registry.npmjs.org',
 ]);
 
+/** Reads the approved lockfile and source inputs and rejects any digest or version drift. */
 export function readApprovedBuildInputs(root) {
   const lockBytes = readFileSync(path.join(root, 'apps', 'web', 'package-lock.json'));
   if (createHash('sha256').update(lockBytes).digest('hex') !== approvedWebLockSha256) {
@@ -45,6 +52,7 @@ export function readApprovedBuildInputs(root) {
   return { packages, images };
 }
 
+/** Requires the Docker context expected by the shared release image store. */
 export function requireSharedImageStore(run) {
   if (run('docker', ['context', 'show']).trim() !== 'default') {
     throw new Error('Release input preparation requires the default local Docker context');
@@ -71,6 +79,10 @@ export function requireSharedImageStore(run) {
   }
 }
 
+/**
+ * Prepares local package and container build inputs after checking the pinned source and environment.
+ * Invalid source, lockfile, Docker context, or cache settings stop the operation with an error.
+ */
 export function prepareBuildInputs({
   root = repositoryRoot, expectedSource = process.env.EXPECTED_SOURCE,
   cache = process.env.npm_config_cache, run,

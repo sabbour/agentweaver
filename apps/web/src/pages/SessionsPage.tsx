@@ -27,6 +27,10 @@ import { ErrorState } from '../components/ui';
 // Data comes from Tank's caller-scoped GET /api/assistant/runs, so the page now
 // intentionally spans all projects rather than being tied to /projects/:projectId.
 
+/**
+ * Lists the signed-in user's assistant conversations across projects, supports
+ * resuming a selected run, and confirms deletion before removing a conversation.
+ */
 const useStyles = makeStyles({
   root: {
     display: 'flex',
@@ -93,6 +97,7 @@ const useStyles = makeStyles({
   },
 });
 
+/** Converts API and ordinary errors to text for the list and delete dialog. */
 function formatError(err: unknown): string {
   return err instanceof ApiError
     ? `API error ${err.status}: ${err.body}`
@@ -101,6 +106,7 @@ function formatError(err: unknown): string {
       : String(err);
 }
 
+/** Formats a valid run creation timestamp and preserves invalid server text. */
 function formatCreatedAt(iso: string): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
@@ -111,6 +117,8 @@ export function SessionsPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const projectId = searchParams.get('project') ?? undefined;
+  // The optional project query is retained when opening or starting a conversation;
+  // run-list state is global and is not filtered by this display context.
   const [runs, setRuns] = useState<AssistantRunSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -124,6 +132,7 @@ export function SessionsPage() {
     return query ? `/assistant?${query}` : '/assistant';
   }, [projectId]);
 
+  /** Fetches the most recent caller-scoped assistant runs and updates list errors. */
   const load = () => {
     setLoading(true);
     return apiClient.listAssistantRuns(50)
@@ -135,6 +144,7 @@ export function SessionsPage() {
       .finally(() => setLoading(false));
   };
 
+  // Defer the initial request one task so this page can mount before loading UI changes.
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       void load();
@@ -142,28 +152,33 @@ export function SessionsPage() {
     return () => window.clearTimeout(timeoutId);
   }, []);
 
+  /** Navigates to the assistant with the selected conversation in the query string. */
   const openRun = (runId: string) => {
     const params = new URLSearchParams();
     if (projectId) params.set('project', projectId);
     params.set('runId', runId);
     navigate(`/assistant?${params.toString()}`);
   };
+  /** Starts a fresh assistant session while preserving the optional project context. */
   const startNew = () => navigate(
     assistantBasePath,
     { state: createNewAssistantSessionState() },
   );
 
+  /** Opens deletion confirmation and clears any error from a previous attempt. */
   const requestDelete = (run: AssistantRunSummary) => {
     setDeleteError(null);
     setDeleteTarget(run);
   };
 
+  /** Prevents closing the confirmation while deletion is still in flight. */
   const closeDeleteDialog = () => {
     if (deleting) return;
     setDeleteTarget(null);
     setDeleteError(null);
   };
 
+  /** Deletes the chosen run and removes it from the visible list on success. */
   const confirmDelete = () => {
     if (!deleteTarget) return;
     const runId = deleteTarget.run_id;

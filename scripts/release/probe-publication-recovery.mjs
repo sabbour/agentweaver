@@ -1,3 +1,7 @@
+/**
+ * Performs a narrowly pinned recovery publication for a previously frozen Foundation Probe artifact.
+ * It verifies workflow admission, artifact identity, and image digest before recording the result.
+ */
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -7,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { runPublicationCommand } from './command.mjs';
 import { diagnosticPins as pins, verifyFrozenProbeArtifact, verifyFrozenLoadedImage } from './probe-publication-diagnostic.mjs';
 
+/** Claim namespace used to bind the recovery attempt to its expected publication records. */
 export const recoveryClaimNamespace = 'agentweaver-publication/foundation-probe-0.0.0-sampler-recovery-attempt-2';
 const helperNamespace = sha => `agentweaver-publication/foundation-probe-0.0.0-sampler-recovery-helper/${sha}`;
 const repository = 'ghcr.io/sabbour/agentweaver-foundation-probe';
@@ -29,6 +34,10 @@ const safeFailure = (error, operation) => ({
   code: safeCodes.has(error?.code) ? error.code : 'RECOVERY_VALIDATION_FAILED',
 });
 
+/**
+ * Verifies the fixed recovery inputs and performs the admitted publication steps.
+ * Any mismatched receipt or approval blocks publishing; a result receipt is written after verification.
+ */
 export function publishFrozenProbeRecovery(directory, {
   env = process.env, spawn = spawnSync, readFile = readFileSync, digest = hash, writeReceipt = writeFileSync,
 } = {}) {

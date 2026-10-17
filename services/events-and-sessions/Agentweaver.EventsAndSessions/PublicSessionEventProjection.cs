@@ -3,15 +3,18 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.EventsAndSessions;
 
+/// <summary>Projects private producer-owned event material into the safe public journal response shape.</summary>
 internal static class PublicSessionEventProjection
 {
     private const string RemoteToolCallIdPrefix = "remote_tool_call_";
     private const string RemoteToolNamePrefix = "remote_tool_";
     private const string ExternalToolCallName = "external-tool";
 
+    /// <summary>Projects an append acknowledgment while retaining its event identity and position.</summary>
     public static SessionAppendResult Project(SessionAppendResult result) =>
         result with { Event = Project(result.Event) };
 
+    /// <summary>Validates a replay page and removes private material references from every event.</summary>
     public static SessionEventPage Project(SessionEventPage page)
     {
         if (page.Events.IsDefault)
@@ -19,9 +22,11 @@ internal static class PublicSessionEventProjection
         return page with { Events = page.Events.Select(Project).ToImmutableArray() };
     }
 
+    /// <summary>Projects one live event delivery and leaves its reconnect cursor unchanged.</summary>
     public static SessionEventDelivery Project(SessionEventDelivery delivery) =>
         new(Project(delivery.Event), delivery.NextCursor);
 
+    /// <summary>Validates event and material structure, then hides private configuration and tool-result content.</summary>
     private static SessionEventEnvelope Project(SessionEventEnvelope envelope)
     {
         if (envelope.SchemaVersion != SessionsContractVersions.CurrentSchemaVersion ||
@@ -110,6 +115,7 @@ internal static class PublicSessionEventProjection
             ImmutableArray<StoredSessionObjectReference>.Empty);
     }
 
+    /// <summary>Identifies references that must not be exposed by the ordinary journal routes.</summary>
     private static bool HasPrivateMarker(SessionObjectReference reference) =>
         reference.Purpose.Contains("runtime-configuration", StringComparison.OrdinalIgnoreCase) ||
         reference.Material?.Kind == SessionMaterialKind.RuntimeConfiguration ||
@@ -120,6 +126,7 @@ internal static class PublicSessionEventProjection
         } ||
         reference.Material?.RemoteToolResultProof is not null;
 
+    /// <summary>Compares stored and payload references, including the complete private-call proof.</summary>
     private static bool SameReference(SessionObjectReference first, SessionObjectReference second)
     {
         if (first.Key != second.Key || first.Purpose != second.Purpose || first.ByteLength != second.ByteLength)
@@ -134,9 +141,11 @@ internal static class PublicSessionEventProjection
             proofMatches;
     }
 
+    /// <summary>Checks whether an identifier uses a reserved private-result namespace.</summary>
     private static bool HasReservedPrefix(string value, string prefix) =>
         value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Creates a stable integrity failure for an invalid public event projection.</summary>
     private static SessionMaterialIntegrityException InvalidEvent() =>
         new("session_public_event_projection_invalid");
 }

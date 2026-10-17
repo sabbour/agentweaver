@@ -8,8 +8,21 @@ using OpenTelemetry.Trace;
 
 namespace Agentweaver.Telemetry;
 
+/// <summary>Registers the shared Agentweaver OpenTelemetry sources with a service container.</summary>
 public static class TelemetryServiceCollectionExtensions
 {
+    /// <summary>
+    /// Adds tracing, metrics, and structured logging for one service. Custom callbacks add
+    /// exporters or other configuration; formatted messages and scopes are disabled by default.
+    /// </summary>
+    /// <param name="services">The service collection receiving the telemetry providers.</param>
+    /// <param name="serviceName">The service identity attached to emitted telemetry.</param>
+    /// <param name="configureTracing">Optional additional tracing configuration.</param>
+    /// <param name="configureMetrics">Optional additional metrics configuration.</param>
+    /// <param name="configureLogging">Optional additional logging configuration.</param>
+    /// <returns>The same service collection for further registration.</returns>
+    /// <exception cref="ArgumentNullException">The service collection is null.</exception>
+    /// <exception cref="ArgumentException">The service name is blank.</exception>
     public static IServiceCollection AddAgentweaverTelemetry(
         this IServiceCollection services,
         string serviceName,

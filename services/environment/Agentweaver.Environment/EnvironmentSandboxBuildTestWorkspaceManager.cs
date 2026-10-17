@@ -4,6 +4,7 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Adds owner-verified workspace capture access to the build/test command manager.</summary>
 public sealed partial class EnvironmentSandboxBuildTestCommandManager
 {
     private async Task<EnvironmentSandboxBuildTestCommandState> PrepareNativeWorkspaceAsync(
@@ -87,6 +88,7 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager
         }
     }
 
+    /// <summary>Exports a completed native capture only while the accepted command and owner authority remain current.</summary>
     public async Task<ImmutableArray<byte>> ReadWorkspaceCaptureAsync(
         CurrentCallerRequest caller, string projectId, string runId, string environmentId, Guid operationId,
         CancellationToken cancellationToken)
@@ -112,6 +114,7 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager
         return bytes;
     }
 
+    /// <summary>Stores the exact capture acknowledgment and removes temporary command Pods after rechecking authority.</summary>
     public async Task<SandboxBuildTestOperationResult> AcknowledgeWorkspaceCaptureAsync(
         CurrentCallerRequest caller, string projectId, string runId, string environmentId, Guid operationId,
         SandboxBuildTestWorkspaceCaptureAcknowledgmentRequest acknowledgmentRequest,
@@ -161,6 +164,7 @@ public sealed partial class EnvironmentSandboxBuildTestCommandManager
         return new(state.Operation, true);
     }
 
+    /// <summary>Loads a completed capture and validates its accepted command, workspace reference, and owner authority.</summary>
     private async Task<(EnvironmentSandboxBuildTestCommandState State,
         SandboxBuildTestAcceptedCommand Command, SandboxBuildTestApiRequest Request)> ReadCurrentCapturedWorkspaceAsync(
         CurrentCallerRequest caller, string projectId, string runId, string environmentId, Guid operationId,

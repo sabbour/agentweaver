@@ -107,6 +107,8 @@ export interface AiCreditsProps {
  * value with a sparkle glyph; hover or click opens a Popover with the Session credit total, the
  * USD estimate (only when a real rate is configured — see lib/credits.ts), and any extra detail.
  * Reuses formatAic/costChipLabel so it stays consistent with CostChip.
+ * The parent supplies backend nano-AIU usage and optional token fallback; local state controls
+ * the popover, and no request is made by this component.
  */
 export function AiCredits({
   totalNanoAiu,

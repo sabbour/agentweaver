@@ -4,8 +4,14 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// These helpers verify BuildTest repository artifacts and connect them to durable Source Control capture evidence.
+/// </summary>
 internal static partial class SourceControlEndpoints
 {
+    /// <summary>
+    /// Validates native output against the accepted seed and capture proof, then persists and admits it through Events. Current execution and run authority are checked around these steps.
+    /// </summary>
     internal static async Task<ProducedRunCaptureJournalEntry> AdmitBuildTestOutputAsync(
         HttpContext context,
         MafExecutionBuildTestIntent intent,
@@ -72,6 +78,9 @@ internal static partial class SourceControlEndpoints
         return acknowledgment;
     }
 
+    /// <summary>
+    /// Parses native output against the accepted workspace source, seed, capture reference, and requested paths; malformed or mismatched output becomes a gateway error.
+    /// </summary>
     internal static GitWorkspaceCaptureDocument ParseBuildTestOutput(
         byte[] bytes, SandboxBuildTestWorkspaceCaptureReference reference,
         SandboxBuildTestAcceptedCommand command)
@@ -94,6 +103,9 @@ internal static partial class SourceControlEndpoints
         }
     }
 
+    /// <summary>
+    /// Reconstructs the stored manifest, patch, and package as the capture document used by the BuildTest output parser.
+    /// </summary>
     internal static byte[] SerializeBuildTestOutput(SourceControlOutputCaptureRecord capture) =>
         GitWorkspaceCapturePackage.SerializeDocument(new(
             GitWorkspaceCapturePackage.ParseManifest(capture.ManifestBytes),
@@ -101,6 +113,9 @@ internal static partial class SourceControlEndpoints
             capture.PatchBytes, capture.Proof.PatchSha256,
             capture.PackageBytes, capture.Proof.PackageSha256));
 
+    /// <summary>
+    /// Requires an admitted capture with a durable Events position and matching object reference, then validates it against the accepted capture reference.
+    /// </summary>
     internal static ProducedRunCaptureJournalEntry ReadBuildTestAcknowledgment(
         SourceControlOutputCaptureRecord capture,
         SandboxBuildTestWorkspaceCaptureReference reference,

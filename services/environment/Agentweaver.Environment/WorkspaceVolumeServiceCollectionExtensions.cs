@@ -4,8 +4,10 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Registers the Azure Files-backed workspace-volume provider and its Environment service dependencies.</summary>
 public static class WorkspaceVolumeServiceCollectionExtensions
 {
+    /// <summary>Configures a TLS-validated Kubernetes API client and scoped workspace-volume services.</summary>
     public static IServiceCollection AddAgentweaverWorkspaceVolumeService(
         this IServiceCollection services,
         AzureFilesCsiOptions options,

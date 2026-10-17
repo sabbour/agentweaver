@@ -1,5 +1,6 @@
 namespace Agentweaver.Mcp;
 
+/// <summary>Validated Identity audience/issuer and HTTPS Gateway address used by the MCP host.</summary>
 public sealed record McpServiceOptions(
     Uri IdentityIssuer,
     string IdentityAudience,
@@ -26,6 +27,7 @@ public sealed record McpServiceOptions(
 
     public string ProtectedResourceMetadataPath => ProtectedResourceMetadataUri.AbsolutePath;
 
+    /// <summary>Reads the three required service URLs and rejects credentials, query strings, fragments, and non-HTTPS schemes.</summary>
     public static McpServiceOptions Read(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);

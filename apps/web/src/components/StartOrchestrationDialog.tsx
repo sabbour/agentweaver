@@ -48,6 +48,11 @@ interface StartOrchestrationDialogProps {
   onStarted: (runId: string) => void;
 }
 
+/**
+ * Renders the orchestration launch dialog and gathers the user's start options.
+ * It uses the AI execution context hook and API client for provider readiness and launch requests;
+ * local form state tracks selections and submission feedback.
+ */
 export function StartOrchestrationDialog({ projectId, onStarted }: StartOrchestrationDialogProps) {
   const styles = useStyles();
   const [open, setOpen] = useState(false);

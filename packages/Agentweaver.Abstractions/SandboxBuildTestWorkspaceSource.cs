@@ -5,6 +5,10 @@ using System.Text.Json.Serialization;
 
 namespace Agentweaver.Abstractions;
 
+/// <summary>
+/// Exact accepted repository seed reference used by a BuildTest operation; it must refer
+/// to the originating checkpoint and match the accepted source byte length and digest.
+/// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record SandboxBuildTestWorkspaceSeedReference(
     SandboxBuildTestCheckpointReference Origin,
@@ -12,6 +16,8 @@ public sealed record SandboxBuildTestWorkspaceSeedReference(
     string SeedSha256,
     long SeedByteLength)
 {
+    /// <summary>Checks that the seed reference is the one admitted for this checkpoint and operation.</summary>
+    /// <exception cref="ArgumentException">The checkpoint, operation, source digest, or source length differs.</exception>
     public SandboxBuildTestWorkspaceSeedReference Validate(
         SandboxBuildTestCheckpointReference checkpoint,
         Guid operationId,
@@ -28,6 +34,11 @@ public sealed record SandboxBuildTestWorkspaceSeedReference(
     }
 }
 
+/// <summary>
+/// Immutable Source Control and workspace identity accepted for a BuildTest run.
+/// The seed and baseline hashes bind repository input, while the provider generation
+/// and workspace incarnation prevent reuse after resource replacement.
+/// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record SandboxBuildTestWorkspaceSource(
     int ContractVersion,
@@ -51,12 +62,14 @@ public sealed record SandboxBuildTestWorkspaceSource(
     string BaselineManifestSha256,
     long BaselineManifestByteLength)
 {
+    /// <summary>Deterministically names the repository directory prepared for this run and workspace.</summary>
     [JsonIgnore]
     public string PreparedRepositoryRelativePath =>
         "buildtest-" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(
             TenantId + "\0" + Identity.ProjectId + "\0" + Identity.RunId + "\0" + WorkspaceId)))[..32] +
         "/repository";
 
+    /// <summary>Returns whether all identity, hash, generation, and size limits are valid.</summary>
     public bool IsValid() =>
         ContractVersion == 2 &&
         IsText(Identity.ProjectId, 256) &&
@@ -87,6 +100,8 @@ public sealed record SandboxBuildTestWorkspaceSource(
         BaselineManifestByteLength is > 0 and <= ProducedRunCaptureLimits.MaximumManifestBytes &&
         BaselineManifestByteLength <= SeedByteLength - BundleByteLength;
 
+    /// <summary>Returns this source after validating its accepted repository binding.</summary>
+    /// <exception cref="ArgumentException">The source identity, hashes, generation, or lengths are invalid.</exception>
     public SandboxBuildTestWorkspaceSource Validate()
     {
         if (!IsValid())
@@ -94,6 +109,7 @@ public sealed record SandboxBuildTestWorkspaceSource(
         return this;
     }
 
+    /// <summary>Writes the source fields in the stable order used by BuildTest canonical fingerprints.</summary>
     internal void WriteCanonical(Utf8JsonWriter writer)
     {
         writer.WritePropertyName("workspaceSource");
@@ -125,6 +141,7 @@ public sealed record SandboxBuildTestWorkspaceSource(
         writer.WriteEndObject();
     }
 
+    /// <summary>Checks required text for length and control characters.</summary>
     private static bool IsText(string? value, int maximumLength) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= maximumLength &&
         !value.Any(char.IsControl);

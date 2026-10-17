@@ -2,8 +2,19 @@ using System.Collections.Immutable;
 
 namespace Agentweaver.Orchestrator.Core;
 
+/// <summary>Evaluates whether owner-projected prerequisite evidence permits a backlog task to be claimed.</summary>
 public static class BacklogReadinessEvaluator
 {
+    /// <summary>
+    /// Checks task eligibility and exact prerequisite coverage against the current immutable graph.
+    /// A successful result may still contain blockers; malformed or stale inputs return structured issues.
+    /// </summary>
+    /// <param name="graph">Current project graph.</param>
+    /// <param name="taskReference">Task whose readiness is being evaluated.</param>
+    /// <param name="expectedGraphRevision">Graph revision captured by the caller.</param>
+    /// <param name="expectedTaskRevision">Task revision captured by the caller.</param>
+    /// <param name="prerequisites">Owner-projected execution and output evidence for graph prerequisites.</param>
+    /// <returns>A readiness evaluation, or issues when the supplied snapshot cannot be trusted.</returns>
     public static BacklogCoreResult<BacklogReadinessEvaluation> Evaluate(
         BacklogDependencyGraph? graph,
         BacklogTaskReference? taskReference,

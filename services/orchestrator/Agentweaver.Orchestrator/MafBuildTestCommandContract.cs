@@ -8,13 +8,27 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Shared validation and classification rules for BuildTest workflow steps and owner operations.
+/// The dispatcher and checkpoint store use these checks to reject stale provider bindings and mismatched results.
+/// </summary>
 internal static class MafBuildTestCommandContract
 {
+    /// <summary>
+    /// Returns whether a workflow step is a platform BuildTest step with a command payload.
+    /// </summary>
     internal static bool IsExecutable(WorkflowStepDefinition step) =>
         step.Mode == WorkflowStepMode.Platform &&
         step.PlatformGate == WorkflowPlatformGate.BuildTest &&
         step.BuildTestCommand is not null;
 
+    /// <summary>
+    /// Checks that a pinned sandbox provider still matches the command's expected binding and run.
+    /// </summary>
+    /// <param name="pinned">The provider binding stored with the accepted plan, if any.</param>
+    /// <param name="expected">The binding recorded for the BuildTest command.</param>
+    /// <param name="runId">The run that must own the binding.</param>
+    /// <returns><see langword="true"/> only when all identifiers, versions, options, and the BuildTest capability match.</returns>
     internal static bool MatchesProvider(
         PinnedProviderBinding? pinned,
         SandboxBuildTestExpectedBinding expected,
@@ -30,6 +44,16 @@ internal static class MafBuildTestCommandContract
             pinned.NegotiatedCapabilities.Contains(SandboxCapabilities.BuildTestCommandPod);
     }
 
+    /// <summary>
+    /// Validates an owner's preparation response against the accepted step, tenant, environment, and pinned provider.
+    /// </summary>
+    /// <param name="preparation">The environment owner's proposed command binding.</param>
+    /// <param name="identity">The owning project, run, and session.</param>
+    /// <param name="tenantId">The authorized tenant.</param>
+    /// <param name="environmentId">The environment selected for this command.</param>
+    /// <param name="step">The accepted workflow step.</param>
+    /// <param name="pinned">The provider binding pinned by the run selection.</param>
+    /// <exception cref="CoordinationException">Thrown when the step is not executable or the prepared binding is stale.</exception>
     internal static void ValidatePreparation(
         SandboxBuildTestBindingPreparation preparation,
         SessionIdentity identity,
@@ -51,6 +75,13 @@ internal static class MafBuildTestCommandContract
                 "maf_execution_build_test_binding_stale", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Verifies an operation snapshot against the intent and maps its owner status to orchestration progress.
+    /// </summary>
+    /// <param name="intent">The immutable accepted command intent.</param>
+    /// <param name="operation">The current operation snapshot returned by the environment owner.</param>
+    /// <returns>The corresponding orchestration task status.</returns>
+    /// <exception cref="CoordinationException">Thrown when the request fingerprint, expected binding, or owner status is inconsistent.</exception>
     internal static MafExecutionTaskStatus Classify(
         MafExecutionBuildTestIntent intent,
         SandboxBuildTestOperationSnapshot operation)
@@ -76,10 +107,17 @@ internal static class MafBuildTestCommandContract
         };
     }
 
+    /// <summary>
+    /// Hashes the serialized operation snapshot so a checkpoint can bind to the exact observed result.
+    /// </summary>
     internal static string HashOperation(SandboxBuildTestOperationSnapshot operation) =>
         Convert.ToHexStringLower(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(operation)));
 }
 
+/// <summary>
+/// Immutable terminal evidence copied into a MAF checkpoint after the environment owner finishes a BuildTest command.
+/// Validation ties the receipt to its accepted intent and requires output and capture acknowledgements for success.
+/// </summary>
 internal sealed record MafBuildTestTerminalReceipt(
     Guid OperationId,
     string ImmutableHash,
@@ -105,6 +143,12 @@ internal sealed record MafBuildTestTerminalReceipt(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ProducedRunCaptureJournalEntry? WorkspaceCaptureAcknowledgment { get; init; }
 
+    /// <summary>
+    /// Validates that this terminal receipt belongs to the given intent and returns its orchestration status.
+    /// </summary>
+    /// <param name="intent">The checkpointed BuildTest intent whose command and limits must match.</param>
+    /// <returns>The succeeded, failed, or indeterminate terminal status.</returns>
+    /// <exception cref="ArgumentException">Thrown when the receipt is incomplete, malformed, or bound to different command evidence.</exception>
     internal MafExecutionTaskStatus ValidateFor(MafExecutionBuildTestIntent intent)
     {
         var accepted = intent.ToAcceptedCommand(requireSeed: false);
@@ -202,6 +246,13 @@ internal sealed record MafBuildTestTerminalReceipt(
         };
     }
 
+    /// <summary>
+    /// Copies the terminal operation fields into a receipt after rejecting a still-running operation.
+    /// </summary>
+    /// <param name="intent">The accepted command being executed.</param>
+    /// <param name="operation">The owner snapshot to preserve as terminal evidence.</param>
+    /// <returns>The receipt with a digest of the complete operation snapshot.</returns>
+    /// <exception cref="ArgumentException">Thrown when the owner operation is not terminal.</exception>
     internal static MafBuildTestTerminalReceipt Create(
         MafExecutionBuildTestIntent intent,
         SandboxBuildTestOperationSnapshot operation)

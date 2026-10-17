@@ -6,6 +6,11 @@ using System.Text;
 
 namespace Agentweaver.Identity.Broker;
 
+/// <summary>
+/// Builds the pinned Projects-owner TLS handler for run-binding requests. It verifies the
+/// mounted CA bundle digest, leaf certificate pin, server-auth usage and chain, with no
+/// proxy, redirects, cookies or certificate downloads.
+/// </summary>
 internal sealed class BrokerRunBindingTlsIdentity : IDisposable
 {
     private const string ServerAuthenticationOid = "1.3.6.1.5.5.7.3.1";
@@ -25,6 +30,7 @@ internal sealed class BrokerRunBindingTlsIdentity : IDisposable
         _timeProvider = timeProvider;
     }
 
+    /// <summary>Loads the configured trust bundle from the fixed mount and verifies its digest and CA contents.</summary>
     internal static BrokerRunBindingTlsIdentity Load(
         BrokerRunBindingOptions options, TimeProvider? timeProvider = null)
     {
@@ -35,6 +41,7 @@ internal sealed class BrokerRunBindingTlsIdentity : IDisposable
         return Load(options, File.ReadAllBytes(TrustBundlePath), timeProvider);
     }
 
+    /// <summary>Loads the supplied trust bundle bytes; the overload supports deterministic certificate tests.</summary>
     internal static BrokerRunBindingTlsIdentity Load(
         BrokerRunBindingOptions options,
         ReadOnlySpan<byte> trustBundleBytes,
@@ -71,6 +78,7 @@ internal sealed class BrokerRunBindingTlsIdentity : IDisposable
             timeProvider ?? TimeProvider.System);
     }
 
+    /// <summary>Creates an HTTP handler that accepts only the pinned Projects-owner certificate chain.</summary>
     internal HttpClientHandler CreateHandler() => new()
     {
         AllowAutoRedirect = false,

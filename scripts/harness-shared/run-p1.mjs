@@ -17,8 +17,10 @@ import { sanitizeP1Failure } from './p1-surface-common.mjs';
 import { redact } from './redaction.mjs';
 import { appendRedactedJsonLine, serializeRedactedJsonLine } from './safe-jsonl.mjs';
 
+/** CLI orchestration for source-pinned P1 setup, surface journeys, cleanup, and JSONL evidence. */
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
+/** Serialize an object with recursively sorted keys for a stable execution-plan fingerprint. */
 function stableJson(value) {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
   if (value !== null && typeof value === 'object') {
@@ -28,6 +30,7 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
+/** Bind a persisted invocation to the validated plan and selected surface. */
 function invocationBinding(validated, surface) {
   return {
     executionPlanSha256: createHash('sha256').update(stableJson(validated)).digest('hex'),
@@ -35,6 +38,7 @@ function invocationBinding(validated, surface) {
   };
 }
 
+/** Parse supported CLI flags and reject duplicates or unknown options. */
 function parseArguments(argv) {
   const result = {};
   for (let index = 0; index < argv.length; index++) {
@@ -55,6 +59,7 @@ function parseArguments(argv) {
   return result;
 }
 
+/** Build a blocked acceptance result with redacted failure and no claimed fixture cleanup. */
 function createFailureResult(surface, error, sourceEvidence) {
   return createP1AcceptanceResult({
     surface,
@@ -68,6 +73,10 @@ function createFailureResult(surface, error, sourceEvidence) {
   });
 }
 
+/**
+ * Create the invocation record exclusively, or resume only a matching unfinished JSONL invocation.
+ * Existing UI-action records or completed results block retry because owner state may have changed.
+ */
 async function getOrCreateInvocationId(outputPath, binding, createId = randomUUID) {
   await mkdir(dirname(outputPath), { recursive: true });
   try {
@@ -124,6 +133,7 @@ async function getOrCreateInvocationId(outputPath, binding, createId = randomUUI
   return intents[0].invocationId;
 }
 
+/** Add cleanup evidence and promote uncertain or failed cleanup to a failed acceptance result. */
 function addFixtureCleanup(result, state, cleanup, nativeFence, cleanupError) {
   const fixtureSetup = summarizeP1FixtureCleanup(state, cleanup, nativeFence);
   result.observations = { ...result.observations, fixtureSetup };
@@ -148,6 +158,10 @@ function addFixtureCleanup(result, state, cleanup, nativeFence, cleanupError) {
   return result;
 }
 
+/**
+ * Validate inputs and source evidence, create an owned fixture, run one surface journey, and clean up.
+ * The output file is append-only JSONL evidence; setup tokens and interactive sign-in are not handled here.
+ */
 export async function runP1Cli(argv = process.argv.slice(2), env = process.env, io = console, {
   prepareDeploymentEvidence = prepareP1DeploymentEvidence,
   createSetupApi = createP1SetupApi,

@@ -50,6 +50,7 @@ const columns: AzfColumn<ResourceRow>[] = [
   },
 ];
 
+/** Demonstrates the shell slots with a searchable resource grid and local filter state. */
 export function PortalShellExample() {
   const [searchValue, setSearchValue] = useState('');
 

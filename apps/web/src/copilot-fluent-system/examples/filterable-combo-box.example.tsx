@@ -8,6 +8,7 @@ const subscriptions = [
   { id: 'sub-sandbox', label: 'Innovation Sandbox' },
 ];
 
+/** Demonstrates a controlled searchable selector backed by a small local option list. */
 export function FilterableComboBoxExample() {
   const [selected, setSelected] = useState<string | undefined>('sub-a');
 

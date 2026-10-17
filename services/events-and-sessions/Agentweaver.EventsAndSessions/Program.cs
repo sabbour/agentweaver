@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Authentication;
 using Npgsql;
 using OpenIddict.Validation.AspNetCore;
 
+// The migration mode has a separate, explicit connection path and exits before serving requests.
 var migrate = args.SequenceEqual(["--migrate"], StringComparer.Ordinal);
 if (args.Contains("--migrate", StringComparer.Ordinal) && !migrate)
     throw new ArgumentException("The --migrate command must be used by itself.");
@@ -55,6 +56,7 @@ if (migrate)
     return;
 }
 
+// Runtime data access uses the runtime credential, separate from the migration credential above.
 var runtimeConnection = EventsAndSessionsPostgresDataSource.ReadRuntimeConnection(builder.Configuration);
 var issuer = Required(builder.Configuration, "Identity:Issuer");
 if (!Uri.TryCreate(issuer, UriKind.Absolute, out var issuerUri) || issuerUri.Scheme != Uri.UriSchemeHttps)
@@ -219,6 +221,7 @@ builder.Services.AddSingleton<PostgresAddressedMessageStore>(services =>
         issuerUri.AbsoluteUri,
         services.GetRequiredService<TimeProvider>()));
 
+// Verify the schema before accepting traffic, then expose only the routes enabled by configuration.
 var app = builder.Build();
 var dataSource = app.Services.GetRequiredService<NpgsqlDataSource>();
 await EventsAndSessionsMigrator.VerifyAsync(dataSource, options.Schema);

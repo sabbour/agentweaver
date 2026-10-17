@@ -52,6 +52,7 @@ const expectedAssemblies = [
 ];
 const dotnet = process.env.DOTNET_HOST_PATH || 'dotnet';
 
+/** Invoke the selected dotnet executable and convert a spawn failure into a nonzero status. */
 function run(args) {
   console.log(`dotnet ${args.join(' ')}`);
   const result = spawnSync(dotnet, args, { cwd: root, stdio: 'inherit' });
@@ -62,6 +63,7 @@ function run(args) {
   return result.status ?? 1;
 }
 
+/** Find nonempty Cobertura reports recursively and deduplicate identical files by SHA-256. */
 export function reportsIn(directory) {
   if (!existsSync(directory)) return [];
   const reports = readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -73,6 +75,7 @@ export function reportsIn(directory) {
   ])).values()];
 }
 
+/** Run every configured test suite and verify its TRX, coverage, and combined assembly reports. */
 function main() {
   rmSync(output, { recursive: true, force: true });
   mkdirSync(output, { recursive: true });

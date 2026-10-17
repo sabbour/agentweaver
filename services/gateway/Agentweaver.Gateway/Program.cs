@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
 using OpenIddict.Validation.AspNetCore;
 
+// Keep owner HTTP clients unbounded here; GatewayOwnerClient applies per-request deadlines.
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(server => server.Limits.MaxRequestBodySize = 64 * 1024);
 var options = GatewayOptions.Read(builder.Configuration);
@@ -41,6 +42,7 @@ builder.Services.AddOpenIddict().AddValidation(validation =>
 });
 builder.Services.AddAuthorization();
 
+// Authentication and authorization run before the explicit public route map.
 var app = builder.Build();
 app.UseRouting();
 app.UseCors();

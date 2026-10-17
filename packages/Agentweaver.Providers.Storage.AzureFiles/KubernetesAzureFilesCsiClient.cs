@@ -8,10 +8,17 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Providers.Storage.AzureFiles;
 
+/// <summary>
+/// Calls the Kubernetes API for Azure Files resources and converts responses into provider snapshots.
+/// UID preconditions protect reclaim-policy changes and claim deletion from replacing resources.
+/// </summary>
 public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
 {
     private readonly HttpClient _httpClient;
 
+    /// <summary>Creates a client for an HTTPS Kubernetes API endpoint.</summary>
+    /// <param name="httpClient">Configured client, typically carrying cluster authentication.</param>
+    /// <exception cref="ArgumentException">The base address is not a clean HTTPS URI.</exception>
     public KubernetesAzureFilesCsiClient(HttpClient httpClient)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -23,6 +30,7 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
             throw new ArgumentException("The Kubernetes API client requires an HTTPS base address.", nameof(httpClient));
     }
 
+    /// <summary>Gets a lower-case SHA-256 identity of this client's API target.</summary>
     public string ClusterIdentity
     {
         get
@@ -33,6 +41,7 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
         }
     }
 
+    /// <summary>Reads a StorageClass; returns <see langword="null"/> for HTTP 404.</summary>
     public async Task<AzureFilesStorageClassSnapshot?> GetStorageClassAsync(
         string name,
         CancellationToken cancellationToken = default)
@@ -52,6 +61,10 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
             ReadStringArray(root, "mountOptions"));
     }
 
+    /// <summary>
+    /// Returns the exact claim when present or creates one; a create conflict is resolved by rereading it.
+    /// </summary>
+    /// <exception cref="AzureFilesCsiException">Kubernetes returns an error or a create conflict cannot be resolved.</exception>
     public async Task<AzureFilesClaimSnapshot> EnsureClaimAsync(
         AzureFilesClaimRequest request,
         CancellationToken cancellationToken = default)
@@ -115,6 +128,7 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
         return ReadClaim(document.RootElement);
     }
 
+    /// <summary>Reads a namespaced claim; returns <see langword="null"/> for HTTP 404.</summary>
     public async Task<AzureFilesClaimSnapshot?> GetClaimAsync(
         string kubernetesNamespace,
         string name,
@@ -130,6 +144,7 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
         return ReadClaim(document.RootElement);
     }
 
+    /// <summary>Reads a persistent volume; returns <see langword="null"/> for HTTP 404.</summary>
     public async Task<AzureFilesPersistentVolumeSnapshot?> GetPersistentVolumeAsync(
         string name,
         CancellationToken cancellationToken = default)
@@ -144,6 +159,7 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
         return ReadPersistentVolume(document.RootElement);
     }
 
+    /// <summary>Uses a JSON Patch UID test to set the PV reclaim policy without changing a replacement PV.</summary>
     public async Task SetPersistentVolumeReclaimPolicyAsync(
         string name,
         string expectedUid,
@@ -175,6 +191,7 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
         await RequireSuccessAsync(response, "set-reclaim-policy").ConfigureAwait(false);
     }
 
+    /// <summary>Deletes a namespaced claim with a Kubernetes UID precondition; absence is treated as success.</summary>
     public async Task DeleteClaimAsync(
         string kubernetesNamespace,
         string name,
@@ -200,6 +217,7 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
         await RequireSuccessAsync(response, "delete-claim").ConfigureAwait(false);
     }
 
+    /// <summary>Maps a Kubernetes claim response into a normalized snapshot and parses its capacity.</summary>
     private static AzureFilesClaimSnapshot ReadClaim(JsonElement root)
     {
         var metadata = RequiredObject(root, "metadata");
@@ -224,6 +242,7 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
             ReadStringDictionary(metadata, "annotations"));
     }
 
+    /// <summary>Maps a Kubernetes PV response and its claim reference into a snapshot.</summary>
     private static AzureFilesPersistentVolumeSnapshot ReadPersistentVolume(JsonElement root)
     {
         var metadata = RequiredObject(root, "metadata");
@@ -239,6 +258,7 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
             RequiredString(claim, "uid"));
     }
 
+    /// <summary>Reads a required JSON object or throws a typed invalid-response error.</summary>
     private static JsonElement RequiredObject(JsonElement parent, string name) =>
         parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Object
             ? value
@@ -246,6 +266,7 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
                 "kubernetes_response_invalid",
                 $"Kubernetes response is missing object '{name}'.");
 
+    /// <summary>Reads a required non-empty JSON string or throws a typed invalid-response error.</summary>
     private static string RequiredString(JsonElement parent, string name) =>
         parent.TryGetProperty(name, out var value) &&
         value.ValueKind == JsonValueKind.String &&
@@ -255,11 +276,13 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
                 "kubernetes_response_invalid",
                 $"Kubernetes response is missing string '{name}'.");
 
+    /// <summary>Reads an optional JSON string, returning null when it is missing or has another type.</summary>
     private static string? OptionalString(JsonElement parent, string name) =>
         parent.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
 
+    /// <summary>Reads a string array, treating a missing or non-array field as empty and rejecting non-string items.</summary>
     private static ImmutableArray<string> ReadStringArray(JsonElement parent, string name)
     {
         if (!parent.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.Array)
@@ -273,6 +296,7 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
             .ToImmutableArray();
     }
 
+    /// <summary>Reads a string-valued JSON object into an ordinal immutable dictionary.</summary>
     private static ImmutableDictionary<string, string> ReadStringDictionary(JsonElement parent, string name)
     {
         if (!parent.TryGetProperty(name, out var value) || value.ValueKind != JsonValueKind.Object)
@@ -289,6 +313,8 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
         return result.ToImmutable();
     }
 
+    /// <summary>Converts Kubernetes binary storage units to an integral GiB count without numeric overflow.</summary>
+    /// <exception cref="AzureFilesCsiException">The quantity is invalid or not an integral GiB value.</exception>
     private static long ParseCapacityGiB(string quantity)
     {
         var suffix = new[] { "Ki", "Mi", "Gi", "Ti", "Pi", "Ei" }
@@ -324,6 +350,7 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
             "Kubernetes claim capacity is not an integral GiB quantity.");
     }
 
+    /// <summary>Maps supported provider access modes to Kubernetes claim values.</summary>
     private static string ToKubernetesAccessMode(WorkspaceVolumeAccessMode accessMode) => accessMode switch
     {
         WorkspaceVolumeAccessMode.ReadWriteOnce => "ReadWriteOnce",
@@ -332,6 +359,7 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
         _ => throw new ArgumentOutOfRangeException(nameof(accessMode))
     };
 
+    /// <summary>Maps supported Kubernetes claim access modes to the provider contract.</summary>
     private static WorkspaceVolumeAccessMode ParseAccessMode(string accessMode) => accessMode switch
     {
         "ReadWriteOnce" => WorkspaceVolumeAccessMode.ReadWriteOnce,
@@ -342,11 +370,13 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
             "Kubernetes claim contains an unsupported access mode.")
     };
 
+    /// <summary>Validates and escapes one Kubernetes resource-name path segment.</summary>
     private static string Segment(string value) =>
         Uri.EscapeDataString(string.IsNullOrWhiteSpace(value)
             ? throw new ArgumentException("A Kubernetes resource name is required.", nameof(value))
             : value);
 
+    /// <summary>Reads a JSON response and converts malformed content into a typed provider error.</summary>
     private static async Task<JsonDocument> ReadDocumentAsync(
         HttpResponseMessage response,
         CancellationToken cancellationToken)
@@ -364,6 +394,7 @@ public sealed class KubernetesAzureFilesCsiClient : IAzureFilesCsiClient
         }
     }
 
+    /// <summary>Completes successfully for a 2xx response and otherwise reports the operation and status.</summary>
     private static Task RequireSuccessAsync(HttpResponseMessage response, string operation) =>
         response.IsSuccessStatusCode
             ? Task.CompletedTask

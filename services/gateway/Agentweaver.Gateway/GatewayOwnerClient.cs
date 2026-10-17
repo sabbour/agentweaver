@@ -12,6 +12,7 @@ using OpenIddict.Abstractions;
 
 namespace Agentweaver.Gateway;
 
+/// <summary>Stores a bounded owner failure response for pass-through to the public caller.</summary>
 internal sealed class GatewayOwnerFailureException(
     int statusCode,
     string contentType,
@@ -22,6 +23,7 @@ internal sealed class GatewayOwnerFailureException(
     public byte[] Body { get; } = body;
 }
 
+/// <summary>Forwards validated requests to owners with bounded bodies, deadlines, and contract checks.</summary>
 public sealed class GatewayOwnerClient(
     IHttpClientFactory clients,
     GatewayOptions options)
@@ -44,6 +46,7 @@ public sealed class GatewayOwnerClient(
             Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase, allowIntegerValues: false) },
         };
 
+    /// <summary>Proxies one catalog route while preserving owner responses and validating event pages.</summary>
     public async Task ProxyAsync(
         HttpContext context,
         GatewayRoute route,
@@ -160,6 +163,7 @@ public sealed class GatewayOwnerClient(
         }
     }
 
+    /// <summary>Validates the owner's live authorization context before returning it without caching.</summary>
     public async Task ProxyAuthorizationContextAsync(
         HttpContext context,
         GatewayRoute route,
@@ -294,6 +298,7 @@ public sealed class GatewayOwnerClient(
         }
     }
 
+    /// <summary>Matches owner-issued actor, tenant, run, membership, and authority fields to the caller.</summary>
     private bool IsValidAuthorizationContext(
         ProjectAuthorizationContextResponse? value,
         ClaimsPrincipal caller,
@@ -376,6 +381,7 @@ public sealed class GatewayOwnerClient(
         return remaining.Count == 0;
     }
 
+    /// <summary>Forwards Copilot connection requests and only passes the link cookie for completion.</summary>
     public Task ProxyCopilotConnectionAsync(
         HttpContext context,
         string method,
@@ -392,6 +398,7 @@ public sealed class GatewayOwnerClient(
             cookieErrorCode: "copilot_connection_cookie_invalid",
             cancellationToken);
 
+    /// <summary>Forwards JSON identity APIs with validated bearer, optional tenant scope, and selected cookie.</summary>
     public async Task ProxyIdentityBrokerApiAsync(
         HttpContext context,
         string method,
@@ -509,6 +516,7 @@ public sealed class GatewayOwnerClient(
         }
     }
 
+    /// <summary>Forwards allowlisted GitHub callback query parameters and exactly one transaction cookie.</summary>
     public async Task ProxyGitHubRepoAppCallbackAsync(
         HttpContext context,
         string ownerPath,
@@ -619,6 +627,7 @@ public sealed class GatewayOwnerClient(
                 ProblemBody(errorCode, StatusCodes.Status400BadRequest));
     }
 
+    /// <summary>Streams ordered run events as SSE while rechecking project read access before each event.</summary>
     public async Task SubscribeRunEventsAsync(
         HttpContext context,
         string projectId,
@@ -730,6 +739,7 @@ public sealed class GatewayOwnerClient(
         }
     }
 
+    /// <summary>Revalidates project access through the owner before streaming or emitting an event.</summary>
     private async Task EnsureCurrentProjectReadAsync(
         HttpContext context,
         string projectId,
@@ -754,6 +764,7 @@ public sealed class GatewayOwnerClient(
         await response.Content.CopyToAsync(Stream.Null, timeout.Token).ConfigureAwait(false);
     }
 
+    /// <summary>Reads one bounded owner page, validates its projection, and returns its event cursor.</summary>
     private async Task<GatewayRunEventPage> ReadRunEventPageAsync(
         HttpContext context,
         string projectId,
@@ -866,6 +877,7 @@ public sealed class GatewayOwnerClient(
         return request;
     }
 
+    /// <summary>Requires one authenticated, unexpired bearer matching the validated request.</summary>
     private static async Task<AuthenticationHeaderValue> RequireValidatedBearerAsync(HttpContext context)
     {
         var authentication = await context.AuthenticateAsync().ConfigureAwait(false);
@@ -897,6 +909,7 @@ public sealed class GatewayOwnerClient(
         return bearer;
     }
 
+    /// <summary>Combines query and reconnect cursors only when they are singular, safe, and identical.</summary>
     private static string? ReadSseCursor(HttpContext context)
     {
         if (context.Request.Query.Keys.Any(key => key != "cursor") ||
@@ -921,6 +934,7 @@ public sealed class GatewayOwnerClient(
         value.Length > 0 &&
         value.All(character => character is not '\r' and not '\n' and not '\0');
 
+    /// <summary>Revalidates the caller and emits a projected event with its opaque journal cursor.</summary>
     private async Task WriteEventAsync(
         HttpContext context,
         GatewayRunEventPage page,

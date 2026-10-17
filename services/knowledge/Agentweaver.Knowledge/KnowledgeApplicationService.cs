@@ -5,6 +5,7 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Knowledge;
 
+/// <summary>Applies authorization, provider pinning, validation, and audit rules around Memory-provider operations.</summary>
 public sealed class KnowledgeApplicationService(
     ProjectsConfigClient projects,
     KnowledgeProviderBindingService bindings,
@@ -13,6 +14,7 @@ public sealed class KnowledgeApplicationService(
     KnowledgeRuntimeOptions options,
     MemoryContextCompiler contextCompiler)
 {
+    /// <summary>Creates a record after validating input and rechecking authority and provider binding.</summary>
     public async Task<KnowledgeRecordWriteResult> CreateAsync(
         string projectId,
         string runId,
@@ -48,6 +50,7 @@ public sealed class KnowledgeApplicationService(
             .ConfigureAwait(false);
     }
 
+    /// <summary>Searches the selected provider and rechecks authority before returning private records.</summary>
     public async Task<KnowledgeRecordPage> SearchAsync(
         string projectId,
         string runId,
@@ -72,6 +75,7 @@ public sealed class KnowledgeApplicationService(
         return result;
     }
 
+    /// <summary>Reads one project record and returns not-found when it belongs to a different agent.</summary>
     public async Task<KnowledgeRecord> ReadAsync(
         string projectId,
         string runId,
@@ -91,6 +95,7 @@ public sealed class KnowledgeApplicationService(
         return RequireAgentRecord(record, agentId);
     }
 
+    /// <summary>Checks record ownership before exposing its immutable revision history.</summary>
     public async Task<KnowledgeRecordRevisionPage> ReadRevisionsAsync(
         string projectId,
         string runId,
@@ -115,6 +120,7 @@ public sealed class KnowledgeApplicationService(
         return result;
     }
 
+    /// <summary>Updates a supported record kind using the caller's expected revision and idempotency key.</summary>
     public async Task<KnowledgeRecordWriteResult> UpdateAsync(
         string projectId,
         string runId,
@@ -167,6 +173,7 @@ public sealed class KnowledgeApplicationService(
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Restores an eligible record from history as a new pending-trust revision.</summary>
     public async Task<KnowledgeRecordWriteResult> RestoreAsync(
         string projectId,
         string runId,
@@ -205,6 +212,7 @@ public sealed class KnowledgeApplicationService(
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Approves an active Decision only after confirming ownership and current permission.</summary>
     public async Task<KnowledgeRecordWriteResult> ApproveDecisionAsync(
         string projectId,
         string runId,
@@ -242,6 +250,7 @@ public sealed class KnowledgeApplicationService(
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Exports the authorized agent's records and immutable revision history.</summary>
     public async Task<KnowledgeRecordTransferBundle> ExportAsync(
         string projectId,
         string runId,
@@ -260,6 +269,7 @@ public sealed class KnowledgeApplicationService(
         return bundle;
     }
 
+    /// <summary>Imports only a validated transfer matching this route's project and agent.</summary>
     public async Task<KnowledgeRecordImportResult> ImportAsync(
         string projectId,
         string runId,
@@ -290,6 +300,8 @@ public sealed class KnowledgeApplicationService(
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Promotes a pending Proposal, records its accepted effect, and attempts ordered delivery.</summary>
+    /// <remarks>A successful promotion remains committed if downstream delivery is pending.</remarks>
     public async Task<KnowledgeProposalPromotionResult> PromoteAsync(
         string projectId,
         string runId,
@@ -357,6 +369,7 @@ public sealed class KnowledgeApplicationService(
         };
     }
 
+    /// <summary>Reads a receipt by global ID only when current write authority matches its recorded caller bounds.</summary>
     public async Task<AcceptedEffectReceipt> ReadAcceptedEffectReceiptAsync(
         Guid receiptId,
         CancellationToken cancellationToken)
@@ -385,6 +398,7 @@ public sealed class KnowledgeApplicationService(
         return receipt;
     }
 
+    /// <summary>Reads a receipt within the route's existing run binding and current write authority.</summary>
     public async Task<AcceptedEffectReceipt> ReadAcceptedEffectReceiptAsync(
         string projectId,
         string runId,
@@ -421,6 +435,7 @@ public sealed class KnowledgeApplicationService(
         return receipt;
     }
 
+    /// <summary>Rejects a pending Proposal after checking its source run and the current caller authority.</summary>
     public async Task<KnowledgeRecordWriteResult> RejectAsync(
         string projectId,
         string runId,
@@ -456,6 +471,7 @@ public sealed class KnowledgeApplicationService(
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Compiles eligible context within both configured defaults and the run's current prompt limit.</summary>
     public async Task<MemoryContextCompilation?> CompileContextAsync(
         string projectId,
         string runId,
@@ -520,6 +536,7 @@ public sealed class KnowledgeApplicationService(
         return new AuthorizedProvider(authority, provider.Provider, provider.Selection, provider.Binding);
     }
 
+    /// <summary>Re-fetches caller authority and run selection to prevent stale authorization or provider use.</summary>
     private async Task RevalidateProviderAsync(
         string projectId,
         string runId,
@@ -556,6 +573,7 @@ public sealed class KnowledgeApplicationService(
                 StatusCodes.Status409Conflict);
     }
 
+    /// <summary>Compares all pin fields that define a run's immutable provider/resource binding.</summary>
     private static bool SameProviderBinding(
         PinnedProviderBinding expected,
         PinnedProviderBinding current) =>

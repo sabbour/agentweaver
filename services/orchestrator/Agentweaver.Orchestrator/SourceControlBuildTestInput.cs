@@ -6,8 +6,14 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// These helpers bind a repository workspace snapshot to the accepted Source Control run for BuildTest.
+/// </summary>
 internal static partial class SourceControlEndpoints
 {
+    /// <summary>
+    /// Opens the pinned workspace, creates its seed, and binds the result to the accepted checkpoint. It rechecks run authority around workspace reads and rejects a changed workspace incarnation or confirmed source.
+    /// </summary>
     internal static async Task<(SandboxBuildTestWorkspaceSource Source, ImmutableArray<byte> Seed)>
         PrepareBuildTestInputAsync(
             HttpContext context,
@@ -60,6 +66,9 @@ internal static partial class SourceControlEndpoints
         return (source, seed.Bytes.ToImmutableArray());
     }
 
+    /// <summary>
+    /// Reloads the pinned run and verifies that the retained BuildTest source still matches the checkpoint and current run authority.
+    /// </summary>
     internal static async Task RequireCurrentBuildTestInputAsync(
         HttpContext context,
         SandboxBuildTestWorkspaceSource source,
@@ -78,6 +87,9 @@ internal static partial class SourceControlEndpoints
             context, run, projects, decisions, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Checks that the source identity, selection hash, pin, decision version, and execution fence still match the accepted run; stale bindings fail with a conflict.
+    /// </summary>
     internal static void ValidateBuildTestInputRun(
         SandboxBuildTestWorkspaceSource source,
         SandboxBuildTestCheckpointReference reference,
@@ -92,6 +104,9 @@ internal static partial class SourceControlEndpoints
                 "source_control_run_binding_changed", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Builds the immutable source contract from the workspace seed and manifest, then verifies its serialized seed and owner binding before returning it.
+    /// </summary>
     internal static SandboxBuildTestWorkspaceSource CreateBuildTestWorkspaceSource(
         SourceControlRunContext run,
         SourceControlBuildTestWorkspaceLocator locator,
@@ -115,6 +130,9 @@ internal static partial class SourceControlEndpoints
         return source;
     }
 
+    /// <summary>
+    /// Compares the stored source binding with the current actor, tenant, selection, repository pin, and execution fence.
+    /// </summary>
     internal static void ValidateBuildTestSourceOwner(
         SandboxBuildTestWorkspaceSource source,
         CoordinationActor actor,
@@ -137,6 +155,9 @@ internal static partial class SourceControlEndpoints
                 "source_control_run_binding_changed", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Validates the workspace incarnation and Git workspace identifiers before opening a repository workspace.
+    /// </summary>
     internal static void ValidateBuildTestWorkspaceLocator(SourceControlBuildTestWorkspaceLocator locator)
     {
         if (locator is null || locator.WorkspaceIncarnationId == Guid.Empty)
@@ -145,6 +166,9 @@ internal static partial class SourceControlEndpoints
         ValidateWorkspaceRequest(locator.WorkspaceId, locator.BaseSha, locator.BranchName);
     }
 
+    /// <summary>
+    /// Requires the retained source to identify the exact workspace incarnation, base revision, and branch requested by BuildTest.
+    /// </summary>
     internal static void RequireSameBuildTestWorkspace(
         SandboxBuildTestWorkspaceSource? source,
         SourceControlBuildTestWorkspaceLocator locator)

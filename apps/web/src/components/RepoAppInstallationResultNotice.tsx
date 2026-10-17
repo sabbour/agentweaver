@@ -58,6 +58,10 @@ const INSTALLATION_RESULTS = {
   },
 } as const;
 
+/**
+ * Renders a repository app installation callback result from parent-supplied status and message.
+ * The installation flow and any dismissal action remain owned by the caller.
+ */
 export function RepoAppInstallationResultNotice({
   code,
   onDismiss,

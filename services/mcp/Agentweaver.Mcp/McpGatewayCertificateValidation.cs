@@ -4,10 +4,12 @@ using System.Security.Cryptography.X509Certificates;
 
 namespace Agentweaver.Mcp;
 
+/// <summary>Validates Gateway TLS against the mounted private CA and requires server-auth certificate usage.</summary>
 internal static class McpGatewayCertificateValidation
 {
     private const string ServerAuthenticationOid = "1.3.6.1.5.5.7.3.1";
 
+    /// <summary>Rejects absent or name-mismatched certificates, then builds a custom-root server-auth chain.</summary>
     internal static bool Validate(
         X509Certificate? certificate,
         X509Chain? peerChain,

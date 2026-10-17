@@ -1037,6 +1037,10 @@ function TopologyInspector({
   );
 }
 
+/**
+ * Renders the run's cluster topology as a graph from the topology data supplied by its caller.
+ * Memoizes derived node and edge positions; it does not fetch data or keep local state.
+ */
 export function ClusterTopologyGraph({
   topology,
   projectId,

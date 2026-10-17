@@ -6,8 +6,10 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Gateway;
 
+/// <summary>Maps the Gateway's health checks, auth flows, versioned proxies, and route fallback.</summary>
 public static class GatewayEndpoints
 {
+    /// <summary>Maps explicit routes from the public surface to their authoritative owner APIs.</summary>
     public static IEndpointRouteBuilder MapGatewayEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapGet("/health/live", () => Results.Ok(new { status = "live" }))
@@ -292,11 +294,13 @@ public static class GatewayEndpoints
     }
 }
 
+/// <summary>Writes stable, non-cacheable problem responses for authentication and authorization failures.</summary>
 public sealed class GatewayAuthorizationResultHandler : IAuthorizationMiddlewareResultHandler
 {
     private readonly AuthorizationMiddlewareResultHandler _fallback = new();
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    /// <summary>Delegates successful authorization and returns a minimal JSON challenge or forbidden response.</summary>
     public async Task HandleAsync(
         RequestDelegate next,
         HttpContext context,

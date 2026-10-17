@@ -1,3 +1,4 @@
+/** Navigation, source exclusions, and local-search settings for the v1 documentation site. */
 import { defineConfig } from 'vitepress'
 
 export default defineConfig({
@@ -21,10 +22,11 @@ export default defineConfig({
     aside: false,
     outline: false,
     nav: [
-      { text: 'Start', link: '/guide/build-and-use' },
-      { text: 'Use', link: '/guide/azure-acceptance' },
+      { text: 'Guide', link: '/guide/' },
+      { text: 'Experience', link: '/experience/README' },
       { text: 'Architecture', link: '/architecture/overview' },
-      { text: 'Reference', link: '/reference/contracts' },
+      { text: 'Deep dives', link: '/deep-dive/README' },
+      { text: 'Reference', link: '/reference/api' },
       {
         text: '0.x documentation',
         link: 'https://sabbour.github.io/agentweaver/',
@@ -35,17 +37,35 @@ export default defineConfig({
         {
           text: 'Start',
           items: [
+            { text: 'Guide overview', link: '/guide/' },
             { text: 'Build and use', link: '/guide/build-and-use' },
-            { text: 'Testing', link: '/guide/testing' },
+            { text: 'Web client', link: '/guide/web-client' },
             { text: 'Gateway/BFF', link: '/guide/gateway' },
+            { text: 'Testing', link: '/guide/testing' },
           ],
         },
         {
           text: 'Use',
           items: [
-            { text: 'Gateway/BFF', link: '/guide/gateway' },
+            { text: 'Environment Sandbox testing', link: '/guide/environment-sandbox-testing' },
             { text: 'Azure acceptance', link: '/guide/azure-acceptance' },
             { text: 'Diagram authoring', link: '/diagrams/README' },
+          ],
+        },
+      ],
+      '/experience/': [
+        {
+          text: 'Experience',
+          items: [
+            { text: 'Overview', link: '/experience/README' },
+            { text: 'What you can do', link: '/experience/00-overview' },
+            { text: 'Sign-in and consent', link: '/experience/onboarding-auth' },
+            { text: 'Projects', link: '/experience/projects' },
+            { text: 'Configuration', link: '/experience/configuration' },
+            { text: 'Skills', link: '/experience/skills' },
+            { text: 'Connections', link: '/experience/connections' },
+            { text: 'Runs and sessions', link: '/experience/runs-sessions' },
+            { text: 'Knowledge', link: '/experience/knowledge' },
           ],
         },
       ],
@@ -63,10 +83,43 @@ export default defineConfig({
           ],
         },
       ],
+      '/deep-dive/': [
+        {
+          text: 'Deep dives',
+          items: [
+            { text: 'Overview', link: '/deep-dive/README' },
+            { text: 'System overview', link: '/deep-dive/00-system-overview' },
+            { text: 'Gateway', link: '/deep-dive/gateway' },
+            { text: 'Orchestration', link: '/deep-dive/orchestration' },
+            { text: 'Events and sessions', link: '/deep-dive/events-sessions' },
+            { text: 'Agent runtime', link: '/deep-dive/agent-runtime' },
+            { text: 'MCP server', link: '/deep-dive/mcp-server' },
+          ],
+        },
+        {
+          text: 'Platform',
+          items: [
+            { text: 'Identity and secrets', link: '/deep-dive/identity-secrets' },
+            { text: 'Projects and configuration', link: '/deep-dive/projects-config' },
+            { text: 'Environments and sandboxes', link: '/deep-dive/environment-sandbox' },
+            { text: 'Knowledge and memory', link: '/deep-dive/knowledge-memory' },
+            { text: 'Source control', link: '/deep-dive/source-control' },
+            { text: 'Providers and models', link: '/deep-dive/providers-models' },
+            { text: 'Persistence', link: '/deep-dive/persistence' },
+            { text: 'Telemetry', link: '/deep-dive/telemetry' },
+            { text: 'Infrastructure and deployment', link: '/deep-dive/infra-deployment' },
+            { text: 'Testing strategy', link: '/deep-dive/testing-strategy' },
+          ],
+        },
+      ],
       '/reference/': [
         {
           text: 'Reference',
           items: [
+            { text: 'HTTP API', link: '/reference/api' },
+            { text: 'Events', link: '/reference/events' },
+            { text: 'Web client', link: '/reference/web' },
+            { text: 'MCP tools', link: '/reference/mcp-tools' },
             { text: 'Contracts and endpoints', link: '/reference/contracts' },
             { text: 'Component releases', link: '/reference/releases' },
           ],

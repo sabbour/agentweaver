@@ -2,10 +2,16 @@ using System.Text.Json.Serialization;
 
 namespace Agentweaver.Abstractions;
 
+/// <summary>Kinds of private or content-addressed material that the session owner can store.</summary>
 public enum SessionMaterialKind { TurnContent, SdkCache, RemoteToolResult, RuntimeConfiguration }
 
+/// <summary>Classification of the body returned for a reviewed remote-tool result.</summary>
 public enum SessionMaterialResultContentClass { TextOnly, Structured, NonText, Mixed }
 
+/// <summary>
+/// Snapshot of the Remote MCP connection, discovery, tool schema, and permission metadata
+/// reviewed for a single remote call. Revisions and digests preserve the exact decision inputs.
+/// </summary>
 public sealed record RemoteToolResultSnapshotBinding(
     string ConnectionId,
     long ConnectionRowRevision,
@@ -32,6 +38,10 @@ public sealed record RemoteToolResultSnapshotBinding(
     string PermissionPurpose,
     string PermissionMetadataDigest);
 
+/// <summary>
+/// Runtime proof linking a remote-tool result to an accepted run, exact reviewed snapshot,
+/// policy receipt, approved action, call arguments, and actor context.
+/// </summary>
 public sealed record RemoteToolResultProof(
     int ContractVersion,
     Guid CallEventId,
@@ -68,12 +78,18 @@ public sealed record RemoteToolResultProof(
     PolicyEvaluationReasonCode ReasonCode,
     SessionMaterialResultContentClass ContentClass)
 {
+    /// <summary>Prevents proof fields from appearing in default diagnostic output.</summary>
     public override string ToString() => nameof(RemoteToolResultProof) + " [REDACTED]";
 }
 
+/// <summary>Owner acknowledgment that a verified result event was appended for a proof digest.</summary>
 public sealed record RemoteToolResultVerificationReceipt(
     int ContractVersion, Guid ResultEventId, string ProofSha256);
 
+/// <summary>
+/// Non-secret binding between stored bytes and the accepted runtime session, including
+/// the execution fence, model selection, and optional proof for Remote MCP result content.
+/// </summary>
 public sealed record SessionMaterialBinding(
     int ContractVersion,
     SessionMaterialKind Kind,
@@ -88,13 +104,16 @@ public sealed record SessionMaterialBinding(
     string ModelSelectionReference,
     string ModelId)
 {
+    /// <summary>Prompt limit active for the SDK material, when one was pinned.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? MaxPromptTokens { get; init; }
 
+    /// <summary>Current-call proof required only for Remote MCP result material.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RemoteToolResultProof? RemoteToolResultProof { get; init; }
 }
 
+/// <summary>Typed write request from the runtime to the session owner for one bounded material event.</summary>
 public sealed record SessionMaterialWriteRequest(
     int ContractVersion,
     Guid EventId,
@@ -107,15 +126,19 @@ public sealed record SessionMaterialWriteRequest(
     string? SdkVersion = null,
     string? ModelId = null)
 {
+    /// <summary>Prompt limit associated with this material, if it was enforced by the runtime.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? MaxPromptTokens { get; init; }
 
+    /// <summary>Proof that binds Remote MCP result bytes to the current reviewed tool call.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RemoteToolResultProof? RemoteToolResultProof { get; init; }
 
+    /// <summary>Redacts material bytes and proof from default diagnostic output.</summary>
     public override string ToString() => nameof(SessionMaterialWriteRequest) + " [REDACTED]";
 }
 
+/// <summary>Durable acknowledgment locating a stored material event in the session journal.</summary>
 public sealed record SessionMaterialAcknowledgment(
     int ContractVersion,
     SessionIdentity Identity,
@@ -123,16 +146,23 @@ public sealed record SessionMaterialAcknowledgment(
     long Position,
     SessionObjectReference Reference);
 
+/// <summary>Acknowledged material plus its returned bytes; callers should avoid logging the payload.</summary>
 public sealed record SessionMaterialReadResult(SessionMaterialAcknowledgment Material, byte[] Bytes)
 {
+    /// <summary>Redacts material bytes from default diagnostic output.</summary>
     public override string ToString() => nameof(SessionMaterialReadResult) + " [REDACTED]";
 }
 
+/// <summary>Enforces material size, kind, ownership, event identity, and proof invariants.</summary>
 public static class SessionMaterialValidation
 {
+    /// <summary>Maximum stored material body size.</summary>
     public const int MaximumBytes = 1024 * 1024;
+    /// <summary>Maximum canonical argument bytes in a Remote MCP result proof.</summary>
     public const int MaximumRemoteToolArgumentsBytes = 256 * 1024;
 
+    /// <summary>Validates a runtime write request, including kind-specific fields and bounded JSON.</summary>
+    /// <exception cref="ArgumentException">The version, event, binding, content, or kind-specific data is invalid.</exception>
     public static void Validate(SessionMaterialWriteRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -170,6 +200,8 @@ public static class SessionMaterialValidation
         }
     }
 
+    /// <summary>Validates that a stored reference has a complete, supported material binding.</summary>
+    /// <exception cref="ArgumentException">The reference, purpose, byte length, or binding is invalid.</exception>
     public static void Validate(SessionObjectReference reference)
     {
         var material = reference.Material ?? throw new ArgumentException("Recorded session material is required.");
@@ -195,6 +227,8 @@ public static class SessionMaterialValidation
         RequireIdentifier(material.ModelId);
     }
 
+    /// <summary>Returns the owner-defined storage purpose for a material kind.</summary>
+    /// <exception cref="ArgumentOutOfRangeException">The kind is not supported.</exception>
     public static string Purpose(SessionMaterialKind kind) => kind switch
     {
         SessionMaterialKind.TurnContent => "runtime-turn-content",
@@ -204,6 +238,8 @@ public static class SessionMaterialValidation
         _ => throw new ArgumentOutOfRangeException(nameof(kind))
     };
 
+    /// <summary>Derives a stable result-event ID from the originating call event and input hash.</summary>
+    /// <exception cref="ArgumentException">The proof has no call event or an invalid input digest.</exception>
     public static Guid RemoteToolResultEventId(RemoteToolResultProof proof)
     {
         ArgumentNullException.ThrowIfNull(proof);
@@ -222,14 +258,17 @@ public static class SessionMaterialValidation
         return eventId == Guid.Empty ? new Guid(digest.AsSpan(16, 16)) : eventId;
     }
 
+    /// <summary>Derives a deterministic journal call ID for a reviewed remote-tool call.</summary>
     public static string RemoteToolResultCallId(RemoteToolResultProof proof) =>
         "remote_tool_call_" + HashUtf8(
             $"remote-tool-call-id.v1\0{proof.CallEventId:N}\0{proof.CallInputHash}");
 
+    /// <summary>Derives a deterministic journal tool name for one reviewed snapshot and tool.</summary>
     public static string RemoteToolResultToolName(RemoteToolResultProof proof) =>
         "remote_tool_" + HashUtf8(
             $"remote-tool-name.v1\0{proof.Snapshot.SnapshotId:N}\0{proof.Snapshot.SnapshotDigest}\0{proof.ToolName}");
 
+    /// <summary>Compares two proofs by their exact snapshot identity and all remaining proof fields.</summary>
     public static bool SameRemoteToolResultProof(
         RemoteToolResultProof? first, RemoteToolResultProof? second) =>
         first is not null && second is not null &&
@@ -240,12 +279,19 @@ public static class SessionMaterialValidation
         first.Snapshot.NodeId == second.Snapshot.NodeId &&
         (first with { Snapshot = second.Snapshot }) == second;
 
+    /// <summary>Validates a proof and returns its canonical JSON digest.</summary>
+    /// <exception cref="ArgumentException">The proof contains a stale, malformed, or unsupported binding.</exception>
     public static string RemoteToolResultProofHash(RemoteToolResultProof proof)
     {
         ValidateRemoteToolResultProof(proof);
         return HashUtf8(System.Text.Json.JsonSerializer.Serialize(proof));
     }
 
+    /// <summary>
+    /// Rejects proofs that do not represent an allowed tool invocation with exact actor,
+    /// runtime, snapshot, permission, endpoint, and canonical argument pins.
+    /// </summary>
+    /// <exception cref="ArgumentException">A required proof identity or invariant is missing or inconsistent.</exception>
     public static void ValidateRemoteToolResultProof(RemoteToolResultProof proof)
     {
         ArgumentNullException.ThrowIfNull(proof);
@@ -333,16 +379,19 @@ public static class SessionMaterialValidation
             throw new ArgumentException("The remote tool result proof must contain canonical object arguments.");
     }
 
+    /// <summary>Checks required proof text for nonempty bounded content without controls.</summary>
     private static void RequireText(string? value, string parameterName)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 512 || value.Any(char.IsControl))
             throw new ArgumentException("A valid remote tool result proof value is required.", parameterName);
     }
 
+    /// <summary>Hashes a UTF-8 string and returns lowercase hexadecimal SHA-256.</summary>
     private static string HashUtf8(string value) =>
         Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
 
+    /// <summary>Requires a canonical lowercase SHA-256 digest.</summary>
     private static void RequireHash(string? hash)
     {
         if (hash is not { Length: 64 } ||
@@ -350,6 +399,7 @@ public static class SessionMaterialValidation
             throw new ArgumentException("A SHA-256 material digest is required.");
     }
 
+    /// <summary>Checks the bounded identifier format used for SDK and model pins.</summary>
     private static void RequireIdentifier(string? value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 256 ||

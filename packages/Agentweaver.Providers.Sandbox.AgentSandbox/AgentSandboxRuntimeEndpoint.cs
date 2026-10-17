@@ -3,8 +3,21 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Providers.Sandbox.AgentSandbox;
 
+/// <summary>
+/// Resolves the verified in-cluster AgentHost endpoint from the exact Sandbox, Pod, and service resources.
+/// </summary>
 public sealed partial class AgentSandboxProvider
 {
+    /// <summary>
+    /// Reads and validates the HTTPS endpoint only when the caller's pinned profile enables AgentHost.
+    /// </summary>
+    /// <param name="sandbox">The Sandbox resource that owns the workload.</param>
+    /// <param name="pod">The Pod whose identity and address are being verified.</param>
+    /// <param name="namespace">Kubernetes namespace containing the resources.</param>
+    /// <param name="options">The pinned provider options and AgentHost profile.</param>
+    /// <param name="cancellationToken">Cancels Kubernetes reads.</param>
+    /// <returns>A validated endpoint bound to the exact Pod and owned service.</returns>
+    /// <exception cref="SandboxProviderException">The profile, service, selector, or endpoint configuration is unavailable or invalid.</exception>
     private async Task<SandboxRuntimeHttpsEndpoint> ReadRuntimeEndpointAsync(
         JsonElement sandbox,
         JsonElement pod,
@@ -74,6 +87,7 @@ public sealed partial class AgentSandboxProvider
         }
     }
 
+    /// <summary>Checks the single supported named HTTPS service port and its container target.</summary>
     private static bool IsAgentHostServicePort(JsonElement port) =>
         ReadOptionalString(port, "name") == "https" &&
         TryGetInt64(port, "port", out var servicePort) &&
@@ -82,12 +96,16 @@ public sealed partial class AgentSandboxProvider
         (ReadOptionalString(port, "targetPort") == "https" ||
          TryGetInt64(port, "targetPort", out var targetPort) && targetPort == 8443);
 
+    /// <summary>Checks one lower-case DNS label used in a verified runtime service name.</summary>
     private static bool IsRuntimeDnsLabel(string label) =>
         label.Length is > 0 and <= 63 &&
         label[0] is >= 'a' and <= 'z' or >= '0' and <= '9' &&
         label[^1] is >= 'a' and <= 'z' or >= '0' and <= '9' &&
         label.All(character => character is >= 'a' and <= 'z' or >= '0' and <= '9' or '-');
 
+    /// <summary>
+    /// Reads the immutable AgentHost configuration and requires its configure endpoint and audience to agree.
+    /// </summary>
     private async Task<Uri> ReadReceiverConfigureEndpointAsync(
         string @namespace, AgentSandboxOptions.AgentSandboxAgentHostProfile? host,
         CancellationToken cancellationToken)
@@ -132,6 +150,7 @@ public sealed partial class AgentSandboxProvider
         }
     }
 
+    /// <summary>Creates the fail-closed error used when the exact runtime endpoint cannot be established.</summary>
     private static SandboxProviderException RuntimeEndpointUnavailable() =>
         new("sandbox_runtime_endpoint_unavailable",
             "The exact Sandbox Pod and its owned HTTPS service are not available.", effectMayHaveApplied: false);

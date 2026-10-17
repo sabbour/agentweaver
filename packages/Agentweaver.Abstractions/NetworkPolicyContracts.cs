@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 
 namespace Agentweaver.Abstractions;
 
+/// <summary>Why a provider or service needs a particular network egress path.</summary>
 public enum NetworkEgressPurpose
 {
     DnsResolver,
@@ -17,6 +18,7 @@ public enum NetworkEgressPurpose
     PublicHttps
 }
 
+/// <summary>Destination forms supported by the versioned network-egress rule contract.</summary>
 public enum NetworkEgressDestinationKind
 {
     Fqdn,
@@ -24,12 +26,14 @@ public enum NetworkEgressDestinationKind
     KubernetesService
 }
 
+/// <summary>Layer-4 transport protocols supported by network-egress rules.</summary>
 public enum EgressProtocol
 {
     Tcp,
     Udp
 }
 
+/// <summary>One purpose-bound network destination, port, and protocol allowed by policy.</summary>
 public sealed record NetworkEgressRule(
     NetworkEgressPurpose Purpose,
     NetworkEgressDestinationKind DestinationKind,
@@ -37,12 +41,18 @@ public sealed record NetworkEgressRule(
     int Port,
     EgressProtocol Protocol);
 
+/// <summary>
+/// Normalizes and compares egress rules. Callers use these pure helpers to ensure project
+/// policy only narrows platform policy; they do not apply firewall or Kubernetes rules.
+/// </summary>
 public static class NetworkEgressRuleSemantics
 {
     private static readonly Regex KubernetesName = new(
         "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
+    /// <summary>Validates, canonicalizes, deduplicates, and deterministically orders a rule set.</summary>
+    /// <exception cref="ArgumentException">A rule is malformed, duplicated, or violates a purpose-specific constraint.</exception>
     public static ImmutableArray<NetworkEgressRule> NormalizeSet(
         IEnumerable<NetworkEgressRule> rules,
         string location = "egress")
@@ -88,6 +98,7 @@ public static class NetworkEgressRuleSemantics
             .ToImmutableArray();
     }
 
+    /// <summary>Returns whether a candidate rule's complete network scope is covered by one allowed rule.</summary>
     public static bool IsSubset(NetworkEgressRule candidate, NetworkEgressRule allowed)
     {
         if (candidate is null || allowed is null ||
@@ -126,6 +137,7 @@ public static class NetworkEgressRuleSemantics
         }
     }
 
+    /// <summary>Returns the narrower rule when two rules overlap by containment, otherwise null.</summary>
     public static NetworkEgressRule? Intersect(
         NetworkEgressRule left,
         NetworkEgressRule right)
@@ -135,6 +147,7 @@ public static class NetworkEgressRuleSemantics
         return null;
     }
 
+    /// <summary>Returns the normalized pairwise intersection of two rule sets.</summary>
     public static ImmutableArray<NetworkEgressRule> IntersectSets(
         IEnumerable<NetworkEgressRule> left,
         IEnumerable<NetworkEgressRule> right)
@@ -148,6 +161,7 @@ public static class NetworkEgressRuleSemantics
             .Distinct());
     }
 
+    /// <summary>Returns whether any allowed rule contains the candidate rule.</summary>
     public static bool IsContainedBy(
         NetworkEgressRule candidate,
         IEnumerable<NetworkEgressRule> allowed) =>
@@ -262,6 +276,7 @@ public static class NetworkEgressRuleSemantics
         return (childBytes[fullBytes] & mask) == (parentBytes[fullBytes] & mask);
     }
 
+    /// <summary>Parses a previously normalized CIDR into its network address and prefix length.</summary>
     private static (IPAddress Address, int Prefix) ParseCidr(string value)
     {
         var parts = value.Split('/');
@@ -271,6 +286,7 @@ public static class NetworkEgressRuleSemantics
     }
 }
 
+/// <summary>Resource level at which a project authorization grant applies.</summary>
 public enum ProjectAuthorityResourceType
 {
     Platform,
@@ -278,6 +294,7 @@ public enum ProjectAuthorityResourceType
     Project
 }
 
+/// <summary>Permission names returned by the project authorization owner.</summary>
 public enum ProjectAuthorizationPermission
 {
     ReadProjects,
@@ -290,15 +307,21 @@ public enum ProjectAuthorizationPermission
     AccessPrivateKnowledge
 }
 
+/// <summary>Permission plus role revision that produced the grant.</summary>
 public sealed record ProjectAuthorizationPermissionGrant(
     ProjectAuthorizationPermission Permission,
     long RoleRevision);
 
+/// <summary>Effective permissions for a platform, tenant, or project resource.</summary>
 public sealed record EffectiveProjectAuthorization(
     ProjectAuthorityResourceType ResourceType,
     string ResourceId,
     ImmutableArray<ProjectAuthorizationPermissionGrant> Permissions);
 
+/// <summary>
+/// Projects &amp; Config authority response for an authenticated actor. Optional project/run
+/// selectors scope the authority; membership revision lets consumers detect changed membership.
+/// </summary>
 public sealed record ProjectAuthorizationContextResponse(
     int ContractVersion,
     string Issuer,
@@ -309,12 +332,16 @@ public sealed record ProjectAuthorizationContextResponse(
     string? BoundRunId,
     ImmutableArray<EffectiveProjectAuthorization> EffectiveAuthority);
 
+/// <summary>Version and selector header name shared by project authorization clients and owner routes.</summary>
 public static class ProjectAuthorizationContextContract
 {
+    /// <summary>Version of the response contract currently accepted.</summary>
     public const int CurrentVersion = 1;
+    /// <summary>Request header used to select the tenant for project authority resolution.</summary>
     public const string TenantSelectorHeader = "X-Agentweaver-Tenant";
 }
 
+/// <summary>Candidate provider registration and capabilities returned for effective project selection.</summary>
 public sealed record EffectiveProviderCandidate(
     ProviderSeam Seam,
     string ProviderId,
@@ -326,12 +353,17 @@ public sealed record EffectiveProviderCandidate(
     ImmutableArray<string> RequiredCapabilities,
     NetworkPolicyLayer? Layer = null);
 
+/// <summary>Selected candidates for a seam, including cardinality and optional cost meter identity.</summary>
 public sealed record EffectiveProviderSelection(
     ProviderCardinality Cardinality,
     ProviderSeam Seam,
     ImmutableArray<EffectiveProviderCandidate> Candidates,
     string? MeterSource = null);
 
+/// <summary>
+/// Immutable effective network selection for a run, including platform baseline, optional
+/// project narrowing, required destinations, and the computed allowlist.
+/// </summary>
 public sealed record EffectiveNetworkPolicySelection(
     string ProjectId,
     string RunId,

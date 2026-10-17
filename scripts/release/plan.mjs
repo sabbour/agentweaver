@@ -1,3 +1,7 @@
+/**
+ * Converts pending changesets into a deterministic, source-bound release version plan.
+ * Planning reads repository state only; apply.mjs consumes the checksum-protected result.
+ */
 // Dependency-free release planning: turns pending `.changeset/*.md` records into a deterministic,
 // source-bound plan describing the semver bump each touched component will receive. Planning never
 // mutates the repository; `apply.mjs` consumes the plan it produces. See releases/README.md.
@@ -25,6 +29,7 @@ function defaultGit(root) {
  * Bumps the semver *core* (major.minor.patch), discarding any prerelease/build metadata: changeset
  * intent targets the next stable core version, not a continuation of an existing prerelease line.
  */
+/** Applies the requested semver level to a stable version string and returns the new version. */
 export function bumpVersion(version, bump) {
   const core = version.split(/[-+]/, 1)[0];
   const parts = core.split('.');
@@ -47,6 +52,7 @@ export function bumpVersion(version, bump) {
  * `apply.mjs` (source-binding: comparing a submitted plan against one freshly recomputed from the
  * actual current changesets).
  */
+/** Sorts component fields and changesets into a stable order for checksumming and comparisons. */
 export function canonicalizeComponents(components) {
   return [...components]
     .map((c) => ({ id: c.id, fromVersion: c.fromVersion, toVersion: c.toVersion, bump: c.bump, changesets: [...c.changesets].sort() }))
@@ -58,6 +64,7 @@ export function canonicalizeComponents(components) {
  * detects accidental or manual corruption of a plan file before `apply.mjs` trusts it. This is an
  * integrity guard, not a cryptographic signature.
  */
+/** Hashes the canonical release decisions so plan edits can be detected before application. */
 export function planChecksum({ schemaVersion, sourceSha, components, initialBaseline }) {
   const decisions = { schemaVersion, sourceSha, components: canonicalizeComponents(components) };
   if (initialBaseline !== undefined) decisions.initialBaseline = initialBaseline;
@@ -70,6 +77,10 @@ export function planChecksum({ schemaVersion, sourceSha, components, initialBase
  * component is touched by more than one changeset, the highest-severity bump wins (major > minor >
  * patch) — this is "highest intent per component", not a sum of bumps. Returns `{ components: [] }`
  * (no `sourceSha`/`checksum` work skipped) when there is nothing pending.
+ */
+/**
+ * Builds the component version changes from a validated manifest and pending changesets.
+ * Returns a source-bound plan; invalid coverage, stale source, or inconsistent baseline evidence throws.
  */
 export function createPlan(manifest, {
   root = repositoryRoot, readdirSync, readFileSync: readFile, git = defaultGit(root),
@@ -160,6 +171,7 @@ export function createPlan(manifest, {
   return plan;
 }
 
+/** Loads a manifest from disk and creates a release plan using the supplied source dependencies. */
 export function createPlanFromFile(manifestPath, options = {}) {
   const manifest = validateFile(manifestPath, options);
   return createPlan(manifest, options);

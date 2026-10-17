@@ -62,6 +62,10 @@ function LineChart({ points, label }: { points: DailyInvocationPointDto[]; label
   );
 }
 
+/**
+ * Renders daily run counts from API-provided `DailyInvocationPointDto` values as a line chart.
+ * Title, labels, and empty-state text are configurable props; the chart fetches no data.
+ */
 export function AgentInvocationChart({
   points,
   title = 'Runs created by date',

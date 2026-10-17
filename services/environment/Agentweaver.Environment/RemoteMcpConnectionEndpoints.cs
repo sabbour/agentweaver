@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Authentication;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Request body for creating a project-scoped Remote MCP connection.</summary>
 public sealed record CreateRemoteMcpConnectionRequest(
     string IdempotencyKey,
     string DisplayName,
@@ -12,6 +13,7 @@ public sealed record CreateRemoteMcpConnectionRequest(
     string? ResourceUri,
     RemoteMcpAuthenticationMode AuthenticationMode);
 
+/// <summary>Request body for replacing a connection configuration at an expected row revision.</summary>
 public sealed record UpdateRemoteMcpConnectionRequest(
     long ExpectedRowRevision,
     string IdempotencyKey,
@@ -20,18 +22,22 @@ public sealed record UpdateRemoteMcpConnectionRequest(
     string? ResourceUri,
     RemoteMcpAuthenticationMode AuthenticationMode);
 
+/// <summary>Request body for an idempotent connection state change.</summary>
 public sealed record RemoteMcpConnectionStateRequest(
     long ExpectedRowRevision,
     string IdempotencyKey);
 
+/// <summary>Request body for linking an identity binding to one exact configuration revision.</summary>
 public sealed record LinkRemoteMcpIdentityBindingRequest(
     long ExpectedConfigurationRevision,
     string ExpectedConfigurationSha256,
     string IdentityBindingReference,
     string OperationId);
 
+/// <summary>Maps authenticated project APIs for Remote MCP connection management.</summary>
 public static class RemoteMcpConnectionEndpoints
 {
+    /// <summary>Registers list, create, read, update, state, identity-binding, and discovery routes.</summary>
     public static IEndpointRouteBuilder MapRemoteMcpConnectionEndpoints(
         this IEndpointRouteBuilder endpoints)
     {

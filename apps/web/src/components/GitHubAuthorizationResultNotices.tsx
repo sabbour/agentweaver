@@ -106,14 +106,26 @@ const copilotFallback = {
   message: 'The GitHub Copilot connection could not be completed. Start a new connection from settings.',
 } as const;
 
+/**
+ * Renders the callback result for installing or authorizing the repository app.
+ * Callback status is supplied by the parent; no network request or local state is used here.
+ */
 export function RepoAppAuthorizationResultNotice(props: { code: string | null; onDismiss?: () => void }) {
   return <AuthCallbackNotice {...props} results={REPO_AUTH_RESULTS} fallback={repoFallback} />;
 }
 
+/**
+ * Renders the callback result for a user's GitHub Copilot authorization.
+ * The caller supplies the result and actions, keeping authorization exchange outside this view.
+ */
 export function UserCopilotAuthorizationResultNotice(props: { code: string | null; onDismiss?: () => void }) {
   return <AuthCallbackNotice {...props} results={USER_COPILOT_RESULTS} fallback={copilotFallback} />;
 }
 
+/**
+ * Renders the callback result for platform GitHub Copilot authorization.
+ * It presents parent-supplied result data and does not make authorization requests itself.
+ */
 export function PlatformCopilotAuthorizationResultNotice(props: { code: string | null; onDismiss?: () => void }) {
   return <AuthCallbackNotice {...props} results={PLATFORM_COPILOT_RESULTS} fallback={copilotFallback} />;
 }

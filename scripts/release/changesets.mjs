@@ -1,3 +1,7 @@
+/**
+ * Parses changeset records, compares source changes, and validates release coverage.
+ * These checks credit already-receipted changes while rejecting unaccounted component changes.
+ */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -16,6 +20,7 @@ function fail(location, message) {
   throw new Error(`${location}: ${message}`);
 }
 
+/** Parses and validates frontmatter entries while preserving each entry's source line for diagnostics. */
 export function parseChangesetEntries(text, filename, componentIds) {
   const lines = text.replaceAll('\r\n', '\n').split('\n');
   if (lines[0] !== '---') fail(filename, 'expected opening --- frontmatter');
@@ -37,11 +42,13 @@ export function parseChangesetEntries(text, filename, componentIds) {
   return { entries, summary };
 }
 
+/** Returns the component IDs named by one validated changeset document. */
 export function parseChangeset(text, filename, componentIds) {
   const { entries } = parseChangesetEntries(text, filename, componentIds);
   return new Set(entries.map(({ id }) => id));
 }
 
+/** Reads the immutable initial baseline receipt and verifies it against the release manifest. */
 export function readInitialBaseline(manifest, {
   root, readFileSync: readFile = readFileSync,
 } = {}) {
@@ -137,6 +144,7 @@ export function readInitialBaseline(manifest, {
  * a `Map<file, {entries, summary}>` preserving per-component bump severity, for release planning.
  * This does not consume/archive anything; it is a read-only view used by `plan.mjs`.
  */
+/** Loads and validates all pending changeset entries from the repository changeset directory. */
 export function collectChangesetEntries(root, componentIds, { readdirSync: readdir = readdirSync, readFileSync: readFile = readFileSync } = {}) {
   const directory = path.join(root, '.changeset');
   let filenames;
@@ -167,6 +175,7 @@ export function collectChangesetEntries(root, componentIds, { readdirSync: readd
  * release receipt's claimed `sourceSha` to this same ancestor, rather than trusting the receipt's
  * own say-so.
  */
+/** Resolves and validates the common ancestor used for a source-change comparison. */
 export function resolveMergeBase(root, base, comparisonHead = 'HEAD') {
   if (!sha.test(base)) fail('base', 'expected a full lowercase 40-character commit SHA');
   if (comparisonHead !== 'HEAD' && !sha.test(comparisonHead)) {
@@ -186,6 +195,7 @@ export function resolveMergeBase(root, base, comparisonHead = 'HEAD') {
   }
 }
 
+/** Selects the comparison base from CI event metadata and validates that the tested source contains it. */
 export function resolveCiComparisonBase(root, {
   eventName = process.env.GITHUB_EVENT_NAME,
   testedSourceSha = process.env.GITHUB_SHA,
@@ -228,6 +238,7 @@ export function resolveCiComparisonBase(root, {
   }
 }
 
+/** Returns changed path/status records between the validated ancestor and HEAD. */
 export function diffChanges(root, base) {
   const ancestor = resolveMergeBase(root, base);
   try {
@@ -263,6 +274,7 @@ export function diffChanges(root, base) {
  * Source Git notes, decisions, hashes, and prepared mirror bytes are independently checked.
  * Other product edits still require genuinely fresh top-level notes.
  */
+/** Credits changes already represented by valid preparation or release receipts. */
 export function creditReceiptedComponents(root, changes, componentIds, ancestorSha, {
   readFileSync: readFile = readFileSync,
 } = {}) {
@@ -338,6 +350,10 @@ export function creditReceiptedComponents(root, changes, componentIds, ancestorS
   return credited;
 }
 
+/**
+ * Checks that each component change is covered by a pending changeset or an accepted receipt.
+ * Returns the validated baseline and changeset records; malformed or missing coverage throws.
+ */
 export function validateChangesets(manifest, { root, changes, ancestorSha } = {}) {
   const ids = new Set(manifest.components.map(({ id }) => id));
   const baseline = readInitialBaseline(manifest, { root });

@@ -8,12 +8,14 @@ using Azure.Storage.Blobs.Models;
 
 namespace Agentweaver.FoundationProbe;
 
+/// <summary>Performs a nonce-owned Azure Blob round trip and conditionally removes only the blob it created.</summary>
 internal sealed class OwnedBlobProbe
 {
     private readonly BlobContainerClient _container;
     private readonly AzureBlobObjectStore _objectStore;
     private readonly TimeSpan _cleanupTimeout;
 
+    /// <summary>Creates the probe with a bounded cleanup timeout.</summary>
     public OwnedBlobProbe(
         BlobContainerClient container,
         AzureBlobObjectStore objectStore,
@@ -26,6 +28,8 @@ internal sealed class OwnedBlobProbe
             throw new ArgumentOutOfRangeException(nameof(cleanupTimeout));
     }
 
+    /// <summary>Uploads with create-only semantics, verifies content and ownership, and confirms conditional cleanup.</summary>
+    /// <remarks>Cleanup uses nonce metadata and the successful ETag; a changed or unowned blob is never removed.</remarks>
     public async Task<BlobEvidence> RunAsync(
         ProbeTarget target,
         ProbeSource source,
@@ -118,6 +122,7 @@ internal sealed class OwnedBlobProbe
             CleanupConfirmed: true);
     }
 
+    /// <summary>Deletes only after rechecking ownership, then verifies that the object is absent.</summary>
     private static async Task<bool> DeleteOwnedBlobAsync(
         BlobClient blob,
         IReadOnlyDictionary<string, string> expectedMetadata,
@@ -152,6 +157,7 @@ internal sealed class OwnedBlobProbe
         }
     }
 
+    /// <summary>Checks every probe ownership marker and, when known, the upload ETag.</summary>
     private static void VerifyBlobOwnership(
         BlobProperties properties,
         IReadOnlyDictionary<string, string> expectedMetadata,

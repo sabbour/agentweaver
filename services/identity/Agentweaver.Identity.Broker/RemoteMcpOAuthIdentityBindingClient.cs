@@ -7,12 +7,14 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Identity.Broker;
 
+/// <summary>Request to link a project Environment connection to its Identity-managed OAuth registration.</summary>
 public sealed record LinkRemoteMcpIdentityBindingRequest(
     long ExpectedConfigurationRevision,
     string ExpectedConfigurationSha256,
     string IdentityBindingReference,
     string OperationId);
 
+/// <summary>Environment receipt proving the final revision and digest for an identity-binding operation.</summary>
 public sealed record RemoteMcpIdentityBindingReceipt(
     string ProjectId,
     Guid ConnectionId,
@@ -21,12 +23,18 @@ public sealed record RemoteMcpIdentityBindingReceipt(
     string FinalConfigurationSha256,
     string IdentityBindingReference);
 
+/// <summary>Safe status-bearing failure from the Environment identity-binding endpoint.</summary>
 internal sealed class RemoteMcpOAuthEnvironmentException(string code, int statusCode) : Exception(code)
 {
     public string Code { get; } = code;
     public int StatusCode { get; } = statusCode;
 }
 
+/// <summary>
+/// Sends an authenticated, no-store link operation to Environment and validates its
+/// revisioned receipt. It rejects redirects, stale actor credentials and malformed
+/// responses before management code treats the binding as current.
+/// </summary>
 internal sealed class RemoteMcpOAuthIdentityBindingClient : IDisposable
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
@@ -63,6 +71,7 @@ internal sealed class RemoteMcpOAuthIdentityBindingClient : IDisposable
         _ownsClient = ownsClient;
     }
 
+    /// <summary>Links one connection at the expected configuration digest and validates the returned receipt.</summary>
     public async Task<RemoteMcpIdentityBindingReceipt> LinkAsync(
         RuntimeActorAuthorization actor,
         string projectId,

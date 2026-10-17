@@ -42,6 +42,10 @@ import {
   TitleText,
 } from '../components/ui';
 
+/**
+ * Account-level settings for the current authentication session, personal AI
+ * provider access, GitHub Repo App connection, and supported MCP client guidance.
+ */
 const useStyles = makeStyles({
   section: {
     display: 'flex',
@@ -84,6 +88,7 @@ const useStyles = makeStyles({
   },
 });
 
+/** Formats errors raised while loading or starting GitHub authorization. */
 function formatError(err: unknown): string {
   return err instanceof Error
       ? err.message
@@ -95,6 +100,8 @@ export function SettingsPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  // Authentication and repository connection state are loaded independently;
+  // optional installation metadata does not invalidate a connected account.
   const [session, setSession] = useState<AuthSessionResponse | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState<string | null>(null);
@@ -110,6 +117,8 @@ export function SettingsPage() {
   const [mcpClientId, setMcpClientId] = useState<McpClientId>('copilot-cli');
   const mcpClient = MCP_CLIENT_GUIDANCE[mcpClientId];
 
+  // Load the session and public Entra configuration on entry. Config failure only
+  // hides the administrator shortcut; it does not discard signed-in roles.
   useEffect(() => {
     let cancelled = false;
     void apiClient.getAuthSession()
@@ -135,11 +144,13 @@ export function SettingsPage() {
     return () => { cancelled = true; };
   }, []);
 
+  // Remove duplicate role names before rendering the session's access summary.
   const platformRoles = useMemo(
     () => (session?.platform_roles ?? []).filter((role, index, all) => all.indexOf(role) === index),
     [session?.platform_roles],
   );
 
+  /** Refreshes Repo App connection state and resets the connecting indicator. */
   const loadRepoAppConnection = useCallback(async () => {
     setRepoAppStatusLoading(true);
     try {
@@ -155,10 +166,12 @@ export function SettingsPage() {
     }
   }, []);
 
+  // Queue the first connection check after initial render.
   useEffect(() => {
     queueMicrotask(() => { void loadRepoAppConnection(); });
   }, [loadRepoAppConnection]);
 
+  // Installation management URLs are supplemental and only queried when connected.
   useEffect(() => {
     if (!repoAppConnection?.connected) return;
 
@@ -175,6 +188,7 @@ export function SettingsPage() {
     return () => { cancelled = true; };
   }, [repoAppConnection?.connected]);
 
+  // Re-check successful OAuth returns; failed returns only release the busy state.
   useEffect(() => {
     const repoAppAuth = repoAppAuthorizationResult;
     if (!repoAppAuth) return;
@@ -190,6 +204,7 @@ export function SettingsPage() {
 
   }, [loadRepoAppConnection, repoAppAuthorizationResult]);
 
+  /** Clears the transient callback code from both local state and the URL. */
   const dismissRepoAppAuthorizationResult = () => {
     const next = new URLSearchParams(searchParams);
     next.delete('repo_app_auth');
@@ -197,6 +212,7 @@ export function SettingsPage() {
     setRepoAppAuthorizationResult(null);
   };
 
+  /** Requests an OAuth handoff with a return URL preserving the current settings page. */
   const connectRepoApp = async () => {
     setRepoAppConnecting(true);
     setRepoAppError(null);

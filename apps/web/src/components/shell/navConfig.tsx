@@ -54,6 +54,7 @@ export interface NavSectionDef {
 // Global (project-independent) destinations rendered above the project sections.
 // Overview is the live "Now" page; Projects is the gallery / switcher landing;
 // Sessions is the user's cross-project assistant conversation hub.
+/** Route definitions for navigation entries that are not scoped to a project. */
 export const GLOBAL_NAV_ITEMS: GlobalNavItemDef[] = [
   { key: 'overview', label: 'Overview', icon: <Home24Regular />, path: '/overview', matchPrefixes: ['/overview', '/'] },
   { key: 'projects', label: 'Projects', icon: <Apps24Regular />, path: '/projects', matchPrefixes: ['/projects'] },
@@ -61,6 +62,7 @@ export const GLOBAL_NAV_ITEMS: GlobalNavItemDef[] = [
 ];
 
 // WORK / SQUAD / OPERATIONS / SYSTEM.
+/** Section and item definitions used to construct the main navigation. */
 export const NAV_SECTIONS: NavSectionDef[] = [
   {
     heading: 'WORK',
@@ -112,9 +114,11 @@ export const NAV_SECTIONS: NavSectionDef[] = [
 ];
 
 // All project-scoped items flattened, used for active-state resolution.
+/** Flattened navigation definitions for lookups shared by navigation surfaces. */
 export const NAV_ITEMS: NavItemDef[] = NAV_SECTIONS.flatMap((s) => s.items);
 
 // Build the absolute route for a project-scoped nav item.
+/** Builds the route path for an item, substituting the selected project when required. */
 export function navItemPath(projectId: string, item: NavItemDef): string {
   const base = `/projects/${projectId}`;
   return item.segment ? `${base}/${item.segment}` : base;
@@ -123,6 +127,7 @@ export function navItemPath(projectId: string, item: NavItemDef): string {
 // Resolve which nav item is active for the given pathname. Returns the matching
 // item key. When no project is in scope, global keys are resolved first;
 // project-scoped routes fall back to the Dashboard home.
+/** Resolves which configured navigation item matches the current pathname. */
 export function resolveActiveKey(pathname: string, projectId: string | undefined): string {
   if (!projectId) {
     const directGlobal = GLOBAL_NAV_ITEMS.find((item) => {

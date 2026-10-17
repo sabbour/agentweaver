@@ -1,4 +1,5 @@
 import { FileUpload } from '..';
+/** Displays idle, uploading, completed, and multi-file drop-zone upload states. */
 export function FileUploadExample() {
   return (
     <div className="azf-stack azf-gap-l">

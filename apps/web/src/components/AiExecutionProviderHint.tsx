@@ -87,6 +87,11 @@ function compactLabel({
   return `${phase}: ${providerName}`;
 }
 
+/**
+ * Renders the compact effective-provider label, with an unavailable/error treatment when needed.
+ * `context`, `loading`, `error`, and `required` come from the caller's provider-readiness flow;
+ * labels are derived with `aiExecutionProviderLabel` and `aiExecutionProviderScope`. No local state.
+ */
 export function AiExecutionProviderIndicator({
   context,
   loading = false,
@@ -123,6 +128,11 @@ export function AiExecutionProviderIndicator({
   );
 }
 
+/**
+ * Wraps one interactive child with accessible provider context and an optional compact indicator.
+ * The caller supplies provider context and readiness props; this component adds description IDs
+ * and screen-reader text, without fetching data or owning state.
+ */
 export function AiExecutionProviderHint({
   context,
   loading = false,
@@ -174,6 +184,11 @@ export function AiExecutionProviderHint({
   );
 }
 
+/**
+ * Renders a provider status wrapper and announces loading, errors, or unavailable providers.
+ * Provider context and readiness come from the parent; children are optional, and no API request
+ * or local state is used here.
+ */
 export function AiExecutionProviderStatus({
   context,
   loading = false,
@@ -248,6 +263,11 @@ function remediation(
   }
 }
 
+/**
+ * Shows a warning and remediation action when provider readiness failed or the provider is
+ * unavailable. The parent supplies API-derived context/error and a refresh callback; project ID
+ * selects project settings when applicable.
+ */
 export function AiExecutionProviderReadiness({
   context,
   error,
@@ -284,6 +304,10 @@ export function AiExecutionProviderReadiness({
   );
 }
 
+/**
+ * Provides a polite screen-reader announcement after the caller detects a provider change.
+ * The message is supplied by the parent; this component renders hidden live-region text only.
+ */
 export function AiProviderChangeAnnouncement({ message }: { message: string }) {
   return (
     <span

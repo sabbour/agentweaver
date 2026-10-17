@@ -70,6 +70,10 @@ export interface PageHeaderProps {
   actions?: ReactNode;
 }
 
+/**
+ * Renders a page heading with optional subtitle, breadcrumbs, and action content supplied by
+ * the caller. It is a presentational component with no data source or local state.
+ */
 export function PageHeader({ title, description, breadcrumbs, actions }: PageHeaderProps) {
   const styles = useStyles();
   return (

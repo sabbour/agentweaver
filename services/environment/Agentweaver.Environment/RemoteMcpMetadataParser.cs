@@ -6,6 +6,7 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Parses bounded Remote MCP registry and tools/list JSON into validated, digest-pinned contracts.</summary>
 internal static class RemoteMcpMetadataParser
 {
     internal const int MaximumDocumentBytes = 1024 * 1024;
@@ -22,6 +23,7 @@ internal static class RemoteMcpMetadataParser
         MaxDepth = MaximumJsonDepth
     };
 
+    /// <summary>Reads one bounded registry page and returns its server summaries, cursor, and source digest.</summary>
     internal static RemoteMcpRegistryServerPage ParseRegistryServerPage(ReadOnlyMemory<byte> utf8Json)
     {
         using var document = ParseDocument(utf8Json);
@@ -66,6 +68,10 @@ internal static class RemoteMcpMetadataParser
         return new(entries.ToImmutable(), nextCursor, RemoteMcpDigest.Sha256(utf8Json.Span));
     }
 
+    /// <summary>
+    /// Reads one exact registry server version and selects only a static, canonical HTTPS Streamable HTTP endpoint.
+    /// Registry templates, injected headers, duplicate endpoints, and floating versions are rejected.
+    /// </summary>
     internal static RemoteMcpRegistryServerSelection ParseRegistryServerVersion(
         ReadOnlyMemory<byte> utf8Json,
         string expectedName,
@@ -138,6 +144,7 @@ internal static class RemoteMcpMetadataParser
             selectedEndpoint);
     }
 
+    /// <summary>Validates and pins a bounded tools/list response, rejecting duplicate names and invalid schemas.</summary>
     internal static RemoteMcpParsedToolCatalog ParseToolsList(ReadOnlyMemory<byte> utf8Json)
     {
         using var document = ParseDocument(utf8Json);
@@ -262,22 +269,26 @@ internal static class RemoteMcpMetadataParser
         Invalid("JSON document contains a duplicate object property.");
 }
 
+/// <summary>Registry page summary for one server name, exact version, optional title, and description.</summary>
 internal sealed record RemoteMcpRegistryServerSummary(
     string Name,
     string Version,
     string? Title,
     string Description);
 
+/// <summary>Parsed registry page with its optional continuation cursor and raw-document digest.</summary>
 internal sealed record RemoteMcpRegistryServerPage(
     ImmutableArray<RemoteMcpRegistryServerSummary> Servers,
     string? NextCursor,
     string ResponseSha256);
 
+/// <summary>Exact registry version pin, available endpoints, and the one selected endpoint.</summary>
 internal sealed record RemoteMcpRegistryServerSelection(
     RemoteMcpRegistryServerPin Server,
     ImmutableArray<string> AdvertisedEndpoints,
     string SelectedEndpointUri);
 
+/// <summary>Validated tool schemas and the digest used to pin one Remote MCP discovery result.</summary>
 internal sealed record RemoteMcpParsedToolCatalog(
     ImmutableArray<RemoteMcpToolSchemaPin> Tools,
     string CatalogSha256);

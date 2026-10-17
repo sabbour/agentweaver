@@ -6,8 +6,14 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Maps authenticated HTTP operations for a project's persisted task backlog.
+/// </summary>
 public static partial class CoordinationEndpoints
 {
+    /// <summary>
+    /// Registers backlog read, task-edit, dependency, and claim routes under the project run API.
+    /// </summary>
     public static IEndpointRouteBuilder MapBacklogEndpoints(this IEndpointRouteBuilder app)
     {
         var backlog = app.MapGroup("/api/projects/{projectId}/runs/{runId}/backlog")
@@ -26,6 +32,9 @@ public static partial class CoordinationEndpoints
         return app;
     }
 
+    /// <summary>
+    /// Reads the project backlog after validating the caller and accepted run selection.
+    /// </summary>
     private static Task<IResult> ReadBacklogAsync(
         string projectId,
         string runId,
@@ -40,6 +49,9 @@ public static partial class CoordinationEndpoints
                 return BacklogResult(graph);
             });
 
+    /// <summary>
+    /// Adds a task using the caller's expected graph revision.
+    /// </summary>
     private static Task<IResult> AddBacklogTaskAsync(
         string projectId,
         string runId,
@@ -58,6 +70,9 @@ public static partial class CoordinationEndpoints
                 return BacklogResult(result);
             });
 
+    /// <summary>
+    /// Changes a task state using both graph and task revision checks.
+    /// </summary>
     private static Task<IResult> SetBacklogTaskStateAsync(
         string projectId,
         string runId,
@@ -79,6 +94,9 @@ public static partial class CoordinationEndpoints
                 return BacklogResult(result);
             });
 
+    /// <summary>
+    /// Archives a task only when its graph and task revisions still match.
+    /// </summary>
     private static Task<IResult> ArchiveBacklogTaskAsync(
         string projectId,
         string runId,
@@ -99,6 +117,9 @@ public static partial class CoordinationEndpoints
                 return BacklogResult(result);
             });
 
+    /// <summary>
+    /// Adds a prerequisite edge through the owner store's graph validation.
+    /// </summary>
     private static Task<IResult> AddBacklogDependencyAsync(
         string projectId,
         string runId,
@@ -120,6 +141,9 @@ public static partial class CoordinationEndpoints
                 return BacklogResult(result);
             });
 
+    /// <summary>
+    /// Removes a prerequisite edge through the owner store's graph validation.
+    /// </summary>
     private static Task<IResult> RemoveBacklogDependencyAsync(
         string projectId,
         string runId,
@@ -141,6 +165,10 @@ public static partial class CoordinationEndpoints
                 return BacklogResult(result);
             });
 
+    /// <summary>
+    /// Claims a ready task, then ensures its accepted root session exists in the Events owner.
+    /// </summary>
+    /// <remarks>The prerequisite reader is required; without it the request fails closed with service unavailable.</remarks>
     private static Task<IResult> ClaimBacklogTaskAsync(
         string projectId,
         string runId,
@@ -185,6 +213,9 @@ public static partial class CoordinationEndpoints
                 return Results.Ok(result.Value);
             });
 
+    /// <summary>
+    /// Runs a backlog operation with owner authentication and authority checks before and after the operation.
+    /// </summary>
     private static Task<IResult> ExecuteBacklogOperationAsync(
         string projectId,
         string runId,
@@ -209,6 +240,9 @@ public static partial class CoordinationEndpoints
             return result;
         }, context.RequestAborted);
 
+    /// <summary>
+    /// Maps successful core results to HTTP 200 and validation, missing-task, or conflict issues to their HTTP status.
+    /// </summary>
     private static IResult BacklogResult<T>(BacklogCoreResult<T> result) where T : class
     {
         if (result.IsSuccess)
@@ -233,6 +267,9 @@ public static partial class CoordinationEndpoints
         return Results.Json(new { issues = result.Issues }, statusCode: statusCode);
     }
 
+    /// <summary>
+    /// Carries the authenticated actor, accepted run, and authority revalidation callback to a backlog operation.
+    /// </summary>
     private delegate Task<IResult> BacklogOperation(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -240,19 +277,34 @@ public static partial class CoordinationEndpoints
         CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// Request body for adding a task at a specific backlog graph revision.
+/// </summary>
 public sealed record AddBacklogTaskRequest(string TaskId, long ExpectedGraphRevision);
 
+/// <summary>
+/// Request body for changing a task state with graph and task revision guards.
+/// </summary>
 public sealed record SetBacklogTaskStateRequest(
     BacklogTaskState State,
     long ExpectedGraphRevision,
     long ExpectedTaskRevision);
 
+/// <summary>
+/// Request body for an archive operation guarded by graph and task revisions.
+/// </summary>
 public sealed record BacklogTaskRevisionRequest(
     long ExpectedGraphRevision,
     long ExpectedTaskRevision);
 
+/// <summary>
+/// Request body for changing dependency edges at an expected graph revision.
+/// </summary>
 public sealed record BacklogGraphRevisionRequest(long ExpectedGraphRevision);
 
+/// <summary>
+/// Request body for claiming a task with optimistic revisions and a retry-safe idempotency key.
+/// </summary>
 public sealed record ClaimBacklogTaskRequest(
     long ExpectedGraphRevision,
     long ExpectedTaskRevision,

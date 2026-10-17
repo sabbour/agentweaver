@@ -72,6 +72,10 @@ const useStyles = makeStyles({
   },
 });
 
+/**
+ * Renders the notification bell and its unread notifications from `useNotifications`.
+ * Local state controls the notification surface; the hook owns retrieval and refresh behavior.
+ */
 export function NotificationBell() {
   const styles = useStyles();
   const navigate = useNavigate();

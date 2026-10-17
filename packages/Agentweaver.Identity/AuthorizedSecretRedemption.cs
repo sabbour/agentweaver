@@ -2,6 +2,10 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity;
 
+/// <summary>
+/// Guards a secret backend with fresh, exact grant checks both before and after retrieval.
+/// It invalidates a credential acquired during a concurrent grant change instead of returning it.
+/// </summary>
 // The trusted Identity authorization boundary around ISecretRedemption. It
 // evaluates a server-owned grant for the host-authenticated actor before ever
 // calling the credential backend, re-reads the authority fresh on every
@@ -19,6 +23,11 @@ public sealed class AuthorizedSecretRedemption : ISecretRedemption
     private readonly ISecretRedemption _backend;
     private readonly TimeProvider _timeProvider;
 
+    /// <summary>Composes a trusted actor, live grant authority, and credential backend.</summary>
+    /// <param name="actor">The host-authenticated actor, project, and run.</param>
+    /// <param name="authority">The server-owned grant lookup.</param>
+    /// <param name="backend">The secret retrieval implementation.</param>
+    /// <param name="timeProvider">Optional clock used for grant expiry checks.</param>
     public AuthorizedSecretRedemption(
         TrustedActorContext actor,
         IGrantAuthority authority,
@@ -31,6 +40,11 @@ public sealed class AuthorizedSecretRedemption : ISecretRedemption
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
+    /// <summary>
+    /// Authorizes the exact secret request, acquires it from the backend, and rechecks the
+    /// same grant revision. Any failure after acquisition invalidates the credential.
+    /// </summary>
+    /// <exception cref="SecretAuthorizationDeniedException">No unique active grant matches the request.</exception>
     public async Task<SecretCredential> RedeemAsync(
         SecretRedemptionRequest request, CancellationToken cancellationToken)
     {
@@ -69,6 +83,7 @@ public sealed class AuthorizedSecretRedemption : ISecretRedemption
         }
     }
 
+    /// <summary>Reads and validates one active grant bound to this actor and request.</summary>
     private async Task<SecretRedemptionGrant> AuthorizeAsync(
         SecretRedemptionRequest request, CancellationToken cancellationToken)
     {
@@ -109,6 +124,7 @@ public sealed class AuthorizedSecretRedemption : ISecretRedemption
         return grant;
     }
 
+    /// <summary>Compares all grant bindings and revision fields across the backend await.</summary>
     private static bool SameGrant(SecretRedemptionGrant initial, SecretRedemptionGrant current) =>
         string.Equals(initial.GrantId, current.GrantId, StringComparison.Ordinal) &&
         string.Equals(initial.Revision, current.Revision, StringComparison.Ordinal) &&

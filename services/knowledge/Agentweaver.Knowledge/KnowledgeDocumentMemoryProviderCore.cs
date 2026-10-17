@@ -8,6 +8,8 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Knowledge;
 
+/// <summary>Implements Knowledge record and delivery behavior on a project-partitioned document store.</summary>
+/// <remarks>Derived Cosmos and Redis providers supply negotiation and storage-failure classification.</remarks>
 public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
 {
     private const string RecordDocumentType = "record";
@@ -28,6 +30,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
     private readonly IKnowledgeMemoryDocumentStore _store;
     private readonly TimeProvider _timeProvider;
 
+    /// <summary>Creates the shared provider core with a document store and deterministic clock source.</summary>
     public KnowledgeDocumentMemoryProviderCore(
         IKnowledgeMemoryDocumentStore store,
         ProviderDescriptor descriptor,
@@ -42,6 +45,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
 
     public ProviderDescriptor Descriptor { get; }
 
+    /// <summary>Negotiates the backing resource and capabilities against the selected provider candidate.</summary>
     public abstract Task<ResourceNegotiation> NegotiateAsync(
         ProviderCandidate candidate,
         CancellationToken cancellationToken = default);
@@ -50,6 +54,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
 
     protected abstract bool IsStorageFailure(Exception exception);
 
+    /// <summary>Validates and searches project/agent records with bounded paging and normalized search text.</summary>
     public Task<KnowledgeRecordPage> SearchAsync(
         KnowledgeRecordQuery query,
         CancellationToken cancellationToken = default) =>
@@ -73,6 +78,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
                 .ConfigureAwait(false);
         }, cancellationToken);
 
+    /// <summary>Reads a record from its project partition; returns null when the record does not exist.</summary>
     public Task<KnowledgeRecord?> ReadAsync(
         string projectId,
         Guid recordId,
@@ -90,6 +96,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
             return stored?.Document.Record;
         }, cancellationToken);
 
+    /// <summary>Reads one bounded page of immutable revisions for a record.</summary>
     public Task<KnowledgeRecordRevisionPage> ReadRevisionsAsync(
         string projectId,
         Guid recordId,
@@ -109,6 +116,8 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
                 projectId, recordId, page, pageSize, cancellationToken).ConfigureAwait(false);
         }, cancellationToken);
 
+    /// <summary>Creates a record, first revision, and idempotency receipt in one atomic provider batch.</summary>
+    /// <remarks>A repeated key with the same request returns the saved result; reuse for different input conflicts.</remarks>
     public Task<KnowledgeRecordWriteResult> CreateAsync(
         KnowledgeRecordCreate input,
         string idempotencyKey,
@@ -181,6 +190,8 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
             throw new KnowledgeStorageUnavailableException();
         }, cancellationToken);
 
+    /// <summary>Updates a current record using its expected revision and an atomic compare-and-swap batch.</summary>
+    /// <remarks>Decision updates also advance the project graph sequence and validate replacement links.</remarks>
     public Task<KnowledgeRecordWriteResult> UpdateAsync(
         KnowledgeRecordUpdate input,
         string idempotencyKey,
@@ -328,6 +339,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
             throw new KnowledgeStorageUnavailableException();
         }, cancellationToken);
 
+    /// <summary>Copies a historical Memory or Decision snapshot into a new active, pending-trust revision.</summary>
     public Task<KnowledgeRecordWriteResult> RestoreAsync(
         KnowledgeRecordRestore input,
         string idempotencyKey,
@@ -427,6 +439,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
             throw new KnowledgeStorageUnavailableException();
         }, cancellationToken);
 
+    /// <summary>Approves an active pending or legacy Decision and appends an immutable revision.</summary>
     public Task<KnowledgeRecordWriteResult> ApproveDecisionAsync(
         KnowledgeDecisionApproval input,
         string idempotencyKey,
@@ -503,6 +516,8 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
             throw new KnowledgeStorageUnavailableException();
         }, cancellationToken);
 
+    /// <summary>Builds a complete, validated transfer bundle from records and their full revision chains.</summary>
+    /// <exception cref="KnowledgeApiException">The record or revision totals exceed transfer or atomic-batch limits.</exception>
     public Task<KnowledgeRecordTransferBundle> ExportAsync(
         string projectId,
         string agentId,
@@ -567,6 +582,8 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
             return bundle;
         }, cancellationToken);
 
+    /// <summary>Imports a transfer atomically while preserving source history and creating pending-trust heads.</summary>
+    /// <remarks>Existing record or revision identities are rejected; import never merges an existing history.</remarks>
     public Task<KnowledgeRecordImportResult> ImportAsync(
         KnowledgeRecordTransferBundle input,
         string runId,
@@ -661,6 +678,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
                 "The Knowledge transfer changed during import. Retry with the same idempotency key.");
         }, cancellationToken);
 
+    /// <summary>Rejects a pending Proposal only when it belongs to this run and expected revision.</summary>
     public Task<KnowledgeRecordWriteResult> RejectProposalAsync(
         string projectId,
         string runId,
@@ -746,6 +764,8 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
             throw new KnowledgeStorageUnavailableException();
         }, cancellationToken);
 
+    /// <summary>Promotes a pending Proposal into an approved Decision and creates its accepted-effect receipt.</summary>
+    /// <remarks>The Proposal, Decision, event stream sequence, receipt, and idempotency result share one batch.</remarks>
     public Task<KnowledgeProposalPromotionResult> PromoteProposalAsync(
         string projectId,
         string runId,
@@ -922,6 +942,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
             throw new KnowledgeStorageUnavailableException();
         }, cancellationToken);
 
+    /// <summary>Looks up an accepted-effect receipt by its globally unique ID.</summary>
     public Task<AcceptedEffectReceipt?> ReadAcceptedEffectReceiptAsync(
         Guid receiptId,
         CancellationToken cancellationToken = default) =>
@@ -940,6 +961,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
             return ReadReceipt(matches[0], receiptId);
         }, cancellationToken);
 
+    /// <summary>Reads an accepted-effect receipt only when its project and run match the requested scope.</summary>
     public Task<AcceptedEffectReceipt?> ReadAcceptedEffectReceiptAsync(
         string projectId,
         string runId,
@@ -952,6 +974,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
             return state?.Receipt;
         }, cancellationToken);
 
+    /// <summary>Returns receipt delivery state for its exact project/run scope, or null when not found.</summary>
     public Task<AcceptedEffectDeliveryState?> ReadAcceptedEffectDeliveryAsync(
         string projectId,
         string runId,
@@ -960,6 +983,8 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
         WithStorageAsync(() => ReadDeliveryStateAsync(
             projectId, runId, receiptId, cancellationToken), cancellationToken);
 
+    /// <summary>Claims the next eligible receipt with a time-bounded lease and fencing token.</summary>
+    /// <remarks>Earlier undelivered stream events block later claims, preserving per-run delivery order.</remarks>
     public Task<AcceptedEffectDeliveryLease?> ClaimAcceptedEffectDeliveryAsync(
         string projectId,
         string runId,
@@ -1018,6 +1043,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
             return new AcceptedEffectDeliveryLease(stored.Document.Receipt, token);
         }, cancellationToken);
 
+    /// <summary>Releases a receipt lease only when the caller still owns its fencing token.</summary>
     public Task<bool> ReleaseAcceptedEffectDeliveryAsync(
         string projectId,
         string runId,
@@ -1027,6 +1053,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
         UpdateDeliveryLeaseAsync(
             projectId, runId, receiptId, leaseToken, acknowledge: false, cancellationToken);
 
+    /// <summary>Marks a receipt delivered only when its current lease token and expiry still permit acknowledgement.</summary>
     public Task<bool> AcknowledgeAcceptedEffectDeliveryAsync(
         string projectId,
         string runId,
@@ -1036,6 +1063,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
         UpdateDeliveryLeaseAsync(
             projectId, runId, receiptId, leaseToken, acknowledge: true, cancellationToken);
 
+    /// <summary>Reads approved Decisions, eligible Memory, and the current run's approved session context.</summary>
     public Task<KnowledgeContextCandidates> ReadContextCandidatesAsync(
         string projectId,
         string agentId,
@@ -1107,6 +1135,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
         return stored;
     }
 
+    /// <summary>Fences lease release or acknowledgement against stale worker tokens and competing writers.</summary>
     private async Task<bool> UpdateDeliveryLeaseAsync(
         string projectId,
         string runId,
@@ -1215,6 +1244,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
         return page.Items.SingleOrDefault(item => item.Revision == revision);
     }
 
+    /// <summary>Walks same-agent Decision replacements and rejects missing links, cycles, or overlong chains.</summary>
     private async Task<KnowledgeWriteStatus?> ValidateDecisionReplacementAsync(
         string projectId,
         string sourceAgentId,
@@ -1250,6 +1280,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
             StatusCodes.Status409Conflict);
     }
 
+    /// <summary>Checks that every imported supersession link reaches a valid same-agent Decision without a cycle.</summary>
     private async Task ValidateTransferReplacementGraphAsync(
         KnowledgeRecordTransferBundle bundle,
         CancellationToken cancellationToken)
@@ -1358,6 +1389,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
         return stored;
     }
 
+    /// <summary>Loads the idempotency receipt and rejects a key whose request fingerprint or result kind differs.</summary>
     private async Task<KnowledgeMemoryDocument?> ReadWriteReceiptAsync(
         string projectId,
         string actorFingerprint,
@@ -1494,6 +1526,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
         return receipt;
     }
 
+    /// <summary>Preserves cancellation and API conflicts while mapping provider-specific faults to storage unavailable.</summary>
     private async Task<T> WithStorageAsync<T>(
         Func<Task<T>> operation,
         CancellationToken cancellationToken)
@@ -1526,6 +1559,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
             : JsonSerializer.Deserialize<T>(json, JsonOptions)
                 ?? throw new KnowledgeStorageUnavailableException();
 
+    /// <summary>Hashes canonical JSON so idempotency keys are bound to the exact normalized request.</summary>
     private static string Fingerprint<T>(T value) =>
         Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions)))
             .ToLowerInvariant();
@@ -1604,6 +1638,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
                 StatusCodes.Status400BadRequest);
     }
 
+    /// <summary>Validates receipt authorization facts before they are stored with an accepted effect.</summary>
     private static void ValidateAuthorizationBounds(
         string projectId,
         string runId,
@@ -1676,6 +1711,7 @@ public abstract class KnowledgeDocumentMemoryProviderCore : IMemoryProvider
     }
 }
 
+/// <summary>Builds stable document keys for records, revisions, writes, streams, and accepted effects.</summary>
 internal static class KnowledgeMemoryDocumentIds
 {
     public static string Record(Guid recordId) => $"record:{recordId:N}";

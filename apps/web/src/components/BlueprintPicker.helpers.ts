@@ -3,15 +3,23 @@ import { useEffect, useRef, useState } from 'react';
 import type { Blueprint, BlueprintGenerationJob } from '../api/types';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 
+/** Current blueprint choice, including no selection and generated workflow output. */
 export type BlueprintSelection =
   | { kind: 'none' }
   | { kind: 'predefined'; blueprint: Blueprint }
   | { kind: 'generated'; blueprint: Blueprint; generatedWorkflowYaml?: string | null };
 
+/** Empty blueprint selection used before the user chooses a template. */
 export const NO_BLUEPRINT: BlueprintSelection = { kind: 'none' };
 
+/** Available sections in the blueprint selection panel. */
 export type BlueprintPanelTab = 'suggested' | 'templates' | 'generate';
 
+/**
+ * Coordinates blueprint generation jobs through the blueprint API, including polling, cancel,
+ * and retry. It returns job/result/error state and applies AI execution context updates; a
+ * sequence guard prevents stale requests from overwriting a newer generation.
+ */
 export function useBlueprintGeneration(onChange: (selection: BlueprintSelection) => void, targetRepository?: string | null) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -136,6 +144,10 @@ export function useBlueprintGeneration(onChange: (selection: BlueprintSelection)
   };
 }
 
+/**
+ * Copies the selected predefined or generated blueprint onto an orchestration request.
+ * A `none` selection leaves the request unchanged; the same request object is returned.
+ */
 export function applyBlueprintToRequest<T extends {
   blueprint_id?: string;
   blueprint?: Blueprint;

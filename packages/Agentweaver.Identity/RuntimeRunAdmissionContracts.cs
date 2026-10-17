@@ -5,9 +5,11 @@ using Agentweaver.AgentRuntime;
 
 namespace Agentweaver.Identity;
 
+/// <summary>Request for owner authorization of a run's immutable accepted-selection hash.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeRunAdmissionRequest(int ContractVersion, string AcceptedSelectionHash);
 
+/// <summary>Owner-issued run admission snapshot containing the selected model and initial cost quote.</summary>
 public sealed record RuntimeRunAdmissionReceipt(
     int ContractVersion,
     string TenantId,
@@ -20,8 +22,10 @@ public sealed record RuntimeRunAdmissionReceipt(
     CostPrice Quote,
     UsageRunTotals CopilotTotals);
 
+/// <summary>Validates run admission requests, selection scope, and priced Copilot receipts.</summary>
 public static class RuntimeRunAdmissionContract
 {
+    /// <summary>Requires the supported contract version and a canonical accepted-selection hash.</summary>
     public static void ValidateRequest(RuntimeRunAdmissionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -30,9 +34,11 @@ public static class RuntimeRunAdmissionContract
         RuntimeContractValidation.ValidateHash(request.AcceptedSelectionHash);
     }
 
+    /// <summary>Hashes the exact JSON bytes representing the accepted selection.</summary>
     public static string SelectionHash(JsonElement selection) =>
         RuntimeContractValidation.Hash(System.Text.Encoding.UTF8.GetBytes(selection.GetRawText()));
 
+    /// <summary>Requires the selection to contain the expected project/run and positive revision fields.</summary>
     public static void ValidateSelectionScope(JsonElement selection, string projectId, string runId)
     {
         if (selection.ValueKind != JsonValueKind.Object ||
@@ -54,6 +60,10 @@ public static class RuntimeRunAdmissionContract
             throw new RuntimeAuthorizationException("runtime_run_admission_selection_invalid");
     }
 
+    /// <summary>
+    /// Checks tenant, project, run, selection and hosted-model bindings, then validates the
+    /// initial priced Copilot snapshot and returns its total amount.
+    /// </summary>
     public static decimal ValidateReceipt(
         RuntimeRunAdmissionReceipt receipt, RuntimeRunAdmissionRequest request,
         string tenantId, string projectId, string runId, JsonElement selection)

@@ -37,11 +37,16 @@ import type { AgentLeaderboardEntryDto, ProjectDashboardDto, ProjectMetricsDto, 
 // Workflow-health is intentionally not rendered: the backend omits it because a
 // run row carries no workflow-definition reference (see MetricsDtos.cs).
 
+/**
+ * Project-home dashboard. It combines a summary response with range-specific
+ * metrics, derives an evidence-based health state, and links into work views.
+ */
 const REFRESH_MS = 30000;
 
 type TimeRange = '7d' | '30d' | '90d';
 type HealthTone = 'steady' | 'active' | 'attention' | 'insufficient' | 'quiet';
 
+/** Builds inclusive-looking UTC range boundaries used by the metrics API. */
 function timeRangeDates(range: TimeRange): { from: string; to: string } {
   const to = new Date();
   const from = new Date(to);
@@ -52,6 +57,7 @@ function timeRangeDates(range: TimeRange): { from: string; to: string } {
   return { from: from.toISOString(), to: to.toISOString() };
 }
 
+/** Returns the user-facing label matching the selected range key. */
 function timeRangeLabel(range: TimeRange): string {
   switch (range) {
     case '7d':
@@ -447,6 +453,7 @@ const useStyles = makeStyles({
   },
 });
 
+/** Formats a nullable duration using seconds, minutes, or hours for the table. */
 function formatDuration(ms: number | null): string {
   if (ms == null) return '—';
   const seconds = ms / 1000;
@@ -457,17 +464,23 @@ function formatDuration(ms: number | null): string {
   return `${hours.toFixed(1)}h`;
 }
 
+/** Assigns a severity color to the dashboard's success-rate threshold bands. */
 function successBadgeColor(rate: number): 'success' | 'warning' | 'danger' {
   if (rate >= 80) return 'success';
   if (rate >= 50) return 'warning';
   return 'danger';
 }
 
+/** Avoids implying a measured percentage for agents with no scored runs. */
 function formatSuccessRate(row: AgentLeaderboardEntryDto): string {
   if (row.runsTotal === 0) return '—';
   return `${Math.round(row.successRate)}%`;
 }
 
+/**
+ * Derives the dashboard's project tone from live activity and available quality
+ * evidence; missing telemetry is not treated as evidence of poor health.
+ */
 function statusTone(
   summary: ProjectDashboardDto['summary'],
   leaderboard: AgentLeaderboardEntryDto[],
@@ -488,14 +501,17 @@ function statusTone(
   return 'quiet';
 }
 
+/** Formats a count with the correct singular or plural label. */
 function plural(value: number, singular: string, pluralLabel = `${singular}s`): string {
   return `${value} ${value === 1 ? singular : pluralLabel}`;
 }
 
+/** Reports whether the summary contains any run or task activity. */
 function hasSummaryActivity(summary: ProjectDashboardDto['summary']): boolean {
   return summary.runs_this_week > 0 || summary.tasks_done_this_week > 0 || summary.runs_total > 0;
 }
 
+/** Supplies the copy and badge tone associated with a derived health state. */
 function statusCopy(
   tone: HealthTone,
   summary: ProjectDashboardDto['summary'],
@@ -544,6 +560,7 @@ function statusCopy(
   }
 }
 
+/** Detects non-empty usage or latency data rather than merely present arrays. */
 function hasModelTelemetry(metrics: ProjectMetricsDto | null): boolean {
   return Boolean(
     metrics?.modelUsage?.some((row) => row.invocationCount > 0 || row.totalNanoAiu > 0) ||
@@ -553,6 +570,7 @@ function hasModelTelemetry(metrics: ProjectMetricsDto | null): boolean {
   );
 }
 
+/** Selects the main navigation action appropriate to current project evidence. */
 function primaryActionFor(
   tone: HealthTone,
   summary: ProjectDashboardDto['summary'],
@@ -572,6 +590,7 @@ function primaryActionFor(
   }
 }
 
+/** Selects supporting navigation actions without repeating the primary action. */
 function secondaryActionsFor(
   tone: HealthTone,
   summary: ProjectDashboardDto['summary'],
@@ -583,10 +602,12 @@ function secondaryActionsFor(
   return [{ label: 'Open Board', path: 'board' }, { label: 'Open Flow', path: 'flow' }];
 }
 
+/** Totals a single throughput series across the selected time window. */
 function sumThroughput(points: ThroughputPointDto[], field: 'created' | 'done'): number {
   return points.reduce((sum, point) => sum + point[field], 0);
 }
 
+/** Computes run-weighted success and returns the scored-run count as its evidence base. */
 function averageSuccess(leaderboard: AgentLeaderboardEntryDto[]): { rate: number | null; basis: number } {
   let weighted = 0;
   let total = 0;
@@ -599,6 +620,7 @@ function averageSuccess(leaderboard: AgentLeaderboardEntryDto[]): { rate: number
   return { rate: total ? weighted / total : null, basis: total };
 }
 
+/** Renders created and completed run counts as two lines over the same date axis. */
 function ThroughputChart({ points }: { points: ThroughputPointDto[] }) {
   const W = 720;
   const H = 220;
@@ -638,6 +660,7 @@ function ThroughputChart({ points }: { points: ThroughputPointDto[] }) {
   );
 }
 
+/** Dashboard skeleton shown before the first summary and metrics response arrive. */
 function LoadingDashboard() {
   const styles = useStyles();
   return (
@@ -656,6 +679,8 @@ export function DashboardPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
 
+  // Dashboard summary and analytics are separate API responses; retain their own
+  // state so the range selector can update metrics without conflating summary data.
   const [data, setData] = useState<ProjectDashboardDto | null>(null);
   const [metrics, setMetrics] = useState<ProjectMetricsDto | null>(null);
   const [loading, setLoading] = useState(true);
@@ -672,6 +697,10 @@ export function DashboardPage() {
   const mountedRef = useRef(true);
   const inFlightRef = useRef<AbortController | null>(null);
 
+  /**
+   * Fetches summary and range metrics together. Abort is expected during polling
+   * overlap or range changes and must not become a visible page error.
+   */
   const load = useCallback(async (abortSignal?: AbortSignal) => {
     if (!projectId) return;
     const rangeDates = timeRangeDates(selectedRange);
@@ -701,6 +730,7 @@ export function DashboardPage() {
   // #208 point 5: single shared entry point for the poll tick AND manual refresh/retry clicks —
   // aborts whatever request is still in flight before starting a new one, so overlapping fan-outs
   // (interval firing while a manual refresh is pending, or vice versa) can't stack.
+  /** Aborts any previous poll or manual request before starting a fresh load. */
   const runLoad = useCallback(() => {
     if (!projectId) return;
     inFlightRef.current?.abort();
@@ -710,6 +740,8 @@ export function DashboardPage() {
     void load(controller.signal);
   }, [projectId, load]);
 
+  // Start the poll loop for this project and abort the active request on range
+  // change or unmount so results for the old range cannot overwrite new metrics.
   useEffect(() => {
     if (!projectId) return;
     mountedRef.current = true;
@@ -729,6 +761,8 @@ export function DashboardPage() {
     };
   }, [projectId, load]);
 
+  // Keep health copy, totals, evidence availability, and navigation decisions derived
+  // from the same loaded snapshot rather than recalculating them in the markup.
   const dashboardModel = useMemo(() => {
     if (!data) return null;
     const leaderboard = metrics?.leaderboard ?? [];

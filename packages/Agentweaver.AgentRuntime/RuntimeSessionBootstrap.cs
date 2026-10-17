@@ -3,6 +3,10 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.AgentRuntime;
 
+/// <summary>
+/// Consumes a configure credential, obtains observe and model credentials, loads accepted skill
+/// and recovery material, then creates an authorized Copilot session.
+/// </summary>
 public sealed class RuntimeSessionBootstrap(
     IRuntimeRegistrationOwner owner,
     RuntimeBrokerCredentialClient broker,
@@ -16,6 +20,10 @@ public sealed class RuntimeSessionBootstrap(
     Func<RuntimeRegistration, CancellationToken, Task>? requireReadiness = null,
     RuntimeMcpServerEndpoint? capturedMcpServer = null)
 {
+    /// <summary>
+    /// Creates a session only while owner registration, credentials, model binding, skills,
+    /// placement, and optional resume authority remain unchanged.
+    /// </summary>
     public async Task<AuthorizedRuntimeSession> ConfigureAsync(
         ReadOnlyMemory<byte> configuration,
         RuntimeCredentialProof bootstrap,
@@ -183,6 +191,7 @@ public sealed class RuntimeSessionBootstrap(
         }
     }
 
+    /// <summary>Reads the owner again and fails if the registration changed during bootstrap.</summary>
     private async Task RequireUnchangedAsync(
         RuntimeRegistration expected, CancellationToken cancellationToken)
     {
@@ -192,6 +201,7 @@ public sealed class RuntimeSessionBootstrap(
             throw new RuntimeAuthorizationException("runtime_registration_stale");
     }
 
+    /// <summary>Validates registration shape, active state, expiry, and actor bearer lifetime.</summary>
     internal static void RequireCurrent(
         RuntimeRegistration registration, RuntimeActorAuthorization actor, TimeProvider timeProvider)
     {
@@ -201,6 +211,7 @@ public sealed class RuntimeSessionBootstrap(
             throw new RuntimeAuthorizationException("runtime_registration_unavailable");
     }
 
+    /// <summary>Ensures a broker receipt belongs to this registration and does not outlive it.</summary>
     private static void RequireRegistrationReceipt(
         RuntimeGrantReceipt receipt, RuntimeRegistration registration)
     {
@@ -210,11 +221,13 @@ public sealed class RuntimeSessionBootstrap(
             throw new RuntimeAuthorizationException("runtime_grant_registration_mismatch");
     }
 
+    /// <summary>Builds the observe proof from an exchange that contains a live source credential.</summary>
     private static RuntimeCredentialProof SourceProof(RuntimeCredentialExchange source) =>
         new(source.Receipt.GrantId, source.Receipt.RuntimeInstanceId, source.Receipt.Revision,
             RuntimeCredentialPurpose.Observe, source.Receipt.Audience, source.Receipt.ConfigurationHash,
             source.Credential ?? throw new RuntimeAuthorizationException("runtime_source_credential_unavailable"));
 
+    /// <summary>Compares accepted skills by ID, revision, digest, and count.</summary>
     private static bool SameAcceptedSkills(
         SkillRuntimeContentProjectionV1 expected,
         SkillRuntimeContentProjectionV1 current) =>

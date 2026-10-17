@@ -3,6 +3,7 @@ import { useRunStream } from '../api/sse';
 import { mergeRunEvents } from '../timeline/mergeRunEvents';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { EventType, RunStreamEvent, StreamStatus } from '../api/sse';
+/** Persisted history reconciled with live stream events and snapshot request state. */
 export interface SeededRunStream {
   /** Persisted seed merged under the live SSE deltas. */
   events: RunStreamEvent[];

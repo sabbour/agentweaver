@@ -3,6 +3,7 @@ using Agentweaver.Telemetry;
 
 namespace Agentweaver.FoundationProbe;
 
+/// <summary>Operations needed by the acceptance run, separated from its evidence sequencing and validation.</summary>
 internal interface IProbeOperations
 {
     Task<KeyVaultEvidence> RedeemKeyVaultAsync(ProbeTarget target, string nonce, CancellationToken cancellationToken);
@@ -10,6 +11,7 @@ internal interface IProbeOperations
     Task<PostgresEvidence> WritePostgresEffectsAsync(ProbeTarget target, ProbeSource source, string nonce, CancellationToken cancellationToken);
 }
 
+/// <summary>Runs the probe in a fixed order and emits a receipt only after evidence and telemetry are verified.</summary>
 internal sealed class ProbeRunner(
     IProbeOperations operations,
     Func<bool> forceFlush,
@@ -19,6 +21,8 @@ internal sealed class ProbeRunner(
         new("^[0-9a-f]{32}$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
     private readonly Func<string> _createNonce = createNonce ?? (() => Guid.NewGuid().ToString("N"));
 
+    /// <summary>Validates identity and target bindings, performs each probe operation, and flushes its trace.</summary>
+    /// <exception cref="ProbeException">Identity, evidence, target, or telemetry checks fail.</exception>
     public async Task<ProbeReceipt> RunAsync(
         ProbeTarget target,
         ProbeSource source,
@@ -97,6 +101,7 @@ internal sealed class ProbeRunner(
             new TelemetryEvidence("foundation-probe", traceId, spanId, startedAt));
     }
 
+    /// <summary>Requires secret evidence to name the exact configured vault and secret version.</summary>
     private static void ValidateKeyVaultEvidence(ProbeTarget target, KeyVaultEvidence evidence)
     {
         if (evidence is null || !evidence.Redeemed ||
@@ -107,6 +112,7 @@ internal sealed class ProbeRunner(
             throw new ProbeException("key_vault_evidence_mismatch");
     }
 
+    /// <summary>Requires blob evidence to match the nonce-owned key and confirm cleanup.</summary>
     private static void ValidateBlobEvidence(ProbeTarget target, string nonce, BlobEvidence evidence)
     {
         if (evidence is null || !evidence.CleanupConfirmed ||
@@ -119,6 +125,7 @@ internal sealed class ProbeRunner(
             throw new ProbeException("blob_evidence_mismatch");
     }
 
+    /// <summary>Requires committed database evidence to match the target role, schema, nonce, and event identities.</summary>
     private static void ValidatePostgresEvidence(ProbeTarget target, string nonce, PostgresEvidence evidence)
     {
         if (evidence is null || !evidence.TransactionCommitted ||

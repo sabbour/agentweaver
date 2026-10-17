@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { AzureSlider } from '..';
+/** Demonstrates a controlled numeric slider with formatted values and a disabled state. */
 export function AzureSliderExample() {
   const [cores, setCores] = useState(4);
 
