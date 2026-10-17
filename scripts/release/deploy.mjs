@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { componentImageRepository } from './pack.mjs';
+import { componentImageRepository, componentImageTag } from './pack.mjs';
 import {
   BROKER_RUN_BINDING_ANNOTATION,
   PROJECTS_CONFIG_TLS_CERTIFICATE_PATH,
@@ -321,9 +321,18 @@ export function validatePublicationReceipt(receipt, manifest, sourceSha) {
   }
   const product = manifest.components.filter((component) => component.id !== 'Agentweaver.FoundationProbe');
   const productById = new Map(product.map((component) => [component.id, component]));
-  // Package versions are immutable; unchanged packages may be omitted, but every service image is required.
+  // New receipts identify changed packages; legacy receipts must still prove every package version.
   const services = product.filter((component) => component.kind === 'service');
-  if (receipt.planned.length < services.length || receipt.published.length < services.length) {
+  const packages = product.filter((component) => component.kind !== 'service');
+  const packageIds = new Set(packages.map((component) => component.id));
+  const requiredPackageIds = receipt.requiredPackageIds ?? [...packageIds];
+  if (!Array.isArray(requiredPackageIds) ||
+      new Set(requiredPackageIds).size !== requiredPackageIds.length ||
+      requiredPackageIds.some((id) => !packageIds.has(id))) {
+    fail('publication receipt has an invalid required package selection');
+  }
+  if (receipt.planned.filter((entry) => entry?.kind === 'image').length < services.length ||
+      receipt.published.filter((entry) => entry?.kind === 'image').length < services.length) {
     fail('publication receipt must contain every product service image');
   }
   const planned = new Map();
@@ -338,6 +347,16 @@ export function validatePublicationReceipt(receipt, manifest, sourceSha) {
   }
   if (planned.size !== published.size || [...planned.keys()].some((id) => !published.has(id))) {
     fail('publication plan and result selections differ');
+  }
+  for (const id of requiredPackageIds) {
+    if (!planned.has(id) || !published.has(id)) {
+      fail(`publication receipt does not prove required package ${id}`);
+    }
+  }
+  const plannedPackageIds = [...planned.values()]
+    .filter((entry) => entry.kind === 'package').map((entry) => entry.id).sort();
+  if (JSON.stringify([...requiredPackageIds].sort()) !== JSON.stringify(plannedPackageIds)) {
+    fail('publication plan does not match its required package selection');
   }
   for (const id of planned.keys()) {
     if (!productById.has(id)) fail(`publication receipt contains a non-product component ${id}`);
@@ -356,7 +375,10 @@ export function validatePublicationReceipt(receipt, manifest, sourceSha) {
     }
     if (component.kind === 'service') {
       const expectedImage = `${expectedRepository(component.id)}@${component.imageDigest}`;
-      if (plan.destination !== `${expectedRepository(component.id)}:${component.version}` ||
+      // The original v1.0.0 receipt used version-only tags; current receipts use source-bound tags.
+      const imageTag = receipt.requiredPackageIds === undefined
+        ? component.version : componentImageTag(component.version, sourceSha);
+      if (plan.destination !== `${expectedRepository(component.id)}:${imageTag}` ||
           result.image !== expectedImage || result.archiveSha256 !== plan.sha256 ||
           !DIGEST.test(component.imageDigest)) {
         fail(`publication receipt and release manifest disagree on the published image for ${component.id}`);

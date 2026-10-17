@@ -471,7 +471,10 @@ source SHA, manifest hash, selected components, and artifact files agree, then
 publishes only NuGet packages whose versions changed in the verified receipt,
 plus all ten product service images, to GitHub Packages and `ghcr.io/sabbour`.
 The publisher rechecks artifact hashes and image contracts before its first
-external write.
+external write. Each service image uses a tag containing its component version
+and the full source SHA, so a later receipt cannot move an existing version tag.
+The workflow queues receipt-triggered runs in FIFO order instead of replacing
+an earlier pending release.
 
 The release workflow runs automatically. It has no publish toggle and no
 environment approval. Only `publish` receives `contents: write` and
