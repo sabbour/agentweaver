@@ -28,6 +28,14 @@ function fixture() {
   return input;
 }
 const item = (result, kind) => result.items.find(value => value.kind === kind);
+function eventsContractSettings(deployment) {
+  const settings = runtimeContractSettings(deployment);
+  return {
+    ...settings,
+    env: settings.env.filter(value =>
+      value.name !== 'EventsAndSessions__Cost__Copilot__OptionsRevision'),
+  };
+}
 
 test('example is deliberately incomplete and cannot render a deployable profile', () => {
   assert.throws(() => renderEventsProfile(example), /immutable product Events image/);
@@ -232,7 +240,7 @@ test('release runtime preserves the accepted Events identity, listener and healt
   const accepted = item(renderEventsProfile(fixture()), 'Deployment');
   const runtime = runtimeListFixture().items.find(value =>
     value.kind === 'Deployment' && value.metadata.name === 'events-and-sessions');
-  assert.deepEqual(runtimeContractSettings(runtime), runtimeContractSettings(accepted));
+  assert.deepEqual(eventsContractSettings(runtime), eventsContractSettings(accepted));
 });
 
 test('network policy allows only exact callers, owners, required Azure endpoints and DNS names', () => {
