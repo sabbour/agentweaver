@@ -13,6 +13,10 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      contents: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,6 +28,27 @@ jobs:
             echo "::error::Release publication must run from refs/heads/v1 (got $GITHUB_REF)." >&2
             exit 1
           }
+      - name: Wait for CI and documentation checks on this source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for workflow in v1-ci.yml v1-docs-ci.yml; do
+            run_id=""
+            for attempt in $(seq 1 120); do
+              run_id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" \
+                --commit "$GITHUB_SHA" --json databaseId --jq '.[0].databaseId // empty')
+              if [ -n "$run_id" ]; then
+                break
+              fi
+              sleep 15
+            done
+            if [ -z "$run_id" ]; then
+              echo "::error::No $workflow run found for $GITHUB_SHA." >&2
+              exit 1
+            fi
+            gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
+          done
       - uses: actions/setup-node@v4
         with:
           node-version: '24'

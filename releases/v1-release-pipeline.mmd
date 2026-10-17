@@ -1,5 +1,5 @@
 flowchart LR
-  Bump["Merged version bump and receipt"] --> Validate["Validate composition and changesets"]
+  Bump["Merged version bump and receipt"] --> Validate["Wait for CI; validate composition and changesets"]
   Validate --> Packages["Pack NuGet packages"]
   Validate --> Images["Build product Docker images"]
   Packages --> Artifacts["Upload source-bound artifacts"]

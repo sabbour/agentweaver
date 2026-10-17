@@ -518,9 +518,10 @@ The saved OCI digest remains separate from the actual published registry digest.
 Gateway and MCP use the existing digest-pinned SDK container pattern.
 
 The automated v1 release workflow runs when a version-application receipt is
-committed to `v1`. It validates the manifest and changeset coverage, then
-builds NuGet packages and product Docker images in separate jobs. The image job
-uses the approved build inputs and excludes the acceptance-only Probe. The
+committed to `v1`. It waits for `v1-ci.yml` and `v1-docs-ci.yml` to pass on that
+exact source commit, then validates the manifest and changeset coverage. It
+builds NuGet packages and product Docker images in separate jobs. The image
+job uses the approved build inputs and excludes the acceptance-only Probe. The
 publisher waits for both jobs, verifies their source SHA, manifest hash, and
 artifacts, then writes immutable publication claim/result records and the
 receipt used by local deployment tooling. Only the publisher has

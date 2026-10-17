@@ -897,6 +897,12 @@ test('receipt-triggered release workflow builds separate artifacts and publishes
   const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8').replaceAll('\r\n', '\n');
   assert.match(workflow, /push:\n\s+branches: \[v1\]\n\s+paths:\n\s+-\s+'releases\/receipts\/\*\*'/);
   assert.match(workflow, /workflow_dispatch:/);
+  const validate = workflow.slice(workflow.indexOf('\n  validate:'), workflow.indexOf('\n  packages:'));
+  assert.match(validate, /permissions:\n      actions: read/);
+  assert.match(validate, /Wait for CI and documentation checks on this source/);
+  assert.match(validate, /v1-ci\.yml v1-docs-ci\.yml/);
+  assert.match(validate, /--commit "\$GITHUB_SHA"/);
+  assert.match(validate, /gh run watch "\$run_id" --repo "\$GITHUB_REPOSITORY" --exit-status/);
   assert.match(workflow, /packages:\n\s+needs: validate/);
   assert.match(workflow, /images:\n\s+needs: validate/);
   assert.match(workflow, /publish:\n\s+needs: \[validate, packages, images\]/);

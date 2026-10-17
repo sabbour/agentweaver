@@ -457,7 +457,9 @@ The existing `v1-ci.yml` and `v1-docs-ci.yml` workflows run on pull requests and
 pushes to `v1`. They retain the test, build, lint, coverage, release-composition,
 changeset, and documentation checks. A product version-application receipt
 committed to `v1` triggers `.github/workflows/v1-release-pack.yml`; select the
-`v1` branch to run the same pipeline manually as a fallback.
+`v1` branch to run the same pipeline manually as a fallback. Before building or
+publishing, the release workflow waits for both CI workflows to pass on the
+exact source commit.
 
 The release workflow validates the composition and changeset coverage, then
 starts two independent jobs. `packages` creates the NuGet package artifacts.
@@ -479,7 +481,7 @@ Use the local `release:deploy` command for deployment and live acceptance.
 
 ```mermaid
 flowchart LR
-  Bump["Merged version bump and receipt"] --> Validate["Validate composition and changesets"]
+  Bump["Merged version bump and receipt"] --> Validate["Wait for CI; validate composition and changesets"]
   Validate --> Packages["Pack NuGet packages"]
   Validate --> Images["Build product Docker images"]
   Packages --> Artifacts["Upload source-bound artifacts"]
