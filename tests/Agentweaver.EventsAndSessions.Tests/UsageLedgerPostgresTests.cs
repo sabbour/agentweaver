@@ -869,6 +869,43 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         Assert.Equal(1L, reader.GetInt64(3));
     }
 
+    [Fact]
+    public async Task RunAdmissionAcceptsUnpricedUsageWhenCostProviderIsUnavailable()
+    {
+        var consumer = NativeConsumerWithoutCostProvider();
+        var recorded = await consumer.AppendAsync(
+            NativeReceipt(), _ => Task.CompletedTask, default);
+        Assert.Equal(CostDisposition.Unpriced, recorded.Accounting.Disposition);
+        Assert.Null(recorded.Accounting.Amount);
+        Assert.Equal(CopilotCostProvider.AiCreditUnit, recorded.Accounting.Unit);
+        Assert.Equal("cost-provider-unavailable", recorded.Accounting.UnpricedReason);
+
+        var totals = await _ledger.GetRunTotalsAsync("tenant-1", "project-1", "run-1");
+        Assert.False(totals.IsFullyPriced);
+        var amount = Assert.Single(totals.Amounts);
+        Assert.Equal(CopilotCostProvider.AiCreditUnit, amount.Unit);
+        Assert.Equal(0, amount.Amount);
+        Assert.Equal(0, amount.PricedEvents);
+        Assert.Equal(1, amount.UnpricedEvents);
+
+        var selection = RunAdmissionSelection();
+        var request = new RuntimeRunAdmissionRequest(1, RuntimeRunAdmissionContract.SelectionHash(selection));
+        var clock = new AdmissionClock(DateTimeOffset.UtcNow);
+        using var services = AdmissionAuthentication(clock.GetUtcNow().AddMinutes(1));
+        var context = AdmissionContext(services);
+        var projects = new AdmissionProjectsClient(AdmissionAuthority());
+        using var client = new HttpClient(new AdmissionSelectionHandler(_ => selection));
+        var admission = await AdmissionService(client, projects, clock, consumer: consumer).ReadAsync(
+            context, "project-1", "run-1", request, default);
+
+        Assert.Null(admission.CostBinding);
+        Assert.Equal(CostDisposition.Unpriced, admission.Quote.Disposition);
+        Assert.Equal(CopilotCostProvider.AiCreditUnit, admission.Quote.Unit);
+        Assert.Equal("cost-provider-unavailable", admission.Quote.UnpricedReason);
+        Assert.Equal(0, RuntimeRunAdmissionContract.ValidateReceipt(
+            admission, request, "tenant-1", "project-1", "run-1", selection));
+    }
+
     [Theory]
     [InlineData("gpt-6.1-sol", 0.01572)]
     [InlineData("gpt-6-luna", 0.0007895)]
@@ -975,8 +1012,10 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
 
     private RuntimeRunAdmissionService AdmissionService(
         HttpClient client, IProjectsAuthorizationContextClient projects, TimeProvider clock,
-        string ownerAddress = "https://projects.test/", string modelId = "gpt-6.1-sol") =>
-        new(client, new(ownerAddress, "events-api", "https://identity.test/"), projects, NativeConsumer(),
+        string ownerAddress = "https://projects.test/", string modelId = "gpt-6.1-sol",
+        NativeUsageReceiptConsumer? consumer = null) =>
+        new(client, new(ownerAddress, "events-api", "https://identity.test/"), projects,
+            consumer ?? NativeConsumer(),
             new RuntimeModelBindingsResolver("model-bindings-v1", new Dictionary<string, RuntimeModelBinding>
             {
                 ["accepted-native-reference"] = new(modelId, ModelSourceMode.HostedCopilot)
@@ -1447,7 +1486,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task MissingCostProviderReturnsUnpricedSnapshotNotAFreeQuote()
+    public async Task MissingCostProviderReturnsAnUnpricedSnapshotWithoutInventingACost()
     {
         var native = NativeReceipt();
         var request = new RuntimeUsageCostSnapshotRequest(1, native.Registration, native.Usage.SdkSource!);
@@ -1456,10 +1495,10 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var snapshot = await consumer.ReadCostSnapshotAsync(request, _ => Task.CompletedTask, default);
         Assert.Null(snapshot.Binding);
         Assert.Null(snapshot.Quote.Amount);
+        Assert.Equal(CopilotCostProvider.AiCreditUnit, snapshot.Quote.Unit);
         Assert.Equal(CostDisposition.Unpriced, snapshot.Quote.Disposition);
         Assert.Equal("cost-provider-unavailable", snapshot.Quote.UnpricedReason);
-        Assert.Throws<RuntimeAuthorizationException>(() =>
-            RuntimeUsageCostSnapshotContract.ValidateReceipt(snapshot, request));
+        Assert.Equal(0, RuntimeUsageCostSnapshotContract.ValidateReceipt(snapshot, request));
     }
 
     private NativeUsageReceiptConsumer NativeConsumer()
@@ -1476,6 +1515,11 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
             provider, new(catalog.Value!), NullLogger<CopilotCostProviderBinder>.Instance);
         return new(_fixture.DataSource, options, _ledger, provider, binder);
     }
+
+    private NativeUsageReceiptConsumer NativeConsumerWithoutCostProvider() =>
+        new(_fixture.DataSource,
+            new PostgresSessionsProviderOptions("native-postgres", "test", 1, _schema, "native-options", 1),
+            _ledger);
 
     private static RuntimeUsageCostReconciliationRequest ReconciliationRequest(
         RuntimeUsageSourceReceipt source,

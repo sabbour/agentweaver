@@ -300,7 +300,8 @@ Unavailable providers and missing measurements produce `Unpriced`, not zero cost
 the existing run-pinned binding, a zero-work quote for the actual SDK model, and Copilot-only totals.
 It uses the same Cost lock and transaction as native receipt ingestion.
 This quote does not create a usage event or accounting receipt.
-An empty observed set is zero only when the pinned provider can price that model.
+An empty observed set has a zero priced subtotal without turning an unpriced quote
+into a priced zero.
 Unpriced Copilot entries remain incomplete and visible, but are excluded from the
 priced subtotal used by Copilot credit limits. Other meters do not affect Copilot credit limits.
 The snapshot endpoint rechecks current signed run authority before it commits.

@@ -280,8 +280,8 @@ For a bounded cost turn, Events requires the source receipt's A2A ID to equal th
 Already-weighted nano-AIU is not multiplied again.
 Unknown cost remains `Unpriced`, never zero.
 Before readiness, AgentHost asks Events to verify that the current SDK source can
-be priced against the run's immutable Cost binding. An unpriced result prevents
-readiness and cleans up the prepared session before any model turn.
+be checked against the run's immutable Cost binding. A valid `Unpriced` result
+does not prevent readiness; unavailable or malformed receipts still fail closed.
 
 At a confirmed idle boundary, the runtime captures opaque SDK cache bytes through its custom filesystem.
 Durable cache material records both the optional accepted pin and the server-resolved model-binding
@@ -318,8 +318,9 @@ Before sending, the MAF source path prepares the immutable dispatch row under th
 current registration, root owner, decision, and checkpoint locks.
 It pins the platform intent, complete request hash, source hash, model, and execution fence.
 Exact prepared retries retain that row. A changed binding or an already-sending row denies.
-For configured hosted credit limits, preparation verifies the real Events pricing
-snapshot before it commits the dispatch. Unavailable pricing rejects dispatch start.
+For configured hosted credit limits, preparation verifies the Events cost-preflight
+receipt before it commits the dispatch. An explicit `Unpriced` quote does not block
+readiness or dispatch; an unavailable or malformed receipt still fails closed.
 Begin repeats financial admission before any native work.
 `POST /internal/runtime/turns/begin` requires a previously prepared MAF dispatch.
 It checks the current registration, SDK source, model, request bytes, pending checkpoint,
@@ -329,8 +330,9 @@ at its existing owner revision.
 The admission receipt contains the stable platform message ID, not predicted native IDs.
 A repeated begin cannot resend a dispatch that has already entered `sending`.
 For configured hosted credit limits, begin reads the existing Events pricing snapshot.
-It validates the pinned zero-work quote and fully priced observed Copilot totals.
-Missing or unpriced pricing cannot authorize capped native work.
+It validates the pinned zero-work quote and observed Copilot totals.
+An explicit `Unpriced` quote is accepted; only the known priced subtotal counts toward
+the limit, and missing amounts remain visible instead of being treated as zero.
 The root owner lock serializes admission and its durable observed-credit guard.
 When a valid whole-run pricing snapshot first reaches or exceeds the configured
 soft-credit limit, the guard queues one durable warning event through the existing

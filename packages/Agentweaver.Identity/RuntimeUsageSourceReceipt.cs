@@ -121,8 +121,67 @@ public static class RuntimeUsageCostSnapshotContract
         if (request.Source.SourceMode != "hosted-copilot" ||
             request.Source.MeterSource != SdkMeterSources.CopilotNanoAiu)
             throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_unpriced");
-        return ValidatePricedCopilotSnapshot(receipt.Binding, receipt.Quote, receipt.CopilotTotals,
+        var pricedSubtotal = ValidatePricedCopilotSnapshot(receipt.Binding, receipt.Quote, receipt.CopilotTotals,
             request.Source.ModelId, scope.TenantId, scope.ProjectId, scope.RunId);
+        ValidateRepresentedCopilotTotals(receipt.CopilotTotals, receipt.RepresentedReceipts);
+        return pricedSubtotal;
+    }
+
+    /// <summary>Requires run and agent totals to include every receipt represented by the snapshot.</summary>
+    private static void ValidateRepresentedCopilotTotals(
+        UsageRunTotals totals, ImmutableArray<RuntimeUsageCostReceiptReference> receipts)
+    {
+        if (receipts.IsEmpty)
+            return;
+        try
+        {
+            if (receipts.Any(reference => reference.Accounting.Unit is not (null or "AIC")))
+                throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
+
+            var priced = receipts.Where(reference =>
+                reference.Accounting.Disposition != CostDisposition.Unpriced).ToArray();
+            var unpricedCount = receipts.LongCount(reference =>
+                reference.Accounting.Disposition == CostDisposition.Unpriced);
+            var pricedCount = (long)priced.Length;
+            var pricedAmount = priced.Sum(reference => reference.Accounting.Amount!.Value);
+            if (!IncludesRepresentedAmounts(
+                    totals.Amounts, pricedCount, unpricedCount, pricedAmount))
+                throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
+
+            foreach (var group in receipts.GroupBy(
+                         reference => reference.Accounting.Attribution.AgentId, StringComparer.Ordinal))
+            {
+                var agentTotals = totals.Agents.Where(agent => agent.AgentId == group.Key).ToArray();
+                var agentReceipts = group.ToArray();
+                var agentPriced = agentReceipts.Where(reference =>
+                    reference.Accounting.Disposition != CostDisposition.Unpriced).ToArray();
+                var agentUnpricedCount = agentReceipts.LongCount(reference =>
+                    reference.Accounting.Disposition == CostDisposition.Unpriced);
+                var agentPricedAmount = agentPriced.Sum(reference => reference.Accounting.Amount!.Value);
+                if (agentTotals.Length != 1 || agentTotals[0].Events < agentReceipts.Length ||
+                    !IncludesRepresentedAmounts(
+                        agentTotals[0].Amounts, agentPriced.Length, agentUnpricedCount, agentPricedAmount))
+                    throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
+            }
+        }
+        catch (OverflowException)
+        {
+            throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
+        }
+    }
+
+    private static bool IncludesRepresentedAmounts(
+        ImmutableArray<UsageAmountTotal> amounts,
+        long pricedEvents,
+        long unpricedEvents,
+        decimal pricedAmount)
+    {
+        var copilotAmounts = amounts.Where(amount =>
+            amount.MeterSource == SdkMeterSources.CopilotNanoAiu && amount.Unit == "AIC").ToArray();
+        return copilotAmounts.Length == 1 &&
+            copilotAmounts[0].PricedEvents >= pricedEvents &&
+            copilotAmounts[0].UnpricedEvents >= unpricedEvents &&
+            copilotAmounts[0].Amount >= pricedAmount;
     }
 
     /// <summary>Checks published-rate identity, explicit Unpriced shape, totals, and arithmetic consistency.</summary>
