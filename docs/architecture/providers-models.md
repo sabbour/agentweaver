@@ -170,7 +170,11 @@ role, or agent. An explicit project model selection pins every route for that
 project, preserving the 0.x run-pin behavior. The accepted run stores the
 resolved task/role/agent routes and each distinct model/effort selection.
 Every reference must be present in the immutable run context; an unavailable
-reference fails run acceptance instead of falling back.
+reference fails run acceptance instead of falling back. Platform configurations
+that omit task defaults get the built-in routes. Unless a project pins one
+model, a platform that doesn't offer both default models must replace or clear
+those routes; see
+[Projects configuration](projects-config.md#selection-and-persistence-rules).
 
 The accepted reasoning effort is passed to the native Copilot SDK session and
 is recorded in the runtime binding and durable session material. An accepted
