@@ -1284,6 +1284,11 @@ export function verifyRuntimePrerequisites(runtimeManifest, target, { root, run,
     if (resource.metadata?.name !== reference.name || resource.metadata?.namespace !== target.namespace) {
       fail(`required existing ${reference.kind} ${reference.name} is not in the exact v1 P0 namespace`);
     }
+    // Do not let a deployment consume a runtime ConfigMap until every required value is resolved.
+    if (reference.kind === 'configmap' &&
+        resource.metadata?.annotations?.['agentweaver.io/runtime-config-status'] === 'incomplete') {
+      fail(`${reference.name} is marked incomplete; resolve its runtime inputs before deployment`);
+    }
   }
   const defaultPolicies = parseJson(run('kubectl', ['get', 'networkpolicies.networking.k8s.io',
     '--namespace', target.namespace, '--output', 'json'], { cwd: root }), 'namespace network policies');
