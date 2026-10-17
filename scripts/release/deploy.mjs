@@ -15,7 +15,9 @@ import {
   BROKER_RUN_BINDING_ANNOTATION,
   PROJECTS_CONFIG_TLS_CERTIFICATE_PATH,
   PROJECTS_CONFIG_TLS_KEY_PATH, brokerRunBindingFingerprint,
-  createBrokerRunBindingPolicies, createRuntimeList, validateBrokerRunBinding,
+  createBrokerRunBindingPolicies, createRuntimeList,
+  PROVIDER_ADAPTER_VERSION_RUNTIME_INPUTS, PROVIDER_OPTIONS_REVISION_RUNTIME_INPUTS,
+  validateBrokerRunBinding,
 } from './runtime-list.mjs';
 import { validateManifest } from './validate.mjs';
 import { verifyRegistryImage } from './registry.mjs';
@@ -102,6 +104,7 @@ const BACKEND_TLS_HOSTNAMES = Object.freeze({
 const PROJECTS_CONFIG_HOSTNAME = 'projects-config.agentweaver-v1-p0.svc.cluster.local';
 const SERVER_AUTH_EKU = '1.3.6.1.5.5.7.3.1';
 const BACKEND_TLS_CA_CONFIGMAP = 'service-backend-ca';
+const BOOTSTRAP_RELEASE_TAG = 'v1.0.0';
 /** Maps services to the expected Kubernetes network-policy names. */
 export const SERVICE_NETWORK_POLICY_NAMES = Object.freeze({
   'identity-broker': 'identity-broker-egress',
@@ -156,12 +159,13 @@ function runCommand(file, args, options = {}) {
   return runProcess(file, args, options).stdout.trim();
 }
 
-/** Parses deployment CLI options, including the explicit flag required for mutating execution. */
+/** Parses deployment flags; bootstrap is a separate source-bound mode and writes still require --execute. */
 export function parseArgs(argv = []) {
   const values = {};
   let releaseTag;
   let execute = false;
   let dryRun = false;
+  let preAcceptance = false;
   let resume = false;
   let restart = false;
   let help = false;
@@ -189,6 +193,8 @@ export function parseArgs(argv = []) {
       execute = true;
     } else if (arg === '--dry-run') {
       dryRun = true;
+    } else if (arg === '--pre-acceptance') {
+      preAcceptance = true;
     } else if (arg === '--resume') {
       resume = true;
     } else if (arg === '--restart') {
@@ -213,9 +219,12 @@ export function parseArgs(argv = []) {
     }
   }
 
-  if (help) return { help: true };
+  if (help) return { help: true, preAcceptance };
   if (execute && dryRun) fail('--execute and --dry-run are mutually exclusive');
   if (!RELEASE_TAG.test(releaseTag ?? '')) fail('an exact v1.x.y GitHub release tag is required');
+  if (preAcceptance && releaseTag !== BOOTSTRAP_RELEASE_TAG) {
+    fail(`--pre-acceptance is limited to the exact ${BOOTSTRAP_RELEASE_TAG} publication`);
+  }
   if (resume && restart) fail('--resume and --restart are mutually exclusive');
   if ((resume || restart) && !execute) fail('--resume and --restart require explicit --execute');
   const required = [
@@ -224,6 +233,17 @@ export function parseArgs(argv = []) {
   ];
   const optionNames = new Map([...options].map(([option, key]) => [key, option]));
   for (const key of required) requiredString(values[key], optionNames.get(key));
+  if (preAcceptance) {
+    requiredString(values.completionPath, '--completion');
+    if (values.runtimeManifestPath) {
+      fail('--pre-acceptance must generate the runtime List from the verified receipt');
+    }
+    requiredString(values.providerCatalogConfigMapName, '--provider-catalog-configmap');
+    if (!SHA.test(values.providerCatalogSourceCommit ?? '') ||
+        /^0+$/.test(values.providerCatalogSourceCommit)) {
+      fail('--provider-catalog-source-commit must be a nonzero full Git commit SHA');
+    }
+  }
   if (!values.runtimeManifestPath) {
     requiredString(values.providerCatalogConfigMapName, '--provider-catalog-configmap');
     requiredString(values.providerCatalogSourceCommit, '--provider-catalog-source-commit');
@@ -246,6 +266,7 @@ export function parseArgs(argv = []) {
     dryRun: dryRun || !execute,
     resume,
     restart,
+    preAcceptance,
     help: false,
   };
 }
@@ -301,6 +322,77 @@ export function validatePublishedManifest(manifest, { root, sourceSha }) {
     fail('FoundationProbe is acceptance-only at 0.0.1 and must remain outside product deployment');
   }
   return manifest;
+}
+
+/**
+ * Validates the tracked v1.0.0 draft and adds only its source-bound published image digests.
+ * The draft itself remains unchanged and carries no deployment or persona acceptance claim.
+ */
+export function validateBootstrapManifest(manifest, publication, {
+  root, sourceSha, manifestPath, run,
+}) {
+  if (sourceSha !== PARTIAL_PUBLICATION.sourceSha) {
+    fail('pre-acceptance bootstrap is bound to the exact v1.0.0 source commit');
+  }
+  const canonicalManifestPath = path.resolve(root, 'releases', 'foundation.json');
+  if (path.resolve(root, manifestPath ?? '') !== canonicalManifestPath) {
+    fail('pre-acceptance bootstrap requires the tracked releases/foundation.json manifest');
+  }
+  const trackedPath = run('git', [
+    'ls-tree', '-r', '--full-tree', '--name-only', sourceSha, '--', 'releases/foundation.json',
+  ], { cwd: root });
+  if (trackedPath !== 'releases/foundation.json') {
+    fail('the v1.0.0 draft manifest is not tracked at the exact published source commit');
+  }
+  const sourceManifest = parseJson(run('git', [
+    'show', `${sourceSha}:releases/foundation.json`,
+  ], { cwd: root }), 'source-bound v1.0.0 draft manifest');
+  if (!isDeepStrictEqual(manifest, sourceManifest)) {
+    fail('the supplied draft manifest differs from releases/foundation.json at the published source commit');
+  }
+  validateManifest(manifest, { root });
+  if (manifest.stage !== 'draft' || manifest.evidence !== undefined) {
+    fail('pre-acceptance bootstrap requires the tracked draft without release evidence');
+  }
+
+  const product = manifest.components.filter((component) =>
+    component.id !== 'Agentweaver.FoundationProbe');
+  const ids = product.map((component) => component.id).sort();
+  const expectedIds = [...PRODUCT_COMPONENTS].sort();
+  if (ids.length !== expectedIds.length ||
+      ids.some((id, index) => id !== expectedIds[index])) {
+    fail('the tracked draft must contain exactly the 23 v1.0.0 product components');
+  }
+  for (const component of product) {
+    if (component.version !== '1.0.0') {
+      fail(`${component.id} must remain pinned at the approved product version 1.0.0`);
+    }
+  }
+
+  const deploymentManifest = structuredClone(manifest);
+  for (const id of PRODUCT_SERVICES) {
+    const component = deploymentManifest.components.find((entry) => entry.id === id);
+    const repository = expectedRepository(id);
+    const image = publication?.published?.find((entry) => entry?.id === id)?.image;
+    const digest = typeof image === 'string' && image.startsWith(`${repository}@`)
+      ? image.slice(repository.length + 1)
+      : '';
+    if (!DIGEST.test(digest) || /^sha256:0+$/.test(digest)) {
+      fail(`the source-bound publication receipt has no valid immutable image digest for ${id}`);
+    }
+    component.imageDigest = digest;
+  }
+  return deploymentManifest;
+}
+
+/** Rejects any bootstrap input outside the one published v1.0.0 continuation. */
+function validateBootstrapPublication(tag, publication) {
+  if (tag !== BOOTSTRAP_RELEASE_TAG ||
+      publication?.sourceSha !== PARTIAL_PUBLICATION.sourceSha ||
+      publication.status !== 'published' || !publication.continuation ||
+      typeof publication.continuation !== 'object' || Array.isArray(publication.continuation)) {
+    fail('pre-acceptance bootstrap requires the exact source-bound v1.0.0 published continuation receipt');
+  }
 }
 
 function kindFor(component) {
@@ -430,7 +522,7 @@ export function validatePublicationReceipt(receipt, manifest, sourceSha) {
 }
 
 /** Validates generated Kubernetes resources against the selected immutable images and namespace. */
-export function validateRuntimeManifest(document, images, namespace, brokerRunBinding) {
+export function validateRuntimeManifest(document, images, namespace, brokerRunBinding, providerCatalog) {
   const binding = brokerRunBinding === undefined
     ? undefined
     : validateBrokerRunBinding(brokerRunBinding);
@@ -487,6 +579,36 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
     fail('runtime manifest must include exactly one Service and Deployment for each of the nine shared product services');
   }
 
+  // Projects & Config and Orchestrator must consume the same reviewed catalog snapshot.
+  const catalogReference = (name) => {
+    const pod = deployments.get(name)?.spec?.template;
+    const container = pod?.spec?.containers?.[0];
+    const entries = (container?.envFrom ?? [])
+      .filter(({ prefix }) => prefix === 'ProjectsConfig__ProviderCatalog__');
+    const sourceCommit = pod?.metadata?.annotations?.['agentweaver.io/provider-catalog-source'];
+    if (entries.length !== 1 || typeof entries[0].configMapRef?.name !== 'string' ||
+        entries[0].configMapRef.optional === true ||
+        !SHA.test(sourceCommit ?? '') || /^0+$/.test(sourceCommit)) {
+      fail(`${name} must load one immutable-source Projects provider catalog ConfigMap`);
+    }
+    return { configMapName: entries[0].configMapRef.name, sourceCommit };
+  };
+  const projectsCatalog = catalogReference('projects-config');
+  const expectedCatalog = providerCatalog ?? projectsCatalog;
+  if (typeof expectedCatalog.configMapName !== 'string' ||
+      !/^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)*$/.test(expectedCatalog.configMapName) ||
+      expectedCatalog.configMapName === 'projects-config-runtime-config' ||
+      !SHA.test(expectedCatalog.sourceCommit ?? '') || /^0+$/.test(expectedCatalog.sourceCommit)) {
+    fail('runtime validation requires the exact provider catalog ConfigMap name and source commit');
+  }
+  for (const name of ['projects-config', 'orchestrator']) {
+    const reference = catalogReference(name);
+    if (reference.configMapName !== expectedCatalog.configMapName ||
+        reference.sourceCommit !== expectedCatalog.sourceCommit) {
+      fail(`${name} must consume the exact same provider catalog ConfigMap and source commit`);
+    }
+  }
+
   for (const [name, expected] of expectedNames) {
     const deployment = deployments.get(name);
     const service = services.get(name);
@@ -533,6 +655,21 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
       fail(`${name} must use its existing service identity and a single restricted runtime pod`);
     }
     const container = containers[0];
+    const providerAdapterVersionInputs = PROVIDER_ADAPTER_VERSION_RUNTIME_INPUTS
+      .filter(({ workload }) => workload === name);
+    const providerAdapterVersionNames = new Set(
+      providerAdapterVersionInputs.map(({ name: envName }) => envName));
+    const providerRevisionInputs = PROVIDER_OPTIONS_REVISION_RUNTIME_INPUTS
+      .filter(({ workload }) => workload === name);
+    const providerRevisionNames = new Set(providerRevisionInputs.map(({ name: envName }) => envName));
+    // Runtime adapter versions are pinned to the reviewed catalog descriptor.
+    for (const expectedVersion of providerAdapterVersionInputs) {
+      const matches = (container.env ?? []).filter(({ name: envName }) => envName === expectedVersion.name);
+      if (matches.length !== 1 || matches[0].value !== expectedVersion.value ||
+          matches[0].valueFrom !== undefined) {
+        fail(`${name} must set each exact approved provider AdapterVersion input once`);
+      }
+    }
     if (container.command !== undefined || container.args !== undefined ||
         container.securityContext?.allowPrivilegeEscalation !== false ||
         container.securityContext?.readOnlyRootFilesystem !== true ||
@@ -540,6 +677,18 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
       fail(`${name} must not override its image entrypoint and must retain the restricted container profile`);
     }
     for (const env of container.env ?? []) {
+      if (typeof env.name === 'string' && env.name.endsWith('OptionsRevision')) {
+        const expectedRevision = providerRevisionInputs.find(({ name: envName }) => envName === env.name);
+        if (!expectedRevision || env.value !== expectedRevision.value || env.valueFrom !== undefined) {
+          fail(`${name} may set only its exact approved provider OptionsRevision inputs and values`);
+        }
+      }
+      if (typeof env.name === 'string' && env.name.endsWith('AdapterVersion')) {
+        const expectedVersion = providerAdapterVersionInputs.find(({ name: envName }) => envName === env.name);
+        if (!expectedVersion || env.value !== expectedVersion.value || env.valueFrom !== undefined) {
+          fail(`${name} may set only its exact approved provider AdapterVersion inputs and values`);
+        }
+      }
       if (env.value !== undefined && ![
         'ASPNETCORE_URLS',
         'ASPNETCORE_Kestrel__Certificates__Default__Path',
@@ -548,6 +697,8 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
         'Environment__Sandbox__AgentSandbox__ContainerImage',
         'Environment__Sandbox__AgentSandbox__ContainerImagePlatform',
         'Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes',
+        ...providerAdapterVersionNames,
+        ...providerRevisionNames,
       ].includes(env.name)) {
         fail(`${name} may not embed runtime credentials or operator configuration as literal environment values`);
       }
@@ -572,6 +723,11 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
       if (matches.length !== 1 || typeof matches[0].value !== 'string') return undefined;
       return matches[0].value;
     };
+    for (const expectedRevision of providerRevisionInputs) {
+      if (getEnvValue(expectedRevision.name) !== expectedRevision.value) {
+        fail(`${name} must set its exact approved provider OptionsRevision input ${expectedRevision.name}`);
+      }
+    }
     if (getEnvValue('ASPNETCORE_URLS') !== `${web ? 'http' : 'https'}://+:${portNumber}`) {
       fail(`${name} must explicitly configure its ${scheme} listener`);
     }
@@ -630,7 +786,27 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
         ? 'only MCP and an opted-in Identity Broker may mount the public backend CA ConfigMap'
         : 'only MCP may mount the public backend CA ConfigMap');
     }
+    // Endpoint-selector keys are file configuration because their '/' and ':' are not valid env-var names.
+    const ciliumConfigVolumes = (podSpec.volumes ?? []).filter((volume) =>
+      volume.name === 'cilium-options' || volume.configMap?.name === 'environment-cilium-config');
+    const ciliumConfigMounts = (container.volumeMounts ?? []).filter((mount) =>
+      mount.name === 'cilium-options' || mount.mountPath === '/app/appsettings.Production.json');
     if (name === 'environment') {
+      const ciliumVolume = ciliumConfigVolumes[0];
+      const ciliumMount = ciliumConfigMounts[0];
+      if (ciliumConfigVolumes.length !== 1 ||
+          ciliumVolume.configMap?.name !== 'environment-cilium-config' ||
+          ciliumVolume.configMap.optional === true ||
+          ciliumVolume.configMap.items?.length !== 1 ||
+          ciliumVolume.configMap.items[0].key !== 'appsettings.Production.json' ||
+          ciliumVolume.configMap.items[0].path !== 'appsettings.Production.json' ||
+          ciliumConfigMounts.length !== 1 ||
+          ciliumMount.name !== 'cilium-options' ||
+          ciliumMount.mountPath !== '/app/appsettings.Production.json' ||
+          ciliumMount.subPath !== 'appsettings.Production.json' ||
+          ciliumMount.readOnly !== true) {
+        fail('Environment must mount the exact read-only Cilium options file');
+      }
       if (getEnvValue('Environment__Sandbox__AgentSandbox__ContainerImage') !== hostImage.sandboxImage ||
           getEnvValue('Environment__Sandbox__AgentSandbox__ContainerImagePlatform') !== 'linux/amd64' ||
           getEnvValue('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes') !==
@@ -640,6 +816,8 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
     } else if (environment.some((entry) =>
       entry.name.startsWith('Environment__Sandbox__AgentSandbox__ContainerImage'))) {
       fail('only Environment may configure the per-Sandbox AgentHost image');
+    } else if (ciliumConfigVolumes.length || ciliumConfigMounts.length) {
+      fail('only Environment may mount the Cilium options file');
     }
     for (const [probeName, expectedPath] of [['livenessProbe', '/health/live'], ['readinessProbe', '/health/ready']]) {
       const probe = container[probeName];
@@ -769,10 +947,15 @@ export function verifyExistingP0BrokerRouting(target, { root, run }) {
 }
 
 function checkpointKey(tag, sourceSha, target, identity) {
+  const identityFields = [
+    tag, sourceSha, target.subscriptionId, target.tenantId,
+    target.resourceGroup, target.clusterName, target.namespace, target.nodeMin, target.nodeMax,
+    identity.manifestSha256, identity.runtimeManifestSha256, identity.publicationSha256,
+  ];
+  // Keep bootstrap checkpoints separate without changing existing release checkpoint keys.
+  if (identity.resultType === 'pre-acceptance') identityFields.unshift(identity.resultType);
   return createHash('sha256')
-    .update(JSON.stringify([tag, sourceSha, target.subscriptionId, target.tenantId,
-      target.resourceGroup, target.clusterName, target.namespace, target.nodeMin, target.nodeMax,
-      identity.manifestSha256, identity.runtimeManifestSha256, identity.publicationSha256]))
+    .update(JSON.stringify(identityFields))
     .digest('hex');
 }
 
@@ -791,6 +974,7 @@ function loadCheckpoint(key, identity, io) {
       value.manifestSha256 !== identity.manifestSha256 ||
       value.runtimeManifestSha256 !== identity.runtimeManifestSha256 ||
       value.publicationSha256 !== identity.publicationSha256 ||
+      identity.resultType !== undefined && value.resultType !== identity.resultType ||
       value.stages?.apply?.completed !== true) {
     fail(`deployment checkpoint ${file} is invalid; use --restart after inspecting it`);
   }
@@ -933,12 +1117,19 @@ export async function verifyAgentHostRegistryImage(image, fetchImpl = globalThis
   };
 }
 
-async function verifyRelease(tag, publication, { root, run }) {
+/** Requires a clean, full-SHA checkout before consulting release evidence. */
+function verifyCleanCheckout(root, run, checkoutName = 'release source') {
   const current = run('git', ['rev-parse', 'HEAD'], { cwd: root });
   const dirty = run('git', ['status', '--porcelain'], { cwd: root });
-  if (dirty) fail('the release source checkout must be clean');
-  if (!SHA.test(current)) fail('the local release source HEAD is not a full commit SHA');
+  if (dirty) fail(`the ${checkoutName} checkout must be clean`);
+  if (!SHA.test(current)) fail(`the local ${checkoutName} HEAD is not a full commit SHA`);
+  return current;
+}
 
+/** Confirms the public Release, annotated source tag, and immutable receipt for one source SHA. */
+async function verifyPublishedSource(tag, publication, sourceSha, {
+  root, run, sourceCommitDescription,
+}) {
   const release = parseJson(run('gh', ['api', `repos/${REPOSITORY}/releases/tags/${tag}`], { cwd: root }), 'GitHub Release');
   if (release.tag_name !== tag || release.draft !== false || release.prerelease !== false) {
     fail(`${tag} must identify an existing published, non-prerelease GitHub Release`);
@@ -950,14 +1141,14 @@ async function verifyRelease(tag, publication, { root, run }) {
   }
   const tagObject = parseJson(run('gh', ['api', `repos/${REPOSITORY}/git/tags/${tagRef.object.sha}`], { cwd: root }), 'GitHub annotated tag');
   if (tagObject.tag !== tag || tagObject.object?.type !== 'commit' ||
-      !SHA.test(tagObject.object.sha ?? '') || tagObject.object.sha !== current) {
-    fail(`${tag} must resolve to the exact clean local source commit ${current}`);
+      !SHA.test(tagObject.object.sha ?? '') || tagObject.object.sha !== sourceSha) {
+    fail(`${tag} must resolve to the exact ${sourceCommitDescription} commit ${sourceSha}`);
   }
 
   const resultRefName = publication?.continuation !== undefined
     ? `${PARTIAL_PUBLICATION.namespace}/result`
-    : `agentweaver-publication/${current}/result`;
-  if (publication?.continuation !== undefined && current !== PARTIAL_PUBLICATION.sourceSha) {
+    : `agentweaver-publication/${sourceSha}/result`;
+  if (publication?.continuation !== undefined && sourceSha !== PARTIAL_PUBLICATION.sourceSha) {
     fail('a continuation publication receipt is only valid for the one approved partial release source');
   }
   const resultRef = parseJson(run('gh', ['api', `repos/${REPOSITORY}/git/ref/tags/${encodeURIComponent(resultRefName)}`], { cwd: root }), 'publication result ref');
@@ -965,14 +1156,33 @@ async function verifyRelease(tag, publication, { root, run }) {
     fail('the immutable publication result for this exact source SHA is missing');
   }
   const resultTag = parseJson(run('gh', ['api', `repos/${REPOSITORY}/git/tags/${resultRef.object.sha}`], { cwd: root }), 'publication result tag');
-  if (resultTag.tag !== resultRefName || resultTag.object?.type !== 'commit' || resultTag.object.sha !== current) {
+  if (resultTag.tag !== resultRefName || resultTag.object?.type !== 'commit' || resultTag.object.sha !== sourceSha) {
     fail('the publication result tag is not bound to the exact release source commit');
   }
   const remotePublication = parseJson(resultTag.message, 'publication result message');
   if (JSON.stringify(remotePublication) !== JSON.stringify(publication)) {
     fail('the supplied publication receipt differs from the immutable GitHub publication result');
   }
-  return current;
+  return sourceSha;
+}
+
+async function verifyRelease(tag, publication, { root, run }) {
+  const sourceSha = verifyCleanCheckout(root, run);
+  return verifyPublishedSource(tag, publication, sourceSha, {
+    root, run, sourceCommitDescription: 'clean local source',
+  });
+}
+
+/**
+ * Verifies the one-use v1.0.0 publication while allowing a clean, newer helper checkout.
+ * The image source remains bound to the published annotated tag, not the helper commit.
+ */
+export async function verifyBootstrapRelease(tag, publication, { root, run }) {
+  verifyCleanCheckout(root, run, 'deployment helper');
+  validateBootstrapPublication(tag, publication);
+  return verifyPublishedSource(tag, publication, PARTIAL_PUBLICATION.sourceSha, {
+    root, run, sourceCommitDescription: 'published source',
+  });
 }
 
 function projectAksTargetReadback(value) {
@@ -1463,13 +1673,35 @@ and the exact merged helper PR. No environment approval history is required.
 `;
 }
 
+/** Shows the source-bound bootstrap contract without implying release acceptance. */
+function bootstrapHelpText() {
+  return `release:deploy-bootstrap -- verify or deploy the published v1.0.0 before live acceptance
+
+Usage:
+  npm run release:deploy-bootstrap -- v1.0.0 --manifest releases/foundation.json --publication <publication.json> --completion <continuation.json> --subscription-id <id> --tenant-id <id> --resource-group aw-v1-p0 --cluster aw-v1-p0-aks --namespace agentweaver-v1-p0 --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
+
+The default is a read-only pre-acceptance dry-run. This mode accepts only the
+source-bound v1.0.0 published receipt, its immutable continuation result, and
+the tracked draft manifest. It never creates release acceptance evidence.
+`;
+}
+
 /**
  * Validates release inputs and prerequisites, then optionally deploys and verifies the live workloads.
  * Without explicit execution approval it performs verification only; mismatches stop the release flow.
  */
 export async function deployRelease(options = {}, dependencies = {}) {
   const parsed = options.argv ? parseArgs(options.argv) : options;
-  if (parsed.help) return { ok: true, help: true, text: helpText() };
+  if (parsed.help) {
+    return {
+      ok: true,
+      help: true,
+      text: parsed.preAcceptance ? bootstrapHelpText() : helpText(),
+    };
+  }
+  if (parsed.preAcceptance && (parsed.runtimeManifestPath || options.runtimeManifest)) {
+    fail('--pre-acceptance must generate the runtime List from the verified receipt');
+  }
   if (!parsed.target) fail('explicit P0 target is required');
   validateTarget(parsed.target);
   if (!RELEASE_TAG.test(parsed.releaseTag ?? '')) fail('an exact v1.x.y GitHub release tag is required');
@@ -1494,15 +1726,33 @@ export async function deployRelease(options = {}, dependencies = {}) {
     (parsed.runtimeManifestPath
       ? parseJson(readFile(path.resolve(root, parsed.runtimeManifestPath), 'utf8'), 'runtime manifest')
       : undefined);
+  if (parsed.preAcceptance) validateBootstrapPublication(parsed.releaseTag, publication);
 
-  const sourceSha = await (dependencies.verifyRelease ?? verifyRelease)(parsed.releaseTag, publication, { root, run });
-  validatePublishedManifest(manifest, { root, sourceSha });
-  if (completion || publication.continuation !== undefined) {
-    if (!completion) fail('a continuation publication receipt requires an explicit --completion proof');
-    verifyPartialPublicationCompletion(completion, publication, sourceSha,
-      (file, args, input) => run(file, args, input === undefined ? {} : { input }));
-  }
-  const images = validatePublicationReceipt(publication, manifest, sourceSha);
+  const verifyCompletion = dependencies.verifyCompletion ??
+    ((receipt, published, source) => verifyPartialPublicationCompletion(receipt, published, source,
+      (file, args, input) => run(file, args, input === undefined ? {} : { input })));
+  const verifySource = async () => {
+    const source = parsed.preAcceptance
+      ? await (dependencies.verifyBootstrapRelease ?? verifyBootstrapRelease)(
+        parsed.releaseTag, publication, { root, run })
+      : await (dependencies.verifyRelease ?? verifyRelease)(
+        parsed.releaseTag, publication, { root, run });
+    if (parsed.preAcceptance) {
+      if (!completion) fail('pre-acceptance bootstrap requires its exact continuation completion proof');
+      await verifyCompletion(completion, publication, source);
+    } else if (completion || publication.continuation !== undefined) {
+      if (!completion) fail('a continuation publication receipt requires an explicit --completion proof');
+      await verifyCompletion(completion, publication, source);
+    }
+    return source;
+  };
+  const sourceSha = await verifySource();
+  const deploymentManifest = parsed.preAcceptance
+    ? validateBootstrapManifest(manifest, publication, {
+      root, sourceSha, manifestPath: parsed.manifestPath, run,
+    })
+    : validatePublishedManifest(manifest, { root, sourceSha });
+  const images = validatePublicationReceipt(publication, deploymentManifest, sourceSha);
   const verifyImages = dependencies.verifyImages ?? (async (refs) => {
     const result = new Map();
     for (const image of refs) {
@@ -1520,11 +1770,17 @@ export async function deployRelease(options = {}, dependencies = {}) {
   });
   let acceptedDigests = await verifyImages(images);
   verifyMeasuredAgentHostDigest(images, acceptedDigests);
-  const runtimeList = runtimeDocument ?? createRuntimeList(images, parsed.target.namespace, {
-    configMapName: parsed.providerCatalogConfigMapName,
-    sourceCommit: parsed.providerCatalogSourceCommit,
-  });
-  const runtimeManifest = validateRuntimeManifest(runtimeList, images, parsed.target.namespace);
+  // Supplied runtime Lists carry their own catalog identity; generated Lists require explicit CLI values.
+  const providerCatalog = parsed.providerCatalogConfigMapName === undefined &&
+    parsed.providerCatalogSourceCommit === undefined
+    ? undefined
+    : {
+      configMapName: parsed.providerCatalogConfigMapName,
+      sourceCommit: parsed.providerCatalogSourceCommit,
+    };
+  const runtimeList = runtimeDocument ?? createRuntimeList(images, parsed.target.namespace, providerCatalog);
+  const runtimeManifest = validateRuntimeManifest(
+    runtimeList, images, parsed.target.namespace, undefined, providerCatalog);
   verifyImageIds(runtimeManifest, images);
   const targetInfo = await (dependencies.verifyTarget ?? verifyAzureTarget)(parsed.target, { root, run });
   (dependencies.verifyPrerequisites ?? verifyRuntimePrerequisites)(runtimeManifest, parsed.target, { root, run });
@@ -1537,6 +1793,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
     return {
       ok: true,
       dryRun: true,
+      ...(parsed.preAcceptance ? { resultType: 'pre-acceptance' } : {}),
       sourceSha,
       target: parsed.target,
       services: images.filter((image) => image.id !== 'Agentweaver.AgentHost')
@@ -1548,6 +1805,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
   }
 
   const identity = {
+    ...(parsed.preAcceptance ? { resultType: 'pre-acceptance' } : {}),
     releaseTag: parsed.releaseTag,
     sourceSha,
     target: parsed.target,
@@ -1586,7 +1844,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
 
   // Resume never skips current target, release, image, rollout, pod or health checks.
   validateTarget(parsed.target);
-  const freshSourceSha = await (dependencies.verifyRelease ?? verifyRelease)(parsed.releaseTag, publication, { root, run });
+  const freshSourceSha = await verifySource();
   if (freshSourceSha !== sourceSha) fail('release source changed during deployment');
   acceptedDigests = await verifyImages(images);
   verifyMeasuredAgentHostDigest(images, acceptedDigests);
@@ -1600,6 +1858,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
     ok: true,
     dryRun: false,
     resumed: parsed.resume && applied,
+    ...(parsed.preAcceptance ? { resultType: 'pre-acceptance' } : {}),
     sourceSha,
     services: deployedImages.map(({ id }) => id),
     perSandboxAgentHost: images.find((image) => image.id === 'Agentweaver.AgentHost').sandboxImage,
@@ -1611,7 +1870,15 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const result = await deployRelease({ argv: process.argv.slice(2) });
     if (result.help) console.log(result.text);
     else if (result.dryRun) {
-      console.log(`Read-only dry-run validated ${result.services.length} product images and ${result.renderedResources} runtime resources at ${result.sourceSha}.`);
+      const prefix = result.resultType === 'pre-acceptance'
+        ? 'Read-only pre-acceptance dry-run'
+        : 'Read-only dry-run';
+      console.log(`${prefix} validated ${result.services.length} product images and ${result.renderedResources} runtime resources at ${result.sourceSha}.`);
+      if (result.resultType === 'pre-acceptance') {
+        console.log('No release acceptance evidence was recorded.');
+      }
+    } else if (result.resultType === 'pre-acceptance') {
+      console.log(`Pre-acceptance bootstrap deployment and live verification completed for ${result.services.length} product services at ${result.sourceSha}. This is not a release acceptance result.`);
     } else {
       console.log(`Deployment and live verification completed for ${result.services.length} product services at ${result.sourceSha}.`);
     }

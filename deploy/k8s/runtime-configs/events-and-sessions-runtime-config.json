@@ -1,0 +1,40 @@
+{
+  "apiVersion": "v1",
+  "kind": "ConfigMap",
+  "metadata": {
+    "name": "events-and-sessions-runtime-config",
+    "namespace": "agentweaver-v1-p0",
+    "annotations": {
+      "agentweaver.io/runtime-config-status": "incomplete"
+    }
+  },
+  "immutable": true,
+  "data": {
+    "ConnectionStrings__EventsAndSessions": "Host=aw-v1-p0-pg.postgres.database.azure.com;Port=5432;Database=agentweaver;Username=aw-v1-p0-id-events-and-sessions;SSL Mode=VerifyFull",
+    "EventsAndSessions__Database__WorkloadIdentity__TenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47",
+    "EventsAndSessions__Database__WorkloadIdentity__ClientId": "3ab39eda-7389-4b5e-b5b6-232d7671e012",
+    "EventsAndSessions__Database__WorkloadIdentity__TokenFilePath": "/var/run/secrets/azure/tokens/azure-identity-token",
+    "Identity__Issuer": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
+    "Identity__Audience": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
+    "EventsAndSessions__Provider__DatabaseName": "agentweaver",
+    "EventsAndSessions__Provider__Schema": "events_sessions",
+    "EventsAndSessions__Provider__OptionsSchemaVersion": "1",
+    "EventsAndSessions__Provider__OptionsRevision": "native-postgres-v1",
+    "EventsAndSessions__Provider__PollIntervalMilliseconds": "250",
+    "EventsAndSessions__Provider__ReferenceRetentionDays": "365",
+    "EventsAndSessions__Messaging__OptionsSchemaVersion": "1",
+    "EventsAndSessions__Messaging__OptionsRevision": "native-postgres-messaging-v1",
+    "EventsAndSessions__Messaging__ClaimLeaseSeconds": "120",
+    "EventsAndSessions__Messaging__MaximumMessageLifetimeDays": "1",
+    "EventsAndSessions__Cost__Copilot__OptionsSchemaVersion": "1",
+    "EventsAndSessions__Cost__Copilot__RateCard__MeterSource": "copilot.nano_aiu",
+    "EventsAndSessions__Cost__Copilot__RateCard__Unit": "AIC",
+    "EventsAndSessions__Cost__Copilot__RateCard__NanoUnitsPerUnit": "1000000000",
+    "EventsAndSessions__Knowledge__BaseAddress": "https://knowledge.agentweaver-v1-p0.svc.cluster.local:8443/",
+    "ProjectsConfig__BaseAddress": "https://projects-config.agentweaver-v1-p0.svc.cluster.local:8443/",
+    "ProjectsConfig__AuthorizationContext__OwnerBaseAddress": "https://projects-config.agentweaver-v1-p0.svc.cluster.local:8443/",
+    "ProjectsConfig__AuthorizationContext__Audience": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
+    "EventsAndSessions__OrchestratorOwner__OwnerBaseAddress": "https://orchestrator.agentweaver-v1-p0.svc.cluster.local:8443/",
+    "EventsAndSessions__OrchestratorOwner__Audience": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/"
+  }
+}

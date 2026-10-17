@@ -168,6 +168,17 @@ runs cannot replace an earlier pending release.
 
 GitHub Actions never deploys to Azure or AKS. Use the local `release:deploy`
 command for deployment and live acceptance.
+For the first v1.0.0 P0 rollout, `release:deploy-bootstrap` accepts only the
+source-bound published receipt, its immutable continuation proof, and the
+tracked draft manifest. Its verified result is pre-acceptance only; it does not
+replace or weaken `release:deploy`, which remains the strict gate after live
+deployment and API, UI, and MCP persona evidence exist. The three checked-in
+P0 service ConfigMap snapshots are currently marked incomplete and must not be
+applied or used for rollout until every unresolved input has an authoritative
+source. The [P0 Kubernetes input inventory](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md#p0-runtime-configmap-snapshots)
+records their provenance and future apply order. Pass the catalog PR merge
+commit as `--provider-catalog-source-commit`; the catalog snapshot separately
+records the published product source.
 The source contains a prepared platform release composition, not an actual deployment or live acceptance gate. Release preparation does not prove Azure acceptance.
 
 ## One-use v1.0.0 completion

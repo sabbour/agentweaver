@@ -17,12 +17,14 @@ import {
   verifyLiveDeployment,
   verifyRegistryImage,
   verifyAzureTarget,
+  verifyBootstrapRelease,
 } from '../deploy.mjs';
 import { componentImageRepository, componentImageTag } from '../pack.mjs';
 import {
   brokerRunBindingFingerprint, createBrokerRunBindingPolicies, createRuntimeList,
   validateBrokerRunBinding,
 } from '../runtime-list.mjs';
+import { PARTIAL_PUBLICATION } from '../partial-publication-contract.mjs';
 import { run as runProcess } from '../../azure/lib/exec.mjs';
 import { projectIdentityRoutingReadback } from '../../azure/lib/identity-broker-routing.mjs';
 
@@ -83,11 +85,11 @@ function releaseManifest() {
   return manifest;
 }
 
-function publicationReceipt(manifest = releaseManifest()) {
+function publicationReceipt(manifest = releaseManifest(), receiptSourceSha = sourceSha) {
   const product = manifest.components.filter(({ id }) => id !== 'Agentweaver.FoundationProbe');
   return {
     schemaVersion: 1,
-    sourceSha,
+    sourceSha: receiptSourceSha,
     provenanceSha256: 'b'.repeat(64),
     status: 'published',
     requiredPackageIds: product.filter((component) => component.kind !== 'service')
@@ -100,7 +102,7 @@ function publicationReceipt(manifest = releaseManifest()) {
         kind: isService ? 'image' : 'package',
         sha256: 'c'.repeat(64),
         destination: isService
-          ? `ghcr.io/sabbour/${componentImageRepository(component.id)}:${componentImageTag(component.version, sourceSha)}`
+          ? `ghcr.io/sabbour/${componentImageRepository(component.id)}:${componentImageTag(component.version, receiptSourceSha)}`
           : 'https://nuget.pkg.github.com/sabbour/index.json',
       };
     }),
@@ -122,7 +124,7 @@ function publicationReceipt(manifest = releaseManifest()) {
               preparedOciMeasurement: {
                 kind: 'agenthost-image',
                 schemaVersion: 1,
-                sourceSha,
+                sourceSha: receiptSourceSha,
                 sourceTree: 'f'.repeat(40),
                 image: {
                   digest: `sha256:${'a'.repeat(64)}`,
@@ -139,6 +141,20 @@ function publicationReceipt(manifest = releaseManifest()) {
       };
     }),
   };
+}
+
+function bootstrapFixture() {
+  const manifest = JSON.parse(readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8'));
+  const publishedManifest = structuredClone(manifest);
+  for (const component of publishedManifest.components) {
+    if (component.kind === 'service' && component.id !== 'Agentweaver.FoundationProbe') {
+      const nibble = (component.id.charCodeAt(0) % 15 + 1).toString(16);
+      component.imageDigest = `sha256:${nibble.repeat(64)}`;
+    }
+  }
+  const publication = publicationReceipt(publishedManifest, PARTIAL_PUBLICATION.sourceSha);
+  publication.continuation = { namespace: PARTIAL_PUBLICATION.namespace };
+  return { manifest, publication, completion: structuredClone(publication) };
 }
 
 function publishedAgentHostFixture(mutateConfig = () => {}) {
@@ -259,6 +275,67 @@ const argsFor = (overrides = {}) => [
   ...Object.entries(overrides).flatMap(([key, value]) => [`--${key}`, value]),
 ];
 
+const bootstrapArgsFor = (overrides = {}) => [
+  '--pre-acceptance',
+  'v1.0.0',
+  '--manifest', 'releases/foundation.json',
+  '--publication', 'publication.json',
+  '--completion', 'completion.json',
+  '--subscription-id', target.subscriptionId,
+  '--tenant-id', target.tenantId,
+  '--resource-group', target.resourceGroup,
+  '--cluster', target.clusterName,
+  '--namespace', target.namespace,
+  '--node-min', String(target.nodeMin),
+  '--node-max', String(target.nodeMax),
+  '--provider-catalog-configmap', 'projects-config-provider-catalog',
+  '--provider-catalog-source-commit', 'd'.repeat(40),
+  ...Object.entries(overrides).flatMap(([key, value]) => [`--${key}`, value]),
+];
+
+function bootstrapDependencies(fixture, overrides = {}) {
+  const commands = [];
+  const dependencies = {
+    root,
+    readFile: (file, encoding) => {
+      if (path.resolve(file) === path.join(root, 'releases', 'foundation.json')) {
+        return JSON.stringify(fixture.manifest);
+      }
+      if (path.resolve(file) === path.join(root, 'publication.json')) {
+        return JSON.stringify(fixture.publication);
+      }
+      if (path.resolve(file) === path.join(root, 'completion.json')) {
+        return JSON.stringify(fixture.completion);
+      }
+      return readFileSync(file, encoding);
+    },
+    verifyBootstrapRelease: async () => PARTIAL_PUBLICATION.sourceSha,
+    verifyCompletion: (completion, publication, source) => {
+      assert.deepEqual(completion, publication);
+      assert.equal(source, PARTIAL_PUBLICATION.sourceSha);
+    },
+    verifyImages: async (images) => new Map(images.map((image) => [
+      image.name,
+      new Set([
+        image.image.slice(image.image.lastIndexOf('@') + 1),
+        ...(image.sandboxImageDigest ? [image.sandboxImageDigest] : []),
+      ]),
+    ])),
+    verifyTarget: async () => ({ exact: true }),
+    verifyPrerequisites: () => undefined,
+    run: (file, args, options) => {
+      if (file === 'git' && args[0] === 'ls-tree') return 'releases/foundation.json';
+      if (file === 'git' && args[0] === 'show') return JSON.stringify(fixture.manifest);
+      if (file === 'kubectl' && args[0] === 'apply' && args[1] === '--dry-run=client') {
+        commands.push({ file, args, input: options.input });
+        return '';
+      }
+      assert.fail(`unexpected command: ${file} ${args.join(' ')}`);
+    },
+  };
+  return { ...dependencies, ...overrides, commands };
+}
+
 test('P0 target and every required deployment target input are explicit and exact', () => {
   assert.deepEqual(validateTarget(target), target);
   assert.throws(() => validateTarget({ ...target, subscriptionId: '0'.repeat(36) }), /exact approved v1 P0/);
@@ -275,6 +352,132 @@ test('P0 target and every required deployment target input are explicit and exac
     '--provider-catalog-source-commit', sourceSha);
   assert.equal(parseArgs(generatedListArgs).runtimeManifestPath, undefined);
   assert.throws(() => parseArgs([...argsFor(), '--execute', '--dry-run']), /mutually exclusive/);
+});
+
+test('pre-acceptance mode is explicit and requires its exact v1.0.0 inputs', () => {
+  const parsed = parseArgs(bootstrapArgsFor());
+  assert.equal(parsed.preAcceptance, true);
+  assert.equal(parsed.releaseTag, 'v1.0.0');
+  assert.equal(parsed.dryRun, true);
+  assert.throws(() => parseArgs(bootstrapArgsFor({ 'cluster': 'other-cluster' })), /exact approved v1 P0/);
+  assert.throws(() => parseArgs(bootstrapArgsFor().filter((value, index, values) =>
+    value !== '--completion' && values[index - 1] !== '--completion')), /--completion is required/);
+  assert.throws(() => parseArgs([...bootstrapArgsFor(), '--runtime-manifest', 'runtime.json']),
+    /must generate the runtime List/);
+  const wrongTag = bootstrapArgsFor();
+  wrongTag[wrongTag.indexOf('v1.0.0')] = 'v1.0.1';
+  assert.throws(() => parseArgs(wrongTag), /limited to the exact v1.0.0/);
+});
+
+test('pre-acceptance dry-run accepts only the tracked draft and returns a non-release result', async () => {
+  const fixture = bootstrapFixture();
+  const dependencies = bootstrapDependencies(fixture);
+  const result = await deployRelease({ argv: bootstrapArgsFor() }, dependencies);
+  assert.equal(result.resultType, 'pre-acceptance');
+  assert.equal(result.sourceSha, PARTIAL_PUBLICATION.sourceSha);
+  assert.equal(result.dryRun, true);
+  assert.equal(result.renderedResources, 18);
+  assert.equal('acceptedRelease' in result, false);
+  assert.doesNotMatch(JSON.stringify(result), /"stage":"release"/);
+  assert.equal(dependencies.commands.length, 1);
+  assert.deepEqual(dependencies.commands[0].args,
+    ['apply', '--dry-run=client', '--filename', '-']);
+});
+
+test('pre-acceptance execute and resume retain a separately labeled checkpoint', async () => {
+  const fixture = bootstrapFixture();
+  const dependencies = bootstrapDependencies(fixture);
+  const originalRun = dependencies.run;
+  let checkpoint;
+  let applies = 0;
+  let liveChecks = 0;
+  let clears = 0;
+  dependencies.run = (file, args, options) => {
+    if (file === 'kubectl' && args[0] === 'apply' && args[1] === '--filename') {
+      applies++;
+      return '';
+    }
+    return originalRun(file, args, options);
+  };
+  Object.assign(dependencies, {
+    checkpointDirectory: path.join(root, 'bootstrap-checkpoint-fixture'),
+    checkpointMkdir: () => undefined,
+    checkpointWriteFile: (_file, text) => { checkpoint = text; },
+    checkpointReadFile: () => checkpoint,
+    checkpointRm: () => { clears++; },
+    verifyLive: async () => { liveChecks++; },
+  });
+  const first = await deployRelease({ argv: [...bootstrapArgsFor(), '--execute'] }, dependencies);
+  assert.equal(first.resultType, 'pre-acceptance');
+  const saved = JSON.parse(checkpoint);
+  assert.equal(saved.resultType, 'pre-acceptance');
+  assert.equal(saved.sourceSha, PARTIAL_PUBLICATION.sourceSha);
+
+  const resumed = await deployRelease({
+    argv: [...bootstrapArgsFor(), '--execute', '--resume'],
+  }, dependencies);
+  assert.equal(resumed.resultType, 'pre-acceptance');
+  assert.equal(resumed.resumed, true);
+  assert.equal(applies, 1);
+  assert.equal(liveChecks, 2);
+  assert.equal(clears, 2);
+});
+
+test('pre-acceptance rejects a receipt bound to another source before verification', async () => {
+  const fixture = bootstrapFixture();
+  fixture.publication.sourceSha = 'b'.repeat(40);
+  const dependencies = bootstrapDependencies(fixture);
+  await assert.rejects(deployRelease({ argv: bootstrapArgsFor() }, dependencies),
+    /exact source-bound v1.0.0 published continuation receipt/);
+});
+
+test('pre-acceptance rejects a missing publication receipt file', async () => {
+  const fixture = bootstrapFixture();
+  const args = bootstrapArgsFor();
+  args[args.indexOf('publication.json')] = 'missing-publication.json';
+  await assert.rejects(deployRelease({ argv: args }, bootstrapDependencies(fixture)), /ENOENT/);
+});
+
+test('pre-acceptance rejects a receipt that differs from the immutable result', async () => {
+  const fixture = bootstrapFixture();
+  const tagObjectSha = '1'.repeat(40);
+  const resultObjectSha = '2'.repeat(40);
+  const changedPublication = {
+    ...fixture.publication,
+    provenanceSha256: 'f'.repeat(64),
+  };
+  const run = (file, args) => {
+    if (file === 'git' && args[0] === 'rev-parse') return 'e'.repeat(40);
+    if (file === 'git' && args[0] === 'status') return '';
+    if (file === 'gh' && args[0] === 'api') {
+      const endpoint = args[1];
+      if (endpoint.endsWith('/releases/tags/v1.0.0')) {
+        return JSON.stringify({ tag_name: 'v1.0.0', draft: false, prerelease: false });
+      }
+      if (endpoint.endsWith(`/git/ref/tags/${encodeURIComponent('v1.0.0')}`)) {
+        return JSON.stringify({ object: { type: 'tag', sha: tagObjectSha } });
+      }
+      if (endpoint.endsWith(`/git/tags/${tagObjectSha}`)) {
+        return JSON.stringify({
+          tag: 'v1.0.0',
+          object: { type: 'commit', sha: PARTIAL_PUBLICATION.sourceSha },
+        });
+      }
+      if (endpoint.endsWith(`/git/ref/tags/${encodeURIComponent(`${PARTIAL_PUBLICATION.namespace}/result`)}`)) {
+        return JSON.stringify({ object: { type: 'tag', sha: resultObjectSha } });
+      }
+      if (endpoint.endsWith(`/git/tags/${resultObjectSha}`)) {
+        return JSON.stringify({
+          tag: `${PARTIAL_PUBLICATION.namespace}/result`,
+          object: { type: 'commit', sha: PARTIAL_PUBLICATION.sourceSha },
+          message: JSON.stringify(changedPublication),
+        });
+      }
+    }
+    assert.fail(`unexpected command: ${file} ${args.join(' ')}`);
+  };
+  await assert.rejects(verifyBootstrapRelease('v1.0.0', fixture.publication, { root, run }),
+    /differs from the immutable GitHub publication result/);
 });
 
 test('a draft or altered product manifest cannot pass published-release validation', () => {
@@ -403,6 +606,22 @@ test('runtime manifest requires nine shared workloads and pins AgentHost through
   assert.ok(projects.spec.containers[0].envFrom.some(({ prefix, configMapRef }) =>
     prefix === 'ProjectsConfig__ProviderCatalog__' &&
     configMapRef?.name === 'projects-config-provider-catalog' && configMapRef.optional === false));
+  // The source-control resolver and Projects & Config must consume the same catalog snapshot.
+  const orchestrator = item('Deployment', 'orchestrator').spec.template;
+  assert.equal(orchestrator.metadata.annotations['agentweaver.io/provider-catalog-source'], sourceSha);
+  assert.ok(orchestrator.spec.containers[0].envFrom.some(({ prefix, configMapRef }) =>
+    prefix === 'ProjectsConfig__ProviderCatalog__' &&
+    configMapRef?.name === 'projects-config-provider-catalog' && configMapRef.optional === false));
+  const ciliumVolume = item('Deployment', 'environment').spec.template.spec.volumes
+    .find(({ name }) => name === 'cilium-options');
+  assert.deepEqual(ciliumVolume.configMap, {
+    name: 'environment-cilium-config',
+    optional: false,
+    items: [{ key: 'appsettings.Production.json', path: 'appsettings.Production.json' }],
+  });
+  assert.ok(item('Deployment', 'environment').spec.template.spec.containers[0].volumeMounts.some((mount) =>
+    mount.name === 'cilium-options' && mount.mountPath === '/app/appsettings.Production.json' &&
+    mount.subPath === 'appsettings.Production.json' && mount.readOnly === true));
   const webContainer = item('Deployment', 'web').spec.template.spec.containers[0];
   assert.equal(webContainer.ports[0].containerPort, 8080);
   assert.ok(webContainer.envFrom.some(({ configMapRef }) =>
@@ -412,6 +631,34 @@ test('runtime manifest requires nine shared workloads and pins AgentHost through
     volume.configMap.optional === false && volume.configMap.items?.[0]?.key === 'ca.crt'));
   assert.ok(mcp.containers[0].volumeMounts.some(mount => mount.name === 'backend-ca' &&
     mount.mountPath === '/var/run/service-backend-ca' && mount.readOnly === true));
+  const missingOrchestratorCatalog = structuredClone(rendered);
+  const orchestratorContainer = missingOrchestratorCatalog.items.find(({ kind, metadata }) =>
+    kind === 'Deployment' && metadata.name === 'orchestrator').spec.template.spec.containers[0];
+  orchestratorContainer.envFrom = orchestratorContainer.envFrom
+    .filter(({ prefix }) => prefix !== 'ProjectsConfig__ProviderCatalog__');
+  assert.throws(() => validateRuntimeManifest(missingOrchestratorCatalog, images, target.namespace),
+    /orchestrator must load one immutable-source Projects provider catalog ConfigMap/);
+  const mismatchedOrchestratorCatalog = structuredClone(rendered);
+  const mismatchedOrchestrator = mismatchedOrchestratorCatalog.items.find(({ kind, metadata }) =>
+    kind === 'Deployment' && metadata.name === 'orchestrator').spec.template;
+  mismatchedOrchestrator.spec.containers[0].envFrom
+    .find(({ prefix }) => prefix === 'ProjectsConfig__ProviderCatalog__').configMapRef.name = 'other-catalog';
+  assert.throws(() => validateRuntimeManifest(mismatchedOrchestratorCatalog, images, target.namespace),
+    /orchestrator must consume the exact same provider catalog/);
+  const wrongCatalogSource = structuredClone(rendered);
+  wrongCatalogSource.items.find(({ kind, metadata }) =>
+    kind === 'Deployment' && metadata.name === 'orchestrator')
+    .spec.template.metadata.annotations['agentweaver.io/provider-catalog-source'] = 'e'.repeat(40);
+  assert.throws(() => validateRuntimeManifest(wrongCatalogSource, images, target.namespace, undefined, {
+    configMapName: 'projects-config-provider-catalog',
+    sourceCommit: sourceSha,
+  }), /orchestrator must consume the exact same provider catalog/);
+  const missingCiliumConfig = structuredClone(rendered);
+  const environmentPod = missingCiliumConfig.items.find(({ kind, metadata }) =>
+    kind === 'Deployment' && metadata.name === 'environment').spec.template.spec;
+  environmentPod.volumes = environmentPod.volumes.filter(({ name }) => name !== 'cilium-options');
+  assert.throws(() => validateRuntimeManifest(missingCiliumConfig, images, target.namespace),
+    /Environment must mount the exact read-only Cilium options file/);
   const mutable = structuredClone(rendered);
   mutable.items.find(({ kind, metadata }) => kind === 'Deployment' && metadata.name === 'web')
     .spec.template.spec.containers[0].image = 'ghcr.io/sabbour/agentweaver-web:1.0.0';
@@ -499,6 +746,108 @@ test('runtime manifest requires nine shared workloads and pins AgentHost through
   route.items.push({ apiVersion: 'networking.k8s.io/v1', kind: 'Ingress',
     metadata: { name: 'outside', namespace: target.namespace } });
   assert.throws(() => validateRuntimeManifest(route, images, target.namespace), /only Deployment and ClusterIP Service/);
+});
+
+test('runtime List provider inputs match the checked-in catalog and reject unapproved values', () => {
+  const manifest = releaseManifest();
+  const images = validatePublicationReceipt(publicationReceipt(manifest), manifest, sourceSha);
+  const rendered = validateRuntimeManifest(runtimeManifest(manifest), images, target.namespace);
+  const catalog = JSON.parse(readFileSync(path.join(root, 'deploy', 'k8s', 'provider-catalogs',
+    'projects-config-provider-catalog.snapshot.json'), 'utf8')).ProjectsConfig.ProviderCatalog;
+  const runtimeInputs = [
+    {
+      workload: 'environment',
+      providerId: 'agent-sandbox',
+      name: 'Environment__Sandbox__AgentSandbox__OptionsRevision',
+    },
+    {
+      workload: 'environment',
+      providerId: 'azure-files-csi',
+      name: 'Environment__Storage__AzureFiles__OptionsRevision',
+    },
+    {
+      workload: 'environment',
+      providerId: 'cilium',
+      name: 'Environment__NetworkPolicy__Cilium__AdapterVersion',
+      catalogProperty: 'AdapterVersion',
+    },
+    {
+      workload: 'environment',
+      providerId: 'cilium',
+      name: 'Environment__NetworkPolicy__Cilium__OptionsRevision',
+    },
+    {
+      workload: 'orchestrator',
+      providerId: 'agt.dotnet-yaml',
+      name: 'AgentGovernance__Policy__OptionsRevision',
+    },
+    {
+      workload: 'events-and-sessions',
+      providerId: 'copilot.usage-cost',
+      name: 'EventsAndSessions__Cost__Copilot__OptionsRevision',
+    },
+  ];
+  const deployment = (resources, name) => resources.items.find(({ kind, metadata }) =>
+    kind === 'Deployment' && metadata.name === name);
+  for (const input of runtimeInputs) {
+    const container = deployment(rendered, input.workload).spec.template.spec.containers[0];
+    const matches = container.env.filter(({ name }) => name === input.name);
+    const registration = catalog.Registrations.find(({ Id }) => Id === input.providerId);
+    assert.ok(registration, `snapshot registration ${input.providerId} exists`);
+    assert.equal(matches.length, 1, `${input.name} is emitted exactly once`);
+    assert.equal(matches[0].value, registration[input.catalogProperty ?? 'OptionsRevision'],
+      `${input.name} matches the catalog`);
+    assert.ok(container.envFrom.some(({ configMapRef }) =>
+      configMapRef?.name === `${input.workload}-runtime-config` && configMapRef.optional === false),
+    `${input.workload} retains its runtime ConfigMap envFrom`);
+  }
+
+  const invalidCases = [
+    ['wrong value', (resources) => {
+      deployment(resources, 'environment').spec.template.spec.containers[0].env
+        .find(({ name }) => name === 'Environment__Sandbox__AgentSandbox__OptionsRevision')
+        .value = 'invented-revision';
+    }],
+    ['missing value', (resources) => {
+      const container = deployment(resources, 'events-and-sessions').spec.template.spec.containers[0];
+      container.env = container.env.filter(({ name }) =>
+        name !== 'EventsAndSessions__Cost__Copilot__OptionsRevision');
+    }],
+    ['unknown revision', (resources) => {
+      deployment(resources, 'environment').spec.template.spec.containers[0].env
+        .push({ name: 'Environment__Cilium__OptionsRevision', value: 'p1-v1.0.0' });
+    }],
+    ['wrong workload', (resources) => {
+      deployment(resources, 'events-and-sessions').spec.template.spec.containers[0].env
+        .push({ name: 'AgentGovernance__Policy__OptionsRevision', value: 'p1-v1.0.0' });
+    }],
+  ];
+  for (const [label, mutate] of invalidCases) {
+    const invalid = structuredClone(runtimeManifest(manifest));
+    mutate(invalid);
+    assert.throws(
+      () => validateRuntimeManifest(invalid, images, target.namespace),
+      /provider OptionsRevision/,
+      label,
+    );
+  }
+  const wrongAdapterVersion = structuredClone(runtimeManifest(manifest));
+  deployment(wrongAdapterVersion, 'environment').spec.template.spec.containers[0].env
+    .find(({ name }) => name === 'Environment__NetworkPolicy__Cilium__AdapterVersion')
+    .value = '2.0.0';
+  assert.throws(
+    () => validateRuntimeManifest(wrongAdapterVersion, images, target.namespace),
+    /provider AdapterVersion/,
+  );
+  const missingAdapterVersion = structuredClone(runtimeManifest(manifest));
+  const environmentContainer = deployment(missingAdapterVersion, 'environment')
+    .spec.template.spec.containers[0];
+  environmentContainer.env = environmentContainer.env.filter(({ name }) =>
+    name !== 'Environment__NetworkPolicy__Cilium__AdapterVersion');
+  assert.throws(
+    () => validateRuntimeManifest(missingAdapterVersion, images, target.namespace),
+    /provider AdapterVersion/,
+  );
 });
 
 test('runtime manifest preserves only the existing Azure Workload Identity pod labels', () => {

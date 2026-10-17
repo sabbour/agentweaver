@@ -1,0 +1,32 @@
+{
+  "apiVersion": "v1",
+  "kind": "ConfigMap",
+  "metadata": {
+    "name": "environment-runtime-config",
+    "namespace": "agentweaver-v1-p0",
+    "annotations": {
+      "agentweaver.io/runtime-config-status": "incomplete"
+    }
+  },
+  "immutable": true,
+  "data": {
+    "ConnectionStrings__Environment": "Host=aw-v1-p0-pg.postgres.database.azure.com;Port=5432;Database=agentweaver;Username=aw-v1-p0-id-environment;SSL Mode=VerifyFull",
+    "Environment__Database__WorkloadIdentity__TenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47",
+    "Environment__Database__WorkloadIdentity__ClientId": "21a97456-bb10-4833-bb75-a14cabaad4c1",
+    "Environment__Database__WorkloadIdentity__TokenFilePath": "/var/run/secrets/azure/tokens/azure-identity-token",
+    "Environment__Authentication__Authority": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
+    "Environment__Authentication__Audience": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
+    "ProjectsConfig__BaseAddress": "https://projects-config.agentweaver-v1-p0.svc.cluster.local:8443/",
+    "Environment__RuntimeBootstrap__OrchestratorOwnerAddress": "https://orchestrator.agentweaver-v1-p0.svc.cluster.local:8443/",
+    "Environment__RuntimeBootstrap__BrokerOwnerAddress": "https://identity-broker.agentweaver-v1-p0.svc.cluster.local:443/",
+    "Environment__RuntimeBootstrap__EventsOwnerAddress": "https://events-and-sessions.agentweaver-v1-p0.svc.cluster.local:8443/",
+    "Environment__Sandbox__AgentSandbox__OptionsSchemaVersion": "2",
+    "Environment__Sandbox__AgentSandbox__Namespace": "agentweaver-v1-p0",
+    "Environment__Sandbox__AgentSandbox__WorkspaceStorageProviderId": "azure-files-csi",
+    "Environment__Sandbox__AgentSandbox__RuntimeClassName": "kata-vm-isolation",
+    "Environment__Sandbox__AgentSandbox__ExpectedRuntimeHandler": "kata",
+    "Environment__Storage__AzureFiles__OptionsSchemaVersion": "1",
+    "Environment__Storage__AzureFiles__Namespace": "agentweaver-v1-p0",
+    "Environment__Storage__AzureFiles__StorageClassName": "azurefile-csi"
+  }
+}

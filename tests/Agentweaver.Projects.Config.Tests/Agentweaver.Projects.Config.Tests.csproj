@@ -18,4 +18,55 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <ProjectReference Include="..\..\services\projects-config\Agentweaver.Projects.Config\Agentweaver.Projects.Config.csproj" />
   </ItemGroup>
+  <!-- Snapshot tests compare the real catalog loader with its source and runtime-input contracts. -->
+  <ItemGroup>
+    <None Include="..\..\deploy\k8s\provider-catalogs\projects-config-provider-catalog.snapshot.json"
+          Link="provider-catalog\projects-config-provider-catalog.snapshot.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\deploy\k8s\provider-catalogs\projects-config-provider-catalog.json"
+          Link="provider-catalog\projects-config-provider-catalog.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\docs\reference\contracts.md"
+          Link="provider-catalog\contracts.md"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\docs\architecture\design\provider-seams.md"
+          Link="provider-catalog\provider-seams.md"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\docs\architecture\projects-config.md"
+          Link="provider-catalog\projects-config.md"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\scripts\release\runtime-list.mjs"
+          Link="provider-catalog\runtime-list.mjs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\services\events-and-sessions\Agentweaver.EventsAndSessions\Program.cs"
+          Link="provider-catalog\EventsAndSessions.Program.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\services\events-and-sessions\Agentweaver.EventsAndSessions\Cost\CopilotCostProviderOptions.cs"
+          Link="provider-catalog\CopilotCostProviderOptions.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\services\events-and-sessions\Agentweaver.EventsAndSessions\Cost\CopilotCostProvider.cs"
+          Link="provider-catalog\CopilotCostProvider.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\services\environment\Agentweaver.Environment\Program.cs"
+          Link="provider-catalog\Environment.Program.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\services\orchestrator\Agentweaver.Orchestrator\Program.cs"
+          Link="provider-catalog\Orchestrator.Program.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\services\orchestrator\Agentweaver.Orchestrator.Core\AgtPolicyProvider.cs"
+          Link="provider-catalog\AgtPolicyProvider.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\packages\Agentweaver.Providers.Sandbox.AgentSandbox\AgentSandboxOptions.cs"
+          Link="provider-catalog\AgentSandboxOptions.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\packages\Agentweaver.Providers.Storage.AzureFiles\AzureFilesCsiOptions.cs"
+          Link="provider-catalog\AzureFilesCsiOptions.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\packages\Agentweaver.Abstractions\SdkUsageContracts.cs"
+          Link="provider-catalog\SdkUsageContracts.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\services\knowledge\Agentweaver.Knowledge\KnowledgeOptions.cs"
+          Link="provider-catalog\KnowledgeOptions.cs"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
