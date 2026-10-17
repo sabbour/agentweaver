@@ -668,6 +668,23 @@ test('platform-only publication includes product packages and images but exclude
   assert.ok(!f.externalCalls.some(({ args }) => args.some(arg => arg.includes('foundation-probe'))));
 });
 
+test('automatic product publication omits unchanged NuGet versions but still publishes every product image', t => {
+  const f = fixture(t);
+  f.prepare({ platformOnly: true });
+  const receipt = f.publish({ platformOnly: true, packageComponents: [] });
+  assert.deepEqual(receipt.planned.map(({ id, kind }) => ({ id, kind })), [{ id: 'Svc', kind: 'image' }]);
+  assert.deepEqual(receipt.published.map(({ id, kind }) => ({ id, kind })), [{ id: 'Svc', kind: 'image' }]);
+  assert.ok(!f.externalCalls.some(({ bin, args }) => bin === 'dotnet' && args[0] === 'nuget'));
+  assert.ok(f.externalCalls.some(({ bin, args }) => bin === 'docker' && args[0] === 'push'));
+
+  const invalid = fixture(t);
+  invalid.prepare({ platformOnly: true });
+  assert.throws(() => invalid.publish({ platformOnly: true, packageComponents: ['Svc'] }),
+    /unique non-service components/);
+  assert.deepEqual(invalid.remoteCalls, []);
+  assert.deepEqual(invalid.externalCalls, []);
+});
+
 test('platform-only publication rejects full preparation and conflicting selections before external effects', t => {
   const f = fixture(t, { foundationProbe: true });
   f.prepare();
@@ -895,6 +912,7 @@ test('sampler replacement rejects an unavailable preserved initial index before 
 
 test('receipt-triggered release workflow builds separate artifacts and publishes without an approval gate', () => {
   const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8').replaceAll('\r\n', '\n');
+  const publish = workflow.slice(workflow.indexOf('\n  publish:'));
   assert.match(workflow, /push:\n\s+branches: \[v1\]\n\s+paths:\n\s+-\s+'releases\/receipts\/\*\*'/);
   assert.match(workflow, /workflow_dispatch:/);
   const validate = workflow.slice(workflow.indexOf('\n  validate:'), workflow.indexOf('\n  packages:'));
@@ -903,6 +921,10 @@ test('receipt-triggered release workflow builds separate artifacts and publishes
   assert.match(validate, /v1-ci\.yml v1-docs-ci\.yml/);
   assert.match(validate, /--commit "\$GITHUB_SHA"/);
   assert.match(validate, /gh run watch "\$run_id" --repo "\$GITHUB_REPOSITORY" --exit-status/);
+  assert.match(validate, /npm run release:validate -- --ci --require-version-application-receipt/);
+  assert.match(validate, /--require-version-application-receipt/);
+  assert.doesNotMatch(validate, /RELEASE_HEAD_SHA:/);
+  assert.match(publish, /RELEASE_BASE_SHA:/);
   assert.match(workflow, /packages:\n\s+needs: validate/);
   assert.match(workflow, /images:\n\s+needs: validate/);
   assert.match(workflow, /publish:\n\s+needs: \[validate, packages, images\]/);

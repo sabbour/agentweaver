@@ -320,8 +320,11 @@ export function validatePublicationReceipt(receipt, manifest, sourceSha) {
     fail('publication receipt is missing, partial, or not bound to the tagged source');
   }
   const product = manifest.components.filter((component) => component.id !== 'Agentweaver.FoundationProbe');
-  if (receipt.planned.length !== product.length || receipt.published.length !== product.length) {
-    fail('publication receipt does not contain the exact 23-component product selection');
+  const productById = new Map(product.map((component) => [component.id, component]));
+  // Package versions are immutable; unchanged packages may be omitted, but every service image is required.
+  const services = product.filter((component) => component.kind === 'service');
+  if (receipt.planned.length < services.length || receipt.published.length < services.length) {
+    fail('publication receipt must contain every product service image');
   }
   const planned = new Map();
   for (const entry of receipt.planned) {
@@ -333,12 +336,19 @@ export function validatePublicationReceipt(receipt, manifest, sourceSha) {
     if (!entry || typeof entry !== 'object' || published.has(entry.id)) fail('published receipt has malformed or duplicate entries');
     published.set(entry.id, entry);
   }
+  if (planned.size !== published.size || [...planned.keys()].some((id) => !published.has(id))) {
+    fail('publication plan and result selections differ');
+  }
+  for (const id of planned.keys()) {
+    if (!productById.has(id)) fail(`publication receipt contains a non-product component ${id}`);
+  }
 
   let agentHostMeasurement;
   for (const component of product) {
     const expectedKind = kindFor(component);
     const plan = planned.get(component.id);
     const result = published.get(component.id);
+    if (!plan && !result && component.kind !== 'service') continue;
     if (!plan || !result || plan.version !== component.version ||
         plan.kind !== expectedKind || result.version !== component.version ||
         result.kind !== expectedKind || !/^[a-f0-9]{64}$/.test(plan.sha256 ?? '')) {

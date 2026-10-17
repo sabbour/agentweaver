@@ -5,7 +5,10 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { diffChanges, resolveCiComparisonBase, resolveMergeBase, validateChangesets } from './changesets.mjs';
+import {
+  diffChanges, requireFreshVersionApplicationReceipt, resolveCiComparisonBase, resolveMergeBase,
+  validateChangesets,
+} from './changesets.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
@@ -271,16 +274,21 @@ export function validateFile(file, options = {}) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
     const file = process.argv[2];
-    const ciContext = process.argv.length === 4 && process.argv[3] === '--ci';
-    if (!file || (!ciContext && ![3, 5].includes(process.argv.length)) ||
-        (process.argv.length === 5 && process.argv[3] !== '--base')) {
-      fail('usage', 'node scripts/release/validate.mjs <manifest.json> [--base <full-git-sha> | --ci]');
+    const supplied = process.argv.slice(3);
+    const requireReceipt = supplied.includes('--require-version-application-receipt');
+    const args = supplied.filter((arg) => arg !== '--require-version-application-receipt');
+    const ciContext = args.length === 1 && args[0] === '--ci';
+    const baseContext = args.length === 2 && args[0] === '--base';
+    if (!file || (!ciContext && !baseContext && args.length !== 0) ||
+        (requireReceipt && !ciContext && !baseContext)) {
+      fail('usage', 'node scripts/release/validate.mjs <manifest.json> [--base <full-git-sha> | --ci] [--require-version-application-receipt]');
     }
     const manifest = validateFile(file);
     const ancestorSha = ciContext ? resolveCiComparisonBase(repositoryRoot)
-      : process.argv.length === 5 ? resolveMergeBase(repositoryRoot, process.argv[4]) : undefined;
+      : baseContext ? resolveMergeBase(repositoryRoot, args[1]) : undefined;
     const changes = ancestorSha ? diffChanges(repositoryRoot, ancestorSha) : undefined;
     const records = validateChangesets(manifest, { root: repositoryRoot, changes, ancestorSha });
+    if (requireReceipt) requireFreshVersionApplicationReceipt(changes);
     console.log(`Validated ${file} and ${records.size} changesets${changes ? ' with diff coverage' : ''}`);
   } catch (error) {
     console.error(`Release manifest validation failed: ${error.message}`);

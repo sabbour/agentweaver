@@ -25,11 +25,14 @@ import {
 import { measureAgentHostArchiveSync } from './measure-agenthost-image.mjs';
 import { readDockerArchiveConfig } from './docker-archive.mjs';
 import { createNugetConfig } from './nuget-config.mjs';
+import {
+  readPublicationPackageComponents, resolveVersionApplicationSourceSha,
+} from './publication-selection.mjs';
 import { continuePartialPublication } from './partial-publication.mjs';
 import { PARTIAL_PUBLICATION } from './partial-publication-contract.mjs';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
-const fail = (message) => { throw new Error(`manual publication: ${message}`); };
+const fail = (message) => { throw new Error(`release publication: ${message}`); };
 const repositoryPathPattern = /^[a-z0-9]+(?:[._-][a-z0-9]+)*(?:\/[a-z0-9]+(?:[._-][a-z0-9]+)*)*$/;
 const initialProbeTarget = 'ghcr.io/sabbour/agentweaver-foundation-probe:0.0.0';
 const initialProbeDigest = 'sha256:452be7e284ee6c33814fcedcf1d7c98f98384d09ea7239ad851f9cb316727c9a';
@@ -180,6 +183,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   packagesOnly = false,
   foundationProbeOnly = false,
   platformOnly = false,
+  packageComponents,
   integrationImagesOnly = false,
   integrationConfirmed = false,
   partialContinuation = false,
@@ -219,12 +223,34 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
         env.GITHUB_REPOSITORY !== 'sabbour/agentweaver' ||
         env.EXPECTED_SOURCE !== PARTIAL_PUBLICATION.sourceSha)) ||
       git('status', '--porcelain')) {
-    fail('publication requires a clean exact source HEAD and approved dispatch context');
+    fail('publication requires a clean exact source and verified publication context');
   }
   const manifest = validateFile(path.resolve(root, manifestPath), { root });
   const sourceManifest = JSON.parse(execFileSync('git', ['show', `${sourceSha}:${path.relative(root, path.resolve(root, manifestPath)).replaceAll('\\', '/')}`],
     { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
   if (JSON.stringify(sourceManifest) !== JSON.stringify(manifest)) fail('manifest differs from source');
+  let verifiedPackageComponents;
+  // Automated product publication derives package pushes from its exact version-application receipt.
+  if (platformOnly && env.RELEASE_BASE_SHA !== undefined) {
+    const receiptSourceSha = resolveVersionApplicationSourceSha(root, {
+      eventName: env.GITHUB_EVENT_NAME,
+      testedSourceSha: env.GITHUB_SHA ?? sourceSha,
+      baseSha: env.RELEASE_BASE_SHA,
+    });
+    verifiedPackageComponents = readPublicationPackageComponents(
+      root, receiptSourceSha, path.relative(root, path.resolve(root, manifestPath)).replaceAll('\\', '/'),
+    );
+  }
+  if (packageComponents !== undefined &&
+      (!platformOnly || packagesOnly || foundationProbeOnly || integrationImagesOnly ||
+        !Array.isArray(packageComponents))) {
+    fail('package selection can be supplied only for a platform-only product publication');
+  }
+  const selectedPackageComponents = packageComponents ?? verifiedPackageComponents;
+  if (verifiedPackageComponents !== undefined && packageComponents !== undefined &&
+      JSON.stringify(packageComponents) !== JSON.stringify(verifiedPackageComponents)) {
+    fail('supplied package selection differs from the source-verified version-application receipt');
+  }
   if (integrationImagesOnly && (manifest.stage !== 'draft' || manifest.evidence !== undefined)) {
     fail('integration image-only publication requires a tracked draft manifest with no deployment evidence');
   }
@@ -259,6 +285,19 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     ? manifest.components.filter((component) => component.kind !== 'service')
     : manifest.components;
   if (components.length === 0) fail('the selected composition has no components to publish');
+  if (selectedPackageComponents !== undefined) {
+    const allowedPackages = new Set(components.filter((component) => component.kind !== 'service')
+      .map((component) => component.id));
+    const packageSet = new Set(selectedPackageComponents);
+    if (packageSet.size !== selectedPackageComponents.length ||
+        selectedPackageComponents.some((id) => !allowedPackages.has(id))) {
+      fail('package selection must contain unique non-service components from the product manifest');
+    }
+  }
+  const publicationComponents = selectedPackageComponents === undefined
+    ? components
+    : components.filter((component) => component.kind === 'service' ||
+      selectedPackageComponents.includes(component.id));
   const replaceInitialProbe = confirmFoundationProbeInitialReplacement !== undefined;
   const replaceSamplerProbe = confirmFoundationProbeSamplerReplacement !== undefined;
   if (replaceInitialProbe && replaceSamplerProbe) fail('Probe replacement intents are mutually exclusive');
@@ -302,9 +341,9 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   if (!Array.isArray(provenance.artifacts) || provenance.artifacts.length !== components.length) {
     fail('missing or unexpected artifact provenance');
   }
+  const componentProvenanceById = new Map(provenance.components.map((record) => [record.id, record]));
   const selected = [];
-  for (let index = 0; index < components.length; index++) {
-    const component = components[index];
+  for (const component of publicationComponents) {
     const kind = component.kind === 'service' ? 'image' : 'package';
     const filename = kind === 'image' ? `${component.id}.${component.version}.tar.gz`
       : `${path.basename(component.project, '.csproj')}.${component.version}.nupkg`;
@@ -330,7 +369,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     const file = path.join(directory, artifactFilename);
     if (component.id !== AGENTHOST_ID && hash(readFileSync(file)) !== artifact.sha256)
       fail(`artifact hash mismatch for ${component.id}`);
-    const componentProvenance = provenance.components[index];
+    const componentProvenance = componentProvenanceById.get(component.id);
     const integrationLabels = integrationImagesOnly ? {
       'org.opencontainers.image.revision': sourceSha,
       'io.agentweaver.source-tree': integrationSourceTree,

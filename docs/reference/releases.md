@@ -106,9 +106,9 @@ The full manifest hash remains in the preparation receipt.
 The publisher rejects a receipt prepared with another component selection.
 This selection cannot combine with `--packages-only` or `--foundation-probe-only`.
 
-For a product build, the automated v1 release workflow first prepares its approved build inputs.
+For a product build, the automated v1 release workflow first prepares its source-pinned build inputs.
 It pulls only the three source-pinned Microsoft base images.
-A standard locked npm install fills the cache for the runner's dependencies from the approved 467-entry Web lockfile.
+A standard locked npm install fills the cache from the source-committed Web lockfile.
 It retains the committed download destinations and npm's existing integrity checks.
 This preparation runs no dependency install scripts and adds no dependency.
 The image job starts Docker Engine `v29.9.0` with the official `docker/setup-docker-action` `v5.5.0`, pinned to commit `2bf61fb9464cc67f0cbdeabed6aa0380accd1c70`.
@@ -130,7 +130,7 @@ flowchart LR
   Validate --> Images["Build product Docker images"]
   Packages --> Artifacts["Upload exact-source artifacts"]
   Images --> Artifacts
-  Artifacts --> Publish["Publish to GitHub Packages and GHCR; save receipt"]
+  Artifacts --> Publish["Publish changed packages and images; save receipt"]
 ```
 
 ## Publication boundary
@@ -140,7 +140,8 @@ and documentation checks on pull requests and pushes. A committed
 `releases/receipts/**` version-application receipt on `v1` triggers automatic
 publication. Before building packages or images, the release workflow waits for
 both CI workflows to pass on the exact source commit. `workflow_dispatch` runs
-the same release path manually from `v1`.
+the same release path manually and still requires a fresh receipt, so it must
+target the version-application commit that added the receipt.
 There is no publish toggle or environment approval. The Foundation Probe is
 excluded from product packages and images.
 
@@ -158,7 +159,9 @@ push succeeds or fails. This does not read or change a developer's global NuGet
 settings, and the config is not included in release artifacts or receipts.
 Before any push, the publisher verifies source HEAD, manifest, selected components,
 and artifact hashes. It records immutable claim and result records and uploads the
-publication receipt for the local deployment tooling.
+publication receipt for the local deployment tooling. It publishes only NuGet
+packages whose versions changed in the verified receipt, while publishing all
+ten product service images.
 
 GitHub Actions never deploys to Azure or AKS. Use the local `release:deploy`
 command for deployment and live acceptance.

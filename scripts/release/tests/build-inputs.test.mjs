@@ -7,7 +7,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
 import { gzipSync } from 'node:zlib';
-import { approvedBaseImages, approvedWebLockSha256, prepareBuildInputs, readApprovedBuildInputs } from '../prepare-build-inputs.mjs';
+import { approvedBaseImages, prepareBuildInputs, readApprovedBuildInputs } from '../prepare-build-inputs.mjs';
 
 const defaultBuilderInspection = `Name:          default
 Driver:        docker
@@ -57,20 +57,22 @@ function sourceFixture(t) {
   };
 }
 
-test('approved inputs retain three exact source pins and 467 committed dependency origins and integrities', () => {
+test('approved inputs retain immutable base-image pins and validate committed dependency origins and integrities', () => {
   const inputs = readApprovedBuildInputs(process.cwd());
   assert.deepEqual(inputs.images, approvedBaseImages);
-  assert.equal(inputs.packages.length, 467);
-  assert.equal(inputs.packages.filter(item => item.integrity.startsWith('sha1-')).length, 377);
-  assert.equal(inputs.packages.filter(item => item.integrity.startsWith('sha512-')).length, 90);
-  assert.equal(createHash('sha256').update(readFileSync('apps/web/package-lock.json')).digest('hex'), approvedWebLockSha256);
+  assert.ok(inputs.packages.length > 0);
+  assert.ok(inputs.packages.every(({ resolved, integrity }) =>
+    new URL(resolved).protocol === 'https:' &&
+    ['ms-feed-25.pkgs.visualstudio.com', 'ms-feed-12.pkgs.visualstudio.com',
+      'ms-feed-2.pkgs.visualstudio.com', 'registry.npmjs.org'].includes(new URL(resolved).hostname) &&
+    /^sha(?:1|512)-[A-Za-z0-9+/]+={0,2}$/.test(integrity)));
 });
 
 test('preparation pulls only approved digests and fills the same-runner cache with ordinary locked npm and no scripts', t => {
   const f = sourceFixture(t);
   const result = prepareBuildInputs(f);
   assert.equal(result.sourceSha, f.expectedSource);
-  assert.equal(result.approvedLockedDependencyCount, 467);
+  assert.equal(result.approvedLockedDependencyCount, readApprovedBuildInputs(f.root).packages.length);
   assert.equal(result.npmCachePreparedForRunner, true);
   assert.equal('cachedDependencyCount' in result, false);
   assert.deepEqual(f.calls.filter(call => call.args[0] === 'pull').map(call => call.args), approvedBaseImages.map(image =>
@@ -97,9 +99,21 @@ test('source, lock, image-pin and cache isolation failures cause no input downlo
     if (kind === 'lock') writeFileSync(path.join(f.root, 'apps', 'web', 'package-lock.json'), '{}');
     if (kind === 'pin') writeFileSync(path.join(f.root, 'apps', 'web', 'Dockerfile'), 'FROM unapproved:latest\n');
     if (kind === 'cache') options.cache = path.join(f.root, 'cache');
-    assert.throws(() => prepareBuildInputs(options), /approved|clean|immutable|isolated/);
+    assert.throws(() => prepareBuildInputs(options), /approved|clean|immutable|isolated|lock|dependency/);
     assert.equal(f.calls.some(call => call.args[0] === 'pull' || call.bin === 'npm'), false, kind);
   }
+});
+
+test('Web version mirrors can advance while every locked dependency remains source-bound', t => {
+  const f = sourceFixture(t);
+  const lockPath = path.join(f.root, 'apps', 'web', 'package-lock.json');
+  const lock = JSON.parse(readFileSync(lockPath, 'utf8'));
+  lock.version = '1.0.1';
+  lock.packages[''].version = '1.0.1';
+  writeFileSync(lockPath, `${JSON.stringify(lock, null, 2)}\n`);
+  const inputs = readApprovedBuildInputs(f.root);
+  assert.ok(inputs.packages.length > 0);
+  assert.deepEqual(inputs.images, approvedBaseImages);
 });
 
 test('missing shared store, old engine, remote context and invalid builder metadata fail before image pulls without changing the daemon', t => {
@@ -149,7 +163,7 @@ test('wrong pulled digest or platform blocks npm cache fill, and command failure
   } }), /controlled integrity failure/);
 });
 
-test('preparation rechecks source and exact lock bytes after npm succeeds', t => {
+test('preparation rechecks source and lock integrity after npm succeeds', t => {
   for (const kind of ['head', 'lock']) {
     const f = sourceFixture(t);
     let npmRan = false;
@@ -161,20 +175,20 @@ test('preparation rechecks source and exact lock bytes after npm succeeds', t =>
       if (npmRan && kind === 'head' && bin === 'git' && args[0] === 'rev-parse') return 'c'.repeat(40);
       return f.run(bin, args, cwd);
     };
-    assert.throws(() => prepareBuildInputs({ ...f, run }), /approved|clean/);
+    assert.throws(() => prepareBuildInputs({ ...f, run }), /lock|source|clean/);
   }
 });
 
-test('product image job prepares approved inputs with the shared Docker engine before packing', () => {
+test('product image job prepares source-pinned inputs with the shared Docker engine before packing', () => {
   const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8').replaceAll('\r\n', '\n');
   const images = workflow.slice(workflow.indexOf('\n  images:'), workflow.indexOf('\n  publish:'));
   assert.equal((images.match(/uses: docker\/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70/g) ?? []).length, 1);
   assert.match(images, /- name: Set up product Docker engine\n\s+uses: docker\/setup-docker-action@2bf61fb9464cc67f0cbdeabed6aa0380accd1c70\n\s+with:\n\s+version: 'v29\.9\.0'\n\s+set-host: true\n\s+daemon-config:[\s\S]*?"containerd-snapshotter": true/);
   assert.doesNotMatch(images, /docker context update default|setup-buildx-action/);
-  assert.match(images, /Prepare approved product build inputs[\s\S]*?EXPECTED_SOURCE: \$\{\{ github\.sha \}\}[\s\S]*?DOCKER_CONTEXT: default/);
+  assert.match(images, /Prepare pinned product build inputs[\s\S]*?EXPECTED_SOURCE: \$\{\{ github\.sha \}\}[\s\S]*?DOCKER_CONTEXT: default/);
   assert.match(images, /npm_config_cache: \$\{\{ runner.temp \}\}\/agentweaver-release-npm-cache/);
-  assert.ok(images.indexOf('Set up product Docker engine') < images.indexOf('Prepare approved product build inputs'));
-  assert.ok(images.indexOf('Prepare approved product build inputs') < images.indexOf('Build product Docker images'));
+  assert.ok(images.indexOf('Set up product Docker engine') < images.indexOf('Prepare pinned product build inputs'));
+  assert.ok(images.indexOf('Prepare pinned product build inputs') < images.indexOf('Build product Docker images'));
   assert.doesNotMatch(images, /\bsudo\b|systemctl|daemon\.json|buildx-stable|docker buildx install/);
 });
 
