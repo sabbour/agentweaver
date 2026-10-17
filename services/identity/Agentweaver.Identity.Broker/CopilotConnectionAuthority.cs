@@ -11,22 +11,33 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Identity.Broker;
 
+/// <summary>
+/// Fixed GitHub OAuth and Projects-owner settings used by the user-owned Copilot
+/// connection flow. The callback and secret references are supplied by host configuration.
+/// </summary>
 public sealed record CopilotConnectionOptions(
     Uri ProjectsOwnerAddress, string ClientId, Uri CallbackUri, SecretRef ClientSecretReference);
 
+/// <summary>Safe connection status returned to the owner; it contains no credential material.</summary>
 public sealed record CopilotConnectionReceipt(
     Guid ConnectionId, long Revision, ProjectAuthorityResourceType Scope,
     string ScopeId, CopilotConnectionState State, DateTimeOffset FreshUntil);
 
+/// <summary>OAuth authorization URL and status created for the beginning of a link flow.</summary>
 public sealed record CopilotConnectionStart(CopilotConnectionReceipt Connection, Uri AuthorizationUri)
 {
     [System.Text.Json.Serialization.JsonIgnore]
     internal string CallbackCookie { get; init; } = string.Empty;
 }
 
+/// <summary>
+/// Protected OAuth state carried through GitHub's redirect. It binds the short-lived
+/// callback to one connection, actor, PKCE verifier and browser cookie.
+/// </summary>
 internal sealed record CopilotLinkState(
     Guid ConnectionId, string ActorId, string Verifier, string CallbackCookieHash, DateTimeOffset ExpiresAt);
 
+/// <summary>Serialized GitHub user access and refresh tokens stored only in the secret backend.</summary>
 internal sealed record CopilotUserCredential(
     string Status, string AccessToken, string RefreshToken, DateTimeOffset ExpiresAt,
     DateTimeOffset RefreshTokenExpiresAt)
@@ -34,6 +45,11 @@ internal sealed record CopilotUserCredential(
     public override string ToString() => nameof(CopilotUserCredential) + " [REDACTED]";
 }
 
+/// <summary>
+/// Owns GitHub Copilot user-connection lifecycle for project or platform scope. It checks
+/// live Projects write authority around persisted transitions, stores token envelopes in
+/// the secret backend, and uses revision checks to reject stale callbacks and refreshes.
+/// </summary>
 public sealed class CopilotConnectionAuthority(
     IdentityBrokerDbContext db, CopilotConnectionOptions options,
     HttpClient projects, HttpClient github, ISecretRedemption secrets, ISecretVersionWriter writer,
@@ -43,6 +59,11 @@ public sealed class CopilotConnectionAuthority(
     private readonly IDataProtector _stateProtector = protection.CreateProtector(
         "Agentweaver.Identity.CopilotUserConnection.v1");
 
+    /// <summary>
+    /// Creates a pending connection and a protected, five-minute OAuth state, then returns
+    /// a GitHub authorization URL using PKCE S256. The state and cookie are not persisted
+    /// as replayable values.
+    /// </summary>
     public async Task<CopilotConnectionStart> BeginAsync(
         RuntimeActorAuthorization actor, string issuer, string actorId,
         ProjectAuthorityResourceType scope, string scopeId, CancellationToken cancellationToken)
@@ -82,6 +103,11 @@ public sealed class CopilotConnectionAuthority(
         return new(Receipt(row), url) { CallbackCookie = callbackCookie };
     }
 
+    /// <summary>
+    /// Claims and validates a callback against its protected state, browser cookie, owner,
+    /// expiry and pending revision. Denial or exchange failures leave a non-connected
+    /// state; successful exchange stores a new secret version after GitHub identity checks.
+    /// </summary>
     public async Task<CopilotConnectionReceipt> CompleteAsync(
         RuntimeActorAuthorization actor, string issuer, string actorId,
         string state, string? code, string? callbackCookie, string? error, CancellationToken cancellationToken)
@@ -127,6 +153,7 @@ public sealed class CopilotConnectionAuthority(
             }, null, cancellationToken);
     }
 
+    /// <summary>Returns safe status only after checking ownership and current Projects write authority.</summary>
     public async Task<CopilotConnectionReceipt> ReadStatusAsync(
         RuntimeActorAuthorization actor, string issuer, string actorId,
         Guid connectionId, CancellationToken cancellationToken)
@@ -138,6 +165,11 @@ public sealed class CopilotConnectionAuthority(
         return Receipt(current);
     }
 
+    /// <summary>
+    /// Refreshes a connected credential only at the caller's expected revision. A refresh
+    /// whose upstream outcome is uncertain is never blindly replayed; the stored state
+    /// records that uncertainty for explicit recovery.
+    /// </summary>
     public async Task<CopilotConnectionReceipt> RefreshAsync(
         RuntimeActorAuthorization actor, string issuer, string actorId,
         Guid connectionId, long expectedRevision, CancellationToken cancellationToken)
@@ -181,6 +213,7 @@ public sealed class CopilotConnectionAuthority(
         }
     }
 
+    /// <summary>Appends a revoked connection revision after rechecking owner authority and expected revision.</summary>
     public async Task<CopilotConnectionReceipt> RevokeAsync(
         RuntimeActorAuthorization actor, string issuer, string actorId,
         Guid connectionId, long expectedRevision, CancellationToken cancellationToken)
@@ -195,6 +228,10 @@ public sealed class CopilotConnectionAuthority(
         return Receipt(row);
     }
 
+    /// <summary>
+    /// Resolves the registration's hosted-Copilot reference to a connected, fresh
+    /// credential reference with matching owner, project or platform scope.
+    /// </summary>
     internal async Task<CopilotConnectionRecord> RequireCurrentAsync(
         RuntimeBinding binding, CancellationToken cancellationToken)
     {
@@ -213,6 +250,11 @@ public sealed class CopilotConnectionAuthority(
         return row;
     }
 
+    /// <summary>
+    /// Exchanges an authorization code or refresh token, confirms the returned GitHub
+    /// account, writes the new token envelope, and commits it with a compare-and-swap
+    /// connection revision. On an ambiguous exchange it records an indeterminate state.
+    /// </summary>
     private async Task<CopilotConnectionReceipt> RotateAsync(
         CopilotConnectionRecord row, RuntimeActorAuthorization actor, string issuer, string actorId,
         Dictionary<string, string> parameters, string? expectedUserId, CancellationToken cancellationToken)
@@ -324,6 +366,10 @@ public sealed class CopilotConnectionAuthority(
         }
     }
 
+    /// <summary>
+    /// Loads current Projects authority and, for project scope, an active project record.
+    /// Missing, mismatched, expired or insufficient owner evidence denies the operation.
+    /// </summary>
     private async Task<ProjectAuthorizationContextResponse> RequireWriteAuthorityAsync(
         RuntimeActorAuthorization actor, string issuer, string actorId,
         ProjectAuthorityResourceType scope, string scopeId, CancellationToken cancellationToken)
@@ -374,6 +420,11 @@ public sealed class CopilotConnectionAuthority(
             throw Denied("copilot_connection_revision_stale");
     }
 
+    /// <summary>
+    /// Advances the mutable connection row only at its observed revision and appends the
+    /// matching audit snapshot in the same transaction; optional authority is rechecked
+    /// before commit.
+    /// </summary>
     private async Task TransitionAsync(
         CopilotConnectionRecord row, CopilotConnectionState state, CancellationToken cancellationToken,
         Func<CancellationToken, Task>? revalidate = null)

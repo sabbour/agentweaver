@@ -97,6 +97,11 @@ function PolicySummary({
   );
 }
 
+/**
+ * Loads and renders the effective permissions for the selected project through the permissions
+ * API. Project identity and display props come from the parent; effect state covers loading and
+ * request failures so stale permissions are not presented as current.
+ */
 export function EffectivePermissionsPanel({
   runId,
 }: {

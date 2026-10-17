@@ -4,8 +4,10 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Orchestrator.Core;
 
+/// <summary>Opaque identifier and revision for an owner-issued permission grant.</summary>
 public sealed record ExecutableActionGrantReference(string GrantId, string Revision);
 
+/// <summary>Lifecycle state returned by the current grant owner.</summary>
 public enum ExecutableActionGrantState
 {
     Active,
@@ -14,6 +16,7 @@ public enum ExecutableActionGrantState
     Superseded
 }
 
+/// <summary>Validated owner grant binding an actor, run, step, action set, purpose, fence, and expiry.</summary>
 public sealed record ValidatedExecutableActionGrant(
     ExecutableActionGrantReference Reference,
     ExecutableActionGrantState State,
@@ -29,6 +32,7 @@ public sealed record ValidatedExecutableActionGrant(
     long Fence,
     DateTimeOffset ExpiresAt);
 
+/// <summary>Current lookup result category; anything other than Current blocks the protected effect.</summary>
 public enum ExecutableActionGrantLookupStatus
 {
     Current,
@@ -39,21 +43,26 @@ public enum ExecutableActionGrantLookupStatus
     Error
 }
 
+/// <summary>Grant lookup outcome returned by the authoritative grant owner.</summary>
 public sealed record ExecutableActionGrantLookupResult(
     ExecutableActionGrantLookupStatus Status,
     ValidatedExecutableActionGrant? Grant = null)
 {
+    /// <summary>Creates a current result for a validated grant.</summary>
     public static ExecutableActionGrantLookupResult Current(ValidatedExecutableActionGrant grant) =>
         new(ExecutableActionGrantLookupStatus.Current, grant);
 }
 
+/// <summary>Reads the current grant state immediately before and after protected-effect preparation.</summary>
 public interface IExecutableActionGrantOwnerLookup
 {
+    /// <summary>Returns the current state for an exact grant reference; implementations must not substitute another grant.</summary>
     Task<ExecutableActionGrantLookupResult> GetCurrentAsync(
         ExecutableActionGrantReference reference,
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>Persistence outcome for an immutable source receipt.</summary>
 public enum ExecutableActionSourceReceiptWriteStatus
 {
     Unavailable,
@@ -62,9 +71,11 @@ public enum ExecutableActionSourceReceiptWriteStatus
     Rejected
 }
 
+/// <summary>Result of storing a source receipt; only a newly stored receipt permits this flow to continue.</summary>
 public sealed record ExecutableActionSourceReceiptWriteResult(
     ExecutableActionSourceReceiptWriteStatus Status);
 
+/// <summary>Owner-local evidence tying an allowed action to its grant and pinned policy provider.</summary>
 public sealed class ExecutableActionSourceReceipt
 {
     internal ExecutableActionSourceReceipt(
@@ -98,11 +109,13 @@ public sealed class ExecutableActionSourceReceipt
 /// </summary>
 public interface IExecutableActionSourceReceiptWriter
 {
+    /// <summary>Stores immutable owner-local evidence; duplicate, rejected, or unavailable writes do not authorize effects.</summary>
     Task<ExecutableActionSourceReceiptWriteResult> StoreAsync(
         ExecutableActionSourceReceipt receipt,
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>Durable record of a deny or error policy result when an allowed action cannot be evidenced.</summary>
 public sealed record ExecutableActionPolicyEvaluationReceipt(
     Guid ReceiptId,
     string SessionId,
@@ -118,23 +131,29 @@ public sealed record ExecutableActionPolicyEvaluationReceipt(
     int OptionsSchemaVersion,
     string OptionsRevision);
 
+/// <summary>Persists policy evaluation evidence before it is appended to the session journal.</summary>
 public interface IExecutableActionPolicyEvaluationReceiptWriter
 {
+    /// <summary>Stores one immutable evaluation receipt and reports whether storage accepted it.</summary>
     Task<ExecutableActionSourceReceiptWriteResult> StoreAsync(
         ExecutableActionPolicyEvaluationReceipt receipt,
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>Indicates whether the journal accepted the exact receipt or already contained it.</summary>
 public sealed record ExecutableActionPolicyEvaluationAppendResult(bool IsDuplicate);
 
+/// <summary>Appends the receipt reference to the session journal after owner-local evidence is durable.</summary>
 public interface IExecutableActionPolicyEvaluationJournal
 {
+    /// <summary>Appends the exact receipt ID under its project, run, and session identity.</summary>
     Task<ExecutableActionPolicyEvaluationAppendResult> AppendReceiptAsync(
         SessionIdentity identity,
         Guid receiptId,
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>Caller and exact action context supplied to the guarded effect path.</summary>
 public sealed record ExecutableActionInvocation(
     ClaimsPrincipal Caller,
     string SessionId,
@@ -146,12 +165,17 @@ public sealed record ExecutableActionInvocation(
     PinnedProviderBinding? PolicyBinding,
     Guid EventId);
 
+/// <summary>Policy result and whether the guarded effect actually ran.</summary>
 public sealed record ExecutableActionGuardResult<T>(
     PolicyEvaluationOutcome Outcome,
     PolicyEvaluationReasonCode ReasonCode,
     bool EffectInvoked,
     T? EffectResult);
 
+/// <summary>
+/// Authorizes a protected effect only after policy allow, source-receipt storage, journal acknowledgment,
+/// and repeated current-grant checks. Any incomplete authority or evidence path fails closed.
+/// </summary>
 public sealed class ExecutableActionGuard(
     AgtPolicyProvider? policyProvider,
     AgtPolicyProviderOptions? policyOptions,
@@ -163,6 +187,10 @@ public sealed class ExecutableActionGuard(
 {
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
+    /// <summary>
+    /// Revalidates caller and grant, evaluates pinned policy, persists and journals evidence, then invokes the effect.
+    /// </summary>
+    /// <returns>A deny/error result without invoking the effect when any prerequisite is missing or rejected.</returns>
     public async Task<ExecutableActionGuardResult<T>> ExecuteAsync<T>(
         ExecutableActionInvocation invocation,
         Func<CancellationToken, Task<T>> protectedEffect,
@@ -303,6 +331,7 @@ public sealed class ExecutableActionGuard(
                 ? PolicyEvaluationReasonCode.ProviderUnavailable
                 : PolicyEvaluationReasonCode.EvaluationFailed);
 
+        // Evidence is durable before its journal reference is appended, and authority is checked again before the effect.
         var authorityError = await RevalidateCurrentGrantAsync(
             invocation, issuer, actorId, projectId, runId, grant, policyOptions, cancellationToken)
             .ConfigureAwait(false);

@@ -12,6 +12,10 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Issues and reads executable-action grants and persists policy-evaluation receipts in PostgreSQL.
+/// Each grant and receipt is bound to the accepted run, session writer, execution fence, and current selection authority.
+/// </summary>
 internal sealed class ExecutableActionGrantOwnerStore(
     NpgsqlDataSource dataSource,
     OrchestratorOptions options,
@@ -27,6 +31,17 @@ internal sealed class ExecutableActionGrantOwnerStore(
     private readonly string _schema = $"\"{options.Schema}\"";
     private readonly PostgresOutbox _outbox = new(dataSource, options.Schema);
 
+    /// <summary>
+    /// Issues a runtime action grant after validating the registration, accepted selection, and active child session.
+    /// </summary>
+    /// <param name="context">The authenticated request context used to reread run authority.</param>
+    /// <param name="registration">The runtime registration and its immutable owner binding.</param>
+    /// <param name="request">The runtime action request to authorize.</param>
+    /// <param name="cancellationToken">Cancels database and authority reads.</param>
+    /// <param name="reserveToolInvocation">When true, reserves a tool call under a run-scoped lock and enforces its limit.</param>
+    /// <returns>The grant reference derived from the action event ID.</returns>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when registration, actor, decision, selection, or dispatch admission is stale or invalid.</exception>
+    /// <remarks>Grant creation and any tool-invocation outbox reservation commit together, making retries idempotent by event ID and request hash.</remarks>
     internal async Task<ExecutableActionGrantReference> IssueRuntimeActionGrantAsync(
         HttpContext context, RuntimeRegistration registration, RuntimeActionRequest request,
         CancellationToken cancellationToken, bool reserveToolInvocation = false)
@@ -193,6 +208,13 @@ internal sealed class ExecutableActionGrantOwnerStore(
         return reference;
     }
 
+    /// <summary>
+    /// Requires that a runtime tool action already has a matching admission reservation.
+    /// </summary>
+    /// <param name="registration">The runtime registration that owns the request.</param>
+    /// <param name="request">The tool invocation request to verify.</param>
+    /// <param name="cancellationToken">Cancels the outbox read.</param>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the request is not bound to the registration or lacks its reservation.</exception>
     internal async Task RequireToolInvocationReservationAsync(
         RuntimeRegistration registration, RuntimeActionRequest request, CancellationToken cancellationToken)
     {
@@ -206,6 +228,15 @@ internal sealed class ExecutableActionGrantOwnerStore(
             throw new RuntimeAuthorizationException("runtime_tool_invocation_admission_required");
     }
 
+    /// <summary>
+    /// Checks the outbox for a reservation matching this event ID and request hash.
+    /// </summary>
+    /// <param name="connection">The database connection.</param>
+    /// <param name="transaction">The optional transaction that must contain the reservation.</param>
+    /// <param name="request">The tool action whose reservation is checked.</param>
+    /// <param name="cancellationToken">Cancels the database read.</param>
+    /// <returns><see langword="true"/> for a matching reservation, or <see langword="false"/> when no event exists.</returns>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the event ID belongs to a different event or request hash.</exception>
     private async Task<bool> HasToolInvocationReservationAsync(
         NpgsqlConnection connection, NpgsqlTransaction? transaction, RuntimeActionRequest request,
         CancellationToken cancellationToken)
@@ -224,6 +255,9 @@ internal sealed class ExecutableActionGrantOwnerStore(
         return true;
     }
 
+    /// <summary>
+    /// Adds the common project, run, session, actor, tenant, fence, and selection parameters to an owner query.
+    /// </summary>
     private static void BindRuntime(NpgsqlCommand command, RuntimeBinding binding)
     {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, binding.ProjectId);
@@ -236,6 +270,13 @@ internal sealed class ExecutableActionGrantOwnerStore(
         command.Parameters.AddWithValue("selectionHash", NpgsqlDbType.Char, binding.AcceptedSelectionHash.ToUpperInvariant());
     }
 
+    /// <summary>
+    /// Looks up a grant and returns it only if it remains current for the caller and accepted run.
+    /// </summary>
+    /// <param name="reference">The grant ID and requested revision.</param>
+    /// <param name="cancellationToken">Cancels authority and database reads.</param>
+    /// <returns>A current validated grant, or a status describing unknown, stale, revoked, expired, or unavailable state.</returns>
+    /// <remarks>Selection authority and the grant row are read together; changed selection, actor, tenant, role, or fences revoke use.</remarks>
     public async Task<ExecutableActionGrantLookupResult> GetCurrentAsync(
         ExecutableActionGrantReference reference,
         CancellationToken cancellationToken = default)
@@ -332,6 +373,13 @@ internal sealed class ExecutableActionGrantOwnerStore(
         return ExecutableActionGrantLookupResult.Current(snapshot.Grant);
     }
 
+    /// <summary>
+    /// Reads the grant and its linked run, session, current decision, and source-control intent state.
+    /// </summary>
+    /// <param name="scope">The project and run whose grant is being looked up.</param>
+    /// <param name="grantId">The grant identifier.</param>
+    /// <param name="cancellationToken">Cancels the database read.</param>
+    /// <returns>The joined grant snapshot, or <see langword="null"/> when no eligible row is present.</returns>
     private async Task<GrantCurrentSnapshot?> ReadGrantSnapshotAsync(
         CoordinationRunScope scope,
         string grantId,
@@ -474,6 +522,13 @@ internal sealed class ExecutableActionGrantOwnerStore(
             reader.GetString(5));
     }
 
+    /// <summary>
+    /// Persists an allow-policy source receipt emitted by a runtime action.
+    /// </summary>
+    /// <param name="receipt">The action receipt and the grant/provider binding that authorized it.</param>
+    /// <param name="cancellationToken">Cancels database and authority checks.</param>
+    /// <returns>Stored, duplicate, rejected, or unavailable status; caller cancellation is rethrown.</returns>
+    /// <remarks>The grant must still be current. Invalid or stale evidence is rejected; unexpected storage failures are reported as unavailable.</remarks>
     public async Task<ExecutableActionSourceReceiptWriteResult> StoreAsync(
         ExecutableActionSourceReceipt receipt,
         CancellationToken cancellationToken = default)
@@ -535,6 +590,13 @@ internal sealed class ExecutableActionGrantOwnerStore(
         }
     }
 
+    /// <summary>
+    /// Persists a deny or error policy-evaluation receipt from the authenticated runtime caller.
+    /// </summary>
+    /// <param name="receipt">The denial or failure evidence to record.</param>
+    /// <param name="cancellationToken">Cancels database and authority checks.</param>
+    /// <returns>Stored, duplicate, rejected, or unavailable status; caller cancellation is rethrown.</returns>
+    /// <remarks>Denied/error receipts may refer to an issued grant that is no longer effective, but still require current session and selection authority.</remarks>
     public async Task<ExecutableActionSourceReceiptWriteResult> StoreAsync(
         ExecutableActionPolicyEvaluationReceipt receipt,
         CancellationToken cancellationToken = default)
@@ -622,6 +684,18 @@ internal sealed class ExecutableActionGrantOwnerStore(
         }
     }
 
+    /// <summary>
+    /// Validates the grant, inserts a receipt idempotently, verifies any existing row, and rechecks writer authority.
+    /// </summary>
+    /// <param name="actor">The issuer and subject allowed to write the receipt.</param>
+    /// <param name="identity">The owning project, run, and session.</param>
+    /// <param name="receiptId">The idempotency key for this receipt.</param>
+    /// <param name="evidence">The policy provider's decision and pinned options.</param>
+    /// <param name="requireCurrentGrant">Whether the grant must remain effective at write time.</param>
+    /// <param name="cancellationToken">Cancels database and authority checks.</param>
+    /// <returns>Stored for a new receipt or duplicate for an identical existing receipt.</returns>
+    /// <exception cref="CoordinationException">Thrown when the writer, grant, or existing receipt conflicts with the supplied evidence.</exception>
+    /// <remarks>Receipt insertion, conflict verification, and owner-session checks occur in one PostgreSQL transaction.</remarks>
     private async Task<ExecutableActionSourceReceiptWriteResult> PersistReceiptAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -687,6 +761,15 @@ internal sealed class ExecutableActionGrantOwnerStore(
             : ExecutableActionSourceReceiptWriteStatus.Duplicate);
     }
 
+    /// <summary>
+    /// Reads a receipt only when its issuer and actor match the requesting actor.
+    /// </summary>
+    /// <param name="actor">The caller identity required to read the receipt.</param>
+    /// <param name="projectId">The project containing the receipt.</param>
+    /// <param name="runId">The run containing the receipt.</param>
+    /// <param name="receiptId">The receipt identifier.</param>
+    /// <param name="cancellationToken">Cancels the database read.</param>
+    /// <returns>The receipt view, or <see langword="null"/> when missing or owned by another actor.</returns>
     internal async Task<PolicyEvaluationReceiptView?> ReadReceiptAsync(
         CoordinationActor actor,
         string projectId,
@@ -738,6 +821,16 @@ internal sealed class ExecutableActionGrantOwnerStore(
             reader.GetFieldValue<DateTimeOffset>(16));
     }
 
+    /// <summary>
+    /// Loads and validates a policy receipt before it is admitted to the session event journal.
+    /// </summary>
+    /// <param name="actor">The authenticated actor that must own the receipt.</param>
+    /// <param name="projectId">The expected project.</param>
+    /// <param name="runId">The expected run.</param>
+    /// <param name="receiptId">The receipt to admit.</param>
+    /// <param name="cancellationToken">Cancels owner and database checks.</param>
+    /// <returns>The validated receipt view.</returns>
+    /// <exception cref="CoordinationException">Thrown when the receipt is absent, not owned by this actor, or inconsistent with current run authority.</exception>
     internal async Task<PolicyEvaluationReceiptView> ValidateReceiptAdmissionAsync(
         CoordinationActor actor,
         string projectId,
@@ -775,6 +868,18 @@ internal sealed class ExecutableActionGrantOwnerStore(
         return receipt;
     }
 
+    /// <summary>
+    /// Rechecks caller, selection, active owner session, and optionally the currently effective action grant.
+    /// </summary>
+    /// <param name="actor">The expected receipt writer.</param>
+    /// <param name="identity">The receipt's session scope.</param>
+    /// <param name="evidence">The decision evidence being admitted.</param>
+    /// <param name="requireCurrentGrant">Whether the referenced grant must still be effective.</param>
+    /// <param name="cancellationToken">Cancels authority and database reads.</param>
+    /// <param name="ownerConnection">Optional connection for a caller-owned atomic write.</param>
+    /// <param name="ownerTransaction">Optional transaction paired with <paramref name="ownerConnection"/>.</param>
+    /// <exception cref="CoordinationException">Thrown when caller scope, selection, writer state, or grant authority has changed.</exception>
+    /// <remarks>The selection hash is read before the row-locked session check and then reread to detect authority changes during validation.</remarks>
     private async Task ValidateReceiptWriterAuthorityAsync(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -849,6 +954,9 @@ internal sealed class ExecutableActionGrantOwnerStore(
         }
     }
 
+    /// <summary>
+    /// Rereads project authority and rejects a receipt when the selection hash changed during validation.
+    /// </summary>
     private async Task ValidateReceiptWriterSelectionUnchangedAsync(
         HttpContext context,
         CoordinationActor actor,
@@ -864,6 +972,11 @@ internal sealed class ExecutableActionGrantOwnerStore(
                 "policy_receipt_admission_denied", StatusCodes.Status403Forbidden);
     }
 
+    /// <summary>
+    /// Reads the currently authorized run selection and verifies its actor, tenant, and project/run binding.
+    /// </summary>
+    /// <returns>The SHA-256 of the accepted selection snapshot.</returns>
+    /// <exception cref="CoordinationException">Thrown when authority no longer matches the receipt writer.</exception>
     private async Task<string> ReadCurrentReceiptWriterSelectionHashAsync(
         HttpContext context,
         CoordinationActor actor,
@@ -884,6 +997,10 @@ internal sealed class ExecutableActionGrantOwnerStore(
             Encoding.UTF8.GetBytes(authorized.Selection.Snapshot.GetRawText())));
     }
 
+    /// <summary>
+    /// Locks and validates the session and accepted-run rows against the receipt writer and selection hash.
+    /// </summary>
+    /// <remarks>The shared row locks keep the checked owner state stable until the surrounding transaction completes.</remarks>
     private async Task ValidateCurrentOwnerSessionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -918,12 +1035,18 @@ internal sealed class ExecutableActionGrantOwnerStore(
                 "policy_receipt_admission_denied", StatusCodes.Status403Forbidden);
     }
 
+    /// <summary>
+    /// Checks that receipt evidence identifies the supported policy provider and a bounded options revision.
+    /// </summary>
     private static bool IsValidPolicyProviderEvidence(PolicyEvaluationSessionPayload evidence) =>
         evidence.ProviderId == AgtPolicyProvider.ProviderId &&
         evidence.AdapterVersion == AgtPolicyProvider.AdapterVersion.ToString() &&
         evidence.OptionsSchemaVersion == AgtPolicyProvider.OptionsSchemaVersion &&
         IsIdentifier(evidence.OptionsRevision);
 
+    /// <summary>
+    /// Checks whether the evidence names the active grant with matching identity, action, purpose, and fences.
+    /// </summary>
     private async Task<bool> IsCurrentGrantForReceiptAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -970,6 +1093,10 @@ internal sealed class ExecutableActionGrantOwnerStore(
             reader.GetInt64(14) == evidence.Fence;
     }
 
+    /// <summary>
+    /// Checks whether an issued grant matches the evidence even if it is no longer current or effective.
+    /// </summary>
+    /// <remarks>This relaxed check supports persisted deny/error receipts without allowing use of a stale grant as an allow.</remarks>
     private async Task<bool> IsIssuedGrantForReceiptAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1019,6 +1146,9 @@ internal sealed class ExecutableActionGrantOwnerStore(
             reader.GetString(16) != "completed";
     }
 
+    /// <summary>
+    /// Reads the receipt row within the caller's transaction for idempotency and exact-content checks.
+    /// </summary>
     private async Task<StoredReceipt?> ReadReceiptRowAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1045,6 +1175,9 @@ internal sealed class ExecutableActionGrantOwnerStore(
             : null;
     }
 
+    /// <summary>
+    /// Binds receipt evidence to the typed database parameters used for insert.
+    /// </summary>
     private static void BindReceipt(
         NpgsqlCommand command,
         CoordinationActor actor,
@@ -1072,6 +1205,10 @@ internal sealed class ExecutableActionGrantOwnerStore(
         command.Parameters.AddWithValue("optionsRevision", NpgsqlDbType.Varchar, evidence.OptionsRevision);
     }
 
+    /// <summary>
+    /// Rejects receipt identifiers, metadata, fences, or outcome/reason pairs outside the persisted contract.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when any required field or outcome/reason combination is invalid.</exception>
     private static void ValidateReceipt(
         SessionIdentity identity,
         Guid receiptId,
@@ -1089,6 +1226,9 @@ internal sealed class ExecutableActionGrantOwnerStore(
             throw new CoordinationException("policy_receipt_invalid", StatusCodes.Status400BadRequest);
     }
 
+    /// <summary>
+    /// Allows only outcome and reason combinations emitted by the policy evaluator.
+    /// </summary>
     private static bool IsValidOutcomeReason(
         PolicyEvaluationOutcome outcome,
         PolicyEvaluationReasonCode reason) =>
@@ -1105,6 +1245,9 @@ internal sealed class ExecutableActionGrantOwnerStore(
             _ => false
         };
 
+    /// <summary>
+    /// Parses the database's stable lowercase outcome value.
+    /// </summary>
     private static PolicyEvaluationOutcome ParseOutcome(string value) => value switch
     {
         "allow" => PolicyEvaluationOutcome.Allow,
@@ -1113,6 +1256,9 @@ internal sealed class ExecutableActionGrantOwnerStore(
         _ => throw new InvalidOperationException("Stored policy receipt outcome is invalid.")
     };
 
+    /// <summary>
+    /// Parses the database's stable lowercase reason value.
+    /// </summary>
     private static PolicyEvaluationReasonCode ParseReason(string value) => value switch
     {
         "allowed" => PolicyEvaluationReasonCode.Allowed,
@@ -1126,20 +1272,32 @@ internal sealed class ExecutableActionGrantOwnerStore(
         _ => throw new InvalidOperationException("Stored policy receipt reason is invalid.")
     };
 
+    /// <summary>
+    /// Converts a typed enum value to the snake-case representation stored in PostgreSQL.
+    /// </summary>
     private static string ToDatabaseValue<T>(T value) where T : struct, Enum =>
         JsonNamingPolicy.SnakeCaseLower.ConvertName(value.ToString());
 
+    /// <summary>
+    /// Checks for a non-empty identifier of bounded length with only supported identifier characters.
+    /// </summary>
     private static bool IsIdentifier(string? value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= MaximumIdLength &&
         value.All(character => char.IsAsciiLetterOrDigit(character) ||
             character is '.' or '_' or '-' or ':');
 
+    /// <summary>
+    /// Adds project and run parameters to receipt queries.
+    /// </summary>
     private static void AddIdentity(NpgsqlCommand command, SessionIdentity identity)
     {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, identity.ProjectId);
         command.Parameters.AddWithValue("run", NpgsqlDbType.Varchar, identity.RunId);
     }
 
+    /// <summary>
+    /// The exact policy receipt fields read from storage for idempotent write verification.
+    /// </summary>
     private sealed record StoredReceipt(
         string Issuer,
         string ActorId,
@@ -1157,6 +1315,9 @@ internal sealed class ExecutableActionGrantOwnerStore(
         int OptionsSchemaVersion,
         string OptionsRevision);
 
+    /// <summary>
+    /// The grant row together with the run, session, selection, and source-intent state used by grant lookup.
+    /// </summary>
     private sealed record GrantCurrentSnapshot(
         ValidatedExecutableActionGrant Grant,
         bool IsCurrent,

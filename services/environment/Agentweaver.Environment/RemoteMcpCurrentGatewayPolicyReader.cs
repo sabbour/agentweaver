@@ -7,6 +7,7 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Versioned configuration for the in-process managed Remote MCP gateway policy handler.</summary>
 public sealed record RemoteMcpManagedGatewayProviderOptions(
     string ProviderId,
     string AdapterVersion,
@@ -17,6 +18,7 @@ public sealed record RemoteMcpManagedGatewayProviderOptions(
     public const string L7Capability = "networkpolicy.l7";
     public const string RemoteMcpCapability = "networkpolicy.remote-mcp";
 
+    /// <summary>Validates explicit provider metadata and a canonical HTTPS gateway endpoint.</summary>
     public RemoteMcpManagedGatewayProviderOptions Validate()
     {
         if (string.IsNullOrWhiteSpace(ProviderId) || ProviderId.Length > 256 || ProviderId.Any(char.IsControl) ||
@@ -28,12 +30,14 @@ public sealed record RemoteMcpManagedGatewayProviderOptions(
         return this;
     }
 
+    /// <summary>Hashes the validated provider settings so policy receipts can pin the exact configuration.</summary>
     public string Sha256()
     {
         Validate();
         return Hash(JsonSerializer.SerializeToUtf8Bytes(this));
     }
 
+    /// <summary>Builds the provider registration and its declared L7 and Remote MCP capabilities.</summary>
     public ProviderRegistration CreateRegistration()
     {
         Validate();
@@ -43,30 +47,40 @@ public sealed record RemoteMcpManagedGatewayProviderOptions(
             true, OptionsRevision, OptionsSchemaVersion);
     }
 
+    /// <summary>Returns the lowercase SHA-256 digest used to pin managed gateway provider options.</summary>
     internal static string Hash(ReadOnlySpan<byte> bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 }
 
+/// <summary>Reports the active gateway descriptor and the handler's current verification receipt.</summary>
 public sealed record RemoteMcpManagedGatewayActiveState(
     RemoteMcpManagedGatewayGateDescriptor Descriptor,
     RemoteMcpManagedGatewayPolicyReceipt Receipt);
 
 // The managed handler returns its actual current descriptor and a fresh Verify receipt.
+/// <summary>Reads the exact gateway policy currently enforced by the managed handler.</summary>
 public interface IRemoteMcpManagedGatewayStateReader
 {
+    /// <summary>Returns current state for the supplied live call after validating its actor context.</summary>
     Task<RemoteMcpManagedGatewayActiveState> ReadCurrentAsync(
         RemoteMcpNativeCallContext currentCall, CancellationToken cancellationToken);
 }
 
+/// <summary>Pairs a current gateway policy binding with evidence from its managed handler.</summary>
 public sealed record RemoteMcpCurrentGatewayPolicyReadResult(
     RemoteMcpCurrentGatewayPolicyBinding GatewayPolicy,
     RemoteMcpManagedGatewayPolicyReceipt HandlerReceipt)
 {
     // This reader has object and handler evidence, not a forced-mediation proof producer.
+    /// <summary>Fails closed because a policy record and handler receipt do not prove forced network mediation.</summary>
     public void RequireDispatchEnforcement() =>
         throw new RuntimeAuthorizationException("remote_mcp_forced_network_enforcement_unavailable");
 }
 
+/// <summary>
+/// Re-reads owner authorization, selected egress policy, Cilium state, and gateway state before a Remote MCP dispatch.
+/// This reader intentionally does not claim that those observations prove forced L7 mediation.
+/// </summary>
 public sealed class RemoteMcpCurrentGatewayPolicyReader(
     IProjectsConfigClient projects,
     IEnvironmentLifecycleStore lifecycle,
@@ -75,6 +89,7 @@ public sealed class RemoteMcpCurrentGatewayPolicyReader(
     RemoteMcpManagedGatewayProviderOptions gatewayOptions,
     IRemoteMcpManagedGatewayStateReader managedState)
 {
+    /// <summary>Reads and compares the current network and gateway bindings against the accepted tool proof.</summary>
     public async Task<RemoteMcpCurrentGatewayPolicyReadResult> ReadCurrentAsync(
         RemoteMcpNativeCallContext currentCall, CancellationToken cancellationToken)
     {
@@ -145,6 +160,7 @@ public sealed class RemoteMcpCurrentGatewayPolicyReader(
         return new(binding, currentState.Receipt);
     }
 
+    /// <summary>Rejects dispatch until the current result can prove forced network enforcement.</summary>
     public async Task<RemoteMcpCurrentGatewayPolicyBinding> VerifyForDispatchAsync(
         RemoteMcpNativeCallContext currentCall, CancellationToken cancellationToken)
     {
@@ -153,6 +169,7 @@ public sealed class RemoteMcpCurrentGatewayPolicyReader(
         return current.GatewayPolicy;
     }
 
+    /// <summary>Requires exactly one layered L3/L4 and L7 network provider selection matching pinned revisions.</summary>
     private void RequireSelection(
         EffectiveNetworkPolicySelection selection, RemoteToolResultProof proof,
         RemoteMcpManagedGatewayProviderOptions options)

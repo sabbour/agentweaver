@@ -3,6 +3,7 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.EventsAndSessions.Cost;
 
+/// <summary>Configures the immutable Copilot AI-credit rate card and its run-scoped resource identity.</summary>
 public sealed record CopilotCostProviderOptions(
     string ResourceId,
     long ResourceGeneration,
@@ -13,6 +14,8 @@ public sealed record CopilotCostProviderOptions(
     public const int CurrentOptionsSchemaVersion = 1;
     public const decimal NanoAiuPerAiCredit = 1_000_000_000m;
 
+    /// <summary>Reads an optional rate card from configuration and validates its units and model rates.</summary>
+    /// <returns>Null when absent; incomplete or unsupported configuration throws.</returns>
     public static CopilotCostProviderOptions? FromConfiguration(IConfigurationSection section)
     {
         if (!section.Exists())
@@ -36,6 +39,7 @@ public sealed record CopilotCostProviderOptions(
         return options;
     }
 
+    /// <summary>Checks that the rate card uses nano-AIU per AI credit and positive model multipliers.</summary>
     public void Validate()
     {
         if (!IsToken(ResourceId, 256) || ResourceGeneration < 1 ||
@@ -52,6 +56,7 @@ public sealed record CopilotCostProviderOptions(
             throw new ArgumentException("Copilot Cost provider options or rate card are invalid.");
     }
 
+    /// <summary>Returns an immutable rate-card copy for binding and accounting.</summary>
     internal CostRateCard SnapshotRateCard()
     {
         Validate();

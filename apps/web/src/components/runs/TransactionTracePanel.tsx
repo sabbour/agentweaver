@@ -1129,6 +1129,11 @@ function TraceEvents({
   );
 }
 
+/**
+ * Loads and renders a run's distributed trace and persisted event details through the API and
+ * `useRunStream`. Effects manage initial retry, stream updates, and panel state; malformed or
+ * unavailable trace data is surfaced through the panel's empty/error states.
+ */
 export function TransactionTracePanel({
   runId,
   title = 'Transaction trace',

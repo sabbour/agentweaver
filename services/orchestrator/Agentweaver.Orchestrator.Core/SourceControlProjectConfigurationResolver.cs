@@ -7,12 +7,14 @@ using Agentweaver.Providers;
 
 namespace Agentweaver.Orchestrator.Core;
 
+/// <summary>Why accepted project Source Control configuration could not be loaded.</summary>
 public enum SourceControlProjectConfigurationFailure
 {
     Missing,
     Invalid
 }
 
+/// <summary>Typed configuration failure distinguishing absence from malformed or unsupported values.</summary>
 public sealed class SourceControlProjectConfigurationException(
     SourceControlProjectConfigurationFailure failure,
     string message,
@@ -22,6 +24,10 @@ public sealed class SourceControlProjectConfigurationException(
     public SourceControlProjectConfigurationFailure Failure { get; } = failure;
 }
 
+/// <summary>
+/// Reads Source Control configuration from the immutable accepted-selection snapshot and pins the
+/// negotiated repository. It never substitutes current project settings for the accepted snapshot.
+/// </summary>
 public static class SourceControlProjectConfigurationResolver
 {
     private static readonly JsonSerializerOptions ConfigurationJsonOptions =
@@ -31,6 +37,8 @@ public static class SourceControlProjectConfigurationResolver
             UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
         };
 
+    /// <summary>Deserializes accepted project settings with unknown JSON fields rejected.</summary>
+    /// <exception cref="SourceControlProjectConfigurationException">Settings are missing or invalid.</exception>
     public static SourceControlProjectSettings Resolve(JsonElement acceptedSelectionSnapshot)
     {
         if (acceptedSelectionSnapshot.ValueKind != JsonValueKind.Object ||
@@ -60,6 +68,7 @@ public static class SourceControlProjectConfigurationResolver
         }
     }
 
+    /// <summary>Validates the accepted run snapshot and pins a repository using configured SecretRef credentials.</summary>
     public static SourceControlRepositoryPin PinNegotiatedRepository(
         JsonElement acceptedSelectionSnapshot,
         ProviderCatalog catalog,
@@ -102,6 +111,10 @@ public static class SourceControlProjectConfigurationResolver
             pinnedAt);
     }
 
+    /// <summary>
+    /// Pins a GitHub App repository after matching the exact Identity connection and one-time selection code hash.
+    /// Removes issue-write capability unless the Identity binding explicitly granted it.
+    /// </summary>
     public static SourceControlRepositoryPin PinNegotiatedGitHubAppRepository(
         JsonElement acceptedSelectionSnapshot,
         ProviderCatalog catalog,

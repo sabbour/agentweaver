@@ -1,18 +1,25 @@
 namespace Agentweaver.Abstractions;
 
+/// <summary>Identifies which provider lifecycle event an Environment report describes.</summary>
 public enum EnvironmentProviderLifecycleReportKind
 {
     Suspend,
     Relocation
 }
 
+/// <summary>Lifecycle report states exposed by the current contract.</summary>
 public enum EnvironmentProviderLifecycleReportState
 {
     Pending
 }
 
+/// <summary>
+/// Provider-to-Environment report for a suspend or relocation event. Validation requires a
+/// versioned provider/resource identity and positive resource and fencing generations.
+/// </summary>
 public sealed record EnvironmentProviderLifecycleReportRequest
 {
+    /// <summary>Creates a report request; required nested fence and resource values cannot be null.</summary>
     public EnvironmentProviderLifecycleReportRequest(
         int contractVersion,
         Guid providerEventId,
@@ -39,9 +46,12 @@ public sealed record EnvironmentProviderLifecycleReportRequest
     public EnvironmentGenerationFence Fence { get; }
     public string AdapterVersion { get; }
     public ProviderResourceRef Resource { get; }
+    /// <summary>Provider-side generation used to reject reports from an older provider operation.</summary>
     public long ProviderFencingGeneration { get; }
     public DateTimeOffset ReportedAt { get; }
 
+    /// <summary>Checks contract version, event identity, adapter version, resource, and fencing values.</summary>
+    /// <exception cref="ArgumentException">The report has an unsupported or invalid field.</exception>
     public EnvironmentProviderLifecycleReportRequest Validate()
     {
         if (ContractVersion < 1 ||
@@ -65,6 +75,10 @@ public sealed record EnvironmentProviderLifecycleReportRequest
     }
 }
 
+/// <summary>
+/// Environment-owned persisted view of an admitted provider lifecycle report, including
+/// the current fence and operation identity used for replay and stale-report checks.
+/// </summary>
 public sealed record EnvironmentProviderLifecycleReportSnapshot(
     EnvironmentGenerationFence Fence,
     Guid ProviderEventId,
@@ -86,5 +100,6 @@ public sealed record EnvironmentProviderLifecycleReportSnapshot(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt)
 {
+    /// <summary>True when this response represents a previously admitted provider event.</summary>
     public bool Replayed { get; init; }
 }

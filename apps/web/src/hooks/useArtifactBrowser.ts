@@ -18,6 +18,7 @@ const POLL_INTERVAL_MS = 3000;
 const RETRY_POLL_INTERVAL_MS = 15000;
 const MAX_SERVER_ERROR_RETRIES = 2;
 
+/** File-list filters offered for a non-historical run. */
 export const FILTERS = [
   { label: 'All', value: 'all' },
   { label: 'Committed', value: 'committed' },
@@ -25,13 +26,13 @@ export const FILTERS = [
   { label: 'Last commit', value: 'last-commit' },
 ] as const;
 
+/** One file-list filter key supported by this hook. */
 export type FilterValue = (typeof FILTERS)[number]['value'];
 
 /**
- * Optional adapter that redirects the artifact browser at a non-standard run's artifacts and review
- * gate. Used by the Coordinator session: it owns no worktree, so files/diff come from the integration
- * branch and the three review actions are delivered to the collective assembly gate instead of the
- * per-run review endpoints. When omitted the hook uses the standard per-run endpoints unchanged.
+ * Optional adapter for artifacts and review actions owned by a non-standard run.
+ * The Coordinator uses its integration branch and collective assembly gate instead
+ * of per-run worktree and review endpoints; omitted callbacks use the standard API.
  */
 export interface ArtifactBrowserAdapter {
   getFiles?: (runId: string, filter: string) => Promise<WorkspaceFileEntry[]>;
@@ -51,10 +52,12 @@ export interface ArtifactBrowserAdapter {
   aiExecutionAvailable?: boolean;
 }
 
+/** Converts API and transport failures to the artifact browser's user-facing message. */
 function extractErrorMessage(err: unknown): string {
   return formatApiErrorMessage(err);
 }
 
+/** Recognizes the temporary conflict returned while a run's workspace is being provisioned. */
 function isWorkspaceProvisioningError(err: unknown): boolean {
   return err instanceof ApiError
     && err.status === 409
@@ -64,6 +67,7 @@ function isWorkspaceProvisioningError(err: unknown): boolean {
     && err.payload.error === 'workspace_provisioning';
 }
 
+/** Browser data, loading/error states, and review actions exposed to artifact views. */
 export interface ArtifactBrowserState {
   runStatus: string;
   commitMessage: string | null;
@@ -106,6 +110,11 @@ export interface ArtifactBrowserState {
   aiExecutionAvailable: boolean;
 }
 
+/**
+ * Loads run files, workspace contents, and selected-file diffs while coordinating review actions.
+ * Live runs poll for updates; terminal runs show an unfiltered historical view. An adapter can
+ * redirect data and review actions to coordinator assembly without changing the consuming UI.
+ */
 export function useArtifactBrowser(
   runId: string,
   runStatus: string,

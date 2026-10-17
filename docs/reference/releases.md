@@ -163,3 +163,16 @@ Package access, environment configuration and actual publication require separat
 The existing registry credential inputs and frozen Probe routes remain unchanged.
 
 The source contains a prepared platform release composition, not an actual deployment or live acceptance gate. Release preparation does not prove Azure acceptance.
+
+## One-use v1.0.0 completion
+
+The one-use continuation for `v1.0.0` is consumed. Run `38997112717` published
+the 11 missing outputs and verified the full 23-output release. It is not a
+retry path. Deployment uses the product source at tag `v1.0.0` (commit
+`c24d0000fe5fc6163e4f38594c39dff782d3a46d`) and a separate helper checkout
+pinned to `5cb088d`. Comments added to AgentHost inputs on the current `v1`
+branch do not change that release checkout.
+
+The continuation did not use the ordinary publication environment approval.
+Its immutable admission, receipt, registry, package-read, and image-validation
+checks remain documented in the [release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md).

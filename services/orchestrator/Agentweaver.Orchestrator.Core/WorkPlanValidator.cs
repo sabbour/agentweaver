@@ -3,8 +3,17 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Orchestrator.Core;
 
+/// <summary>
+/// Validates coordinator proposals against a pinned workflow catalog, selected agents/models,
+/// and immutable Sandbox binding; valid plans receive deterministic ordering for conflicting outputs.
+/// </summary>
 public static class WorkPlanValidator
 {
+    /// <summary>
+    /// Checks the whole plan, including open-step cardinality, joins, acyclic dependencies,
+    /// exact run selections, output bounds, and required provider capabilities.
+    /// </summary>
+    /// <returns>A snapshot only when every contract is valid; otherwise structured issues and no plan value.</returns>
     public static WorkflowValidationResult<WorkPlanSnapshot> ValidateAndSnapshot(
         WorkflowDefinitionSnapshot? workflow,
         WorkPlan? plan,
@@ -139,6 +148,7 @@ public static class WorkPlanValidator
         if (issues.Count > 0)
             return WorkflowValidationResult<WorkPlanSnapshot>.Failure(issues.ToImmutable());
 
+        // Add deterministic edges between output-conflicting items so their writes cannot race.
         var normalizedItems = SerializeOutputConflicts(items, itemIndexes, dependencyMap, stepById);
         var normalizedPlan = plan with { Items = normalizedItems };
         return WorkflowValidationResult<WorkPlanSnapshot>.Success(

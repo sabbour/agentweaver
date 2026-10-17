@@ -6,6 +6,10 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity;
 
+/// <summary>
+/// Creates direct, proxy-free transport to a pinned sandbox Pod IP and verifies its bounded
+/// liveness response before runtime configuration proceeds.
+/// </summary>
 public static class RuntimeSandboxHttpTransport
 {
     private static readonly TimeSpan HealthRequestTimeout = TimeSpan.FromSeconds(10);
@@ -13,12 +17,14 @@ public static class RuntimeSandboxHttpTransport
     internal static readonly HttpRequestOptionsKey<SandboxRuntimeHttpsEndpoint> EndpointOption =
         new("Agentweaver.SandboxRuntimeEndpoint");
 
+    /// <summary>Verifies that the fixed sandbox liveness endpoint returns a small no-store live response.</summary>
     public static async Task VerifyHealthAsync(
         HttpClient client,
         SandboxRuntimeHttpsEndpoint endpoint,
         CancellationToken cancellationToken) =>
         await VerifyHealthAsync(client, endpoint, HealthRequestTimeout, cancellationToken).ConfigureAwait(false);
 
+    /// <summary>Time-bounded health check variant used by tests and host startup policy.</summary>
     internal static async Task VerifyHealthAsync(
         HttpClient client,
         SandboxRuntimeHttpsEndpoint endpoint,
@@ -82,6 +88,10 @@ public static class RuntimeSandboxHttpTransport
         }
     }
 
+    /// <summary>
+    /// Creates a handler that disables redirects and proxies and connects the validated
+    /// sandbox hostname directly to its configured Pod address.
+    /// </summary>
     public static SocketsHttpHandler CreateHandler() => new()
     {
         AllowAutoRedirect = false,

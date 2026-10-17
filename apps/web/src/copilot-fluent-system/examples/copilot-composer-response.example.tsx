@@ -33,6 +33,7 @@ const initialResponse: AzfResponsePart[] = [
   },
 ];
 
+/** Demonstrates a response containing text and confirmation beside a locally controlled composer. */
 export function CopilotComposerResponseExample() {
   const [prompt, setPrompt] = useState('Summarize unhealthy resources in the last 24 hours.');
   const [isRunning, setIsRunning] = useState(false);

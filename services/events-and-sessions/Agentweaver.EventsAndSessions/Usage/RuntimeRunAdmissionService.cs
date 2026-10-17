@@ -5,11 +5,13 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.EventsAndSessions;
 
+/// <summary>Reads accepted selection and pins a run before allowing its Copilot runtime admission.</summary>
 internal sealed class RuntimeRunAdmissionService(
     HttpClient client, ProjectsAuthorizationContextOptions options,
     IProjectsAuthorizationContextClient projects, NativeUsageReceiptConsumer consumer,
     RuntimeModelBindingsResolver models, TimeProvider timeProvider)
 {
+    /// <summary>Requires acceptRunSelection authority and rechecks selection and caller authority around pinning.</summary>
     internal async Task<RuntimeRunAdmissionReceipt> ReadAsync(
         HttpContext context, string projectId, string runId,
         RuntimeRunAdmissionRequest request, CancellationToken cancellationToken)

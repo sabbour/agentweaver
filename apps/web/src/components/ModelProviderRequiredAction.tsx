@@ -8,6 +8,10 @@ import { Button } from '@fluentui/react-components';
 import { useNavigate } from 'react-router-dom';
 import { SetupReadiness } from './SetupReadiness';
 
+/**
+ * Renders a navigation action for a missing model-provider requirement, using the shared
+ * connection-requirement helper to choose the appropriate destination. It does not fetch data.
+ */
 export function ModelProviderRequiredAction({
   requirement,
   onDismiss,

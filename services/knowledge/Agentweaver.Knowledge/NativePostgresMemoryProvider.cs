@@ -12,6 +12,8 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Knowledge;
 
+/// <summary>Implements Knowledge records, history, and accepted effects using the service-owned PostgreSQL schema.</summary>
+/// <remarks>Writes use transactions, row locks, revisions, and idempotency receipts; event creation shares that transaction.</remarks>
 public sealed class NativePostgresMemoryProvider : IMemoryProvider
 {
     public const string ProviderId = "postgres.native-memory";
@@ -43,6 +45,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
     private readonly TimeProvider _timeProvider;
     private readonly string _schema;
 
+    /// <summary>Creates the provider and its outbox adapter from validated PostgreSQL resource options.</summary>
     public NativePostgresMemoryProvider(
         NpgsqlDataSource dataSource,
         NativePostgresMemoryOptions options,
@@ -67,6 +70,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
 
     public ProviderDescriptor Descriptor { get; }
 
+    /// <summary>Checks catalog metadata, migrations, and live database identity before pinning this resource.</summary>
     public async Task<ResourceNegotiation> NegotiateAsync(
         ProviderCandidate candidate,
         CancellationToken cancellationToken = default)
@@ -115,6 +119,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
         }
     }
 
+    /// <summary>Searches one project's records with bounded text matching and page results.</summary>
     public Task<KnowledgeRecordPage> SearchAsync(
         KnowledgeRecordQuery query,
         CancellationToken cancellationToken = default) =>
@@ -176,6 +181,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             return new KnowledgeRecordPage(items.ToImmutable(), totalCount, query.Page, query.PageSize);
         }, cancellationToken);
 
+    /// <summary>Reads a single record from the configured schema and project scope.</summary>
     public Task<KnowledgeRecord?> ReadAsync(
         string projectId,
         Guid recordId,
@@ -201,6 +207,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 : null;
         }, cancellationToken);
 
+    /// <summary>Returns a page of immutable record revisions in newest-first order.</summary>
     public Task<KnowledgeRecordRevisionPage> ReadRevisionsAsync(
         string projectId,
         Guid recordId,
@@ -247,6 +254,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             return new KnowledgeRecordRevisionPage(items.ToImmutable(), totalCount, page, pageSize);
         }, cancellationToken);
 
+    /// <summary>Creates a record and first revision in the same transaction as its idempotency receipt.</summary>
     public Task<KnowledgeRecordWriteResult> CreateAsync(
         KnowledgeRecordCreate input,
         string idempotencyKey,
@@ -316,6 +324,8 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             return result;
         }, cancellationToken);
 
+    /// <summary>Updates a record at its expected revision, locking Decisions to serialize replacement checks.</summary>
+    /// <remarks>Record head, immutable revision, and idempotency result commit together or not at all.</remarks>
     public Task<KnowledgeRecordWriteResult> UpdateAsync(
         KnowledgeRecordUpdate input,
         string idempotencyKey,
@@ -441,6 +451,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             return result;
         }, cancellationToken);
 
+    /// <summary>Restores a historical Memory or Decision snapshot as a new active, pending-trust revision.</summary>
     public Task<KnowledgeRecordWriteResult> RestoreAsync(
         KnowledgeRecordRestore input,
         string idempotencyKey,
@@ -527,6 +538,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             return result;
         }, cancellationToken);
 
+    /// <summary>Approves an active pending or legacy Decision at its expected revision.</summary>
     public Task<KnowledgeRecordWriteResult> ApproveDecisionAsync(
         KnowledgeDecisionApproval input,
         string idempotencyKey,
@@ -591,6 +603,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             return result;
         }, cancellationToken);
 
+    /// <summary>Exports a consistent snapshot of records and complete immutable revision histories.</summary>
     public Task<KnowledgeRecordTransferBundle> ExportAsync(
         string projectId,
         string agentId,
@@ -670,6 +683,8 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             return bundle;
         }, cancellationToken);
 
+    /// <summary>Imports a complete transfer in one transaction without overwriting existing record or revision IDs.</summary>
+    /// <remarks>Imported heads become active but pending trust; their source history remains immutable.</remarks>
     public Task<KnowledgeRecordImportResult> ImportAsync(
         KnowledgeRecordTransferBundle input,
         string runId,
@@ -774,6 +789,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             return result;
         }, cancellationToken);
 
+    /// <summary>Rejects a pending Proposal only when it belongs to the requested run and expected revision.</summary>
     public Task<KnowledgeRecordWriteResult> RejectProposalAsync(
         string projectId,
         string runId,
@@ -844,6 +860,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             return result;
         }, cancellationToken);
 
+    /// <summary>Promotes a Proposal to an approved Decision and enqueues its accepted-effect event atomically.</summary>
     public Task<KnowledgeProposalPromotionResult> PromoteProposalAsync(
         string projectId,
         string runId,
@@ -984,6 +1001,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             return result;
         }, cancellationToken);
 
+    /// <summary>Reads a validated accepted-effect receipt by globally unique receipt ID.</summary>
     public Task<AcceptedEffectReceipt?> ReadAcceptedEffectReceiptAsync(
         Guid receiptId,
         CancellationToken cancellationToken = default) =>
@@ -1000,6 +1018,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 : ReadReceiptPayload(stored.Value.Event, receiptId);
         }, cancellationToken);
 
+    /// <summary>Reads a receipt only when the requested project and run match the stored receipt.</summary>
     public Task<AcceptedEffectReceipt?> ReadAcceptedEffectReceiptAsync(
         string projectId,
         string runId,
@@ -1012,6 +1031,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             return state?.Receipt;
         }, cancellationToken);
 
+    /// <summary>Returns accepted-effect receipt and delivery status within the supplied project/run scope.</summary>
     public Task<AcceptedEffectDeliveryState?> ReadAcceptedEffectDeliveryAsync(
         string projectId,
         string runId,
@@ -1020,6 +1040,8 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
         WithStorageAsync(() => ReadAcceptedEffectDeliveryCoreAsync(
             projectId, runId, receiptId, cancellationToken), cancellationToken);
 
+    /// <summary>Claims the next eligible outbox event for delivery using the outbox's expiring lease token.</summary>
+    /// <remarks>An undelivered predecessor in the same stream prevents later events from being claimed first.</remarks>
     public Task<AcceptedEffectDeliveryLease?> ClaimAcceptedEffectDeliveryAsync(
         string projectId,
         string runId,
@@ -1048,6 +1070,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             return new AcceptedEffectDeliveryLease(receipt, delivery.LeaseToken);
         }, cancellationToken);
 
+    /// <summary>Releases a delivery lease only when its token still belongs to the caller.</summary>
     public Task<bool> ReleaseAcceptedEffectDeliveryAsync(
         string projectId,
         string runId,
@@ -1062,6 +1085,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 await _outbox.ReleaseAsync(receiptId, leaseToken, cancellationToken).ConfigureAwait(false);
         }, cancellationToken);
 
+    /// <summary>Acknowledges delivery only while the outbox lease token remains valid.</summary>
     public Task<bool> AcknowledgeAcceptedEffectDeliveryAsync(
         string projectId,
         string runId,
@@ -1076,6 +1100,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 await _outbox.AcknowledgeAsync(receiptId, leaseToken, cancellationToken).ConfigureAwait(false);
         }, cancellationToken);
 
+    /// <summary>Loads and scopes the outbox event used by receipt and delivery-state reads.</summary>
     private async Task<AcceptedEffectDeliveryState?> ReadAcceptedEffectDeliveryCoreAsync(
         string projectId,
         string runId,
@@ -1094,6 +1119,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 : new AcceptedEffectDeliveryState(receipt, stored.Value.IsDelivered);
     }
 
+    /// <summary>Parses and validates an outbox payload as the current accepted-effect contract.</summary>
     private static AcceptedEffectReceipt? ReadReceiptPayload(StoredOutboxEvent stored, Guid receiptId)
     {
         if (stored.Message.EventType != "knowledge.accepted-effect")
@@ -1130,6 +1156,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 StatusCodes.Status400BadRequest);
     }
 
+    /// <summary>Reads only approved Decisions, eligible Memory, and session context scoped to this run.</summary>
     public Task<KnowledgeContextCandidates> ReadContextCandidatesAsync(
         string projectId,
         string agentId,
@@ -1182,6 +1209,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             return new KnowledgeContextCandidates(records.ToImmutable());
         }, cancellationToken);
 
+    /// <summary>Maps database and outbox infrastructure failures to stable Knowledge errors while preserving cancellation.</summary>
     private async Task<T> WithStorageAsync<T>(
         Func<Task<T>> operation,
         CancellationToken cancellationToken)
@@ -1271,6 +1299,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             : null;
     }
 
+    /// <summary>Serializes Decision graph mutations for one project across transactions.</summary>
     private static async Task AcquireDecisionGraphLockAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1285,6 +1314,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Follows same-agent replacement links and detects missing targets, cycles, and excessive depth.</summary>
     private async Task<KnowledgeWriteStatus?> ValidateDecisionReplacementAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1322,6 +1352,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
             StatusCodes.Status409Conflict);
     }
 
+    /// <summary>Validates imported replacement links against bundle records and existing same-agent Decisions.</summary>
     private async Task ValidateTransferReplacementGraphAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1544,6 +1575,8 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 StatusCodes.Status409Conflict);
     }
 
+    /// <summary>Reserves a request key or returns its prior result when the fingerprint and result type match.</summary>
+    /// <exception cref="KnowledgeApiException">The key was previously reserved for a different request.</exception>
     private async Task<IdempotencyReservation> ReserveWriteAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1596,6 +1629,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
         return new IdempotencyReservation(false, reader.GetString(2));
     }
 
+    /// <summary>Stores the completed response in the current transaction's idempotency reservation.</summary>
     private async Task CompleteWriteAsync<T>(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1724,6 +1758,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 ?? throw new InvalidOperationException(
                     "A Knowledge idempotency receipt contains an invalid result.");
 
+    /// <summary>Hashes serialized request data to bind each idempotency key to one write payload.</summary>
     private static string Fingerprint<T>(T value) =>
         Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions)))
             .ToLowerInvariant();
@@ -1803,6 +1838,7 @@ public sealed class NativePostgresMemoryProvider : IMemoryProvider
                 StatusCodes.Status400BadRequest);
     }
 
+    /// <summary>Checks issuer, actor, tenant, project/run, and permission facts before event receipt creation.</summary>
     private static void ValidateAuthorizationBounds(
         string projectId,
         string runId,

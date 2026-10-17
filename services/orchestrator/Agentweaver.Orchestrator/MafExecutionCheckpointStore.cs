@@ -9,6 +9,10 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Adapts MAF execution state to the PostgreSQL checkpoint owner for one bound session and execution fence.
+/// It validates state transitions, serializes checkpoint writes, and restores large workspace seeds from durable storage.
+/// </summary>
 internal sealed class MafExecutionCheckpointStore
 {
     private const string StoreName = MafExecutionCheckpointContract.StoreName;
@@ -19,6 +23,13 @@ internal sealed class MafExecutionCheckpointStore
     private readonly PostgresMafCheckpointStore _checkpoints;
     private readonly MafCheckpointBinding _binding;
 
+    /// <summary>
+    /// Creates a store bound to one session, fence, SDK version, and validated checkpoint store name.
+    /// </summary>
+    /// <param name="checkpoints">The PostgreSQL checkpoint owner.</param>
+    /// <param name="binding">The identity and execution-fence binding for this store instance.</param>
+    /// <param name="checkpointStoreName">An optional store name override, restricted to safe identifier characters.</param>
+    /// <exception cref="ArgumentException">Thrown when the checkpoint store name is blank or contains unsupported characters.</exception>
     internal MafExecutionCheckpointStore(
         PostgresMafCheckpointStore checkpoints,
         MafCheckpointBinding binding,
@@ -36,6 +47,10 @@ internal sealed class MafExecutionCheckpointStore
         _checkpoints = checkpoints.ForRun(_binding);
     }
 
+    /// <summary>
+    /// Reads and deserializes the newest checkpoint for this store's bound session.
+    /// </summary>
+    /// <returns>The latest validated snapshot, or <see langword="null"/> when no checkpoint exists.</returns>
     internal async Task<MafExecutionCheckpointSnapshot?> ReadLatestAsync(
         CancellationToken cancellationToken)
     {
@@ -51,6 +66,9 @@ internal sealed class MafExecutionCheckpointStore
             };
     }
 
+    /// <summary>
+    /// Reads a child-session association only while its fixed-work item is running.
+    /// </summary>
     internal async Task<MafExecutionFixedWorkAssociation?> ReadFixedWorkAssociationAsync(
         string childSessionId,
         string workPlanId,
@@ -58,6 +76,9 @@ internal sealed class MafExecutionCheckpointStore
         await ReadFixedWorkAssociationAsync(
             childSessionId, workPlanId, allowTerminal: false, cancellationToken).ConfigureAwait(false);
 
+    /// <summary>
+    /// Reads a fixed-work association for observation while its item is running or terminal.
+    /// </summary>
     internal async Task<MafExecutionFixedWorkAssociation?> ReadFixedWorkAssociationForObservationAsync(
         string childSessionId,
         string workPlanId,
@@ -65,6 +86,14 @@ internal sealed class MafExecutionCheckpointStore
         await ReadFixedWorkAssociationAsync(
             childSessionId, workPlanId, allowTerminal: true, cancellationToken).ConfigureAwait(false);
 
+    /// <summary>
+    /// Finds a child association in the latest plan and applies the requested status eligibility rule.
+    /// </summary>
+    /// <param name="childSessionId">The child session to find.</param>
+    /// <param name="workPlanId">The plan that must own the association.</param>
+    /// <param name="allowTerminal">Whether terminal statuses are eligible for observation.</param>
+    /// <param name="cancellationToken">Cancels the checkpoint read.</param>
+    /// <returns>The matching association when its status is eligible; otherwise <see langword="null"/>.</returns>
     private async Task<MafExecutionFixedWorkAssociation?> ReadFixedWorkAssociationAsync(
         string childSessionId,
         string workPlanId,
@@ -88,10 +117,20 @@ internal sealed class MafExecutionCheckpointStore
             : null;
     }
 
+    /// <summary>
+    /// Identifies fixed-work statuses that can still provide an observation for their child.
+    /// </summary>
     internal static bool IsObservationFixedWorkStatus(MafExecutionTaskStatus status) =>
         status is MafExecutionTaskStatus.Running or MafExecutionTaskStatus.Succeeded or
             MafExecutionTaskStatus.Failed or MafExecutionTaskStatus.Indeterminate;
 
+    /// <summary>
+    /// Reads and deserializes the newest checkpoint using the caller's existing PostgreSQL transaction.
+    /// </summary>
+    /// <param name="connection">The open database connection.</param>
+    /// <param name="transaction">The transaction that owns the consistent read.</param>
+    /// <param name="cancellationToken">Cancels the database read.</param>
+    /// <returns>The latest bound snapshot, or <see langword="null"/> when absent.</returns>
     internal async Task<MafExecutionCheckpointSnapshot?> ReadLatestInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -109,9 +148,22 @@ internal sealed class MafExecutionCheckpointStore
             };
     }
 
+    /// <summary>
+    /// Reports whether the store is bound to the given session and execution fence.
+    /// </summary>
     internal bool IsBoundTo(SessionIdentity identity, long executionFence) =>
         MafExecutionCheckpointContract.IsBoundTo(_binding, identity, executionFence);
 
+    /// <summary>
+    /// Appends a checkpoint in its own transaction.
+    /// </summary>
+    /// <param name="checkpointId">The new checkpoint identifier.</param>
+    /// <param name="expectedParent">The checkpoint that must still be latest, or <see langword="null"/> for initial state.</param>
+    /// <param name="state">The complete state to validate and persist.</param>
+    /// <param name="cancellationToken">Cancels opening, writing, or committing the transaction.</param>
+    /// <returns>The persisted checkpoint snapshot.</returns>
+    /// <exception cref="CoordinationException">Thrown when the expected parent or state transition is stale or invalid.</exception>
+    /// <remarks>The write is committed atomically with any extracted workspace seed data.</remarks>
     internal async Task<MafExecutionCheckpointSnapshot> AppendAsync(
         string checkpointId,
         CheckpointInfo? expectedParent,
@@ -126,6 +178,18 @@ internal sealed class MafExecutionCheckpointStore
         return result;
     }
 
+    /// <summary>
+    /// Validates and appends a checkpoint using a caller-owned transaction.
+    /// </summary>
+    /// <param name="connection">The open database connection.</param>
+    /// <param name="transaction">The transaction that owns the append.</param>
+    /// <param name="checkpointId">The new checkpoint identifier.</param>
+    /// <param name="expectedParent">The checkpoint that must remain latest.</param>
+    /// <param name="state">The state to serialize and persist.</param>
+    /// <param name="cancellationToken">Cancels lock acquisition or database operations.</param>
+    /// <returns>The persisted snapshot, including parent metadata.</returns>
+    /// <exception cref="CoordinationException">Thrown when the parent, revision, or transition check fails.</exception>
+    /// <remarks>A transaction-scoped advisory lock serializes updates for this session; an exact current-checkpoint replay is delegated to the checkpoint owner for idempotent handling.</remarks>
     internal async Task<MafExecutionCheckpointSnapshot> AppendInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -206,6 +270,12 @@ internal sealed class MafExecutionCheckpointStore
         };
     }
 
+    /// <summary>
+    /// Loads large workspace seed bytes referenced by an intent from the checkpoint owner.
+    /// </summary>
+    /// <param name="intent">The intent containing a durable seed reference, when applicable.</param>
+    /// <param name="cancellationToken">Cancels the database read.</param>
+    /// <returns>The intent with its seed restored, or the original intent when it has no workspace source.</returns>
     internal async Task<MafExecutionBuildTestIntent> HydrateBuildTestIntentAsync(
         MafExecutionBuildTestIntent intent,
         CancellationToken cancellationToken)
@@ -220,9 +290,19 @@ internal sealed class MafExecutionCheckpointStore
         return intent with { WorkspaceSeed = bytes.ToImmutableArray() };
     }
 
+    /// <summary>
+    /// Opens a connection through the checkpoint owner using this store's configuration.
+    /// </summary>
     private async Task<NpgsqlConnection> _bindingConnectionAsync(CancellationToken cancellationToken) =>
         await _checkpoints.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
 
+    /// <summary>
+    /// Acquires a transaction-scoped PostgreSQL advisory lock for this session's execution stream.
+    /// </summary>
+    /// <param name="connection">The connection participating in the write transaction.</param>
+    /// <param name="transaction">The transaction that holds the lock until commit or rollback.</param>
+    /// <param name="cancellationToken">Cancels lock acquisition.</param>
+    /// <remarks>The lock key is derived from project, run, and session identity to serialize competing checkpoint appends.</remarks>
     internal async Task AcquireExecutionLockInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,

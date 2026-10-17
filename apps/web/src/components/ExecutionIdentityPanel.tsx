@@ -35,6 +35,11 @@ const useStyles = makeStyles({
   },
 });
 
+/**
+ * Loads and displays the execution identity resolved for a run or project through the API.
+ * Parent props identify the target; an effect refreshes the displayed identity and tracks request
+ * errors and loading state.
+ */
 export function ExecutionIdentityPanel({ runId }: { runId: string }) {
   const styles = useStyles();
   const [record, setRecord] = useState<ExecutionIdentityProjection | null>(null);

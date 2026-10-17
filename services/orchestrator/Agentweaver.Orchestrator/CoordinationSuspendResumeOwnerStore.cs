@@ -11,6 +11,9 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Returns a completed suspend or resume operation, including its validated immutable manifest.
+/// </summary>
 internal sealed record SessionSuspendResumeOperationSnapshot(
     Guid OperationId,
     SessionIdentity Identity,
@@ -24,6 +27,9 @@ internal sealed record SessionSuspendResumeOperationSnapshot(
     JsonElement Progress,
     bool IsDuplicate);
 
+/// <summary>
+/// Holds the mutable phase, progress, and optional manifest for one owner-tracked suspend or resume operation.
+/// </summary>
 internal sealed record SessionSuspendResumeOperationRecord(
     Guid OperationId,
     SessionIdentity Identity,
@@ -39,13 +45,23 @@ internal sealed record SessionSuspendResumeOperationRecord(
     string? ManifestHash,
     bool IsDuplicate);
 
+/// <summary>
+/// Combines a validated suspended manifest with the placement release request derived from committed evidence.
+/// </summary>
 internal sealed record SessionSuspendResumeSourceEvidence(
     SessionSuspendResumeManifest Manifest,
     string ManifestHash,
     RuntimeSuspendPlacementReleaseRequest PlacementRelease);
 
+/// <summary>
+/// Owns the PostgreSQL state machine for session suspend and resume operations.
+/// </summary>
 internal sealed partial class CoordinationOwnerStore
 {
+    /// <summary>
+    /// Confirms that a host-suspend request matches the active owner operation and current accepted run binding.
+    /// </summary>
+    /// <remarks>The stored operation phase, fence, request hash, actor, and resolved request are checked under row locks.</remarks>
     internal async Task RequireCurrentSessionSuspendAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -155,6 +171,9 @@ internal sealed partial class CoordinationOwnerStore
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Confirms that a placement-release request exactly matches the committed suspend operation.
+    /// </summary>
     internal async Task RequireCurrentSessionSuspendReleaseAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -317,6 +336,9 @@ internal sealed partial class CoordinationOwnerStore
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Confirms that a workspace-resume request matches its persisted source manifest and current operation phase.
+    /// </summary>
     internal async Task RequireCurrentSessionResumeAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -444,6 +466,10 @@ internal sealed partial class CoordinationOwnerStore
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Confirms that runtime bootstrap inputs match the completed resume operation and current registration.
+    /// </summary>
+    /// <remarks>The previous manifest fence must be exactly one less than the current run fence.</remarks>
     internal async Task RequireCurrentSessionResumeBootstrapAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -601,6 +627,9 @@ internal sealed partial class CoordinationOwnerStore
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Re-reads the current runtime registration and rejects a changed, inactive, or expired registration.
+    /// </summary>
     private async Task RequireCurrentResumeBootstrapRegistrationInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -631,6 +660,10 @@ internal sealed partial class CoordinationOwnerStore
                 "runtime_registration_stale", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Starts or resumes an idempotent resume operation for a suspended source manifest.
+    /// </summary>
+    /// <exception cref="CoordinationException">The source manifest, session, owner, or current run selection is not eligible.</exception>
     internal async Task<SessionSuspendResumeOperationRecord> BeginSessionResumeAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -734,6 +767,10 @@ internal sealed partial class CoordinationOwnerStore
             IsDuplicate: false);
     }
 
+    /// <summary>
+    /// Advances the run and all sessions to a new fence after resume placement and egress evidence are verified.
+    /// </summary>
+    /// <remarks>The run, session rows, source manifest claim, decision fence, and operation phase move in one transaction.</remarks>
     internal async Task<SessionSuspendResumeOperationRecord> AdvanceSessionResumeFenceAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -908,6 +945,9 @@ internal sealed partial class CoordinationOwnerStore
         };
     }
 
+    /// <summary>
+    /// Reads and verifies the suspended source manifest and its committed suspend operation.
+    /// </summary>
     private async Task<SessionSuspendResumeSourceEvidence> ReadResumeSourceEvidenceAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1025,6 +1065,9 @@ internal sealed partial class CoordinationOwnerStore
             SessionSuspendResumeCoordinator.CreatePlacementReleaseRequest(saved));
     }
 
+    /// <summary>
+    /// Starts or resumes an idempotent suspend operation for an active session.
+    /// </summary>
     internal async Task<SessionSuspendResumeOperationRecord> BeginSessionSuspendAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -1123,6 +1166,10 @@ internal sealed partial class CoordinationOwnerStore
             IsDuplicate: false);
     }
 
+    /// <summary>
+    /// Advances a suspend or resume operation using the allowed phase transition and a compare-and-swap update.
+    /// </summary>
+    /// <remarks>Progress is bounded before persistence; the owner fence, operation identity, current phase, and phase version must still match.</remarks>
     internal async Task<SessionSuspendResumeOperationRecord> AdvanceSessionSuspendResumeAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -1184,6 +1231,10 @@ internal sealed partial class CoordinationOwnerStore
         };
     }
 
+    /// <summary>
+    /// Stores a validated suspended manifest and commits the suspend operation's manifest phase atomically.
+    /// </summary>
+    /// <exception cref="CoordinationException">The manifest is invalid, bound to another operation, or the phase has changed.</exception>
     internal async Task<SessionSuspendResumeOperationRecord> CommitSuspendedSessionManifestAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -1292,6 +1343,10 @@ internal sealed partial class CoordinationOwnerStore
         };
     }
 
+    /// <summary>
+    /// Records an interrupted operation and a manifest that lists evidence unavailable to complete it safely.
+    /// </summary>
+    /// <remarks>This path preserves an explicit incomplete result instead of treating missing transport evidence as success.</remarks>
     internal async Task<SessionSuspendResumeOperationSnapshot> RecordUnavailableSessionSuspendResumeAsync(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -1470,6 +1525,9 @@ internal sealed partial class CoordinationOwnerStore
             IsDuplicate: false);
     }
 
+    /// <summary>
+    /// Reads a matching interrupted operation for an idempotent retry.
+    /// </summary>
     private async Task<SessionSuspendResumeOperationSnapshot?> ReadExistingSessionSuspendResumeOperationAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1542,6 +1600,9 @@ internal sealed partial class CoordinationOwnerStore
             manifestId, manifestHash, manifest, progress, IsDuplicate: true);
     }
 
+    /// <summary>
+    /// Reads an existing operation and its manifest, checking phase, fence, hash, and stored progress consistency.
+    /// </summary>
     private async Task<SessionSuspendResumeOperationRecord?> ReadExistingSessionSuspendResumeOperationRecordAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1647,6 +1708,9 @@ internal sealed partial class CoordinationOwnerStore
             idempotencyKey, storedRequestHash, progress, manifest, manifestHash, IsDuplicate: true);
     }
 
+    /// <summary>
+    /// Rechecks the caller, selection, run fence, and exact persisted operation while its transaction is active.
+    /// </summary>
     private async Task RequireCurrentSessionSuspendOperationInTransactionAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1720,6 +1784,9 @@ internal sealed partial class CoordinationOwnerStore
                 "suspend_resume_operation_stale", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Serializes operation progress as a JSON object using the strict suspend/resume contract options.
+    /// </summary>
     private static JsonElement SerializeSessionSuspendResumeProgress(SessionSuspendResumeProgress progress)
     {
         var value = JsonSerializer.SerializeToElement(progress, JsonOptions);
@@ -1728,6 +1795,9 @@ internal sealed partial class CoordinationOwnerStore
         return value;
     }
 
+    /// <summary>
+    /// Rejects progress that is not an object or exceeds the stored size bound.
+    /// </summary>
     private static void RequireBoundedProgress(JsonElement progress)
     {
         if (progress.ValueKind != JsonValueKind.Object ||
@@ -1736,6 +1806,9 @@ internal sealed partial class CoordinationOwnerStore
                 "suspend_resume_progress_invalid", StatusCodes.Status400BadRequest);
     }
 
+    /// <summary>
+    /// Deserializes persisted operation progress and reports malformed state as unavailable.
+    /// </summary>
     private static SessionSuspendResumeProgress DeserializeSessionSuspendResumeProgress(string json)
     {
         try
@@ -1751,6 +1824,10 @@ internal sealed partial class CoordinationOwnerStore
         }
     }
 
+    /// <summary>
+    /// Lists evidence that this owner cannot supply for the requested suspend or resume operation.
+    /// </summary>
+    /// <remarks>For resume, a source manifest is considered usable only when its identity, state, hash, and fence match.</remarks>
     private async Task<ImmutableArray<string>> ReadMissingEvidenceAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1807,6 +1884,9 @@ internal sealed partial class CoordinationOwnerStore
         return evidence.ToImmutable();
     }
 
+    /// <summary>
+    /// Creates a validated interrupted manifest containing the evidence that was unavailable.
+    /// </summary>
     private static SessionSuspendResumeManifest CreateInterruptedManifest(
         SessionIdentity identity,
         Guid manifestId,
@@ -1832,6 +1912,10 @@ internal sealed partial class CoordinationOwnerStore
             missingEvidence)
         .Validate();
 
+    /// <summary>
+    /// Deserializes a manifest and verifies its identity, contract, and canonical content hash.
+    /// </summary>
+    /// <exception cref="CoordinationException">The manifest is malformed, invalid, or fails the stored integrity hash.</exception>
     private static SessionSuspendResumeManifest DeserializeAndValidateManifest(
         string json,
         string storedHash,
@@ -1873,6 +1957,9 @@ internal sealed partial class CoordinationOwnerStore
         return manifest;
     }
 
+    /// <summary>
+    /// Parses a JSON object and clones it so it remains valid after its document is disposed.
+    /// </summary>
     private static JsonElement ReadJsonObject(string json, string errorCode)
     {
         JsonDocument document;
@@ -1892,6 +1979,9 @@ internal sealed partial class CoordinationOwnerStore
         }
     }
 
+    /// <summary>
+    /// Checks that progress references the same manifest identity and serialized manifest content.
+    /// </summary>
     private static void RequireMatchingProgress(
         JsonElement progress,
         Guid manifestId,
@@ -1919,6 +2009,9 @@ internal sealed partial class CoordinationOwnerStore
                 "suspend_resume_progress_invalid", StatusCodes.Status503ServiceUnavailable);
     }
 
+    /// <summary>
+    /// Requires the selected actor, tenant, revisions, run, and accepted selection to match current owner state.
+    /// </summary>
     private static void RequireCurrentAuthorizedSelection(
         CoordinationActor actor,
         AuthorizedRunSelection selection,
@@ -1952,6 +2045,9 @@ internal sealed partial class CoordinationOwnerStore
                 "accepted_run_selection_stale", StatusCodes.Status409Conflict);
     }
 
+    /// <summary>
+    /// Validates suspend/resume operation kind, idempotency key, and optional source-manifest identity.
+    /// </summary>
     private static void ValidateSessionSuspendResumeRequest(
         SessionSuspendResumeOperationKind kind,
         string idempotencyKey,

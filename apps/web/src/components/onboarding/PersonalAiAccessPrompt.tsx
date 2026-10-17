@@ -9,6 +9,11 @@ import {
   personalAiAccessPromptStorageKey,
 } from './personalAiAccessPromptStorage';
 
+/**
+ * Loads the user's AI-access readiness and renders the onboarding prompt when needed.
+ * The API client supplies access status; local state/effects track loading, dismissal, and
+ * refresh, while navigation opens the settings flow.
+ */
 export function PersonalAiAccessPrompt({ userKey }: { userKey: string }) {
   const navigate = useNavigate();
   const storageKey = useMemo(() => personalAiAccessPromptStorageKey(userKey), [userKey]);

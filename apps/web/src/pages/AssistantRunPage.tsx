@@ -29,6 +29,11 @@ import {
 } from '../components/aiExecutionContext';
 import { useAiExecutionContext } from '../hooks/useAiExecutionContext';
 
+/**
+ * Operator-assistant conversation page. It binds a URL-selected run to the shared
+ * event stream and timeline, sends user turns, and reconciles optimistic messages
+ * against durable history while exposing unresolved tool and shell approvals.
+ */
 const useStyles = makeStyles({
   page: {
     display: 'flex',
@@ -125,6 +130,7 @@ const useStyles = makeStyles({
  * decisions/inbox/trinity-assistant-run-prompt-buttons.md for why these five and
  * not the landing page's longer, more elaborate demo scenarios.
  */
+/** Example requests displayed before the first run; selecting one only fills the composer. */
 const SUGGESTED_PROMPTS: string[] = [
   'List my projects and each one\u2019s most recent run status.',
   'Start a quick smoke-test run: ask the coordinator to add a one-line README update to a project.',
@@ -133,6 +139,7 @@ const SUGGESTED_PROMPTS: string[] = [
   'Create a new test project and kick off a small run to verify everything is wired up.',
 ];
 
+/** Reads the first non-blank string from event payload aliases used by the API. */
 function readString(payload: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
     const value = payload[key];
@@ -141,6 +148,7 @@ function readString(payload: Record<string, unknown>, keys: string[]): string | 
   return undefined;
 }
 
+/** Approval event details needed to call the matching tool or shell endpoint. */
 interface PendingApproval {
   event: RunStreamEvent;
   isShell: boolean;
@@ -150,6 +158,7 @@ interface PendingApproval {
   targetRunId: string;
 }
 
+/** A locally rendered user turn awaiting confirmation in a durable run snapshot. */
 interface OptimisticUserMessage {
   id: string;
   runId: string;
@@ -160,6 +169,7 @@ interface OptimisticUserMessage {
   status: 'sending' | 'syncing';
 }
 
+/** Normalizes whitespace for matching sent turns with their server timeline copies. */
 function normalizeMessageText(text: string): string {
   return text.trim();
 }
@@ -205,12 +215,17 @@ function derivePendingApprovals(events: RunStreamEvent[], runId: string): Pendin
   return pending;
 }
 
+/**
+ * Resolves one pending approval. Requests are serialized locally and failures leave
+ * the gate available so the user can retry rather than implying approval succeeded.
+ */
 function AssistantApprovalGate({ approval }: { approval: PendingApproval }) {
   const styles = useStyles();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resolved, setResolved] = useState<string | null>(null);
 
+  // Share busy/error/resolved handling between tool and shell approval operations.
   const settle = useCallback(async (fn: () => Promise<void>, outcome: string) => {
     if (busy || resolved || !approval.targetRunId) return;
     setBusy(true);
@@ -304,6 +319,11 @@ export interface AssistantRunPageProps {
  * transcript path into a shared component and have both pages consume it, rather than the
  * lean reuse-the-primitives approach taken here.
  */
+/**
+ * Renders the conversation selected by `runId` in the URL. `projectId` optionally
+ * scopes a newly created run; send and stream failures are shown without discarding
+ * saved conversation history.
+ */
 export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   const styles = useStyles();
   const params = useParams<{ projectId?: string }>();
@@ -317,6 +337,8 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
   // assigning a newly-created session's first run id, then resets it when navigation moves
   // between two already-established run ids.
   const runId = routeRunId;
+  // Composer state and pending local turns are kept separate from the server timeline
+  // so the user's message appears immediately but is removed only after reconciliation.
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -356,6 +378,8 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     });
   }, []);
 
+  // The stream exposes both live events and snapshot generations; those generations
+  // let the page distinguish post-send snapshots from stale history.
   const {
     events,
     baselineEvents,
@@ -369,6 +393,8 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     refresh,
   } = useSeededRunStream(runId);
 
+  // Derive the display timeline and count repeated user messages so optimistic entries
+  // are cleared only when the corresponding occurrence is present on the server.
   const timelineModel = useMemo(
     () => buildRunTimeline(events, { stripSerializedWorkPlan: false }),
     [events],
@@ -481,6 +507,7 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     [busy, events, providerContext.context],
   );
 
+  /** Refreshes the saved event snapshot, then reconnects live updates even on failure. */
   const reconcileDurableHistory = useCallback(async () => {
     setReconciliationError(null);
     try {
@@ -494,6 +521,8 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     }
   }, [reconnect, refresh]);
 
+  // A disconnected stream can hide a successful send; reconcile each syncing message
+  // at most once automatically, while leaving an explicit retry available in the UI.
   useEffect(() => {
     if (!runId || streamStatus !== 'error') return;
     const candidates = optimisticMessages.filter(
@@ -559,6 +588,12 @@ export function AssistantRunPage({ projectId }: AssistantRunPageProps) {
     });
   }, [renderedMessageSignature, renderedMessages.length, runId, scrollLatestMessageIntoView]);
 
+  /**
+   * Sends one trimmed turn. A new run is created without awaiting the model turn so its
+   * id can enter the URL and bind the stream before the assistant response completes.
+   * Failed sends remove the optimistic row and map closed/missing-run responses to
+   * a new conversation that can resume recoverable history.
+   */
   const handleSubmit = useCallback(async () => {
     const message = input.trim();
     if (!message || busy || sendingRef.current) return;

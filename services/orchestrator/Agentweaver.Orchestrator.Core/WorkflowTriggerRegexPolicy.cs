@@ -2,12 +2,15 @@ using System.Text.RegularExpressions;
 
 namespace Agentweaver.Orchestrator.Core;
 
+/// <summary>Restricts comment-match patterns to a bounded, non-backtracking regular-expression subset.</summary>
 public static class WorkflowTriggerRegexPolicy
 {
+    /// <summary>Maximum time allowed for matching a comment body.</summary>
     public static readonly TimeSpan MatchTimeout = TimeSpan.FromMilliseconds(200);
     private const RegexOptions SafeRegexOptions =
         RegexOptions.CultureInvariant | RegexOptions.NonBacktracking;
 
+    /// <summary>Checks syntax and rejects unsafe or unsupported constructs before a pattern is stored.</summary>
     public static bool TryValidatePattern(string? pattern, out string? error)
     {
         error = null;
@@ -37,11 +40,13 @@ public static class WorkflowTriggerRegexPolicy
         }
     }
 
+    /// <summary>Convenience check that returns false for invalid patterns and timeouts.</summary>
     public static bool IsMatch(string pattern, string input)
     {
         return TryMatch(pattern, input, out var matches, out _) && matches;
     }
 
+    /// <summary>Matches using the safe engine and reports invalid patterns or timeouts through <paramref name="error"/>.</summary>
     public static bool TryMatch(
         string pattern,
         string input,

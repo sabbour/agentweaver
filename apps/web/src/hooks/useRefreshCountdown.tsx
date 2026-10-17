@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 // a live "Next refresh in Xs" indicator that counts DOWN to the next refresh,
 // rather than a timestamp or a count-up "Updated Xs ago" stamp.
 
+/** Inputs that determine the auto-refresh countdown and its status label. */
 export interface UseRefreshCountdownOptions {
   intervalMs: number;
   // Timestamp of the last successful load (ms epoch or Date). When null/undefined
@@ -19,17 +20,20 @@ export interface UseRefreshCountdownOptions {
   refreshing?: boolean;
 }
 
+/** Remaining seconds and accessible label returned by the countdown hook. */
 export interface RefreshCountdownState {
   secondsRemaining: number;
   label: string;
 }
 
+/** Converts a supported timestamp to epoch milliseconds or returns null if absent/invalid. */
 function toMillis(value: number | Date | null | undefined): number | null {
   if (value == null) return null;
   const ms = value instanceof Date ? value.getTime() : value;
   return Number.isNaN(ms) ? null : ms;
 }
 
+/** Computes a live countdown from the last successful refresh and polling interval. */
 export function useRefreshCountdown({
   intervalMs,
   lastRefreshedAt,
@@ -73,10 +77,12 @@ const useStyles = makeStyles({
   },
 });
 
+/** Props for the shared auto-refresh countdown display component. */
 export interface RefreshCountdownProps extends UseRefreshCountdownOptions {
   className?: string;
 }
 
+/** Renders the countdown label with shared subdued styling and live-region behavior. */
 export function RefreshCountdown({ className, ...options }: RefreshCountdownProps) {
   const styles = useStyles();
   const { label } = useRefreshCountdown(options);

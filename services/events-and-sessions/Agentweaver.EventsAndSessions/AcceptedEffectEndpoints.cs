@@ -3,8 +3,12 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.EventsAndSessions;
 
+/// <summary>Maps the authenticated endpoint that records owner-accepted project effects.</summary>
 public static class AcceptedEffectEndpoints
 {
+    /// <summary>
+    /// Adds the receipt-delivery route; conflicts stay explicit and unexpected failures return a stable 503 code.
+    /// </summary>
     public static void MapAcceptedEffectEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapPost(
@@ -46,6 +50,7 @@ public static class AcceptedEffectEndpoints
             .RequireAuthorization();
     }
 
+    /// <summary>Creates the stable problem response used when a receipt cannot be admitted.</summary>
     private static IResult Error(string code, int statusCode) =>
         Results.Problem(
             title: code,

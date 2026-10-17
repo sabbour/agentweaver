@@ -5,8 +5,15 @@ using Agentweaver.Orchestrator.Core;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Resolves the current accepted runtime owner context for a child session and its selected work.
+/// It verifies both model-work items and fixed-work associations against owner state before returning runtime configuration.
+/// </summary>
 public static partial class CoordinationEndpoints
 {
+    /// <summary>
+    /// HTTP endpoint handler that reads the current runtime owner context.
+    /// </summary>
     private static Task<IResult> ReadRuntimeOwnerContextAsync(
         string projectId, string runId, string sessionId, HttpContext context,
         OrchestratorOptions options, ProjectsRunSelectionClient projects,
@@ -17,6 +24,13 @@ public static partial class CoordinationEndpoints
             projectId, runId, sessionId, context, options, projects, store, decisions,
             runSelectionContexts, checkpoints, cancellationToken).ConfigureAwait(false)), cancellationToken);
 
+    /// <summary>
+    /// Builds a runtime owner context from the accepted run selection, root decision, child association, and run admission.
+    /// </summary>
+    /// <param name="allowTerminalChild">When true, permits observation of terminal fixed-work children without allowing dispatch.</param>
+    /// <returns>The selected agent/model, authority revisions, and runtime budget limits.</returns>
+    /// <exception cref="CoordinationException">Thrown when owner state, selection, plan, child association, or model binding is stale or invalid.</exception>
+    /// <remarks>The method rereads selection, owner, and decision state before returning to detect changes during context construction.</remarks>
     internal static async Task<RuntimeOwnerContext> ReadRuntimeOwnerContextCoreAsync(
         string projectId, string runId, string sessionId, HttpContext context,
         OrchestratorOptions options, ProjectsRunSelectionClient projects,
@@ -171,6 +185,9 @@ public static partial class CoordinationEndpoints
         };
     }
 
+    /// <summary>
+    /// Rebuilds the expected fixed-work association from current selection data and compares it to the saved binding.
+    /// </summary>
     internal static bool MatchesFixedRuntimeAssociation(
         MafExecutionFixedWorkAssociation association,
         WorkPlanSnapshot snapshot,
@@ -207,6 +224,10 @@ public static partial class CoordinationEndpoints
         return FixedAssociationsMatch(expected, association);
     }
 
+    /// <summary>
+    /// Reads the accepted model selection and requires its reference to match the work association.
+    /// </summary>
+    /// <exception cref="CoordinationException">Thrown when the accepted model reference is missing, changed, or invalid.</exception>
     private static RuntimeAcceptedModelSelection ReadModelSelection(
         JsonElement snapshot, string expectedModelReference)
     {

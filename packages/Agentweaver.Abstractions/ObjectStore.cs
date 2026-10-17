@@ -3,8 +3,10 @@ namespace Agentweaver.Abstractions;
 /// <summary>An opaque platform object identity, not an agent workspace path.</summary>
 public readonly record struct ObjectKey
 {
+    /// <summary>The validated relative, slash-separated object identity.</summary>
     public string Value { get; }
 
+    /// <summary>Creates an object key and rejects absolute, empty, or traversal-like segments.</summary>
     public ObjectKey(string value)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
@@ -15,6 +17,7 @@ public readonly record struct ObjectKey
         Value = value;
     }
 
+    /// <summary>Returns the object key's validated value.</summary>
     public override string ToString() => Value;
 }
 
@@ -31,10 +34,17 @@ public interface IObjectStore
     Task<bool> DeleteAsync(ObjectKey key, CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// Owns a downloaded object's stream and transport cleanup callback; dispose it after
+/// consuming the content so the provider can release its resources.
+/// </summary>
 public sealed class ObjectRead : IDisposable
 {
     private readonly Action _dispose;
 
+    /// <summary>Creates a download wrapper with its content length and cleanup action.</summary>
+    /// <exception cref="ArgumentNullException">The stream or cleanup action is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The content length is negative.</exception>
     public ObjectRead(Stream content, long length, Action dispose)
     {
         Content = content ?? throw new ArgumentNullException(nameof(content));
@@ -43,7 +53,11 @@ public sealed class ObjectRead : IDisposable
         Length = length;
     }
 
+    /// <summary>The readable object stream, valid until this wrapper is disposed.</summary>
     public Stream Content { get; }
+    /// <summary>The number of bytes in the object.</summary>
     public long Length { get; }
+
+    /// <summary>Releases the provider transport associated with the read.</summary>
     public void Dispose() => _dispose();
 }

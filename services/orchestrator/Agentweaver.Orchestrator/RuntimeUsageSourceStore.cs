@@ -11,11 +11,19 @@ using NpgsqlTypes;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// A consistent set of usage evidence exposed to runtime observation.
+/// It combines the credit guard with bounded dispatch and tool-reservation history.
+/// </summary>
 internal sealed record RuntimeObservationEvidence(
     RuntimeObservationCreditGuard? CreditGuard,
     RuntimeObservationDispatchCollection Dispatches,
     RuntimeObservationToolReservationCollection ToolReservations);
 
+/// <summary>
+/// Persists runtime SDK source receipts, usage observations, native-turn dispatch state, and credit-limit evidence.
+/// The store uses PostgreSQL transactions and outbox events to make admission, accounting, and denials replay-safe.
+/// </summary>
 internal sealed class RuntimeUsageSourceStore(
     NpgsqlDataSource dataSource, OrchestratorOptions options, TimeProvider timeProvider)
 {
@@ -34,6 +42,14 @@ internal sealed class RuntimeUsageSourceStore(
     private readonly string _outboxEvents = $"\"{options.Schema}\".outbox_events";
     private readonly PostgresOutbox _outbox = new(dataSource, options.Schema);
 
+    /// <summary>
+    /// Reads credit-guard, dispatch, and tool-reservation evidence from one repeatable-read snapshot.
+    /// </summary>
+    /// <param name="registration">The active runtime registration whose evidence is observed.</param>
+    /// <param name="rootSessionId">The root session associated with the dispatch history.</param>
+    /// <param name="cancellationToken">Cancels the transaction and queries.</param>
+    /// <returns>Validated, bounded observation evidence.</returns>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the registration is invalid, stale, or owner evidence conflicts.</exception>
     internal async Task<RuntimeObservationEvidence> ReadObservationEvidenceAsync(
         RuntimeRegistration registration,
         string rootSessionId,
@@ -71,6 +87,9 @@ internal sealed class RuntimeUsageSourceStore(
             toolReservations);
     }
 
+    /// <summary>
+    /// Reads the newest dispatch rows for the registered child and reports whether the bounded list was truncated.
+    /// </summary>
     private async Task<RuntimeObservationDispatchCollection> ReadObservationDispatchesAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -132,6 +151,9 @@ internal sealed class RuntimeUsageSourceStore(
             truncated).Validate();
     }
 
+    /// <summary>
+    /// Reads recent tool-invocation admission events for the runtime session with a bounded result count.
+    /// </summary>
     private async Task<RuntimeObservationToolReservationCollection> ReadObservationToolReservationsAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -175,6 +197,15 @@ internal sealed class RuntimeUsageSourceStore(
             truncated).Validate();
     }
 
+    /// <summary>
+    /// Runs a callback inside a transaction while holding a per-runtime usage advisory lock.
+    /// </summary>
+    /// <typeparam name="T">The callback result type.</typeparam>
+    /// <param name="runtimeInstanceId">The runtime ID used as the lock scope.</param>
+    /// <param name="action">The database work performed while the lock is held.</param>
+    /// <param name="cancellationToken">Cancels connection, lock, or callback work.</param>
+    /// <returns>The callback result.</returns>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the runtime ID is empty.</exception>
     internal async Task<T> ExecuteLockedAsync<T>(
         Guid runtimeInstanceId, Func<NpgsqlConnection, NpgsqlTransaction, CancellationToken, Task<T>> action,
         CancellationToken cancellationToken)
@@ -193,6 +224,17 @@ internal sealed class RuntimeUsageSourceStore(
         return await action(connection, transaction, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Stores the first SDK source receipt for a runtime registration, or returns an exact matching replay.
+    /// </summary>
+    /// <param name="connection">The caller's database connection.</param>
+    /// <param name="transaction">The transaction that owns the source receipt.</param>
+    /// <param name="registration">The runtime registration being bound.</param>
+    /// <param name="grant">The runtime grant that authorized source registration.</param>
+    /// <param name="facts">The SDK session facts to preserve.</param>
+    /// <param name="cancellationToken">Cancels database operations.</param>
+    /// <returns>The existing or newly persisted source receipt.</returns>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when source facts, registration, or grant conflict with the stored receipt.</exception>
     internal async Task<RuntimeSdkSourceReceipt> RegisterWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeGrantReceipt grant, SdkSessionFacts facts, CancellationToken cancellationToken)
@@ -225,6 +267,17 @@ internal sealed class RuntimeUsageSourceStore(
         return receipt;
     }
 
+    /// <summary>
+    /// Appends an SDK usage observation once, keyed by its deterministic event ID.
+    /// </summary>
+    /// <param name="connection">The caller's database connection.</param>
+    /// <param name="transaction">The transaction that owns the observation.</param>
+    /// <param name="registration">The runtime registration that produced usage.</param>
+    /// <param name="grant">The grant that authorized the SDK source.</param>
+    /// <param name="observation">The SDK usage event to record.</param>
+    /// <param name="cancellationToken">Cancels database operations.</param>
+    /// <returns>The stored usage receipt, or the prior receipt for an exact replay.</returns>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the source is absent or the event ID is reused with different content.</exception>
     internal async Task<RuntimeUsageSourceReceipt> AppendWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeGrantReceipt grant, SdkUsageObservation observation, CancellationToken cancellationToken)
@@ -269,6 +322,10 @@ internal sealed class RuntimeUsageSourceStore(
         return receipt;
     }
 
+    /// <summary>
+    /// Reads one usage receipt scoped to its project, run, and session.
+    /// </summary>
+    /// <returns>The validated receipt, or <see langword="null"/> when the scoped row is absent.</returns>
     internal async Task<RuntimeUsageSourceReceipt?> ReadReceiptAsync(
         Guid receiptId, string projectId, string runId, string sessionId, CancellationToken cancellationToken)
     {
@@ -289,6 +346,18 @@ internal sealed class RuntimeUsageSourceStore(
         return receipt;
     }
 
+    /// <summary>
+    /// Validates a native-turn begin request, checks its checkpoint and credit limits, and advances dispatch state to sending.
+    /// </summary>
+    /// <param name="connection">The transaction connection.</param>
+    /// <param name="transaction">The transaction that owns the dispatch-state change.</param>
+    /// <param name="registration">The active runtime registration.</param>
+    /// <param name="grant">The runtime grant for the SDK source.</param>
+    /// <param name="request">The source facts and A2A message to admit.</param>
+    /// <param name="readCostSnapshot">Reads the current usage-cost snapshot when configured credit limits require it.</param>
+    /// <param name="cancellationToken">Cancels owner and cost-snapshot reads.</param>
+    /// <returns>The admitted turn and current owner revision, or the denial receipt when a hard credit limit is reached.</returns>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the dispatch, message, checkpoint, source, or accounting state is invalid or uncertain.</exception>
     internal async Task<RuntimeNativeTurnBeginResult> BeginNativeTurnWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeGrantReceipt grant, RuntimeNativeTurnBeginRequest request,
@@ -360,6 +429,10 @@ internal sealed class RuntimeUsageSourceStore(
         return new(admission, null);
     }
 
+    /// <summary>
+    /// Confirms a native-turn preparation belongs to the current root checkpoint and pending child dispatch.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the registration, message, or checkpoint intent is not the expected pending dispatch.</exception>
     internal static void ValidateNativePreparation(
         SessionIdentity root, MafExecutionCheckpointSnapshot checkpoint, MafExecutionDispatchIntent intent,
         RuntimeRegistration registration, SdkSessionFacts source, RuntimeA2ASendRequest message)
@@ -383,6 +456,11 @@ internal sealed class RuntimeUsageSourceStore(
             throw new RuntimeAuthorizationException("runtime_native_turn_preparation_invalid");
     }
 
+    /// <summary>
+    /// Compares observed Copilot credits with configured soft and hard limits.
+    /// </summary>
+    /// <returns>Whether the soft and hard limits have each been reached.</returns>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when observed values or configured limits are invalid.</exception>
     internal static (bool SoftReached, bool HardReached) EvaluateObservedCreditLimits(
         RuntimeBinding binding, decimal observedCredits)
     {
@@ -395,10 +473,17 @@ internal sealed class RuntimeUsageSourceStore(
             binding.CopilotHardCreditLimit is { } hardLimit && observedCredits >= hardLimit);
     }
 
+    /// <summary>
+    /// Reports whether hosted Copilot usage needs a cost snapshot for any configured credit limit.
+    /// </summary>
     internal static bool RequiresCopilotCreditSnapshot(RuntimeBinding binding) =>
         binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
         (binding.CopilotSoftCreditLimit is not null || binding.CopilotHardCreditLimit is not null);
 
+    /// <summary>
+    /// Reconciles a cost snapshot against the locked run credit guard and records monotonic limit state.
+    /// </summary>
+    /// <remarks>The guard update uses its owner revision as a compare-and-swap check; crossing the soft limit emits one outbox event.</remarks>
     private async Task<NativeCreditDecision> ReconcileNativeCreditLimitsAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         SdkSessionFacts source, string rootSessionId, RuntimeUsageCostSnapshotReceipt snapshot,
@@ -500,6 +585,9 @@ internal sealed class RuntimeUsageSourceStore(
             revision, nextRevision, hardExhausted || limits.HardReached);
     }
 
+    /// <summary>
+    /// Seals and appends deterministic hard-credit-denial evidence to the outbox.
+    /// </summary>
     private async Task<RuntimeNativeCreditDenialReceipt> RecordNativeCreditDenialAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeSdkSourceReceipt source, Guid dispatchId, RuntimeCreditLimitDenialStage stage,
@@ -535,6 +623,9 @@ internal sealed class RuntimeUsageSourceStore(
         return denial;
     }
 
+    /// <summary>
+    /// Reads and validates a prior denial for one registration, dispatch, and denial stage.
+    /// </summary>
     internal async Task<RuntimeNativeCreditDenialReceipt?> ReadNativeCreditDenialWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeSdkSourceReceipt source, Guid dispatchId, RuntimeCreditLimitDenialStage stage,
@@ -568,6 +659,9 @@ internal sealed class RuntimeUsageSourceStore(
         return denial;
     }
 
+    /// <summary>
+    /// Creates the stable outbox event ID for a denial and the credit-guard revision that observed it.
+    /// </summary>
     private static Guid NativeCreditDenialEventId(RuntimeNativeCreditDenialReceipt denial)
     {
         var key = $"native-credit-denial\0{denial.RuntimeInstanceId:D}\0{denial.DispatchId:D}\0" +
@@ -575,6 +669,9 @@ internal sealed class RuntimeUsageSourceStore(
         return Guid.ParseExact(RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(key))[..32], "N");
     }
 
+    /// <summary>
+    /// Adds the root, tenant, selection, fence, configured limits, and cost identity to a guard query.
+    /// </summary>
     private static void AddCreditGuardScope(
         NpgsqlCommand command, RuntimeBinding binding, string rootSessionId, string costIdentity)
     {
@@ -587,6 +684,10 @@ internal sealed class RuntimeUsageSourceStore(
         command.Parameters.AddWithValue("cost", NpgsqlDbType.Varchar, costIdentity);
     }
 
+    /// <summary>
+    /// Persists the prepared native dispatch and returns a prior denial when the hard limit blocks sending.
+    /// </summary>
+    /// <remarks>The root session is locked before the MAF execution lock; an existing dispatch is accepted only as the same first prepared revision.</remarks>
     internal async Task<RuntimeNativeCreditDenialReceipt?> PrepareNativeTurnWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, SessionIdentity root,
         MafExecutionCheckpointSnapshot checkpoint, MafExecutionDispatchIntent intent,
@@ -713,6 +814,18 @@ internal sealed class RuntimeUsageSourceStore(
         return null;
     }
 
+    /// <summary>
+    /// Records the runtime host's native-turn observation and advances the dispatch to accounting-pending.
+    /// </summary>
+    /// <param name="connection">The caller's database connection.</param>
+    /// <param name="transaction">The transaction that owns the observation and dispatch update.</param>
+    /// <param name="registration">The runtime registration.</param>
+    /// <param name="grant">The grant used for the SDK source.</param>
+    /// <param name="request">The admitted turn and observed usage/output.</param>
+    /// <param name="cancellationToken">Cancels database operations.</param>
+    /// <returns>The recorded receipt, or the previously recorded exact observation.</returns>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when observation contents conflict, usage is reused, or dispatch state cannot accept the report.</exception>
+    /// <remarks>Matching repeated observations are idempotent; a first report advances the owner revision and is retained for later accounting.</remarks>
     internal async Task<RuntimeNativeTurnRecordedReceipt> RecordNativeTurnWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeGrantReceipt grant, RuntimeNativeTurnObservationRequest request, CancellationToken cancellationToken)
@@ -765,6 +878,10 @@ internal sealed class RuntimeUsageSourceStore(
         return receipt;
     }
 
+    /// <summary>
+    /// Locks the active root and dispatch rows and returns the complete native-dispatch snapshot.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the root or dispatch is unavailable under the current fence.</exception>
     private async Task<NativeDispatch> ReadNativeDispatchAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         Guid messageId, CancellationToken cancellationToken)
@@ -810,6 +927,9 @@ internal sealed class RuntimeUsageSourceStore(
             reader.IsDBNull(19) ? null : reader.GetString(19));
     }
 
+    /// <summary>
+    /// Reads the dispatch state and owner revision under a row lock, if the dispatch exists.
+    /// </summary>
     private async Task<NativeDispatchMarker?> ReadNativeDispatchMarkerAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         Guid messageId, CancellationToken cancellationToken)
@@ -826,6 +946,10 @@ internal sealed class RuntimeUsageSourceStore(
             : null;
     }
 
+    /// <summary>
+    /// Records evidence that a hard-credit denial prevented the native turn from being sent.
+    /// </summary>
+    /// <remarks>The evidence is accepted only for a matching stored denial and unchanged prepared dispatch/checkpoint hashes.</remarks>
     internal async Task<RuntimeNativeTurnNoSendReceipt> RecordNativeTurnNoSendWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeGrantReceipt grant, RuntimeNativeTurnNoSendEvidenceRequest request,
@@ -882,6 +1006,10 @@ internal sealed class RuntimeUsageSourceStore(
         return request.Evidence;
     }
 
+    /// <summary>
+    /// Stores fixed-credit guard evidence as a deterministic outbox event, accepting only exact replays.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when registration, source tuple, grant, or replay evidence conflicts.</exception>
     internal async Task<RuntimeFixedCreditGuardReceipt> RecordFixedCreditGuardWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeFixedCreditGuardReceipt receipt, RuntimeGrantReceipt? grant,
@@ -919,6 +1047,10 @@ internal sealed class RuntimeUsageSourceStore(
         return receipt;
     }
 
+    /// <summary>
+    /// Records evidence that a fixed-credit guard prevented a runtime action from being sent.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the stored guard receipt, grant, source, or no-send evidence does not match.</exception>
     internal async Task<RuntimeFixedCreditNoSendReceipt> RecordFixedCreditNoSendWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeGrantReceipt grant, RuntimeSdkSourceReceipt sourceReceipt,
@@ -955,6 +1087,12 @@ internal sealed class RuntimeUsageSourceStore(
         return request.Evidence;
     }
 
+    /// <summary>
+    /// Reads a fixed-credit guard receipt and, when requested, its matching no-send evidence.
+    /// </summary>
+    /// <param name="includeEvidence">Whether to load and validate the corresponding no-send record.</param>
+    /// <returns>The guard and optional evidence, or <see langword="null"/> when no guard exists for the request.</returns>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when request, registration, receipt hash, or source evidence conflicts.</exception>
     internal async Task<RuntimeFixedCreditGuardReadResult?> ReadFixedCreditGuardResultWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeFixedCreditGuardReadRequest request, bool includeEvidence,
@@ -998,6 +1136,9 @@ internal sealed class RuntimeUsageSourceStore(
         return new(receipt, evidence);
     }
 
+    /// <summary>
+    /// Reads and validates one fixed-credit guard event by runtime, stage, and request ID.
+    /// </summary>
     internal async Task<RuntimeFixedCreditGuardReceipt?> ReadFixedCreditGuardWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeFixedCreditGuardStage stage, Guid requestId, CancellationToken cancellationToken)
@@ -1026,6 +1167,9 @@ internal sealed class RuntimeUsageSourceStore(
         return receipt;
     }
 
+    /// <summary>
+    /// Reads a fixed-credit no-send event by the digest of its guard receipt.
+    /// </summary>
     private async Task<RuntimeFixedCreditNoSendReceipt?> ReadFixedCreditNoSendWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         string guardReceiptHash, CancellationToken cancellationToken)
@@ -1042,6 +1186,9 @@ internal sealed class RuntimeUsageSourceStore(
         return payload is null ? null : Deserialize<RuntimeFixedCreditNoSendReceipt>(payload);
     }
 
+    /// <summary>
+    /// Reads previously recorded no-send evidence for a native-turn credit denial.
+    /// </summary>
     internal async Task<RuntimeNativeTurnNoSendReceipt?> ReadNativeTurnNoSendWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         string denialHash, CancellationToken cancellationToken)
@@ -1059,23 +1206,38 @@ internal sealed class RuntimeUsageSourceStore(
         return payload is null ? null : Deserialize<RuntimeNativeTurnNoSendReceipt>(payload);
     }
 
+    /// <summary>
+    /// Derives the stable event ID for no-send evidence from its denial receipt hash.
+    /// </summary>
     private static Guid NativeTurnNoSendEventId(string denialHash) =>
         Guid.ParseExact(RuntimeContractValidation.Hash(
             Encoding.UTF8.GetBytes($"native-turn-no-send\0{denialHash}"))[..32], "N");
 
+    /// <summary>
+    /// Builds the run-scoped outbox stream for fixed-credit guard records.
+    /// </summary>
     private static string FixedCreditGuardStream(RuntimeRegistration registration) =>
         $"coordination/{registration.Binding.ProjectId}/{registration.Binding.RunId}/fixed-credit-denials";
 
+    /// <summary>
+    /// Derives the stable fixed-credit guard event ID from registration, fence, stage, and request.
+    /// </summary>
     private static Guid FixedCreditGuardEventId(RuntimeFixedCreditGuardReceipt receipt) =>
         Guid.ParseExact(RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(
             $"fixed-credit-denial\0{receipt.Registration.RuntimeInstanceId:D}\0" +
             $"{receipt.Registration.Revision}\0{receipt.Registration.Binding.ExecutionFence}\0" +
             $"{receipt.Stage}\0{receipt.RequestId:D}"))[..32], "N");
 
+    /// <summary>
+    /// Derives the stable event ID for fixed-credit no-send evidence from its guard receipt hash.
+    /// </summary>
     private static Guid FixedCreditNoSendEventId(string guardReceiptHash) =>
         Guid.ParseExact(RuntimeContractValidation.Hash(
             Encoding.UTF8.GetBytes($"fixed-credit-no-send\0{guardReceiptHash}"))[..32], "N");
 
+    /// <summary>
+    /// Rejects an existing fixed-credit guard event when any stable request or source binding changed.
+    /// </summary>
     private static void RequireFixedCreditGuardReplay(
         RuntimeFixedCreditGuardReceipt existing, RuntimeFixedCreditGuardReceipt requested)
     {
@@ -1088,6 +1250,9 @@ internal sealed class RuntimeUsageSourceStore(
             throw new RuntimeAuthorizationException("runtime_fixed_credit_guard_conflict");
     }
 
+    /// <summary>
+    /// Reads the recorded native-turn receipt and report inside the caller's transaction.
+    /// </summary>
     internal async Task<RuntimeNativeTurnRecordedReceipt> ReadNativeTurnWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeNativeTurnRecordedReceipt expected, CancellationToken cancellationToken)
@@ -1128,6 +1293,10 @@ internal sealed class RuntimeUsageSourceStore(
         return (dispatch, recorded);
     }
 
+    /// <summary>
+    /// Ensures that none of the SDK usage event IDs in this observation were already reported by another dispatch.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when a usage event has already been associated with another native turn.</exception>
     private async Task RequireUniqueNativeUsageAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeNativeTurnAdmissionReceipt admission,
         RuntimeNativeTurnObservation observation, CancellationToken cancellationToken)
@@ -1151,6 +1320,13 @@ internal sealed class RuntimeUsageSourceStore(
             throw new RuntimeAuthorizationException("runtime_native_turn_usage_reused");
     }
 
+    /// <summary>
+    /// Validates usage-cost receipts and marks a terminal native dispatch accounted.
+    /// </summary>
+    /// <param name="snapshot">The owner-confirmed cost snapshot that covers the recorded turn and required receipts.</param>
+    /// <returns>The accounting receipt, or the prior accounted receipt when references match exactly.</returns>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when cost evidence, stored acknowledgment references, or dispatch revision conflicts.</exception>
+    /// <remarks>The update is a compare-and-swap from terminal-pending to completed, and records priced versus unpriced status.</remarks>
     internal async Task<RuntimeNativeTurnAccountingReceipt> CompleteNativeTurnWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeGrantReceipt grant, RuntimeNativeTurnAccountingRequest request,
@@ -1210,6 +1386,10 @@ internal sealed class RuntimeUsageSourceStore(
         return accounted;
     }
 
+    /// <summary>
+    /// Requires that the dispatch's recorded output and usage have a completed accounting record.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when accounting is pending, output hashes differ, or stored references are invalid.</exception>
     internal async Task RequireNativeTurnAccountedWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeA2ASendRequest message, string answer, CancellationToken cancellationToken)
@@ -1244,6 +1424,9 @@ internal sealed class RuntimeUsageSourceStore(
             new(admission, observation, dispatch.ReportHash, dispatch.OwnerRevision - 1), references);
     }
 
+    /// <summary>
+    /// Verifies that the dispatch row matches the runtime, source, model, prompt, and request in its admission receipt.
+    /// </summary>
     private static void RequireNativeDispatch(
         NativeDispatch dispatch, RuntimeNativeTurnAdmissionReceipt admission, string sourceHash)
     {
@@ -1259,6 +1442,11 @@ internal sealed class RuntimeUsageSourceStore(
             throw new RuntimeAuthorizationException("runtime_native_turn_admission_invalid");
     }
 
+    /// <summary>
+    /// Reads the bound root checkpoint and requires that it still contains this running dispatch intent.
+    /// </summary>
+    /// <returns>The hash of the exact stored checkpoint payload after all dispatch bindings match.</returns>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the checkpoint is no longer latest or its intent, revision, fence, or progress changed.</exception>
     private async Task<string> RequireNativeCheckpointAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeNativeTurnAdmissionReceipt admission, NativeDispatch dispatch, CancellationToken cancellationToken)
@@ -1307,10 +1495,16 @@ internal sealed class RuntimeUsageSourceStore(
         return RuntimeContractValidation.Hash(Encoding.UTF8.GetBytes(payload));
     }
 
+    /// <summary>
+    /// Reports whether the association is still running in either model-work or fixed-work progress.
+    /// </summary>
     private static bool IsNativeDispatchRunning(MafExecutionCheckpoint checkpoint, string associationId) =>
         checkpoint.Progress.WorkItems.GetValueOrDefault(associationId) == MafExecutionTaskStatus.Running ||
         checkpoint.Progress.FixedWorkItems.GetValueOrDefault(associationId) == MafExecutionTaskStatus.Running;
 
+    /// <summary>
+    /// Adds project, run, and message parameters to native dispatch queries.
+    /// </summary>
     private static void AddNativeScope(NpgsqlCommand command, RuntimeRegistration registration, Guid messageId)
     {
         command.Parameters.AddWithValue("project", NpgsqlDbType.Varchar, registration.Binding.ProjectId);
@@ -1318,6 +1512,9 @@ internal sealed class RuntimeUsageSourceStore(
         command.Parameters.AddWithValue("message", NpgsqlDbType.Uuid, messageId);
     }
 
+    /// <summary>
+    /// Adds the run stream and exact registration, fence, stage, and request identifiers to a guard query.
+    /// </summary>
     private static void AddFixedCreditGuardScope(
         NpgsqlCommand command, RuntimeRegistration registration,
         RuntimeFixedCreditGuardStage stage, Guid requestId)
@@ -1333,6 +1530,9 @@ internal sealed class RuntimeUsageSourceStore(
         command.Parameters.AddWithValue("request", NpgsqlDbType.Text, requestId.ToString("D"));
     }
 
+    /// <summary>
+    /// Acquires the transaction-scoped execution lock for the root session.
+    /// </summary>
     private static async Task AcquireNativeExecutionLockAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, SessionIdentity root,
         CancellationToken cancellationToken)
@@ -1345,6 +1545,9 @@ internal sealed class RuntimeUsageSourceStore(
         await acquire.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Locked native dispatch row, including the checkpoint and report values needed for admission and reconciliation.
+    /// </summary>
     private sealed record NativeDispatch(
         string RootSessionId, string ChildSessionId, Guid RuntimeInstanceId, long RegistrationRevision,
         long ExecutionFence, string BindingHash, string SourceHash, string ModelSelectionReference,
@@ -1352,12 +1555,22 @@ internal sealed class RuntimeUsageSourceStore(
         string WorkPlanId, string AssociationId, string CheckpointId, long CheckpointRevision,
         long DecisionStateVersion, string? ReportHash, string? ReportJson);
 
+    /// <summary>
+    /// Minimal dispatch state and owner revision used to bind a credit-denial decision.
+    /// </summary>
     private sealed record NativeDispatchMarker(string State, long OwnerRevision);
 
+    /// <summary>
+    /// Reconciled cost observation and guard revisions used to decide whether a turn can proceed.
+    /// </summary>
     private sealed record NativeCreditDecision(
         decimal ObservedCredits, long LedgerEventCount, string LedgerDigest, string CostIdentity,
         long GuardRevisionBefore, long GuardRevisionAfter, bool HardLimitReached);
 
+    /// <summary>
+    /// Reads and revalidates the SDK source receipt for an active runtime registration.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the source is missing or its registration revision or hash is inconsistent.</exception>
     internal async Task<RuntimeSdkSourceReceipt> ReadCurrentSourceAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         CancellationToken cancellationToken)
@@ -1372,6 +1585,10 @@ internal sealed class RuntimeUsageSourceStore(
         return stored.Receipt;
     }
 
+    /// <summary>
+    /// Reads the SDK source receipt and verifies it against the runtime grant and configuration hash.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the source receipt does not belong to the supplied grant.</exception>
     internal async Task<RuntimeSdkSourceReceipt> ReadCurrentSourceForGrantAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeGrantReceipt grant, CancellationToken cancellationToken)
@@ -1382,6 +1599,12 @@ internal sealed class RuntimeUsageSourceStore(
         return stored.Receipt;
     }
 
+    /// <summary>
+    /// Reads a run's credit guard under a shared lock and validates it against the observation intent.
+    /// </summary>
+    /// <param name="intent">The root, tenant, selection, fence, and configured limits expected by the observer.</param>
+    /// <returns>The sealed current snapshot, or <see langword="null"/> when no guard has been recorded.</returns>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when guard identity, limits, or required ledger fields conflict.</exception>
     internal async Task<RuntimeCreditGuardSnapshot?> ReadCreditGuardWithinTransactionAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, RuntimeRegistration registration,
         RuntimeCreditGuardIntent intent, CancellationToken cancellationToken)
@@ -1427,6 +1650,11 @@ internal sealed class RuntimeUsageSourceStore(
         return snapshot;
     }
 
+    /// <summary>
+    /// Reads a completed source report and its selection hash after checking its manifest and source receipt bindings.
+    /// </summary>
+    /// <returns>The validated source-completion manifest and selection hash, or <see langword="null"/> when no eligible report exists.</returns>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when persisted completion metadata is inconsistent.</exception>
     internal async Task<(UsageDispatchSourceCompletionManifest Manifest, string SelectionHash)?>
         ReadSourceCompletionAsync(
             string projectId, string runId, string sessionId, Guid dispatchId,
@@ -1469,6 +1697,9 @@ internal sealed class RuntimeUsageSourceStore(
         return (manifest, reader.GetString(5));
     }
 
+    /// <summary>
+    /// Loads the source receipt and database metadata for a runtime ID.
+    /// </summary>
     private async Task<StoredSource?> ReadSourceAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, Guid runtimeInstanceId,
         CancellationToken cancellationToken)
@@ -1489,6 +1720,10 @@ internal sealed class RuntimeUsageSourceStore(
         return new(receipt, reader.GetString(1));
     }
 
+    /// <summary>
+    /// Requires that source facts, grant ID, configuration hash, and registration revision still match.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">Thrown when the source was registered for different runtime facts or grant.</exception>
     private static void RequireSource(
         StoredSource source, RuntimeRegistration registration, RuntimeGrantReceipt grant)
     {
@@ -1501,16 +1736,26 @@ internal sealed class RuntimeUsageSourceStore(
             throw new RuntimeAuthorizationException("runtime_sdk_source_conflict");
     }
 
+    /// <summary>
+    /// Returns the current UTC timestamp rounded down to the persisted 10-tick precision.
+    /// </summary>
     private DateTimeOffset RecordedAt()
     {
         var now = timeProvider.GetUtcNow();
         return new(now.UtcTicks - now.UtcTicks % 10, TimeSpan.Zero);
     }
 
+    /// <summary>
+    /// Deserializes a stored runtime receipt using strict JSON settings.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Thrown when stored JSON does not contain the expected receipt.</exception>
     private static T Deserialize<T>(string json) =>
         JsonSerializer.Deserialize<T>(json, JsonOptions)
         ?? throw new InvalidOperationException("A stored native runtime source receipt is invalid.");
 
+    /// <summary>
+    /// Adds the canonical hash, serialized receipt, and timestamp parameters to a receipt insert.
+    /// </summary>
     private static void AddReceipt<T>(NpgsqlCommand command, string hash, T receipt, DateTimeOffset recordedAt)
     {
         command.Parameters.AddWithValue("hash", NpgsqlDbType.Char, hash);
@@ -1518,5 +1763,8 @@ internal sealed class RuntimeUsageSourceStore(
         command.Parameters.AddWithValue("recorded", NpgsqlDbType.TimestampTz, recordedAt);
     }
 
+    /// <summary>
+    /// The SDK source receipt paired with the configuration hash used to authorize it.
+    /// </summary>
     private sealed record StoredSource(RuntimeSdkSourceReceipt Receipt, string ConfigurationHash);
 }

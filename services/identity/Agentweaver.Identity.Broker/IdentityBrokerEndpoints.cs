@@ -14,11 +14,17 @@ using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace Agentweaver.Identity.Broker;
 
+/// <summary>
+/// Hosts the broker's browser authorization, consent and token endpoints. It persists
+/// short-lived protocol state, validates run-bound grants when authorizing and again
+/// before issuing or refreshing tokens, and lets OpenIddict enforce OAuth client rules.
+/// </summary>
 public static class IdentityBrokerEndpoints
 {
     public const string LocalCookieScheme = "Identity.Local";
     public const string ExternalScheme = "Identity.External";
 
+    /// <summary>Maps OAuth endpoints and the broker's live, ready and identity diagnostics routes.</summary>
     public static void MapIdentityBrokerEndpoints(this IEndpointRouteBuilder app)
     {
         var webEndpoints = app.MapGroup("/connect")
@@ -41,6 +47,11 @@ public static class IdentityBrokerEndpoints
             .RequireAuthenticatedUser());
     }
 
+    /// <summary>
+    /// Validates requested project/run selectors and current authority before reusing an
+    /// existing authorization or creating a one-use consent transaction. An unauthenticated
+    /// request stores only a hash of its opaque resume handle.
+    /// </summary>
     private static async Task<IResult> AuthorizeAsync(
         HttpContext context, IdentityBrokerDbContext db, IOpenIddictScopeManager scopes,
         IOpenIddictAuthorizationManager authorizations, IOpenIddictApplicationManager applications,
@@ -153,6 +164,10 @@ public static class IdentityBrokerEndpoints
         });
     }
 
+    /// <summary>
+    /// Atomically claims an unexpired login continuation for the authenticated local user,
+    /// then restores the saved OAuth request. A missing, expired or replayed handle is rejected.
+    /// </summary>
     private static async Task<IResult> ResumeAsync(
         HttpContext context, string? handle, IdentityBrokerDbContext db,
         TimeProvider timeProvider, CancellationToken ct)
@@ -179,6 +194,11 @@ public static class IdentityBrokerEndpoints
         return Results.Redirect(BuildAuthorizeQuery(pending));
     }
 
+    /// <summary>
+    /// Validates antiforgery protection and atomically consumes the pending consent handle.
+    /// Approved scopes must be a subset of the original request; denial redirects with an
+    /// OAuth error and does not create a permanent authorization.
+    /// </summary>
     private static async Task<IResult> ConsentAsync(
         HttpContext context, ConsentDecision decision, IdentityBrokerDbContext db,
         IOpenIddictAuthorizationManager authorizations, IOpenIddictApplicationManager applications,
@@ -248,6 +268,11 @@ public static class IdentityBrokerEndpoints
         return Results.Redirect(BuildAuthorizeQuery(pending, scopeOverride: string.Join(' ', approvedScopes)));
     }
 
+    /// <summary>
+    /// Accepts only authorization-code and refresh-token exchanges. Before signing in the
+    /// validated principal, it rechecks the local user and the exact run authority, scope
+    /// and Projects receipt that were bound to the authorization.
+    /// </summary>
     private static async Task<IResult> TokenAsync(
         HttpContext context, IdentityBrokerDbContext db, IdentityGrantAuthority grantAuthority,
         BrokerRunBindingAuthority runBindingAuthority, IdentityBrokerOptions brokerOptions,
@@ -318,6 +343,11 @@ public static class IdentityBrokerEndpoints
         return Results.SignIn(result.Principal, authenticationScheme: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
 
+    /// <summary>
+    /// Builds a minimal token principal from the authenticated local user and approved
+    /// scopes. Run-bound issuance requires either a fresh Projects receipt or a live secret
+    /// grant; inconsistent or absent authority evidence is denied.
+    /// </summary>
     private static async Task<IResult> SignInAsync(
         IdentityBrokerDbContext db, IOpenIddictScopeManager scopes,
         IOpenIddictAuthorizationManager authorizations, object authorization,
@@ -363,6 +393,11 @@ public static class IdentityBrokerEndpoints
         return Results.SignIn(principal, authenticationScheme: OpenIddictServerAspNetCoreDefaults.AuthenticationScheme);
     }
 
+    /// <summary>
+    /// Creates the minimal OpenIddict principal and assigns claims to access or identity
+    /// tokens explicitly. Throws if run selectors and authority evidence do not form one
+    /// consistent binding.
+    /// </summary>
     private static ClaimsPrincipal BuildMinimalPrincipal(
         Guid userId,
         IEnumerable<string> scopes,
@@ -524,8 +559,10 @@ public static class IdentityBrokerEndpoints
         new { error, error_description = description }, statusCode: StatusCodes.Status400BadRequest);
 }
 
+/// <summary>Untrusted project and run selectors that must be checked by an authority.</summary>
 internal sealed record RequestedRunBinding(string ProjectId, string RunId);
 
+/// <summary>Browser consent decision; approved scopes are restricted to the pending request.</summary>
 public sealed record ConsentDecision(
     [property: JsonPropertyName("consent_handle")] string? ConsentHandle,
     [property: JsonPropertyName("approve")] bool Approve,

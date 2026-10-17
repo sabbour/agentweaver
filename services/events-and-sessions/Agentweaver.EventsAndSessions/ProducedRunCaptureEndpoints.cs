@@ -9,24 +9,28 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.EventsAndSessions;
 
+/// <summary>Signals that a capture proof, journal record, or stored package failed integrity checks.</summary>
 internal sealed class ProducedRunCaptureIntegrityException(string code, Exception? innerException = null)
     : Exception(code, innerException)
 {
     public string Code { get; } = code;
 }
 
+/// <summary>Represents a bounded package request rejected with a specific HTTP status.</summary>
 internal sealed class ProducedRunCaptureRequestException(string code, int statusCode) : Exception(code)
 {
     public string Code { get; } = code;
     public int StatusCode { get; } = statusCode;
 }
 
+/// <summary>Validates capture authority and package bytes before journal admission or content retrieval.</summary>
 internal sealed class ProducedRunCaptureApplicationService(
     IProjectsAuthorizationContextClient projects,
     ICoordinationOwnerClient owner,
     PostgresSessionsJournal journal,
     IObjectStore objects)
 {
+    /// <summary>Verifies owner proof and package digest, stores content, then appends the capture event.</summary>
     internal async Task<ProducedRunCaptureAcknowledgment> WriteAsync(
         HttpContext context,
         string sessionId,
@@ -91,6 +95,7 @@ internal sealed class ProducedRunCaptureApplicationService(
         return acknowledgment;
     }
 
+    /// <summary>Reads a journaled capture only after rechecking owner proof, authority, length, and digest.</summary>
     internal async Task<ProducedRunCaptureContentResult> ReadAsync(
         HttpContext context,
         string sessionId,
@@ -211,11 +216,14 @@ internal sealed class ProducedRunCaptureApplicationService(
         Convert.ToHexStringLower(SHA256.HashData(bytes));
 }
 
+/// <summary>Registers the bounded package upload and authenticated capture-content endpoints.</summary>
 public static class ProducedRunCaptureEndpoints
 {
+    /// <summary>Registers the scoped capture application service.</summary>
     public static void AddProducedRunCaptureOwner(this IServiceCollection services) =>
         services.AddScoped<ProducedRunCaptureApplicationService>();
 
+    /// <summary>Maps octet-stream upload and event-addressed download routes.</summary>
     public static void MapProducedRunCaptureEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost(
@@ -260,6 +268,7 @@ public static class ProducedRunCaptureEndpoints
             .RequireAuthorization();
     }
 
+    /// <summary>Reads a request body up to the configured package limit and returns the pooled buffer.</summary>
     private static async Task<byte[]> ReadBoundedAsync(Stream body, CancellationToken cancellationToken)
     {
         await using var output = new MemoryStream();
@@ -284,6 +293,7 @@ public static class ProducedRunCaptureEndpoints
         }
     }
 
+    /// <summary>Converts expected capture and authorization failures into non-cacheable HTTP responses.</summary>
     private static async Task<IResult> ExecuteAsync<T>(
         HttpContext context,
         Func<Task<T>> action,

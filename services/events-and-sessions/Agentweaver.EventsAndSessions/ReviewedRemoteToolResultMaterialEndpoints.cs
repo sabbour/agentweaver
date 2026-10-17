@@ -9,8 +9,10 @@ using Microsoft.AspNetCore.Routing;
 
 namespace Agentweaver.EventsAndSessions;
 
+/// <summary>Exposes private remote-tool result transfer only on the configured direct mutual-TLS listener.</summary>
 public static class ReviewedRemoteToolResultMaterialEndpoints
 {
+    /// <summary>Maps private result write/read routes and requires the dedicated HTTPS peer certificate.</summary>
     public static IEndpointRouteBuilder MapReviewedRemoteToolResultMaterialEndpoints(
         this IEndpointRouteBuilder endpoints)
     {
@@ -41,6 +43,7 @@ public static class ReviewedRemoteToolResultMaterialEndpoints
         return endpoints;
     }
 
+    /// <summary>Applies transport checks before body reads, returns no-store responses, and maps owner failures.</summary>
     private static async Task<IResult> ExecuteAsync<T>(HttpContext context, Func<Task<T>> action)
     {
         context.Response.Headers.CacheControl = "no-store";

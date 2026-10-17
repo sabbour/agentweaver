@@ -2,10 +2,17 @@ import { randomUUID } from 'node:crypto';
 import { validateNetworkTarget } from '../../harness-shared/target-guard.mjs';
 import { redact } from '../../harness-shared/redaction.mjs';
 
+/** Gateway API harness client, live contract discovery, and redacted request evidence. */
+/** HTTP client for exercising only operations discovered from the live Agentweaver Gateway contract. */
 const METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const CORRELATION_HEADERS = ['traceparent', 'request-id', 'x-request-id', 'x-correlation-id'];
 
+/**
+ * Calls the selected Gateway origin as one explicit tenant and records redacted request evidence.
+ * Discovery and invocation are deliberately tied to the live OpenAPI document, not a local route list.
+ */
 export class AgentweaverClient {
+  /** Bind the client to a validated root URL, broker identity, tenant, and injectable fetch implementation. */
   constructor({ baseUrl, authProvider, tenantId, fetchImpl = globalThis.fetch }) {
     this.target = validateNetworkTarget(baseUrl, { exactPath: '/' });
     if (typeof authProvider?.getAuthorization !== 'function' || authProvider.origin !== this.target.origin) {
@@ -21,6 +28,10 @@ export class AgentweaverClient {
     this.operations = new Map();
   }
 
+  /**
+   * Send one same-origin API request and retain a redacted record even when the network call fails.
+   * Authentication, redirects, and request identity cannot be overridden by caller-supplied headers.
+   */
   async call(method, path, body, { authenticated = true, headers = {}, signal } = {}) {
     if (!METHODS.has(method)) throw new Error('Unsupported API method.');
     const url = validateNetworkTarget(new URL(path, this.target));
@@ -70,6 +81,10 @@ export class AgentweaverClient {
     }
   }
 
+  /**
+   * Read and validate the live Gateway OpenAPI menu, replacing the cached operation map on success.
+   * Throws when the document is unavailable, malformed, empty, or has ambiguous operation IDs.
+   */
   async discover() {
     this.operations.clear();
     const call = await this.call('GET', '/openapi/v1.json', undefined, { authenticated: false });
@@ -97,6 +112,10 @@ export class AgentweaverClient {
     return document;
   }
 
+  /**
+   * Invoke a discovered operation after checking its path, query, and request-body contract.
+   * Returns the request evidence; unknown operations or contract mismatches are rejected before sending.
+   */
   async invoke(operationId, { pathParameters = {}, query = {}, body, headers, signal } = {}) {
     const operation = this.operations.get(operationId);
     if (!operation) throw new Error('The requested operation has not been discovered from the live Gateway.');

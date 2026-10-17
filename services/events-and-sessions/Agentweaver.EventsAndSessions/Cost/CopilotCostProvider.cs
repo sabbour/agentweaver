@@ -4,6 +4,7 @@ using Agentweaver.Providers;
 
 namespace Agentweaver.EventsAndSessions.Cost;
 
+/// <summary>Capabilities advertised by the Copilot usage-pricing adapter.</summary>
 public static class CopilotCostCapabilities
 {
     public const string PriceUsage = "cost.usage.price";
@@ -13,6 +14,7 @@ public static class CopilotCostCapabilities
         ImmutableHashSet.Create(StringComparer.Ordinal, PriceUsage, QuoteWork);
 }
 
+/// <summary>Prices Copilot Nano AIU usage and quotes supported work from a pinned rate card.</summary>
 public sealed class CopilotCostProvider : ICostProvider
 {
     /// <summary>The stable meter-source key for Copilot SDK TotalNanoAiu values.</summary>
@@ -43,6 +45,7 @@ public sealed class CopilotCostProvider : ICostProvider
         ProviderHostingPattern.InProcess,
         CopilotCostCapabilities.All);
 
+    /// <summary>Creates the enabled catalog registration after validating the configured rate card.</summary>
     public ProviderRegistration CreateRegistration()
     {
         Options.Validate();
@@ -53,6 +56,7 @@ public sealed class CopilotCostProvider : ICostProvider
             Options.OptionsSchemaVersion);
     }
 
+    /// <summary>Negotiates only candidates matching this adapter's options revision and schema.</summary>
     public ProviderResult<ResourceNegotiation> Negotiate(ProviderCandidate candidate)
     {
         ArgumentNullException.ThrowIfNull(candidate);
@@ -81,6 +85,7 @@ public sealed class CopilotCostProvider : ICostProvider
             CopilotCostCapabilities.All));
     }
 
+    /// <summary>Builds the persisted cost binding from a matching provider pin and rate-card snapshot.</summary>
     public CostBinding CreateBinding(PinnedCostProviderBinding pinned)
     {
         ArgumentNullException.ThrowIfNull(pinned);
@@ -106,6 +111,7 @@ public sealed class CopilotCostProvider : ICostProvider
             _rateCard);
     }
 
+    /// <summary>Prices supported Nano AIU measurements; missing or incompatible units remain unpriced.</summary>
     public CostPrice Price(UsageMeasurement usage, UsageModelBinding model, CostBinding binding)
     {
         ArgumentNullException.ThrowIfNull(usage);
@@ -136,6 +142,7 @@ public sealed class CopilotCostProvider : ICostProvider
             null);
     }
 
+    /// <summary>Prices supported planned-work bases against the pinned model multiplier.</summary>
     public CostPrice Quote(CostQuoteRequest plannedWork, CostBinding binding)
     {
         ArgumentNullException.ThrowIfNull(plannedWork);

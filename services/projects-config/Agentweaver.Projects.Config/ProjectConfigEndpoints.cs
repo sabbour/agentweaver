@@ -2,12 +2,14 @@ using System.Text.Json.Serialization;
 
 namespace Agentweaver.Projects.Config;
 
+/// <summary>Strict JSON request for creating a project.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record CreateProjectRequest
 {
     public required string Name { get; init; }
 }
 
+/// <summary>Strict JSON request for updating project metadata at an expected revision.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record UpdateProjectRequest
 {
@@ -16,6 +18,7 @@ public sealed record UpdateProjectRequest
     public required ProjectLifecycleState State { get; init; }
 }
 
+/// <summary>Strict JSON request for appending a validated project configuration revision.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record UpdateProjectConfigurationRequest
 {
@@ -23,6 +26,7 @@ public sealed record UpdateProjectConfigurationRequest
     public required ProjectConfiguration Configuration { get; init; }
 }
 
+/// <summary>Strict JSON request for appending platform runtime defaults at an expected revision.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record UpdatePlatformRuntimeDefaultsRequest
 {
@@ -30,8 +34,17 @@ public sealed record UpdatePlatformRuntimeDefaultsRequest
     public required PlatformRuntimeDefaults Defaults { get; init; }
 }
 
+/// <summary>
+/// Maps authenticated project, configuration, casting, run-selection, platform-default, and optional private Broker routes.
+/// </summary>
 public static class ProjectConfigEndpoints
 {
+    /// <summary>
+    /// Registers the Projects &amp; Config HTTP routes; handlers resolve current authority and translate domain errors to problem responses.
+    /// </summary>
+    /// <param name="app">The application route builder.</param>
+    /// <param name="enableBrokerRunBinding">Whether to map the private native-TLS Broker proof endpoint.</param>
+    /// <returns>The same route builder for endpoint composition.</returns>
     public static IEndpointRouteBuilder MapProjectConfigEndpoints(
         this IEndpointRouteBuilder app,
         bool enableBrokerRunBinding = false)
@@ -587,6 +600,7 @@ public static class ProjectConfigEndpoints
         return app;
     }
 
+    /// <summary>Converts an owner error to a problem response while preserving its stable code and HTTP status.</summary>
     private static IResult ToProblem(ProjectConfigException exception) =>
         Results.Problem(
             title: exception.Code,
@@ -594,6 +608,7 @@ public static class ProjectConfigEndpoints
             statusCode: exception.StatusCode,
             extensions: new Dictionary<string, object?> { ["code"] = exception.Code });
 
+    /// <summary>Resolves the bearer principal and optional tenant selector through the Projects authority owner.</summary>
     private static Task<ProjectAuthorizationContext> ResolveCallerAsync(
         HttpContext context,
         ProjectAuthorizationOwner authorizationOwner,

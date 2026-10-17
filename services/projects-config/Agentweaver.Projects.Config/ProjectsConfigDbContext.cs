@@ -3,6 +3,9 @@ using Microsoft.EntityFrameworkCore.Design;
 
 namespace Agentweaver.Projects.Config;
 
+/// <summary>
+/// EF Core mapping for the service-owned PostgreSQL schema, including revision tokens and authority/audit relationships.
+/// </summary>
 public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbContext> options) : DbContext(options)
 {
     public const string Schema = "projects_config";
@@ -26,6 +29,7 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        // The database mapping mirrors the append-only revision and authority constraints used by the service transactions.
         modelBuilder.HasDefaultSchema(Schema);
 
         modelBuilder.Entity<ProjectRecord>(entity =>
@@ -489,8 +493,10 @@ public sealed class ProjectsConfigDbContext(DbContextOptions<ProjectsConfigDbCon
     }
 }
 
+/// <summary>Design-time context factory used by EF tooling; it does not connect until the returned context is used.</summary>
 public sealed class ProjectsConfigDbContextFactory : IDesignTimeDbContextFactory<ProjectsConfigDbContext>
 {
+    /// <summary>Creates a context with a placeholder local connection and the service's migration-history schema.</summary>
     public ProjectsConfigDbContext CreateDbContext(string[] args)
     {
         var options = new DbContextOptionsBuilder<ProjectsConfigDbContext>()

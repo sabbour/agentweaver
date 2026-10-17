@@ -13,6 +13,12 @@ using static OpenIddict.Abstractions.OpenIddictConstants;
 
 namespace Agentweaver.Identity.Broker;
 
+/// <summary>
+/// Requests fresh project/run authorization evidence from the Projects owner using a
+/// short-lived broker-signed service token. It distinguishes denied authority from owner
+/// unavailability and only accepts a bounded, no-store receipt bound to the requested actor
+/// and run.
+/// </summary>
 internal sealed class BrokerRunBindingAuthority(
     IdentityBrokerOptions brokerOptions,
     X509Certificate2 signingCertificate,
@@ -64,6 +70,11 @@ internal sealed class BrokerRunBindingAuthority(
         SelectionHashClaim,
     ];
 
+    /// <summary>
+    /// Obtains a current owner receipt for the user, project and run. A receipt that differs
+    /// from the previously issued ticket is denied; transport or malformed-response failures
+    /// are reported as unavailable rather than treated as authorization.
+    /// </summary>
     public async Task<BrokerRunBindingCheck> CheckAsync(
         Guid userId,
         string projectId,
@@ -373,6 +384,7 @@ internal sealed class BrokerRunBindingAuthority(
             character is '.' or '_' or '-' or ':');
 }
 
+/// <summary>Outcome of a Projects-owner run-binding check; only <c>Authorized</c> carries a receipt.</summary>
 internal sealed record BrokerRunBindingCheck(
     BrokerRunBindingStatus Status,
     BrokerRunBindingReceipt? Receipt)
@@ -387,6 +399,7 @@ internal sealed record BrokerRunBindingCheck(
         new(BrokerRunBindingStatus.Authorized, receipt);
 }
 
+/// <summary>Separates a rejected binding from an unavailable Projects owner.</summary>
 internal enum BrokerRunBindingStatus
 {
     Authorized,
@@ -394,6 +407,10 @@ internal enum BrokerRunBindingStatus
     Unavailable,
 }
 
+/// <summary>
+/// Projects-owner receipt received over the pinned TLS channel. It carries the actor and
+/// revisioned membership, assignment, project and runtime context used to bind a run authorization.
+/// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 internal sealed record BrokerRunBindingReceipt(
     string ActorIssuer,

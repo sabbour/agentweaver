@@ -5,6 +5,7 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity;
 
+/// <summary>Owner admission request binding one runtime action to its registration and input hash.</summary>
 public sealed record RuntimeActionRequest(
     int ContractVersion,
     Guid RuntimeInstanceId,
@@ -24,6 +25,7 @@ public sealed record RuntimeActionRequest(
     public Guid? CostTurnId { get; init; }
 }
 
+/// <summary>Owner policy decision for a specific action request and receipt ID.</summary>
 public sealed record RuntimeActionAdmission(
     int ContractVersion,
     RuntimeActionRequest Request,
@@ -33,6 +35,7 @@ public sealed record RuntimeActionAdmission(
     PolicyEvaluationOutcome Outcome,
     PolicyEvaluationReasonCode ReasonCode);
 
+/// <summary>Validation and stable action identifiers shared by runtime action admission clients.</summary>
 public static class RuntimeActionContract
 {
     public const string Purpose = "runtime.execution";
@@ -42,6 +45,7 @@ public static class RuntimeActionContract
         "exec.read", "exec.write", "exec.stop"
     }.ToFrozenSet(StringComparer.Ordinal);
 
+    /// <summary>Checks version, IDs, allowed action, dispatch fields, and the canonical input hash.</summary>
     public static void Validate(RuntimeActionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -58,6 +62,7 @@ public static class RuntimeActionContract
         RuntimeContractValidation.ValidateHash(request.InputHash);
     }
 
+    /// <summary>Requires an owner dispatch ID for bounded or hard-credit-limited native model turns.</summary>
     public static void RequireNativeDispatchAdmission(RuntimeBinding binding, RuntimeActionRequest request)
     {
         ArgumentNullException.ThrowIfNull(binding);
@@ -70,6 +75,7 @@ public static class RuntimeActionContract
             throw new RuntimeAuthorizationException("runtime_model_turn_admission_required");
     }
 
+    /// <summary>Rejects invalid counters and stops new admissions when the configured capacity is reserved.</summary>
     public static void RequireInvocationCapacity(int? limit, long reserved, string exhaustedCode)
     {
         if (reserved < 0 || limit is < 1)
@@ -78,6 +84,7 @@ public static class RuntimeActionContract
             throw new RuntimeAuthorizationException(exhaustedCode);
     }
 
+    /// <summary>Returns the SHA-256 digest of the validated serialized request.</summary>
     public static string Hash(RuntimeActionRequest request)
     {
         Validate(request);

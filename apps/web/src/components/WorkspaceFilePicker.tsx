@@ -199,6 +199,11 @@ export interface WorkspaceFilePickerProps {
   onSelect: (path: string) => void;
 }
 
+/**
+ * Loads and renders a picker of files in the selected workspace through the workspace API.
+ * Props identify the workspace and selection callbacks; local state/effects track file results,
+ * filtering, and request status.
+ */
 export function WorkspaceFilePicker({ projectId, workspaceRef, selectedPath, onSelect }: WorkspaceFilePickerProps) {
   const styles = useStyles();
   const [nodes, setNodes] = useState<WorkspaceFileNode[]>([]);

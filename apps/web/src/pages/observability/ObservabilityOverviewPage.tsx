@@ -25,6 +25,10 @@ import {
 
 type TimeRange = '7d' | '30d' | '90d';
 
+/**
+ * Project-level telemetry overview. It fetches the chosen metrics window and shows
+ * aggregate model activity, latency, and usage through shared dashboard components.
+ */
 const useStyles = makeStyles({
   tileGrid: {
     display: 'grid',
@@ -41,6 +45,7 @@ const useStyles = makeStyles({
   },
 });
 
+/** Builds UTC date boundaries for a selected metrics range. */
 function timeRangeDates(range: TimeRange): { from: string; to: string } {
   const to = new Date();
   const from = new Date(to);
@@ -51,6 +56,7 @@ function timeRangeDates(range: TimeRange): { from: string; to: string } {
   return { from: from.toISOString(), to: to.toISOString() };
 }
 
+/** Formats API and other metrics errors for a visible message. */
 function formatError(error: unknown): string {
   return error instanceof ApiError
     ? `API error ${error.status}: ${error.body}`
@@ -59,16 +65,19 @@ function formatError(error: unknown): string {
       : String(error);
 }
 
+/** Supplies the matching display label for a range key. */
 function rangeLabel(range: TimeRange): string {
   if (range === '7d') return 'Last 7 days';
   if (range === '30d') return 'Last 30 days';
   return 'Last 90 days';
 }
 
+/** Uses compact locale notation for calls and credit totals. */
 function compactNumber(value: number): string {
   return new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 }
 
+/** Treats telemetry as present only when at least one metric carries a measurement. */
 function hasTelemetry(metrics: ProjectMetricsDto | null): boolean {
   if (!metrics) return false;
   return Boolean(
@@ -89,6 +98,8 @@ export function ObservabilityOverviewPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Fetch the project label and selected metrics range together; ignore late responses
+  // after a range or route change, while allowing missing project metadata.
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
@@ -109,6 +120,7 @@ export function ObservabilityOverviewPage() {
     return () => { cancelled = true; };
   }, [projectId, range, reloadKey]);
 
+  // Derive counts from metric arrays once so the summary tiles use one snapshot.
   const summary = useMemo(() => {
     const modelUsage = metrics?.modelUsage ?? [];
     const aiCreditUsageTrend = metrics?.aiCreditUsageTrend ?? [];

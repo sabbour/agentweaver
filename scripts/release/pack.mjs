@@ -1,3 +1,7 @@
+/**
+ * Builds and measures release artifacts locally from an exact source revision.
+ * It writes artifacts and provenance receipts to an output directory but does not publish or deploy them.
+ */
 // Dependency-free artifact preparation: runs a locked `dotnet restore` + `build` + `pack`/container
 // publish sequence for each manifest component into a fresh, per-run output
 // directory, then records a provenance receipt (source SHA, component versions, and a SHA-256 hash
@@ -38,6 +42,7 @@ const INTEGRATION_SERVICE_IDS = Object.freeze([
   'Agentweaver.Projects.Config',
 ].sort());
 
+/** Returns the fixed container repository name for a component that produces an image. */
 export function componentImageRepository(componentId) {
   if (componentId === 'Agentweaver.FoundationProbe') return 'agentweaver-foundation-probe';
   if (componentId === 'Agentweaver.Web') return 'agentweaver-web';
@@ -45,6 +50,7 @@ export function componentImageRepository(componentId) {
   return componentId.toLowerCase();
 }
 
+/** Selects service image components included in images-only integration releases. */
 export function selectIntegrationImageComponents(manifest) {
   const components = manifest.components.filter(component =>
     component.kind === 'service' && component.id !== 'Agentweaver.FoundationProbe');
@@ -271,6 +277,7 @@ function verifyPinnedBaseImages(images, docker, webDir) {
   return resolved;
 }
 
+/** Removes Vite-prefixed variables so local build settings cannot leak into release output. */
 export function cleanBuildEnvironment(environment) {
   return Object.fromEntries(Object.entries(environment).filter(([name]) => !/^VITE_/i.test(name)));
 }
@@ -295,6 +302,10 @@ function hashFile(file, readFile) {
  * Fails closed (no provenance written) on a dirty working tree, stale output, or any failing build.
  * Web images are built only from a locked npm install, a clean staged context, and locally present
  * immutable base images. Never pushes or publishes any artifact anywhere.
+ */
+/**
+ * Builds each manifest component from a clean, exact source and records artifact hashes and provenance.
+ * It returns the receipt and output paths; restore, build, archive, or validation failures throw.
  */
 export function packComponents(manifest, {
   root = repositoryRoot,
@@ -783,6 +794,7 @@ export function packComponents(manifest, {
   return provenance;
 }
 
+/** Loads and validates a release manifest, then delegates artifact preparation to packComponents(). */
 export function packComponentsFromFile(manifestPath, options = {}) {
   const manifest = validateFile(manifestPath, options);
   const root = options.root ?? repositoryRoot;

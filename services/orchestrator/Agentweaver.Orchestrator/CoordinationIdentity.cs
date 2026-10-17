@@ -7,8 +7,15 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Validates caller identity and extracts the project, run, and tenant selectors used by coordination endpoints.
+/// </summary>
 internal static class CoordinationIdentity
 {
+    /// <summary>
+    /// Requires one authenticated GUID subject and an absolute HTTPS issuer.
+    /// </summary>
+    /// <exception cref="CoordinationException">The principal or issuer is invalid.</exception>
     public static CoordinationActor RequireActor(ClaimsPrincipal principal, string issuer)
     {
         var subjects = principal.FindAll("sub").Take(2).ToArray();
@@ -20,6 +27,10 @@ internal static class CoordinationIdentity
         return new CoordinationActor(issuerUri.AbsoluteUri, subjects[0].Value);
     }
 
+    /// <summary>
+    /// Reads exactly one project and run claim and validates their stable identifier syntax.
+    /// </summary>
+    /// <exception cref="CoordinationException">A binding is missing, duplicated, or malformed.</exception>
     public static CoordinationRunScope RequireRunScope(ClaimsPrincipal principal)
     {
         var projects = principal.FindAll("project_id").Take(2).ToArray();
@@ -31,6 +42,10 @@ internal static class CoordinationIdentity
         return new CoordinationRunScope(projects[0].Value, runs[0].Value);
     }
 
+    /// <summary>
+    /// Requires both read access and the Orchestrator project scope.
+    /// </summary>
+    /// <exception cref="CoordinationException">Either required scope is absent.</exception>
     public static void RequireScopes(ClaimsPrincipal principal)
     {
         var scopes = principal.FindAll("scope").Concat(principal.FindAll("scp"))
@@ -40,10 +55,17 @@ internal static class CoordinationIdentity
             throw new CoordinationException("caller_scope_invalid", StatusCodes.Status403Forbidden);
     }
 
+    /// <summary>
+    /// Checks whether the principal contains the exact configured audience.
+    /// </summary>
     public static bool HasAudience(ClaimsPrincipal principal, string expectedAudience) =>
         principal.FindAll("aud").Any(claim =>
             string.Equals(claim.Value, expectedAudience, StringComparison.Ordinal));
 
+    /// <summary>
+    /// Parses the single Authorization header as a non-empty Bearer credential.
+    /// </summary>
+    /// <exception cref="CoordinationException">The request has a missing, duplicate, or invalid Bearer header.</exception>
     public static AuthenticationHeaderValue RequireBearer(HttpContext context)
     {
         var values = context.Request.Headers.Authorization;
@@ -55,6 +77,10 @@ internal static class CoordinationIdentity
         return authorization;
     }
 
+    /// <summary>
+    /// Reads the optional tenant selector, rejecting duplicate or malformed header values.
+    /// </summary>
+    /// <exception cref="CoordinationException">The supplied tenant selector is invalid.</exception>
     public static string? ReadTenantSelector(HttpContext context)
     {
         var selectors = context.Request.Headers["X-Agentweaver-Tenant"];
@@ -65,9 +91,16 @@ internal static class CoordinationIdentity
         return selectors[0]!;
     }
 
+    /// <summary>
+    /// Derives a stable owner key from the actor issuer and subject without storing either as the key.
+    /// </summary>
     public static string ClaimOwner(CoordinationActor actor) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{actor.Issuer}\0{actor.Subject}")));
 
+    /// <summary>
+    /// Checks that an identity uses only the accepted bounded ASCII characters.
+    /// </summary>
+    /// <exception cref="CoordinationException">The value is empty, too long, or contains unsupported characters.</exception>
     public static void ValidateIdentity(string value, string field)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 256 ||
@@ -76,6 +109,9 @@ internal static class CoordinationIdentity
             throw new CoordinationException($"{field}_invalid", StatusCodes.Status400BadRequest);
     }
 
+    /// <summary>
+    /// Checks whether a tenant selector uses the bounded opaque identifier syntax.
+    /// </summary>
     private static bool IsOpaqueIdentifier(string? value) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= 256 &&
         value.All(character => char.IsAsciiLetterOrDigit(character) ||

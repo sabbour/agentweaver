@@ -3,6 +3,7 @@ using System.Text.Json;
 
 namespace Agentweaver.Gateway;
 
+/// <summary>Identifies a run-event page or event that violates the Gateway's public projection contract.</summary>
 internal sealed class GatewayEventProjectionException : Exception
 {
     public GatewayEventProjectionException(string code) : base(code) => Code = code;
@@ -10,6 +11,7 @@ internal sealed class GatewayEventProjectionException : Exception
     public string Code { get; }
 }
 
+/// <summary>Validates owner event pages and excludes private runtime and remote-tool result data.</summary>
 internal static class GatewayRunEventProjection
 {
     private const int MaximumPageEvents = 200;
@@ -23,6 +25,7 @@ internal static class GatewayRunEventProjection
         "occurredAt", "kind", "payload", "objectReferences"
     ];
 
+    /// <summary>Validates page shape, bounded cursor, event count, and each event before returning JSON.</summary>
     public static byte[] ProjectPage(ReadOnlyMemory<byte> utf8Json, string? cursor, int limit)
     {
         if (limit is < 1 or > MaximumPageEvents ||
@@ -65,6 +68,7 @@ internal static class GatewayRunEventProjection
         }
     }
 
+    /// <summary>Checks versioned event identity, payload shape, and object references before forwarding.</summary>
     public static JsonElement ProjectEvent(JsonElement sessionEvent)
     {
         RequireProperties(sessionEvent, EventProperties);
@@ -92,6 +96,7 @@ internal static class GatewayRunEventProjection
         return sessionEvent.Clone();
     }
 
+    /// <summary>Validates supported payload variants and rejects private remote-tool identifiers.</summary>
     private static void ValidatePayload(
         string eventKind, string payloadKind, JsonElement payload, Guid eventId)
     {
@@ -232,6 +237,7 @@ internal static class GatewayRunEventProjection
         }
     }
 
+    /// <summary>Rejects references that disclose runtime configuration or private remote-tool result material.</summary>
     private static void ValidateReference(JsonElement reference)
     {
         RequireProperties(reference, ["key", "purpose"], ["byteLength", "material"]);
@@ -305,6 +311,7 @@ internal static class GatewayRunEventProjection
             throw InvalidProjection();
     }
 
+    /// <summary>Requires exactly the declared property set, rejecting unknown and duplicate JSON fields.</summary>
     private static void RequireProperties(
         JsonElement value, string[] required, string[]? optional = null)
     {

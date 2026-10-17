@@ -69,6 +69,10 @@ export interface MetricRowProps {
   className?: string;
 }
 
+/**
+ * Renders a horizontal row of metric values from the supplied `items`.
+ * Labels and values remain caller-owned; the row has no API dependency or state.
+ */
 export function MetricRow({ items, separators = true, className }: MetricRowProps) {
   const styles = useRowStyles();
   return (
@@ -133,6 +137,10 @@ export interface StatTileProps {
   className?: string;
 }
 
+/**
+ * Renders one emphasized metric tile from the supplied value, label, and optional supporting
+ * content. It presents caller-provided data only and has no local state.
+ */
 export function StatTile({ label, value, icon, hint, className }: StatTileProps) {
   const styles = useTileStyles();
   return (

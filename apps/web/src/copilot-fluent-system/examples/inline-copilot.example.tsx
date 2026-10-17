@@ -6,6 +6,7 @@ const suggestions: AzfOption[] = [
   { id: 'draft', label: 'Draft a stakeholder update for the incident channel' },
 ];
 
+/** Demonstrates open-start and guided prompt states, including local validation and suggestions. */
 export function InlineCopilotExample() {
   const [openPrompt, setOpenPrompt] = useState('');
   const [guidedPrompt, setGuidedPrompt] = useState('Summarize deployment failures from the last 24 hours');

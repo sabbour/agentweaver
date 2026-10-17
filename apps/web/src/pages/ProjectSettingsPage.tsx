@@ -46,14 +46,22 @@ import {
   SetupReadiness,
   TitleText,
 } from '../components/ui';
+
+/**
+ * Project configuration hub. It keeps route-deep-linked sections in sync with
+ * provider models, access assignments, repository readiness, automation controls,
+ * sandbox policy, previews, rename, and deletion APIs.
+ */
 // Spec settings-subnav — project Settings restructured into a left in-page rail +
 // right content pane. Only sections with a real Agentweaver backend are shipped
 // (Principle VII): General, Sandbox policy, Danger Zone. The rail is
 // data-driven so more sections can be appended as their backends land.
+/** Route keys for the settings sections available to this project's origin. */
 type SectionId = 'general' | 'access' | 'repository' | 'unattended' | 'sandbox' | 'danger';
 
 const GENERATION_DEFAULT_MODEL = 'gpt-5.4';
 
+/** Uses explicit model readiness or maps known legacy reasons into a safe status. */
 function modelProviderReadiness(readiness: UnattendedReadiness) {
   if (readiness.model_provider) return readiness.model_provider;
   const blocked = readiness.reason_code === 'model_provider_connection_required'
@@ -73,6 +81,7 @@ function modelProviderReadiness(readiness: UnattendedReadiness) {
   };
 }
 
+/** Uses structured repository status or derives it from required access signals. */
 function repositoryReadiness(
   readiness: UnattendedReadiness,
   repositoryRequired: boolean,
@@ -111,6 +120,7 @@ function repositoryReadiness(
   };
 }
 
+/** Explains the remediation associated with a model-provider readiness code. */
 function modelProviderReadinessMessage(reasonCode: string) {
   if (reasonCode === 'project_model_provider_reconnect_required') {
     return 'Reconnect the project GitHub Copilot authorization used for unattended AI work.';
@@ -121,6 +131,7 @@ function modelProviderReadinessMessage(reasonCode: string) {
   return 'The model provider is ready for background automation.';
 }
 
+/** Explains whether repository access is optional, missing, or ready. */
 function repositoryReadinessMessage(reasonCode: string) {
   if (reasonCode === 'not_required') return 'This project does not require repository access.';
   if (reasonCode === 'repo_app_installation_required') {
@@ -132,12 +143,14 @@ function repositoryReadinessMessage(reasonCode: string) {
   return 'Repository access is ready for background automation.';
 }
 
+/** Per-feature generation model overrides; empty values inherit project defaults. */
 interface GenerationModelState {
   blueprint_generation_model: string;
   workflow_generation_model: string;
   outcome_spec_generation_model: string;
 }
 
+/** Empty override values used to reset generation models to inherited defaults. */
 const emptyGenerationModels: GenerationModelState = {
   blueprint_generation_model: '',
   workflow_generation_model: '',
@@ -148,6 +161,7 @@ const AUTH_MODE_LABELS = {
   entra: 'Entra ID',
 } as const;
 
+/** Label and navigation metadata for one project settings rail item. */
 interface SectionDef {
   id: SectionId;
   label: string;
@@ -156,6 +170,7 @@ interface SectionDef {
   danger?: boolean;
 }
 
+/** Settings sections with real server-backed controls in this page. */
 const SECTIONS: SectionDef[] = [
   {
     id: 'general',
@@ -196,6 +211,7 @@ const SECTIONS: SectionDef[] = [
   },
 ];
 
+/** Type guard for valid deep-linked section query values. */
 function isSectionId(value: string | null): value is SectionId {
   return value === 'general'
     || value === 'access'
@@ -378,6 +394,7 @@ export function ProjectSettingsPage() {
   const sectionParam = searchParams.get('section');
   const activeSection: SectionId = isSectionId(sectionParam) ? sectionParam : 'general';
 
+  /** Writes the selected section into the URL so it can be bookmarked or shared. */
   const selectSection = (id: SectionId) => {
     const next = new URLSearchParams(searchParams);
     next.set('section', id);
@@ -399,6 +416,8 @@ export function ProjectSettingsPage() {
 
   const [connectRepoOpen, setConnectRepoOpen] = useState(false);
 
+  // The page loads core project data first and ancillary access/readiness data
+  // independently so optional APIs cannot block general project settings.
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -464,6 +483,7 @@ export function ProjectSettingsPage() {
 
   const formatError = (err: unknown): string => formatApiErrorMessage(err);
 
+  // An OAuth return opens repository setup so the user can continue the access flow.
   useEffect(() => {
     if (!repoAppAuthorizationResult) return;
     queueMicrotask(() => {
@@ -471,6 +491,7 @@ export function ProjectSettingsPage() {
     });
   }, [repoAppAuthorizationResult]);
 
+  // Load project settings and seed editable form values from the server response.
   useEffect(() => {
     if (!projectId) return;
     let cancelled = false;
@@ -497,6 +518,7 @@ export function ProjectSettingsPage() {
     return () => { cancelled = true; };
   }, [projectId]);
 
+  // Authentication configuration is optional for project settings and is cached locally.
   useEffect(() => {
     let cancelled = false;
     void apiClient.getAuthConfig()
@@ -509,6 +531,7 @@ export function ProjectSettingsPage() {
     return () => { cancelled = true; };
   }, []);
 
+  /** Loads project roles; a 404 is shown as unsupported rather than a generic failure. */
   const refreshAccessOverview = useCallback(async () => {
     if (!projectId) return;
     setAccessLoading(true);
@@ -531,11 +554,13 @@ export function ProjectSettingsPage() {
     }
   }, [projectId]);
 
+  // Resolve membership after the route's project is known.
   useEffect(() => {
     if (!projectId) return;
     queueMicrotask(() => { void refreshAccessOverview(); });
   }, [projectId, refreshAccessOverview]);
 
+  /** Reloads model and repository prerequisites for unattended work. */
   const refreshUnattendedReadiness = useCallback(async () => {
     if (!projectId) return;
     setUnattendedLoading(true);
@@ -550,11 +575,13 @@ export function ProjectSettingsPage() {
     }
   }, [projectId]);
 
+  // Readiness is project-specific and refreshed when the route changes.
   useEffect(() => {
     if (!projectId) return;
     queueMicrotask(() => { void refreshUnattendedReadiness(); });
   }, [projectId, refreshUnattendedReadiness]);
 
+  /** Loads activation state; non-owner authorization is expected and not surfaced. */
   const refreshAutomationStatus = useCallback(async () => {
     if (!projectId) return;
     setAutomationLoading(true);
@@ -573,11 +600,13 @@ export function ProjectSettingsPage() {
     }
   }, [projectId]);
 
+  // Activation controls are backed by an owner-only endpoint.
   useEffect(() => {
     if (!projectId) return;
     queueMicrotask(() => { void refreshAutomationStatus(); });
   }, [projectId, refreshAutomationStatus]);
 
+  /** Enables project automation and replaces local state with the returned status. */
   const handleActivateAutomation = async () => {
     if (!projectId) return;
     setAutomationActionPending(true);
@@ -591,6 +620,7 @@ export function ProjectSettingsPage() {
     }
   };
 
+  /** Disables project automation and replaces local state with the returned status. */
   const handleDeactivateAutomation = async () => {
     if (!projectId) return;
     setAutomationActionPending(true);
@@ -604,6 +634,7 @@ export function ProjectSettingsPage() {
     }
   };
 
+  /** Persists model settings while preserving the project's current provider fields. */
   const handleSaveModel = async () => {
     if (!projectId) return;
     setSavingModel(true);
@@ -633,6 +664,7 @@ export function ProjectSettingsPage() {
     }
   };
 
+  /** Saves all generation model overrides together so omitted fields are not lost. */
   const saveGenerationModels = async (models: GenerationModelState) => {
     if (!projectId) return;
     setSavingGeneration(true);
@@ -662,16 +694,20 @@ export function ProjectSettingsPage() {
     }
   };
 
+  /** Persists the model values currently entered in the generation form. */
   const handleSaveGeneration = async () => {
     await saveGenerationModels(generationModels);
   };
 
+  /** Clears all generation overrides and saves the inherited-default state. */
   const handleResetGeneration = async () => {
     const inherited = { ...emptyGenerationModels };
     setGenerationModels(inherited);
     await saveGenerationModels(inherited);
   };
 
+  // Sandbox policy is scoped to the project's working directory. Mark the fetch
+  // complete on both success and failure so the section does not wait forever.
   useEffect(() => {
     if (!project?.working_directory) return;
     let cancelled = false;
@@ -691,6 +727,7 @@ export function ProjectSettingsPage() {
     return () => { cancelled = true; };
   }, [project?.working_directory]);
 
+  /** Saves the full policy object to preserve fields not edited by this page. */
   const handleSaveSandbox = async () => {
     if (!sandboxPolicy) return;
     setSavingSandbox(true);
@@ -709,6 +746,10 @@ export function ProjectSettingsPage() {
     }
   };
 
+  /**
+   * Validates bounded integer limits before persisting preview approval and lifetime
+   * settings; invalid values are reported locally without an API request.
+   */
   const handleSavePreviewApproval = async () => {
     if (!projectId) return;
     if (!Number.isInteger(previewApprovalTimeout)
@@ -761,6 +802,7 @@ export function ProjectSettingsPage() {
     }
   };
 
+  /** Renames the project and updates the displayed name after server success. */
   const handleRename = async () => {
     if (!projectId || !newName.trim()) return;
     setSavingRename(true);
@@ -777,6 +819,7 @@ export function ProjectSettingsPage() {
     }
   };
 
+  /** Deletes only after the confirmation checkbox is selected, then leaves settings. */
   const handleDelete = async () => {
     if (!projectId || !deleteConfirmed) return;
     setDeleting(true);
@@ -791,6 +834,7 @@ export function ProjectSettingsPage() {
     }
   };
 
+  /** Adds a project role assignment and reloads the authoritative access overview. */
   const handleAddRoleAssignment = async () => {
     if (!projectId || !principalId.trim()) return;
     setSavingRoleAssignment(true);
@@ -815,6 +859,7 @@ export function ProjectSettingsPage() {
     }
   };
 
+  /** Removes one assignment and reloads membership state after server success. */
   const handleDeleteRoleAssignment = async (assignmentId: string) => {
     if (!projectId) return;
     setRoleActionKey(assignmentId);

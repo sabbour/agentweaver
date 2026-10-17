@@ -1,3 +1,4 @@
+/** Provides a temporary user-authenticated kubeconfig and bootstraps the dedicated P0 namespace. */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -51,6 +52,10 @@ function assertNamespaceReadback(result) {
     : undefined;
 }
 
+/**
+ * Obtains a short-lived kubeconfig, runs the supplied action, then removes the temporary directory.
+ * Cleanup is attempted on both success and failure; the action or Azure command error is propagated.
+ */
 export function withP0UserKubeconfig({
   resourceGroup, subscriptionId, clusterName,
 }, action, {
@@ -90,6 +95,10 @@ export function withP0UserKubeconfig({
   return receipt;
 }
 
+/**
+ * Verifies operator access and creates or validates the P0 namespace using bounded retries.
+ * It rejects unauthorized access and unexpected namespace ownership rather than continuing.
+ */
 export function bootstrapP0Namespace({
   resourceGroup, subscriptionId, repoRoot = process.cwd(), clusterName,
 }, {

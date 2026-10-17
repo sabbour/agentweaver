@@ -8,22 +8,31 @@ using OpenIddict.Validation.AspNetCore;
 
 namespace Agentweaver.Identity.Broker;
 
+/// <summary>Request to start a Copilot connection for one project or platform scope.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record BeginCopilotConnectionRequest(ProjectAuthorityResourceType Scope, string ScopeId);
 
+/// <summary>OAuth callback data. Its string representation deliberately omits state and code.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record CompleteCopilotConnectionRequest(string State, string? Code, string? Error = null)
 {
     public override string ToString() => nameof(CompleteCopilotConnectionRequest) + " [REDACTED]";
 }
 
+/// <summary>Revision-guarded request to refresh or revoke one Copilot connection.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ChangeCopilotConnectionRequest(Guid ConnectionId, long ExpectedRevision);
 
+/// <summary>
+/// Maps authenticated internal routes for beginning, completing, reading and changing
+/// user Copilot connections. The callback cookie is HTTP-only and scoped to the browser
+/// return path; credentials and errors are not cached.
+/// </summary>
 public static class CopilotConnectionEndpoints
 {
     public const string CallbackCookieName = "__Host-agentweaver-copilot-link";
     public const string BrowserCallbackPath = "/auth/github/copilot-app/callback";
+    /// <summary>Registers all internal Copilot connection routes.</summary>
     public static void MapCopilotConnectionEndpoints(this IEndpointRouteBuilder app)
     {
         var routes = app.MapGroup("/internal/connections/copilot-user")

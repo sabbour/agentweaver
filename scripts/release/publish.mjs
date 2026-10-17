@@ -1,4 +1,8 @@
-// Only the manually confirmed publication workflow invokes this script.
+/**
+ * Publishes packed artifacts to configured registries and feeds after source-bound validation.
+ * Release and integration modes require their matching confirmation; one-use continuation validates fixed recovery evidence.
+ */
+// The CLI supports release, integration-image, and one-use continuation publication.
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -164,6 +168,11 @@ function parseRegistry(value) {
   return { host, repositoryPath: repositoryPath ?? '' };
 }
 
+/**
+ * Verifies packed artifacts and publishes them to their configured registries and feeds.
+ * Release and integration modes require their matching confirmation; one-use continuation validates fixed recovery evidence.
+ * Command failures are surfaced with sanitized diagnostics.
+ */
 export function publishArtifacts(manifestPath, outDir, sourceSha, {
   root = process.cwd(), confirmed = false, env = process.env, run = command,
   measureAgentHostArchive = measureAgentHostArchiveSync,
@@ -670,6 +679,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   }
 }
 
+/** Extracts a sanitized native NuGet push diagnostic when the error came from that operation. */
 export function findNugetPushDiagnostic(error) {
   if (!error || typeof error !== 'object') return undefined;
   if (error.operation === 'nuget.push' && typeof error.nativeDiagnostic === 'string')

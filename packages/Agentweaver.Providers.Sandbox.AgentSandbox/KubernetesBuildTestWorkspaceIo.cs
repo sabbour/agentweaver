@@ -6,13 +6,31 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Providers.Sandbox.AgentSandbox;
 
+/// <summary>
+/// Implements the bounded WebSocket channel exchange used to prepare and collect BuildTest workspace data.
+/// </summary>
 public sealed partial class KubernetesAgentSandboxClient
 {
+    /// <summary>The fixed container name used for workspace preparation.</summary>
     public const string WorkspacePreparationContainer = SandboxBuildTestLimits.WorkspacePreparationContainerName;
+    /// <summary>The fixed container name used for output capture.</summary>
     public const string WorkspaceCaptureContainer = SandboxBuildTestLimits.WorkspaceCaptureContainerName;
     private const string WorkspaceIoProtocol = "v5.channel.k8s.io";
     private const int MaximumWorkspaceIoFrameBytes = 32 * 1024;
 
+    /// <summary>
+    /// Exchanges bounded input and output with the exact Kubernetes Pod over the exec or attach subresource.
+    /// </summary>
+    /// <param name="pod">Pod name and UID pinned by the caller.</param>
+    /// <param name="requestFingerprint">Expected 64-character request identity sent before input.</param>
+    /// <param name="input">Bytes supplied to the helper.</param>
+    /// <param name="preparingWorkspace">Selects the preparation helper and failure-effect semantics.</param>
+    /// <param name="maximumOutputBytes">Maximum accepted stdout length.</param>
+    /// <param name="cancellationToken">Cancels the Kubernetes exchange.</param>
+    /// <param name="executionCommand">Optional command that selects exec instead of attach.</param>
+    /// <returns>The bounded stdout bytes returned by the helper.</returns>
+    /// <exception cref="ArgumentException">The request exceeds protocol bounds or contains invalid arguments.</exception>
+    /// <exception cref="SandboxProviderException">Pod identity, protocol, status, size, or transport validation fails.</exception>
     public async Task<ImmutableArray<byte>> ExchangeBuildTestWorkspaceAsync(
         SandboxBuildTestPodReference pod,
         string requestFingerprint,
@@ -84,6 +102,9 @@ public sealed partial class KubernetesAgentSandboxClient
         }
     }
 
+    /// <summary>
+    /// Enforces the channel order, request identity, output limit, successful helper status, and clean close.
+    /// </summary>
     private static async Task<ImmutableArray<byte>> ExchangeWorkspaceChannelsAsync(
         WebSocket socket,
         string podUid,
@@ -177,6 +198,7 @@ public sealed partial class KubernetesAgentSandboxClient
         }
     }
 
+    /// <summary>Sends the bounded input on stdin and then signals end-of-input on the protocol channel.</summary>
     private static async Task SendWorkspaceInputAsync(
         WebSocket socket,
         ImmutableArray<byte> input,
@@ -198,6 +220,7 @@ public sealed partial class KubernetesAgentSandboxClient
             endOfMessage: true, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Parses the bounded status channel and rejects a helper result other than Success.</summary>
     private static void RequireSuccessfulWorkspaceStatus(byte[] bytes, bool preparingWorkspace)
     {
         try
@@ -214,6 +237,7 @@ public sealed partial class KubernetesAgentSandboxClient
         }
     }
 
+    /// <summary>Builds the protocol failure while preserving whether workspace preparation may have changed state.</summary>
     private static SandboxProviderException WorkspaceIoFailure(string code, bool preparingWorkspace) =>
         new(code, "The bounded native BuildTest workspace exchange did not complete.", preparingWorkspace);
 }

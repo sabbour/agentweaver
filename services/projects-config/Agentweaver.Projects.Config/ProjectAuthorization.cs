@@ -10,8 +10,10 @@ using Microsoft.IdentityModel.Tokens;
 
 namespace Agentweaver.Projects.Config;
 
+/// <summary>Configured issuer whose tokens are accepted by the service.</summary>
 public sealed record ProjectsConfigIdentityOptions(string Issuer);
 
+/// <summary>A current membership role assignment with its resource scope and revision.</summary>
 public sealed record ProjectAuthorizationGrant(
     Guid AssignmentId,
     ProjectAuthorityResourceType ResourceType,
@@ -19,10 +21,14 @@ public sealed record ProjectAuthorizationGrant(
     ProjectAuthorityRole Role,
     long Revision);
 
+/// <summary>
+/// Validated actor identity, active membership, current role snapshot, scopes, and optional project/run request binding.
+/// </summary>
 public sealed class ProjectAuthorizationContext
 {
     public const int CurrentContractVersion = ProjectAuthorizationContextContract.CurrentVersion;
 
+    /// <summary>Creates a resolved context from normalized identity and authority data read by the owner.</summary>
     internal ProjectAuthorizationContext(
         string issuer,
         string actorId,
@@ -60,6 +66,7 @@ public sealed class ProjectAuthorizationContext
     public string? BoundRunId { get; }
     public string? Purpose { get; }
 
+    /// <summary>Checks for an exact resource type, resource ID, and role in the resolved grant snapshot.</summary>
     public bool HasRole(
         ProjectAuthorityResourceType resourceType,
         string resourceId,
@@ -69,36 +76,46 @@ public sealed class ProjectAuthorizationContext
             string.Equals(grant.ResourceId, resourceId, StringComparison.Ordinal) &&
             grant.Role == role);
 
+    /// <summary>Checks whether any supplied role is assigned to the specified project.</summary>
     public bool HasAnyProjectRole(string projectId, params ProjectAuthorityRole[] roles) =>
         roles.Any(role => HasRole(ProjectAuthorityResourceType.Project, projectId, role));
 
+    /// <summary>Whether the caller has the current tenant-admin role for the resolved tenant.</summary>
     public bool IsTenantAdmin =>
         HasRole(ProjectAuthorityResourceType.Tenant, TenantId, ProjectAuthorityRole.TenantAdmin);
 
+    /// <summary>Whether the caller has the platform-admin role on the singleton platform resource.</summary>
     public bool IsPlatformAdmin =>
         HasRole(
             ProjectAuthorityResourceType.Platform,
             ProjectAuthorizationOwner.PlatformResourceId,
             ProjectAuthorityRole.PlatformAdmin);
 
+    /// <summary>Returns the project assignment used for one role, or null if it is absent.</summary>
     public ProjectAuthorizationGrant? FindProjectGrant(string projectId, ProjectAuthorityRole role) =>
         Grants.FirstOrDefault(grant =>
             grant.ResourceType == ProjectAuthorityResourceType.Project &&
             string.Equals(grant.ResourceId, projectId, StringComparison.Ordinal) &&
             grant.Role == role);
 
+    /// <summary>Requires an OAuth scope and rejects purpose-bound Broker tickets.</summary>
+    /// <exception cref="ProjectConfigException">The token is purpose-bound or does not contain the requested scope.</exception>
     public void RequireScope(string scope)
     {
         if (Purpose is not null || !Scopes.Contains(scope))
             throw ProjectConfigException.Forbidden();
     }
 
+    /// <summary>Requires an ordinary request token with no project, run, or purpose binding.</summary>
+    /// <exception cref="ProjectConfigException">The token is bound to a resource or operation purpose.</exception>
     public void RequireUnboundRequest()
     {
         if (Purpose is not null || BoundProjectId is not null || BoundRunId is not null)
             throw ProjectConfigException.Forbidden();
     }
 
+    /// <summary>Rejects a request that conflicts with any project or run binding carried by the token.</summary>
+    /// <exception cref="ProjectConfigException">The token purpose or a signed resource binding does not match the request.</exception>
     public void RequireResourceBinding(string projectId, string? runId = null)
     {
         if (Purpose is not null ||
@@ -109,6 +126,8 @@ public sealed class ProjectAuthorizationContext
             throw ProjectConfigException.Forbidden();
     }
 
+    /// <summary>Requires exact project and run claims, with no wildcard or omitted binding.</summary>
+    /// <exception cref="ProjectConfigException">The token is not bound to the requested project and run.</exception>
     public void RequireExactRunBinding(string projectId, string runId)
     {
         if (Purpose is not null ||
@@ -117,6 +136,8 @@ public sealed class ProjectAuthorizationContext
             throw ProjectConfigException.Forbidden();
     }
 
+    /// <summary>Maps current grants and OAuth scopes to the versioned effective-permissions response.</summary>
+    /// <exception cref="ProjectConfigException">The caller lacks the API read scope or uses a purpose-bound token.</exception>
     public ProjectAuthorizationContextResponse ToEffectiveResponse()
     {
         RequireScope(ProjectAuthorizationOwner.ApiReadScope);
@@ -245,6 +266,9 @@ public sealed class ProjectAuthorizationContext
     }
 }
 
+/// <summary>
+/// Resolves authenticated principals against the service-owned membership and role tables; signed claims alone grant no role.
+/// </summary>
 public sealed class ProjectAuthorizationOwner(
     ProjectsConfigDbContext db,
     ProjectsConfigIdentityOptions identityOptions)
@@ -260,6 +284,10 @@ public sealed class ProjectAuthorizationOwner(
     public const string BrokerRunBindingPurpose = "run-binding-query";
     public const string BrokerRunBindingServiceSubject = "identity-broker";
 
+    /// <summary>
+    /// Resolves one active issuer/subject membership and its active role assignments, enforcing tenant-selector consistency.
+    /// </summary>
+    /// <exception cref="ProjectConfigException">Identity claims or membership selection are missing, ambiguous, or inconsistent.</exception>
     public async Task<ProjectAuthorizationContext> ResolveAsync(
         ClaimsPrincipal principal,
         IReadOnlyList<string?> tenantSelectors,
@@ -329,6 +357,10 @@ public sealed class ProjectAuthorizationOwner(
             request.Purpose);
     }
 
+    /// <summary>
+    /// Resolves a short-lived Broker ticket only for its exact project/run, actor, and run-binding purpose.
+    /// </summary>
+    /// <exception cref="ProjectConfigException">The ticket has an unexpected claim, the project is unavailable, or its actor is unauthorized.</exception>
     public async Task<ProjectAuthorizationContext> ResolveBrokerRunBindingAsync(
         ClaimsPrincipal principal,
         string projectId,
@@ -448,12 +480,14 @@ public sealed class ProjectAuthorizationOwner(
         string? Purpose);
 }
 
+/// <summary>Applies the Broker proof ticket's shorter lifetime and clock-skew profile after JWT validation.</summary>
 internal static class BrokerRunBindingTokenValidation
 {
     private const long MaximumLifetimeSeconds = 30;
     private const long ClockSkewSeconds = 5;
     private const long MaximumAgeSeconds = MaximumLifetimeSeconds + ClockSkewSeconds;
 
+    /// <summary>Creates JWT events that reject tickets outside the exact issuance and expiry window.</summary>
     public static JwtBearerEvents CreateEvents(TimeProvider timeProvider) => new()
     {
         OnTokenValidated = context =>
@@ -471,6 +505,7 @@ internal static class BrokerRunBindingTokenValidation
         },
     };
 
+    /// <summary>Checks integer JWT time claims using the Broker's maximum lifetime and bounded clock skew.</summary>
     internal static bool HasValidTimeProfile(JwtPayload payload, DateTimeOffset now)
     {
         if (!TryReadNumericDate(payload, "iat", out var issuedAt) ||

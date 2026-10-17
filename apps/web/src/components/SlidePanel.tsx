@@ -152,6 +152,10 @@ export interface SlidePanelProps {
   children: ReactNode;
 }
 
+/**
+ * Renders a side panel that slides into view around caller-provided content.
+ * `open`, title, and dismissal props control the surface; effects manage focus and cleanup.
+ */
 export function SlidePanel({
   open,
   id,

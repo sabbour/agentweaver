@@ -13,6 +13,7 @@ import workflowNodeTypeContract from '../contracts/workflowNodeTypes.json';
  * All authoritative validation/persistence remains server-side; this is only a
  * view-and-edit convenience layer over the canonical YAML text.
  */
+/** Generated contract rows shared with the runtime's workflow node type catalog. */
 interface WorkflowNodeTypeContractEntry {
   yamlType: string;
   apiType: string;
@@ -26,8 +27,10 @@ const WORKFLOW_NODE_TYPE_CONTRACT =
 /** The canonical node `type` strings the runtime loader accepts (WorkflowDefinitionLoader.TryParseNodeType). */
 export const WORKFLOW_NODE_TYPES = WORKFLOW_NODE_TYPE_CONTRACT.map((entry) => entry.yamlType);
 
+/** Type union for node names accepted by the workflow parser. */
 export type WorkflowNodeTypeName = (typeof WORKFLOW_NODE_TYPES)[number];
 
+/** Node types the visual editor allows a user to add. */
 export const AUTHORABLE_WORKFLOW_NODE_TYPES = WORKFLOW_NODE_TYPE_CONTRACT
   .filter((entry) => entry.authorable)
   .map((entry) => entry.yamlType);
@@ -37,6 +40,7 @@ export const NODE_TYPE_LABELS: Record<string, string> = Object.fromEntries(
   WORKFLOW_NODE_TYPE_CONTRACT.map((entry) => [entry.yamlType, entry.label]),
 );
 
+/** Editor projection of a workflow node; unknown YAML fields remain in source text. */
 export interface WfNode {
   id: string;
   type: string;
@@ -52,12 +56,14 @@ export interface WfNode {
   branches?: string[];
 }
 
+/** Editor projection of an edge between workflow nodes. */
 export interface WfEdge {
   from: string;
   to: string;
   when?: string;
 }
 
+/** Graph model parsed from the workflow YAML header, nodes, and edges. */
 export interface WfModel {
   id: string;
   name: string;
@@ -67,11 +73,13 @@ export interface WfModel {
   edges: WfEdge[];
 }
 
+/** Parse result that returns either a graph model or the first readable YAML error. */
 export interface ParseResult {
   model: WfModel | null;
   error: string | null;
 }
 
+/** GitHub event families supported by workflow event triggers. */
 export const WORKFLOW_EVENT_TYPES = [
   'issues',
   'issue_comment',
@@ -82,8 +90,10 @@ export const WORKFLOW_EVENT_TYPES = [
   'discussion',
 ] as const;
 
+/** Union of supported GitHub workflow event families. */
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
 
+/** Predicate names supported for filtering each event family. */
 export const WORKFLOW_EVENT_PREDICATE_TYPES = [
   'hasLabel',
   'isNotLabeledWith',
@@ -94,20 +104,24 @@ export const WORKFLOW_EVENT_PREDICATE_TYPES = [
   'commentMatches',
 ] as const;
 
+/** Union of supported workflow event filter predicates. */
 export type WorkflowEventPredicateType = (typeof WORKFLOW_EVENT_PREDICATE_TYPES)[number];
 
+/** One normalized event predicate and the values combined by its match mode. */
 export interface WorkflowEventCondition {
   predicate: WorkflowEventPredicateType;
   values: string[];
   matchAny: boolean;
 }
 
+/** Parsed event trigger ready for display and editing in the workflow editor. */
 export interface WorkflowEventTrigger {
   event: WorkflowEventType;
   eventName: string;
   conditions: WorkflowEventCondition[];
 }
 
+/** Parsed schedule trigger in the editor's camelCase representation. */
 export interface WorkflowScheduleTrigger {
   interval: 'daily' | 'weekly' | 'monthly';
   timeOfDay: string;
@@ -115,6 +129,7 @@ export interface WorkflowScheduleTrigger {
   dayOfMonth?: number;
 }
 
+/** Runtime-supported predicates for each event type, used to constrain editor choices. */
 export const WORKFLOW_EVENT_PREDICATES_BY_EVENT: Record<WorkflowEventType, WorkflowEventPredicateType[]> = {
   issues: ['hasLabel', 'isNotLabeledWith'],
   issue_comment: ['commentMatches'],
@@ -313,6 +328,7 @@ export function getScheduleTrigger(text: string): WorkflowScheduleTrigger | null
   }
 }
 
+/** Formats a schedule as a concise UTC label for the trigger editor. */
 export function scheduleTriggerLabel(trigger: WorkflowScheduleTrigger): string {
   return `${trigger.interval} · ${trigger.timeOfDay} UTC`;
 }
@@ -434,6 +450,7 @@ function serializeEventPredicate(predicate: WorkflowEventPredicateType, value: s
   }
 }
 
+/** Reads a supported event trigger, returning null for invalid or unsupported YAML. */
 export function getEventTrigger(text: string): WorkflowEventTrigger | null {
   let js: Record<string, unknown>;
   try {

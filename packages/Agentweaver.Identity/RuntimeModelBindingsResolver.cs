@@ -5,12 +5,20 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.AgentRuntime;
 
+/// <summary>
+/// Resolves enabled model references from a startup snapshot and fingerprints the complete
+/// configuration so accepted runs can pin and later verify the exact binding.
+/// </summary>
 public sealed class RuntimeModelBindingsResolver
 {
+    /// <summary>Configuration path containing the model binding map.</summary>
     public const string ConfigurationSection = "AgentHost:ModelBindings";
+
+    /// <summary>Configuration path containing the model binding revision.</summary>
     public const string RevisionConfigurationKey = "AgentHost:ModelBindingsRevision";
     private readonly ImmutableDictionary<string, RuntimeModelBinding> _bindings;
 
+    /// <summary>Validates and freezes model bindings, then computes their canonical configuration hash.</summary>
     public RuntimeModelBindingsResolver(
         string configurationRevision, IReadOnlyDictionary<string, RuntimeModelBinding> bindings)
     {
@@ -46,9 +54,14 @@ public sealed class RuntimeModelBindingsResolver
             capacities.Length == 0 ? (object)models : new { Models = models, PromptCapacities = capacities }));
     }
 
+    /// <summary>Revision supplied by the host for this model binding snapshot.</summary>
     public string ConfigurationRevision { get; }
+
+    /// <summary>Stable digest of normalized models and prompt-capacity settings.</summary>
     public string ConfigurationHash { get; }
 
+    /// <summary>Returns an enabled binding only when its source mode and optional accepted pin match.</summary>
+    /// <exception cref="RuntimeAuthorizationException">The model is missing, disabled, or differs from its pin.</exception>
     public RuntimeModelBinding Resolve(
         string reference, ModelSourceMode? sourceMode, RuntimeModelBindingPin? acceptedPin = null)
     {
@@ -68,6 +81,7 @@ public sealed class RuntimeModelBindingsResolver
         return model;
     }
 
+    /// <summary>Builds a pin for the exact resolved model and configuration revision.</summary>
     public RuntimeModelBindingPin Pin(string reference, ModelSourceMode sourceMode) =>
         CreatePin(reference, Resolve(reference, sourceMode));
 
@@ -77,6 +91,7 @@ public sealed class RuntimeModelBindingsResolver
             ProviderType = model.Provider?.Type
         };
 
+    /// <summary>Validates version, model source, provider type, revision, and configuration digest.</summary>
     public static void ValidatePin(RuntimeModelBindingPin pin)
     {
         ArgumentNullException.ThrowIfNull(pin);

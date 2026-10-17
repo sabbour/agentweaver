@@ -175,6 +175,10 @@ function StatusIcon({ status }: { status: SetupReadinessStatus }) {
   return <CircleRegular aria-hidden="true" />;
 }
 
+/**
+ * Renders the setup-readiness checklist from a view model assembled by the parent.
+ * The model's requirement and item states drive the display; local state only supports the view.
+ */
 export function SetupReadiness({
   model,
   primaryAction,

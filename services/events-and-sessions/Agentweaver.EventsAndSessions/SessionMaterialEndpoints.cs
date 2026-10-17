@@ -9,21 +9,25 @@ using System.Text.Json;
 
 namespace Agentweaver.EventsAndSessions;
 
+/// <summary>Calls the fixed Orchestrator runtime owner for current registration and resume authority.</summary>
 internal sealed class SessionMaterialRuntimeClient(HttpClient client, CoordinationOwnerClientOptions options)
 {
     private Uri Address => Uri.TryCreate(options.OwnerBaseAddress, UriKind.Absolute, out var address)
         ? RuntimeOwnerHttpTransport.RequireOwnerAddress(address)
         : throw new RuntimeAuthorizationException("runtime_material_owner_configuration_invalid");
 
+    /// <summary>Reads the current active registration for a runtime instance.</summary>
     internal Task<RuntimeRegistration> ReadCurrentAsync(
         Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken cancellationToken) =>
         new RuntimeRegistrationHttpClient(client, Address).ReadCurrentAsync(runtimeInstanceId, actor, cancellationToken);
 
+    /// <summary>Reads the source snapshot the owner recorded for the current registration.</summary>
     internal Task<RuntimeSdkSourceReceipt> ReadSourceAsync(
         Guid runtimeInstanceId, RuntimeActorAuthorization actor, CancellationToken cancellationToken) =>
         RuntimeOwnerHttpTransport.SendAsync<RuntimeSdkSourceReceipt>(
             client, Address, $"/internal/runtime/sources/{runtimeInstanceId:D}", actor, null, cancellationToken);
 
+    /// <summary>Requires the owner to confirm the complete resume-bootstrap request is still current.</summary>
     internal async Task RequireResumeBootstrapCurrentAsync(
         RuntimeResumeBootstrapRequest request, RuntimeActorAuthorization actor, CancellationToken cancellationToken)
     {
@@ -38,19 +42,23 @@ internal sealed class SessionMaterialRuntimeClient(HttpClient client, Coordinati
     }
 }
 
+/// <summary>Combines current Projects authority, Orchestrator registration, provider pin, and material storage.</summary>
 internal sealed class SessionMaterialApplicationService(
     SessionMaterialRuntimeClient runtime, IProjectsAuthorizationContextClient projects,
     SessionMaterialStore material, PostgresSessionsJournal journal, ISessionsProviderBinder bindings,
     TimeProvider timeProvider)
 {
+    /// <summary>Stores turn content or SDK cache, rejecting types reserved for protected owner routes.</summary>
     internal Task<SessionMaterialAcknowledgment> WriteAsync(
         HttpContext context, string sessionId, SessionMaterialWriteRequest request, CancellationToken cancellationToken) =>
         WriteCoreAsync(context, sessionId, request, false, cancellationToken);
 
+    /// <summary>Stores accepted runtime configuration only through its protected direct-HTTPS route.</summary>
     internal Task<SessionMaterialAcknowledgment> WriteConfigurationAsync(
         HttpContext context, string sessionId, SessionMaterialWriteRequest request, CancellationToken cancellationToken) =>
         WriteCoreAsync(context, sessionId, request, true, cancellationToken);
 
+    /// <summary>Checks authority and exact provider/runtime state around the object-store and journal writes.</summary>
     private async Task<SessionMaterialAcknowledgment> WriteCoreAsync(
         HttpContext context, string sessionId, SessionMaterialWriteRequest request,
         bool configurationRoute, CancellationToken cancellationToken)
@@ -98,6 +106,7 @@ internal sealed class SessionMaterialApplicationService(
         }
     }
 
+    /// <summary>Reads committed material with the entitlement required for its specific material type.</summary>
     internal async Task<SessionMaterialReadResult> ReadAsync(
         HttpContext context, string sessionId, Guid eventId, SessionMaterialKind kind,
         CancellationToken cancellationToken)
@@ -116,6 +125,7 @@ internal sealed class SessionMaterialApplicationService(
             }, cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>Restores accepted configuration only after Orchestrator confirms the resume bootstrap remains current.</summary>
     internal async Task<SessionMaterialReadResult> ReadResumeConfigurationAsync(
         HttpContext context, RuntimeResumeBootstrapRequest request, CancellationToken cancellationToken)
     {
@@ -165,6 +175,7 @@ internal sealed class SessionMaterialApplicationService(
         }
     }
 
+    /// <summary>Applies the stricter Core selection boundary for cache and the actual project entitlement for turn text.</summary>
     internal static void RequireMaterialReadAuthority(ProjectsAuthorizationContextResponse authority, SessionMaterialKind kind)
     {
         if (kind == SessionMaterialKind.RuntimeConfiguration)
@@ -182,12 +193,14 @@ internal sealed class SessionMaterialApplicationService(
             throw new RuntimeAuthorizationException("runtime_material_read_authority_denied");
     }
 
+    /// <summary>Accepts a project-scoped read entitlement only for the authority's currently bound project.</summary>
     private static bool HasTurnContentReadEntitlement(ProjectsAuthorizationContextResponse authority) =>
         !authority.EffectiveAuthority.IsDefault && authority.EffectiveAuthority.Any(resource =>
                 resource.ResourceType == "project" && resource.ResourceId == authority.BoundProjectId &&
                 !resource.Permissions.IsDefault && resource.Permissions.Any(permission =>
                     permission.Permission is "readProjects" or "readRunSelection" && permission.RoleRevision > 0));
 
+    /// <summary>Rejects authority responses that do not retain the expected tenant and exact project/run.</summary>
     private static void RequireScope(
         ProjectsAuthorizationContextResponse current, string tenantId, string projectId, string runId)
     {
@@ -196,8 +209,10 @@ internal sealed class SessionMaterialApplicationService(
     }
 }
 
+/// <summary>Registers Object Store material handling and maps authenticated session material endpoints.</summary>
 public static class SessionMaterialEndpoints
 {
+    /// <summary>Adds the scoped material store, authority service, and bounded owner client.</summary>
     public static void AddSessionMaterialOwner(this IServiceCollection services)
     {
         services.AddScoped<SessionMaterialStore>();
@@ -206,6 +221,7 @@ public static class SessionMaterialEndpoints
             .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
     }
 
+    /// <summary>Maps write, read, and resume-configuration routes; every response is marked no-store.</summary>
     public static void MapSessionMaterialEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("/internal/runtime/resume/configuration",
@@ -251,6 +267,7 @@ public static class SessionMaterialEndpoints
             .RequireAuthorization();
     }
 
+    /// <summary>Maps either the public route spelling or CLR enum spelling to an allowed material kind.</summary>
     private static SessionMaterialKind ParseKind(string kind) => kind switch
     {
         "turnContent" or "TurnContent" => SessionMaterialKind.TurnContent,
@@ -260,6 +277,7 @@ public static class SessionMaterialEndpoints
         _ => throw new ArgumentException("A supported session material kind is required.", nameof(kind))
     };
 
+    /// <summary>Requires direct TLS 1.2/1.3 before reading protected runtime-configuration requests.</summary>
     private static Task<IResult> ExecuteProtectedConfigurationAsync<T>(HttpContext context, Func<Task<T>> action)
     {
         context.Response.Headers.CacheControl = "no-store";
@@ -273,6 +291,7 @@ public static class SessionMaterialEndpoints
         return ExecuteAsync(context, action);
     }
 
+    /// <summary>Converts typed authorization, integrity, owner, and request failures into stable no-store responses.</summary>
     private static async Task<IResult> ExecuteAsync<T>(
         HttpContext context, Func<Task<T>> action, bool missingCacheIsNotFound = false)
     {

@@ -4,11 +4,16 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Identity.Broker;
 
+/// <summary>Lifecycle state of a user-linked Copilot connection.</summary>
 public enum CopilotConnectionState
 {
     Pending, Connected, Refreshing, TransientUnavailable, ReconnectRequired, Revoked, RefreshIndeterminate
 }
 
+/// <summary>
+/// Current Copilot connection pointer, owner and scope binding. OAuth secret bytes remain
+/// in the external secret store; this row holds only their identifiers and versions.
+/// </summary>
 public sealed class CopilotConnectionRecord
 {
     public Guid ConnectionId { get; set; }
@@ -27,6 +32,7 @@ public sealed class CopilotConnectionRecord
     public string StateHash { get; set; } = string.Empty;
 }
 
+/// <summary>Append-only snapshot of the connection state and secret reference at one revision.</summary>
 public sealed class CopilotConnectionRevision
 {
     public Guid ConnectionId { get; set; }
@@ -38,8 +44,10 @@ public sealed class CopilotConnectionRevision
     public DateTimeOffset RecordedAt { get; set; }
 }
 
+/// <summary>Configures Copilot connection tables, ownership links and revision concurrency.</summary>
 internal static class CopilotConnectionModel
 {
+    /// <summary>Maps the current connection and append-only revisions with concurrency protection.</summary>
     public static void Configure(ModelBuilder model)
     {
         model.Entity<CopilotConnectionRecord>(entity =>

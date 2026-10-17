@@ -2,8 +2,19 @@ using Agentweaver.Identity;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Registers runtime-owner services and exposes authenticated runtime registration and skill endpoints.
+/// </summary>
 public static class RuntimeRegistrationEndpoints
 {
+    /// <summary>
+    /// Registers Environment-backed runtime registration services when an owner address is configured.
+    /// </summary>
+    /// <param name="services">The service collection receiving owner stores, clients, and runtime services.</param>
+    /// <param name="configuration">Configuration containing the Environment owner address.</param>
+    /// <param name="options">Orchestrator identity and database settings.</param>
+    /// <returns><see langword="true"/> when the runtime registration owner is enabled.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the configured owner address is not a valid absolute HTTPS address.</exception>
     public static bool AddRuntimeRegistrationOwner(
         this IServiceCollection services, IConfiguration configuration, OrchestratorOptions options)
     {
@@ -38,6 +49,11 @@ public static class RuntimeRegistrationEndpoints
         return true;
     }
 
+    /// <summary>
+    /// Maps protected registration, skill, and runtime action routes.
+    /// </summary>
+    /// <param name="endpoints">The endpoint route builder.</param>
+    /// <returns>The same route builder after endpoint registration.</returns>
     public static IEndpointRouteBuilder MapRuntimeRegistrationEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost(
@@ -74,6 +90,13 @@ public static class RuntimeRegistrationEndpoints
         return endpoints;
     }
 
+    /// <summary>
+    /// Converts owner results and expected failures into no-store HTTP responses.
+    /// </summary>
+    /// <typeparam name="T">The successful response type.</typeparam>
+    /// <param name="context">The current request context used to set response headers.</param>
+    /// <param name="action">The owner operation to execute.</param>
+    /// <returns>An OK response or a structured error response for known failures.</returns>
     private static async Task<IResult> ExecuteAsync<T>(HttpContext context, Func<Task<T>> action)
     {
         context.Response.Headers.CacheControl = "no-store";

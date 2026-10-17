@@ -7,10 +7,22 @@ using System.Text;
 
 namespace Agentweaver.Secrets.AzureKeyVault;
 
+/// <summary>
+/// Writes short-lived credentials to Azure Key Vault and returns the exact created secret
+/// version only after reading it back and comparing its value and metadata.
+/// </summary>
 public sealed class AzureKeyVaultSecretVersionWriter : ISecretVersionWriter
 {
     private readonly SecretClient _client;
 
+    /// <summary>
+    /// Creates a writer that disables SDK retries and content logging, preventing an
+    /// ambiguous retry from creating multiple secret versions.
+    /// </summary>
+    /// <param name="configuration">The validated vault root URI.</param>
+    /// <param name="credential">The Azure credential used for Key Vault access.</param>
+    /// <param name="options">Optional SDK options subject to the safe-write checks.</param>
+    /// <exception cref="ArgumentException">Options enable content logging or automatic retries.</exception>
     public AzureKeyVaultSecretVersionWriter(
         AzureKeyVaultConfiguration configuration,
         TokenCredential credential,
@@ -25,6 +37,15 @@ public sealed class AzureKeyVaultSecretVersionWriter : ISecretVersionWriter
         _client = new SecretClient(configuration.VaultUri, credential, options);
     }
 
+    /// <summary>
+    /// Creates one enabled, expiring secret version and returns its exact version reference
+    /// only after confirming that Key Vault stored the same value and expiry.
+    /// </summary>
+    /// <param name="secretId">The native Key Vault secret name.</param>
+    /// <param name="credential">The secret material and its requested expiry.</param>
+    /// <param name="cancellationToken">Cancels the write or read-back verification.</param>
+    /// <returns>A reference containing the exact created secret version.</returns>
+    /// <exception cref="AzureKeyVaultSecretException">The credential or stored version is invalid, or Azure denies/fails the request.</exception>
     public async Task<SecretRef> WriteVersionAsync(
         string secretId, SecretCredential credential, CancellationToken cancellationToken)
     {

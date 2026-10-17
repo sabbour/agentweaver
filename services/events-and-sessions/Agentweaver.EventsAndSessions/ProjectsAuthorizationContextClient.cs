@@ -9,18 +9,22 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.EventsAndSessions;
 
+/// <summary>Owner endpoint and expected token identity for live project authorization reads.</summary>
 public sealed record ProjectsAuthorizationContextOptions(
     string? OwnerBaseAddress,
     string? Audience,
     string? ExpectedIssuer);
 
+/// <summary>A permission granted at a specific role revision.</summary>
 public sealed record ProjectsAuthorizationPermissionGrant(string Permission, long RoleRevision);
 
+/// <summary>Effective permissions for one resource in the current tenant context.</summary>
 public sealed record ProjectsEffectiveAuthority(
     string ResourceType,
     string ResourceId,
     ImmutableArray<ProjectsAuthorizationPermissionGrant> Permissions);
 
+/// <summary>Current actor, tenant, bound run, and effective resource authority from the Projects owner.</summary>
 public sealed record ProjectsAuthorizationContextResponse(
     int ContractVersion,
     string Issuer,
@@ -31,6 +35,7 @@ public sealed record ProjectsAuthorizationContextResponse(
     string? BoundRunId,
     ImmutableArray<ProjectsEffectiveAuthority> EffectiveAuthority);
 
+/// <summary>Represents a rejected, unavailable, or invalid live authorization context response.</summary>
 public sealed class ProjectsAuthorizationContextException(
     string code,
     HttpStatusCode statusCode,
@@ -41,13 +46,16 @@ public sealed class ProjectsAuthorizationContextException(
     public HttpStatusCode StatusCode { get; } = statusCode;
 }
 
+/// <summary>Reads the caller's current authoritative project and run permissions.</summary>
 public interface IProjectsAuthorizationContextClient
 {
+    /// <summary>Fetches and validates live authority against the authenticated caller and bound run.</summary>
     Task<ProjectsAuthorizationContextResponse> GetCurrentAsync(
         HttpContext context,
         CancellationToken cancellationToken = default);
 }
 
+/// <summary>Calls the Projects owner without redirects and validates its uncached authorization contract.</summary>
 public sealed class ProjectsAuthorizationContextClient(
     HttpClient httpClient,
     ProjectsAuthorizationContextOptions options) : IProjectsAuthorizationContextClient
@@ -60,6 +68,7 @@ public sealed class ProjectsAuthorizationContextClient(
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
     };
 
+    /// <summary>Forwards the caller token and tenant selector, then checks the owner context's identity and scope.</summary>
     public async Task<ProjectsAuthorizationContextResponse> GetCurrentAsync(
         HttpContext context,
         CancellationToken cancellationToken = default)

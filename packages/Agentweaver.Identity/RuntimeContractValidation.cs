@@ -4,8 +4,11 @@ using System.Text.Json;
 
 namespace Agentweaver.Identity;
 
+/// <summary>Shared fail-closed validators and hashing helpers for runtime identity contracts.</summary>
 public static class RuntimeContractValidation
 {
+    /// <summary>Validates runtime registration bindings, endpoints, identities, limits, and selection hashes.</summary>
+    /// <exception cref="RuntimeAuthorizationException">Any registration field is invalid or inconsistent.</exception>
     public static void Validate(RuntimeRegistration registration)
     {
         ArgumentNullException.ThrowIfNull(registration);
@@ -101,6 +104,7 @@ public static class RuntimeContractValidation
         ValidateHash(binding.AcceptedSelectionHash);
     }
 
+    /// <summary>Rejects model/tool numeric limits when the binding is not scoped to a workflow step.</summary>
     public static void RequireSupportedNumericRunLimits(RuntimeBinding binding)
     {
         ArgumentNullException.ThrowIfNull(binding);
@@ -109,6 +113,7 @@ public static class RuntimeContractValidation
             throw new RuntimeAuthorizationException("runtime_numeric_limits_unsupported");
     }
 
+    /// <summary>Requires a lowercase 64-character SHA-256 hex digest.</summary>
     public static void ValidateHash(string value)
     {
         if (value is null || value.Length != 64 ||
@@ -116,9 +121,11 @@ public static class RuntimeContractValidation
             throw new RuntimeAuthorizationException("runtime_hash_invalid");
     }
 
+    /// <summary>Returns the lowercase SHA-256 digest of arbitrary bytes.</summary>
     public static string Hash(ReadOnlySpan<byte> value) =>
         Convert.ToHexStringLower(SHA256.HashData(value));
 
+    /// <summary>Derives a stable opaque SDK session ID from tenant, project, run, and session scope.</summary>
     public static string NativeSessionId(RuntimeBinding binding)
     {
         ArgumentNullException.ThrowIfNull(binding);
@@ -128,9 +135,11 @@ public static class RuntimeContractValidation
             $"{binding.TenantId}\0{binding.ProjectId}\0{binding.RunId}\0{binding.SessionId}"));
     }
 
+    /// <summary>Hashes the serialized registration for exact receipt binding.</summary>
     public static string RegistrationHash(RuntimeRegistration registration) =>
         Hash(JsonSerializer.SerializeToUtf8Bytes(registration));
 
+    /// <summary>Checks an absolute HTTPS endpoint without user info, query, or fragment.</summary>
     public static bool IsHttpsEndpoint(Uri? endpoint) =>
         endpoint is { IsAbsoluteUri: true } &&
         endpoint.Scheme == Uri.UriSchemeHttps &&
@@ -138,6 +147,7 @@ public static class RuntimeContractValidation
         string.IsNullOrEmpty(endpoint.Fragment) &&
         string.IsNullOrEmpty(endpoint.Query);
 
+    /// <summary>Requires an opaque identifier containing only the shared ASCII character set.</summary>
     public static void ValidateIdentifier(string value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 256 ||
@@ -146,6 +156,7 @@ public static class RuntimeContractValidation
             throw new RuntimeAuthorizationException("runtime_identifier_invalid");
     }
 
+    /// <summary>Compares a secret's digest with the expected digest using a fixed-time comparison.</summary>
     public static bool VerifierMatches(string secret, string expectedVerifier)
     {
         ValidateHash(secret);

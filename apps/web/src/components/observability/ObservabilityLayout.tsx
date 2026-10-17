@@ -18,6 +18,10 @@ const useStyles = makeStyles({
   },
 });
 
+/**
+ * Renders the observability page layout and navigation for the current route.
+ * Router state controls active navigation; child pages own their data loading.
+ */
 export function ObservabilityLayout({
   projectId,
   projectName,

@@ -11,6 +11,7 @@ using NpgsqlTypes;
 
 namespace Agentweaver.EventsAndSessions;
 
+/// <summary>Reports an expected reconciliation mismatch and the affected source receipts.</summary>
 internal sealed class NativeUsageReconciliationException(
     string code, ImmutableArray<Guid> sourceReceiptIds = default) : InvalidOperationException(code)
 {
@@ -18,11 +19,13 @@ internal sealed class NativeUsageReconciliationException(
     internal ImmutableArray<Guid> SourceReceiptIds { get; } = sourceReceiptIds;
 }
 
+/// <summary>The pinned binding and priceability result for a native source preflight.</summary>
 internal sealed record NativeUsageCostPreflightResult(
     CostBinding? Binding,
     bool IsPriced,
     string? UnpricedReason);
 
+/// <summary>Admits owner-issued receipts and maintains run-scoped cost bindings transactionally.</summary>
 internal sealed class NativeUsageReceiptConsumer(
     NpgsqlDataSource dataSource, PostgresSessionsProviderOptions options, PostgresUsageLedger ledger,
     CopilotCostProvider? provider = null, ICostProviderBinder? bindings = null)
@@ -39,6 +42,7 @@ internal sealed class NativeUsageReceiptConsumer(
     private readonly string _bindings = $"\"{options.Schema}\".usage_run_cost_bindings";
     private readonly string _ledger = $"\"{options.Schema}\".usage_ledger";
 
+    /// <summary>Pins Copilot cost identity and returns the current quote and run totals for admission.</summary>
     internal async Task<RuntimeRunAdmissionReceipt> ReadRunAdmissionAsync(
         string tenantId, string projectId, string runId, RuntimeRunAdmissionRequest request,
         JsonElement selection, RuntimeAcceptedModelSelection model, RuntimeModelBindingPin modelPin,
@@ -62,6 +66,7 @@ internal sealed class NativeUsageReceiptConsumer(
         return receipt;
     }
 
+    /// <summary>Verifies a complete priced receipt set and returns totals at its accounting revision.</summary>
     internal async Task<RuntimeUsageCostReconciliationReceipt> ReconcileAsync(
         string tenantId,
         string projectId,
@@ -125,6 +130,7 @@ internal sealed class NativeUsageReceiptConsumer(
         return receipt;
     }
 
+    /// <summary>Pins a meter's binding and returns a quote or stable reason when pricing is unavailable.</summary>
     internal async Task<NativeUsageCostPreflightResult> PreflightAsync(
         string tenantId,
         string projectId,
@@ -155,6 +161,7 @@ internal sealed class NativeUsageReceiptConsumer(
         return result;
     }
 
+    /// <summary>Idempotently consumes a source receipt and writes its ledger entry and acknowledgment together.</summary>
     internal async Task<RuntimeUsageAccountingAcknowledgment> AppendAsync(
         RuntimeUsageSourceReceipt receipt, Func<CancellationToken, Task> revalidateCurrentAuthority,
         CancellationToken cancellationToken)
@@ -213,6 +220,7 @@ internal sealed class NativeUsageReceiptConsumer(
         return acknowledgment;
     }
 
+    /// <summary>Validates required accounting receipts and snapshots ledger totals in one transaction.</summary>
     internal async Task<RuntimeUsageCostSnapshotReceipt> ReadCostSnapshotAsync(
         RuntimeUsageCostSnapshotRequest request, Func<CancellationToken, Task> revalidateCurrentAuthority,
         CancellationToken cancellationToken, RuntimeNativeTurnRecordedReceipt? verifiedNativeTurn = null)
@@ -301,6 +309,7 @@ internal sealed class NativeUsageReceiptConsumer(
         return represented.ToImmutable();
     }
 
+    /// <summary>Matches every requested receipt to its source proof, ledger row, and pinned binding.</summary>
     private async Task<ImmutableArray<RuntimeUsageCostReceiptReference>> ReadCostReceiptReferencesAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -379,6 +388,7 @@ internal sealed class NativeUsageReceiptConsumer(
         return represented.ToImmutable();
     }
 
+    /// <summary>Checks the full scope and immutable accounting fields for one reconciliation receipt.</summary>
     private static bool MatchesReceipt(
         Guid sourceReceiptId,
         Guid eventId,
@@ -466,6 +476,7 @@ internal sealed class NativeUsageReceiptConsumer(
         left.NegotiatedCapabilities.SetEquals(right.NegotiatedCapabilities) &&
         CopilotCostProvider.RateCardsEqual(left.RateCard, right.RateCard);
 
+    /// <summary>Reads an existing run binding or persists the first resolution, including unpriced outcomes.</summary>
     private async Task<RunCostBinding> ReadOrPinBindingAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction,
         string tenantId, string projectId, string runId, string meterSource, CancellationToken cancellationToken)

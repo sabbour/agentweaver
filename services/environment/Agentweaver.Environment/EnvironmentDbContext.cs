@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Defines the Environment service's PostgreSQL schema and entity mappings.</summary>
 public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> options) : DbContext(options)
 {
     public const string Schema = "environment";
@@ -23,6 +24,7 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
     internal DbSet<RemoteMcpConnectionIdempotencyRow> RemoteMcpConnectionIdempotency =>
         Set<RemoteMcpConnectionIdempotencyRow>();
 
+    /// <summary>Maps Environment, Remote MCP, and lifecycle report entities to their database contracts.</summary>
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema(Schema);
@@ -330,6 +332,7 @@ public sealed class EnvironmentDbContext(DbContextOptions<EnvironmentDbContext> 
     }
 }
 
+/// <summary>Persisted owner identity and current lifecycle state for one project run's Environment.</summary>
 internal sealed class EnvironmentOwnerRow
 {
     public string TenantId { get; set; } = string.Empty;
@@ -341,6 +344,7 @@ internal sealed class EnvironmentOwnerRow
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
+/// <summary>Append-only record of a lifecycle operation and the generation and state it produced.</summary>
 internal sealed class EnvironmentLifecycleOperationRow
 {
     public Guid OperationId { get; set; }
@@ -356,6 +360,7 @@ internal sealed class EnvironmentLifecycleOperationRow
     public DateTimeOffset CreatedAt { get; set; }
 }
 
+/// <summary>Durable reservation and completion data for an external effect owned by an Environment.</summary>
 internal sealed class EnvironmentOwnerEffectRow
 {
     public Guid OperationId { get; set; }
@@ -393,6 +398,7 @@ internal sealed class EnvironmentOwnerEffectRow
     public DateTimeOffset? CompletedAt { get; set; }
 }
 
+/// <summary>Database row tracking a workspace-volume cleanup claim and its retry state.</summary>
 internal sealed class EnvironmentWorkspaceVolumeCleanupRow
 {
     public Guid WorkId { get; set; }

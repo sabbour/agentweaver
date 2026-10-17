@@ -4,6 +4,10 @@ using System.Text.Json;
 
 namespace Agentweaver.Abstractions;
 
+/// <summary>
+/// Semantic identity of the outgoing native tools/call request. It binds HTTP method,
+/// canonical endpoint, tool operation, SDK call event, and exact argument digest.
+/// </summary>
 public sealed record RemoteMcpToolCallSemanticBinding(
     string ProtocolProfile,
     string Method,
@@ -15,17 +19,24 @@ public sealed record RemoteMcpToolCallSemanticBinding(
     string ToolName,
     string ArgumentsDigest)
 {
+    /// <summary>Prevents call details from appearing in logs through default formatting.</summary>
     public override string ToString() => nameof(RemoteMcpToolCallSemanticBinding) + " [REDACTED]";
 }
 
+/// <summary>Request for current owner verification of a reviewed remote-tool result proof and call binding.</summary>
 public sealed record RemoteMcpCurrentCallVerificationRequest(
     int ContractVersion,
     RemoteToolResultProof Proof,
     RemoteMcpToolCallSemanticBinding CallBinding)
 {
+    /// <summary>Prevents the reviewed proof from appearing in logs through default formatting.</summary>
     public override string ToString() => nameof(RemoteMcpCurrentCallVerificationRequest) + " [REDACTED]";
 }
 
+/// <summary>
+/// Network Policy pins acknowledged by the current-call owner. The endpoint hashes and
+/// applied-policy generation bind the gateway and target used for this specific call.
+/// </summary>
 public sealed record RemoteMcpCurrentGatewayPolicyBinding(
     RemoteMcpAppliedNetworkPolicyReference AppliedPolicy,
     ProviderResourceRef PolicyResource,
@@ -36,9 +47,14 @@ public sealed record RemoteMcpCurrentGatewayPolicyBinding(
     string GatewayEndpointSha256,
     string TargetEndpointSha256)
 {
+    /// <summary>Prevents policy details from appearing in logs through default formatting.</summary>
     public override string ToString() => nameof(RemoteMcpCurrentGatewayPolicyBinding) + " [REDACTED]";
 }
 
+/// <summary>
+/// Owner acknowledgment that the reviewed proof and exact call binding are current,
+/// including a fresh tool snapshot and applied gateway policy.
+/// </summary>
 public sealed record RemoteMcpCurrentCallVerificationAcknowledgment(
     int ContractVersion,
     string ProofSha256,
@@ -47,17 +63,23 @@ public sealed record RemoteMcpCurrentCallVerificationAcknowledgment(
     RemoteToolResultSnapshotBinding SnapshotBinding,
     RemoteMcpCurrentGatewayPolicyBinding GatewayPolicy)
 {
+    /// <summary>Prevents proof and current authority pins from appearing in default logs.</summary>
     public override string ToString() => nameof(RemoteMcpCurrentCallVerificationAcknowledgment) + " [REDACTED]";
 }
 
+/// <summary>Creates and validates exact current-call bindings and owner acknowledgments for Remote MCP.</summary>
 public static class RemoteMcpCurrentCallContract
 {
+    /// <summary>Internal route used to verify current Remote MCP authority.</summary>
     public const string VerificationPath = "/internal/remote-mcp/current-call/verify";
     private static readonly JsonSerializerOptions BindingJsonOptions = new(JsonSerializerDefaults.Web);
 
+    /// <summary>Builds the semantic binding from a validated reviewed-result proof.</summary>
     public static RemoteMcpCurrentCallVerificationRequest CreateRequest(RemoteToolResultProof proof) =>
         new(1, proof, CreateBinding(proof));
 
+    /// <summary>Derives the only supported POST tools/call binding for the proof's endpoint and arguments.</summary>
+    /// <exception cref="ArgumentException">The proof, protocol profile, or argument digest is invalid.</exception>
     public static RemoteMcpToolCallSemanticBinding CreateBinding(RemoteToolResultProof proof)
     {
         SessionMaterialValidation.ValidateRemoteToolResultProof(proof);
@@ -76,6 +98,8 @@ public static class RemoteMcpCurrentCallContract
             proof.ArgumentsDigest);
     }
 
+    /// <summary>Checks request version and requires its semantic binding to match the proof exactly.</summary>
+    /// <exception cref="ArgumentException">The request does not contain the exact reviewed tools/call binding.</exception>
     public static void Validate(RemoteMcpCurrentCallVerificationRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -84,6 +108,11 @@ public static class RemoteMcpCurrentCallContract
             throw new ArgumentException("The exact reviewed tools/call semantic binding is required.", nameof(request));
     }
 
+    /// <summary>
+    /// Validates actual outgoing bytes against the reviewed method, endpoint, tool, and
+    /// canonical argument JSON, rejecting duplicate or unsupported JSON properties.
+    /// </summary>
+    /// <exception cref="ArgumentException">The method, target, bytes, JSON-RPC shape, tool, or arguments differ.</exception>
     public static void ValidateToolCallBytes(
         RemoteMcpCurrentCallVerificationRequest request,
         string actualMethod,
@@ -147,12 +176,15 @@ public static class RemoteMcpCurrentCallContract
         }
     }
 
+    /// <summary>Returns a deterministic hash of a semantic call binding.</summary>
     public static string CallBindingHash(RemoteMcpToolCallSemanticBinding binding)
     {
         ArgumentNullException.ThrowIfNull(binding);
         return Sha256(JsonSerializer.SerializeToUtf8Bytes(binding, BindingJsonOptions));
     }
 
+    /// <summary>Checks that the acknowledgment proves the exact proof, call, snapshot, and current network pins.</summary>
+    /// <exception cref="ArgumentException">Any acknowledgment field is stale, missing, or bound to another call.</exception>
     public static void ValidateAcknowledgment(
         RemoteMcpCurrentCallVerificationRequest request,
         RemoteMcpCurrentCallVerificationAcknowledgment acknowledgment)
@@ -188,6 +220,8 @@ public static class RemoteMcpCurrentCallContract
         RequireHash(policy.TargetEndpointSha256);
     }
 
+    /// <summary>Rejects a wait if the owner's current call authority changed between two acknowledgments.</summary>
+    /// <exception cref="ArgumentException">Either acknowledgment is invalid or their authority differs.</exception>
     public static void RequireSameAuthority(
         RemoteMcpCurrentCallVerificationRequest request,
         RemoteMcpCurrentCallVerificationAcknowledgment before,
@@ -199,12 +233,14 @@ public static class RemoteMcpCurrentCallContract
             throw new ArgumentException("The current Remote MCP owner authority changed during the wait.");
     }
 
+    /// <summary>Requires a bounded, nonempty policy pin without control characters.</summary>
     private static void RequireText(string? value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Length > 512 || value.Any(char.IsControl))
             throw new ArgumentException("A bounded current policy binding is required.");
     }
 
+    /// <summary>Requires a canonical lowercase SHA-256 policy pin.</summary>
     private static void RequireHash(string? value)
     {
         if (value is not { Length: 64 } ||
@@ -212,6 +248,7 @@ public static class RemoteMcpCurrentCallContract
             throw new ArgumentException("An exact SHA-256 policy binding is required.");
     }
 
+    /// <summary>Rejects non-object JSON or properties outside the protocol's allowed shape.</summary>
     private static void RequireObjectShape(JsonElement value, string[] allowedProperties)
     {
         if (value.ValueKind != JsonValueKind.Object ||
@@ -219,6 +256,7 @@ public static class RemoteMcpCurrentCallContract
             throw new ArgumentException("The MCP request contains an unsupported object shape.");
     }
 
+    /// <summary>Walks nested JSON values and rejects duplicate property names before interpretation.</summary>
     private static void RequireUniqueProperties(JsonElement value)
     {
         if (value.ValueKind == JsonValueKind.Object)
@@ -238,6 +276,7 @@ public static class RemoteMcpCurrentCallContract
         }
     }
 
+    /// <summary>Returns lowercase SHA-256 for the exact supplied bytes.</summary>
     private static string Sha256(ReadOnlySpan<byte> bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 }

@@ -74,6 +74,7 @@ function formatAge(ageSeconds: number | null | undefined): string {
   return `${Math.floor(ageSeconds / 3600)}h`;
 }
 
+/** Maps API health vocabulary to the visual severity used by status badges. */
 function healthBadgeColor(
   status: string,
 ): 'success' | 'warning' | 'danger' | 'subtle' {
@@ -83,12 +84,14 @@ function healthBadgeColor(
   return 'subtle';
 }
 
+/** Maps pod readiness to a compact badge tone; unknown states remain neutral. */
 function podBadgeColor(status: string): 'success' | 'warning' | 'subtle' {
   if (status === 'ready') return 'success';
   if (status === 'pending') return 'warning';
   return 'subtle';
 }
 
+/** Displays each named cluster health check and its reported latency. */
 function HealthChecksTable({ rows }: { rows: DetailedHealthCheckDto[] }) {
   if (rows.length === 0) return <EmptyState title="No health checks" />;
   return (
@@ -117,6 +120,7 @@ function HealthChecksTable({ rows }: { rows: DetailedHealthCheckDto[] }) {
   );
 }
 
+/** Displays pods with their owning claim, status, and age. */
 function AgentPodsTable({ pods, label }: { pods: AgentPodInfoDto[]; label: string }) {
   if (pods.length === 0) return <EmptyState title={`No ${label.toLowerCase()}`} />;
   return (
@@ -145,6 +149,7 @@ function AgentPodsTable({ pods, label }: { pods: AgentPodInfoDto[]; label: strin
   );
 }
 
+/** Shows subtasks waiting for sandbox capacity and the backend's stated reason. */
 function PendingCapacityTable({ rows }: { rows: PendingCapacityRunDto[] }) {
   if (rows.length === 0) {
     return (
@@ -182,6 +187,7 @@ function PendingCapacityTable({ rows }: { rows: PendingCapacityRunDto[] }) {
   );
 }
 
+/** Displays configured warm-pool health and ready-versus-desired capacity. */
 function WarmPoolsTable({ rows }: { rows: WarmPoolStatusDto[] }) {
   if (rows.length === 0) return <EmptyState title="No warm pools configured" />;
   return (
@@ -210,6 +216,7 @@ function WarmPoolsTable({ rows }: { rows: WarmPoolStatusDto[] }) {
   );
 }
 
+/** Displays sandbox claims and their current binding state. */
 function SandboxClaimsTable({ rows }: { rows: SandboxClaimObjectDto[] }) {
   if (rows.length === 0) return <EmptyState title="No sandbox claims" description="Claims will appear when runs are assigned to sandbox environments." />;
   return (
@@ -245,6 +252,8 @@ function SandboxClaimsTable({ rows }: { rows: SandboxClaimObjectDto[] }) {
 export function ClusterPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
+  // Cluster health and resource topology load independently so an unavailable
+  // topology does not hide health data (or the reverse).
   const [data, setData] = useState<ClusterDiagnosticsDto | null>(null);
   const [notAvailable, setNotAvailable] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -263,6 +272,7 @@ export function ClusterPage() {
         ? err.message
         : String(err);
 
+  /** Refreshes cluster diagnostics; null means the endpoint is not enabled here. */
   const load = useCallback(async (signal: { cancelled: boolean }) => {
     try {
       const dto = await apiClient.getClusterDiagnostics();
@@ -283,6 +293,7 @@ export function ClusterPage() {
     }
   }, []);
 
+  // Refetch topology whenever its selected layers change and ignore stale responses.
   useEffect(() => {
     const signal = { cancelled: false };
     apiClient.getClusterTopology(topologyLayers)
@@ -301,6 +312,8 @@ export function ClusterPage() {
     return () => { signal.cancelled = true; };
   }, [topologyLayers]);
 
+  // The diagnostics poll uses one cancellation token for both its immediate request
+  // and interval ticks, so unmounting or disabling refresh prevents late state writes.
   useEffect(() => {
     const signal = { cancelled: false };
     const runLoad = () => {

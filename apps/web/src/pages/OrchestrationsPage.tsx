@@ -33,10 +33,12 @@ import { isTerminalRunStatus } from '../utils/runStatus';
 // row opens the existing coordinator topology view. Data comes from the project's
 // runs API (real data); coordinator runs are detected via isCoordinatorRun.
 
+/** Uses the shared status contract so active and retained lists agree on terminality. */
 function isRunTerminal(status: string | undefined): boolean {
   return isTerminalRunStatus(status);
 }
 
+/** Normalizes coordinator status identifiers into operator-facing labels. */
 function coordinatorStatusLabel(status: string | undefined): string | undefined {
   if (!status) return undefined;
   const k = status.toLowerCase().replace(/[^a-z]/g, '');
@@ -57,6 +59,7 @@ function coordinatorStatusLabel(status: string | undefined): string | undefined 
 // status instead of showing a stale in-flight label (#304).
 const TERMINAL_COORD_LABELS = new Set(['Complete', 'Failed', 'Blocked', 'Declined']);
 
+/** Derives a user-facing terminal label from the run status and result fields. */
 function runStatusFallbackLabel(run: WorkflowRunDto): string {
   const result = run.result?.toLowerCase() ?? '';
   if (result.includes('abandon')) return 'Cancelled';
@@ -71,6 +74,7 @@ function runStatusFallbackLabel(run: WorkflowRunDto): string {
 
 // Resolves the label to display for a run's status badge, correcting for a stale
 // coordinator_status when the run has already terminated (#304).
+/** Prefers coordinator progress unless it is stale after the run has terminated. */
 function resolveRunStatusLabel(run: WorkflowRunDto): string | undefined {
   const coordLabel = coordinatorStatusLabel(run.coordinator_status);
   if (isRunTerminal(run.status) && (!coordLabel || !TERMINAL_COORD_LABELS.has(coordLabel))) {
@@ -79,6 +83,7 @@ function resolveRunStatusLabel(run: WorkflowRunDto): string | undefined {
   return coordLabel;
 }
 
+/** Chooses a badge tone for the resolved orchestration status label. */
 function badgeColor(label: string | undefined): 'success' | 'danger' | 'warning' | 'subtle' {
   if (label === 'Complete') return 'success';
   if (label === 'Failed' || label === 'Blocked' || label === 'Declined' || label === 'Merge failed') return 'danger';
@@ -284,6 +289,8 @@ export function OrchestrationsPage() {
   const styles = useStyles();
   const { projectId } = useParams<{ projectId: string }>();
 
+  // The complete coordinator set drives active counts; a separate server-paged
+  // terminal set keeps recent history bounded and supports its own pager.
   const [runs, setRuns] = useState<WorkflowRunDto[]>([]);
   const [activeRuns, setActiveRuns] = useState<WorkflowRunDto[]>([]);
   const [recentRuns, setRecentRuns] = useState<WorkflowRunDto[]>([]);
@@ -304,6 +311,10 @@ export function OrchestrationsPage() {
         ? err.message
         : String(err);
 
+  /**
+   * Loads all coordinator runs for live status, one page of terminal history, and
+   * optional project metadata. A project lookup failure does not fail the run lists.
+   */
   const load = useCallback(async (showSpinner: boolean) => {
     if (!projectId) return;
     if (showSpinner) setLoading(true);
@@ -337,6 +348,7 @@ export function OrchestrationsPage() {
     }
   }, [projectId, recentPage, recentPageSize]);
 
+  // Load after project or recent-page changes; `load` owns error and spinner state.
   useEffect(() => {
     if (!projectId) return;
     const loadRuns = async () => {
@@ -345,12 +357,14 @@ export function OrchestrationsPage() {
     void loadRuns();
   }, [projectId, load]);
 
+  /** Uses the workflow id when available and the execution id for legacy run rows. */
   const runIdOf = (run: WorkflowRunDto) => run.workflow_run_id ?? run.execution_id;
   const statusCounts = runs.reduce<Record<string, number>>((acc, run) => {
     const label = coordinatorStatusLabel(run.coordinator_status) ?? run.status ?? 'Unknown';
     acc[label] = (acc[label] ?? 0) + 1;
     return acc;
   }, {});
+  // Keep active work unpaged and recent terminal work server-paged.
   const runSections = [
     {
       title: 'Active',
@@ -385,10 +399,12 @@ export function OrchestrationsPage() {
     },
   ].filter((section) => section.totalCount > 0);
 
+  /** Opens a confirmation dialog; cancellation is sent only after confirmation. */
   const handleStop = (run: WorkflowRunDto) => {
     setStopTarget(run);
   };
 
+  /** Cancels the selected run but retains it for later inspection. */
   const confirmStop = () => {
     if (!stopTarget) return;
     const runId = runIdOf(stopTarget);
@@ -401,6 +417,7 @@ export function OrchestrationsPage() {
       .finally(() => setBusyId(null));
   };
 
+  /** Deletes the selected run and reloads counts after the server confirms. */
   const confirmDelete = () => {
     if (!deleteTarget) return;
     const runId = runIdOf(deleteTarget);

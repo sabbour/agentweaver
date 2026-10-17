@@ -2,12 +2,14 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Projects.Config;
 
+/// <summary>Lifecycle states that control whether a project can accept new configuration changes or runs.</summary>
 public enum ProjectLifecycleState
 {
     Active,
     Archived
 }
 
+/// <summary>Mutable project metadata and revision heads; configuration bytes are stored in separate append-only rows.</summary>
 public sealed class ProjectRecord
 {
     public required string ProjectId { get; set; }
@@ -21,12 +23,14 @@ public sealed class ProjectRecord
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
+/// <summary>Whether an authority membership or assignment can currently grant permissions.</summary>
 public enum ProjectAuthorityRecordState
 {
     Active,
     Revoked
 }
 
+/// <summary>Roles recognized by the Projects &amp; Config authority owner.</summary>
 public enum ProjectAuthorityRole
 {
     PlatformAdmin,
@@ -37,6 +41,7 @@ public enum ProjectAuthorityRole
     Orchestrator
 }
 
+/// <summary>An issuer-and-subject membership in one tenant, with a revisioned revocation state.</summary>
 public sealed class ProjectTenantMembershipRecord
 {
     public Guid MembershipId { get; set; }
@@ -51,6 +56,7 @@ public sealed class ProjectTenantMembershipRecord
     public DateTimeOffset? RevokedAt { get; set; }
 }
 
+/// <summary>A revisioned role grant scoped to one platform, tenant, or project resource.</summary>
 public sealed class ProjectRoleAssignmentRecord
 {
     public Guid AssignmentId { get; set; }
@@ -66,6 +72,7 @@ public sealed class ProjectRoleAssignmentRecord
     public DateTimeOffset? RevokedAt { get; set; }
 }
 
+/// <summary>Append-only evidence for membership grants/revocations and role assignments/revocations.</summary>
 public sealed class ProjectAuthorityAuditRecord
 {
     public Guid EventId { get; set; }
@@ -83,6 +90,7 @@ public sealed class ProjectAuthorityAuditRecord
     public DateTimeOffset CreatedAt { get; set; }
 }
 
+/// <summary>An immutable JSON snapshot for one project configuration revision.</summary>
 public sealed class ProjectConfigurationRevisionRecord
 {
     public required string ProjectId { get; set; }
@@ -92,6 +100,7 @@ public sealed class ProjectConfigurationRevisionRecord
     public DateTimeOffset CreatedAt { get; set; }
 }
 
+/// <summary>The singleton head that points to the current platform runtime-default revision.</summary>
 public sealed class PlatformRuntimeHeadRecord
 {
     public const string SingletonId = "default";
@@ -100,6 +109,7 @@ public sealed class PlatformRuntimeHeadRecord
     public long CurrentRevision { get; set; }
 }
 
+/// <summary>An immutable JSON snapshot of platform runtime defaults.</summary>
 public sealed class PlatformRuntimeRevisionRecord
 {
     public required string HeadId { get; set; }
@@ -109,6 +119,7 @@ public sealed class PlatformRuntimeRevisionRecord
     public DateTimeOffset CreatedAt { get; set; }
 }
 
+/// <summary>An immutable selection snapshot bound to one run ID and the revisions used to resolve it.</summary>
 public sealed class ProjectRunSelectionRecord
 {
     public required string RunId { get; set; }
@@ -122,6 +133,7 @@ public sealed class ProjectRunSelectionRecord
     public DateTimeOffset CreatedAt { get; set; }
 }
 
+/// <summary>Current actor, role, project, configuration, and selection hashes proven to the private Broker route.</summary>
 public sealed record BrokerRunBindingProofResponse(
     string ActorIssuer,
     string ActorSubject,
@@ -138,12 +150,14 @@ public sealed record BrokerRunBindingProofResponse(
     string ContextRevision,
     string SelectionHash);
 
+/// <summary>The operator setup or cleanup operation represented by a privileged project request.</summary>
 public enum ProjectSetupOperationKind
 {
     Setup,
     Cleanup
 }
 
+/// <summary>Whether setup created state or cleanup completed or retained it pending existing run evidence.</summary>
 public enum ProjectSetupOperationResultState
 {
     Created,
@@ -151,6 +165,7 @@ public enum ProjectSetupOperationResultState
     RetainedPending
 }
 
+/// <summary>Immutable idempotency record and receipt binding for a privileged setup or cleanup invocation.</summary>
 public sealed class ProjectSetupOperationRecord
 {
     public Guid InvocationId { get; set; }
@@ -178,6 +193,7 @@ public sealed class ProjectSetupOperationRecord
     public DateTimeOffset CreatedAt { get; set; }
 }
 
+/// <summary>Standard-input envelope containing the access token and versioned operation details.</summary>
 public sealed record PrivilegedProjectSetupInput(
     int Version,
     string AccessToken,
@@ -187,6 +203,7 @@ public sealed record PrivilegedProjectSetupInput(
     long? ExpectedProjectRevision,
     long? ExpectedAssignmentRevision);
 
+/// <summary>Token-free operation data passed to the privileged authority store after authentication.</summary>
 public sealed record ProjectSetupOperationRequest(
     int Version,
     Guid InvocationId,
@@ -195,6 +212,7 @@ public sealed record ProjectSetupOperationRequest(
     long? ExpectedProjectRevision,
     long? ExpectedAssignmentRevision);
 
+/// <summary>Immutable receipt proving which project, initial revisions, assignments, and audit events setup created.</summary>
 public sealed record ProjectSetupReceipt(
     Guid InvocationId,
     string Issuer,
@@ -216,6 +234,7 @@ public sealed record ProjectSetupReceipt(
     public Guid? OwnerAuthorityAuditEventId { get; init; }
 }
 
+/// <summary>Readback of setup-owned resources, used to report whether the original receipt still matches stored state.</summary>
 public sealed record ProjectSetupReadback(
     bool ProjectExists,
     ProjectLifecycleState? ProjectState,
@@ -232,6 +251,7 @@ public sealed record ProjectSetupReadback(
     long? OwnerAssignmentRevision = null,
     bool OwnerAuthorityAuditExists = false);
 
+/// <summary>Receipt for cleanup, including whether existing selections prevented destructive cleanup.</summary>
 public sealed record ProjectCleanupReceipt(
     Guid InvocationId,
     string TenantId,
@@ -249,6 +269,7 @@ public sealed record ProjectCleanupReceipt(
     public Guid? OwnerRevocationAuditEventId { get; init; }
 }
 
+/// <summary>Command result containing a setup receipt/readback or cleanup receipt and whether the call was replayed.</summary>
 public sealed record ProjectSetupCommandResult(
     ProjectSetupOperationKind OperationKind,
     bool Replayed,
@@ -256,6 +277,7 @@ public sealed record ProjectSetupCommandResult(
     ProjectSetupReadback? SetupReadback,
     ProjectCleanupReceipt? Cleanup);
 
+/// <summary>Review lifecycle for a proposed project casting change.</summary>
 public enum ProjectCastingProposalState
 {
     Pending,
@@ -263,6 +285,7 @@ public enum ProjectCastingProposalState
     Rejected
 }
 
+/// <summary>Persisted proposal draft and base/draft revisions used to serialize review and confirmation.</summary>
 public sealed class ProjectCastingProposalRecord
 {
     public Guid ProposalId { get; set; }
@@ -283,6 +306,7 @@ public sealed class ProjectCastingProposalRecord
     public DateTimeOffset UpdatedAt { get; set; }
 }
 
+/// <summary>Immutable metadata and object-store key for one imported skill content revision.</summary>
 public sealed class ProjectSkillContentRevisionRecord
 {
     public required string ProjectId { get; set; }
@@ -303,6 +327,7 @@ public sealed class ProjectSkillContentRevisionRecord
     public string? SelectedPath { get; set; }
 }
 
+/// <summary>Actor-scoped idempotency key and request digest for a completed skill import.</summary>
 public sealed class ProjectSkillImportIdempotencyRecord
 {
     public required string ProjectId { get; set; }
@@ -315,6 +340,7 @@ public sealed class ProjectSkillImportIdempotencyRecord
     public DateTimeOffset CreatedAt { get; set; }
 }
 
+/// <summary>Append-only revocation marker that makes one immutable skill revision unavailable to new reads.</summary>
 public sealed class ProjectSkillContentRevocationRecord
 {
     public required string ProjectId { get; set; }
@@ -325,6 +351,7 @@ public sealed class ProjectSkillContentRevocationRecord
     public DateTimeOffset RevokedAt { get; set; }
 }
 
+/// <summary>Stable HTTP error code, message, and status used by Projects &amp; Config endpoints.</summary>
 public sealed class ProjectConfigException(
     string code,
     string message,
@@ -333,21 +360,27 @@ public sealed class ProjectConfigException(
     public string Code { get; } = code;
     public int StatusCode { get; } = statusCode;
 
+    /// <summary>Creates a not-found response without disclosing whether a foreign project exists.</summary>
     public static ProjectConfigException NotFound() =>
         new("not_found", "The requested project or configuration was not found.", StatusCodes.Status404NotFound);
 
+    /// <summary>Creates a revision-conflict response with the supplied safe detail.</summary>
     public static ProjectConfigException Conflict(string message) =>
         new("revision_conflict", message, StatusCodes.Status409Conflict);
 
+    /// <summary>Creates a conflict response with a caller-selected stable error code.</summary>
     public static ProjectConfigException Conflict(string code, string message) =>
         new(code, message, StatusCodes.Status409Conflict);
 
+    /// <summary>Creates a bad-request response for invalid input.</summary>
     public static ProjectConfigException Invalid(string code, string message) =>
         new(code, message, StatusCodes.Status400BadRequest);
 
+    /// <summary>Creates a conflict when a run ID is reused for a different immutable selection request.</summary>
     public static ProjectConfigException IdempotencyConflict() =>
         new("run_selection_conflict", "The run ID already has a different immutable selection.", StatusCodes.Status409Conflict);
 
+    /// <summary>Creates a forbidden response for a caller who cannot perform the requested operation.</summary>
     public static ProjectConfigException Forbidden() =>
         new("forbidden", "The authenticated caller is not authorized for this operation.", StatusCodes.Status403Forbidden);
 }

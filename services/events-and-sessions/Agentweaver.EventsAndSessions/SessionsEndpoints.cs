@@ -6,10 +6,12 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.EventsAndSessions;
 
+/// <summary>Maps authenticated run/session creation, append, replay, subscription, and owner receipt routes.</summary>
 public static class SessionsEndpoints
 {
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
+    /// <summary>Registers journal routes under the internal Sessions prefix and run-scoped event routes.</summary>
     public static void MapEventsAndSessionsEndpoints(this IEndpointRouteBuilder app)
     {
         var endpoints = app.MapGroup("/internal/sessions")
@@ -30,6 +32,7 @@ public static class SessionsEndpoints
             .RequireAuthorization();
     }
 
+    /// <summary>Returns the immutable provider pin only after current Projects authority and the provider are rechecked.</summary>
     private static Task<IResult> ReadRunBindingAsync(
         HttpContext context, string projectId, string runId, ISessionsJournal journal,
         ISessionsProviderBinder bindings, [FromServices] IProjectsAuthorizationContextClient projects,
@@ -51,6 +54,7 @@ public static class SessionsEndpoints
             return Results.Json(pin, JsonOptions);
         }, cancellationToken);
 
+    /// <summary>Resolves the provider binding, creates the session, and returns 201 or the existing session.</summary>
     private static async Task<IResult> CreateAsync(
         HttpContext context,
         string sessionId,
@@ -64,6 +68,7 @@ public static class SessionsEndpoints
             return Results.Json(session, JsonOptions, statusCode: StatusCodes.Status201Created);
         }, cancellationToken);
 
+    /// <summary>Verifies the saved provider pin, appends one event, and projects private fields before responding.</summary>
     private static async Task<IResult> AppendAsync(
         HttpContext context,
         string sessionId,
@@ -81,6 +86,7 @@ public static class SessionsEndpoints
                 ? StatusCodes.Status200OK : StatusCodes.Status201Created);
         }, cancellationToken);
 
+    /// <summary>Admits an explicit-event fork only while the Orchestrator's fork receipt remains unchanged.</summary>
     private static async Task<IResult> ForkFromExplicitEventAsync(
         HttpContext context,
         string sessionId,
@@ -116,6 +122,7 @@ public static class SessionsEndpoints
                 ? StatusCodes.Status200OK : StatusCodes.Status201Created);
         }, cancellationToken);
 
+    /// <summary>Fetches and revalidates the owner receipt before appending its policy-evaluation event.</summary>
     private static async Task<IResult> AppendPolicyEvaluationAsync(
         HttpContext context,
         string sessionId,
@@ -152,6 +159,7 @@ public static class SessionsEndpoints
                 ? StatusCodes.Status200OK : StatusCodes.Status201Created);
         }, cancellationToken);
 
+    /// <summary>Returns a bounded event page and strips private material from its public projection.</summary>
     private static async Task<IResult> ReplayAsync(
         HttpContext context,
         string sessionId,
@@ -170,6 +178,7 @@ public static class SessionsEndpoints
             return Results.Json(PublicSessionEventProjection.Project(page), JsonOptions);
         }, cancellationToken);
 
+    /// <summary>Returns a bounded run-wide page ordered by the shared project/run event position.</summary>
     private static async Task<IResult> ReplayRunAsync(
         HttpContext context,
         string projectId,
@@ -189,6 +198,7 @@ public static class SessionsEndpoints
             return Results.Json(PublicSessionEventProjection.Project(page), JsonOptions);
         }, cancellationToken);
 
+    /// <summary>Streams bounded NDJSON session events until the event or duration limit, caller cancellation, or failure.</summary>
     private static async Task SubscribeAsync(
         HttpContext context,
         string sessionId,
@@ -229,6 +239,7 @@ public static class SessionsEndpoints
         }
     }
 
+    /// <summary>Streams bounded run-wide events using the same cursor and public projection as replay.</summary>
     private static async Task SubscribeRunAsync(
         HttpContext context,
         string projectId,
@@ -271,6 +282,7 @@ public static class SessionsEndpoints
         }
     }
 
+    /// <summary>Maps journal, owner, authority, version, and request failures to stable HTTP responses.</summary>
     private static async Task<IResult> ExecuteAsync(
         Func<Task<IResult>> action,
         CancellationToken cancellationToken)
@@ -375,6 +387,7 @@ public static class SessionsEndpoints
             new { error = "journal_unavailable" }, statusCode: StatusCodes.Status503ServiceUnavailable)
     };
 
+    /// <summary>Creates the JSON options used by journal routes, including camel-case enum values.</summary>
     private static JsonSerializerOptions CreateJsonOptions()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);

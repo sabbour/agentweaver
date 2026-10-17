@@ -19,7 +19,38 @@
     "docs/architecture/design/provider-seams.md",
     "docs/architecture/azure.md",
     "docs/reference/contracts.md",
-    "docs/reference/releases.md"
+    "docs/reference/releases.md",
+    "docs/guide/index.md",
+    "docs/deep-dive/README.md",
+    "docs/deep-dive/00-system-overview.md",
+    "docs/deep-dive/gateway.md",
+    "docs/deep-dive/orchestration.md",
+    "docs/deep-dive/events-sessions.md",
+    "docs/deep-dive/agent-runtime.md",
+    "docs/deep-dive/mcp-server.md",
+    "docs/deep-dive/identity-secrets.md",
+    "docs/deep-dive/projects-config.md",
+    "docs/deep-dive/environment-sandbox.md",
+    "docs/deep-dive/knowledge-memory.md",
+    "docs/deep-dive/source-control.md",
+    "docs/deep-dive/providers-models.md",
+    "docs/deep-dive/persistence.md",
+    "docs/deep-dive/telemetry.md",
+    "docs/deep-dive/infra-deployment.md",
+    "docs/deep-dive/testing-strategy.md",
+    "docs/experience/README.md",
+    "docs/experience/00-overview.md",
+    "docs/experience/onboarding-auth.md",
+    "docs/experience/projects.md",
+    "docs/experience/configuration.md",
+    "docs/experience/skills.md",
+    "docs/experience/connections.md",
+    "docs/experience/runs-sessions.md",
+    "docs/experience/knowledge.md",
+    "docs/reference/api.md",
+    "docs/reference/events.md",
+    "docs/reference/web.md",
+    "docs/reference/mcp-tools.md"
   ],
   "rules": [
     {
@@ -352,6 +383,174 @@
       "required": [
         "docs/diagrams/README.md",
         "docs/diagrams/src/sequence-spec.schema.json"
+      ]
+    },
+    {
+      "name": "Deep dive: Gateway and API inventory",
+      "sourcePrefixes": [
+        "services/gateway/"
+      ],
+      "required": [
+        "docs/deep-dive/gateway.md",
+        "docs/reference/api.md"
+      ]
+    },
+    {
+      "name": "Deep dive: orchestration",
+      "sourcePrefixes": [
+        "services/orchestrator/"
+      ],
+      "required": [
+        "docs/deep-dive/orchestration.md",
+        "docs/experience/runs-sessions.md"
+      ]
+    },
+    {
+      "name": "Deep dive: Events and Sessions",
+      "sourcePrefixes": [
+        "services/events-and-sessions/"
+      ],
+      "required": [
+        "docs/deep-dive/events-sessions.md",
+        "docs/reference/events.md"
+      ]
+    },
+    {
+      "name": "Deep dive: agent runtime",
+      "sourcePrefixes": [
+        "services/agenthost/",
+        "packages/Agentweaver.AgentRuntime/"
+      ],
+      "required": [
+        "docs/deep-dive/agent-runtime.md"
+      ]
+    },
+    {
+      "name": "Deep dive: MCP server and tools",
+      "sourcePrefixes": [
+        "services/mcp/"
+      ],
+      "required": [
+        "docs/deep-dive/mcp-server.md",
+        "docs/reference/mcp-tools.md"
+      ]
+    },
+    {
+      "name": "Deep dive: identity and secrets",
+      "sourcePrefixes": [
+        "services/identity/",
+        "packages/Agentweaver.Identity/",
+        "packages/Agentweaver.Secrets.AzureKeyVault/"
+      ],
+      "required": [
+        "docs/deep-dive/identity-secrets.md",
+        "docs/experience/onboarding-auth.md"
+      ]
+    },
+    {
+      "name": "Deep dive: projects and configuration",
+      "sourcePrefixes": [
+        "services/projects-config/"
+      ],
+      "required": [
+        "docs/deep-dive/projects-config.md",
+        "docs/experience/projects.md",
+        "docs/experience/configuration.md",
+        "docs/experience/skills.md"
+      ]
+    },
+    {
+      "name": "Deep dive: environments and sandboxes",
+      "sourcePrefixes": [
+        "services/environment/",
+        "packages/Agentweaver.Providers.Sandbox.AgentSandbox/",
+        "packages/Agentweaver.Providers.Storage.AzureFiles/"
+      ],
+      "required": [
+        "docs/deep-dive/environment-sandbox.md"
+      ]
+    },
+    {
+      "name": "Deep dive: knowledge and memory",
+      "sourcePrefixes": [
+        "services/knowledge/"
+      ],
+      "required": [
+        "docs/deep-dive/knowledge-memory.md",
+        "docs/experience/knowledge.md"
+      ]
+    },
+    {
+      "name": "Deep dive: source control",
+      "sourcePrefixes": [
+        "packages/Agentweaver.SourceControl/"
+      ],
+      "required": [
+        "docs/deep-dive/source-control.md",
+        "docs/experience/connections.md"
+      ]
+    },
+    {
+      "name": "Deep dive: providers and contracts",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Providers/",
+        "packages/Agentweaver.Abstractions/"
+      ],
+      "required": [
+        "docs/deep-dive/providers-models.md"
+      ]
+    },
+    {
+      "name": "Deep dive: persistence",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Persistence.Postgres/"
+      ],
+      "required": [
+        "docs/deep-dive/persistence.md"
+      ]
+    },
+    {
+      "name": "Deep dive: telemetry",
+      "sourcePrefixes": [
+        "packages/Agentweaver.Telemetry/",
+        "packages/Agentweaver.Telemetry.AzureMonitor/"
+      ],
+      "required": [
+        "docs/deep-dive/telemetry.md"
+      ]
+    },
+    {
+      "name": "Deep dive: infrastructure and deployment",
+      "sourcePrefixes": [
+        "infra/bicep/",
+        "deploy/",
+        "scripts/azure/"
+      ],
+      "required": [
+        "docs/deep-dive/infra-deployment.md"
+      ]
+    },
+    {
+      "name": "Deep dive: testing strategy",
+      "sourcePrefixes": [
+        "tests/",
+        "scripts/api-harness/",
+        "scripts/ui-harness/",
+        "scripts/mcp-harness/",
+        "scripts/coverage/"
+      ],
+      "required": [
+        "docs/deep-dive/testing-strategy.md"
+      ]
+    },
+    {
+      "name": "Web client experience and reference",
+      "sourcePrefixes": [
+        "apps/web/"
+      ],
+      "required": [
+        "docs/reference/web.md",
+        "docs/experience/00-overview.md"
       ]
     }
   ]

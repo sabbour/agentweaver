@@ -1,3 +1,4 @@
+/** Browser-like test environment and coverage boundaries for the web app test suite. */
 import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 

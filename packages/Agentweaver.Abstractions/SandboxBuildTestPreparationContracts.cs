@@ -4,6 +4,10 @@ using System.Text.Json;
 
 namespace Agentweaver.Abstractions;
 
+/// <summary>
+/// Result of preparing the accepted Sandbox provider binding and execution profile for
+/// a session. Validation rejects mismatched session/profile pins and changed options.
+/// </summary>
 public sealed record SandboxBuildTestBindingPreparation(
     string SessionId,
     string ExecutionProfileReference,
@@ -14,6 +18,8 @@ public sealed record SandboxBuildTestBindingPreparation(
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    /// <summary>Validates the provider and execution pins against the requested session and profile.</summary>
+    /// <exception cref="ArgumentException">An identifier, provider binding, profile, or options digest differs.</exception>
     public SandboxBuildTestBindingPreparation Validate(
         string sessionId,
         string executionProfileReference)
@@ -43,6 +49,7 @@ public sealed record SandboxBuildTestBindingPreparation(
         return this;
     }
 
+    /// <summary>Request to prepare a version 2 repository workspace from its accepted source seed.</summary>
     [System.Text.Json.Serialization.JsonUnmappedMemberHandling(
         System.Text.Json.Serialization.JsonUnmappedMemberHandling.Disallow)]
     public sealed record SandboxBuildTestWorkspaceRequest(
@@ -55,6 +62,8 @@ public sealed record SandboxBuildTestBindingPreparation(
         bool PreparingWorkspace,
         ImmutableArray<SandboxBuildTestOutputObligation> Outputs)
     {
+        /// <summary>Validates source identity and output obligations against the accepted checkpoint.</summary>
+        /// <exception cref="ArgumentException">The source, checkpoint, or collector request is inconsistent.</exception>
         public SandboxBuildTestWorkspaceRequest Validate()
         {
             ArgumentNullException.ThrowIfNull(Source);
@@ -74,6 +83,10 @@ public sealed record SandboxBuildTestBindingPreparation(
         }
     }
 
+    /// <summary>
+    /// Provider receipt that the accepted repository seed was prepared at its deterministic
+    /// repository path. It proves preparation identity, not a captured output result.
+    /// </summary>
     public sealed record SandboxBuildTestWorkspacePreparationReceipt(
         Guid OperationId,
         string ImmutableHash,
@@ -84,6 +97,8 @@ public sealed record SandboxBuildTestBindingPreparation(
         string SeedSha256,
         string BaselineTreeSha)
     {
+        /// <summary>Checks that the receipt identifies the accepted operation, pod, source, and baseline.</summary>
+        /// <exception cref="ArgumentException">The receipt does not match the accepted workspace or command.</exception>
         public SandboxBuildTestWorkspacePreparationReceipt Validate(
             SandboxBuildTestAcceptedCommand command,
             string requestFingerprint,
@@ -102,6 +117,8 @@ public sealed record SandboxBuildTestBindingPreparation(
         }
     }
 
+    /// <summary>Hashes the validated accepted execution options using the contract JSON settings.</summary>
+    /// <exception cref="ArgumentException">The options value is null or fails its own validation.</exception>
     public static string ComputeExecutionOptionsSha256(
         SandboxBuildTestAcceptedExecutionOptions executionOptions)
     {
@@ -111,6 +128,7 @@ public sealed record SandboxBuildTestBindingPreparation(
             JsonSerializer.SerializeToUtf8Bytes(executionOptions, JsonOptions))).ToLowerInvariant();
     }
 
+    /// <summary>Checks a bounded opaque identifier and rejects control characters.</summary>
     private static void ValidateIdentifier(string? value, string name, int maximumLength)
     {
         if (string.IsNullOrWhiteSpace(value) ||

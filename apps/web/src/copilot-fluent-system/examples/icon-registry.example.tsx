@@ -22,6 +22,7 @@ const combinedRegistry = {
   ...manifestRegistry,
 };
 
+/** Demonstrates registries built from icon names and a categorized manifest. */
 export function IconRegistryExample() {
   return (
     <AzureIconProvider registry={combinedRegistry}>

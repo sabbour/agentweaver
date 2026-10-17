@@ -4,12 +4,24 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// The idempotency key supplied when a caller asks to suspend a session.
+/// </summary>
 public sealed record SessionSuspendRequest(string IdempotencyKey);
 
+/// <summary>
+/// The idempotency key and retained manifest identifier supplied when a caller asks to resume a session.
+/// </summary>
 public sealed record SessionResumeRequest(string IdempotencyKey, Guid ManifestId);
 
+/// <summary>
+/// Maps session suspend and resume operations and the authenticated internal checks used by runtime hosts.
+/// </summary>
 public static partial class CoordinationEndpoints
 {
+    /// <summary>
+    /// Registers authorized project-run routes for requesting session suspension and resumption.
+    /// </summary>
     public static IEndpointRouteBuilder MapSuspendResumeEndpoints(this IEndpointRouteBuilder app)
     {
         var coordination = app.MapGroup("/api/projects/{projectId}/runs/{runId}/coordination")
@@ -23,6 +35,9 @@ public static partial class CoordinationEndpoints
         return app;
     }
 
+    /// <summary>
+    /// Registers authenticated internal routes for current suspend, release, resume, and bootstrap evidence checks.
+    /// </summary>
     public static IEndpointRouteBuilder MapRuntimeSuspendResumeEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapPost(
@@ -40,6 +55,9 @@ public static partial class CoordinationEndpoints
         return app;
     }
 
+    /// <summary>
+    /// Validates the runtime receipt, owner actor, accepted selection, and current registration before returning suspend proof; it rereads selection and registration to reject stale evidence.
+    /// </summary>
     private static Task<IResult> RequireCurrentSuspendAsync(
         RuntimeHostSuspendRequest request,
         HttpContext context,
@@ -117,6 +135,9 @@ public static partial class CoordinationEndpoints
             return Results.Ok(echo);
         }, cancellationToken);
 
+    /// <summary>
+    /// Checks that the release receipt belongs to the current actor, run, tenant, and selection before returning the coordinator release proof.
+    /// </summary>
     private static Task<IResult> RequireCurrentSuspendReleaseAsync(
         RuntimeSuspendPlacementReleaseRequest request,
         HttpContext context,
@@ -150,6 +171,9 @@ public static partial class CoordinationEndpoints
             return Results.Ok(echo);
         }, cancellationToken);
 
+    /// <summary>
+    /// Checks the source manifest and release receipt against the current owner and accepted selection before returning resume proof.
+    /// </summary>
     private static Task<IResult> RequireCurrentResumeAsync(
         RuntimeWorkspaceResumeRequest request,
         HttpContext context,
@@ -187,6 +211,9 @@ public static partial class CoordinationEndpoints
             return Results.Ok(echo);
         }, cancellationToken);
 
+    /// <summary>
+    /// Validates bootstrap registration and resume evidence, then rereads selection and registration so a changed runtime binding is rejected.
+    /// </summary>
     private static Task<IResult> RequireCurrentResumeBootstrapAsync(
         RuntimeResumeBootstrapRequest request,
         HttpContext context,
@@ -255,6 +282,9 @@ public static partial class CoordinationEndpoints
             return Results.Ok(echo);
         }, cancellationToken);
 
+    /// <summary>
+    /// Authorizes the caller and reads the accepted selection, then records an unavailable result or delegates suspension to configured runtime and owner services.
+    /// </summary>
     private static Task<IResult> SuspendOperationAsync(
         string projectId,
         string runId,
@@ -302,6 +332,9 @@ public static partial class CoordinationEndpoints
                 cancellationToken).ConfigureAwait(false);
         }, cancellationToken);
 
+    /// <summary>
+    /// Authorizes the caller and reads the accepted selection, then delegates to the runtime resume flow or records that required runtime services are unavailable.
+    /// </summary>
     private static Task<IResult> ResumeOperationAsync(
         string projectId,
         string runId,

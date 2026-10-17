@@ -12,6 +12,8 @@ using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 using WorkloadIdentityCredential = AzureIdentity::Azure.Identity.WorkloadIdentityCredential;
 
+// Composes the Projects & Config host and its separate migration and privileged-setup command paths.
+// Runtime database access uses workload identity and verifies the applied schema and read-only authority boundary.
 var runMigrations = args.Length == 1 && args[0] == "--migrate";
 if (args.Contains("--migrate", StringComparer.Ordinal) && !runMigrations)
     throw new ArgumentException("The --migrate command must be used by itself.", nameof(args));
@@ -23,6 +25,7 @@ if (args.Contains("--privileged-project-setup", StringComparer.Ordinal) && !runP
 var builder = WebApplication.CreateBuilder(runMigrations || runPrivilegedProjectSetup ? [] : args);
 if (runPrivilegedProjectSetup)
 {
+    // This one-shot path reports only a stable error code; token and exception details never reach console output.
     try
     {
         await PrivilegedProjectSetupCommand.RunAsync(builder.Configuration);
@@ -42,6 +45,7 @@ if (runPrivilegedProjectSetup)
 
 if (runMigrations)
 {
+    // Migration credentials and connection settings are separate from the runtime database identity.
     var migrationConnectionString = builder.Configuration.GetConnectionString("ProjectsConfigMigration")
         ?? throw new InvalidOperationException(
             "Missing required configuration 'ConnectionStrings:ProjectsConfigMigration'.");
@@ -85,6 +89,7 @@ builder.Services.AddHttpClient<SkillMarketplaceBrowseService>();
 var skillContentContainer = builder.Configuration["ProjectsConfig:SkillContent:ContainerUri"];
 if (skillContentContainer is not null)
 {
+    // Skill blobs are optional, but when configured the store must target one explicit HTTPS container.
     if (!Uri.TryCreate(skillContentContainer, UriKind.Absolute, out var skillContentContainerUri) ||
         skillContentContainerUri.Scheme != Uri.UriSchemeHttps ||
         !string.IsNullOrEmpty(skillContentContainerUri.UserInfo) ||

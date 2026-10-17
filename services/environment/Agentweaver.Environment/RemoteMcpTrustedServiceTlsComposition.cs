@@ -6,6 +6,9 @@ using Microsoft.AspNetCore.Server.Kestrel.Https;
 
 namespace Agentweaver.Environment;
 
+/// <summary>
+/// Configures certificate-pinned mutual TLS for trusted Remote MCP owner calls and their private listeners.
+/// </summary>
 public static class RemoteMcpTrustedServiceTlsComposition
 {
     public const string IdentityTlsKey = "remote-mcp-credential-use-identity";
@@ -23,6 +26,7 @@ public static class RemoteMcpTrustedServiceTlsComposition
         "Environment:RemoteMcpCallVerification:EnableCurrentCallVerifier";
     public const string ManagedGatewaySectionName = "Environment:NetworkPolicy:RemoteMcpManagedGateway";
 
+    /// <summary>Loads the explicit service TLS profiles and configures their outbound clients and dedicated listeners.</summary>
     public static void AddRemoteMcpTrustedServiceTls(this WebApplicationBuilder builder)
     {
         var identity = ReadProfile(builder, IdentitySectionName, "IdentityBroker");
@@ -61,11 +65,13 @@ public static class RemoteMcpTrustedServiceTlsComposition
         }
     }
 
+    /// <summary>Requires the current request to arrive from the configured Identity service peer.</summary>
     public static void RequireIdentityPeer(HttpContext context) =>
         RequirePeer(context, IdentityTlsKey, "IdentityBroker",
             "remote_mcp_current_verification_route_unavailable",
             "remote_mcp_current_verification_peer_profile_invalid");
 
+    /// <summary>Enables dispatch only when the reviewed recipient and current-call verifier are fully registered.</summary>
     public static bool ConfigureRemoteMcpNativeCallDispatch(this WebApplicationBuilder builder)
     {
         if (!builder.Configuration.GetValue<bool>(OrchestratorRecipientEnabledSetting))
@@ -80,6 +86,7 @@ public static class RemoteMcpTrustedServiceTlsComposition
         return true;
     }
 
+    /// <summary>Registers current-call verification only when both trusted owner TLS profiles are available.</summary>
     public static bool AddRemoteMcpCurrentCallVerification(this WebApplicationBuilder builder, string actorIssuer)
     {
         if (!builder.Configuration.GetValue<bool>(CurrentCallVerifierEnabledSetting))
@@ -106,11 +113,13 @@ public static class RemoteMcpTrustedServiceTlsComposition
         return true;
     }
 
+    /// <summary>Requires the current request to arrive from the configured Orchestrator service peer.</summary>
     public static void RequireOrchestratorPeer(HttpContext context) =>
         RequirePeer(context, OrchestratorRecipientTlsKey, "Orchestrator",
             "remote_mcp_reviewed_tool_recipient_unavailable",
             "remote_mcp_reviewed_tool_recipient_profile_invalid");
 
+    /// <summary>Validates the peer profile, direct TLS listener, and client certificate for the current request.</summary>
     private static void RequirePeer(
         HttpContext context, string key, string peerName, string unavailableCode, string profileCode)
     {
@@ -129,6 +138,7 @@ public static class RemoteMcpTrustedServiceTlsComposition
             context.Features.Get<ITlsConnectionFeature>()?.ClientCertificate);
     }
 
+    /// <summary>Ensures the private service listener has its own HTTPS endpoint and port.</summary>
     private static void RequireDedicatedListener(
         WebApplicationBuilder builder, string listenerName, int port, string error)
     {
@@ -142,6 +152,7 @@ public static class RemoteMcpTrustedServiceTlsComposition
             throw new InvalidOperationException(error);
     }
 
+    /// <summary>Configures a dedicated Kestrel listener to require and validate the pinned client certificate.</summary>
     private static void ConfigureListener(WebApplicationBuilder builder, string listenerName, string key)
     {
         builder.WebHost.ConfigureKestrel(server =>
@@ -159,6 +170,7 @@ public static class RemoteMcpTrustedServiceTlsComposition
         });
     }
 
+    /// <summary>Reads and validates one optional local/peer identity profile, rejecting reused service certificates.</summary>
     private static RuntimeServiceTlsOptions? ReadProfile(
         WebApplicationBuilder builder, string sectionName, string peerName)
     {
@@ -174,6 +186,7 @@ public static class RemoteMcpTrustedServiceTlsComposition
         return options;
     }
 
+    /// <summary>Registers a certificate-pinned mutual-TLS HTTP client for one trusted service owner.</summary>
     private static void AddClient(
         WebApplicationBuilder builder, string key, string clientName, RuntimeServiceTlsOptions options, string peerName)
     {

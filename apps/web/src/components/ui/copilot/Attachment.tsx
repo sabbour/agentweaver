@@ -23,6 +23,10 @@ export interface AttachmentProps {
   className?: string;
 }
 
+/**
+ * Renders one attachment chip with its supplied name, type, and optional removal action.
+ * Attachment data is passed by the composer; the chip does not upload or fetch the file.
+ */
 export function Attachment({
   name,
   icon,
@@ -72,6 +76,10 @@ export interface AttachmentListProps {
   attachments: AttachmentProps[];
   className?: string;
 }
+/**
+ * Renders the attachment chips for the supplied attachment collection.
+ * Parent props provide items and removal callbacks; the list owns no API state.
+ */
 export function AttachmentList({ attachments, className }: AttachmentListProps) {
   const styles = useAttachmentStyles();
   if (!attachments.length) return null;

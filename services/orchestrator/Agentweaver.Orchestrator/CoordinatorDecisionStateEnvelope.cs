@@ -5,6 +5,9 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.Orchestrator;
 
+/// <summary>
+/// Serializes coordinator decision state together with the actor, run selection, and fence that authorize it.
+/// </summary>
 internal sealed record CoordinatorDecisionStateEnvelope(
     int Version,
     string Issuer,
@@ -35,6 +38,9 @@ internal sealed record CoordinatorDecisionStateEnvelope(
 {
     public const int CurrentVersion = 1;
 
+    /// <summary>
+    /// Captures a validated decision state and its optional plan-selection contexts for durable storage.
+    /// </summary>
     public static CoordinatorDecisionStateEnvelope Capture(
         CoordinatorDecisionState state,
         CoordinatorDecisionBinding binding,
@@ -73,6 +79,10 @@ internal sealed record CoordinatorDecisionStateEnvelope(
             state.WorkPlanRevisionAttempts);
     }
 
+    /// <summary>
+    /// Restores the envelope only when it matches the expected owner binding and all embedded workflow data validates.
+    /// </summary>
+    /// <remarks>Malformed persisted state becomes validation issues rather than escaping as a deserialization exception.</remarks>
     public CoordinatorDecisionStateEnvelopeRestoreResult Restore(
         CoordinatorDecisionBinding expectedBinding,
         Func<PinnedProviderBindingEnvelope, PinnedProviderBinding?>? pinnedBindingResolver = null)
@@ -90,6 +100,9 @@ internal sealed record CoordinatorDecisionStateEnvelope(
         }
     }
 
+    /// <summary>
+    /// Validates envelope identity and versions, then rebuilds workflow and plan snapshots.
+    /// </summary>
     private CoordinatorDecisionStateEnvelopeRestoreResult RestoreCore(
         CoordinatorDecisionBinding expectedBinding,
         Func<PinnedProviderBindingEnvelope, PinnedProviderBinding?>? pinnedBindingResolver)
@@ -168,6 +181,9 @@ internal sealed record CoordinatorDecisionStateEnvelope(
             restored.Issues);
     }
 
+    /// <summary>
+    /// Restores one plan only when its workflow, selection context, and plan all pass current validators.
+    /// </summary>
     private static PlanRestoreResult RestorePlan(
         WorkPlan? plan,
         WorkPlanSelectionContextEnvelope? selectionContext,
@@ -196,6 +212,9 @@ internal sealed record CoordinatorDecisionStateEnvelope(
         return new PlanRestoreResult(validated.Value, []);
     }
 
+    /// <summary>
+    /// Builds a single validation issue for an envelope that cannot be safely restored.
+    /// </summary>
     private static CoordinatorDecisionStateEnvelopeRestoreResult Failure(string path, string message) =>
         new(null,
         [
@@ -205,8 +224,14 @@ internal sealed record CoordinatorDecisionStateEnvelope(
                 message)
         ]);
 
+    /// <summary>
+    /// Adds the parent envelope path to nested workflow-plan validation issues.
+    /// </summary>
     private static class WorkflowPlanIssuePrefix
     {
+        /// <summary>
+        /// Prefixes plan validation paths with the envelope property that contained the invalid plan.
+        /// </summary>
         public static ImmutableArray<WorkflowValidationIssue> Apply(
             WorkflowValidationResult<WorkPlanSnapshot> result,
             string prefix) =>
@@ -216,12 +241,18 @@ internal sealed record CoordinatorDecisionStateEnvelope(
             }).ToImmutableArray();
     }
 
+    /// <summary>
+    /// Holds either a restored plan snapshot or the issues that prevented restoration.
+    /// </summary>
     private sealed record PlanRestoreResult(
         WorkPlanSnapshot? Snapshot,
         ImmutableArray<WorkflowValidationIssue> Issues)
     {
         public bool IsValid => Issues.IsEmpty;
 
+        /// <summary>
+        /// Creates a selection-context issue for a plan that lacks a required workflow.
+        /// </summary>
         public static PlanRestoreResult Failure(string path, string message) =>
             Failure([
                 new WorkflowValidationIssue(
@@ -230,12 +261,18 @@ internal sealed record CoordinatorDecisionStateEnvelope(
                     message)
             ]);
 
+        /// <summary>
+        /// Creates a failed plan result from existing validation issues.
+        /// </summary>
         public static PlanRestoreResult Failure(
             ImmutableArray<WorkflowValidationIssue> issues) =>
             new(null, issues);
     }
 }
 
+/// <summary>
+/// Captures the exact actor, tenant, project, run, accepted selection, and fence for decision-state persistence.
+/// </summary>
 internal sealed record CoordinatorDecisionBinding(
     string Issuer,
     string Subject,
@@ -250,6 +287,10 @@ internal sealed record CoordinatorDecisionBinding(
     string ContextRevision,
     long Fence)
 {
+    /// <summary>
+    /// Creates a binding after confirming the actor and accepted selection identify the supplied root session.
+    /// </summary>
+    /// <exception cref="CoordinationException">The actor, selection revisions, root, or execution fence are inconsistent.</exception>
     public static CoordinatorDecisionBinding Create(
         CoordinationActor actor,
         SessionIdentity identity,
@@ -288,6 +329,9 @@ internal sealed record CoordinatorDecisionBinding(
     }
 }
 
+/// <summary>
+/// Returns restored coordinator state or the validation issues that rejected the persisted envelope.
+/// </summary>
 internal sealed record CoordinatorDecisionStateEnvelopeRestoreResult(
     CoordinatorDecisionState? State,
     ImmutableArray<WorkflowValidationIssue> Issues)
@@ -295,10 +339,16 @@ internal sealed record CoordinatorDecisionStateEnvelopeRestoreResult(
     public bool IsValid => State is not null && Issues.IsEmpty;
 }
 
+/// <summary>
+/// Persists the roles and exact provider binding required to revalidate a work plan after restart.
+/// </summary>
 internal sealed record WorkPlanSelectionContextEnvelope(
     ImmutableArray<RoleRunSelection> Roles,
     PinnedProviderBindingEnvelope? IsolationProviderBinding)
 {
+    /// <summary>
+    /// Captures selection context only when both a plan and its context exist.
+    /// </summary>
     public static WorkPlanSelectionContextEnvelope? Capture(
         WorkPlanSnapshot? plan,
         WorkPlanRunSelectionContext? context)
@@ -310,6 +360,9 @@ internal sealed record WorkPlanSelectionContextEnvelope(
             PinnedProviderBindingEnvelope.Capture(context.IsolationProviderBinding));
     }
 
+    /// <summary>
+    /// Restores role selection and resolves any pinned provider binding from trusted persistence.
+    /// </summary>
     public SelectionContextRestoreResult Restore(
         string runId,
         Func<PinnedProviderBindingEnvelope, PinnedProviderBinding?>? pinnedBindingResolver,
@@ -345,12 +398,18 @@ internal sealed record WorkPlanSelectionContextEnvelope(
     }
 }
 
+/// <summary>
+/// Holds a restored run-selection context or its validation issues.
+/// </summary>
 internal sealed record SelectionContextRestoreResult(
     WorkPlanRunSelectionContext? Value,
     ImmutableArray<WorkflowValidationIssue> Issues)
 {
     public bool IsValid => Issues.IsEmpty;
 
+    /// <summary>
+    /// Creates a pinned-provider validation issue for an unavailable or mismatched binding.
+    /// </summary>
     public static SelectionContextRestoreResult Failure(string path, string message) =>
         new(null,
         [
@@ -361,6 +420,9 @@ internal sealed record SelectionContextRestoreResult(
         ]);
 }
 
+/// <summary>
+/// Stores the provider and resource identity needed to compare a persisted binding with trusted runtime state.
+/// </summary>
 internal sealed record PinnedProviderBindingEnvelope(
     string RunId,
     ProviderSeam Seam,
@@ -373,6 +435,9 @@ internal sealed record PinnedProviderBindingEnvelope(
     long ResourceGeneration,
     ImmutableHashSet<string> NegotiatedCapabilities)
 {
+    /// <summary>
+    /// Captures the provider seam, adapter, resource generation, and negotiated capabilities of a pinned binding.
+    /// </summary>
     public static PinnedProviderBindingEnvelope? Capture(PinnedProviderBinding? binding) =>
         binding is null
             ? null
@@ -388,6 +453,9 @@ internal sealed record PinnedProviderBindingEnvelope(
                 binding.Resource.Generation,
                 binding.NegotiatedCapabilities);
 
+    /// <summary>
+    /// Checks that a trusted pinned binding exactly matches this envelope and the expected run.
+    /// </summary>
     public bool Matches(PinnedProviderBinding binding, string runId) =>
         RunId == runId &&
         binding.RunId == RunId &&

@@ -1,27 +1,40 @@
 namespace Agentweaver.Abstractions;
 
+/// <summary>
+/// Carries the exact bounded HTTP request bytes and the current-call proof from the
+/// runtime to the trusted native Remote MCP caller.
+/// </summary>
 public sealed record RemoteMcpNativeCallRequest(
     int ContractVersion,
     RemoteMcpCurrentCallVerificationRequest CurrentCall,
     byte[] RequestBytes)
 {
+    /// <summary>Prevents request content from appearing in logs through default formatting.</summary>
     public override string ToString() => nameof(RemoteMcpNativeCallRequest) + " [REDACTED]";
 }
 
+/// <summary>Returns bounded native response bytes with the proof bound to the reviewed call.</summary>
 public sealed record RemoteMcpNativeCallResult(
     int ContractVersion,
     RemoteToolResultProof Proof,
     byte[] ContentBytes)
 {
+    /// <summary>Prevents response content from appearing in logs through default formatting.</summary>
     public override string ToString() => nameof(RemoteMcpNativeCallResult) + " [REDACTED]";
 }
 
+/// <summary>Validates the byte-level request and result contract used by the native Remote MCP bridge.</summary>
 public static class RemoteMcpNativeCallContract
 {
+    /// <summary>Wire-contract version accepted by this implementation.</summary>
     public const int CurrentVersion = 1;
+    /// <summary>Maximum combined envelope size reserved for request and proof content.</summary>
     public const int MaximumEnvelopeBytes = 2 * SessionMaterialValidation.MaximumBytes;
+    /// <summary>Internal dispatch route used by the trusted current-call bridge.</summary>
     public const string DispatchPath = "/internal/remote-mcp/current-call/dispatch";
 
+    /// <summary>Returns an owned copy of bounded request bytes for transport.</summary>
+    /// <exception cref="ArgumentException">The request has the wrong version or an empty/oversized body.</exception>
     public static byte[] CopyRequestBytes(RemoteMcpNativeCallRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -31,6 +44,11 @@ public static class RemoteMcpNativeCallContract
         return request.RequestBytes.ToArray();
     }
 
+    /// <summary>
+    /// Confirms the transport used the exact received bytes and that method, target, and
+    /// call semantics match the current-call proof.
+    /// </summary>
+    /// <exception cref="ArgumentException">The version, bytes, or request proof does not match.</exception>
     public static void ValidateRequest(
         RemoteMcpNativeCallRequest request,
         string actualMethod,
@@ -48,6 +66,8 @@ public static class RemoteMcpNativeCallContract
             request.CurrentCall, actualMethod, actualTarget, actualRequestBytes);
     }
 
+    /// <summary>Returns an owned copy of bounded response bytes for the caller.</summary>
+    /// <exception cref="ArgumentException">The result has the wrong version or an empty/oversized body.</exception>
     public static byte[] CopyContentBytes(RemoteMcpNativeCallResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
@@ -57,6 +77,8 @@ public static class RemoteMcpNativeCallContract
         return result.ContentBytes.ToArray();
     }
 
+    /// <summary>Checks that the response proof belongs to the exact reviewed request.</summary>
+    /// <exception cref="ArgumentException">The request or result is invalid or the proof pins differ.</exception>
     public static void ValidateResult(
         RemoteMcpNativeCallRequest request,
         RemoteMcpNativeCallResult result)

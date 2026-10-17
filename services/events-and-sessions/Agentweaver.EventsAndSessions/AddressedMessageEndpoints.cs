@@ -3,8 +3,10 @@ using Microsoft.AspNetCore.Http;
 
 namespace Agentweaver.EventsAndSessions;
 
+/// <summary>Maps authenticated addressed-message admission and turn-boundary delivery operations.</summary>
 public static class AddressedMessageEndpoints
 {
+    /// <summary>Registers routes for sending, claiming, presenting, and acknowledging messages.</summary>
     public static IEndpointRouteBuilder MapAddressedMessageEndpoints(this IEndpointRouteBuilder app)
     {
         var endpoints = app.MapGroup("/internal/addressed-messages").RequireAuthorization();
@@ -20,6 +22,7 @@ public static class AddressedMessageEndpoints
         return app;
     }
 
+    /// <summary>Claims the next eligible message only while the owner confirms a presenting turn boundary.</summary>
     private static async Task<IResult> ClaimAsync(
         string projectId,
         string runId,
@@ -58,6 +61,7 @@ public static class AddressedMessageEndpoints
         }
     }
 
+    /// <summary>Marks a claimed message as presented after re-reading the recipient's current owner fence.</summary>
     private static async Task<IResult> PresentAsync(
         string projectId,
         string runId,
@@ -103,6 +107,7 @@ public static class AddressedMessageEndpoints
         }
     }
 
+    /// <summary>Acknowledges a presented message using the owner claim identity and current execution fence.</summary>
     private static async Task<IResult> AcknowledgeAsync(
         string projectId,
         string runId,
@@ -148,6 +153,7 @@ public static class AddressedMessageEndpoints
         }
     }
 
+    /// <summary>Validates owner routing and atomically records the message, journal event, and delivery outbox item.</summary>
     private static async Task<IResult> AdmitAsync(
         OwnerOutboundMessage request,
         HttpContext context,
@@ -238,6 +244,7 @@ public static class AddressedMessageEndpoints
         }
     }
 
+    /// <summary>Maps typed message failures to stable client status codes without exposing storage details.</summary>
     private static IResult ToError(AddressedMessageException exception)
     {
         var status = exception.Code switch
@@ -252,6 +259,7 @@ public static class AddressedMessageEndpoints
         return Results.Json(new { error = exception.Code }, statusCode: status);
     }
 
+    /// <summary>Rejects owner bindings that do not identify the requested recipient session and a valid claim owner.</summary>
     private static void RequireSessionBinding(
         CoordinationSessionBinding binding,
         SessionIdentity expected)
@@ -262,6 +270,7 @@ public static class AddressedMessageEndpoints
                 "coordination_owner_contract_invalid", StatusCodes.Status502BadGateway);
     }
 
+    /// <summary>Requires the owner session to be at its presenting boundary before claim or presentation.</summary>
     private static void RequireTurnBoundaryBinding(
         CoordinationSessionBinding binding,
         SessionIdentity expected)

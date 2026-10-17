@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace Agentweaver.Identity;
 
+/// <summary>Execution lifecycle states reported by the workflow owner.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter<RuntimeExecutionTaskStatus>))]
 public enum RuntimeExecutionTaskStatus
 {
@@ -12,12 +13,18 @@ public enum RuntimeExecutionTaskStatus
     Indeterminate
 }
 
+/// <summary>Owner-tracked child dispatch that is pending while the execution is running.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeExecutionPendingDispatch(Guid MessageId, string PromptSha256);
 
+/// <summary>Digest and UTF-8 size of a completed execution result.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeExecutionResultDigest(string Sha256, long Utf8ByteLength);
 
+/// <summary>
+/// Owner observation tying a child execution status to its session, work plan, checkpoint,
+/// decision versions, and optional pending-dispatch or completed-result evidence.
+/// </summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeExecutionObservation(
     int ContractVersion,
@@ -39,6 +46,8 @@ public sealed record RuntimeExecutionObservation(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeExecutionResultDigest? ResultDigest { get; init; }
 
+    /// <summary>Checks version, identifiers, checkpoint ordering, and status-specific evidence.</summary>
+    /// <exception cref="RuntimeAuthorizationException">The observation is inconsistent or malformed.</exception>
     public RuntimeExecutionObservation Validate()
     {
         if (ContractVersion != 1 ||
@@ -79,12 +88,14 @@ public sealed record RuntimeExecutionObservation(
         value is { Length: 64 } && value.All(Uri.IsHexDigit);
 }
 
+/// <summary>Version 2 execution observation with explicit parent-checkpoint metadata.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeExecutionObservationV2(
     [property: JsonRequired] int ContractVersion,
     [property: JsonRequired] RuntimeExecutionObservation Observation,
     [property: JsonRequired] RuntimeExecutionCheckpointParent CheckpointParent)
 {
+    /// <summary>Validates both the nested observation and required parent metadata.</summary>
     public RuntimeExecutionObservationV2 Validate()
     {
         if (ContractVersion != 2 || Observation is null || CheckpointParent is null)
@@ -95,11 +106,13 @@ public sealed record RuntimeExecutionObservationV2(
     }
 }
 
+/// <summary>States whether parent-checkpoint metadata exists and, when present, its ID.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeExecutionCheckpointParent(
     [property: JsonRequired] bool HasParentMetadata,
     [property: JsonRequired] string? ParentCheckpointId)
 {
+    /// <summary>Rejects an ID when parent metadata is absent and validates any supplied ID.</summary>
     public RuntimeExecutionCheckpointParent Validate()
     {
         if (!HasParentMetadata && ParentCheckpointId is not null ||

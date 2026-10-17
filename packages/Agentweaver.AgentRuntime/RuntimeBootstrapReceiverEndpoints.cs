@@ -8,8 +8,18 @@ using Microsoft.AspNetCore.Routing;
 
 namespace Agentweaver.AgentRuntime;
 
+/// <summary>Maps the authenticated HTTP route that delivers one runtime bootstrap credential.</summary>
 public static class RuntimeBootstrapReceiverEndpoints
 {
+    /// <summary>
+    /// Adds the fixed HTTPS configure path. The handler requires bearer authentication,
+    /// checks the request authority, suppresses caching, and invalidates its temporary bearer.
+    /// </summary>
+    /// <param name="endpoints">The ASP.NET route builder.</param>
+    /// <param name="configureEndpoint">The exact HTTPS configure endpoint from registration.</param>
+    /// <param name="receiver">The receiver validating and retaining the bootstrap delivery.</param>
+    /// <returns>The mapped endpoint convention builder.</returns>
+    /// <exception cref="ArgumentException">The configure endpoint is not fixed HTTPS.</exception>
     public static IEndpointConventionBuilder MapRuntimeBootstrapReceiver(
         this IEndpointRouteBuilder endpoints,
         Uri configureEndpoint,

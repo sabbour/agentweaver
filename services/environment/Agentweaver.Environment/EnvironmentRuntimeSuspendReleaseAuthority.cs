@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authentication;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Confirms that a suspend operation still has current release authority at the orchestrator.</summary>
 public sealed class EnvironmentRuntimeSuspendReleaseAuthority(
     HttpClient client,
     EnvironmentRuntimeBootstrapDeliveryOptions options,
@@ -14,6 +15,11 @@ public sealed class EnvironmentRuntimeSuspendReleaseAuthority(
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
+    /// <summary>
+    /// Validates the authenticated caller locally, then confirms the exact request with the owner service.
+    /// The temporary bearer credential is invalidated on both success and failure.
+    /// </summary>
+    /// <exception cref="RuntimeAuthorizationException">The caller, request, or remote authority confirmation is stale.</exception>
     public async Task RequireCurrentAsync(
         CurrentCallerRequest caller, RuntimeSuspendPlacementReleaseRequest request,
         CancellationToken cancellationToken)

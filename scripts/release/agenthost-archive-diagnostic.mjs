@@ -1,3 +1,7 @@
+/**
+ * Produces a bounded diagnostic for a pinned AgentHost archive and its container image.
+ * It reports inspected metadata and failures without changing the release or deployment state.
+ */
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
@@ -6,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { agentHostArchiveMetadata } from './agenthost-image.mjs';
 import { runPublicationCommand } from './command.mjs';
 
+/** Fixed archive and run evidence used by this one-purpose archive diagnostic. */
 export const archivePins = Object.freeze({
   runId: 38286624230,
   artifactId: 11763641424,
@@ -21,6 +26,7 @@ export const archivePins = Object.freeze({
 });
 
 // Only these inspect fields are ever read. Nothing else from the inspect output is reported.
+/** Image-inspection fields the diagnostic is permitted to include in its output. */
 export const allowedFields = Object.freeze([
   'Id', 'Os', 'Architecture', 'Config.User', 'Config.Entrypoint',
   'Config.Labels.org.opencontainers.image.revision', 'Config.Labels.io.agentweaver.source-tree',
@@ -36,6 +42,7 @@ const failureCodes = new Set([
 ]);
 const reject = code => { throw Object.assign(new Error(`AgentHost archive diagnostic refused: ${code}`), { code }); };
 
+/** Projects Docker inspect output to the explicitly allowed, non-secret diagnostic fields. */
 export function describeInspect(image) {
   const labels = image?.Config?.Labels;
   const values = {
@@ -64,6 +71,10 @@ export function describeInspect(image) {
   return { present, comparisons, digests, imageId };
 }
 
+/**
+ * Checks the pinned archive, local image, and expected source metadata in the supplied directory.
+ * Returns a structured diagnostic result; it does not publish or deploy the image.
+ */
 export function runAgentHostArchiveDiagnostic(directory, { env = process.env, spawn = spawnSync,
   expectedArchiveSha256 = archivePins.archiveSha256 } = {}) {
   const result = {

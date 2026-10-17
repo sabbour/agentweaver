@@ -1,4 +1,5 @@
 import { CopyButton } from '..';
+/** Shows icon-only and labeled copy controls using fixed sample values. */
 export function CopyButtonExample() {
   return (
     <div className="azf-row azf-gap-s azf-wrap">

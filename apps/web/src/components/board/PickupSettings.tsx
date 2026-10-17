@@ -26,6 +26,11 @@ export interface PickupSettingsProps {
 
 // Per-project pickup settings (FR-008a): max Ready items per heartbeat (default 3,
 // range 1..20) plus the autopilot / auto-approve-tools toggles from BacklogSettingsDto.
+/**
+ * Loads and renders project task-pickup settings through the project API.
+ * The project prop selects the settings; effects refresh them, while local state tracks edits,
+ * saving, and request errors.
+ */
 export function PickupSettings({ projectId }: PickupSettingsProps) {
   const styles = useStyles();
   const [open, setOpen] = useState(false);

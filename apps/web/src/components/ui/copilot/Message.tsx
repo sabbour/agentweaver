@@ -34,6 +34,10 @@ export interface CopilotChatProps {
   label?: string;
 }
 
+/**
+ * Renders a conversation transcript from caller-supplied messages and chat props.
+ * Message content remains parent-owned; local state is limited to chat presentation behavior.
+ */
 export function CopilotChat({
   children,
   className,
@@ -68,6 +72,10 @@ export interface UserMessageProps {
   accessibleHeading?: string;
 }
 
+/**
+ * Renders one user-authored message and its optional attachments from props.
+ * It is presentational and does not read or mutate conversation data.
+ */
 export function UserMessage({
   children,
   topContent,
@@ -171,6 +179,10 @@ export interface CopilotMessageProps {
   accessibleHeading?: string;
 }
 
+/**
+ * Renders one assistant message, including any supplied response content and actions.
+ * Message data and callbacks come from the parent; local state supports message presentation.
+ */
 export function CopilotMessage({
   children,
   avatar,

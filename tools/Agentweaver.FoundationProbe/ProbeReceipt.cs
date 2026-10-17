@@ -1,5 +1,6 @@
 namespace Agentweaver.FoundationProbe;
 
+/// <summary>Machine-readable evidence produced after all target-bound foundation checks succeed.</summary>
 internal sealed record ProbeReceipt(
     string SourceSha,
     string SourceTree,
@@ -14,6 +15,7 @@ internal sealed record ProbeReceipt(
     PostgresEvidence Postgres,
     TelemetryEvidence Telemetry);
 
+/// <summary>Deployment and infrastructure provenance copied into the final receipt.</summary>
 internal sealed record ProbeDeploymentBinding(
     string SubscriptionId,
     string TenantId,
@@ -26,8 +28,10 @@ internal sealed record ProbeDeploymentBinding(
     ProbeResources Resources,
     ProbeInfrastructure Infrastructure);
 
+/// <summary>Issuer, subject, and audience claims observed in the projected workload token.</summary>
 internal sealed record ProbeIdentityEvidence(string Issuer, string Subject, string Audience);
 
+/// <summary>Provider seam and pinned resource identity recorded for the probe run.</summary>
 internal sealed record ProviderPinEvidence(
     string Seam,
     string ProviderId,
@@ -38,6 +42,7 @@ internal sealed record ProviderPinEvidence(
     long Generation,
     IReadOnlyList<string> NegotiatedCapabilities);
 
+/// <summary>Evidence that the configured version of the probe secret was redeemed.</summary>
 internal sealed record KeyVaultEvidence(
     string ResourceId,
     string VaultUri,
@@ -45,6 +50,7 @@ internal sealed record KeyVaultEvidence(
     string SecretVersion,
     bool Redeemed);
 
+/// <summary>Evidence for a nonce-owned blob round trip and confirmed cleanup.</summary>
 internal sealed record BlobEvidence(
     string ContainerResourceId,
     string ContainerUri,
@@ -54,6 +60,7 @@ internal sealed record BlobEvidence(
     string ContentSha256,
     bool CleanupConfirmed);
 
+/// <summary>Evidence for the committed PostgreSQL effect, inbox receipt, and outbox event.</summary>
 internal sealed record PostgresEvidence(
     string ServerResourceId,
     string Host,
@@ -67,6 +74,7 @@ internal sealed record PostgresEvidence(
     long OutboxSequence,
     bool TransactionCommitted);
 
+/// <summary>Trace identity and start time for the emitted probe operation.</summary>
 internal sealed record TelemetryEvidence(
     string Name,
     string TraceId,

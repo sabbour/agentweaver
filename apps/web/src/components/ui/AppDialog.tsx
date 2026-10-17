@@ -123,6 +123,10 @@ const useStyles = makeStyles({
   },
 });
 
+/**
+ * Renders the shared modal shell with title, body, and optional actions.
+ * Props provide content and open/close behavior; a local effect manages dialog focus and cleanup.
+ */
 export function AppDialog({
   open,
   onOpenChange,

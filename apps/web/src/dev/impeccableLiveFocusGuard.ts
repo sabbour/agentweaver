@@ -1,3 +1,4 @@
+/** Removes listeners and the mutation observer installed by the development-only focus guard. */
 type Cleanup = () => void;
 
 declare global {
@@ -23,22 +24,30 @@ function isElement(node: EventTarget | null): node is Element {
   return node instanceof Element;
 }
 
+/** Returns the current modal surface, if one is mounted. */
 function getActiveDialog(): HTMLElement | null {
   return document.querySelector<HTMLElement>(DIALOG_SELECTOR);
 }
 
+/** Finds the first enabled control in the current modal for restoring focus. */
 function getFocusableInDialog(): HTMLElement | null {
   return getActiveDialog()?.querySelector<HTMLElement>(FOCUSABLE_DIALOG_SELECTOR) ?? null;
 }
 
+/** Recognizes pointer targets inside the live preview's global toolbar. */
 function isInsideGlobalBar(node: EventTarget | null): boolean {
   return isElement(node) && Boolean(node.closest(GLOBAL_BAR_SELECTOR));
 }
 
+/** Recognizes the live-preview steering input or one of its containing elements. */
 function isSteerInput(node: EventTarget | null): boolean {
   return isElement(node) && (node.matches(STEER_INPUT_SELECTOR) || Boolean(node.closest(STEER_CONTAINER_SELECTOR)));
 }
 
+/**
+ * Installs document listeners and an observer that keep the live steering input from stealing modal focus.
+ * Replaces any prior installation and returns a cleanup callback for hot reload or unmount.
+ */
 export function installImpeccableLiveFocusGuard(): Cleanup {
   window.__agentweaverImpeccableFocusGuard?.cleanup();
 

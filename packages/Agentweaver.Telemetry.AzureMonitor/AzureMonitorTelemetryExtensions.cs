@@ -7,8 +7,24 @@ using OpenTelemetry.Trace;
 
 namespace Agentweaver.Telemetry.AzureMonitor;
 
+/// <summary>Connects the shared telemetry pipeline to Azure Monitor exporters.</summary>
 public static class AzureMonitorTelemetryExtensions
 {
+    /// <summary>
+    /// Registers Agentweaver tracing, metrics, and logging with Azure Monitor exporters.
+    /// The required connection string is validated and then assigned after exporter
+    /// customization so callbacks cannot replace the selected destination.
+    /// </summary>
+    /// <param name="services">The service collection receiving telemetry providers.</param>
+    /// <param name="serviceName">The service identity attached to emitted telemetry.</param>
+    /// <param name="connectionString">Azure Monitor destination settings.</param>
+    /// <param name="credential">Optional token credential used by the exporters.</param>
+    /// <param name="configureExporter">Optional exporter-specific settings.</param>
+    /// <param name="configureTracing">Optional additional tracing configuration.</param>
+    /// <param name="configureMetrics">Optional additional metrics configuration.</param>
+    /// <param name="configureLogging">Optional additional logging configuration.</param>
+    /// <returns>The same service collection after shared telemetry registration.</returns>
+    /// <exception cref="ArgumentException">The connection string is absent or malformed.</exception>
     public static IServiceCollection AddAgentweaverAzureMonitorTelemetry(
         this IServiceCollection services,
         string serviceName,
@@ -48,6 +64,7 @@ public static class AzureMonitorTelemetryExtensions
             });
     }
 
+    /// <summary>Rejects malformed or duplicate fields and requires a GUID instrumentation key.</summary>
     private static void ValidateConnectionString(string connectionString)
     {
         if (string.IsNullOrWhiteSpace(connectionString))

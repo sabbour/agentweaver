@@ -1,7 +1,12 @@
+/**
+ * Defines the deterministic PostgreSQL grants plan for the P1 service principals.
+ * This module only builds and hashes the plan; its CLI mode emits JSON and never connects to a database.
+ */
 import { createHash } from 'node:crypto';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
+/** Fixed target identity used to prevent the P1 grants plan from drifting to another database. */
 export const P1_POSTGRES_TARGET = Object.freeze({
   subscriptionId: '90ab3701-83f0-4ba1-a90a-f2e68683adab',
   tenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47',
@@ -148,6 +153,7 @@ const OWNER_ONLY_OBJECTS = {
   },
 };
 
+/** Builds the complete ordered role, schema, table, and sequence grant description. */
 export function buildP1PostgresPlan() {
   const services = SERVICES.map(([service, schema, principalObjectId]) => ({
     service,
@@ -192,6 +198,7 @@ export function buildP1PostgresPlan() {
   };
 }
 
+/** Returns a SHA-256 fingerprint for the serialized plan so callers can detect plan changes. */
 export function p1PostgresPlanHash(plan = buildP1PostgresPlan()) {
   return createHash('sha256').update(JSON.stringify(plan)).digest('hex');
 }

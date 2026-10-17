@@ -9,6 +9,7 @@ using Npgsql;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Coordinates durable workspace-volume state with the selected storage provider.</summary>
 public sealed class WorkspaceVolumeService
 {
     private static readonly JsonSerializerOptions SpecificationJsonOptions = new(JsonSerializerDefaults.Web);
@@ -19,6 +20,7 @@ public sealed class WorkspaceVolumeService
     private readonly IWorkspaceVolumeProvider _volumeProvider;
     private readonly ILogger<WorkspaceVolumeService> _logger;
 
+    /// <summary>Creates a service over the Environment lifecycle store and selected workspace-volume provider.</summary>
     public WorkspaceVolumeService(
         IEnvironmentLifecycleStore lifecycleStore,
         IWorkspaceVolumeProvider volumeProvider,
@@ -29,6 +31,7 @@ public sealed class WorkspaceVolumeService
         _logger = logger ?? NullLogger<WorkspaceVolumeService>.Instance;
     }
 
+    /// <summary>Creates a volume record after checking its specification matches the Environment owner scope.</summary>
     public Task<EnvironmentWorkspaceVolumeSnapshot> CreateAsync(
         EnvironmentGenerationFence environmentFence,
         WorkspaceVolumeTransitionRequest request,
@@ -46,6 +49,7 @@ public sealed class WorkspaceVolumeService
             environmentFence, request, cancellationToken, authorizationAndFenceCheck);
     }
 
+    /// <summary>Reads and validates the current volume snapshot without changing provider state.</summary>
     public async Task<EnvironmentWorkspaceVolumeSnapshot?> InspectAsync(
         EnvironmentGenerationFence environmentFence,
         string volumeId,
@@ -82,6 +86,7 @@ public sealed class WorkspaceVolumeService
         return snapshot;
     }
 
+    /// <summary>Provisions the storage resource using a durable transition reservation and owner fence.</summary>
     public Task<WorkspaceVolumeLifecycleResult> ProvisionAsync(
         EnvironmentGenerationFence environmentFence,
         WorkspaceVolumeTransitionRequest request,
@@ -89,6 +94,7 @@ public sealed class WorkspaceVolumeService
         Func<CancellationToken, Task>? authorizationAndFenceCheck = null) =>
         ApplyProvisionAsync(environmentFence, request, cancellationToken, authorizationAndFenceCheck);
 
+    /// <summary>Replaces a storage resource and queues cleanup for the superseded resource.</summary>
     public Task<WorkspaceVolumeLifecycleResult> ReplaceAsync(
         EnvironmentGenerationFence environmentFence,
         WorkspaceVolumeTransitionRequest request,
@@ -101,6 +107,7 @@ public sealed class WorkspaceVolumeService
         return ApplyReplaceAsync(environmentFence, request, cancellationToken, authorizationAndFenceCheck);
     }
 
+    /// <summary>Reserves replacement, provisions the new resource, commits it, then reconciles cleanup of the old one.</summary>
     private async Task<WorkspaceVolumeLifecycleResult> ApplyReplaceAsync(
         EnvironmentGenerationFence environmentFence,
         WorkspaceVolumeTransitionRequest request,
@@ -234,6 +241,7 @@ public sealed class WorkspaceVolumeService
             cleanupResult.FailureType);
     }
 
+    /// <summary>Reserves provisioning before the provider call and records a completed or uncertain result.</summary>
     private async Task<WorkspaceVolumeLifecycleResult> ApplyProvisionAsync(
         EnvironmentGenerationFence environmentFence,
         WorkspaceVolumeTransitionRequest request,
@@ -305,6 +313,7 @@ public sealed class WorkspaceVolumeService
         return new WorkspaceVolumeLifecycleResult(reservation, completion, null);
     }
 
+    /// <summary>Binds a provisioned volume to a workspace after a generation-fenced provider operation.</summary>
     public Task<WorkspaceVolumeLifecycleResult> BindAsync(
         EnvironmentGenerationFence environmentFence,
         WorkspaceVolumeTransitionRequest request,
@@ -314,6 +323,7 @@ public sealed class WorkspaceVolumeService
             environmentFence, request, WorkspaceVolumeTransitionKind.Bind, cancellationToken,
             authorizationAndFenceCheck);
 
+    /// <summary>Unbinds a volume while retaining its storage resource for later reuse or cleanup.</summary>
     public Task<WorkspaceVolumeLifecycleResult> UnbindAsync(
         EnvironmentGenerationFence environmentFence,
         WorkspaceVolumeTransitionRequest request,
@@ -323,6 +333,7 @@ public sealed class WorkspaceVolumeService
             environmentFence, request, WorkspaceVolumeTransitionKind.Unbind, cancellationToken,
             authorizationAndFenceCheck);
 
+    /// <summary>Applies bind, unbind, or release metadata transitions through durable reservations and provider evidence.</summary>
     private async Task<WorkspaceVolumeLifecycleResult> ApplyMetadataTransitionAsync(
         EnvironmentGenerationFence environmentFence,
         WorkspaceVolumeTransitionRequest request,
@@ -370,6 +381,7 @@ public sealed class WorkspaceVolumeService
         return new WorkspaceVolumeLifecycleResult(reservation, completion, null);
     }
 
+    /// <summary>Releases the volume and schedules provider cleanup when its lifecycle state allows release.</summary>
     public async Task<WorkspaceVolumeLifecycleResult> ReleaseAsync(
         EnvironmentGenerationFence environmentFence,
         WorkspaceVolumeTransitionRequest request,
@@ -468,6 +480,7 @@ public sealed class WorkspaceVolumeService
         return new WorkspaceVolumeLifecycleResult(reservation, completion, null);
     }
 
+    /// <summary>Retries bounded cleanup work claimed from the durable cleanup queue.</summary>
     public async Task<EnvironmentWorkspaceVolumeCleanupStatus?> RetryCleanupAsync(
         EnvironmentGenerationFence environmentFence,
         CancellationToken cancellationToken = default,
@@ -479,6 +492,7 @@ public sealed class WorkspaceVolumeService
             .ConfigureAwait(false)).Status;
     }
 
+    /// <summary>Reconciles cleanup created by one exact replacement operation.</summary>
     public async Task<EnvironmentWorkspaceVolumeCleanupStatus?> ReconcileCleanupAsync(
         EnvironmentGenerationFence environmentFence,
         Guid sourceReplaceOperationId,
@@ -493,6 +507,10 @@ public sealed class WorkspaceVolumeService
             .ConfigureAwait(false)).Status;
     }
 
+    /// <summary>
+    /// Claims cleanup work, bounds provider calls, and records completion or retry state.
+    /// Expected provider failures remain visible as cleanup status instead of erasing the retained resource evidence.
+    /// </summary>
     private async Task<CleanupProcessingResult> ProcessCleanupAsync(
         EnvironmentGenerationFence environmentFence,
         Guid? sourceReplaceOperationId,
@@ -578,6 +596,7 @@ public sealed class WorkspaceVolumeService
         }
     }
 
+    /// <summary>Negotiates the storage provider's attachment protocol for a volume and Sandbox placement.</summary>
     public async Task<WorkspaceVolumeAttachmentNegotiation> NegotiateAttachmentAsync(
         EnvironmentGenerationFence environmentFence,
         WorkspaceVolumeResource storageResource,
@@ -618,6 +637,7 @@ public sealed class WorkspaceVolumeService
             protocol);
     }
 
+    /// <summary>Builds the exact flush request from persisted volume state and runtime workspace evidence.</summary>
     internal WorkspaceVolumeFlushRequest ResolveFlushRequest(
         EnvironmentWorkspaceVolumeSnapshot snapshot,
         EnvironmentRuntimeWorkspaceContext context,
@@ -642,6 +662,7 @@ public sealed class WorkspaceVolumeService
         }.Validate();
     }
 
+    /// <summary>Flushes host workspace data and persists the returned durability evidence.</summary>
     public async Task FlushAsync(
         WorkspaceVolumeFlushRequest request,
         WorkspaceVolumeResource pinnedResource,
@@ -677,6 +698,7 @@ public sealed class WorkspaceVolumeService
             "Flush requires the trusted mounted-workspace producer through the Environment owner path.");
     }
 
+    /// <summary>Reserves a flush, verifies host evidence, and completes the volume transition at its next data generation.</summary>
     public async Task<WorkspaceVolumeLifecycleResult> FlushAsync(
         EnvironmentGenerationFence environmentFence,
         WorkspaceVolumeTransitionRequest request,
@@ -770,11 +792,13 @@ public sealed class WorkspaceVolumeService
         return FlushResult(reservation, completion, null, providerRequest);
     }
 
+    /// <summary>Compares the complete suspend-bound flush request by serialized value.</summary>
     private static bool SameFlushRequest(WorkspaceVolumeFlushRequest expected, WorkspaceVolumeFlushRequest actual) =>
         JsonElement.DeepEquals(
             JsonSerializer.SerializeToElement(expected, SpecificationJsonOptions),
             JsonSerializer.SerializeToElement(actual, SpecificationJsonOptions));
 
+    /// <summary>Builds a lifecycle result that includes the validated host flush evidence.</summary>
     private static WorkspaceVolumeLifecycleResult FlushResult(
         EnvironmentWorkspaceVolumeTransitionReservation reservation,
         EnvironmentWorkspaceVolumeTransitionResult? completion,
@@ -808,6 +832,7 @@ public sealed class WorkspaceVolumeService
         };
     }
 
+    /// <summary>Checks the current owner fence and reserves a durable volume transition before external effects.</summary>
     private async Task<EnvironmentWorkspaceVolumeTransitionReservation> ReserveAsync(
         EnvironmentGenerationFence fence,
         WorkspaceVolumeTransitionRequest request,
@@ -903,6 +928,7 @@ public sealed class WorkspaceVolumeService
             _ => throw new ArgumentOutOfRangeException(nameof(operation))
         };
 
+    /// <summary>Reconstructs an idempotent replay and resumes any cleanup associated with its completed transition.</summary>
     private async Task<WorkspaceVolumeLifecycleResult> ReplayedAsync(
         EnvironmentGenerationFence fence,
         string volumeId,
@@ -925,6 +951,7 @@ public sealed class WorkspaceVolumeService
         return snapshot;
     }
 
+    /// <summary>Deserializes and validates the stored specification against its owner and volume identifier.</summary>
     private static WorkspaceVolumeSpec ReadSpecification(
         EnvironmentWorkspaceVolumeSnapshot snapshot,
         EnvironmentGenerationFence fence,
@@ -967,6 +994,7 @@ public sealed class WorkspaceVolumeService
                 "A run-owned workspace volume is restricted to its owning run.");
     }
 
+    /// <summary>Requires a transition reservation to match the requested owner, volume, operation, and revisions.</summary>
     private static EnvironmentWorkspaceVolumeTransitionReservation ValidateReservation(
         EnvironmentWorkspaceVolumeSnapshot snapshot,
         EnvironmentGenerationFence fence,
@@ -1027,6 +1055,7 @@ public sealed class WorkspaceVolumeService
             _ => throw new NotSupportedException($"{operation} is not executed by this Storage facade.")
         };
 
+    /// <summary>Returns the exact provider resource pin or fails when the volume has no current resource.</summary>
     private static ProviderResourceRef RequirePinnedResource(
         EnvironmentWorkspaceVolumeTransitionReservation reservation) =>
         reservation.CurrentResource
@@ -1050,6 +1079,7 @@ public sealed class WorkspaceVolumeService
             ? provisioned.ProviderBinding
             : null;
 
+    /// <summary>Runs a provider effect and records the outcome even when cancellation or provider failure occurs.</summary>
     private static async Task<T> RunEffectAsync<T>(
         Func<CancellationToken, Task<T>> effect,
         Func<CancellationToken, Task<EnvironmentWorkspaceVolumeTransitionResult>> markUnverified,
@@ -1124,6 +1154,7 @@ public sealed class WorkspaceVolumeService
         }
     }
 
+    /// <summary>Runs the optional current-authority check before beginning a provider effect.</summary>
     private static Task CheckAuthorizationAndFenceAsync(
         Func<CancellationToken, Task>? authorizationAndFenceCheck,
         CancellationToken cancellationToken) =>
@@ -1131,6 +1162,7 @@ public sealed class WorkspaceVolumeService
             ? Task.CompletedTask
             : authorizationAndFenceCheck(cancellationToken);
 
+    /// <summary>Rechecks caller authority and Environment fence immediately before the owner state is committed.</summary>
     private static async Task CheckAuthorizationBeforeOwnerCommitAsync(
         Func<CancellationToken, Task>? authorizationAndFenceCheck,
         Func<CancellationToken, Task<EnvironmentWorkspaceVolumeTransitionResult>> markUnverified)
@@ -1192,6 +1224,7 @@ public sealed class WorkspaceVolumeService
             failureCode,
             failure.GetType().Name);
 
+    /// <summary>Provider cleanup outcome and safe failure details for a workspace-volume cleanup attempt.</summary>
     private sealed record CleanupProcessingResult(
         EnvironmentWorkspaceVolumeCleanupStatus? Status,
         string? FailureCode = null,

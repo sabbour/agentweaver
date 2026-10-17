@@ -11,6 +11,7 @@ import {
 } from './diagram-inventory.mjs';
 import { listDiagramSources } from './diagram-sources.mjs';
 
+/** Command-line entry point for checking, listing, and updating reviewed diagram inventory entries. */
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..', '..');
 const specsDir = path.join(repoRoot, 'docs', 'diagrams', 'src');
@@ -49,6 +50,7 @@ export function parseInventoryArgs(args) {
   return { checkMode, listMode, setName, setDisposition, owner, replacement, notes, filters };
 }
 
+/** Apply inventory filters or one disposition update after reconciling against discovered sources. */
 async function main() {
   const options = parseInventoryArgs(process.argv.slice(2));
   const sources = await listDiagramSources(specsDir);

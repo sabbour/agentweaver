@@ -7,8 +7,10 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Environment;
 
+/// <summary>Maps the Environment lifecycle, Sandbox, egress, and workspace-volume HTTP API.</summary>
 public static class EnvironmentEndpoints
 {
+    /// <summary>Registers the authenticated Environment API routes and their service dependencies.</summary>
     public static IEndpointRouteBuilder MapEnvironmentEndpoints(this IEndpointRouteBuilder endpoints)
     {
         var environments = endpoints.MapGroup("/api/projects/{projectId}/runs/{runId}/environments")
@@ -803,6 +805,7 @@ public static class EnvironmentEndpoints
         });
     }
 
+    /// <summary>Maps transition lifecycle results to the documented HTTP status and response body.</summary>
     internal static IResult ToWorkspaceVolumeTransitionResult(WorkspaceVolumeLifecycleResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
@@ -825,6 +828,7 @@ public static class EnvironmentEndpoints
         };
     }
 
+    /// <summary>Runs a workspace-volume endpoint operation and translates expected storage and lifecycle failures.</summary>
     private static async Task<IResult> ExecuteWorkspaceVolumeApiAsync(
         Func<Task<IResult>> operation,
         CancellationToken cancellationToken)
@@ -892,6 +896,7 @@ public static class EnvironmentEndpoints
         }
     }
 
+    /// <summary>Runs a Sandbox endpoint operation and translates expected provider and authorization failures.</summary>
     private static async Task<IResult> ExecuteSandboxApiAsync(
         Func<Task<IResult>> operation,
         CancellationToken cancellationToken)
@@ -959,6 +964,7 @@ public static class EnvironmentEndpoints
         }
     }
 
+    /// <summary>Maps a Sandbox result to its HTTP response without exposing internal provider details.</summary>
     private static IResult ToSandboxResult(EnvironmentSandboxResult? result)
     {
         if (result is null)
@@ -970,6 +976,7 @@ public static class EnvironmentEndpoints
         return Results.Json(result, statusCode: status);
     }
 
+    /// <summary>Maps an Azure Files CSI failure to an HTTP response using its safe error code.</summary>
     internal static IResult ToAzureFilesCsiErrorResult(AzureFilesCsiException exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
@@ -985,6 +992,7 @@ public static class EnvironmentEndpoints
         return Results.Json(new { code = exception.Code }, statusCode: statusCode);
     }
 
+    /// <summary>Extracts the authenticated bearer caller and optional tenant selector from the current request.</summary>
     private static bool TryReadCaller(HttpContext context, out CurrentCallerRequest? caller)
     {
         caller = null;
@@ -1012,6 +1020,7 @@ public static class EnvironmentEndpoints
         }
     }
 
+    /// <summary>Maps a network policy operation result to a ready or not-ready API response.</summary>
     private static IResult ToHttpResult(EnvironmentEgressOperationResult operation)
     {
         if (operation.FailureCode is null)
@@ -1030,6 +1039,7 @@ public static class EnvironmentEndpoints
         return Results.Json(operation, statusCode: status);
     }
 
+    /// <summary>Maps Projects &amp; Config authorization failures to their public HTTP response contract.</summary>
     internal static IResult ToProjectAuthorizationResult(ProjectsConfigApiException exception)
     {
         var status = exception.Code switch

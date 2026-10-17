@@ -6,12 +6,18 @@ import {
   MessageBarTitle,
 } from '@fluentui/react-components';
 
+/** Display content and severity for one authentication callback result code. */
 export type AuthCallbackResult = {
   intent: 'success' | 'warning' | 'error' | 'info';
   title: string;
   message: string;
 };
 
+/**
+ * Renders the notice for an authentication callback code, or nothing when no code is present.
+ * `results` maps known codes to notices; unknown codes use `fallback`. An optional dismiss
+ * callback adds a dismiss action; all result data is supplied by the caller.
+ */
 export function AuthCallbackNotice({
   code,
   results,

@@ -3,6 +3,10 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Identity;
 
+/// <summary>
+/// Validated OAuth metadata for one remote MCP connection, tied to the configuration
+/// binding from which the metadata was fetched.
+/// </summary>
 public sealed class RemoteMcpOAuthServerMetadata
 {
     internal RemoteMcpOAuthServerMetadata(
@@ -32,11 +36,13 @@ public sealed class RemoteMcpOAuthServerMetadata
     public bool SupportsRefreshToken { get; }
 }
 
+/// <summary>Safe protocol failure with a stable code and no provider response body.</summary>
 public sealed class RemoteMcpOAuthProtocolException(string code) : Exception(code)
 {
     public string Code { get; } = code;
 }
 
+/// <summary>Validates remote MCP OAuth metadata and builds bound authorization requests.</summary>
 public static class RemoteMcpOAuthProtocol
 {
     private const int MaximumMetadataBytes = 64 * 1024;
@@ -46,6 +52,7 @@ public static class RemoteMcpOAuthProtocol
     private const string UnapprovedEndpoint = "remote_mcp_metadata_endpoint_unapproved";
     private const string InvalidAuthorizationRequest = "remote_mcp_authorization_request_invalid";
 
+    /// <summary>Builds the OAuth protected-resource metadata URL for a canonical HTTPS resource.</summary>
     public static Uri GetProtectedResourceMetadataUri(Uri resource)
     {
         ArgumentNullException.ThrowIfNull(resource);
@@ -62,6 +69,7 @@ public static class RemoteMcpOAuthProtocol
         }.Uri;
     }
 
+    /// <summary>Builds the authorization-server metadata URL for a canonical HTTPS issuer.</summary>
     public static Uri GetAuthorizationServerMetadataUri(Uri issuer)
     {
         ArgumentNullException.ThrowIfNull(issuer);
@@ -79,6 +87,11 @@ public static class RemoteMcpOAuthProtocol
         }.Uri;
     }
 
+    /// <summary>
+    /// Parses bounded JSON metadata and requires the advertised resource and issuer to match
+    /// the connection, the endpoints to be preapproved, and the server to support code flow with S256.
+    /// </summary>
+    /// <exception cref="RemoteMcpOAuthProtocolException">Metadata is malformed, unsupported, or not bound to the connection.</exception>
     public static RemoteMcpOAuthServerMetadata ValidateMetadata(
         RemoteMcpOAuthConnectionBinding binding,
         ReadOnlyMemory<byte> protectedResourceJson,
@@ -153,6 +166,10 @@ public static class RemoteMcpOAuthProtocol
             grantTypes?.Contains("refresh_token", StringComparer.Ordinal) == true);
     }
 
+    /// <summary>
+    /// Builds an authorization-code request with state and PKCE material. It rejects preexisting
+    /// query parameters that could override protected OAuth fields.
+    /// </summary>
     public static Uri BuildAuthorizationRequestUri(
         RemoteMcpOAuthConnectionBinding binding,
         RemoteMcpOAuthServerMetadata metadata,
@@ -202,6 +219,7 @@ public static class RemoteMcpOAuthProtocol
         return builder.Uri;
     }
 
+    /// <summary>Parses a bounded JSON object with strict depth and syntax rules.</summary>
     private static JsonDocument ParseObject(ReadOnlyMemory<byte> json)
     {
         try
@@ -225,6 +243,7 @@ public static class RemoteMcpOAuthProtocol
         }
     }
 
+    /// <summary>Reads a required canonical HTTPS URI from metadata.</summary>
     private static Uri ReadCanonicalUri(JsonElement root, string name)
     {
         var value = ReadRequiredString(root, name);
@@ -233,6 +252,7 @@ public static class RemoteMcpOAuthProtocol
         return uri;
     }
 
+    /// <summary>Reads a required list of canonical HTTPS URIs.</summary>
     private static string[] ReadCanonicalUriArray(JsonElement root, string name)
     {
         var values = ReadRequiredStringArray(root, name);
@@ -251,6 +271,7 @@ public static class RemoteMcpOAuthProtocol
     private static string[]? ReadOptionalStringArray(JsonElement root, string name) =>
         ReadStringArray(root, name, required: false);
 
+    /// <summary>Reads a unique, nonempty array of strings and rejects duplicate property names.</summary>
     private static string[]? ReadStringArray(JsonElement root, string name, bool required)
     {
         if (!TryGetSingleProperty(root, name, out var value))
@@ -286,6 +307,7 @@ public static class RemoteMcpOAuthProtocol
         return value.GetString()!;
     }
 
+    /// <summary>Finds exactly one named JSON property and rejects duplicate occurrences.</summary>
     private static bool TryGetSingleProperty(JsonElement root, string name, out JsonElement value)
     {
         value = default;
@@ -302,6 +324,7 @@ public static class RemoteMcpOAuthProtocol
         return count == 1;
     }
 
+    /// <summary>Accepts only canonical absolute HTTPS URIs without user information or fragments.</summary>
     private static bool IsCanonicalHttpsUri(string value, out Uri uri)
     {
         if (value.Length <= 2048 &&

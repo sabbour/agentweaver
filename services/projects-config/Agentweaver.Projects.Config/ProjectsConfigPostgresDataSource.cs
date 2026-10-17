@@ -6,10 +6,15 @@ using WorkloadIdentityCredentialOptions = AzureIdentity::Azure.Identity.Workload
 
 namespace Agentweaver.Projects.Config;
 
+/// <summary>Builds passwordless PostgreSQL connections using workload identity and full server-certificate validation.</summary>
 internal static class ProjectsConfigPostgresDataSource
 {
     private const string TokenScope = "https://ossrdbms-aad.database.windows.net/.default";
 
+    /// <summary>
+    /// Creates a data source that obtains PostgreSQL access tokens asynchronously and forces TLS hostname verification.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The role is missing, a password is configured, or token acquisition is invalid.</exception>
     public static NpgsqlDataSource Create(string connectionString, TokenCredential credential)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
@@ -29,6 +34,7 @@ internal static class ProjectsConfigPostgresDataSource
         return builder.Build();
     }
 
+    /// <summary>Loads workload-identity settings and requires GUID tenant/client IDs plus an absolute projected token path.</summary>
     public static WorkloadIdentityCredentialOptions ReadWorkloadIdentityOptions(
         IConfiguration configuration,
         string section)
@@ -42,6 +48,7 @@ internal static class ProjectsConfigPostgresDataSource
         return options;
     }
 
+    /// <summary>Requests a PostgreSQL-scoped token and rejects empty or already expired credentials.</summary>
     internal static async ValueTask<string> GetPostgresTokenAsync(
         TokenCredential credential,
         CancellationToken cancellationToken,

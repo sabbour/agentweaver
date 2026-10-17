@@ -3,10 +3,16 @@ using Npgsql;
 
 namespace Agentweaver.Identity.Broker;
 
+/// <summary>
+/// Creates the broker's PostgreSQL data source using asynchronous Microsoft Entra token
+/// authentication and full certificate verification. Password-based connection settings
+/// and synchronous token acquisition are rejected.
+/// </summary>
 internal static class IdentityBrokerPostgresDataSource
 {
     private const string TokenScope = "https://ossrdbms-aad.database.windows.net/.default";
 
+    /// <summary>Builds a validated data source whose password provider obtains Entra tokens asynchronously.</summary>
     public static NpgsqlDataSource Create(
         string connectionString,
         TokenCredential credential,
@@ -30,6 +36,7 @@ internal static class IdentityBrokerPostgresDataSource
         return builder.Build();
     }
 
+    /// <summary>Gets a nonempty access token for the PostgreSQL Entra resource.</summary>
     internal static async ValueTask<string> GetPostgresTokenAsync(
         TokenCredential credential,
         CancellationToken cancellationToken)

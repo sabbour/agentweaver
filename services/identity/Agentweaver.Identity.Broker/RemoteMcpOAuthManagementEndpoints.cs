@@ -7,8 +7,15 @@ using OpenIddict.Validation.AspNetCore;
 
 namespace Agentweaver.Identity.Broker;
 
+/// <summary>
+/// Maps authenticated internal routes for registering, consenting to, refreshing,
+/// disconnecting and reading remote MCP OAuth connections. The shared handler validates
+/// a single bearer subject and tenant selector, disables caching, maps safe errors and
+/// invalidates the in-memory bearer after each request.
+/// </summary>
 public static class RemoteMcpOAuthManagementEndpoints
 {
+    /// <summary>Registers the management routes under the remote-MCP connection path.</summary>
     public static void MapRemoteMcpOAuthManagementEndpoints(this IEndpointRouteBuilder app)
     {
         var routes = app.MapGroup("/internal/connections/remote-mcp")
