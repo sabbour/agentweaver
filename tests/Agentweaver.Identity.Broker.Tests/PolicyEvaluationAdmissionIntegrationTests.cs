@@ -534,6 +534,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 Defaults = new PlatformRuntimeDefaults
                 {
                     ModelSelection = new ModelSelectionSettings("platform-model"),
+                    // This harness models a single-model platform, so built-in task routes are cleared.
+                    ModelTaskDefaults = [],
                     EgressBaseline = [],
                     RunLimits = new CopilotRunLimits
                     {

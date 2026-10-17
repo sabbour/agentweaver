@@ -368,6 +368,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     } : new ModelSelectionSettings(
                         "platform-model", SourceMode: ModelSourceMode.HostedCopilot,
                         ConnectionId: linkedConnection!.ConnectionId),
+                    // This journey models a single-model platform, so built-in task routes are cleared.
+                    ModelTaskDefaults = [],
                     EgressBaseline = [],
                     RunLimits = new CopilotRunLimits
                     {
