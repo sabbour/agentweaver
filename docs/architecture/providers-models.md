@@ -238,8 +238,9 @@ immutable rate-card snapshot. The published card carries default and long-contex
 per-million-token USD rates, its context threshold, `1 AIC = $0.01 USD`, and its
 source URL, snapshot version, and retrieval date. The current snapshot cites
 [GitHub's official Copilot model-pricing documentation](https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing),
-retrieved 2026-10-17. Copilot configuration no longer supplies scalar multipliers,
-and prices are not inferred from legacy multipliers. Missing token measurements,
+retrieved 2026-10-17. Complete token measurements can be priced when the SDK omits
+Nano AIU. Copilot configuration no longer supplies scalar multipliers, and prices
+are not inferred from legacy multipliers. Missing token measurements,
 unsupported sources, unavailable context tiers, and unknown model rates return an
 explicit `Unpriced` result with a reason, never a zero price. A valid `Unpriced`
 model quote does not block run admission or dispatch; its recorded usage remains

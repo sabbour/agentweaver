@@ -230,7 +230,8 @@ the numeric range fail rather than round or wrap.
 
 Hosted Copilot entries are priced from their complete token measurements against the
 provider's pinned published rate card, not by applying a model multiplier to nano-AIU.
-Optional SDK accounting identity and status do not control pricing completeness.
+Complete token measurements remain sufficient when the SDK omits Nano AIU; optional
+SDK accounting identity and status do not control pricing completeness.
 Supplied identity text, source session, and positive sequence remain validated.
 BYOK pricing uses the actual `tokens` measurement shape and the existing price disposition.
 Hosted credit status does not determine BYOK token-pricing completeness.
