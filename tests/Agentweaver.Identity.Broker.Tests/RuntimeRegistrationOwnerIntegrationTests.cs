@@ -1429,8 +1429,11 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 byok ? "2025-04-01-preview" : null,
             ["EventsAndSessions__Cost__Copilot__ResourceId"] = "native-copilot-cost",
             ["EventsAndSessions__Cost__Copilot__ResourceGeneration"] = "1",
-            ["EventsAndSessions__Cost__Copilot__OptionsRevision"] = "native-cost-v1",
-            ["EventsAndSessions__Cost__Copilot__OptionsSchemaVersion"] = "2"
+            ["EventsAndSessions__Cost__Copilot__OptionsRevision"] =
+                PublishedCopilotRateCardFixture.OptionsRevision,
+            ["EventsAndSessions__Cost__Copilot__OptionsSchemaVersion"] = "2",
+            ["EventsAndSessions__Cost__Copilot__RateCard__Json"] =
+                PublishedCopilotRateCardFixture.RateCardJson
         });
         var objects = new RuntimeMaterialObjects();
         await using var factory = new EventsIntegrationFactory(

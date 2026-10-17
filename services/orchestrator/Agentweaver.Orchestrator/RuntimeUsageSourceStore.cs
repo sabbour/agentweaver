@@ -480,6 +480,53 @@ internal sealed class RuntimeUsageSourceStore(
         binding.ModelSourceMode == ModelSourceMode.HostedCopilot &&
         (binding.CopilotSoftCreditLimit is not null || binding.CopilotHardCreditLimit is not null);
 
+    /// <summary>Computes the cost-rate identity stored with a Copilot credit guard.</summary>
+    /// <remarks>Legacy multiplier cards keep their original projection so existing guards remain valid.</remarks>
+    internal static string CostRateScopeIdentity(RuntimeUsageCostSnapshotReceipt snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var binding = snapshot.Binding;
+        if (binding?.RateCard.ModelTokenRates is { Count: > 0 })
+        {
+            return RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                meterSource = binding.MeterSource,
+                providerId = binding.ProviderId,
+                adapterVersion = binding.AdapterVersion,
+                optionsSchemaVersion = binding.OptionsSchemaVersion,
+                optionsRevision = binding.OptionsRevision,
+                resourceId = binding.ResourceId,
+                resourceGeneration = binding.ResourceGeneration,
+                capabilities = binding.NegotiatedCapabilities.Order(StringComparer.Ordinal),
+                rateCard = CostRateCardContract.SerializeCanonical(binding.RateCard)
+            }));
+        }
+
+        return RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            binding?.MeterSource,
+            binding?.ProviderId,
+            binding?.AdapterVersion,
+            binding?.OptionsSchemaVersion,
+            binding?.OptionsRevision,
+            binding?.ResourceId,
+            binding?.ResourceGeneration,
+            capabilities = binding?.NegotiatedCapabilities.Order(StringComparer.Ordinal),
+            rateCard = binding is { } legacyBinding
+                ? new
+                {
+                    legacyBinding.RateCard.Id,
+                    legacyBinding.RateCard.Version,
+                    legacyBinding.RateCard.MeterSource,
+                    legacyBinding.RateCard.Unit,
+                    legacyBinding.RateCard.NanoUnitsPerUnit,
+                    models = legacyBinding.RateCard.ModelMultipliers
+                        .OrderBy(model => model.Key, StringComparer.Ordinal)
+                }
+                : null
+        }));
+    }
+
     /// <summary>
     /// Reconciles a cost snapshot against the locked run credit guard and records monotonic limit state.
     /// </summary>
@@ -492,20 +539,7 @@ internal sealed class RuntimeUsageSourceStore(
         var observed = RuntimeUsageCostSnapshotContract.ValidateReceipt(snapshot, new(1, registration, source));
         var binding = registration.Binding;
         var limits = EvaluateObservedCreditLimits(binding, observed);
-        var costIdentity = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(new
-        {
-            meterSource = snapshot.Binding?.MeterSource,
-            providerId = snapshot.Binding?.ProviderId,
-            adapterVersion = snapshot.Binding?.AdapterVersion,
-            optionsSchemaVersion = snapshot.Binding?.OptionsSchemaVersion,
-            optionsRevision = snapshot.Binding?.OptionsRevision,
-            resourceId = snapshot.Binding?.ResourceId,
-            resourceGeneration = snapshot.Binding?.ResourceGeneration,
-            capabilities = snapshot.Binding?.NegotiatedCapabilities.Order(StringComparer.Ordinal),
-            rateCard = snapshot.Binding is { } pinnedBinding
-                ? CostRateCardContract.SerializeCanonical(pinnedBinding.RateCard)
-                : null
-        }));
+        var costIdentity = CostRateScopeIdentity(snapshot);
         var digest = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(snapshot.CopilotTotals));
         await using (var insert = new NpgsqlCommand($"""
             INSERT INTO {_guards}

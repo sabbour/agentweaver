@@ -249,6 +249,8 @@ page. The operator supplies its strict, versioned JSON through
 validates the schema and hashes the exact JSON text; each cost binding, snapshot,
 and accounting receipt retains the rate-card version and content hash. Updating the
 ConfigMap and rolling out the service loads new rates without a product rebuild.
+Keep the adapter options revision aligned with the provider catalog; the rate-card
+version changes independently when pricing data changes.
 No runtime price fetch, scalar multiplier, or inferred price is used. Unknown
 model rates, missing token categories, and unavailable context-tier rates remain
 explicitly `Unpriced` with a reason; this does not block admission or dispatch.

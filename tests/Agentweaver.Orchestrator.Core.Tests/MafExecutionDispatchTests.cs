@@ -16,6 +16,45 @@ namespace Agentweaver.Orchestrator.Core.Tests;
 public sealed class MafExecutionDispatchTests
 {
     [Fact]
+    public void LegacyCreditGuardIdentityKeepsItsOriginalRateCardProjection()
+    {
+        var multipliers = ImmutableDictionary<string, decimal>.Empty
+            .WithComparers(StringComparer.Ordinal)
+            .Add("gpt-6.1-sol", 1m);
+        var card = new CostRateCard(
+            "legacy-copilot-card", "v1", SdkMeterSources.CopilotNanoAiu, "AIC", 1_000_000_000m, multipliers);
+        var binding = new CostBinding(
+            SdkMeterSources.CopilotNanoAiu, "copilot.usage-cost", "1.0.0", 1,
+            "cost-options", "cost", 1, ImmutableHashSet<string>.Empty, card);
+        var snapshot = new RuntimeUsageCostSnapshotReceipt(
+            1, new string('a', 64), binding,
+            new(0, "AIC", CostDisposition.Estimate, card, null),
+            new("tenant", "project", "run", 0, true, [], []));
+        var expected = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            binding.MeterSource,
+            binding.ProviderId,
+            binding.AdapterVersion,
+            binding.OptionsSchemaVersion,
+            binding.OptionsRevision,
+            binding.ResourceId,
+            binding.ResourceGeneration,
+            capabilities = binding.NegotiatedCapabilities.Order(StringComparer.Ordinal),
+            rateCard = new
+            {
+                card.Id,
+                card.Version,
+                card.MeterSource,
+                card.Unit,
+                card.NanoUnitsPerUnit,
+                models = card.ModelMultipliers.OrderBy(model => model.Key, StringComparer.Ordinal)
+            }
+        }));
+
+        Assert.Equal(expected, RuntimeUsageSourceStore.CostRateScopeIdentity(snapshot));
+    }
+
+    [Fact]
     public void NativePreparationBindsTheCurrentPlatformIntentWithoutPredictingNativeIds()
     {
         var (root, checkpoint, intent, registration, source, message) = CreateNativePreparation();
@@ -127,6 +166,54 @@ public sealed class MafExecutionDispatchTests
         var binding = registration.Binding with { CopilotSoftCreditLimit = soft, CopilotHardCreditLimit = hard };
         Assert.Equal((softReached, hardReached),
             RuntimeUsageSourceStore.EvaluateObservedCreditLimits(binding, milliCredits / 1000m));
+    }
+
+    /// <summary>Ensures an explicit Unpriced event contributes no credits to the run limit.</summary>
+    [Fact]
+    public void UnpricedCopilotSnapshotDoesNotCountTowardCreditLimits()
+    {
+        var (_, _, _, registration, _, _) = CreateNativePreparation();
+        var scope = registration.Binding;
+        var card = new CostRateCard(
+            "github-copilot-published", "2026-10-17", SdkMeterSources.CopilotNanoAiu, "AIC",
+            1_000_000_000m, ImmutableDictionary<string, decimal>.Empty)
+        {
+            ProviderSourceUrl = "https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing",
+            SnapshotVersion = "2026-10-17",
+            RetrievedOn = new DateOnly(2026, 10, 17),
+            TokenRateCurrency = "USD",
+            TokensPerRateUnit = 1_000_000m,
+            CreditsPerCurrencyUnit = 100m,
+            LongContextThresholdTokens = 272_000,
+            ContentHash = new string('a', 64),
+            ModelTokenRates = ImmutableDictionary<string, CostModelTokenRates>.Empty
+                .WithComparers(StringComparer.Ordinal)
+                .Add("gpt-6.1-sol", new(
+                    new(2m, 0.1m, 2.5m, 10m),
+                    new(4m, 0.2m, 5m, 15m)))
+        };
+        var costBinding = new CostBinding(
+            SdkMeterSources.CopilotNanoAiu, "copilot.usage-cost", "1.0.0", 1,
+            "cost-options", "cost", 1, ImmutableHashSet<string>.Empty, card);
+        var amount = new UsageAmountTotal(SdkMeterSources.CopilotNanoAiu, "AIC", 0m, 0, 1);
+        var agent = new UsageAgentTotals(
+            scope.AgentId, 1, null, null, null, null, null, null, false, [amount]);
+        var totals = new UsageRunTotals(
+            scope.TenantId, scope.ProjectId, scope.RunId, 1, false, [agent], [amount]);
+        var quote = new CostPrice(
+            null, "AIC", CostDisposition.Unpriced, card, "model-rate-unavailable");
+        var observed = RuntimeUsageCostSnapshotContract.ValidatePricedCopilotSnapshot(
+            costBinding, quote, totals, "unknown-model",
+            scope.TenantId, scope.ProjectId, scope.RunId);
+        var limitedBinding = scope with
+        {
+            CopilotSoftCreditLimit = 1m,
+            CopilotHardCreditLimit = 1m
+        };
+
+        Assert.Equal(0m, observed);
+        Assert.Equal((false, false),
+            RuntimeUsageSourceStore.EvaluateObservedCreditLimits(limitedBinding, observed));
     }
 
     [Theory]

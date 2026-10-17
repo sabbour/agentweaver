@@ -109,6 +109,10 @@ public static class RuntimeUsageCostSnapshotContract
             throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
         if (receipt.RateCardContentHash is { } contentHash)
             RuntimeContractValidation.ValidateHash(contentHash);
+        var card = receipt.Binding?.RateCard;
+        if (card?.ModelTokenRates is { Count: > 0 } &&
+            (receipt.RateCardContentHash is null || card.ContentHash is null))
+            throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
         if (receipt.RateCardContentHash != receipt.Binding?.RateCard?.ContentHash ||
             receipt.RepresentedReceipts.Any(reference =>
                 reference is null || reference.Accounting is null ||
@@ -126,8 +130,13 @@ public static class RuntimeUsageCostSnapshotContract
             throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
         if (request.Source.SourceMode == "hosted-copilot" &&
             request.Source.MeterSource == SdkMeterSources.CopilotNanoAiu)
+        {
+            var allowLegacyUnpricedOmission = request.RequiredReceipts.IsEmpty &&
+                IsLegacyUnpricedOmission(receipt.Binding, receipt.Quote, receipt.CopilotTotals);
             RuntimeUsageCostTotalsContract.ValidateRepresentedCopilotTotals(
-                receipt.CopilotTotals, receipt.RepresentedReceipts, "runtime_usage_cost_snapshot_invalid");
+                receipt.CopilotTotals, receipt.RepresentedReceipts, "runtime_usage_cost_snapshot_invalid",
+                allowLegacyUnpricedOmission);
+        }
     }
 
     /// <summary>Validates a hosted-Copilot snapshot and returns only its known priced AIC subtotal.</summary>
@@ -162,13 +171,15 @@ public static class RuntimeUsageCostSnapshotContract
             throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_unpriced");
         try
         {
+            var legacyUnpricedOmission = IsLegacyUnpricedOmission(binding, quote, totals);
             var recordedEvents = totals.Amounts.Sum(amount => checked(amount.PricedEvents + amount.UnpricedEvents));
             var isFullyPriced = RuntimeUsageCostTotalsContract.AmountsAreFullyPriced(totals.Amounts);
-            if (recordedEvents != totals.Events || totals.IsFullyPriced != isFullyPriced ||
+            if (!legacyUnpricedOmission &&
+                (recordedEvents != totals.Events || totals.IsFullyPriced != isFullyPriced ||
                 totals.Agents.Any(agent =>
                     agent.IsFullyPriced != RuntimeUsageCostTotalsContract.AmountsAreFullyPriced(agent.Amounts)) ||
                 totals.Agents.Sum(agent => agent.Events) != totals.Events ||
-                !RuntimeUsageCostTotalsContract.RunAmountsMatchAgents(totals))
+                !RuntimeUsageCostTotalsContract.RunAmountsMatchAgents(totals)))
                 throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
 
             if (binding is null)
@@ -190,7 +201,8 @@ public static class RuntimeUsageCostSnapshotContract
                         card.ModelMultipliers is null || card.ModelTokenRates is null ||
                         (card.ModelTokenRates.Count == 0
                             ? card.ModelMultipliers.Count == 0
-                            : card.ModelMultipliers.Count != 0))
+                            : card.ModelMultipliers.Count != 0) ||
+                        card.ModelTokenRates.Count > 0 && card.ContentHash is null)
                     throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
                 try
                 {
@@ -202,7 +214,7 @@ public static class RuntimeUsageCostSnapshotContract
                 }
 
                 var hasModelRate = card.ModelTokenRates.ContainsKey(modelId);
-                // Legacy snapshots used model multipliers and must retain their fully priced replay contract.
+                // Legacy multiplier quotes keep their recorded estimate; absent model rates remain Unpriced.
                 var hasLegacyModelMultiplier =
                     card.ModelTokenRates.Count == 0 && card.ModelMultipliers.ContainsKey(modelId);
                 var quoteMatchesCard = CostRateCardContract.Equals(quote.RateCard, card);
@@ -232,6 +244,21 @@ public static class RuntimeUsageCostSnapshotContract
     private static bool ValidUnpricedReason(string? reason) =>
         !string.IsNullOrWhiteSpace(reason) && reason.Length <= 1024 &&
         !reason.Any(char.IsControl);
+
+    /// <summary>Allows only the pre-token-rate Unpriced snapshot shape with omitted amount groups.</summary>
+    private static bool IsLegacyUnpricedOmission(
+        CostBinding? binding, CostPrice quote, UsageRunTotals totals) =>
+        binding?.RateCard is { ModelTokenRates.Count: 0, ModelMultipliers.Count: > 0 } card &&
+        quote is
+        {
+            Amount: null,
+            Unit: "AIC",
+            Disposition: CostDisposition.Unpriced,
+            RateCard: { } quoteCard
+        } &&
+        ValidUnpricedReason(quote.UnpricedReason) &&
+        CostRateCardContract.Equals(quoteCard, card) &&
+        RuntimeUsageCostTotalsContract.HasLegacyUnpricedTotalsShape(totals);
 }
 
 /// <summary>Checks Copilot run totals against agent subtotals and represented usage receipts.</summary>
@@ -241,7 +268,8 @@ internal static class RuntimeUsageCostTotalsContract
     internal static void ValidateRepresentedCopilotTotals(
         UsageRunTotals totals,
         ImmutableArray<RuntimeUsageCostReceiptReference> receipts,
-        string invalidCode)
+        string invalidCode,
+        bool allowLegacyUnpricedOmission = false)
     {
         try
         {
@@ -251,6 +279,9 @@ internal static class RuntimeUsageCostTotalsContract
                     agent.Amounts.IsDefault || agent.Amounts.Any(amount => !ValidCopilotAmount(amount))) ||
                 receipts.Any(reference => reference.Accounting.Unit is not (null or "AIC")))
                 throw new RuntimeAuthorizationException(invalidCode);
+
+            if (allowLegacyUnpricedOmission && receipts.IsEmpty && HasLegacyUnpricedTotalsShape(totals))
+                return;
 
             var recordedEvents = totals.Amounts.Sum(amount =>
                 checked(amount.PricedEvents + amount.UnpricedEvents));
@@ -309,6 +340,24 @@ internal static class RuntimeUsageCostTotalsContract
     /// <summary>Derives pricing completeness from explicit Unpriced event counts.</summary>
     internal static bool AmountsAreFullyPriced(ImmutableArray<UsageAmountTotal> amounts) =>
         amounts.All(amount => amount.UnpricedEvents == 0);
+
+    /// <summary>Recognizes the historical Unpriced totals shape that omitted amount groups.</summary>
+    internal static bool HasLegacyUnpricedTotalsShape(UsageRunTotals totals)
+    {
+        if (totals.Events <= 0 || !totals.Amounts.IsEmpty || totals.IsFullyPriced ||
+            totals.Agents.IsDefaultOrEmpty ||
+            totals.Agents.Any(agent => agent is null || agent.Events < 0 || agent.IsFullyPriced ||
+                agent.Amounts.IsDefault || !agent.Amounts.IsEmpty))
+            return false;
+        try
+        {
+            return totals.Agents.Sum(agent => agent.Events) == totals.Events;
+        }
+        catch (OverflowException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>Checks that each run amount equals the sum of its per-agent amounts.</summary>
     internal static bool RunAmountsMatchAgents(UsageRunTotals totals)

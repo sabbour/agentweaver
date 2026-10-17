@@ -111,6 +111,7 @@ public sealed class RuntimeRunAdmissionContractTests
             receipt, request, "tenant", "project", "run", selection));
         Assert.Equal(modelId, receipt.ModelBindingPin.ModelId);
         Assert.Contains(modelId, receipt.CostBinding!.RateCard.ModelTokenRates.Keys);
+        Assert.Equal(receipt.CostBinding.RateCard.ContentHash, receipt.RateCardContentHash);
     }
 
     [Theory]
@@ -205,10 +206,14 @@ public sealed class RuntimeRunAdmissionContractTests
             "1.0.0", 1, "options-v1", "resource", 1,
             ImmutableHashSet.Create("cost.usage.price", "cost.work.quote"), card);
         var model = RuntimeAcceptedModelSelection.Read(selection);
-        return new(1, "tenant", "project", "run", RuntimeRunAdmissionContract.SelectionHash(selection),
+        return new RuntimeRunAdmissionReceipt(1, "tenant", "project", "run",
+            RuntimeRunAdmissionContract.SelectionHash(selection),
             model, resolver.Pin(modelReference, ModelSourceMode.HostedCopilot, model.ReasoningEffort),
             binding, new(0, "AIC", CostDisposition.Estimate, card, null),
-            new("tenant", "project", "run", 0, true, [], []));
+            new("tenant", "project", "run", 0, true, [], []))
+        {
+            RateCardContentHash = card.ContentHash
+        };
     }
 
     private static RuntimeModelBindingsResolver ModelResolver(
@@ -219,7 +224,7 @@ public sealed class RuntimeRunAdmissionContractTests
                 [modelReference] = new(modelId, ModelSourceMode.HostedCopilot)
             });
 
-    /// <summary>Builds the source-verified token snapshot shared by both approved HostedCopilot models.</summary>
+    /// <summary>Builds a test card with the published rates for both approved HostedCopilot models.</summary>
     private static CostRateCard PublishedCard() =>
         new("github-copilot-published", "2026-10-17",
             SdkMeterSources.CopilotNanoAiu, "AIC", 1_000_000_000m,
@@ -232,6 +237,7 @@ public sealed class RuntimeRunAdmissionContractTests
             TokensPerRateUnit = 1_000_000m,
             CreditsPerCurrencyUnit = 100m,
             LongContextThresholdTokens = 272_000,
+            ContentHash = new string('a', 64),
             ModelTokenRates = ImmutableDictionary<string, CostModelTokenRates>.Empty
                 .WithComparers(StringComparer.Ordinal)
                 .Add("gpt-6.1-sol", new(
