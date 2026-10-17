@@ -147,7 +147,48 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         Assert.Equal(2, result.AccountingRevision);
         Assert.Equal(2, result.CopilotTotals.Events);
         Assert.Equal(firstAck.SourceReceiptId, Assert.Single(result.RepresentedReceipts).SourceReceiptId);
-        Assert.Equal(0.0024691345m, Assert.Single(result.CopilotTotals.Amounts).Amount);
+        Assert.Equal(0.03144m, Assert.Single(result.CopilotTotals.Amounts).Amount);
+
+        var downgradedAmounts = result.CopilotTotals.Amounts.Select(amount => amount with
+        {
+            Amount = 0m,
+            PricedEvents = 0,
+            UnpricedEvents = checked(amount.PricedEvents + amount.UnpricedEvents)
+        }).ToImmutableArray();
+        var downgradedAgents = result.CopilotTotals.Agents.Select(agent => agent with
+        {
+            IsFullyPriced = false,
+            Amounts = agent.Amounts.Select(amount => amount with
+            {
+                Amount = 0m,
+                PricedEvents = 0,
+                UnpricedEvents = checked(amount.PricedEvents + amount.UnpricedEvents)
+            }).ToImmutableArray()
+        }).ToImmutableArray();
+        var downgraded = result with
+        {
+            CopilotTotals = result.CopilotTotals with
+            {
+                IsFullyPriced = false,
+                Amounts = downgradedAmounts,
+                Agents = downgradedAgents
+            }
+        };
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageCostReconciliationContract.ValidateReceipt(
+                downgraded, request, "tenant-1", "project-1", "run-1"));
+
+        var agentMismatch = result with
+        {
+            CopilotTotals = result.CopilotTotals with
+            {
+                Agents = result.CopilotTotals.Agents.Select(agent => agent with { Amounts = [] })
+                    .ToImmutableArray()
+            }
+        };
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageCostReconciliationContract.ValidateReceipt(
+                agentMismatch, request, "tenant-1", "project-1", "run-1"));
 
         var secondSend = request with { CostTurnId = Guid.NewGuid() };
         var mismatch = await Assert.ThrowsAsync<NativeUsageReconciliationException>(() =>
@@ -249,10 +290,13 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
     {
         var source = NativeReceipt(missingMeasurements: true);
         var acknowledgment = await NativeConsumer().AppendAsync(source, _ => Task.CompletedTask, default);
+        var request = ReconciliationRequest(source, acknowledgment);
         var receipt = await NativeConsumer().ReconcileAsync(
-            "tenant-1", "project-1", "run-1", ReconciliationRequest(source, acknowledgment),
+            "tenant-1", "project-1", "run-1", request,
             _ => Task.CompletedTask, default);
 
+        RuntimeUsageCostReconciliationContract.ValidateReceipt(
+            receipt, request, "tenant-1", "project-1", "run-1");
         Assert.Equal(acknowledgment.SourceReceiptId,
             Assert.Single(receipt.RepresentedReceipts).SourceReceiptId);
         Assert.Equal(CostDisposition.Unpriced,
@@ -875,6 +919,7 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
             receipt, request, "tenant-1", "project-1", "run-1", selection));
         Assert.Equal(0, RuntimeRunAdmissionContract.ValidateReceipt(
             replay, request, "tenant-1", "project-1", "run-1", selection));
+        Assert.Equal(new long[] { 0, 0, 0, 1 }, await ReadPersistedCountsAsync());
         var accounting = await NativeConsumer().AppendAsync(
             NativeReceipt(modelId: "unknown-model"), _ => Task.CompletedTask, default);
         Assert.Equal(CostDisposition.Unpriced, accounting.Accounting.Disposition);
@@ -885,17 +930,21 @@ public sealed class UsageLedgerPostgresTests : IAsyncLifetime
         var amount = Assert.Single(totals.Amounts);
         Assert.Equal(1, amount.UnpricedEvents);
         Assert.Equal(0, amount.Amount);
-        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
-        await using var counts = new NpgsqlCommand($"""
-            SELECT (SELECT count(*) FROM "{_schema}".usage_ledger),
-                   (SELECT count(*) FROM "{_schema}".usage_source_receipts),
-                   (SELECT count(*) FROM "{_schema}".usage_rate_cards),
-                   (SELECT count(*) FROM "{_schema}".usage_run_cost_bindings)
-            """, connection);
-        await using var reader = await counts.ExecuteReaderAsync();
-        Assert.True(await reader.ReadAsync());
-        Assert.All(Enumerable.Range(0, 3), column => Assert.Equal(0L, reader.GetInt64(column)));
-        Assert.Equal(1L, reader.GetInt64(3));
+        Assert.Equal(new long[] { 1, 1, 1, 1 }, await ReadPersistedCountsAsync());
+
+        async Task<long[]> ReadPersistedCountsAsync()
+        {
+            await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+            await using var counts = new NpgsqlCommand($"""
+                SELECT (SELECT count(*) FROM "{_schema}".usage_ledger),
+                       (SELECT count(*) FROM "{_schema}".usage_source_receipts),
+                       (SELECT count(*) FROM "{_schema}".usage_rate_cards),
+                       (SELECT count(*) FROM "{_schema}".usage_run_cost_bindings)
+                """, connection);
+            await using var reader = await counts.ExecuteReaderAsync();
+            Assert.True(await reader.ReadAsync());
+            return Enumerable.Range(0, 4).Select(column => reader.GetInt64(column)).ToArray();
+        }
     }
 
     [Fact]

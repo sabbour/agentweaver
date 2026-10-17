@@ -321,7 +321,6 @@ internal sealed class NativeUsageReceiptConsumer(
         var represented = ImmutableArray.CreateBuilder<RuntimeUsageCostReceiptReference>(required.Count);
         var found = new HashSet<Guid>();
         var mismatched = ImmutableArray.CreateBuilder<Guid>();
-        var unpriced = ImmutableArray.CreateBuilder<Guid>();
         await using var read = new NpgsqlCommand($"""
             SELECT r.source_receipt_id, r.event_id, r.source_payload_hash,
                    r.source_receipt_json, r.accounting_receipt_json,
@@ -365,10 +364,8 @@ internal sealed class NativeUsageReceiptConsumer(
                 mismatched.Add(sourceReceiptId);
                 continue;
             }
-            if (accounting.Disposition == CostDisposition.Unpriced)
-                unpriced.Add(sourceReceiptId);
-            else
-                represented.Add(new(sourceReceiptId, accounting));
+            // Unpriced is valid accounting state and remains represented without becoming zero cost.
+            represented.Add(new(sourceReceiptId, accounting));
         }
         await reader.CloseAsync().ConfigureAwait(false);
 
@@ -379,9 +376,6 @@ internal sealed class NativeUsageReceiptConsumer(
         if (mismatched.Count > 0)
             throw new NativeUsageReconciliationException(
                 "runtime_usage_reconciliation_mismatch", mismatched.ToImmutable());
-        if (unpriced.Count > 0)
-            throw new NativeUsageReconciliationException(
-                "runtime_usage_reconciliation_unpriced", unpriced.ToImmutable());
         return represented.ToImmutable();
     }
 

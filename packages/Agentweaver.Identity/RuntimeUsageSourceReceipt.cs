@@ -112,7 +112,8 @@ public static class RuntimeUsageCostSnapshotContract
             throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
         if (request.Source.SourceMode == "hosted-copilot" &&
             request.Source.MeterSource == SdkMeterSources.CopilotNanoAiu)
-            ValidateRepresentedCopilotTotals(receipt.CopilotTotals, receipt.RepresentedReceipts);
+            RuntimeUsageCostTotalsContract.ValidateRepresentedCopilotTotals(
+                receipt.CopilotTotals, receipt.RepresentedReceipts, "runtime_usage_cost_snapshot_invalid");
     }
 
     /// <summary>Validates a hosted-Copilot snapshot and returns only its known priced AIC subtotal.</summary>
@@ -129,79 +130,6 @@ public static class RuntimeUsageCostSnapshotContract
         return pricedSubtotal;
     }
 
-    /// <summary>Validates Copilot totals and requires them to include every represented receipt.</summary>
-    private static void ValidateRepresentedCopilotTotals(
-        UsageRunTotals totals, ImmutableArray<RuntimeUsageCostReceiptReference> receipts)
-    {
-        try
-        {
-            if (totals.Amounts.IsDefault || totals.Agents.IsDefault ||
-                totals.Amounts.Any(amount => !ValidCopilotAmount(amount)) ||
-                totals.Agents.Any(agent => agent is null || agent.Events < 0 ||
-                    agent.Amounts.IsDefault || agent.Amounts.Any(amount => !ValidCopilotAmount(amount))) ||
-                receipts.Any(reference => reference.Accounting.Unit is not (null or "AIC")))
-                throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
-
-            var recordedEvents = totals.Amounts.Sum(amount =>
-                checked(amount.PricedEvents + amount.UnpricedEvents));
-            var isFullyPriced = AmountsAreFullyPriced(totals.Amounts);
-            if (recordedEvents != totals.Events || totals.IsFullyPriced != isFullyPriced ||
-                totals.Agents.Any(agent => agent.IsFullyPriced != AmountsAreFullyPriced(agent.Amounts)) ||
-                totals.Agents.Sum(agent => agent.Events) != totals.Events || !RunAmountsMatchAgents(totals))
-                throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
-
-            if (receipts.IsEmpty)
-                return;
-
-            var priced = receipts.Where(reference =>
-                reference.Accounting.Disposition != CostDisposition.Unpriced).ToArray();
-            var unpricedCount = receipts.LongCount(reference =>
-                reference.Accounting.Disposition == CostDisposition.Unpriced);
-            var pricedCount = (long)priced.Length;
-            // Request validation normally rejects missing amounts before this receipt set is checked.
-            if (priced.Any(reference => reference.Accounting.Amount is null))
-                throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
-            var pricedAmount = priced.Sum(reference => reference.Accounting.Amount!.Value);
-            if (!IncludesRepresentedAmounts(
-                    totals.Amounts, pricedCount, unpricedCount, pricedAmount))
-                throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
-
-            foreach (var group in receipts.GroupBy(
-                         reference => reference.Accounting.Attribution.AgentId, StringComparer.Ordinal))
-            {
-                var agentTotals = totals.Agents.Where(agent => agent.AgentId == group.Key).ToArray();
-                var agentReceipts = group.ToArray();
-                var agentPriced = agentReceipts.Where(reference =>
-                    reference.Accounting.Disposition != CostDisposition.Unpriced).ToArray();
-                var agentUnpricedCount = agentReceipts.LongCount(reference =>
-                    reference.Accounting.Disposition == CostDisposition.Unpriced);
-                var agentPricedAmount = agentPriced.Sum(reference => reference.Accounting.Amount!.Value);
-                if (agentTotals.Length != 1 || agentTotals[0].Events < agentReceipts.Length ||
-                    !IncludesRepresentedAmounts(
-                        agentTotals[0].Amounts, agentPriced.Length, agentUnpricedCount, agentPricedAmount))
-                    throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
-            }
-        }
-        catch (OverflowException)
-        {
-            throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
-        }
-    }
-
-    private static bool IncludesRepresentedAmounts(
-        ImmutableArray<UsageAmountTotal> amounts,
-        long pricedEvents,
-        long unpricedEvents,
-        decimal pricedAmount)
-    {
-        var copilotAmounts = amounts.Where(amount =>
-            amount.MeterSource == SdkMeterSources.CopilotNanoAiu && amount.Unit == "AIC").ToArray();
-        return copilotAmounts.Length == 1 &&
-            copilotAmounts[0].PricedEvents >= pricedEvents &&
-            copilotAmounts[0].UnpricedEvents >= unpricedEvents &&
-            copilotAmounts[0].Amount >= pricedAmount;
-    }
-
     /// <summary>Checks published-rate identity, explicit Unpriced shape, totals, and arithmetic consistency.</summary>
     public static decimal ValidatePricedCopilotSnapshot(
         CostBinding? binding, CostPrice quote, UsageRunTotals copilotTotals,
@@ -214,17 +142,19 @@ public static class RuntimeUsageCostSnapshotContract
             totals.TenantId != tenantId || totals.ProjectId != projectId ||
             totals.RunId != runId || totals.Amounts.IsDefault || totals.Agents.IsDefault ||
             totals.Agents.Any(agent => agent is null || agent.Events < 0 ||
-                agent.Amounts.IsDefault || agent.Amounts.Any(amount => !ValidCopilotAmount(amount))) ||
-            totals.Amounts.Any(amount => !ValidCopilotAmount(amount)))
+                agent.Amounts.IsDefault ||
+                agent.Amounts.Any(amount => !RuntimeUsageCostTotalsContract.ValidCopilotAmount(amount))) ||
+            totals.Amounts.Any(amount => !RuntimeUsageCostTotalsContract.ValidCopilotAmount(amount)))
             throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_unpriced");
         try
         {
             var recordedEvents = totals.Amounts.Sum(amount => checked(amount.PricedEvents + amount.UnpricedEvents));
-            var isFullyPriced = AmountsAreFullyPriced(totals.Amounts);
+            var isFullyPriced = RuntimeUsageCostTotalsContract.AmountsAreFullyPriced(totals.Amounts);
             if (recordedEvents != totals.Events || totals.IsFullyPriced != isFullyPriced ||
-                totals.Agents.Any(agent => agent.IsFullyPriced != AmountsAreFullyPriced(agent.Amounts)) ||
+                totals.Agents.Any(agent =>
+                    agent.IsFullyPriced != RuntimeUsageCostTotalsContract.AmountsAreFullyPriced(agent.Amounts)) ||
                 totals.Agents.Sum(agent => agent.Events) != totals.Events ||
-                !RunAmountsMatchAgents(totals))
+                !RuntimeUsageCostTotalsContract.RunAmountsMatchAgents(totals))
                 throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
 
             if (binding is null)
@@ -275,7 +205,75 @@ public static class RuntimeUsageCostSnapshotContract
         }
     }
 
-    private static bool ValidCopilotAmount(UsageAmountTotal? amount) =>
+    private static bool ValidUnpricedReason(string? reason) =>
+        !string.IsNullOrWhiteSpace(reason) && reason.Length <= 1024 &&
+        !reason.Any(char.IsControl);
+}
+
+/// <summary>Checks Copilot run totals against agent subtotals and represented usage receipts.</summary>
+internal static class RuntimeUsageCostTotalsContract
+{
+    /// <summary>Requires totals to include represented receipts without counting Unpriced as zero.</summary>
+    internal static void ValidateRepresentedCopilotTotals(
+        UsageRunTotals totals,
+        ImmutableArray<RuntimeUsageCostReceiptReference> receipts,
+        string invalidCode)
+    {
+        try
+        {
+            if (totals.Amounts.IsDefault || totals.Agents.IsDefault ||
+                totals.Amounts.Any(amount => !ValidCopilotAmount(amount)) ||
+                totals.Agents.Any(agent => agent is null || agent.Events < 0 ||
+                    agent.Amounts.IsDefault || agent.Amounts.Any(amount => !ValidCopilotAmount(amount))) ||
+                receipts.Any(reference => reference.Accounting.Unit is not (null or "AIC")))
+                throw new RuntimeAuthorizationException(invalidCode);
+
+            var recordedEvents = totals.Amounts.Sum(amount =>
+                checked(amount.PricedEvents + amount.UnpricedEvents));
+            var isFullyPriced = AmountsAreFullyPriced(totals.Amounts);
+            if (recordedEvents != totals.Events || totals.IsFullyPriced != isFullyPriced ||
+                totals.Agents.Any(agent => agent.IsFullyPriced != AmountsAreFullyPriced(agent.Amounts)) ||
+                totals.Agents.Sum(agent => agent.Events) != totals.Events || !RunAmountsMatchAgents(totals))
+                throw new RuntimeAuthorizationException(invalidCode);
+
+            if (receipts.IsEmpty)
+                return;
+
+            var priced = receipts.Where(reference =>
+                reference.Accounting.Disposition != CostDisposition.Unpriced).ToArray();
+            var unpricedCount = receipts.LongCount(reference =>
+                reference.Accounting.Disposition == CostDisposition.Unpriced);
+            var pricedCount = (long)priced.Length;
+            if (priced.Any(reference => reference.Accounting.Amount is null))
+                throw new RuntimeAuthorizationException(invalidCode);
+            var pricedAmount = priced.Sum(reference => reference.Accounting.Amount!.Value);
+            if (!IncludesRepresentedAmounts(totals.Amounts, pricedCount, unpricedCount, pricedAmount))
+                throw new RuntimeAuthorizationException(invalidCode);
+
+            foreach (var group in receipts.GroupBy(
+                         reference => reference.Accounting.Attribution.AgentId, StringComparer.Ordinal))
+            {
+                var agentTotals = totals.Agents.Where(agent => agent.AgentId == group.Key).ToArray();
+                var agentReceipts = group.ToArray();
+                var agentPriced = agentReceipts.Where(reference =>
+                    reference.Accounting.Disposition != CostDisposition.Unpriced).ToArray();
+                var agentUnpricedCount = agentReceipts.LongCount(reference =>
+                    reference.Accounting.Disposition == CostDisposition.Unpriced);
+                var agentPricedAmount = agentPriced.Sum(reference => reference.Accounting.Amount!.Value);
+                if (agentTotals.Length != 1 || agentTotals[0].Events < agentReceipts.Length ||
+                    !IncludesRepresentedAmounts(
+                        agentTotals[0].Amounts, agentPriced.Length, agentUnpricedCount, agentPricedAmount))
+                    throw new RuntimeAuthorizationException(invalidCode);
+            }
+        }
+        catch (OverflowException)
+        {
+            throw new RuntimeAuthorizationException(invalidCode);
+        }
+    }
+
+    /// <summary>Checks a Copilot total's AIC unit and nonnegative event and amount fields.</summary>
+    internal static bool ValidCopilotAmount(UsageAmountTotal? amount) =>
         amount is not null &&
         amount.MeterSource == SdkMeterSources.CopilotNanoAiu &&
         amount.Unit == "AIC" &&
@@ -285,11 +283,11 @@ public static class RuntimeUsageCostSnapshotContract
         (amount.PricedEvents > 0 || amount.Amount == 0);
 
     /// <summary>Derives pricing completeness from explicit Unpriced event counts.</summary>
-    private static bool AmountsAreFullyPriced(ImmutableArray<UsageAmountTotal> amounts) =>
+    internal static bool AmountsAreFullyPriced(ImmutableArray<UsageAmountTotal> amounts) =>
         amounts.All(amount => amount.UnpricedEvents == 0);
 
-    /// <summary>Checks run amounts against agent subtotals before they reach credit-limit enforcement.</summary>
-    private static bool RunAmountsMatchAgents(UsageRunTotals totals)
+    /// <summary>Checks that each run amount equals the sum of its per-agent amounts.</summary>
+    internal static bool RunAmountsMatchAgents(UsageRunTotals totals)
     {
         var agentAmounts = new Dictionary<(string MeterSource, string Unit), UsageAmountTotal>();
         foreach (var agent in totals.Agents)
@@ -322,9 +320,19 @@ public static class RuntimeUsageCostSnapshotContract
         return true;
     }
 
-    private static bool ValidUnpricedReason(string? reason) =>
-        !string.IsNullOrWhiteSpace(reason) && reason.Length <= 1024 &&
-        !reason.Any(char.IsControl);
+    private static bool IncludesRepresentedAmounts(
+        ImmutableArray<UsageAmountTotal> amounts,
+        long pricedEvents,
+        long unpricedEvents,
+        decimal pricedAmount)
+    {
+        var copilotAmounts = amounts.Where(amount =>
+            amount.MeterSource == SdkMeterSources.CopilotNanoAiu && amount.Unit == "AIC").ToArray();
+        return copilotAmounts.Length == 1 &&
+            copilotAmounts[0].PricedEvents >= pricedEvents &&
+            copilotAmounts[0].UnpricedEvents >= unpricedEvents &&
+            copilotAmounts[0].Amount >= pricedAmount;
+    }
 }
 
 /// <summary>One source receipt and accounting receipt represented by a cost snapshot.</summary>
@@ -476,24 +484,6 @@ public static class RuntimeUsageCostReconciliationContract
             receipt.CopilotTotals.Amounts.Any(amount =>
                 amount.MeterSource != request.MeterSource || amount.Unit != request.RateCardUnit))
             throw new RuntimeAuthorizationException("runtime_usage_reconciliation_invalid");
-        long amountEvents;
-        long agentEvents;
-        long unpricedEvents;
-        try
-        {
-            amountEvents = receipt.CopilotTotals.Amounts.Sum(amount =>
-            checked(amount.PricedEvents + amount.UnpricedEvents));
-            agentEvents = receipt.CopilotTotals.Agents.Sum(agent => agent.Events);
-            unpricedEvents = receipt.CopilotTotals.Amounts.Sum(amount => amount.UnpricedEvents);
-        }
-        catch (OverflowException)
-        {
-            throw new RuntimeAuthorizationException("runtime_usage_reconciliation_invalid");
-        }
-        if (amountEvents != receipt.CopilotTotals.Events || agentEvents != receipt.CopilotTotals.Events ||
-            receipt.CopilotTotals.IsFullyPriced !=
-            (unpricedEvents == 0 && receipt.CopilotTotals.Agents.All(agent => agent.IsFullyPriced)))
-            throw new RuntimeAuthorizationException("runtime_usage_reconciliation_invalid");
         var expected = request.RequiredReceipts.ToDictionary(reference => reference.SourceReceiptId);
         foreach (var represented in receipt.RepresentedReceipts)
             if (!expected.Remove(represented.SourceReceiptId, out var required) ||
@@ -501,6 +491,8 @@ public static class RuntimeUsageCostReconciliationContract
                 throw new RuntimeAuthorizationException("runtime_usage_reconciliation_invalid");
         if (expected.Count != 0)
             throw new RuntimeAuthorizationException("runtime_usage_reconciliation_invalid");
+        RuntimeUsageCostTotalsContract.ValidateRepresentedCopilotTotals(
+            receipt.CopilotTotals, receipt.RepresentedReceipts, "runtime_usage_reconciliation_invalid");
     }
 }
 

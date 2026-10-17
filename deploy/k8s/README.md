@@ -219,8 +219,8 @@ kubectl apply -f deploy\k8s\runtime-configs\events-and-sessions-runtime-config.j
 ```
 
 These commands are documented for the later operator handoff only; do not run
-them from this PR. The three service maps remain incomplete and none of these
-ConfigMaps has been applied.
+them from this PR. The Environment and Orchestrator service maps remain
+incomplete. None of these ConfigMaps has been applied.
 
 ## Managed routing candidate
 

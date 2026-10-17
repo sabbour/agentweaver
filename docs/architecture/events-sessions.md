@@ -318,8 +318,11 @@ Without native proof, the existing exact raw-message check remains unchanged.
 The response returns only those verified references as `RepresentedReceipts`.
 Missing rows reject the join; altered references cannot substitute another receipt.
 For hosted-Copilot snapshots, run and per-agent totals must include the amount and
-priced or unpriced event count for every represented receipt. Native-turn accounting
-uses the same check. Observed validation permits an explicit `Unpriced` receipt.
+priced or unpriced event count for every represented receipt, and run totals must
+match agent subtotals. Turn-cost reconciliation keeps a valid `Unpriced` receipt in
+the represented set with its reason and event count; it does not block reconciliation
+or become a zero-cost priced event. Missing rows, altered references, and totals that
+omit represented amounts or event counts are rejected.
 Admission and credit-limit validation accept well-formed `Unpriced` quote and usage
 shapes, retain their reasons and event counts, and use only the known priced subtotal;
 malformed or tampered receipts remain rejected.
