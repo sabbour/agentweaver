@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import test from 'node:test';
+import test, { after } from 'node:test';
 import {
   deployRelease,
   parseArgs,
@@ -30,6 +32,21 @@ import { run as runProcess } from '../../azure/lib/exec.mjs';
 import { projectIdentityRoutingReadback } from '../../azure/lib/identity-broker-routing.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const p0SourceSha = PARTIAL_PUBLICATION.sourceSha;
+const p0Manifest = JSON.parse(execFileSync('git', [
+  'show', `${p0SourceSha}:releases/foundation.json`,
+], { cwd: root, encoding: 'utf8' }));
+const p0Root = mkdtempSync(path.join(tmpdir(), 'agentweaver-v1-0-0-release-tests-'));
+for (const file of [...p0Manifest.components.map(component => component.project), 'apps/web/package-lock.json']) {
+  const contents = execFileSync('git', ['show', `${p0SourceSha}:${file}`], {
+    cwd: root, encoding: 'utf8',
+  });
+  const destination = path.join(p0Root, file);
+  mkdirSync(path.dirname(destination), { recursive: true });
+  writeFileSync(destination, contents);
+}
+cpSync(path.join(root, 'deploy', 'k8s'), path.join(p0Root, 'deploy', 'k8s'), { recursive: true });
+after(() => rmSync(p0Root, { recursive: true, force: true }));
 const sourceSha = 'a'.repeat(40);
 const target = {
   subscriptionId: '90ab3701-83f0-4ba1-a90a-f2e68683adab',
@@ -68,7 +85,7 @@ function imagesExpectedHost(manifest = releaseManifest()) {
 }
 
 function releaseManifest() {
-  const manifest = JSON.parse(readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8'));
+  const manifest = structuredClone(p0Manifest);
   manifest.stage = 'release';
   for (const component of manifest.components) {
     if (component.kind === 'service' && component.id !== 'Agentweaver.FoundationProbe') {
@@ -145,7 +162,7 @@ function publicationReceipt(manifest = releaseManifest(), receiptSourceSha = sou
 }
 
 function bootstrapFixture() {
-  const manifest = JSON.parse(readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8'));
+  const manifest = structuredClone(p0Manifest);
   const publishedManifest = structuredClone(manifest);
   for (const component of publishedManifest.components) {
     if (component.kind === 'service' && component.id !== 'Agentweaver.FoundationProbe') {
@@ -297,15 +314,15 @@ const bootstrapArgsFor = (overrides = {}) => [
 function bootstrapDependencies(fixture, overrides = {}) {
   const commands = [];
   const dependencies = {
-    root,
+    root: p0Root,
     readFile: (file, encoding) => {
-      if (path.resolve(file) === path.join(root, 'releases', 'foundation.json')) {
+      if (path.resolve(file) === path.join(p0Root, 'releases', 'foundation.json')) {
         return JSON.stringify(fixture.manifest);
       }
-      if (path.resolve(file) === path.join(root, 'publication.json')) {
+      if (path.resolve(file) === path.join(p0Root, 'publication.json')) {
         return JSON.stringify(fixture.publication);
       }
-      if (path.resolve(file) === path.join(root, 'completion.json')) {
+      if (path.resolve(file) === path.join(p0Root, 'completion.json')) {
         return JSON.stringify(fixture.completion);
       }
       return readFileSync(file, encoding);
@@ -483,22 +500,22 @@ test('pre-acceptance rejects a receipt that differs from the immutable result', 
 
 test('a draft or altered product manifest cannot pass published-release validation', () => {
   const manifest = releaseManifest();
-  assert.equal(validatePublishedManifest(manifest, { root, sourceSha }).stage, 'release');
+  assert.equal(validatePublishedManifest(manifest, { root: p0Root, sourceSha }).stage, 'release');
   const draft = structuredClone(manifest);
   draft.stage = 'draft';
   delete draft.evidence;
-  assert.throws(() => validatePublishedManifest(draft, { root, sourceSha }), /still draft/);
+  assert.throws(() => validatePublishedManifest(draft, { root: p0Root, sourceSha }), /still draft/);
   const wrongEvidence = structuredClone(manifest);
   wrongEvidence.evidence.sourceSha = 'd'.repeat(40);
   wrongEvidence.evidence.deploymentSha = 'd'.repeat(40);
   for (const run of wrongEvidence.evidence.personaRuns) run.sourceSha = 'd'.repeat(40);
-  assert.throws(() => validatePublishedManifest(wrongEvidence, { root, sourceSha }), /must match/);
+  assert.throws(() => validatePublishedManifest(wrongEvidence, { root: p0Root, sourceSha }), /must match/);
   const wrongProductVersion = structuredClone(manifest);
   wrongProductVersion.components.find(({ id }) => id === 'Agentweaver.Gateway').version = '1.0.1';
-  assert.throws(() => validatePublishedManifest(wrongProductVersion, { root, sourceSha }), /checked-in .*declare/);
+  assert.throws(() => validatePublishedManifest(wrongProductVersion, { root: p0Root, sourceSha }), /checked-in .*declare/);
   const probe = structuredClone(manifest);
   probe.components.find(({ id }) => id === 'Agentweaver.FoundationProbe').imageDigest = `sha256:${'e'.repeat(64)}`;
-  const publishedManifest = validatePublishedManifest(probe, { root, sourceSha });
+  const publishedManifest = validatePublishedManifest(probe, { root: p0Root, sourceSha });
   assert.equal(publishedManifest.components.filter(({ id, kind }) =>
     id !== 'Agentweaver.FoundationProbe' && kind === 'service').length, 10);
 });
@@ -1212,7 +1229,7 @@ test('runtime preflight checks shared backend certificates once after verifying 
     releaseTag: 'v1.0.0', target, manifest, publication,
     runtimeManifest: runtimeManifest(manifest), dryRun: true,
   }, {
-    root,
+    root: p0Root,
     verifyRelease: async () => sourceSha,
     verifyImages: async () => verifiedImageDigests(manifest),
     verifyTarget: async () => undefined,
@@ -1289,7 +1306,7 @@ test('default dry-run validates and renders without issuing any external write',
     providerCatalogSourceCommit: sourceSha,
     dryRun: true,
   }, {
-    root,
+    root: p0Root,
     verifyRelease: async () => sourceSha,
     verifyImages: async () => { imagesVerified++; return verifiedImageDigests(manifest); },
     verifyTarget: async () => { targetVerified++; return { exact: true }; },
@@ -1320,7 +1337,7 @@ test('dry-run refuses a GHCR receipt that omits the measured AgentHost platform 
     runtimeManifest: runtimeManifest(manifest),
     dryRun: true,
   }, {
-    root,
+    root: p0Root,
     verifyRelease: async () => sourceSha,
     verifyImages: async () => new Map(),
     verifyTarget: async () => assert.fail('target verification must not run after a GHCR mismatch'),
@@ -1346,7 +1363,7 @@ test('resume rechecks publication, GHCR, target and live deployment health befor
     dryRun: false,
     resume: true,
   }, {
-    root,
+    root: p0Root,
     checkpointDirectory: directory,
     checkpointReadFile: (file) => JSON.stringify({
       version: 1,
@@ -1399,7 +1416,7 @@ test('checkpoint read and write failures are surfaced as deployment failures', a
     dryRun: false,
   };
   const baseDependencies = {
-    root,
+    root: p0Root,
     verifyRelease: async () => sourceSha,
     verifyImages: async () => verifiedImageDigests(manifest),
     verifyTarget: async () => undefined,
@@ -1493,7 +1510,7 @@ test('default dry-run uses the verified published AgentHost platform child and i
     providerCatalogSourceCommit: sourceSha,
     dryRun: true,
   }, {
-    root,
+    root: p0Root,
     verifyRelease: async () => sourceSha,
     verifyTarget: async () => undefined,
     verifyPrerequisites: () => undefined,

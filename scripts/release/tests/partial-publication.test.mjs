@@ -547,7 +547,9 @@ test('helper deploy CLI uses a separate original product cwd and accepts its val
   const world = newWorld();
   const completion = await continuePartialPublication(options(world, directory));
   const productRoot = path.join(directory, 'original-product');
-  const manifest = JSON.parse(readFileSync(path.join(root, 'releases', 'foundation.json'), 'utf8'));
+  const manifest = JSON.parse(execFileSync('git', [
+    'show', `${P.sourceSha}:releases/foundation.json`,
+  ], { cwd: root, encoding: 'utf8' }));
   manifest.stage = 'release';
   manifest.evidence = {
     sourceSha: P.sourceSha, deploymentSha: P.sourceSha,
@@ -562,7 +564,9 @@ test('helper deploy CLI uses a separate original product cwd and accepts its val
   for (const relative of [...manifest.components.map(component => component.project), WEB_LOCK_PATH]) {
     const destination = path.join(productRoot, relative);
     mkdirSync(path.dirname(destination), { recursive: true });
-    writeFileSync(destination, readFileSync(path.join(root, relative)));
+    writeFileSync(destination, execFileSync('git', ['show', `${P.sourceSha}:${relative}`], {
+      cwd: root, encoding: 'utf8',
+    }));
   }
   const manifestPath = path.join(directory, 'release-manifest.json');
   const publicationPath = path.join(directory, 'publication.json');

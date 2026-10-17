@@ -1,0 +1,290 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "e99d9de8f61ef491cb496f4d6284cf30f7bc226f",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "47167409b8a33a1924a1b0cf881073cdede72eaf112699f2ab0a5441bb4e0d74",
+  "appliedAt": "2026-10-17T18:31:15.569Z",
+  "components": [
+    {
+      "id": "Agentweaver.Abstractions",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.1.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.AgentHost",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.0.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.AgentRuntime",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.1.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Environment",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.1.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.EventsAndSessions",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.1.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.FoundationProbe",
+      "fromVersion": "0.0.1",
+      "toVersion": "0.0.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Gateway",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.1.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Identity",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.1.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Identity.Broker",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.1.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Knowledge",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.0.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Mcp",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.0.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.ObjectStore.AzureBlob",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.0.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Orchestrator",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.1.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Orchestrator.Core",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.1.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Persistence.Postgres",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.0.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Projects.Config",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.1.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Providers",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.0.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Providers.Sandbox.AgentSandbox",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.1.0",
+      "bump": "minor"
+    },
+    {
+      "id": "Agentweaver.Providers.Storage.AzureFiles",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.0.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Secrets.AzureKeyVault",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.0.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.SourceControl",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.0.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Telemetry",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.0.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Telemetry.AzureMonitor",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.0.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Web",
+      "fromVersion": "1.0.0",
+      "toVersion": "1.0.1",
+      "bump": "patch"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/agenthost-sandbox-service.md",
+      "archivedPath": ".changeset/archive/agenthost-sandbox-service.md",
+      "sha256": "834763eadf6a0f9f0fd8b19d76fc10c2fc8dbd66f33b487c0efcd4565a3eabbd"
+    },
+    {
+      "sourcePath": ".changeset/copilot-admission-readiness-2037.md",
+      "archivedPath": ".changeset/archive/copilot-admission-readiness-2037.md",
+      "sha256": "3963537d5ccbeeb315ea680f7b672ab108efe5db200ea6d67ccee7f228616c3e"
+    },
+    {
+      "sourcePath": ".changeset/copilot-published-token-rates-2037.md",
+      "archivedPath": ".changeset/archive/copilot-published-token-rates-2037.md",
+      "sha256": "acd8650dbc10cd2c18b76d4bc3a13bf0831b0f0f71469a294a9e271e11cacfcf"
+    },
+    {
+      "sourcePath": ".changeset/environment-lifecycle-no-store.md",
+      "archivedPath": ".changeset/archive/environment-lifecycle-no-store.md",
+      "sha256": "ab01b4249fd32f9f84593569b014f2f2cd2f801713f8a9f6c9fc1f89834ecd67"
+    },
+    {
+      "sourcePath": ".changeset/gateway-portal-routes.md",
+      "archivedPath": ".changeset/archive/gateway-portal-routes.md",
+      "sha256": "4db482ded67e0a7e29bb96d17277cd42645aef5bccfe916cca4fb6bbdfac1a2e"
+    },
+    {
+      "sourcePath": ".changeset/managed-mcp-backend-tls.md",
+      "archivedPath": ".changeset/archive/managed-mcp-backend-tls.md",
+      "sha256": "b4b1b3bf49b01414e43e0b67e94e7fe33e959e47998789d19ac9d106d2a1d2db"
+    },
+    {
+      "sourcePath": ".changeset/optional-prompt-token-cap-1855.md",
+      "archivedPath": ".changeset/archive/optional-prompt-token-cap-1855.md",
+      "sha256": "986c1133f45a95658745eee7f9e7d9442df394f84ec889d52bfb59d702953785"
+    },
+    {
+      "sourcePath": ".changeset/p0-release-runtime-verification.md",
+      "archivedPath": ".changeset/archive/p0-release-runtime-verification.md",
+      "sha256": "7aaa8f744be1c9a71fcacb421106518193dc51e2b6003472c3e8149f358e1be0"
+    },
+    {
+      "sourcePath": ".changeset/p1-broker-run-binding-1860.md",
+      "archivedPath": ".changeset/archive/p1-broker-run-binding-1860.md",
+      "sha256": "2a71b625144852c0d604787ff359d4696f811c0eb8373daacf21f26cf6bad118"
+    },
+    {
+      "sourcePath": ".changeset/p1-broker-run-binding-tls.md",
+      "archivedPath": ".changeset/archive/p1-broker-run-binding-tls.md",
+      "sha256": "4040616e5a13783b318c946e6d33bb39e9be1fae0f97c64a54a9472edc3455ea"
+    },
+    {
+      "sourcePath": ".changeset/p1-checkpoint-parent-observation.md",
+      "archivedPath": ".changeset/archive/p1-checkpoint-parent-observation.md",
+      "sha256": "d70759a007ed2ac5de513072314f00257bf161f1bf9b3563f8053319ef7a9139"
+    },
+    {
+      "sourcePath": ".changeset/p1-dispatch-recovery-probes.md",
+      "archivedPath": ".changeset/archive/p1-dispatch-recovery-probes.md",
+      "sha256": "2e7c45daf002ad64c1c0776c66520599d465a5f95951e97b7d6961440379c739"
+    },
+    {
+      "sourcePath": ".changeset/p1-environment-lifecycle-safe-cleanup.md",
+      "archivedPath": ".changeset/archive/p1-environment-lifecycle-safe-cleanup.md",
+      "sha256": "556d0f9ec94a37d422151968fdf0fd4ac8e100e62505cae2b4af26ae6c3d1835"
+    },
+    {
+      "sourcePath": ".changeset/p1-native-credit-denial-receipts.md",
+      "archivedPath": ".changeset/archive/p1-native-credit-denial-receipts.md",
+      "sha256": "dcc1cb8b7bd14b95747664f057fc6842724384618cb1fd552f6bffa7facc7232"
+    },
+    {
+      "sourcePath": ".changeset/p1-postgres-continuation.md",
+      "archivedPath": ".changeset/archive/p1-postgres-continuation.md",
+      "sha256": "94380a7d5ea6beb6bc55de85b2023500564b33cbecfbb27709d190f50cedc6ff"
+    },
+    {
+      "sourcePath": ".changeset/p1-project-setup-owner-grants.md",
+      "archivedPath": ".changeset/archive/p1-project-setup-owner-grants.md",
+      "sha256": "c2903abb0845b57b7d01ca2cbd1d764f81fc343ee0cc60ede10b1a58929bc777"
+    },
+    {
+      "sourcePath": ".changeset/p1-projects-setup-1860.md",
+      "archivedPath": ".changeset/archive/p1-projects-setup-1860.md",
+      "sha256": "c6b9f1ac0f39425f344bf3af382614342d4a8e7e34680d182d04ecb931ed4f8d"
+    },
+    {
+      "sourcePath": ".changeset/p1-prompt-context-capacity.md",
+      "archivedPath": ".changeset/archive/p1-prompt-context-capacity.md",
+      "sha256": "6b802a62135ed928cf9769cbdda7a64a997085e46985c81a16c33b5de609a2a2"
+    },
+    {
+      "sourcePath": ".changeset/p1-run-bound-knowledge-owner.md",
+      "archivedPath": ".changeset/archive/p1-run-bound-knowledge-owner.md",
+      "sha256": "cc1b9818527925cd88e1e582cf0e34667e0806c7bc4a9d48b4ad482e2b9d8eb5"
+    },
+    {
+      "sourcePath": ".changeset/runtime-credit-guard-observation.md",
+      "archivedPath": ".changeset/archive/runtime-credit-guard-observation.md",
+      "sha256": "7441dedd55afa12964d41a80a155d3e421230d77f47ae9468fcf0ce3ab851ec8"
+    },
+    {
+      "sourcePath": ".changeset/runtime-observation-read-paths.md",
+      "archivedPath": ".changeset/archive/runtime-observation-read-paths.md",
+      "sha256": "4208457bb6dd83053482ebb803b02e37f4f285fcac58cd626191bb8a5109a79f"
+    },
+    {
+      "sourcePath": ".changeset/runtime-profile-resolution.md",
+      "archivedPath": ".changeset/archive/runtime-profile-resolution.md",
+      "sha256": "235b265e16b5aebee50ca7e116ff5c4fcfdf2741d66b2ca58e0812e93aff7ca2"
+    },
+    {
+      "sourcePath": ".changeset/runtime-tool-reservation-stream.md",
+      "archivedPath": ".changeset/archive/runtime-tool-reservation-stream.md",
+      "sha256": "a1af77b3afcbed51fc958d305b3c97abfd6e59cf686733a09f7c6567771bc732"
+    },
+    {
+      "sourcePath": ".changeset/task-model-routing-reasoning.md",
+      "archivedPath": ".changeset/archive/task-model-routing-reasoning.md",
+      "sha256": "9b355552c2d607d0132bfe62c0101295211feb672d1c761d08775bd866a20f51"
+    },
+    {
+      "sourcePath": ".changeset/v1-code-documentation.md",
+      "archivedPath": ".changeset/archive/v1-code-documentation.md",
+      "sha256": "fdcb95ad5a58ad7c007ff367d689d53f9042b9281f11ba4176e39779ed325f96"
+    },
+    {
+      "sourcePath": ".changeset/web-runtime-list-policy.md",
+      "archivedPath": ".changeset/archive/web-runtime-list-policy.md",
+      "sha256": "edf42f993abe9523f04b7cd9cace652c2d7fde63d098c01cd74b27446e951798"
+    },
+    {
+      "sourcePath": ".changeset/workflow-bound-tool-call-limits.md",
+      "archivedPath": ".changeset/archive/workflow-bound-tool-call-limits.md",
+      "sha256": "99518f5c6ee750172971bb8c0548523d468104e9ad93f1c235912951382efc41"
+    }
+  ]
+}
