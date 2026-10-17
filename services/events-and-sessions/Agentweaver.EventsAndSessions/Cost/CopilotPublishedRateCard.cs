@@ -17,7 +17,7 @@ public static class CopilotPublishedRateCard
 
     /// <summary>Returns the immutable card for rates verified on the snapshot date.</summary>
     public static CostRateCard Current { get; } = new(
-        "github-copilot-models-and-pricing",
+        "github-copilot-published",
         SnapshotVersion,
         CopilotCostProvider.MeterSource,
         CopilotCostProvider.AiCreditUnit,

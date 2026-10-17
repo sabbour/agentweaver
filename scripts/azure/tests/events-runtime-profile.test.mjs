@@ -15,8 +15,6 @@ function fixture() {
   Object.assign(input.configuration, {
     Identity__Issuer: 'https://agentweaver.test.eastus2euap.aksapp.io/',
     Identity__Audience: 'events-test-audience',
-    EventsAndSessions__Provider__ResourceId: 'test:events:resource',
-    EventsAndSessions__Provider__ResourceGeneration: '1',
     EventsAndSessions__Knowledge__BaseAddress: 'https://knowledge.agentweaver-v1-p0.svc.cluster.local:8443/',
     ProjectsConfig__BaseAddress: 'https://projects-config.agentweaver-v1-p0.svc.cluster.local:8443/',
     ProjectsConfig__AuthorizationContext__OwnerBaseAddress: 'https://projects-config.agentweaver-v1-p0.svc.cluster.local:8443/',
@@ -42,6 +40,9 @@ test('example is deliberately incomplete and cannot render a deployable profile'
 
 test('pure renderer retains every required existing startup key and does not mutate input', () => {
   const input = fixture();
+  assert.equal(input.configuration.EventsAndSessions__Provider__ResourceId,
+    'events-sessions-provider:p1-v1.0.0');
+  assert.equal(input.configuration.EventsAndSessions__Provider__ResourceGeneration, '1');
   assert.equal(input.configuration.EventsAndSessions__SessionMaterial__ContainerUri,
     'https://awv1p0blob.blob.core.windows.net/session-material');
   assert.equal(input.configuration.AgentHost__ModelBindingsRevision, 'p1-v1.0.0');

@@ -2922,7 +2922,7 @@ public sealed class RuntimeAgentHostTests
                     throw new InvalidOperationException("The exact registered runtime source is required.");
                 CostPreflightRequests++;
                 var rateCard = new CostRateCard(
-                    "github-copilot-models-and-pricing", "2026-10-17", _facts.MeterSource, "AIC",
+                    "github-copilot-published", "2026-10-17", _facts.MeterSource, "AIC",
                     1_000_000_000m, ImmutableDictionary<string, decimal>.Empty.WithComparers(StringComparer.Ordinal))
                 {
                     ProviderSourceUrl = "https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing",

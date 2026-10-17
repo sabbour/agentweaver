@@ -48,7 +48,7 @@ const orchestrator = manifest('orchestrator-runtime-config');
 const events = manifest('events-and-sessions-runtime-config');
 const cilium = manifest('environment-cilium-config');
 
-test('P0 runtime ConfigMaps remain immutable, incomplete, and free of placeholders and credentials', () => {
+test('P0 runtime ConfigMaps remain immutable and free of placeholders and credentials', () => {
   for (const [name, resource] of [
     ['environment-runtime-config', environment],
     ['orchestrator-runtime-config', orchestrator],
@@ -59,9 +59,8 @@ test('P0 runtime ConfigMaps remain immutable, incomplete, and free of placeholde
     assert.equal(resource.kind, 'ConfigMap');
     assert.equal(resource.metadata.name, name);
     assert.equal(resource.metadata.namespace, namespace);
-    assert.equal(
-      resource.metadata.annotations?.['agentweaver.io/runtime-config-status'],
-      name === 'environment-cilium-config' ? undefined : 'incomplete');
+    assert.equal(resource.metadata.annotations?.['agentweaver.io/runtime-config-status'],
+      ['environment-runtime-config', 'orchestrator-runtime-config'].includes(name) ? 'incomplete' : undefined);
     assert.equal(resource.immutable, true);
     assert.ok(Object.keys(resource.data).length > 0);
     for (const [key, value] of Object.entries(resource.data)) {
@@ -75,8 +74,7 @@ test('P0 runtime ConfigMaps remain immutable, incomplete, and free of placeholde
   }
   for (const resource of [environment, orchestrator, events])
     assert.ok(Object.keys(resource.data).every(key => /^[A-Za-z][A-Za-z0-9_]*$/.test(key)));
-  assert.equal(events.metadata.annotations['agentweaver.io/runtime-config-incomplete-reason'],
-    'Provider and cost resource IDs and generations remain unsourced; HostedCopilot also requires a compatible model rate entry, tracked in #2037.');
+  assert.equal(events.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'], undefined);
 });
 
 test('P0 PostgreSQL roles, projected identities, and issuer use the exact approved inputs', () => {
@@ -157,16 +155,18 @@ test('P0 service addresses and source-backed provider defaults are exact', () =>
   assert.equal(evt.EventsAndSessions__Provider__Schema, 'events_sessions');
   assert.equal(evt.EventsAndSessions__Provider__OptionsSchemaVersion, '1');
   assert.equal(evt.EventsAndSessions__Provider__OptionsRevision, 'native-postgres-v1');
+  assert.equal(evt.EventsAndSessions__Provider__ResourceId, 'events-sessions-provider:p1-v1.0.0');
+  assert.equal(evt.EventsAndSessions__Provider__ResourceGeneration, '1');
   assert.equal(evt.EventsAndSessions__Provider__PollIntervalMilliseconds, '250');
   assert.equal(evt.EventsAndSessions__Provider__ReferenceRetentionDays, '365');
   assert.equal(evt.EventsAndSessions__Messaging__OptionsSchemaVersion, '1');
   assert.equal(evt.EventsAndSessions__Messaging__OptionsRevision, 'native-postgres-messaging-v1');
   assert.equal(evt.EventsAndSessions__Messaging__ClaimLeaseSeconds, '120');
   assert.equal(evt.EventsAndSessions__Messaging__MaximumMessageLifetimeDays, '1');
-  assert.equal(evt.EventsAndSessions__Cost__Copilot__OptionsSchemaVersion, '1');
-  assert.equal(evt.EventsAndSessions__Cost__Copilot__RateCard__MeterSource, 'copilot.nano_aiu');
-  assert.equal(evt.EventsAndSessions__Cost__Copilot__RateCard__Unit, 'AIC');
-  assert.equal(evt.EventsAndSessions__Cost__Copilot__RateCard__NanoUnitsPerUnit, '1000000000');
+  assert.equal(evt.EventsAndSessions__Cost__Copilot__OptionsSchemaVersion, '2');
+  assert.equal(evt.EventsAndSessions__Cost__Copilot__ResourceId, 'copilot-cost:p1-v1.0.0');
+  assert.equal(evt.EventsAndSessions__Cost__Copilot__ResourceGeneration, '1');
+  assert.ok(!Object.keys(evt).some(key => key.startsWith('EventsAndSessions__Cost__Copilot__RateCard__')));
   assert.equal(evt.EventsAndSessions__Knowledge__BaseAddress, serviceAddress('knowledge'));
   assert.equal(evt.ProjectsConfig__BaseAddress, serviceAddress('projects-config'));
   assert.equal(evt.ProjectsConfig__AuthorizationContext__OwnerBaseAddress, serviceAddress('projects-config'));
@@ -234,26 +234,16 @@ test('nested Cilium selectors match the existing source policies and contain no 
   assert.equal(environment.data.Environment__NetworkPolicy__Cilium__EndpointSelectors, undefined);
 });
 
-test('unknown P0 required values are omitted rather than invented', () => {
+test('P0 values use approved labels and omit unknown resource identities', () => {
   for (const key of ['ContainerImage', 'ContainerImagePlatform', 'ContainerImageCompressedPullBytes',
     'OptionsRevision']) {
     assert.ok(!Object.hasOwn(environment.data, `Environment__Sandbox__AgentSandbox__${key}`));
   }
-  for (const key of [
-    'EventsAndSessions__Provider__ResourceId',
-    'EventsAndSessions__Provider__ResourceGeneration',
-  ]) {
-    assert.ok(!Object.hasOwn(events.data, key), key);
-  }
-  assert.equal(events.data.EventsAndSessions__Cost__Copilot__OptionsSchemaVersion, '1');
-  for (const key of [
-    'ResourceId',
-    'ResourceGeneration',
-    'RateCard__Id',
-    'RateCard__Version',
-  ]) {
-    assert.ok(!Object.hasOwn(events.data, `EventsAndSessions__Cost__Copilot__${key}`), key);
-  }
+  assert.equal(events.data.EventsAndSessions__Provider__ResourceId, 'events-sessions-provider:p1-v1.0.0');
+  assert.equal(events.data.EventsAndSessions__Provider__ResourceGeneration, '1');
+  assert.equal(events.data.EventsAndSessions__Cost__Copilot__OptionsSchemaVersion, '2');
+  assert.equal(events.data.EventsAndSessions__Cost__Copilot__ResourceId, 'copilot-cost:p1-v1.0.0');
+  assert.equal(events.data.EventsAndSessions__Cost__Copilot__ResourceGeneration, '1');
   assert.ok(!Object.keys(events.data).some(key =>
     key.startsWith('EventsAndSessions__Cost__Copilot__RateCard__ModelMultipliers__')));
   assert.equal(events.data.AgentHost__ModelBindingsRevision, 'p1-v1.0.0');
