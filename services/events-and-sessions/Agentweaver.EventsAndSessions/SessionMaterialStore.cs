@@ -55,6 +55,9 @@ internal sealed class SessionMaterialStore(PostgresSessionsJournal journal, IObj
                 source.SdkVersion, source.RuntimeVersion, source.ModelSelectionReference, source.ModelId)
             {
                 MaxPromptTokens = source.MaxPromptTokens,
+                ReasoningEffort = source.ReasoningEffort,
+                ModelBindingPin = registration.Binding.ModelBindingPin,
+                ResolvedModelBindingPin = source.ResolvedModelBindingPin,
                 RemoteToolResultProof = input.RemoteToolResultProof
             }
         };

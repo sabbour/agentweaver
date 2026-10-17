@@ -18,12 +18,16 @@ internal sealed record RuntimeSessionRecovery(
     SessionMaterialReadResult? Cache,
     IReadOnlyList<(string Role, string Content)> Turns)
 {
+    /// <summary>Durable model binding from the accepted configuration before this resume.</summary>
+    internal SessionMaterialBinding? PreviousConfigurationBinding { get; init; }
+    /// <summary>Model binding recorded by the latest turn or cache in ordinary recovery.</summary>
+    internal SessionMaterialBinding? PreviousModelBinding { get; init; }
     internal RuntimeResumeJournalRebuildReceipt? JournalRebuild { get; init; }
     internal RuntimeSessionJournalEvidence? JournalEvidence { get; init; }
 
-    /// <summary>Checks all pinned session, tenant, selection, SDK, and model fields before cache reuse.</summary>
+    /// <summary>Checks all pinned session, tenant, selection, SDK, model, and effort fields before cache reuse.</summary>
     internal bool CacheMatches(RuntimeRegistration registration, string sdkVersion, string runtimeVersion,
-        string modelId, int? maxPromptTokens = null)
+        string modelId, RuntimeModelBindingPin resolvedModelBindingPin, int? maxPromptTokens = null)
     {
         var binding = registration.Binding;
         if (Identity != new SessionIdentity(binding.ProjectId, binding.RunId, binding.SessionId) ||
@@ -34,7 +38,10 @@ internal sealed record RuntimeSessionRecovery(
             cached.AcceptedSelectionHash == binding.AcceptedSelectionHash &&
             cached.ModelSelectionReference == binding.ModelSelectionReference &&
             cached.SdkVersion == sdkVersion && cached.RuntimeVersion == runtimeVersion &&
-            cached.ModelId == modelId && cached.MaxPromptTokens == maxPromptTokens;
+            cached.ModelId == modelId && cached.MaxPromptTokens == maxPromptTokens &&
+            cached.ReasoningEffort == binding.ReasoningEffort &&
+            cached.ModelBindingPin == binding.ModelBindingPin &&
+            cached.ResolvedModelBindingPin == resolvedModelBindingPin;
     }
 
     /// <summary>

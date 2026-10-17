@@ -18,7 +18,7 @@ public sealed record RuntimeByokProvider(
 }
 
 /// <summary>
-/// One enabled model choice and its source mode, optional BYOK provider, and prompt capacity.
+/// One enabled model choice and its source mode, optional BYOK provider, prompt capacity, and reasoning support.
 /// Validation rejects any source/provider combination that is not explicitly supported.
 /// </summary>
 public sealed record RuntimeModelBinding(
@@ -29,11 +29,17 @@ public sealed record RuntimeModelBinding(
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? PromptCapacityTokens { get; init; }
 
+    /// <summary>Reasoning levels explicitly supported by a BYOK model binding.</summary>
+    public ImmutableArray<string> SupportedReasoningEfforts { get; init; } = [];
+
     /// <summary>Checks model identity, source mode, prompt capacity, and the provider allow-list.</summary>
     internal void Validate()
     {
         RuntimeContractValidation.ValidateIdentifier(ModelId);
         if (!Enum.IsDefined(SourceMode) || PromptCapacityTokens is < 1 ||
+            SupportedReasoningEfforts.IsDefault ||
+            SupportedReasoningEfforts.Any(effort => effort is not ("low" or "medium" or "high" or "xhigh")) ||
+            SupportedReasoningEfforts.Distinct(StringComparer.Ordinal).Count() != SupportedReasoningEfforts.Length ||
             SourceMode == ModelSourceMode.HostedCopilot && Provider is not null ||
             SourceMode == ModelSourceMode.Byok && Provider is null)
             throw new ArgumentException("An explicit, mode-compatible model binding is required.");

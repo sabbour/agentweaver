@@ -115,12 +115,19 @@ internal static class MafExecutionPlanner
         var agents = role?.EligibleAgentIds.IsDefault == false
             ? role.EligibleAgentIds.Order(StringComparer.Ordinal).ToArray()
             : [];
-        var modelReferences = role?.ModelSelectionReferences.IsDefault == false
-            ? role.ModelSelectionReferences
-            : [];
+        var agentId = agents.FirstOrDefault();
+        var modelSelectionReference = agentId is null
+            ? null
+            : ModelTaskSelectionResolver.ResolveReference(
+                step.ModelTaskKind ?? ModelTaskKind.Straightforward,
+                fixedWork.RoleId,
+                agentId,
+                selectionContext.ModelTaskSelections);
         var isolationProvider = snapshot.IsolationProviderBinding?.ProviderId;
-        if (agents.Length == 0 || modelReferences.Length != 1 ||
-            string.IsNullOrWhiteSpace(modelReferences[0]) ||
+        if (agentId is null ||
+            string.IsNullOrWhiteSpace(modelSelectionReference) ||
+            role?.ModelSelectionReferences.IsDefault != false ||
+            !role.ModelSelectionReferences.Contains(modelSelectionReference, StringComparer.Ordinal) ||
             string.IsNullOrWhiteSpace(isolationProvider))
             throw new CoordinationException(
                 "maf_fixed_work_selection_unavailable", StatusCodes.Status409Conflict);
@@ -145,8 +152,8 @@ internal static class MafExecutionPlanner
             snapshot.Workflow.Definition.CatalogVersion,
             step.Id,
             fixedWork,
-            agents[0],
-            modelReferences[0],
+            agentId,
+            modelSelectionReference,
             isolationProvider,
             acceptedSelectionHash.ToUpperInvariant(),
             executionFence,

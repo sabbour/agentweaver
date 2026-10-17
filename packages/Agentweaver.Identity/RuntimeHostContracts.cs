@@ -185,7 +185,10 @@ public sealed record RuntimeHostRecoveryReceipt(
                 material.SdkVersion != Source.SdkVersion ||
                 material.RuntimeVersion != Source.RuntimeVersion ||
                 material.ModelId != Source.ModelId ||
-                material.MaxPromptTokens != Source.MaxPromptTokens)
+                material.MaxPromptTokens != Source.MaxPromptTokens ||
+                material.ReasoningEffort != Source.ReasoningEffort ||
+                material.ModelBindingPin != Source.ModelBindingPin ||
+                material.ResolvedModelBindingPin != Source.ResolvedModelBindingPin)
                 throw new RuntimeAuthorizationException("runtime_recovery_receipt_invalid");
         }
         else if (RecoveryMode == RuntimeHostRecoveryMode.JournalRebuild)

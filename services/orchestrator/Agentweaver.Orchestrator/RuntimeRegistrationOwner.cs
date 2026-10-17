@@ -326,6 +326,7 @@ internal sealed class RuntimeRegistrationOwner(
                 ModelSelectionReference = owner.ModelSelectionReference,
                 ModelCredentialReference = owner.ModelCredentialReference,
                 ModelSourceMode = owner.ModelSourceMode,
+                ReasoningEffort = owner.ReasoningEffort,
                 ModelBindingPin = owner.ModelBindingPin,
                 ModelConnectionId = owner.ModelConnectionId,
                 ModelConnectionScope = owner.ModelConnectionScope,

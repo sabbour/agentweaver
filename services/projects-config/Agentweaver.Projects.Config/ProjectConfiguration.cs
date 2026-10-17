@@ -6,16 +6,45 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.Projects.Config;
 
-/// <summary>Model selection reference and optional exact credential or hosted-connection binding.</summary>
+/// <summary>Model binding reference, reasoning effort, and optional exact credential or hosted-connection binding.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record ModelSelectionSettings(
     string Reference, SecretRef? CredentialReference = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ModelSourceMode? SourceMode = null,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? ConnectionId = null)
 {
+    /// <summary>Requested native-SDK reasoning effort; omission resolves to the platform default.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ReasoningEffort { get; init; }
+
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public RuntimeModelBindingPin? ModelBindingPin { get; init; }
 }
+
+/// <summary>Optional model-reference and reasoning-effort changes at one configuration layer.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ModelSelectionOverride(
+    string? Reference = null,
+    string? ReasoningEffort = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    RuntimeModelBindingPin? ModelBindingPin = null);
+
+/// <summary>Platform or project model override for one task category.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ModelTaskSelectionOverride(ModelTaskKind TaskKind, ModelSelectionOverride Selection);
+
+/// <summary>Platform or project model override for all work assigned to one role.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ModelRoleSelectionOverride(string RoleId, ModelSelectionOverride Selection);
+
+/// <summary>Project model override for all work assigned to one project agent.</summary>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record ModelAgentSelectionOverride(string AgentId, ModelSelectionOverride Selection);
+
+/// <summary>Accepted model choice with the authority scope that supplied its credentials.</summary>
+public sealed record EffectiveModelSelection(
+    ModelSelectionSettings Selection,
+    ProjectAuthorityResourceType ConnectionScope);
 
 /// <summary>Project-level provider choice for an exclusive or singleton provider seam.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
@@ -95,6 +124,12 @@ public sealed record CopilotRunLimits
 public sealed record ProjectConfiguration
 {
     public ModelSelectionSettings? ModelSelection { get; init; }
+    /// <summary>Project overrides for one task category.</summary>
+    public ImmutableArray<ModelTaskSelectionOverride> ModelTaskOverrides { get; init; } = [];
+    /// <summary>Project overrides for all work assigned to one role.</summary>
+    public ImmutableArray<ModelRoleSelectionOverride> ModelRoleOverrides { get; init; } = [];
+    /// <summary>Project overrides for all work assigned to one agent.</summary>
+    public ImmutableArray<ModelAgentSelectionOverride> ModelAgentOverrides { get; init; } = [];
     public ImmutableArray<ProjectProviderOverride> ProviderOverrides { get; init; } = [];
     public ImmutableArray<ProjectOrderedProviderOverride> OrderedProviderOverrides { get; init; } = [];
     public ImmutableArray<ProjectAgentCharter> AgentCharters { get; init; } = [];
@@ -117,8 +152,32 @@ public sealed record ProjectConfiguration
 public sealed record PlatformRuntimeDefaults
 {
     public ModelSelectionSettings? ModelSelection { get; init; }
+    /// <summary>Platform task defaults, including the built-in task-based model routes.</summary>
+    public ImmutableArray<ModelTaskSelectionOverride> ModelTaskDefaults { get; init; } =
+        ModelTaskSelectionDefaults.Create();
+    /// <summary>Platform overrides for work assigned to one role.</summary>
+    public ImmutableArray<ModelRoleSelectionOverride> ModelRoleDefaults { get; init; } = [];
+    /// <summary>Platform overrides for work assigned to one agent.</summary>
+    public ImmutableArray<ModelAgentSelectionOverride> ModelAgentDefaults { get; init; } = [];
     public ImmutableArray<NetworkEgressRule> EgressBaseline { get; init; } = [];
     public CopilotRunLimits RunLimits { get; init; } = new();
+}
+
+/// <summary>Built-in task routing used until a platform administrator supplies narrower defaults.</summary>
+public static class ModelTaskSelectionDefaults
+{
+    /// <summary>Returns task defaults for reasoning-heavy work and direct implementation work.</summary>
+    public static ImmutableArray<ModelTaskSelectionOverride> Create() =>
+    [
+        new(ModelTaskKind.Planning, new("gpt-6.1-sol", "high")),
+        new(ModelTaskKind.Review, new("gpt-6.1-sol", "high")),
+        new(ModelTaskKind.Design, new("gpt-6.1-sol", "high")),
+        new(ModelTaskKind.Security, new("gpt-6.1-sol", "high")),
+        new(ModelTaskKind.CreativeWriting, new("gpt-6.1-sol", "high")),
+        new(ModelTaskKind.Complex, new("gpt-6.1-sol", "high")),
+        new(ModelTaskKind.CodeWriting, new("gpt-6-luna", "high")),
+        new(ModelTaskKind.Straightforward, new("gpt-6-luna", "high"))
+    ];
 }
 
 /// <summary>Provider seam, adapter/options versions, and capability requirements supplied for run selection.</summary>
@@ -169,6 +228,9 @@ public static class ProjectConfigurationValidator
         ArgumentNullException.ThrowIfNull(configuration);
         if (configuration.ProviderOverrides.IsDefault ||
             configuration.OrderedProviderOverrides.IsDefault ||
+            configuration.ModelTaskOverrides.IsDefault ||
+            configuration.ModelRoleOverrides.IsDefault ||
+            configuration.ModelAgentOverrides.IsDefault ||
             configuration.AgentCharters.IsDefault ||
             configuration.Casting.IsDefault ||
             configuration.BlueprintWorkflowReferences.IsDefault ||
@@ -192,6 +254,7 @@ public static class ProjectConfigurationValidator
         {
             ValidateIdentifier(model.Reference, "modelSelection.reference");
             ValidateModelSourceMode(model);
+            ValidateReasoningEffort(model.ReasoningEffort, "modelSelection.reasoningEffort");
         }
         if (configuration.ModelSelection?.CredentialReference is { } secret &&
             (string.IsNullOrWhiteSpace(secret.Id) || string.IsNullOrWhiteSpace(secret.Version)))
@@ -250,6 +313,14 @@ public static class ProjectConfigurationValidator
         }
 
         ValidateCastingProjection(configuration.AgentCharters, configuration.Casting);
+        ValidateModelOverrides(
+            configuration.ModelTaskOverrides,
+            configuration.ModelRoleOverrides,
+            configuration.ModelAgentOverrides,
+            configuration.Casting.Select(item => item.Role),
+            configuration.AgentCharters.Select(item => item.AgentId)
+                .Concat(configuration.Casting.Select(item => item.AgentId)),
+            "project");
 
         if (configuration.BlueprintWorkflowReferences.Any(item => item is null))
             throw Invalid("Configuration contains a null blueprint reference.");
@@ -391,20 +462,99 @@ public static class ProjectConfigurationValidator
         !string.IsNullOrWhiteSpace(secret.Id) &&
         !string.IsNullOrWhiteSpace(secret.Version);
 
+    private static void ValidateModelOverrides(
+        ImmutableArray<ModelTaskSelectionOverride> taskOverrides,
+        ImmutableArray<ModelRoleSelectionOverride> roleOverrides,
+        ImmutableArray<ModelAgentSelectionOverride> agentOverrides,
+        IEnumerable<string> configuredRoles,
+        IEnumerable<string> configuredAgents,
+        string scope)
+    {
+        if (taskOverrides.IsDefault || roleOverrides.IsDefault || agentOverrides.IsDefault ||
+            taskOverrides.Any(item => item is null) ||
+            roleOverrides.Any(item => item is null) ||
+            agentOverrides.Any(item => item is null))
+            throw Invalid($"The {scope} model override collections must be present and non-null.");
+
+        if (taskOverrides.Any(item => !Enum.IsDefined(item.TaskKind)) ||
+            taskOverrides.Select(item => item.TaskKind).Distinct().Count() != taskOverrides.Length)
+            throw Invalid($"The {scope} model task overrides contain an unknown or duplicate task kind.");
+
+        EnsureUnique(roleOverrides.Select(item => item.RoleId), $"{scope} model role override");
+        EnsureUnique(agentOverrides.Select(item => item.AgentId), $"{scope} model agent override");
+
+        var roles = configuredRoles.ToHashSet(StringComparer.Ordinal);
+        var agents = configuredAgents.ToHashSet(StringComparer.Ordinal);
+        foreach (var item in roleOverrides)
+        {
+            ValidateIdentifier(item.RoleId, $"{scope}.modelRoleOverrides.roleId");
+            if (roles.Count > 0 && !roles.Contains(item.RoleId))
+                throw Invalid($"The {scope} model role override names an unconfigured role.");
+            ValidateModelSelectionOverride(item.Selection, $"{scope}.modelRoleOverrides.selection");
+        }
+        foreach (var item in agentOverrides)
+        {
+            ValidateIdentifier(item.AgentId, $"{scope}.modelAgentOverrides.agentId");
+            if (agents.Count > 0 && !agents.Contains(item.AgentId))
+                throw Invalid($"The {scope} model agent override names an unconfigured agent.");
+            ValidateModelSelectionOverride(item.Selection, $"{scope}.modelAgentOverrides.selection");
+        }
+        foreach (var item in taskOverrides)
+            ValidateModelSelectionOverride(item.Selection, $"{scope}.modelTaskOverrides.selection");
+    }
+
+    private static void ValidateModelSelectionOverride(ModelSelectionOverride selection, string path)
+    {
+        if (selection is null ||
+            selection.Reference is null && selection.ReasoningEffort is null && selection.ModelBindingPin is null)
+            throw Invalid($"'{path}' must change a model reference or reasoning effort.");
+        if (selection.Reference is { } reference)
+            ValidateIdentifier(reference, path + ".reference");
+        ValidateReasoningEffort(selection.ReasoningEffort, path + ".reasoningEffort");
+        if (selection.ModelBindingPin is { } pin)
+        {
+            if (pin.ContractVersion != 1 || !Enum.IsDefined(pin.SourceMode) ||
+                pin.SourceMode == ModelSourceMode.HostedCopilot && pin.ProviderType is not null ||
+                pin.SourceMode == ModelSourceMode.Byok &&
+                    pin.ProviderType is not ("azure" or "openai" or "anthropic") ||
+                pin.ConfigurationHash is not { Length: 64 } ||
+                pin.ConfigurationHash.Any(character => character is not
+                    (>= '0' and <= '9' or >= 'a' and <= 'f')))
+                throw Invalid($"'{path}.modelBindingPin' is invalid.");
+            ValidateIdentifier(pin.ModelSelectionReference, path + ".modelBindingPin.modelSelectionReference");
+            ValidateIdentifier(pin.ModelId, path + ".modelBindingPin.modelId");
+            ValidateIdentifier(pin.ConfigurationRevision, path + ".modelBindingPin.configurationRevision");
+            ValidateReasoningEffort(pin.ReasoningEffort, path + ".modelBindingPin.reasoningEffort");
+            if (selection.Reference != pin.ModelSelectionReference ||
+                selection.ReasoningEffort is not null && selection.ReasoningEffort != pin.ReasoningEffort)
+                throw Invalid($"'{path}.modelBindingPin' must match the selected model reference.");
+        }
+    }
+
+    private static void ValidateReasoningEffort(string? effort, string path)
+    {
+        if (effort is not null && effort is not ("low" or "medium" or "high" or "xhigh"))
+            throw Invalid($"'{path}' must be low, medium, high, or xhigh.");
+    }
+
     private static void ValidateModelSourceMode(ModelSelectionSettings model)
     {
         if (model.ModelBindingPin is { } pin &&
-            (model.SourceMode != ModelSourceMode.Byok || pin.ContractVersion != 1 ||
+            (model.SourceMode is null || pin.ContractVersion != 1 ||
              pin.SourceMode != model.SourceMode || pin.ModelSelectionReference != model.Reference ||
-             pin.ProviderType is not ("azure" or "openai" or "anthropic") ||
+             model.SourceMode == ModelSourceMode.Byok &&
+                pin.ProviderType is not ("azure" or "openai" or "anthropic") ||
+             model.SourceMode == ModelSourceMode.HostedCopilot && pin.ProviderType is not null ||
              string.IsNullOrWhiteSpace(pin.ModelId) || string.IsNullOrWhiteSpace(pin.ConfigurationRevision) ||
              pin.ConfigurationHash is not { Length: 64 } ||
+             model.ReasoningEffort is not null && model.ReasoningEffort != pin.ReasoningEffort ||
              pin.ConfigurationHash.Any(character => character is not (>= '0' and <= '9' or >= 'a' and <= 'f'))))
-            throw Invalid("The BYOK model binding pin must match the selected source and reference.");
+            throw Invalid("The model binding pin must match the selected source and reference.");
         if (model.ModelBindingPin is { } validatedPin)
         {
             ValidateIdentifier(validatedPin.ModelId, "modelSelection.modelBindingPin.modelId");
             ValidateIdentifier(validatedPin.ConfigurationRevision, "modelSelection.modelBindingPin.configurationRevision");
+            ValidateReasoningEffort(validatedPin.ReasoningEffort, "modelSelection.modelBindingPin.reasoningEffort");
         }
         if (model.SourceMode is { } mode && !Enum.IsDefined(mode))
             throw Invalid("Model source mode must be hostedCopilot or byok.");
@@ -427,17 +577,26 @@ public static class ProjectConfigurationValidator
     public static PlatformRuntimeDefaults Validate(PlatformRuntimeDefaults defaults)
     {
         ArgumentNullException.ThrowIfNull(defaults);
-        if (defaults.EgressBaseline.IsDefault || defaults.RunLimits is null)
+        if (defaults.ModelTaskDefaults.IsDefault || defaults.ModelRoleDefaults.IsDefault ||
+            defaults.ModelAgentDefaults.IsDefault || defaults.EgressBaseline.IsDefault || defaults.RunLimits is null)
             throw Invalid("Platform egress baseline and run limits must be present.");
         if (defaults.ModelSelection is { } model)
         {
             ValidateIdentifier(model.Reference, "modelSelection.reference");
             ValidateModelSourceMode(model);
+            ValidateReasoningEffort(model.ReasoningEffort, "modelSelection.reasoningEffort");
         }
         if (defaults.ModelSelection?.CredentialReference is { } secret &&
             (string.IsNullOrWhiteSpace(secret.Id) || string.IsNullOrWhiteSpace(secret.Version)))
             throw Invalid("Model credential references must contain an exact secret ID and version.");
 
+        ValidateModelOverrides(
+            defaults.ModelTaskDefaults,
+            defaults.ModelRoleDefaults,
+            defaults.ModelAgentDefaults,
+            [],
+            [],
+            "platform");
         var normalizedEgress = ValidateAndNormalizeRules(defaults.EgressBaseline, "egressBaseline");
         ValidateLimits(defaults.RunLimits);
         return defaults with { EgressBaseline = normalizedEgress };

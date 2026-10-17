@@ -49,7 +49,9 @@ internal sealed class RuntimeRunAdmissionService(
             if (model.SourceMode != ModelSourceMode.HostedCopilot || model.ConnectionId is null ||
                 model.CredentialReference is not null)
                 throw new RuntimeAuthorizationException("runtime_run_admission_model_mode_invalid");
-            var pin = models.Pin(model.Reference, ModelSourceMode.HostedCopilot);
+            _ = models.Resolve(model.Reference, model.SourceMode, model.ModelBindingPin);
+            var pin = models.Pin(
+                model.Reference, ModelSourceMode.HostedCopilot, model.ReasoningEffort);
             return await consumer.ReadRunAdmissionAsync(
                 first.TenantId, projectId, runId, request, selection, model, pin, async token =>
                 {

@@ -708,7 +708,11 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
             Context = new RunSelectionContext
             {
                 Revision = "cost-context-v1",
-                AvailableModelSelectionReferences = ImmutableHashSet.Create("platform-model"),
+                AvailableModelSelectionReferences = ImmutableHashSet.Create(
+                    StringComparer.Ordinal,
+                    "platform-model",
+                    "gpt-6.1-sol",
+                    "gpt-6-luna"),
                 ProviderRequirements = [requirement, requirement with { MeterSource = "hosted.tokens" }],
             },
         };
@@ -2941,7 +2945,12 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         {
             Revision = "provider-catalog-revision-1",
             AvailableModelSelectionReferences =
-                ImmutableHashSet.Create(StringComparer.Ordinal, "project-model", "platform-model"),
+                ImmutableHashSet.Create(
+                    StringComparer.Ordinal,
+                    "project-model",
+                    "platform-model",
+                    "gpt-6.1-sol",
+                    "gpt-6-luna"),
             ProviderRequirements =
             [
                 new ProviderRequirement

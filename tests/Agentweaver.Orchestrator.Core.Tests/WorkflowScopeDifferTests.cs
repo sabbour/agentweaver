@@ -1,3 +1,4 @@
+using Agentweaver.Abstractions;
 using Agentweaver.Orchestrator.Core;
 using Xunit;
 
@@ -28,10 +29,37 @@ public sealed class WorkflowScopeDifferTests
     }
 
     [Fact]
+    public void ChangingStepModelTaskKindRequiresConfirmation()
+    {
+        var previous = WorkflowTestData.Snapshot(
+            WorkflowTestData.Definition(
+                WorkflowDefinitionOrigin.BuiltIn,
+                WorkflowTestData.Open("implement", 0, [])));
+        var next = WorkflowTestData.Snapshot(
+            WorkflowTestData.Definition(
+                WorkflowDefinitionOrigin.BuiltIn,
+                WorkflowTestData.Open("implement", 0, []) with
+                {
+                    ModelTaskKind = ModelTaskKind.CodeWriting
+                }));
+
+        var diff = WorkflowScopeDiffer.Compare(previous, next);
+
+        Assert.True(diff.RequiresConfirmation);
+        Assert.Equal(["implement"], diff.ChangedStepIds.ToArray());
+    }
+
+    [Fact]
     public void WorkPlanRevisionReportsAddedAndChangedScope()
     {
         var workflow = WorkflowTestData.Snapshot();
         var context = WorkflowTestData.SelectionContext();
+        var nextContext = WorkflowTestData.SelectionContext(
+            modelTaskSelections:
+            [
+                new(ModelTaskKind.Straightforward, null, null, "model:provider/alpha"),
+                new(ModelTaskKind.Straightforward, "engineer", "agent-1", "model:provider/beta")
+            ]);
         var previous = WorkPlanValidator.ValidateAndSnapshot(
             workflow,
             WorkflowTestData.Plan(WorkflowTestData.Item("first")),
@@ -40,8 +68,8 @@ public sealed class WorkflowScopeDifferTests
             workflow,
             WorkflowTestData.Plan(
                 WorkflowTestData.Item("first", modelSelection: "model:provider/beta"),
-                WorkflowTestData.Item("second")),
-            context);
+                WorkflowTestData.Item("second", role: "researcher", agent: "agent-2")),
+            nextContext);
 
         Assert.True(previous.IsValid);
         Assert.True(next.IsValid);

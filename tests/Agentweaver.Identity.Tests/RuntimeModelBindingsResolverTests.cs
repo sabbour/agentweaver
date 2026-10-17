@@ -39,6 +39,41 @@ public sealed class RuntimeModelBindingsResolverTests
     }
 
     [Fact]
+    public void ReasoningEffortIsPartOfTheAcceptedModelPinAndByokConfigurationIdentity()
+    {
+        var binding = new RuntimeModelBinding("byok-model", ModelSourceMode.Byok,
+            new RuntimeByokProvider("openai", new Uri("https://byok.test/v1")))
+        {
+            SupportedReasoningEfforts = ["low", "high"]
+        };
+        var first = new RuntimeModelBindingsResolver("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding> { ["accepted-reference"] = binding });
+        var reordered = new RuntimeModelBindingsResolver("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-reference"] = binding with { SupportedReasoningEfforts = ["high", "low"] }
+            });
+        var changed = new RuntimeModelBindingsResolver("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-reference"] = binding with { SupportedReasoningEfforts = ["high"] }
+            });
+
+        Assert.Equal(first.ConfigurationHash, reordered.ConfigurationHash);
+        Assert.NotEqual(first.ConfigurationHash, changed.ConfigurationHash);
+        var high = first.Pin("accepted-reference", ModelSourceMode.Byok, "high");
+        var low = first.Pin("accepted-reference", ModelSourceMode.Byok, "low");
+        Assert.NotEqual(high, low);
+        Assert.Equal("high", high.ReasoningEffort);
+        Assert.Equal("runtime_model_binding_pin_mismatch",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                changed.Resolve("accepted-reference", ModelSourceMode.Byok, high)).Code);
+        Assert.Equal("runtime_model_binding_pin_invalid",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeModelBindingsResolver.ValidatePin(high with { ReasoningEffort = "none" })).Code);
+    }
+
+    [Fact]
     public void ResolvesTheAcceptedReferenceRatherThanTreatingItAsAModelId()
     {
         var resolver = Resolver();
@@ -53,6 +88,138 @@ public sealed class RuntimeModelBindingsResolverTests
         Assert.Equal("runtime_model_reference_unavailable",
             Assert.Throws<RuntimeAuthorizationException>(() =>
                 resolver.Resolve("concrete-model", ModelSourceMode.HostedCopilot)).Code);
+    }
+
+    [Fact]
+    public void AcceptedSelectionDecoderPreservesAHostedModelEffortPin()
+    {
+        var pin = Resolver().Pin("accepted-reference", ModelSourceMode.HostedCopilot, "low");
+        var selection = JsonSerializer.SerializeToElement(new
+        {
+            modelSelection = new
+            {
+                reference = "accepted-reference",
+                sourceMode = "hostedCopilot",
+                modelBindingPin = pin
+            }
+        }, new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
+        });
+
+        Assert.Equal(pin, RuntimeAcceptedModelSelection.Read(selection).ModelBindingPin);
+    }
+
+    [Fact]
+    public void AcceptedSelectionDecoderSelectsTheExactModelAndEffortVariantForATaskRoute()
+    {
+        using var selection = JsonDocument.Parse("""
+            {
+              "projectConfiguration": { "modelSelection": null },
+              "modelSelection": {
+                "reference": "accepted-reference",
+                "sourceMode": "hostedCopilot",
+                "connectionId": "b14182e2-c4fd-4cb5-8d89-556c26a0d284",
+                "reasoningEffort": "high"
+              },
+              "modelSelections": [
+                {
+                  "selection": {
+                    "reference": "accepted-reference",
+                    "sourceMode": "hostedCopilot",
+                    "connectionId": "b14182e2-c4fd-4cb5-8d89-556c26a0d284",
+                    "reasoningEffort": "high"
+                  },
+                  "connectionScope": "platform"
+                },
+                {
+                  "selection": {
+                    "reference": "accepted-reference",
+                    "sourceMode": "hostedCopilot",
+                    "connectionId": "b14182e2-c4fd-4cb5-8d89-556c26a0d284",
+                    "reasoningEffort": "low"
+                  },
+                  "connectionScope": "platform"
+                }
+              ]
+            }
+            """);
+
+        var accepted = RuntimeAcceptedModelSelection.Read(
+            selection.RootElement, "accepted-reference", "low");
+
+        Assert.Equal("accepted-reference", accepted.Reference);
+        Assert.Equal("low", accepted.ReasoningEffort);
+        Assert.Equal(ModelSourceMode.HostedCopilot, accepted.SourceMode);
+        Assert.Equal(Guid.Parse("b14182e2-c4fd-4cb5-8d89-556c26a0d284"), accepted.ConnectionId);
+        Assert.Equal(ProjectAuthorityResourceType.Platform, accepted.ConnectionScope);
+    }
+
+    /// <summary>Omitted project effort normalizes to the accepted High selection.</summary>
+    [Fact]
+    public void AcceptedSelectionDecoderMatchesNormalizedProjectModelDefaults()
+    {
+        using var selection = JsonDocument.Parse("""
+            {
+              "projectConfiguration": {
+                "modelSelection": {
+                  "reference": "accepted-reference",
+                  "sourceMode": "hostedCopilot",
+                  "connectionId": "b14182e2-c4fd-4cb5-8d89-556c26a0d284"
+                }
+              },
+              "modelSelection": {
+                "reference": "accepted-reference",
+                "sourceMode": "hostedCopilot",
+                "connectionId": "b14182e2-c4fd-4cb5-8d89-556c26a0d284",
+                "reasoningEffort": "high"
+              },
+              "modelSelections": [
+                {
+                  "selection": {
+                    "reference": "accepted-reference",
+                    "sourceMode": "hostedCopilot",
+                    "connectionId": "b14182e2-c4fd-4cb5-8d89-556c26a0d284",
+                    "reasoningEffort": "high"
+                  },
+                  "connectionScope": "project"
+                }
+              ]
+            }
+            """);
+
+        var accepted = RuntimeAcceptedModelSelection.Read(
+            selection.RootElement, "accepted-reference", "high");
+
+        Assert.Equal("high", accepted.ReasoningEffort);
+        Assert.Equal(ProjectAuthorityResourceType.Project, accepted.ConnectionScope);
+    }
+
+    [Fact]
+    public void AcceptedSelectionDecoderRejectsMissingAndDuplicateTaskModelVariants()
+    {
+        using var missing = JsonDocument.Parse("""
+            {
+              "modelSelection": { "reference": "accepted-reference", "reasoningEffort": "high" },
+              "modelSelections": [
+                { "selection": { "reference": "accepted-reference", "reasoningEffort": "high" }, "connectionScope": "platform" }
+              ]
+            }
+            """);
+        using var duplicate = JsonDocument.Parse("""
+            {
+              "modelSelection": { "reference": "accepted-reference", "reasoningEffort": "high" },
+              "modelSelections": [
+                { "selection": { "reference": "accepted-reference", "reasoningEffort": "low" }, "connectionScope": "platform" },
+                { "selection": { "reference": "accepted-reference", "reasoningEffort": "low" }, "connectionScope": "platform" }
+              ]
+            }
+            """);
+
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeAcceptedModelSelection.Read(missing.RootElement, "accepted-reference", "low"));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeAcceptedModelSelection.Read(duplicate.RootElement, "accepted-reference", "low"));
     }
 
     [Theory]

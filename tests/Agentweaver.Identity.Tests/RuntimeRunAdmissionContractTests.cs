@@ -32,6 +32,54 @@ public sealed class RuntimeRunAdmissionContractTests
             $$"""{"ContractVersion":1,"AcceptedSelectionHash":"{{request.AcceptedSelectionHash}}","ModelId":"free-model"}"""));
     }
 
+    [Fact]
+    public void AdmissionPreservesTheAcceptedReasoningEffortInTheModelPin()
+    {
+        var selection = Selection(reasoningEffort: "low");
+        var request = new RuntimeRunAdmissionRequest(1, RuntimeRunAdmissionContract.SelectionHash(selection));
+        var receipt = Receipt(selection);
+
+        Assert.Equal("low", receipt.ModelSelection.ReasoningEffort);
+        Assert.Equal("low", receipt.ModelBindingPin.ReasoningEffort);
+        Assert.Equal(0, RuntimeRunAdmissionContract.ValidateReceipt(
+            receipt, request, "tenant", "project", "run", selection));
+
+        var mismatched = receipt with
+        {
+            ModelBindingPin = receipt.ModelBindingPin with { ReasoningEffort = "high" }
+        };
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeRunAdmissionContract.ValidateReceipt(mismatched, request, "tenant", "project", "run", selection));
+    }
+
+    [Fact]
+    public void AdmissionCannotReplaceAnAcceptedModelBindingPin()
+    {
+        var models = ModelResolver();
+        var acceptedPin = models.Pin("accepted-reference", ModelSourceMode.HostedCopilot, "high");
+        var selection = Selection(reasoningEffort: "high", modelBindingPin: acceptedPin);
+        var request = new RuntimeRunAdmissionRequest(1, RuntimeRunAdmissionContract.SelectionHash(selection));
+        var receipt = Receipt(selection);
+        Assert.Equal(acceptedPin, receipt.ModelBindingPin);
+
+        var changedPin = acceptedPin with
+        {
+            ConfigurationRevision = "model-bindings-v2",
+            ConfigurationHash = new string('b', 64)
+        };
+        var replaced = receipt with
+        {
+            ModelBindingPin = changedPin
+        };
+        Assert.Equal("runtime_run_admission_invalid",
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeRunAdmissionContract.ValidateReceipt(
+                    replaced, request, "tenant", "project", "run", selection)).Code);
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            models.Resolve("accepted-reference", ModelSourceMode.HostedCopilot,
+                changedPin));
+    }
+
     [Theory]
     [InlineData("reasoning", "gpt-6.1-sol")]
     [InlineData("coding", "gpt-6-luna")]
@@ -57,6 +105,7 @@ public sealed class RuntimeRunAdmissionContractTests
     [InlineData("model")]
     [InlineData("mode")]
     [InlineData("binding")]
+    [InlineData("effort")]
     [InlineData("quote")]
     [InlineData("unit")]
     [InlineData("unpriced")]
@@ -81,6 +130,7 @@ public sealed class RuntimeRunAdmissionContractTests
             "model" => receipt with { ModelBindingPin = receipt.ModelBindingPin with { ModelId = "unpriced-model" } },
             "mode" => receipt with { ModelBindingPin = receipt.ModelBindingPin with { SourceMode = ModelSourceMode.Byok } },
             "binding" => receipt with { CostBinding = null },
+            "effort" => receipt with { ModelBindingPin = receipt.ModelBindingPin with { ReasoningEffort = "low" } },
             "quote" => receipt with { Quote = receipt.Quote with { Amount = null } },
             "unit" => receipt with { Quote = receipt.Quote with { Unit = "tokens" } },
             "unpriced" => receipt with { Quote = new(null, null, CostDisposition.Unpriced, null, "unavailable") },
@@ -113,7 +163,10 @@ public sealed class RuntimeRunAdmissionContractTests
                 RuntimeRunAdmissionContract.ValidateSelectionScope(document.RootElement, "project", "run")).Code);
     }
 
-    private static JsonElement Selection(string modelReference = "accepted-reference") =>
+    private static JsonElement Selection(
+        string modelReference = "accepted-reference",
+        string reasoningEffort = "high",
+        RuntimeModelBindingPin? modelBindingPin = null) =>
         JsonSerializer.SerializeToElement(new
     {
         projectId = "project", runId = "run", projectRevision = 1, projectConfigurationRevision = 1,
@@ -122,7 +175,8 @@ public sealed class RuntimeRunAdmissionContractTests
         modelSelection = new
         {
             reference = modelReference, sourceMode = "hostedCopilot",
-            connectionId = "11111111-1111-1111-1111-111111111111"
+            connectionId = "11111111-1111-1111-1111-111111111111",
+            reasoningEffort, modelBindingPin
         }
     });
 
@@ -132,19 +186,24 @@ public sealed class RuntimeRunAdmissionContractTests
         decimal multiplier = 2.5m)
     {
         var modelReference = selection.GetProperty("modelSelection").GetProperty("reference").GetString()!;
-        var resolver = new RuntimeModelBindingsResolver("model-bindings-v1",
-            new Dictionary<string, RuntimeModelBinding>
-            {
-                [modelReference] = new(modelId, ModelSourceMode.HostedCopilot)
-            });
+        var resolver = ModelResolver(modelReference, modelId);
         var card = new CostRateCard("card", "1", SdkMeterSources.CopilotNanoAiu, "AIC", 1_000_000_000,
             ImmutableDictionary<string, decimal>.Empty.Add(modelId, multiplier));
         var binding = new CostBinding(SdkMeterSources.CopilotNanoAiu, "copilot.usage-cost",
             "1.0.0", 1, "options-v1", "resource", 1,
             ImmutableHashSet.Create("cost.usage.price", "cost.work.quote"), card);
+        var model = RuntimeAcceptedModelSelection.Read(selection);
         return new(1, "tenant", "project", "run", RuntimeRunAdmissionContract.SelectionHash(selection),
-            RuntimeAcceptedModelSelection.Read(selection), resolver.Pin(modelReference, ModelSourceMode.HostedCopilot),
+            model, resolver.Pin(modelReference, ModelSourceMode.HostedCopilot, model.ReasoningEffort),
             binding, new(0, "AIC", CostDisposition.Estimate, card, null),
             new("tenant", "project", "run", 0, true, [], []));
     }
+
+    private static RuntimeModelBindingsResolver ModelResolver(
+        string modelReference = "accepted-reference", string modelId = "concrete-model") =>
+        new("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                [modelReference] = new(modelId, ModelSourceMode.HostedCopilot)
+            });
 }

@@ -343,7 +343,8 @@ public sealed class RuntimeNativePromptCapacityTests
                     [modelReference] = new("prompt-test-model", ModelSourceMode.Byok,
                         new RuntimeByokProvider("openai", InferenceEndpoint.BaseUrl, "completions"))
                     {
-                        PromptCapacityTokens = serverCapacity
+                        PromptCapacityTokens = serverCapacity,
+                        SupportedReasoningEfforts = ["low", "medium", "high", "xhigh"]
                     }
                 });
             ModelBindingConfigurationHash = resolver.ConfigurationHash;

@@ -215,7 +215,10 @@ public sealed partial class RuntimeResumeBootstrapTests
                     binding.ProjectId, binding.RunId, binding.SessionId, binding.AgentId,
                     binding.ModelSelectionReference!, binding.TurnId, binding.ProjectRevision,
                     binding.ProjectConfigurationRevision, binding.PlatformRuntimeRevision, binding.ContextRevision,
-                    binding.AcceptedSelectionHash, binding.ExecutionFence, 1, 1, 1);
+                    binding.AcceptedSelectionHash, binding.ExecutionFence, 1, 1, 1)
+                {
+                    ReasoningEffort = binding.ReasoningEffort
+                };
             }
             else if (path == "/internal/runtime/resume/configuration")
             {

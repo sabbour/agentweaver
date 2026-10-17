@@ -107,6 +107,163 @@ public sealed class ProjectConfigurationValidatorTests
     }
 
     [Fact]
+    public void ResolvesTaskRoleAndAgentModelOverridesAndKeepsExplicitProjectSelectionGlobal()
+    {
+        var platform = PlatformDefaults() with
+        {
+            ModelSelection = new("global-model", null, ModelSourceMode.HostedCopilot, Guid.NewGuid()),
+        };
+        var project = ProjectConfigurationValidator.Validate(new ProjectConfiguration
+        {
+            AgentCharters = [new ProjectAgentCharter("agent-1", "Engineer", "engineer", "Build software.")],
+            Casting = [new ProjectAgentCast("agent-1", "engineer", 0)],
+            ModelTaskOverrides =
+                [new ModelTaskSelectionOverride(ModelTaskKind.CodeWriting, new("project-code", "medium"))],
+            ModelRoleOverrides =
+                [new ModelRoleSelectionOverride("engineer", new("role-model", "low"))],
+            ModelAgentOverrides =
+                [new ModelAgentSelectionOverride("agent-1", new("agent-model", "xhigh"))],
+        });
+        var context = new RunSelectionContext
+        {
+            Revision = "model-routing-v1",
+            AvailableModelSelectionReferences = ImmutableHashSet.Create(
+                StringComparer.Ordinal,
+                "global-model",
+                "gpt-6.1-sol",
+                "gpt-6-luna",
+                "project-code",
+                "role-model",
+                "agent-model"),
+        };
+
+        var resolved = ProjectsConfigService.ResolveModelSelections(project, platform, context);
+        var taskRoute = Assert.Single(resolved.TaskSelections.Where(item =>
+            item.TaskKind == ModelTaskKind.CodeWriting && item.RoleId is null && item.AgentId is null));
+        Assert.Equal("project-code", taskRoute.ModelSelectionReference);
+        Assert.Equal("medium", taskRoute.ReasoningEffort);
+        var roleRoute = Assert.Single(resolved.TaskSelections.Where(item =>
+            item.TaskKind == ModelTaskKind.CodeWriting && item.RoleId == "engineer" && item.AgentId is null));
+        Assert.Equal("role-model", roleRoute.ModelSelectionReference);
+        Assert.Equal("low", roleRoute.ReasoningEffort);
+        var agentRoute = Assert.Single(resolved.TaskSelections.Where(item =>
+            item.TaskKind == ModelTaskKind.CodeWriting && item.RoleId == "engineer" && item.AgentId == "agent-1"));
+        Assert.Equal("agent-model", agentRoute.ModelSelectionReference);
+        Assert.Equal("xhigh", agentRoute.ReasoningEffort);
+        var defaultRoute = Assert.Single(resolved.TaskSelections.Where(item =>
+            item.TaskKind == ModelTaskKind.Planning && item.RoleId is null && item.AgentId is null));
+        Assert.Equal("gpt-6.1-sol", defaultRoute.ModelSelectionReference);
+        Assert.Equal("high", defaultRoute.ReasoningEffort);
+
+        var explicitProject = ProjectConfigurationValidator.Validate(project with
+        {
+            ModelSelection = new("manual-model", new SecretRef("model-key", "v1"), ModelSourceMode.Byok),
+        });
+        var explicitContext = context with
+        {
+            AvailableModelSelectionReferences = ImmutableHashSet.Create(StringComparer.Ordinal, "manual-model"),
+        };
+        var globallySelected = ProjectsConfigService.ResolveModelSelections(explicitProject, platform, explicitContext);
+        Assert.All(globallySelected.TaskSelections, item =>
+        {
+            Assert.Equal("manual-model", item.ModelSelectionReference);
+            Assert.Equal("high", item.ReasoningEffort);
+        });
+    }
+
+    [Fact]
+    public void CoalescesEquivalentRoutesWithoutDroppingPinsAndRejectsConflictingPins()
+    {
+        var pin = new RuntimeModelBindingPin(
+            1, "gpt-6.1-sol", "reasoning-model", ModelSourceMode.HostedCopilot,
+            "model-bindings-v1", new string('a', 64)) { ReasoningEffort = "high" };
+        var project = ProjectConfigurationValidator.Validate(new ProjectConfiguration
+        {
+            AgentCharters = [new ProjectAgentCharter("agent-1", "Engineer", "engineer", "Build software.")],
+            Casting = [new ProjectAgentCast("agent-1", "engineer", 0)],
+            ModelRoleOverrides =
+                [new ModelRoleSelectionOverride("engineer", new("gpt-6.1-sol", "high", pin))]
+        });
+        var platform = PlatformDefaults() with
+        {
+            ModelSelection = new("gpt-6.1-sol", null, ModelSourceMode.HostedCopilot, Guid.NewGuid())
+        };
+        var context = new RunSelectionContext
+        {
+            Revision = "model-routing-v1",
+            AvailableModelSelectionReferences = ImmutableHashSet.Create(
+                StringComparer.Ordinal, "gpt-6.1-sol", "gpt-6-luna")
+        };
+
+        var resolved = ProjectsConfigService.ResolveModelSelections(project, platform, context);
+        var effective = Assert.Single(resolved.EffectiveSelections.Where(item =>
+            item.Selection.Reference == "gpt-6.1-sol" && item.Selection.ReasoningEffort == "high"));
+        Assert.Equal(pin, effective.Selection.ModelBindingPin);
+
+        var conflictingProject = ProjectConfigurationValidator.Validate(project with
+        {
+            ModelAgentOverrides =
+            [
+                new ModelAgentSelectionOverride(
+                    "agent-1", new("gpt-6.1-sol", "high", pin with { ModelId = "other-model" }))
+            ]
+        });
+        Assert.Equal("model_selection_conflict",
+            Assert.Throws<ProjectConfigException>(() =>
+                ProjectsConfigService.ResolveModelSelections(conflictingProject, platform, context)).Code);
+    }
+
+    [Fact]
+    public void ResolvesOnlyConfiguredEligibleRoutesForLargeCasts()
+    {
+        var roster = Enumerable.Range(0, 16)
+            .Select(index => (AgentId: $"agent-{index}", RoleId: $"role-{index}"))
+            .ToArray();
+        var project = ProjectConfigurationValidator.Validate(new ProjectConfiguration
+        {
+            AgentCharters = roster.Select(item =>
+                new ProjectAgentCharter(item.AgentId, item.AgentId, item.RoleId, "Complete assigned work."))
+                .ToImmutableArray(),
+            Casting = roster.Select((item, index) =>
+                new ProjectAgentCast(item.AgentId, item.RoleId, index)).ToImmutableArray(),
+            ModelRoleOverrides = roster.Select((item, index) =>
+                new ModelRoleSelectionOverride(item.RoleId, new($"role-model-{index}", "high")))
+                .ToImmutableArray(),
+            ModelAgentOverrides = roster.Select((item, index) =>
+                new ModelAgentSelectionOverride(item.AgentId, new($"agent-model-{index}", "high")))
+                .ToImmutableArray()
+        });
+        var platform = PlatformDefaults() with
+        {
+            ModelRoleDefaults = [new("unused-role", new("unused-role-model", "high"))],
+            ModelAgentDefaults = [new("unused-agent", new("unused-agent-model", "high"))]
+        };
+        var context = new RunSelectionContext
+        {
+            Revision = "model-routing-v1",
+            AvailableModelSelectionReferences = roster
+                .SelectMany((_, index) => new[] { $"role-model-{index}", $"agent-model-{index}" })
+                .Append("gpt-6.1-sol")
+                .Append("gpt-6-luna")
+                .Append("unused-role-model")
+                .Append("unused-agent-model")
+                .ToImmutableHashSet(StringComparer.Ordinal)
+        };
+
+        var resolved = ProjectsConfigService.ResolveModelSelections(project, platform, context);
+
+        Assert.Equal(264, resolved.TaskSelections.Length);
+        Assert.Equal(34, resolved.EffectiveSelections.Length);
+        Assert.Equal(8, resolved.TaskSelections.Count(item => item.RoleId is null && item.AgentId is null));
+        Assert.Equal(128, resolved.TaskSelections.Count(item => item.RoleId is not null && item.AgentId is null));
+        Assert.Equal(128, resolved.TaskSelections.Count(item => item.AgentId is not null));
+        Assert.DoesNotContain(resolved.TaskSelections, item =>
+            item.RoleId == "unused-role" || item.AgentId == "unused-agent");
+        Assert.DoesNotContain(resolved.EffectiveSelections, item =>
+            item.Selection.Reference is "unused-role-model" or "unused-agent-model");
+    }
+
+    [Fact]
     public void NormalizesEgressAndAllowsOnlySubsetWithRequiredDestinations()
     {
         var baseline = ProjectConfigurationValidator.Validate(PlatformDefaults()).EgressBaseline;
@@ -410,13 +567,13 @@ public sealed class ProjectConfigurationValidatorTests
     }
 
     [Fact]
-    public void ReviewedRemoteToolReferencesAreOptionalAndPreserveLegacyConfigurationJson()
+    public void ReviewedRemoteToolReferencesAreOptionalAndKeepNullReferencesOmitted()
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
         var legacy = ProjectConfigurationValidator.Validate(new ProjectConfiguration());
         var legacyJson = JsonSerializer.Serialize(legacy, options);
         Assert.Equal(
-            """{"modelSelection":null,"providerOverrides":[],"orderedProviderOverrides":[],"agentCharters":[],"casting":[],"blueprintWorkflowReferences":[],"defaultWorkflowId":null,"skills":[],"egressNarrowing":null,"runLimits":{"maxModelTurns":null,"maxToolCalls":null,"maxChildren":null,"maxConcurrentChildren":null,"maxWallTimeSeconds":null,"maxPromptTokens":null}}""",
+            """{"modelSelection":null,"modelTaskOverrides":[],"modelRoleOverrides":[],"modelAgentOverrides":[],"providerOverrides":[],"orderedProviderOverrides":[],"agentCharters":[],"casting":[],"blueprintWorkflowReferences":[],"defaultWorkflowId":null,"skills":[],"egressNarrowing":null,"runLimits":{"maxModelTurns":null,"maxToolCalls":null,"maxChildren":null,"maxConcurrentChildren":null,"maxWallTimeSeconds":null,"maxPromptTokens":null}}""",
             legacyJson);
 
         var reference = new ReviewedRemoteToolSnapshotReference(

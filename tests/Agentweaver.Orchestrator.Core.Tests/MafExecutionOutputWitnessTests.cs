@@ -697,7 +697,14 @@ public sealed class MafExecutionOutputWitnessTests
                 new RoleRunSelection("planner", ["planner-agent"], ["model:provider/alpha"], ["worktree"]),
                 new RoleRunSelection("engineer", ["agent-1"], ["model:provider/alpha"], ["worktree"])
             ],
-            WorkflowTestData.PinnedSandboxBinding());
+            WorkflowTestData.PinnedSandboxBinding())
+        {
+            ModelTaskSelections =
+            [
+                new(Agentweaver.Abstractions.ModelTaskKind.Straightforward, null, null,
+                    "model:provider/alpha")
+            ]
+        };
         var result = WorkPlanValidator.ValidateAndSnapshot(
             WorkflowTestData.Snapshot(definition),
             WorkflowTestData.Plan(WorkflowTestData.Item("implementation", outputs: ["Src/Result.cs"])),

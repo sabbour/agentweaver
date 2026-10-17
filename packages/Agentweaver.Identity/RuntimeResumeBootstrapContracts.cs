@@ -245,7 +245,10 @@ public sealed record RuntimeHostResumeCacheReceipt(
                 Source.SdkVersion != material.SdkVersion || Source.RuntimeVersion != material.RuntimeVersion ||
                 Source.ModelSelectionReference != material.ModelSelectionReference ||
                 Source.ModelId != material.ModelId || Source.AcceptedSelectionHash != material.AcceptedSelectionHash ||
-                Source.MaxPromptTokens != material.MaxPromptTokens)
+                Source.MaxPromptTokens != material.MaxPromptTokens ||
+                Source.ReasoningEffort != material.ReasoningEffort ||
+                Source.ModelBindingPin != material.ModelBindingPin ||
+                Source.ResolvedModelBindingPin != material.ResolvedModelBindingPin)
                 throw new RuntimeAuthorizationException("runtime_resume_cache_receipt_invalid");
         }
         else if (RecoveryMode == "journal-rebuild" && JournalRebuild is not null)

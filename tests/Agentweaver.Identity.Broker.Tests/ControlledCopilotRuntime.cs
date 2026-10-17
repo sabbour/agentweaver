@@ -43,6 +43,10 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
     public string ExpectedPrompt { get; set; } = "A bounded user request.";
     public string? EffectiveModelId { get; set; }
     public long? MaxPromptTokens { get; set; } = 200000;
+    public bool SupportsReasoningEffort { get; set; } = true;
+    public string[] SupportedReasoningEfforts { get; set; } = ["low", "medium", "high", "xhigh"];
+    public string ExpectedReasoningEffort { get; set; } = "high";
+    public string? EffectiveReasoningEffort { get; set; }
     public bool IncompleteNativeEventRange { get; set; }
     public Action? BeforeEffectiveModelResponse { get; set; }
     public Func<CancellationToken, Task>? BeforeStatusResponse { get; set; }
@@ -280,7 +284,12 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                                     new
                                     {
                                         id = ModelId, name = "Controlled catalog model",
-                                        capabilities = new { limits = new { max_prompt_tokens = MaxPromptTokens } },
+                                        capabilities = new
+                                        {
+                                            limits = new { max_prompt_tokens = MaxPromptTokens },
+                                            supports = new { reasoningEffort = SupportsReasoningEffort }
+                                        },
+                                        supportedReasoningEfforts = SupportedReasoningEfforts,
                                         policy = new { state = "enabled" },
                                         billing = new { multiplier = 2.5 }
                                     }
@@ -296,6 +305,8 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                         case "session.resume":
                             _sessionId = parameters.GetProperty("sessionId").GetString();
                             Assert.Equal(ModelId, parameters.GetProperty("model").GetString());
+                            Assert.Equal(ExpectedReasoningEffort,
+                                parameters.GetProperty("reasoningEffort").GetString());
                             if (Byok)
                             {
                                 Assert.False(parameters.TryGetProperty("gitHubToken", out var githubToken) &&
@@ -319,7 +330,11 @@ internal sealed class ControlledCopilotRuntime : IAsyncDisposable
                             break;
                         case "session.model.getCurrent":
                             BeforeEffectiveModelResponse?.Invoke();
-                            result = new { modelId = EffectiveModelId ?? ModelId };
+                            result = new
+                            {
+                                modelId = EffectiveModelId ?? ModelId,
+                                reasoningEffort = EffectiveReasoningEffort ?? ExpectedReasoningEffort
+                            };
                             break;
                         case "session.send":
                             Assert.Equal(ExpectedPrompt, parameters.GetProperty("prompt").GetString());

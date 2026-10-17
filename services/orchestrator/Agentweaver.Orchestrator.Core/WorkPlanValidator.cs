@@ -205,6 +205,8 @@ public static class WorkPlanValidator
                 role.EligibleIsolationChoices, path + ".eligibleIsolationChoices", issues);
         }
 
+        ValidateModelTaskSelections(context.ModelTaskSelections, roleSelections, issues);
+
         if (required && context.IsolationProviderBinding is null)
         {
             Add(issues, WorkflowValidationCode.PinnedSandboxBindingRequired,
@@ -264,11 +266,19 @@ public static class WorkPlanValidator
         else if (!hasValidRole ||
                  !roleSelections.TryGetValue(item.RoleId, out var modelRoleSelection) ||
                  !ContainsOrdinal(modelRoleSelection.ModelSelectionReferences,
-                     item.ModelSelectionReference))
+                     item.ModelSelectionReference) ||
+                 !string.Equals(
+                     ModelTaskSelectionResolver.ResolveReference(
+                         step.ModelTaskKind ?? ModelTaskKind.Straightforward,
+                         item.RoleId,
+                         item.AgentId,
+                         context?.ModelTaskSelections ?? []),
+                     item.ModelSelectionReference,
+                     StringComparison.Ordinal))
         {
             Add(issues, WorkflowValidationCode.ModelSelectionNotEligible,
                 path + ".modelSelectionReference",
-                "Model selection is not eligible for the assigned role in the pinned run context.");
+                "Model selection is not the accepted route for this task, role, and agent in the pinned run context.");
         }
 
         if (!WorkflowValidationSupport.IsOpaqueReference(item.IsolationProviderId))
@@ -344,6 +354,59 @@ public static class WorkPlanValidator
                 Add(issues, WorkflowValidationCode.RequiredCapabilityUnavailable,
                     path + ".requiredProviderCapabilities",
                     $"The pinned provider lacks a capability required by fixed-work step '{step.Id}'.");
+        }
+    }
+
+    private static void ValidateModelTaskSelections(
+        ImmutableArray<ModelTaskSelectionReference> selections,
+        IReadOnlyDictionary<string, RoleRunSelection> roleSelections,
+        ImmutableArray<WorkflowValidationIssue>.Builder issues)
+    {
+        const string path = "selectionContext.modelTaskSelections";
+        if (selections.IsDefault)
+        {
+            Add(issues, WorkflowValidationCode.InvalidSelectionContext, path,
+                "Task model selections must be an initialized collection.");
+            return;
+        }
+        if (selections.Length > ModelTaskSelectionLimits.MaximumRoutes)
+            Add(issues, WorkflowValidationCode.InvalidSelectionContext, path,
+                $"The run selection may contain at most {ModelTaskSelectionLimits.MaximumRoutes} task model routes.");
+
+        var seen = new HashSet<(ModelTaskKind TaskKind, string? RoleId, string? AgentId)>();
+        for (var index = 0;
+             index < Math.Min(selections.Length, ModelTaskSelectionLimits.MaximumRoutes);
+             index++)
+        {
+            var selection = selections[index];
+            var itemPath = $"{path}[{index}]";
+            if (selection is null ||
+                !Enum.IsDefined(selection.TaskKind) ||
+                (selection.RoleId is not null &&
+                 !WorkflowValidationSupport.IsStableId(selection.RoleId)) ||
+                (selection.AgentId is not null &&
+                 !WorkflowValidationSupport.IsStableId(selection.AgentId)) ||
+                !WorkflowValidationSupport.IsOpaqueReference(selection.ModelSelectionReference) ||
+                !ModelTaskSelectionResolver.IsValidReasoningEffort(selection.ReasoningEffort))
+            {
+                Add(issues, WorkflowValidationCode.InvalidSelectionContext, itemPath,
+                    "Each task model route must contain a supported task, valid optional role and agent IDs, an opaque model reference, and a supported reasoning effort.");
+                continue;
+            }
+
+            if (!seen.Add((selection.TaskKind, selection.RoleId, selection.AgentId)))
+                Add(issues, WorkflowValidationCode.InvalidSelectionContext, itemPath,
+                    "Task model routes must not duplicate a task, role, and agent scope.");
+
+            var isAcceptedForAssignment = roleSelections.Values.Any(role =>
+                (selection.RoleId is null ||
+                 string.Equals(role.RoleId, selection.RoleId, StringComparison.Ordinal)) &&
+                (selection.AgentId is null ||
+                 ContainsOrdinal(role.EligibleAgentIds, selection.AgentId)) &&
+                ContainsOrdinal(role.ModelSelectionReferences, selection.ModelSelectionReference));
+            if (roleSelections.Count > 0 && !isAcceptedForAssignment)
+                Add(issues, WorkflowValidationCode.InvalidSelectionContext, itemPath,
+                    "Task model route must use an accepted model reference for an eligible role and agent.");
         }
     }
 

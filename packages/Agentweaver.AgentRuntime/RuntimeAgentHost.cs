@@ -712,7 +712,10 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             material.RuntimeVersion != session.Facts.RuntimeVersion ||
             material.ModelSelectionReference != session.Facts.ModelSelectionReference ||
             material.ModelId != session.Facts.ModelId ||
-            material.MaxPromptTokens != session.Facts.MaxPromptTokens)
+            material.MaxPromptTokens != session.Facts.MaxPromptTokens ||
+            material.ReasoningEffort != session.Facts.ReasoningEffort ||
+            material.ModelBindingPin != session.Facts.ModelBindingPin ||
+            material.ResolvedModelBindingPin != session.Facts.ResolvedModelBindingPin)
             throw new RuntimeAuthorizationException("runtime_configuration_acknowledgment_invalid");
     }
 
@@ -811,6 +814,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
             owner.ModelSelectionReference != binding.ModelSelectionReference ||
             owner.ModelSourceMode != binding.ModelSourceMode ||
             owner.ModelBindingPin != binding.ModelBindingPin ||
+            owner.ReasoningEffort != binding.ReasoningEffort ||
             owner.ModelCredentialReference != binding.ModelCredentialReference ||
             owner.ModelConnectionId != binding.ModelConnectionId ||
             owner.ModelConnectionScope != binding.ModelConnectionScope ||

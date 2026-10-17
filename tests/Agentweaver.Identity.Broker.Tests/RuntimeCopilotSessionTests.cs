@@ -67,6 +67,162 @@ public sealed class RuntimeCopilotSessionTests
     }
 
     [Fact]
+    public async Task ConfiguredReasoningEffortIsPassedToNativeCreateAndVerified()
+    {
+        await using var external = new ControlledCopilotRuntime
+        {
+            ExpectedReasoningEffort = "low",
+            EffectiveReasoningEffort = "low"
+        };
+        var models = new RuntimeModelBindingsResolver("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.HostedCopilot)
+            });
+        var registration = Registration() with
+        {
+            Binding = Registration().Binding with
+            {
+                ReasoningEffort = "low",
+                ModelBindingPin = models.Pin(
+                    "accepted-model-reference", ModelSourceMode.HostedCopilot, "low")
+            }
+        };
+        var factory = new RuntimeCopilotSessionFactory(external.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), models);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        await using var session = await factory.CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!, SdkCredential(),
+            _ => Task.CompletedTask, timeout.Token);
+
+        Assert.Equal("low", session.Facts.ReasoningEffort);
+        Assert.Equal(registration.Binding.ModelBindingPin, session.Facts.ModelBindingPin);
+        Assert.Equal(registration.Binding.ModelBindingPin, session.Facts.ResolvedModelBindingPin);
+        var create = Assert.Single(external.Requests, request => request.Method == "session.create");
+        Assert.Equal("low", create.Parameters.GetProperty("reasoningEffort").GetString());
+    }
+
+    [Fact]
+    public async Task UnpinnedHostedRouteUsesIndependentEffortAndPinsResolvedServerBinding()
+    {
+        await using var external = new ControlledCopilotRuntime
+        {
+            ExpectedReasoningEffort = "medium",
+            EffectiveReasoningEffort = "medium"
+        };
+        var models = new RuntimeModelBindingsResolver("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.HostedCopilot)
+            });
+        var registration = Registration() with
+        {
+            Binding = Registration().Binding with { ReasoningEffort = "medium" }
+        };
+        var factory = new RuntimeCopilotSessionFactory(external.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), models);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        await using var session = await factory.CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!, SdkCredential(),
+            _ => Task.CompletedTask, timeout.Token);
+
+        Assert.Equal("medium", session.Facts.ReasoningEffort);
+        Assert.Null(session.Facts.ModelBindingPin);
+        Assert.Equal(models.Pin("accepted-model-reference", ModelSourceMode.HostedCopilot, "medium"),
+            session.Facts.ResolvedModelBindingPin);
+        var create = Assert.Single(external.Requests, request => request.Method == "session.create");
+        Assert.Equal("medium", create.Parameters.GetProperty("reasoningEffort").GetString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UnsupportedHostedReasoningEffortFailsBeforeNativeSessionCreation(bool supportsEffort)
+    {
+        await using var external = new ControlledCopilotRuntime
+        {
+            SupportsReasoningEffort = supportsEffort,
+            SupportedReasoningEfforts = supportsEffort ? ["low"] : ["low", "high"]
+        };
+        var models = new RuntimeModelBindingsResolver("model-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.HostedCopilot)
+            });
+        var registration = Registration() with
+        {
+            Binding = Registration().Binding with
+            {
+                ModelBindingPin = models.Pin("accepted-model-reference", ModelSourceMode.HostedCopilot)
+            }
+        };
+        var factory = new RuntimeCopilotSessionFactory(external.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), models);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => factory.CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!, SdkCredential(),
+            _ => Task.CompletedTask, timeout.Token));
+
+        Assert.Equal("runtime_reasoning_effort_unsupported", failure.Code);
+        Assert.DoesNotContain(external.Requests, request => request.Method is "session.create" or "session.resume");
+    }
+
+    [Fact]
+    public async Task UnsupportedByokReasoningEffortFailsBeforeNativeSessionCreation()
+    {
+        await using var external = new ControlledCopilotRuntime { Byok = true };
+        var models = new RuntimeModelBindingsResolver("byok-bindings-v1",
+            new Dictionary<string, RuntimeModelBinding>
+            {
+                ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.Byok,
+                    new RuntimeByokProvider("openai", new Uri("https://byok.test/v1")))
+                {
+                    SupportedReasoningEfforts = ["low"]
+                }
+            });
+        var registration = Registration();
+        registration = registration with
+        {
+            Binding = registration.Binding with
+            {
+                ModelSourceMode = ModelSourceMode.Byok,
+                ModelBindingPin = models.Pin("accepted-model-reference", ModelSourceMode.Byok)
+            }
+        };
+        var factory = new RuntimeCopilotSessionFactory(external.Connection,
+            Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), models);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => factory.CreateAsync(
+            registration, registration.Binding.ModelSelectionReference!,
+            new SecretCredential(external.SdkCredential, DateTimeOffset.UtcNow.AddMinutes(2)),
+            _ => Task.CompletedTask, timeout.Token));
+
+        Assert.Equal("runtime_reasoning_effort_unsupported", failure.Code);
+        Assert.DoesNotContain(external.Requests, request => request.Method is "session.create" or "session.resume");
+        Assert.DoesNotContain(external.Requests, request => request.Method == "models.list");
+    }
+
+    [Fact]
+    public async Task EffectiveNativeReasoningEffortMismatchFailsClosed()
+    {
+        await using var external = new ControlledCopilotRuntime
+        {
+            ExpectedReasoningEffort = "high",
+            EffectiveReasoningEffort = "low"
+        };
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var failure = await Assert.ThrowsAsync<RuntimeAuthorizationException>(() => Factory(external).CreateAsync(
+            Registration(), "accepted-model-reference", SdkCredential(), _ => Task.CompletedTask, timeout.Token));
+
+        Assert.Equal("runtime_sdk_effective_reasoning_effort_mismatch", failure.Code);
+    }
+
+    [Fact]
     public async Task AConfiguredPromptLimitRejectsUnknownConcreteCapacityBeforeNativeCreate()
     {
         await using var external = new ControlledCopilotRuntime { MaxPromptTokens = null };
@@ -89,7 +245,8 @@ public sealed class RuntimeCopilotSessionTests
                 ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.Byok,
                     new RuntimeByokProvider("openai", new Uri("https://byok.test/v1")))
                 {
-                    PromptCapacityTokens = 16000
+                    PromptCapacityTokens = 16000,
+                    SupportedReasoningEfforts = ["low", "medium", "high", "xhigh"]
                 }
             });
         var factory = new RuntimeCopilotSessionFactory(external.Connection,
@@ -505,6 +662,11 @@ public sealed class RuntimeCopilotSessionTests
                 ["accepted-model-reference"] = new("controlled-model", mode,
                     mode == ModelSourceMode.Byok ? new RuntimeByokProvider(
                         "openai", new Uri("https://byok.test/v1"), "responses") : null)
+                    {
+                        SupportedReasoningEfforts = mode == ModelSourceMode.Byok
+                            ? ["low", "medium", "high", "xhigh"]
+                            : []
+                    }
             }, abortDrainTimeout, workingDirectory);
 
     [Theory]
@@ -520,6 +682,9 @@ public sealed class RuntimeCopilotSessionTests
         var models = new RuntimeModelBindingsResolver("byok-bindings-v1", new Dictionary<string, RuntimeModelBinding>
             {
                 ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.Byok, provider)
+                {
+                    SupportedReasoningEfforts = ["low", "medium", "high", "xhigh"]
+                }
             });
         var factory = new RuntimeCopilotSessionFactory(external.Connection,
             Path.GetFullPath(Path.Combine("native-sdk-test", Guid.NewGuid().ToString("N"))), models);
@@ -571,6 +736,9 @@ public sealed class RuntimeCopilotSessionTests
             {
                 ["accepted-model-reference"] = new("controlled-model", ModelSourceMode.Byok,
                     new("azure", new Uri("https://byok.test/")))
+                {
+                    SupportedReasoningEfforts = ["low", "medium", "high", "xhigh"]
+                }
             });
         var pin = models.Pin("accepted-model-reference", ModelSourceMode.Byok);
         var registration = Registration();

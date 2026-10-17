@@ -50,6 +50,11 @@ public sealed class RuntimeUsageSourceReceiptTests
                     "model-bindings-v1", new string('a', 64))
             }
         };
+        source = source with
+        {
+            ModelBindingPin = registration.Binding.ModelBindingPin,
+            ResolvedModelBindingPin = registration.Binding.ModelBindingPin
+        };
         if (changedModel)
             Assert.Equal("runtime_usage_binding_invalid",
                 Assert.Throws<RuntimeAuthorizationException>(() =>
@@ -907,6 +912,8 @@ public sealed class RuntimeUsageSourceReceiptTests
             {
                 ModelSelectionReference = "accepted-model",
                 ModelSourceMode = ModelSourceMode.HostedCopilot,
+                ModelBindingPin = new(1, "accepted-model", "native-model", ModelSourceMode.HostedCopilot,
+                    "model-bindings-v1", new string('c', 64)),
                 PlacementProviderId = "sandbox-platform",
                 EnvironmentLifecycleGeneration = 1,
                 EnvironmentLeaseRevision = 2,
@@ -917,7 +924,11 @@ public sealed class RuntimeUsageSourceReceiptTests
         var source = new SdkSessionFacts(
             registration.RuntimeInstanceId, RuntimeContractValidation.NativeSessionId(registration.Binding),
             "1.0.11+source", "runtime-v1", "accepted-model", "native-model", new string('b', 64),
-            2.5m, "hosted-copilot", SdkMeterSources.CopilotNanoAiu, registration.Binding.AcceptedSelectionHash, 1);
+            2.5m, "hosted-copilot", SdkMeterSources.CopilotNanoAiu, registration.Binding.AcceptedSelectionHash, 1)
+        {
+            ModelBindingPin = registration.Binding.ModelBindingPin,
+            ResolvedModelBindingPin = registration.Binding.ModelBindingPin
+        };
         var eventId = Guid.NewGuid().ToString("D");
         var observation = new SdkUsageObservation(
             SdkUsageIdentity.Create(source.RuntimeInstanceId, source.SdkSessionId, eventId),
@@ -950,7 +961,9 @@ public sealed class RuntimeUsageSourceReceiptTests
         var source = hosted.Usage.SdkSource! with
         {
             SourceMode = "byok", MeterSource = SdkMeterSources.ByokTokens, ModelMultiplier = null,
-            ByokProvider = new("azure", hosted.Usage.SdkSource.ModelId, new string('a', 64))
+            ByokProvider = new("azure", hosted.Usage.SdkSource.ModelId, new string('a', 64)),
+            ModelBindingPin = registration.Binding.ModelBindingPin,
+            ResolvedModelBindingPin = registration.Binding.ModelBindingPin
         };
         var eventId = Guid.NewGuid().ToString("D");
         var observation = new SdkUsageObservation(

@@ -168,11 +168,22 @@ AgentHost and the enabled Events native consumer load the same server-owned
 `AgentHost:ModelBindings` map and required `AgentHost:ModelBindingsRevision`.
 The shared resolver lives in Identity without an SDK dependency.
 It resolves the accepted reference to its concrete model ID; a reference is not a model ID.
-It snapshots the map and hashes its canonical model, provider, header, and enabled-state values.
-An optional accepted `ModelBindingPin` retains that revision, hash, reference, model ID, and source mode.
-AgentHost rejects a changed pin before it starts the SDK client.
+It snapshots the map and hashes its canonical model, provider, header, enabled-state, and BYOK
+reasoning-capability values.
+The accepted `ModelBindingPin` retains that revision, hash, reference, model ID, source mode,
+and requested reasoning effort when the accepted selection carries that pin. The runtime binding
+also carries the independently selected effort (default `high`) so a routed child selection can
+preserve its effort without borrowing the primary model's pin. AgentHost always resolves a
+server-owned pin for the exact selected reference, source mode, and effort; it keeps that pin
+distinct from any accepted pin. A supplied accepted pin must agree with the selected effort, and
+BYOK still requires that accepted pin. AgentHost rejects a changed accepted pin before it starts
+the SDK client.
 Disabled bindings and source-mode mismatches deny; BYOK cannot become hosted through a fallback.
-The native catalog still checks the actual hosted model policy before session creation.
+Before session creation or resume, the host verifies the selected effort against the exact hosted
+catalog capability and supported-effort list. BYOK requires an explicit supported-effort list in
+the server-owned model binding; an unknown or unsupported effort fails closed. The requested
+effort is passed to both native create and resume and checked against the SDK's effective session
+model. The host never silently substitutes a model default or lower effort.
 Legacy unpinned factory callers retain their existing API; they do not provide versioned admission proof.
 For configured hosted credit limits, coordination root acceptance and backlog claim
 now require a real Events run-admission receipt before their transaction writes the root.
@@ -273,9 +284,11 @@ be priced against the run's immutable Cost binding. An unpriced result prevents
 readiness and cleans up the prepared session before any model turn.
 
 At a confirmed idle boundary, the runtime captures opaque SDK cache bytes through its custom filesystem.
-Recovery compares session scope, accepted selection, model reference, model ID, prompt-capacity pin, SDK version, and runtime version.
-A compatible cache uses the actual SDK resume call.
-A missing, incompatible, or corrupt cache rebuilds conversation context from authenticated journal content.
+Durable cache material records both the optional accepted pin and the server-resolved model-binding
+pin, plus the selected reasoning effort, alongside session scope, accepted selection, model reference,
+model ID, prompt-capacity pin, SDK version, and runtime version. A changed or unprovable model/effort
+binding rejects recovery; the host does not convert an unprovable binding into a journal rebuild.
+Other missing, incompatible, or corrupt caches rebuild conversation context from authenticated journal content.
 The saved source-session replay supplies visibility, including Events-approved parent history.
 Each recovered TURN must match its own journal payload, single stored object reference, and authenticated material acknowledgment.
 Events rechecks the current reader's authority before it returns material bytes.

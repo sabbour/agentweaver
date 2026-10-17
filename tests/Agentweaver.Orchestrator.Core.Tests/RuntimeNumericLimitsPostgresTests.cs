@@ -1262,6 +1262,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
             WorkflowStepId = binding.WorkflowStepId,
             ModelCredentialReference = binding.ModelCredentialReference,
             ModelSourceMode = binding.ModelSourceMode,
+            ReasoningEffort = binding.ReasoningEffort,
             ModelBindingPin = binding.ModelBindingPin,
             ModelConnectionId = binding.ModelConnectionId,
             ModelConnectionScope = binding.ModelConnectionScope,

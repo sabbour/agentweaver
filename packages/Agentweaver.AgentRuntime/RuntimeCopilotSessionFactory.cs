@@ -106,6 +106,9 @@ public sealed class RuntimeCopilotSessionFactory
             registration.Binding.ModelSourceMode, registration.Binding.ModelBindingPin);
         if (model.SourceMode == ModelSourceMode.Byok && registration.Binding.ModelBindingPin is null)
             throw new RuntimeAuthorizationException("runtime_byok_binding_pin_required");
+        var reasoningEffort = registration.Binding.ReasoningEffort;
+        var resolvedModelBindingPin = _modelBindings.Pin(
+            acceptedModelSelectionReference, model.SourceMode, reasoningEffort);
         if (!sdkCredential.IsUsable())
             throw new RuntimeAuthorizationException("runtime_sdk_credential_unavailable");
         var token = sdkCredential.GetValue();
@@ -162,6 +165,10 @@ public sealed class RuntimeCopilotSessionFactory
                 var matches = catalog.Models.Where(item => item.Id == model.ModelId).Take(2).ToArray();
                 if (matches.Length != 1 || matches[0].Policy?.State != GitHub.Copilot.Rpc.ModelPolicyState.Enabled)
                     throw new RuntimeAuthorizationException("runtime_sdk_model_unavailable");
+                RequireSupportedReasoningEffort(
+                    matches[0].Capabilities?.Supports?.ReasoningEffort,
+                    matches[0].SupportedReasoningEfforts,
+                    reasoningEffort);
                 catalogHash = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(catalog));
                 multiplier = RuntimeCopilotSession.NullableDecimal(matches[0].Billing?.Multiplier);
                 var limits = matches[0].Capabilities?.Limits;
@@ -171,6 +178,8 @@ public sealed class RuntimeCopilotSessionFactory
             }
             else
             {
+                if (!model.SupportedReasoningEfforts.Contains(reasoningEffort, StringComparer.Ordinal))
+                    throw new RuntimeAuthorizationException("runtime_reasoning_effort_unsupported");
                 catalogHash = RuntimeContractValidation.Hash(JsonSerializer.SerializeToUtf8Bytes(model));
             }
             var sdkVersion = typeof(CopilotClient).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()
@@ -185,8 +194,40 @@ public sealed class RuntimeCopilotSessionFactory
             if (recovery is not null)
             {
                 var recordedLimit = recovery.Cache?.Material.Reference.Material?.MaxPromptTokens;
+                var recordedMaterial = recovery.Cache?.Material.Reference.Material;
+                var previousConfiguration = recovery.PreviousConfigurationBinding;
+                var previousModelBinding = recovery.PreviousModelBinding;
+                if (recovery.JournalEvidence is not null &&
+                    previousConfiguration is null && previousModelBinding is null && recordedMaterial is null)
+                    throw new RuntimeAuthorizationException("runtime_recovery_model_binding_unavailable");
+                if (previousConfiguration is not null &&
+                    (previousConfiguration.Kind != SessionMaterialKind.RuntimeConfiguration ||
+                     previousConfiguration.TenantId != binding.TenantId ||
+                     previousConfiguration.AcceptedSelectionHash != binding.AcceptedSelectionHash ||
+                     previousConfiguration.ModelSelectionReference != acceptedModelSelectionReference ||
+                     previousConfiguration.ModelId != model.ModelId ||
+                     previousConfiguration.ReasoningEffort != reasoningEffort ||
+                     previousConfiguration.ModelBindingPin != binding.ModelBindingPin ||
+                     previousConfiguration.ResolvedModelBindingPin != resolvedModelBindingPin))
+                    throw new RuntimeAuthorizationException("runtime_recovery_model_binding_mismatch");
+                if (previousModelBinding is not null &&
+                    (previousModelBinding.Kind is not
+                         (SessionMaterialKind.TurnContent or SessionMaterialKind.SdkCache) ||
+                     previousModelBinding.TenantId != binding.TenantId ||
+                     previousModelBinding.AcceptedSelectionHash != binding.AcceptedSelectionHash ||
+                     previousModelBinding.ModelSelectionReference != acceptedModelSelectionReference ||
+                     previousModelBinding.ModelId != model.ModelId ||
+                     previousModelBinding.ReasoningEffort != reasoningEffort ||
+                     previousModelBinding.ModelBindingPin != binding.ModelBindingPin ||
+                     previousModelBinding.ResolvedModelBindingPin != resolvedModelBindingPin))
+                    throw new RuntimeAuthorizationException("runtime_recovery_model_binding_mismatch");
+                if (recordedMaterial is not null &&
+                    (recordedMaterial.ReasoningEffort != reasoningEffort ||
+                     recordedMaterial.ModelBindingPin != registration.Binding.ModelBindingPin ||
+                     recordedMaterial.ResolvedModelBindingPin != resolvedModelBindingPin))
+                    throw new RuntimeAuthorizationException("runtime_recovery_model_binding_mismatch");
                 var cacheMatches = recovery.CacheMatches(
-                    registration, sdkVersion, status.Version, model.ModelId, recordedLimit);
+                    registration, sdkVersion, status.Version, model.ModelId, resolvedModelBindingPin, recordedLimit);
                 if (cacheMatches && recordedLimit is { } previousLimit)
                 {
                     if (maxPromptTokens is null || maxPromptTokens < previousLimit)
@@ -194,7 +235,7 @@ public sealed class RuntimeCopilotSessionFactory
                     maxPromptTokens = previousLimit;
                 }
                 cacheMatches = recovery.CacheMatches(
-                    registration, sdkVersion, status.Version, model.ModelId, maxPromptTokens);
+                    registration, sdkVersion, status.Version, model.ModelId, resolvedModelBindingPin, maxPromptTokens);
                 if (cacheMatches)
                 {
                     try
@@ -238,17 +279,23 @@ public sealed class RuntimeCopilotSessionFactory
             void Configure(SessionConfigBase options)
             {
                 options.Model = model.ModelId;
+                options.ReasoningEffort = reasoningEffort;
                 options.GitHubToken = model.SourceMode == ModelSourceMode.HostedCopilot ? token : null;
                 options.Provider = model.Provider?.ToSdkProvider(model.ModelId, token);
                 if (options.Provider is { } provider)
                     provider.MaxPromptTokens = maxPromptTokens;
-                options.ModelCapabilities = maxPromptTokens is { } promptCapacity
+                options.ModelCapabilities = maxPromptTokens is not null || model.SourceMode == ModelSourceMode.Byok
                     ? new GitHub.Copilot.Rpc.ModelCapabilitiesOverride
                     {
-                        Limits = new GitHub.Copilot.Rpc.ModelCapabilitiesOverrideLimits
-                        {
-                            MaxPromptTokens = promptCapacity
-                        }
+                        Supports = model.SourceMode == ModelSourceMode.Byok
+                            ? new GitHub.Copilot.Rpc.ModelCapabilitiesOverrideSupports { ReasoningEffort = true }
+                            : null,
+                        Limits = maxPromptTokens is { } promptCapacity
+                            ? new GitHub.Copilot.Rpc.ModelCapabilitiesOverrideLimits
+                            {
+                                MaxPromptTokens = promptCapacity
+                            }
+                            : null
                     }
                     : null;
                 options.EnableConfigDiscovery = false;
@@ -303,6 +350,8 @@ public sealed class RuntimeCopilotSessionFactory
             var currentModel = await session.Rpc.Model.GetCurrentAsync(cancellationToken);
             if (currentModel.ModelId != model.ModelId)
                 throw new RuntimeAuthorizationException("runtime_sdk_effective_model_mismatch");
+            if (currentModel.ReasoningEffort != reasoningEffort)
+                throw new RuntimeAuthorizationException("runtime_sdk_effective_reasoning_effort_mismatch");
 #pragma warning restore GHCP001
             if (session.SessionId != sdkSessionId)
                 throw new RuntimeAuthorizationException("runtime_sdk_session_mismatch");
@@ -324,6 +373,9 @@ public sealed class RuntimeCopilotSessionFactory
                 registration.Revision)
             {
                 MaxPromptTokens = maxPromptTokens,
+                ReasoningEffort = reasoningEffort,
+                ModelBindingPin = registration.Binding.ModelBindingPin,
+                ResolvedModelBindingPin = resolvedModelBindingPin,
                 ByokProvider = model.Provider is { } actualProvider
                     ? new(actualProvider.Type, currentModel.ModelId, _modelBindings.ConfigurationHash)
                     : null
@@ -360,4 +412,14 @@ public sealed class RuntimeCopilotSessionFactory
         return checked((int)Math.Min(acceptedLimit.Value, supportedCapacity.Value));
     }
 
+    private static void RequireSupportedReasoningEffort(
+        bool? modelSupportsReasoningEffort,
+        IEnumerable<string>? supportedEfforts,
+        string requestedEffort)
+    {
+        if (modelSupportsReasoningEffort is not true ||
+            supportedEfforts is null ||
+            !supportedEfforts.Contains(requestedEffort, StringComparer.Ordinal))
+            throw new RuntimeAuthorizationException("runtime_reasoning_effort_unsupported");
+    }
 }

@@ -79,7 +79,9 @@ public static class RuntimeRunAdmissionContract
             model.SourceMode != ModelSourceMode.HostedCopilot || model.ConnectionId is null ||
             model.CredentialReference is not null || receipt.ModelSelection != model ||
             receipt.ModelBindingPin is not { } pin ||
-            pin.ModelSelectionReference != model.Reference || pin.SourceMode != model.SourceMode)
+            pin.ModelSelectionReference != model.Reference || pin.SourceMode != model.SourceMode ||
+            pin.ReasoningEffort != model.ReasoningEffort ||
+            model.ModelBindingPin is { } acceptedPin && pin != acceptedPin)
             throw new RuntimeAuthorizationException("runtime_run_admission_invalid");
         RuntimeModelBindingsResolver.ValidatePin(pin);
         return RuntimeUsageCostSnapshotContract.ValidatePricedCopilotSnapshot(
