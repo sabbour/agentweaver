@@ -18,8 +18,6 @@ export const PARTIAL_PUBLICATION = Object.freeze({
   originalWorkflowPath: '.github/workflows/v1-release-pack.yml',
   repository: 'sabbour/agentweaver',
   branch: 'v1',
-  environmentName: 'v1-publication',
-  environmentId: 24060361476,
   feed: 'https://nuget.pkg.github.com/sabbour/index.json',
   registry: 'ghcr.io/sabbour',
   publishedIds: Object.freeze([

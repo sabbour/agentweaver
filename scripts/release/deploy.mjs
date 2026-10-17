@@ -1410,7 +1410,7 @@ runtime manifest may reference pre-existing objects only; it cannot create
 credentials, identities, routes, policies, namespaces, migrations, or databases.
 Partial-publication receipts also require --completion, which verifies the
 original partial receipt, immutable continuation records, the successful run,
-its recorded v1-publication environment approval, and the merged helper PR.
+and the exact merged helper PR. No environment approval history is required.
 `;
 }
 

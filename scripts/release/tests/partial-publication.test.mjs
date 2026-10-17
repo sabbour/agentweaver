@@ -72,7 +72,6 @@ function newWorld(overrides = {}) {
     },
     pulls: [{ state: 'closed', merged_at: '2026-10-20T00:00:00Z', merge_commit_sha: HELPER,
       base: { ref: 'v1', repo: { full_name: P.repository } } }],
-    approvals: [{ state: 'approved', environments: [{ id: P.environmentId, name: P.environmentName }] }],
     failPush: undefined,
     failRefCreate: undefined,
     pushReadback: undefined,
@@ -113,7 +112,6 @@ function gh(world, args, input) {
       workflow_run: { id: Number(P.runId), head_sha: P.sourceSha, head_branch: 'v1' },
     };
   }
-  if (method === 'GET' && (match = /^actions\/runs\/(\d+)\/approvals$/.exec(endpoint))) return world.approvals;
   if (method === 'GET' && (match = /^actions\/runs\/(\d+)$/.exec(endpoint))) return world.runs[match[1]] ?? {};
   if (method === 'GET' && (match = /^git\/ref\/tags\/(.+)$/.exec(endpoint))) {
     return world.refs.get(`refs/tags/${decodeURIComponent(match[1])}`) ?? {};
@@ -243,7 +241,7 @@ test('the fixture is the exact retained original partial receipt', () => {
   assert.deepEqual(original.published.map(({ id }) => id), [...P.publishedIds]);
 });
 
-test('continuation publishes only the eleven missing artifacts and deploy verification accepts its proof', withDirectory(async directory => {
+test('without approval history, continuation publishes only the eleven missing artifacts and completion verification accepts its proof', withDirectory(async directory => {
   const world = newWorld();
   const receipt = await continuePartialPublication(options(world, directory));
   assert.equal(receipt.status, 'published');
@@ -263,6 +261,7 @@ test('continuation publishes only the eleven missing artifacts and deploy verifi
   assert.equal(pushes.length, 11);
   assert.ok(!pushes.some(call => P.publishedIds.some(id => call.includes(`/pack/${id} `))));
   assert.equal(verifyPartialPublicationCompletion(publication, publication, P.sourceSha, world.run), publication);
+  assert.ok(!world.calls.some(call => call.includes('/approvals')));
 
   rmSync(path.join(directory, 'publication.json'));
   rmSync(path.join(directory, 'continuation.json'));
@@ -312,8 +311,6 @@ const worldRejections = [
   ['a helper merged in another repository', world => { world.pulls[0].base.repo.full_name = 'elsewhere/agentweaver'; }, /merged into v1/],
   ['another merged helper SHA', world => { world.pulls[0].merge_commit_sha = 'b'.repeat(40); }, /merged into v1/],
   ['an open helper PR', world => { world.pulls[0].state = 'open'; }, /merged into v1/],
-  ['a missing environment approval', world => { world.approvals = []; }, /no recorded approval/],
-  ['a rejected environment approval', world => { world.approvals[0].state = 'rejected'; }, /no recorded approval/],
   ['a loaded image with different layers', world => {
     const base = world.run;
     world.run = (bin, args, input) => bin === 'docker' && args[0] === 'image'
@@ -392,7 +389,7 @@ test('a pre-existing local receipt stops before any registry or GitHub access', 
   assert.deepEqual(world.calls, []);
 }));
 
-test('completion verification rejects altered, unapproved, or unbacked proofs', withDirectory(async directory => {
+test('completion verification rejects altered, unmerged, or unbacked proofs without approval history', withDirectory(async directory => {
   const world = newWorld();
   const completion = await continuePartialPublication(options(world, directory));
   const verify = (value, w = world) => verifyPartialPublicationCompletion(value, value, P.sourceSha, w.run);
@@ -414,9 +411,6 @@ test('completion verification rejects altered, unapproved, or unbacked proofs', 
   wrongRun.continuation.runId = '40000000002';
   assert.throws(() => verify(wrongRun), /continuation claim does not match/);
 
-  const unapproved = newWorld({ ...world, approvals: [] });
-  unapproved.run = (bin, args, input) => bin === 'gh' && args.at(-1).endsWith('/approvals') ? '[]' : world.run(bin, args, input);
-  assert.throws(() => verify(completion, unapproved), /no recorded approval/);
   const unmerged = { run: (bin, args, input) => bin === 'gh' && args.some(arg => arg.includes('/pulls?')) ? '[]' : world.run(bin, args, input) };
   assert.throws(() => verify(completion, unmerged), /merged into v1/);
   world.runs[RUN_ID].conclusion = 'failure';
@@ -641,6 +635,22 @@ test('continuation workflow extracts both original artifacts at the paths the pu
   }
   assert.match(workflow, /node scripts\/release\/publish\.mjs releases\/foundation\.json artifacts\/release\/pack\n/);
   assert.match(workflow, /--original-receipt artifacts\/release\/original\/publication\.json\n/);
+});
+
+test('continuation workflow needs no environment approval and keeps exact one-use dispatch guards', () => {
+  const workflow = readFileSync(path.join(root, P.workflowPath), 'utf8').replaceAll('\r\n', '\n');
+  assert.doesNotMatch(workflow, /^\s*environment:/m);
+  assert.doesNotMatch(workflow, /vars\.RELEASE_NUGET_SOURCE/);
+  assert.equal(workflow.split(`RELEASE_NUGET_SOURCE: ${P.feed}\n`).length - 1, 2);
+  assert.match(workflow, /test "\$GITHUB_REPOSITORY" = "sabbour\/agentweaver"/);
+  assert.match(workflow, /test "\$GITHUB_EVENT_NAME" = "workflow_dispatch"/);
+  assert.match(workflow, /test "\$GITHUB_REF" = "refs\/heads\/v1"/);
+  assert.match(workflow, /test "\$GITHUB_RUN_ATTEMPT" = "1"/);
+  assert.ok(workflow.includes(`test "$EXPECTED_SOURCE" = "${P.sourceSha}"`));
+  assert.match(workflow, /test "\$GITHUB_SHA" != "\$EXPECTED_SOURCE"/);
+  assert.match(workflow, /group: v1-product-publication-\$\{\{ github.repository \}\}/);
+  assert.match(workflow, /cancel-in-progress: false/);
+  assert.match(workflow, /packages: write/);
 });
 
 const feedBase = new URL('https://nuget.pkg.github.com/sabbour/download/');

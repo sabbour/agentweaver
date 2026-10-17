@@ -22,6 +22,12 @@ do not contact GitHub, GHCR, Azure, or Kubernetes or prove
 that a published release or complete runtime manifest currently exists.
 Continuation tests admit only the exact merge result of a closed PR into
 non-default `v1`, including pagination, and reject missing or changed admission.
+Publication and completion fixtures have no approval-history API and succeed
+without a recorded environment approval. Rejection cases still enforce the
+exact source, first attempt, original receipts and refs, empty continuation
+namespace, registry write access, and unchanged or absent destinations.
+Workflow source checks reject an environment binding and retain the exact
+one-use dispatch guards.
 A separate-product-directory fixture invokes the helper deployment CLI parser
 with a valid continuation and the default release verifier. Controlled Git,
 GitHub, registry, and Kubernetes transports prove it reaches the read-only
