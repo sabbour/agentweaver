@@ -151,9 +151,11 @@ coordinator decision and the selected `OptionsRevision` `p1-v1.0.0`.
 
 The three service maps carry
 `agentweaver.io/runtime-config-status: incomplete`. Kubernetes does not enforce
-this annotation. Do not apply these manifests or run the bootstrap while any
-listed input remains unresolved. The Cilium-only map is complete for its
-options; it does not make the Environment runtime configuration deployable.
+this annotation, but runtime preflight rejects any referenced ConfigMap with
+this marker. Remove it only after resolving every required input. Do not apply
+these manifests or run the bootstrap while any listed input remains unresolved.
+The Cilium-only map is complete for its options; it does not make the Environment
+runtime configuration deployable.
 
 | Manifest | Value provenance | Required inputs not yet authoritative |
 | --- | --- | --- |

@@ -18,6 +18,7 @@ import {
   verifyRegistryImage,
   verifyAzureTarget,
   verifyBootstrapRelease,
+  verifyRuntimePrerequisites,
 } from '../deploy.mjs';
 import { componentImageRepository, componentImageTag } from '../pack.mjs';
 import {
@@ -1234,6 +1235,42 @@ test('runtime preflight checks shared backend certificates once after verifying 
   }), /exact service-backend-ca ConfigMap must contain its public ca\.crt/);
   assert.equal(calls.filter(args => args[1] === 'configmap' && args[2] === 'service-backend-ca' &&
     args.at(-1).startsWith('jsonpath=')).length, 1);
+});
+
+test('runtime preflight rejects an incomplete service ConfigMap before other cluster checks', () => {
+  // An incomplete marker blocks deployment until an operator resolves every required input.
+  const manifest = {
+    items: [{
+      kind: 'Deployment',
+      spec: {
+        template: {
+          spec: {
+            containers: [{
+              envFrom: [{ configMapRef: { name: 'environment-runtime-config', optional: false } }],
+            }],
+          },
+        },
+      },
+    }],
+  };
+  const calls = [];
+
+  assert.throws(() => verifyRuntimePrerequisites(manifest, target, {
+    root,
+    run: (_file, args) => {
+      calls.push(args);
+      return JSON.stringify({
+        metadata: {
+          name: 'environment-runtime-config',
+          namespace: target.namespace,
+          annotations: { 'agentweaver.io/runtime-config-status': 'incomplete' },
+        },
+      });
+    },
+  }), /environment-runtime-config is marked incomplete/);
+  assert.deepEqual(calls, [[
+    'get', 'configmap', 'environment-runtime-config', '--namespace', target.namespace, '--output', 'json',
+  ]]);
 });
 
 test('default dry-run validates and renders without issuing any external write', async () => {
