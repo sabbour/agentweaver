@@ -2,6 +2,22 @@
 
 Applied component version changes, newest first.
 
+## 2026-10-17T21:54:16.861Z — source `50664e006b07fd187cbe086288dbbbf0e1584f38`
+
+- `Agentweaver.Abstractions`: 1.1.0 -> 1.1.1 (patch) — .changeset/republication-abstractions-2026-10-17.md
+- `Agentweaver.AgentRuntime`: 1.1.0 -> 1.1.1 (patch) — .changeset/republication-agent-runtime-2026-10-17.md
+- `Agentweaver.Identity`: 1.1.0 -> 1.2.0 (minor) — .changeset/republication-identity-2026-10-17.md
+- `Agentweaver.ObjectStore.AzureBlob`: 1.0.1 -> 1.0.2 (patch) — .changeset/republication-object-store-azure-blob-2026-10-17.md
+- `Agentweaver.Orchestrator.Core`: 1.1.0 -> 1.1.1 (patch) — .changeset/republication-orchestrator-core-2026-10-17.md
+- `Agentweaver.Persistence.Postgres`: 1.0.1 -> 1.0.2 (patch) — .changeset/republication-postgres-2026-10-17.md
+- `Agentweaver.Providers`: 1.0.1 -> 1.0.2 (patch) — .changeset/republication-providers-2026-10-17.md
+- `Agentweaver.Providers.Sandbox.AgentSandbox`: 1.1.0 -> 1.1.1 (patch) — .changeset/republication-sandbox-agent-sandbox-2026-10-17.md
+- `Agentweaver.Providers.Storage.AzureFiles`: 1.0.1 -> 1.0.2 (patch) — .changeset/republication-storage-azure-files-2026-10-17.md
+- `Agentweaver.Secrets.AzureKeyVault`: 1.0.1 -> 1.0.2 (patch) — .changeset/republication-key-vault-2026-10-17.md
+- `Agentweaver.SourceControl`: 1.0.1 -> 1.0.2 (patch) — .changeset/republication-source-control-2026-10-17.md
+- `Agentweaver.Telemetry`: 1.0.1 -> 1.0.2 (patch) — .changeset/republication-telemetry-2026-10-17.md
+- `Agentweaver.Telemetry.AzureMonitor`: 1.0.1 -> 1.0.2 (patch) — .changeset/republication-telemetry-azure-monitor-2026-10-17.md
+
 ## 2026-10-17T19:09:59.072Z — source `7cfe79a0f28dff01a3104cb5dafd38bb9ad92873`
 
 - `Agentweaver.Abstractions`: 1.0.0 -> 1.1.0 (minor) — .changeset/copilot-published-token-rates-2037.md, .changeset/optional-prompt-token-cap-1855.md, .changeset/p1-environment-lifecycle-safe-cleanup.md, .changeset/runtime-profile-resolution.md, .changeset/task-model-routing-reasoning.md, .changeset/v1-code-documentation.md

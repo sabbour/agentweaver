@@ -6,49 +6,49 @@
     {
       "id": "Agentweaver.Abstractions",
       "kind": "contract",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "project": "packages/Agentweaver.Abstractions/Agentweaver.Abstractions.csproj"
     },
     {
       "id": "Agentweaver.Providers",
       "kind": "library",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "project": "packages/Agentweaver.Providers/Agentweaver.Providers.csproj"
     },
     {
       "id": "Agentweaver.SourceControl",
       "kind": "library",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "project": "packages/Agentweaver.SourceControl/Agentweaver.SourceControl.csproj"
     },
     {
       "id": "Agentweaver.Orchestrator.Core",
       "kind": "library",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "project": "services/orchestrator/Agentweaver.Orchestrator.Core/Agentweaver.Orchestrator.Core.csproj"
     },
     {
       "id": "Agentweaver.Persistence.Postgres",
       "kind": "library",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "project": "packages/Agentweaver.Persistence.Postgres/Agentweaver.Persistence.Postgres.csproj"
     },
     {
       "id": "Agentweaver.Secrets.AzureKeyVault",
       "kind": "library",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "project": "packages/Agentweaver.Secrets.AzureKeyVault/Agentweaver.Secrets.AzureKeyVault.csproj"
     },
     {
       "id": "Agentweaver.Identity",
       "kind": "library",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "project": "packages/Agentweaver.Identity/Agentweaver.Identity.csproj"
     },
     {
       "id": "Agentweaver.AgentRuntime",
       "kind": "library",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "project": "packages/Agentweaver.AgentRuntime/Agentweaver.AgentRuntime.csproj"
     },
     {
@@ -60,19 +60,19 @@
     {
       "id": "Agentweaver.Telemetry",
       "kind": "library",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "project": "packages/Agentweaver.Telemetry/Agentweaver.Telemetry.csproj"
     },
     {
       "id": "Agentweaver.Telemetry.AzureMonitor",
       "kind": "library",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "project": "packages/Agentweaver.Telemetry.AzureMonitor/Agentweaver.Telemetry.AzureMonitor.csproj"
     },
     {
       "id": "Agentweaver.ObjectStore.AzureBlob",
       "kind": "library",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "project": "packages/Agentweaver.ObjectStore.AzureBlob/Agentweaver.ObjectStore.AzureBlob.csproj"
     },
     {
@@ -138,13 +138,13 @@
     {
       "id": "Agentweaver.Providers.Storage.AzureFiles",
       "kind": "library",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "project": "packages/Agentweaver.Providers.Storage.AzureFiles/Agentweaver.Providers.Storage.AzureFiles.csproj"
     },
     {
       "id": "Agentweaver.Providers.Sandbox.AgentSandbox",
       "kind": "library",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "project": "packages/Agentweaver.Providers.Sandbox.AgentSandbox/Agentweaver.Providers.Sandbox.AgentSandbox.csproj"
     }
   ],
