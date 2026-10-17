@@ -213,7 +213,7 @@ public sealed class ProviderCatalogSnapshotTests
         Assert.Contains("CurrentOptionsSchemaVersion = 2", sandboxOptions, StringComparison.Ordinal);
         Assert.Contains("CurrentOptionsSchemaVersion = 1", storageOptions, StringComparison.Ordinal);
         Assert.Contains("OptionsSchemaVersion = 1", agtPolicyProvider, StringComparison.Ordinal);
-        Assert.Contains("CurrentOptionsSchemaVersion = 1", costOptions, StringComparison.Ordinal);
+        Assert.Contains("CurrentOptionsSchemaVersion = 2", costOptions, StringComparison.Ordinal);
         Assert.Contains(
             "`Environment__Sandbox__AgentSandbox__OptionsSchemaVersion` | `2`",
             projectConfigDocs,
@@ -223,7 +223,7 @@ public sealed class ProviderCatalogSnapshotTests
             projectConfigDocs,
             StringComparison.Ordinal);
         Assert.Contains(
-            "`EventsAndSessions__Cost__Copilot__OptionsSchemaVersion` | `1`",
+            "`EventsAndSessions__Cost__Copilot__OptionsSchemaVersion` | `2`",
             projectConfigDocs,
             StringComparison.Ordinal);
 

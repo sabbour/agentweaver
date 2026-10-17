@@ -391,10 +391,11 @@ public sealed class PostgresUsageLedger : IUsageLedger
         total.Add(priced, amount);
     }
 
+    /// <summary>Includes unpriced-only groups for visibility while summing only priced amounts.</summary>
     private static ImmutableArray<UsageAmountTotal> ToAmountTotals(
         Dictionary<(string MeterSource, string Unit), AmountAccumulator> amounts) =>
         amounts
-            .Where(entry => entry.Value.PricedEvents > 0)
+            .Where(entry => entry.Value.PricedEvents > 0 || entry.Value.UnpricedEvents > 0)
             .OrderBy(entry => entry.Key.MeterSource, StringComparer.Ordinal)
             .ThenBy(entry => entry.Key.Unit, StringComparer.Ordinal)
             .Select(entry => new UsageAmountTotal(

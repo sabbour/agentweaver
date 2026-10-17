@@ -14,7 +14,7 @@ public static class CopilotCostCapabilities
         ImmutableHashSet.Create(StringComparer.Ordinal, PriceUsage, QuoteWork);
 }
 
-/// <summary>Prices Copilot Nano AIU usage and quotes supported work from a pinned rate card.</summary>
+/// <summary>Prices Copilot token usage and quotes supported work from a pinned provider rate card.</summary>
 public sealed class CopilotCostProvider : ICostProvider
 {
     /// <summary>The stable meter-source key for Copilot SDK TotalNanoAiu values.</summary>
@@ -31,8 +31,9 @@ public sealed class CopilotCostProvider : ICostProvider
     public CopilotCostProvider(CopilotCostProviderOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        Options = options with { RateCard = options.SnapshotRateCard() };
-        _rateCard = Options.RateCard;
+        options.Validate();
+        Options = options;
+        _rateCard = options.SnapshotRateCard();
     }
 
     public CopilotCostProviderOptions Options { get; }
@@ -45,7 +46,7 @@ public sealed class CopilotCostProvider : ICostProvider
         ProviderHostingPattern.InProcess,
         CopilotCostCapabilities.All);
 
-    /// <summary>Creates the enabled catalog registration after validating the configured rate card.</summary>
+    /// <summary>Creates the enabled catalog registration after validating provider-owned pricing.</summary>
     public ProviderRegistration CreateRegistration()
     {
         Options.Validate();
@@ -111,7 +112,7 @@ public sealed class CopilotCostProvider : ICostProvider
             _rateCard);
     }
 
-    /// <summary>Prices supported Nano AIU measurements; missing or incompatible units remain unpriced.</summary>
+    /// <summary>Prices the reported input, cached-input, cache-write, and output token categories.</summary>
     public CostPrice Price(UsageMeasurement usage, UsageModelBinding model, CostBinding binding)
     {
         ArgumentNullException.ThrowIfNull(usage);
@@ -125,24 +126,12 @@ public sealed class CopilotCostProvider : ICostProvider
             !string.Equals(binding.MeterSource, model.MeterSource, StringComparison.Ordinal))
             return Unpriced("meter-source-mismatch");
         if (string.IsNullOrWhiteSpace(model.ModelId) ||
-            !_rateCard.ModelMultipliers.ContainsKey(model.ModelId))
+            !_rateCard.ModelTokenRates.ContainsKey(model.ModelId))
             return Unpriced("model-rate-unavailable");
-        if (usage.ProviderUnits is null)
-            return Unpriced("provider-units-missing");
-        if (usage.ProviderUnit is null)
-            return Unpriced("provider-unit-missing");
-        if (!string.Equals(usage.ProviderUnit, NanoAiuUnit, StringComparison.Ordinal))
-            return Unpriced("provider-unit-unsupported");
-
-        return new CostPrice(
-            usage.ProviderUnits.Value / _rateCard.NanoUnitsPerUnit,
-            _rateCard.Unit,
-            CostDisposition.Estimate,
-            _rateCard,
-            null);
+        return PriceTokenMeasurement(model.ModelId, usage);
     }
 
-    /// <summary>Prices supported planned-work bases against the pinned model multiplier.</summary>
+    /// <summary>Prices published token estimates or already-weighted Nano AIU without multipliers.</summary>
     public CostPrice Quote(CostQuoteRequest plannedWork, CostBinding binding)
     {
         ArgumentNullException.ThrowIfNull(plannedWork);
@@ -154,25 +143,30 @@ public sealed class CopilotCostProvider : ICostProvider
         if (!string.Equals(binding.MeterSource, MeterSource, StringComparison.Ordinal))
             return Unpriced("meter-source-mismatch");
         if (string.IsNullOrWhiteSpace(plannedWork.ModelId) ||
-            !_rateCard.ModelMultipliers.TryGetValue(plannedWork.ModelId, out var multiplier))
+            !_rateCard.ModelTokenRates.ContainsKey(plannedWork.ModelId))
             return Unpriced("model-rate-unavailable");
-        if (plannedWork.Units is null)
-            return Unpriced("planned-units-missing");
 
-        decimal amount;
         switch (plannedWork.Basis)
         {
             case CostQuoteBasis.ProviderWeightedNanoAiu:
-                amount = plannedWork.Units.Value / _rateCard.NanoUnitsPerUnit;
-                break;
+                if (plannedWork.Units is null)
+                    return Unpriced("planned-units-missing");
+                return new CostPrice(
+                    plannedWork.Units.Value / _rateCard.NanoUnitsPerUnit,
+                    _rateCard.Unit,
+                    CostDisposition.Estimate,
+                    _rateCard,
+                    null);
             case CostQuoteBasis.UnweightedAiCredits:
-                amount = plannedWork.Units.Value * multiplier;
-                break;
+                return Unpriced("quote-basis-unsupported");
+            case CostQuoteBasis.ProviderPublishedTokenRates:
+                if (plannedWork.TokenMeasurement is null)
+                    return Unpriced("token-measurement-missing");
+                ValidateMeasurement(plannedWork.TokenMeasurement);
+                return PriceTokenMeasurement(plannedWork.ModelId, plannedWork.TokenMeasurement);
             default:
                 return Unpriced("quote-basis-unsupported");
         }
-
-        return new CostPrice(amount, _rateCard.Unit, CostDisposition.Estimate, _rateCard, null);
     }
 
     internal bool IsBindingCurrent(CostBinding binding) =>
@@ -188,16 +182,43 @@ public sealed class CopilotCostProvider : ICostProvider
         RateCardsEqual(binding.RateCard, _rateCard);
 
     internal static bool RateCardsEqual(CostRateCard? left, CostRateCard right) =>
-        left is not null &&
-        left.Id == right.Id &&
-        left.Version == right.Version &&
-        left.MeterSource == right.MeterSource &&
-        left.Unit == right.Unit &&
-        left.NanoUnitsPerUnit == right.NanoUnitsPerUnit &&
-        left.ModelMultipliers is not null &&
-        left.ModelMultipliers.Count == right.ModelMultipliers.Count &&
-        left.ModelMultipliers.All(pair =>
-            right.ModelMultipliers.TryGetValue(pair.Key, out var value) && value == pair.Value);
+        CostRateCardContract.Equals(left, right);
+
+    private CostPrice PriceTokenMeasurement(string modelId, UsageMeasurement usage)
+    {
+        if (usage.InputTokens is null || usage.OutputTokens is null ||
+            usage.CachedTokens is null || usage.CacheWriteTokens is null)
+            return Unpriced("token-measurement-incomplete");
+        if (!_rateCard.ModelTokenRates.TryGetValue(modelId, out var modelRates))
+            return Unpriced("model-rate-unavailable");
+
+        var longContext = usage.InputTokens.Value > _rateCard.LongContextThresholdTokens!.Value;
+        var rates = longContext ? modelRates.LongContext : modelRates.DefaultContext;
+        if (rates is null)
+            return Unpriced("context-tier-rate-unavailable");
+
+        decimal amount = 0;
+        var reason = AddTokenCategory(usage.InputTokens.Value, rates.Input, "input", ref amount);
+        reason ??= AddTokenCategory(usage.CachedTokens.Value, rates.CachedInput, "cached-input", ref amount);
+        reason ??= AddTokenCategory(usage.CacheWriteTokens.Value, rates.CacheWrite, "cache-write", ref amount);
+        reason ??= AddTokenCategory(usage.OutputTokens.Value, rates.Output, "output", ref amount);
+        if (reason is not null)
+            return Unpriced(reason);
+
+        return new CostPrice(amount, _rateCard.Unit, CostDisposition.Estimate, _rateCard, null);
+    }
+
+    private string? AddTokenCategory(long tokens, decimal? rate, string category, ref decimal amount)
+    {
+        if (tokens == 0)
+            return null;
+        if (rate is null)
+            return $"token-rate-unavailable-{category}";
+        amount = checked(amount +
+            (tokens * rate.Value * _rateCard.CreditsPerCurrencyUnit!.Value) /
+            _rateCard.TokensPerRateUnit!.Value);
+        return null;
+    }
 
     private CostPrice Unpriced(string reason) =>
         new(null, _rateCard.Unit, CostDisposition.Unpriced, _rateCard, reason);

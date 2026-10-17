@@ -3,80 +3,74 @@ using Agentweaver.Abstractions;
 
 namespace Agentweaver.EventsAndSessions.Cost;
 
-/// <summary>
-/// Configures the immutable Copilot AI-credit rate card and its run-scoped resource identity.
-/// Measured usage is priced from GitHub-reported, model-weighted nano-AIU; model multipliers gate
-/// model eligibility and affect only unweighted estimates.
-/// </summary>
+/// <summary>Configures Copilot cost binding identity; published model rates are provider-owned.</summary>
 public sealed record CopilotCostProviderOptions(
     string ResourceId,
     long ResourceGeneration,
     string OptionsRevision,
-    int OptionsSchemaVersion,
-    CostRateCard RateCard)
+    int OptionsSchemaVersion)
 {
-    public const int CurrentOptionsSchemaVersion = 1;
+    /// <summary>The current options schema excludes operator-supplied Copilot prices.</summary>
+    public const int CurrentOptionsSchemaVersion = 2;
     public const decimal NanoAiuPerAiCredit = 1_000_000_000m;
 
-    /// <summary>Reads an optional rate card from configuration and validates its units and model rates.</summary>
-    /// <returns>Null when absent; incomplete or unsupported configuration throws.</returns>
+    /// <summary>The immutable provider-published rates used by this adapter.</summary>
+    public CostRateCard RateCard => CopilotPublishedRateCard.Current;
+
+    /// <summary>Reads cost binding identity; Copilot token rates are never sourced from configuration.</summary>
+    /// <returns>Null when absent; incomplete identity or legacy model multipliers throw.</returns>
     public static CopilotCostProviderOptions? FromConfiguration(IConfigurationSection section)
     {
         if (!section.Exists())
             return null;
-        var card = section.GetRequiredSection(nameof(RateCard));
+        if (section.GetSection("RateCard:ModelMultipliers").GetChildren().Any())
+            throw new ArgumentException(
+                "Copilot model prices are provider-published and cannot be configured as multipliers.",
+                nameof(section));
+
         var options = new CopilotCostProviderOptions(
             section[nameof(ResourceId)] ?? string.Empty,
             section.GetValue<long>(nameof(ResourceGeneration)),
             section[nameof(OptionsRevision)] ?? string.Empty,
-            section.GetValue<int>(nameof(OptionsSchemaVersion)),
-            new CostRateCard(
-                card[nameof(CostRateCard.Id)] ?? string.Empty,
-                card[nameof(CostRateCard.Version)] ?? string.Empty,
-                card[nameof(CostRateCard.MeterSource)] ?? string.Empty,
-                card[nameof(CostRateCard.Unit)] ?? string.Empty,
-                card.GetValue<decimal>(nameof(CostRateCard.NanoUnitsPerUnit)),
-                (card.GetSection(nameof(CostRateCard.ModelMultipliers))
-                    .Get<Dictionary<string, decimal>>() ?? [])
-                    .ToImmutableDictionary(StringComparer.Ordinal)));
+            section.GetValue<int>(nameof(OptionsSchemaVersion)));
         options.Validate();
         return options;
     }
 
-    /// <summary>Checks that the rate card uses nano-AIU per AI credit and positive model multipliers.</summary>
+    /// <summary>Checks provider binding identity and the embedded official pricing snapshot.</summary>
     public void Validate()
     {
         if (!IsToken(ResourceId, 256) || ResourceGeneration < 1 ||
             !IsToken(OptionsRevision, 128) ||
-            OptionsSchemaVersion != CurrentOptionsSchemaVersion ||
-            RateCard is null || !IsToken(RateCard.Id, 128) ||
-            !IsToken(RateCard.Version, 64) ||
-            RateCard.MeterSource != CopilotCostProvider.MeterSource ||
-            RateCard.Unit != CopilotCostProvider.AiCreditUnit ||
-            RateCard.NanoUnitsPerUnit != NanoAiuPerAiCredit ||
-            RateCard.ModelMultipliers is null ||
-            RateCard.ModelMultipliers.Any(rate =>
-                !IsToken(rate.Key, 256) || rate.Value <= 0))
-            throw new ArgumentException("Copilot Cost provider options or rate card are invalid.");
+            OptionsSchemaVersion != CurrentOptionsSchemaVersion)
+            throw new ArgumentException("Copilot Cost provider options are invalid.");
+        CostRateCardContract.Validate(RateCard);
+        if (RateCard.ModelMultipliers.Count != 0 ||
+            RateCard.ProviderSourceUrl != CopilotPublishedRateCard.SourceUrl ||
+            RateCard.SnapshotVersion != CopilotPublishedRateCard.SnapshotVersion)
+            throw new ArgumentException("The Copilot provider rate card is invalid.");
     }
 
-    /// <summary>Returns an immutable rate-card copy for binding and accounting.</summary>
+    /// <summary>Returns the immutable provider-owned card for run binding and accounting.</summary>
     internal CostRateCard SnapshotRateCard()
     {
         Validate();
-        try
+        return RateCard with
         {
-            return RateCard with
-            {
-                ModelMultipliers = RateCard.ModelMultipliers.ToImmutableDictionary(
-                    pair => pair.Key, pair => pair.Value, StringComparer.Ordinal)
-            };
-        }
-        catch (ArgumentException)
-        {
-            throw new ArgumentException("Copilot Cost provider model rates are ambiguous.");
-        }
+            ModelMultipliers = RateCard.ModelMultipliers.ToImmutableDictionary(StringComparer.Ordinal),
+            ModelTokenRates = RateCard.ModelTokenRates.ToImmutableDictionary(
+                pair => pair.Key,
+                pair => pair.Value with
+                {
+                    DefaultContext = SnapshotRates(pair.Value.DefaultContext),
+                    LongContext = SnapshotRates(pair.Value.LongContext)
+                },
+                StringComparer.Ordinal)
+        };
     }
+
+    private static CostTokenRates? SnapshotRates(CostTokenRates? rates) =>
+        rates is null ? null : rates with { };
 
     private static bool IsToken(string? value, int maximumLength) =>
         !string.IsNullOrWhiteSpace(value) && value.Length <= maximumLength &&

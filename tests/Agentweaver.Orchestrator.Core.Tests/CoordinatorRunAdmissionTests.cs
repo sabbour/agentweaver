@@ -83,10 +83,24 @@ public sealed class CoordinatorRunAdmissionTests
         var resolver = new RuntimeModelBindingsResolver("model-bindings-v1",
             new Dictionary<string, RuntimeModelBinding>
             {
-                ["accepted-reference"] = new("concrete-model", ModelSourceMode.HostedCopilot)
+                ["accepted-reference"] = new("gpt-6.1-sol", ModelSourceMode.HostedCopilot)
             });
-        var card = new CostRateCard("card", "1", SdkMeterSources.CopilotNanoAiu, "AIC", 1_000_000_000,
-            ImmutableDictionary<string, decimal>.Empty.Add("concrete-model", 2.5m));
+        var card = new CostRateCard("card", "2026-10-17", SdkMeterSources.CopilotNanoAiu, "AIC", 1_000_000_000,
+            ImmutableDictionary<string, decimal>.Empty)
+        {
+            ProviderSourceUrl = "https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing",
+            SnapshotVersion = "2026-10-17",
+            RetrievedOn = new DateOnly(2026, 10, 17),
+            TokenRateCurrency = "USD",
+            TokensPerRateUnit = 1_000_000m,
+            CreditsPerCurrencyUnit = 100m,
+            LongContextThresholdTokens = 272_000,
+            ModelTokenRates = ImmutableDictionary<string, CostModelTokenRates>.Empty
+                .WithComparers(StringComparer.Ordinal)
+                .Add("gpt-6.1-sol", new(
+                    new(2m, 0.1m, 2.5m, 10m),
+                    new(4m, 0.2m, 5m, 15m)))
+        };
         var binding = new CostBinding(SdkMeterSources.CopilotNanoAiu, "copilot.usage-cost",
             "1.0.0", 1, "options-v1", "resource", 1,
             ImmutableHashSet.Create("cost.usage.price", "cost.work.quote"), card);

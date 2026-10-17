@@ -29,10 +29,12 @@ rejects unavailable or changed provider identity. The adapter verifies the resou
 generation and rate-card content.
 
 `ICostProvider.Price` returns an amount, unit, rate card, and `CostDisposition`.
-`Quote` requires an explicit weighted or unweighted basis. The Copilot adapter
-converts reported nano-AIU to AIC without a second model multiplier. Missing
-measurements or model rates return `Unpriced` with a reason and no amount.
-These methods do not authorize a model session or caller.
+`Quote` requires an explicit provider-supported basis. The Copilot adapter prices
+input, cached-input, cache-write, and output tokens from its immutable provider-
+published rate-card snapshot, which records its source and retrieval date. Missing
+rates or measurements return `Unpriced` with a reason and no amount. That status
+does not block admission; unpriced usage remains visible and is excluded from
+credit-limit totals. These methods do not authorize a model session or caller.
 The standalone Azure Cost adapter uses an explicitly configured, versioned card
 for model-scoped standard input/output token rates in the declared currency. It
 does not fetch rates or quote BYOK work. Missing token counts, unsupported cache

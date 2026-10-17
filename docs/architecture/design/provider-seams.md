@@ -765,8 +765,9 @@ counter too, but Azure Monitor metrics are **not** the accounting record.
 `Price(usage, binding)` returns an estimate with amount, unit (AI credits or currency), versioned rate card,
 and `estimate`, `reconciled`, or `unpriced` status. `Quote(plannedWork)` permits pre-flight checks.
 `Reconcile(period, scope)` is optional and cannot rewrite the underlying usage. The Copilot adapter prices
-reported AI-credit units and model multipliers; each estimate stores its rate-card version, so a rate change
-does not silently reprice history ([R18](../decisions/0001-platform-architecture.md#risk-register)).
+published input, cached-input, cache-write, and output token rates directly; each estimate stores its
+immutable rate-card version and provenance, so a rate change does not silently reprice history
+([R18](../decisions/0001-platform-architecture.md#risk-register)).
 
 The current source implements meter-keyed candidate selection through the existing
 `ProviderCatalog` and `ProviderResolver.ResolveCost`. The catalog owner supplies
@@ -783,10 +784,12 @@ Orchestrator commits immutable source receipts after current owner and grant che
 Events accepts only receipt references and prices them through the existing keyed resolver.
 No parallel Cost resolver or model provider seam is introduced.
 
-The Copilot adapter divides reported `nano_aiu` by `1_000_000_000` to return AIC.
-Reported units already include model weighting. Quotes apply a model multiplier
-only to explicitly unweighted AI credits. Each entry retains an immutable rate-card
-version. Missing measurements or unsupported sources remain unpriced.
+The Copilot adapter prices SDK-reported token categories directly from its
+provider-supplied per-token card. The card records its source URL, retrieval date,
+currency conversion, token-rate unit, and context tiers. It does not derive or apply
+a model multiplier. Each entry retains an immutable rate-card version. Missing
+measurements, rates, or unsupported sources remain explicitly unpriced; they do not
+block admission and do not count toward Copilot credit limits.
 The optional HTTP consumer accepts only immutable source receipt references.
 
 The standalone Azure BYOK cost adapter accepts an explicitly configured, versioned

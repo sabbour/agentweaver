@@ -628,19 +628,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             ["EventsAndSessions__Cost__Copilot__OptionsRevision"] =
                 enableHostedCopilotRunAdmission ? "native-cost-v1" : null,
             ["EventsAndSessions__Cost__Copilot__OptionsSchemaVersion"] =
-                enableHostedCopilotRunAdmission ? "1" : null,
-            ["EventsAndSessions__Cost__Copilot__RateCard__Id"] =
-                enableHostedCopilotRunAdmission ? "native-sdk-card" : null,
-            ["EventsAndSessions__Cost__Copilot__RateCard__Version"] =
-                enableHostedCopilotRunAdmission ? "1" : null,
-            ["EventsAndSessions__Cost__Copilot__RateCard__MeterSource"] =
-                enableHostedCopilotRunAdmission ? SdkMeterSources.CopilotNanoAiu : null,
-            ["EventsAndSessions__Cost__Copilot__RateCard__Unit"] =
-                enableHostedCopilotRunAdmission ? "AIC" : null,
-            ["EventsAndSessions__Cost__Copilot__RateCard__NanoUnitsPerUnit"] =
-                enableHostedCopilotRunAdmission ? "1000000000" : null,
-            ["EventsAndSessions__Cost__Copilot__RateCard__ModelMultipliers__controlled-model"] =
-                enableHostedCopilotRunAdmission ? "2.5" : null,
+                enableHostedCopilotRunAdmission ? "2" : null,
             ["Identity__Issuer"] = IdentityBrokerWebApplicationFactory.Issuer,
             ["Identity__Audience"] = "https://api.test",
             ["Identity__SecretRedemption__Audience"] = "https://broker-redemption.test",

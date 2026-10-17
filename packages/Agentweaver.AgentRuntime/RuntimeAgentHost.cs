@@ -253,7 +253,7 @@ public sealed class RuntimeAgentHost : IAsyncDisposable
                         configuredSession.Registration.Binding.CopilotHardCreditLimit is > 0)
                         await new RuntimeUsageCostPreflightHttpClient(
                             _http, _options.EventsAddress, retained)
-                            .EnsurePricedAsync(configuredSession, token).ConfigureAwait(false);
+                            .ValidateAsync(configuredSession, token).ConfigureAwait(false);
                     await configuredSession.RequireCurrentAsync(token).ConfigureAwait(false);
                     configuredSession.RequireSupportedCostTurnAffinity();
                 }

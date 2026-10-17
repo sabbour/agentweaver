@@ -366,17 +366,22 @@ The additive Provider tests cover Cost resource pins, changed configuration, and
 missing or changed providers. Existing candidate-selection and legacy snapshot
 tests remain unchanged.
 
-The Events & Sessions tests cover weighted nano-AIU pricing, unweighted quotes,
-missing measurements, immutable rate cards, and redacted binding diagnostics.
+The Events & Sessions tests cover GitHub-published per-token Copilot pricing,
+default and long-context tiers, explicit `Unpriced` results for unknown models
+and incomplete measurements, immutable rate cards, and redacted binding diagnostics.
 `AzureCostProviderTests` cover model-scoped standard token arithmetic, explicit
 rate-card source/currency/version, missing or unsupported token measurements,
 changed pins, overflow, unsupported BYOK quotes, and provisioned-throughput
 `Unpriced` behavior. These local provider tests are pure; they do not prove
 trusted BYOK receipt pricing, PostgreSQL integration, or Azure price retrieval.
-Hosted usage contract tests accept priced nano-AIU without optional SDK accounting metadata.
-They still reject wrong source identities, meter shapes, and unpriced entries.
-Cost snapshot contract tests distinguish valid zero-work quotes from unavailable pricing.
-They reject source, model, rate, unit, and run-scope mismatches.
+Hosted usage contract tests preserve priced and explicit `Unpriced` entries without
+letting optional SDK accounting metadata control price status. They still reject
+wrong source identities, meter shapes, and malformed unpriced entries. Cost snapshot
+contract tests distinguish valid zero-work quotes from explicit unavailable pricing,
+accept the latter for admission, and reject source, model, rate, unit, and run-scope
+mismatches. Runtime admission tests exercise receipt consumption, validation, priced
+published models, and an unknown model whose usage is recorded but excluded from
+the credit-limit subtotal.
 Observed snapshot tests require bounded, unique references and reject missing, changed, or foreign acknowledgments.
 Native completion tests require exactly the usage-event IDs in the durable completion range.
 Host tests reject a failed owner join without an answer or a second native send.
@@ -445,7 +450,7 @@ They do not prove a persisted Core suspend operation or PostgreSQL suspend succe
 It rotates the genuine source grant before the protected turn and checks refresh replay.
 Native cancellation tests hold the actual abort idle event before they admit another turn.
 Failed aborts and missing idle events reject later turns and cache capture.
-The multiplier is not applied a second time.
+Copilot usage uses published token rates directly, without a scalar multiplier.
 Database checks reject mutation and truncation of source and accounting history.
 They check each table's statement trigger and attempt dependent, multi-table, and
 `CASCADE` truncation. Stored rows and pins remain identical, and receipt replay succeeds.

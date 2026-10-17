@@ -264,7 +264,8 @@ The source writer rechecks the observe grant and current registration after data
 Its immutable source receipt preserves the nullable native measurements and weighted nano-AIU.
 BYOK receipts preserve token measurements without Copilot units.
 Without an admitted Cost provider, Events records explicit `Unpriced` accounting.
-Unknown cost cannot satisfy a hard cost bound.
+Only priced usage counts toward Copilot credit limits. Unpriced usage remains
+visible with its reason and event count; it is not treated as zero-priced usage.
 Events accepts only the receipt ID, fetches trusted owner evidence, and commits
 the immutable price, rate card, ledger, source hash, and inbox together.
 The combined local harness covers successful accounting and authority loss before

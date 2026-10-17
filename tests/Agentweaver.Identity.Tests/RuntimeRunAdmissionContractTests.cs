@@ -9,7 +9,7 @@ namespace Agentweaver.Identity.Tests;
 public sealed class RuntimeRunAdmissionContractTests
 {
     [Fact]
-    public void AdmissionBindsTheRealSelectionReferenceConnectionAndConcretePricedModelWithoutSdkFacts()
+    public void AdmissionBindsTheRealSelectionReferenceConnectionAndPublishedPricedModelWithoutSdkFacts()
     {
         var selection = Selection();
         var request = new RuntimeRunAdmissionRequest(1, RuntimeRunAdmissionContract.SelectionHash(selection));
@@ -18,7 +18,7 @@ public sealed class RuntimeRunAdmissionContractTests
         Assert.Equal(0, RuntimeRunAdmissionContract.ValidateReceipt(
             receipt, request, "tenant", "project", "run", selection));
         Assert.Equal("accepted-reference", receipt.ModelSelection.Reference);
-        Assert.Equal("concrete-model", receipt.ModelBindingPin.ModelId);
+        Assert.Equal("gpt-6.1-sol", receipt.ModelBindingPin.ModelId);
         Assert.Equal(Guid.Parse("11111111-1111-1111-1111-111111111111"), receipt.ModelSelection.ConnectionId);
         Assert.Equal(ProjectAuthorityResourceType.Platform, receipt.ModelSelection.ConnectionScope);
         var json = JsonSerializer.Serialize(request);
@@ -59,7 +59,7 @@ public sealed class RuntimeRunAdmissionContractTests
         var acceptedPin = models.Pin("accepted-reference", ModelSourceMode.HostedCopilot, "high");
         var selection = Selection(reasoningEffort: "high", modelBindingPin: acceptedPin);
         var request = new RuntimeRunAdmissionRequest(1, RuntimeRunAdmissionContract.SelectionHash(selection));
-        var receipt = Receipt(selection);
+        var receipt = Receipt(selection, acceptedPin.ModelId);
         Assert.Equal(acceptedPin, receipt.ModelBindingPin);
 
         var changedPin = acceptedPin with
@@ -80,21 +80,37 @@ public sealed class RuntimeRunAdmissionContractTests
                 changedPin));
     }
 
+    [Fact]
+    public void AdmissionAcceptsExplicitUnpricedForAModelWithoutPublishedRates()
+    {
+        var selection = Selection();
+        var request = new RuntimeRunAdmissionRequest(1, RuntimeRunAdmissionContract.SelectionHash(selection));
+        var receipt = Receipt(selection);
+        receipt = receipt with
+        {
+            ModelBindingPin = receipt.ModelBindingPin with { ModelId = "unknown-model" },
+            Quote = new(null, "AIC", CostDisposition.Unpriced, receipt.CostBinding!.RateCard,
+                "model-rate-unavailable")
+        };
+
+        Assert.Equal(0, RuntimeRunAdmissionContract.ValidateReceipt(
+            receipt, request, "tenant", "project", "run", selection));
+    }
+
     [Theory]
     [InlineData("reasoning", "gpt-6.1-sol")]
     [InlineData("coding", "gpt-6-luna")]
     public void AdmissionAcceptsBothApprovedHostedModelBindingsWithPresentRateEntries(
         string modelReference, string modelId)
     {
-        var multiplier = modelReference == "reasoning" ? 1m : 3m;
         var selection = Selection(modelReference);
         var request = new RuntimeRunAdmissionRequest(1, RuntimeRunAdmissionContract.SelectionHash(selection));
-        var receipt = Receipt(selection, modelId, multiplier);
+        var receipt = Receipt(selection, modelId);
 
         Assert.Equal(0, RuntimeRunAdmissionContract.ValidateReceipt(
             receipt, request, "tenant", "project", "run", selection));
         Assert.Equal(modelId, receipt.ModelBindingPin.ModelId);
-        Assert.Equal(multiplier, receipt.CostBinding!.RateCard.ModelMultipliers[modelId]);
+        Assert.Contains(modelId, receipt.CostBinding!.RateCard.ModelTokenRates.Keys);
     }
 
     [Theory]
@@ -110,7 +126,7 @@ public sealed class RuntimeRunAdmissionContractTests
     [InlineData("unit")]
     [InlineData("unpriced")]
     [InlineData("totals")]
-    public void ChangedOrUnpricedAdmissionCannotBecomeFreeRootAcceptance(string fault)
+    public void ChangedOrMalformedAdmissionCannotBecomeFreeRootAcceptance(string fault)
     {
         var selection = Selection();
         var request = new RuntimeRunAdmissionRequest(1, RuntimeRunAdmissionContract.SelectionHash(selection));
@@ -133,7 +149,7 @@ public sealed class RuntimeRunAdmissionContractTests
             "effort" => receipt with { ModelBindingPin = receipt.ModelBindingPin with { ReasoningEffort = "low" } },
             "quote" => receipt with { Quote = receipt.Quote with { Amount = null } },
             "unit" => receipt with { Quote = receipt.Quote with { Unit = "tokens" } },
-            "unpriced" => receipt with { Quote = new(null, null, CostDisposition.Unpriced, null, "unavailable") },
+            "unpriced" => receipt with { Quote = new(0, null, CostDisposition.Unpriced, null, "unavailable") },
             _ => receipt with { CopilotTotals = receipt.CopilotTotals with { IsFullyPriced = false } }
         };
         Assert.Throws<RuntimeAuthorizationException>(() =>
@@ -180,15 +196,11 @@ public sealed class RuntimeRunAdmissionContractTests
         }
     });
 
-    private static RuntimeRunAdmissionReceipt Receipt(
-        JsonElement selection,
-        string modelId = "concrete-model",
-        decimal multiplier = 2.5m)
+    private static RuntimeRunAdmissionReceipt Receipt(JsonElement selection, string modelId = "gpt-6.1-sol")
     {
         var modelReference = selection.GetProperty("modelSelection").GetProperty("reference").GetString()!;
         var resolver = ModelResolver(modelReference, modelId);
-        var card = new CostRateCard("card", "1", SdkMeterSources.CopilotNanoAiu, "AIC", 1_000_000_000,
-            ImmutableDictionary<string, decimal>.Empty.Add(modelId, multiplier));
+        var card = PublishedCard();
         var binding = new CostBinding(SdkMeterSources.CopilotNanoAiu, "copilot.usage-cost",
             "1.0.0", 1, "options-v1", "resource", 1,
             ImmutableHashSet.Create("cost.usage.price", "cost.work.quote"), card);
@@ -206,4 +218,27 @@ public sealed class RuntimeRunAdmissionContractTests
             {
                 [modelReference] = new(modelId, ModelSourceMode.HostedCopilot)
             });
+
+    /// <summary>Builds the source-verified token snapshot shared by both approved HostedCopilot models.</summary>
+    private static CostRateCard PublishedCard() =>
+        new("github-copilot-published", "2026-10-17",
+            SdkMeterSources.CopilotNanoAiu, "AIC", 1_000_000_000m,
+            ImmutableDictionary<string, decimal>.Empty)
+        {
+            ProviderSourceUrl = "https://docs.github.com/en/copilot/reference/copilot-billing/models-and-pricing",
+            SnapshotVersion = "2026-10-17",
+            RetrievedOn = new DateOnly(2026, 10, 17),
+            TokenRateCurrency = "USD",
+            TokensPerRateUnit = 1_000_000m,
+            CreditsPerCurrencyUnit = 100m,
+            LongContextThresholdTokens = 272_000,
+            ModelTokenRates = ImmutableDictionary<string, CostModelTokenRates>.Empty
+                .WithComparers(StringComparer.Ordinal)
+                .Add("gpt-6.1-sol", new(
+                    new(2m, 0.1m, 2.5m, 10m),
+                    new(4m, 0.2m, 5m, 15m)))
+                .Add("gpt-6-luna", new(
+                    new(0.1m, 0.01m, 0.125m, 0.5m),
+                    new(0.2m, 0.02m, 0.25m, 0.75m)))
+        };
 }

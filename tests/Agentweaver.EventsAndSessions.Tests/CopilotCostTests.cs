@@ -12,39 +12,22 @@ namespace Agentweaver.EventsAndSessions.Tests;
 
 public sealed class CopilotCostTests
 {
-    private static readonly ImmutableDictionary<string, decimal> ModelRates =
-        ImmutableDictionary.CreateRange(StringComparer.Ordinal, new[]
-        {
-            new KeyValuePair<string, decimal>("gpt-4o", 3m),
-            new KeyValuePair<string, decimal>("gpt-4.1", 2m)
-        });
-
     private static CopilotCostProviderOptions Options(
         long generation = 7,
-        string revision = "copilot-options-v1",
-        decimal nanoUnitsPerAic = 1_000_000_000m,
-        ImmutableDictionary<string, decimal>? modelRates = null) =>
+        string revision = "copilot-options-v1") =>
         new(
             "copilot-meter-resource",
             generation,
             revision,
-            CopilotCostProvider.OptionsSchemaVersion,
-            new CostRateCard(
-                "copilot-aic-v1",
-                "1",
-                CopilotCostProvider.MeterSource,
-                CopilotCostProvider.AiCreditUnit,
-                nanoUnitsPerAic,
-                modelRates ?? ModelRates));
+            CopilotCostProvider.OptionsSchemaVersion);
 
     private static (CopilotCostProvider Provider, CopilotCostProviderBinder Binder, CostBinding Binding)
         Create(
             string revision = "copilot-options-v1",
             long generation = 7,
-            ILogger<CopilotCostProviderBinder>? logger = null,
-            ImmutableDictionary<string, decimal>? modelRates = null)
+            ILogger<CopilotCostProviderBinder>? logger = null)
     {
-        var provider = new CopilotCostProvider(Options(generation, revision, modelRates: modelRates));
+        var provider = new CopilotCostProvider(Options(generation, revision));
         var catalogResult = ProviderCatalog.Create(
             [provider.CreateRegistration()],
             [],
@@ -62,35 +45,35 @@ public sealed class CopilotCostTests
     }
 
     private static UsageModelBinding Model(
-        string id = "gpt-4o", string source = CopilotCostProvider.MeterSource) =>
+        string id = "gpt-6.1-sol", string source = CopilotCostProvider.MeterSource) =>
         new("model-reference", id, source, "model-selection-r7");
 
     [Fact]
-    public void ReadsConfiguredRateCardIntoAnImmutableExactModelSnapshot()
+    public void UsesTheProviderPublishedRateCardRatherThanConfiguredMultipliers()
     {
         var values = ConfigurationValues();
         var section = new ConfigurationBuilder().AddInMemoryCollection(values)
             .Build().GetSection("Cost");
         var options = CopilotCostProviderOptions.FromConfiguration(section);
         Assert.NotNull(options);
-        Assert.Equal(Options(), options with { RateCard = Options().RateCard });
-        Assert.Equal(Options().RateCard,
-            options.RateCard with { ModelMultipliers = Options().RateCard.ModelMultipliers });
-        Assert.Equal(3m, options.RateCard.ModelMultipliers["gpt-4o"]);
-        Assert.Equal(2m, options.RateCard.ModelMultipliers["gpt-4.1"]);
-        Assert.False(options.RateCard.ModelMultipliers.ContainsKey("GPT-4O"));
-        section["RateCard:ModelMultipliers:gpt-4o"] = "99";
-        Assert.Equal(3m, options.RateCard.ModelMultipliers["gpt-4o"]);
+        Assert.Equal(Options(), options);
+        Assert.Same(CopilotPublishedRateCard.Current, options.RateCard);
+        Assert.Equal("github-copilot-published", options.RateCard.Id);
+        Assert.Equal("2026-10-17", options.RateCard.Version);
+        Assert.Empty(options.RateCard.ModelMultipliers);
+        Assert.Equal(CopilotPublishedRateCard.SourceUrl, options.RateCard.ProviderSourceUrl);
+        Assert.Equal("2026-10-17", options.RateCard.RetrievedOn!.Value.ToString("yyyy-MM-dd"));
+        Assert.Equal(2.00m, options.RateCard.ModelTokenRates["gpt-6.1-sol"].DefaultContext!.Input);
+        Assert.Equal(0.02m, options.RateCard.ModelTokenRates["gpt-6-luna"].LongContext!.CachedInput);
         Assert.Null(CopilotCostProviderOptions.FromConfiguration(
             new ConfigurationBuilder().Build().GetSection("Cost")));
     }
 
     [Theory]
     [InlineData("Cost:ResourceGeneration", null)]
-    [InlineData("Cost:OptionsSchemaVersion", "2")]
-    [InlineData("Cost:RateCard:NanoUnitsPerUnit", "2000000000")]
-    [InlineData("Cost:RateCard:ModelMultipliers:gpt-4o", "0")]
-    public void RejectsInvalidConfiguredRatesInsteadOfUsingDefaults(string key, string? value)
+    [InlineData("Cost:OptionsSchemaVersion", "1")]
+    [InlineData("Cost:RateCard:ModelMultipliers:unknown-model", "4")]
+    public void RejectsInvalidProviderOptionsAndLegacyConfiguredMultipliers(string key, string? value)
     {
         var values = ConfigurationValues();
         values[key] = value;
@@ -99,107 +82,106 @@ public sealed class CopilotCostTests
         Assert.Throws<ArgumentException>(() => CopilotCostProviderOptions.FromConfiguration(section));
     }
 
+    [Fact]
+    public void RejectsTokenRateProvenanceWithoutPublishedModelRates()
+    {
+        var incompleteCard = CopilotPublishedRateCard.Current with
+        {
+            ModelTokenRates = ImmutableDictionary<string, CostModelTokenRates>.Empty
+                .WithComparers(StringComparer.Ordinal)
+        };
+
+        Assert.Throws<ArgumentException>(() => CostRateCardContract.Validate(incompleteCard));
+    }
+
     private static Dictionary<string, string?> ConfigurationValues() => new()
     {
         ["Cost:ResourceId"] = "copilot-meter-resource",
         ["Cost:ResourceGeneration"] = "7",
         ["Cost:OptionsRevision"] = "copilot-options-v1",
-        ["Cost:OptionsSchemaVersion"] = "1",
-        ["Cost:RateCard:Id"] = "copilot-aic-v1",
-        ["Cost:RateCard:Version"] = "1",
-        ["Cost:RateCard:MeterSource"] = CopilotCostProvider.MeterSource,
-        ["Cost:RateCard:Unit"] = CopilotCostProvider.AiCreditUnit,
-        ["Cost:RateCard:NanoUnitsPerUnit"] = "1000000000",
-        ["Cost:RateCard:ModelMultipliers:gpt-4o"] = "3",
-        ["Cost:RateCard:ModelMultipliers:gpt-4.1"] = "2"
+        ["Cost:OptionsSchemaVersion"] = CopilotCostProvider.OptionsSchemaVersion.ToString()
     };
 
     [Fact]
-    public void PricesAlreadyWeightedNanoAiuExactlyWithoutReweightingOrTruncation()
+    public void PricesPublishedTokenCategoriesAndContextTierInAiCredits()
     {
         var (provider, _, binding) = Create();
-        var usage = new UsageMeasurement(
-            120, 30, 5, 0, 1, 1_234_567_890.125m,
-            CopilotCostProvider.NanoAiuUnit, 17.5m);
+        var usage = new UsageMeasurement(100, 50, 10, 0, 1, null, null, 17.5m)
+        {
+            CacheWriteTokens = 20
+        };
 
         var price = provider.Price(usage, Model(), binding);
 
-        Assert.Equal(1.234567890125m, price.Amount);
+        Assert.Equal(0.0751m, price.Amount);
         Assert.Equal(CopilotCostProvider.AiCreditUnit, price.Unit);
         Assert.Equal(CostDisposition.Estimate, price.Disposition);
         Assert.Null(price.UnpricedReason);
-        Assert.Equal(3m, price.RateCard!.ModelMultipliers["gpt-4o"]);
-        Assert.Equal(1_000_000_000m, price.RateCard.NanoUnitsPerUnit);
+
+        var longContext = provider.Price(
+            usage with { InputTokens = 272_001, OutputTokens = 1, CachedTokens = 0, CacheWriteTokens = 0 },
+            Model(), binding);
+        Assert.Equal(108.8019m, longContext.Amount);
+
+        var luna = provider.Price(usage, Model("gpt-6-luna"), binding);
+        Assert.Equal(0.00376m, luna.Amount);
     }
 
     [Fact]
-    public void MeasuredUsagePriceDoesNotChangeWithModelMultiplierValues()
-    {
-        static ImmutableDictionary<string, decimal> Rates(decimal multiplier) =>
-            ImmutableDictionary.CreateRange(StringComparer.Ordinal, new[]
-            {
-                new KeyValuePair<string, decimal>("gpt-6.1-sol", multiplier),
-                new KeyValuePair<string, decimal>("gpt-6-luna", multiplier)
-            });
-
-        var (oneMultiplier, _, oneBinding) = Create(modelRates: Rates(1m));
-        var (threeMultiplier, _, threeBinding) = Create(modelRates: Rates(3m));
-        var usage = new UsageMeasurement(
-            120, 30, 5, 0, 1, 1_234_567_890.125m,
-            CopilotCostProvider.NanoAiuUnit, 17.5m);
-
-        foreach (var modelId in new[] { "gpt-6.1-sol", "gpt-6-luna" })
-        {
-            var one = oneMultiplier.Price(usage, Model(modelId), oneBinding);
-            var three = threeMultiplier.Price(usage, Model(modelId), threeBinding);
-
-            Assert.Equal(1.234567890125m, one.Amount);
-            Assert.Equal(one.Amount, three.Amount);
-        }
-    }
-
-    [Fact]
-    public void QuotesWeightedNanoAiuAndUnweightedAiCreditsWithOneMultiplier()
+    public void QuotesProviderWeightedUnitsAndPublishedTokenCategoriesWithoutMultipliers()
     {
         var (provider, _, binding) = Create();
         var weighted = provider.Quote(
-            new CostQuoteRequest("gpt-4o", 3_000_000_000m, CostQuoteBasis.ProviderWeightedNanoAiu), binding);
-        var unweighted = provider.Quote(
-            new CostQuoteRequest("gpt-4o", 2m, CostQuoteBasis.UnweightedAiCredits), binding);
+            new CostQuoteRequest("gpt-6.1-sol", 3_000_000_000m, CostQuoteBasis.ProviderWeightedNanoAiu), binding);
+        var tokenUsage = new UsageMeasurement(100, 50, 10, 0, 1, null, null, null)
+        {
+            CacheWriteTokens = 20
+        };
+        var tokenQuote = provider.Quote(
+            new CostQuoteRequest("gpt-6.1-sol", null, CostQuoteBasis.ProviderPublishedTokenRates)
+            {
+                TokenMeasurement = tokenUsage
+            }, binding);
 
         Assert.Equal(3m, weighted.Amount);
-        Assert.Equal(6m, unweighted.Amount);
+        Assert.Equal(0.0751m, tokenQuote.Amount);
         Assert.Equal(CostDisposition.Estimate, weighted.Disposition);
-        Assert.Equal(CopilotCostProvider.AiCreditUnit, unweighted.Unit);
+        Assert.Equal(CopilotCostProvider.AiCreditUnit, tokenQuote.Unit);
+        AssertUnpriced(provider.Quote(
+            new CostQuoteRequest("gpt-6.1-sol", null, CostQuoteBasis.ProviderPublishedTokenRates), binding),
+            "token-measurement-missing");
     }
 
     [Fact]
-    public void PreservesUnpricedUsageForMissingUnitsUnknownModelsSourcesAndUnits()
+    public void PreservesUnpricedUsageForMissingTokenInputsAndUnknownModels()
     {
         var (provider, _, binding) = Create();
-        var measurement = new UsageMeasurement(1, 2, null, null, 1, null, null, null);
+        var complete = new UsageMeasurement(1, 2, 0, null, 1, 1m, CopilotCostProvider.NanoAiuUnit, null)
+        {
+            CacheWriteTokens = 0
+        };
+        var missingTokens = complete with { CachedTokens = null };
 
-        AssertUnpriced(provider.Price(measurement, Model(), binding), "provider-units-missing");
-        AssertUnpriced(provider.Price(measurement with { ProviderUnits = 1m }, Model("unknown"), binding),
-            "model-rate-unavailable");
-        AssertUnpriced(provider.Price(measurement with { ProviderUnits = 1m }, Model(source: "other"), binding),
+        AssertUnpriced(provider.Price(missingTokens, Model(), binding), "token-measurement-incomplete");
+        AssertUnpriced(provider.Price(complete, Model("unknown"), binding), "model-rate-unavailable");
+        AssertUnpriced(provider.Price(complete, Model(source: "other"), binding),
             "meter-source-mismatch");
-        AssertUnpriced(provider.Price(
-            measurement with { ProviderUnits = 1m, ProviderUnit = "tokens" }, Model(), binding),
-            "provider-unit-unsupported");
-        AssertUnpriced(provider.Price(
-            measurement with { ProviderUnits = 1m }, Model(), binding),
-            "provider-unit-missing");
         AssertUnpriced(provider.Quote(
-            new CostQuoteRequest("unknown", 2m, CostQuoteBasis.UnweightedAiCredits), binding),
+            new CostQuoteRequest("unknown", 0m, CostQuoteBasis.ProviderWeightedNanoAiu), binding),
             "model-rate-unavailable");
+        AssertUnpriced(provider.Quote(
+            new CostQuoteRequest("gpt-6.1-sol", 2m, CostQuoteBasis.UnweightedAiCredits), binding),
+            "quote-basis-unsupported");
     }
 
     [Fact]
     public void RejectsNegativeMeasurementsAndPlannedUnits()
     {
         var (provider, _, binding) = Create();
-        var normal = new UsageMeasurement(0, 0, 0, 0, 0, 0m, CopilotCostProvider.NanoAiuUnit, 0m);
+        var normal = new UsageMeasurement(0, 0, 0, 0, 0, 0m, CopilotCostProvider.NanoAiuUnit, 0m)
+        {
+            CacheWriteTokens = 0
+        };
         var negativeMeasurements = new[]
         {
             normal with { InputTokens = -1 },
@@ -220,17 +202,27 @@ public sealed class CopilotCostTests
     [Fact]
     public void ValidatesFixedNanoAiuConversionAndRejectsTamperedRateCards()
     {
-        Assert.Throws<ArgumentException>(() => Options(nanoUnitsPerAic: 1000m).Validate());
         var (provider, _, binding) = Create();
         var tampered = binding with
         {
-            RateCard = binding.RateCard with { NanoUnitsPerUnit = 2_000_000_000m }
+            RateCard = binding.RateCard with
+            {
+                ModelTokenRates = binding.RateCard.ModelTokenRates.SetItem(
+                    "gpt-6.1-sol",
+                    binding.RateCard.ModelTokenRates["gpt-6.1-sol"] with
+                    {
+                        DefaultContext = binding.RateCard.ModelTokenRates["gpt-6.1-sol"].DefaultContext! with
+                        {
+                            Input = 99m
+                        }
+                    })
+            }
         };
 
         AssertUnpriced(
             provider.Price(
-                new UsageMeasurement(null, null, null, null, 1, 1_000_000_000m,
-                    CopilotCostProvider.NanoAiuUnit, null),
+                new UsageMeasurement(1, 1, 0, null, 1, 1_000_000_000m,
+                    CopilotCostProvider.NanoAiuUnit, null) { CacheWriteTokens = 0 },
                 Model(),
                 tampered),
             "binding-mismatch");
@@ -248,7 +240,15 @@ public sealed class CopilotCostTests
         {
             RateCard = binding.RateCard with
             {
-                ModelMultipliers = binding.RateCard.ModelMultipliers.SetItem("gpt-4o", 99m)
+                ModelTokenRates = binding.RateCard.ModelTokenRates.SetItem(
+                    "gpt-6.1-sol",
+                    binding.RateCard.ModelTokenRates["gpt-6.1-sol"] with
+                    {
+                        DefaultContext = binding.RateCard.ModelTokenRates["gpt-6.1-sol"].DefaultContext! with
+                        {
+                            Output = 99m
+                        }
+                    })
             }
         };
         var rejected = binder.VerifyPinned(CopilotCostProvider.MeterSource, "run-1", tampered);
@@ -332,7 +332,8 @@ public sealed class CopilotCostTests
         Assert.Equal("cost.provider.binding.pinned", activity.OperationName);
         Assert.Equal(CopilotCostProvider.ProviderId, activity.GetTagItem("cost.provider.id"));
         Assert.Equal("1.0.0", activity.GetTagItem("cost.provider.adapter_version"));
-        Assert.Equal(1, activity.GetTagItem("cost.provider.options_schema_version"));
+        Assert.Equal(CopilotCostProvider.OptionsSchemaVersion,
+            activity.GetTagItem("cost.provider.options_schema_version"));
         Assert.Equal(binding.OptionsRevision, activity.GetTagItem("cost.provider.options_revision"));
         var resourceHash = Assert.IsType<string>(activity.GetTagItem("cost.provider.resource.id_hash"));
         Assert.Equal(24, resourceHash.Length);
