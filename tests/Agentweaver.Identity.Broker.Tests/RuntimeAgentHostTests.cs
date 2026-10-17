@@ -3136,10 +3136,17 @@ public sealed class RuntimeAgentHostTests
                 if (NativeAccountingFault == "unavailable")
                     return Response(request, new { }, HttpStatusCode.ServiceUnavailable);
                 var binding = Configure.Registration.Binding;
+                var events = Usage.Count;
+                ImmutableArray<UsageAmountTotal> amounts = events == 0
+                    ? []
+                    : [new(SdkMeterSources.CopilotNanoAiu, "AIC", 0, 0, events)];
+                ImmutableArray<UsageAgentTotals> agents = events == 0
+                    ? []
+                    : [new(binding.AgentId, events, null, null, null, null, null, null, false, amounts)];
                 var snapshot = new RuntimeUsageCostSnapshotReceipt(1,
                     RuntimeUsageSourceReceiptContract.HashSource(Configure.Registration, _facts!), null,
                     new(null, null, CostDisposition.Unpriced, null, "controlled fixture"),
-                    new(binding.TenantId, binding.ProjectId, binding.RunId, Usage.Count, false, [], []))
+                    new(binding.TenantId, binding.ProjectId, binding.RunId, events, events == 0, agents, amounts))
                 {
                     DispatchId = accounted.Recorded.Admission.MessageId,
                     RepresentedReceipts = NativeAccountingFault == "missing" ? [] : accounted.RequiredReceipts

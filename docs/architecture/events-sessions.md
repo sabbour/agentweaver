@@ -316,10 +316,12 @@ A wrong non-null message ID or an event after native completion fails.
 Without native proof, the existing exact raw-message check remains unchanged.
 The response returns only those verified references as `RepresentedReceipts`.
 Missing rows reject the join; altered references cannot substitute another receipt.
-Observed validation permits an explicit `Unpriced` receipt. Admission and credit-limit
-validation accept well-formed `Unpriced` quote and usage shapes, retain their reasons
-and event counts, and use only the known priced subtotal; malformed or tampered
-receipts remain rejected.
+For hosted-Copilot snapshots, run and per-agent totals must include the amount and
+priced or unpriced event count for every represented receipt. Native-turn accounting
+uses the same check. Observed validation permits an explicit `Unpriced` receipt.
+Admission and credit-limit validation accept well-formed `Unpriced` quote and usage
+shapes, retain their reasons and event counts, and use only the known priced subtotal;
+malformed or tampered receipts remain rejected.
 This path neither fetches a Source GET manifest nor writes synthetic usage.
 These routes are enabled only with `EventsAndSessions:RuntimeUsage:Enabled`.
 The [AgentHost candidate](agenthost.md) waits for the observed join and durable owner completion before it returns workflow output.

@@ -88,7 +88,7 @@ public static class RuntimeUsageCostSnapshotContract
             RuntimeNativeTurnContract.ValidateAccountingSnapshot(request, recorded);
     }
 
-    /// <summary>Requires a snapshot to return exactly the receipts in its request, without substitution.</summary>
+    /// <summary>Requires exact receipts and Copilot totals that include every represented receipt.</summary>
     public static void ValidateObservedReceipt(
         RuntimeUsageCostSnapshotReceipt receipt, RuntimeUsageCostSnapshotRequest request)
     {
@@ -110,6 +110,9 @@ public static class RuntimeUsageCostSnapshotContract
                 throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
         if (expected.Count != 0)
             throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
+        if (request.Source.SourceMode == "hosted-copilot" &&
+            request.Source.MeterSource == SdkMeterSources.CopilotNanoAiu)
+            ValidateRepresentedCopilotTotals(receipt.CopilotTotals, receipt.RepresentedReceipts);
     }
 
     /// <summary>Validates a hosted-Copilot snapshot and returns only its known priced AIC subtotal.</summary>
@@ -123,26 +126,41 @@ public static class RuntimeUsageCostSnapshotContract
             throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_unpriced");
         var pricedSubtotal = ValidatePricedCopilotSnapshot(receipt.Binding, receipt.Quote, receipt.CopilotTotals,
             request.Source.ModelId, scope.TenantId, scope.ProjectId, scope.RunId);
-        ValidateRepresentedCopilotTotals(receipt.CopilotTotals, receipt.RepresentedReceipts);
         return pricedSubtotal;
     }
 
-    /// <summary>Requires run and agent totals to include every receipt represented by the snapshot.</summary>
+    /// <summary>Validates Copilot totals and requires them to include every represented receipt.</summary>
     private static void ValidateRepresentedCopilotTotals(
         UsageRunTotals totals, ImmutableArray<RuntimeUsageCostReceiptReference> receipts)
     {
-        if (receipts.IsEmpty)
-            return;
         try
         {
-            if (receipts.Any(reference => reference.Accounting.Unit is not (null or "AIC")))
+            if (totals.Amounts.IsDefault || totals.Agents.IsDefault ||
+                totals.Amounts.Any(amount => !ValidCopilotAmount(amount)) ||
+                totals.Agents.Any(agent => agent is null || agent.Events < 0 ||
+                    agent.Amounts.IsDefault || agent.Amounts.Any(amount => !ValidCopilotAmount(amount))) ||
+                receipts.Any(reference => reference.Accounting.Unit is not (null or "AIC")))
                 throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
+
+            var recordedEvents = totals.Amounts.Sum(amount =>
+                checked(amount.PricedEvents + amount.UnpricedEvents));
+            var isFullyPriced = totals.Amounts.All(amount => amount.UnpricedEvents == 0) &&
+                totals.Agents.All(agent => agent.IsFullyPriced);
+            if (recordedEvents != totals.Events || totals.IsFullyPriced != isFullyPriced ||
+                totals.Agents.Sum(agent => agent.Events) != totals.Events || !RunAmountsMatchAgents(totals))
+                throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
+
+            if (receipts.IsEmpty)
+                return;
 
             var priced = receipts.Where(reference =>
                 reference.Accounting.Disposition != CostDisposition.Unpriced).ToArray();
             var unpricedCount = receipts.LongCount(reference =>
                 reference.Accounting.Disposition == CostDisposition.Unpriced);
             var pricedCount = (long)priced.Length;
+            // Request validation normally rejects missing amounts before this receipt set is checked.
+            if (priced.Any(reference => reference.Accounting.Amount is null))
+                throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
             var pricedAmount = priced.Sum(reference => reference.Accounting.Amount!.Value);
             if (!IncludesRepresentedAmounts(
                     totals.Amounts, pricedCount, unpricedCount, pricedAmount))

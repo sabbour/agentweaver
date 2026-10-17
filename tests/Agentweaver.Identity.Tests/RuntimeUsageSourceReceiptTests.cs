@@ -237,12 +237,49 @@ public sealed class RuntimeUsageSourceReceiptTests
         Assert.Throws<RuntimeAuthorizationException>(() =>
             RuntimeNativeTurnContract.ValidateAccountingSnapshot(
                 request, recorded with { OwnerRevision = recorded.OwnerRevision + 1 }));
-        var snapshot = CostSnapshot(request, 0, 0) with
+        var snapshot = (observesUsage
+            ? CostSnapshot(request, 0, 1, modelRateAvailable: false)
+            : CostSnapshot(request, 0, 0)) with
         {
             DispatchId = admission.MessageId, RepresentedReceipts = references
         };
         var completed = new RuntimeNativeTurnAccountingReceipt(recorded, snapshot, 4);
         RuntimeNativeTurnContract.ValidateAccounted(completed, recorded, references);
+        if (!observesUsage)
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeNativeTurnContract.ValidateAccounted(
+                    completed with
+                    {
+                        Snapshot = snapshot with
+                        {
+                            CopilotTotals = snapshot.CopilotTotals with { Events = 1 }
+                        }
+                    },
+                    recorded, references));
+        if (observesUsage)
+        {
+            var understatedAmount = snapshot.CopilotTotals.Amounts[0] with
+            {
+                Amount = 0,
+                PricedEvents = 0,
+                UnpricedEvents = 0
+            };
+            var originalAgent = snapshot.CopilotTotals.Agents[0];
+            var understatedTotals = snapshot.CopilotTotals with
+            {
+                IsFullyPriced = false,
+                Amounts = [understatedAmount],
+                Agents = [originalAgent with
+                {
+                    IsFullyPriced = false,
+                    Amounts = [understatedAmount]
+                }]
+            };
+            Assert.Throws<RuntimeAuthorizationException>(() =>
+                RuntimeNativeTurnContract.ValidateAccounted(
+                    completed with { Snapshot = snapshot with { CopilotTotals = understatedTotals } },
+                    recorded, references));
+        }
         Assert.Throws<RuntimeAuthorizationException>(() =>
             RuntimeNativeTurnContract.ValidateAccounted(completed with { OwnerRevision = 3 }, recorded, references));
         ImmutableArray<RuntimeUsageCostReceiptReference> wrong = observesUsage ? [] : [reference];
@@ -409,6 +446,28 @@ public sealed class RuntimeUsageSourceReceiptTests
         Assert.Throws<RuntimeAuthorizationException>(() =>
             RuntimeUsageCostSnapshotContract.ValidateReceipt(
                 receipt with { CopilotTotals = totals }, request));
+    }
+
+    [Fact]
+    public void CostSnapshotRejectsPricedReceiptWithoutAmount()
+    {
+        var native = Receipt();
+        var reference = AccountingReference(native, unpriced: false);
+        reference = reference with
+        {
+            Accounting = reference.Accounting with { Amount = null }
+        };
+        var request = new RuntimeUsageCostSnapshotRequest(1, native.Registration, native.Usage.SdkSource!)
+        {
+            DispatchId = Guid.NewGuid(), RequiredReceipts = [reference]
+        };
+        var receipt = CostSnapshot(request, 5, 1) with
+        {
+            DispatchId = request.DispatchId, RepresentedReceipts = [reference]
+        };
+
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageCostSnapshotContract.ValidateReceipt(receipt, request));
     }
 
     private static RuntimeUsageCostSnapshotReceipt CostSnapshot(
