@@ -47,10 +47,13 @@ public sealed partial class ProjectsConfigPostgresTests(ProjectsConfigPostgresFi
         var caller = await ResolveCallerAsync(
             db, "legacy-orchestrator-" + suffix, tenantId, ["api.read", "projects.orchestrator"]);
         var request = RunRequest(configuration.Revision, platform.Revision);
+        // Legacy rows predate built-in task routes, so this replay keeps the original two-model context.
         request = request with
         {
             Context = request.Context with
             {
+                AvailableModelSelectionReferences =
+                    ImmutableHashSet.Create(StringComparer.Ordinal, "project-model", "platform-model"),
                 RequiredEgress =
                 [
                     new NetworkEgressRule(
