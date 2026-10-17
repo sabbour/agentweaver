@@ -325,6 +325,97 @@ public sealed class RuntimeUsageSourceReceiptTests
         Assert.Equal(0, RuntimeUsageCostSnapshotContract.ValidateReceipt(receipt, request));
     }
 
+    [Fact]
+    public void LegacyCostSnapshotWithoutPublishedRateFieldsStillReplays()
+    {
+        var native = Receipt();
+        var request = new RuntimeUsageCostSnapshotRequest(1, native.Registration, native.Usage.SdkSource!);
+        var scope = request.Registration.Binding;
+        // Historic snapshots have no token-rate provenance or content hash.
+        var card = new CostRateCard(
+            "legacy-copilot-card", "v1", SdkMeterSources.CopilotNanoAiu, "AIC",
+            1_000_000_000m,
+            ImmutableDictionary<string, decimal>.Empty.Add(request.Source.ModelId, 1m));
+        var binding = new CostBinding(
+            SdkMeterSources.CopilotNanoAiu, "copilot.usage-cost", "1.0.0", 1,
+            "cost-options", "cost", 1, ImmutableHashSet<string>.Empty, card);
+        var amount = new UsageAmountTotal(SdkMeterSources.CopilotNanoAiu, "AIC", 0.25m, 1, 0);
+        var totals = new UsageRunTotals(scope.TenantId, scope.ProjectId, scope.RunId, 1, true,
+            [new(scope.AgentId, 1, null, null, null, null, null, null, true, [amount])], [amount]);
+        var receipt = new RuntimeUsageCostSnapshotReceipt(
+            1, RuntimeUsageSourceReceiptContract.HashSource(request.Registration, request.Source),
+            binding, new(0, "AIC", CostDisposition.Estimate, card, null), totals);
+
+        var roundTrip = JsonSerializer.Deserialize<RuntimeUsageCostSnapshotReceipt>(
+            JsonSerializer.Serialize(receipt))!;
+
+        Assert.Null(roundTrip.RateCardContentHash);
+        Assert.Equal(0.25m, RuntimeUsageCostSnapshotContract.ValidateReceipt(roundTrip, request));
+    }
+
+    [Fact]
+    public void CostSnapshotCarriesAndValidatesTheExactRateCardContentHash()
+    {
+        var native = Receipt();
+        var request = new RuntimeUsageCostSnapshotRequest(1, native.Registration, native.Usage.SdkSource!);
+        var receipt = CostSnapshot(request, 0, 0, includeContentHash: true);
+        var roundTrip = JsonSerializer.Deserialize<RuntimeUsageCostSnapshotReceipt>(
+            JsonSerializer.Serialize(receipt))!;
+
+        Assert.Equal(new string('a', 64), roundTrip.RateCardContentHash);
+        Assert.Equal(0, RuntimeUsageCostSnapshotContract.ValidateReceipt(roundTrip, request));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageCostSnapshotContract.ValidateReceipt(
+                roundTrip with { RateCardContentHash = new string('b', 64) }, request));
+    }
+
+    [Fact]
+    public void CostReconciliationBindsTheExactRateCardContentHash()
+    {
+        var native = Receipt();
+        var scope = native.Registration.Binding;
+        var hash = new string('a', 64);
+        var reference = AccountingReference(native, unpriced: false) with
+        {
+            Accounting = AccountingReference(native, unpriced: false).Accounting with
+            {
+                RateCardContentHash = hash
+            }
+        };
+        var request = new RuntimeUsageCostReconciliationRequest(
+            1, native.Usage.A2AMessageId!.Value, native.Registration.RuntimeInstanceId,
+            native.Registration.Revision, scope.ExecutionFence, scope.SessionId, scope.TurnId!,
+            scope.AcceptedSelectionHash, scope.ModelSelectionReference!, native.Usage.ModelBinding.ModelId,
+            native.Usage.ModelBinding.MeterSource, reference.Accounting.RateCardId!,
+            reference.Accounting.RateCardVersion!, reference.Accounting.Unit!, 0, [reference])
+        {
+            RateCardContentHash = hash
+        };
+        var amount = new UsageAmountTotal(SdkMeterSources.CopilotNanoAiu, "AIC", 5, 1, 0);
+        var totals = new UsageRunTotals(scope.TenantId, scope.ProjectId, scope.RunId, 1, true,
+            [new(scope.AgentId, 1, null, null, null, null, null, null, true, [amount])], [amount]);
+        var receipt = new RuntimeUsageCostReconciliationReceipt(
+            1, request.CostTurnId, request.RuntimeInstanceId, request.RegistrationRevision,
+            request.ExecutionFence, scope.TenantId, scope.ProjectId, scope.RunId, request.SessionId,
+            request.RuntimeTurnId, request.AcceptedSelectionHash, request.ModelSelectionReference,
+            request.ModelId, request.MeterSource, request.RateCardId, request.RateCardVersion,
+            request.RateCardUnit, 1, [reference], totals)
+        {
+            RateCardContentHash = hash
+        };
+
+        RuntimeUsageCostReconciliationContract.ValidateRequest(request);
+        RuntimeUsageCostReconciliationContract.ValidateReceipt(receipt, request,
+            scope.TenantId, scope.ProjectId, scope.RunId);
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageCostReconciliationContract.ValidateReceipt(
+                receipt with { RateCardContentHash = new string('b', 64) }, request,
+                scope.TenantId, scope.ProjectId, scope.RunId));
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageCostReconciliationContract.ValidateRequest(
+                request with { RateCardContentHash = new string('b', 64) }));
+    }
+
     [Theory]
     [InlineData("source")]
     [InlineData("binding")]
@@ -471,9 +562,11 @@ public sealed class RuntimeUsageSourceReceiptTests
     }
 
     private static RuntimeUsageCostSnapshotReceipt CostSnapshot(
-        RuntimeUsageCostSnapshotRequest request, decimal amount, long events, bool modelRateAvailable = true)
+        RuntimeUsageCostSnapshotRequest request, decimal amount, long events, bool modelRateAvailable = true,
+        bool includeContentHash = false)
     {
-        var card = PublishedCard(modelRateAvailable ? request.Source.ModelId : "gpt-6.1-sol");
+        var card = PublishedCard(
+            modelRateAvailable ? request.Source.ModelId : "gpt-6.1-sol", includeContentHash);
         var binding = new CostBinding(SdkMeterSources.CopilotNanoAiu, "copilot.usage-cost", "1.0.0", 1,
             "cost-options", "cost", 1, ImmutableHashSet<string>.Empty, card);
         var scope = request.Registration.Binding;
@@ -489,10 +582,13 @@ public sealed class RuntimeUsageSourceReceiptTests
             new(scope.TenantId, scope.ProjectId, scope.RunId, events, modelRateAvailable,
                 events == 0 ? [] :
                     [new(scope.AgentId, events, null, null, null, null, null, null, modelRateAvailable, amounts)],
-                amounts));
+                amounts))
+        {
+            RateCardContentHash = card.ContentHash
+        };
     }
 
-    private static CostRateCard PublishedCard(string modelId) =>
+    private static CostRateCard PublishedCard(string modelId, bool includeContentHash = false) =>
         new("card", "2026-10-17", SdkMeterSources.CopilotNanoAiu, "AIC", 1_000_000_000m,
             ImmutableDictionary<string, decimal>.Empty)
         {
@@ -503,6 +599,7 @@ public sealed class RuntimeUsageSourceReceiptTests
             TokensPerRateUnit = 1_000_000m,
             CreditsPerCurrencyUnit = 100m,
             LongContextThresholdTokens = 272_000,
+            ContentHash = includeContentHash ? new string('a', 64) : null,
             ModelTokenRates = ImmutableDictionary<string, CostModelTokenRates>.Empty
                 .WithComparers(StringComparer.Ordinal)
                 .Add(modelId, new(

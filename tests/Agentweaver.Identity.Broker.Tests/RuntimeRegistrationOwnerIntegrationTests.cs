@@ -1143,7 +1143,13 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Equal(intent.MessageId, accounted.Snapshot.DispatchId);
         if (accountNativeUsage is null)
         {
-            Assert.Empty(accounted.Snapshot.CopilotTotals.Amounts);
+            // Native usage without a published rate stays visible but never counts as priced credit.
+            var totals = accounted.Snapshot.CopilotTotals;
+            Assert.Equal(1, totals.Events);
+            var amount = Assert.Single(totals.Amounts);
+            Assert.Equal(0m, amount.Amount);
+            Assert.Equal(0, amount.PricedEvents);
+            Assert.Equal(1, amount.UnpricedEvents);
             Assert.Equal(CostDisposition.Unpriced, accounted.Snapshot.Quote.Disposition);
         }
         else
@@ -1225,6 +1231,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 Assert.Equal(0m, persistedCreditGuard.CopilotAicFloor);
                 Assert.Equal(1L, persistedCreditGuard.AccountedThroughLedgerEventCount);
                 Assert.Equal(initialCreditGuard.LedgerDigest, persistedCreditGuard.LedgerDigest);
+                Assert.False(persistedCreditGuard.SoftWarningEmitted);
                 Assert.True(persistedCreditGuard.GuardRevision > initialCreditGuard.GuardRevision);
                 Assert.True(persistedCreditGuard.UpdatedAt > initialCreditGuard.UpdatedAt);
                 Assert.False(persistedCreditGuard.HardCapExhausted);
@@ -1452,6 +1459,22 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         Assert.Null(accepted.Accounting.Amount);
         Assert.Equal(CostDisposition.Unpriced, accepted.Accounting.Disposition);
         Assert.NotNull(accepted.Accounting.UnpricedReason);
+        await using (var ledgerDataSource = NpgsqlDataSource.Create(_connectionString))
+        await using (var ledgerConnection = await ledgerDataSource.OpenConnectionAsync())
+        await using (var storedEvent = new NpgsqlCommand($"""
+            SELECT price_disposition, price_amount, unpriced_reason
+            FROM "{eventsSchema}".usage_ledger WHERE event_id = @event_id
+            """, ledgerConnection))
+        {
+            storedEvent.Parameters.AddWithValue("event_id", NpgsqlTypes.NpgsqlDbType.Uuid,
+                sourceReceipt.Usage.EventId);
+            await using var ledgerReader = await storedEvent.ExecuteReaderAsync();
+            Assert.True(await ledgerReader.ReadAsync());
+            Assert.Equal(nameof(CostDisposition.Unpriced), ledgerReader.GetString(0));
+            Assert.True(ledgerReader.IsDBNull(1));
+            Assert.False(string.IsNullOrWhiteSpace(ledgerReader.GetString(2)));
+            Assert.False(await ledgerReader.ReadAsync());
+        }
         await AssertNativeHistoryImmutabilityAsync(eventsSchema,
             [("usage_source_receipts", "source_receipt_id"), ("usage_run_cost_bindings", "meter_source")],
             "reject_usage_receipt_mutation");

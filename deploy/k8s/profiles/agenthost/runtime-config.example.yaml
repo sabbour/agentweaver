@@ -3,7 +3,7 @@ kind: ConfigMap
 metadata:
   name: agenthost-runtime-v1
   namespace: agentweaver
-immutable: true
+immutable: false
 data:
   appsettings.json: |
     {

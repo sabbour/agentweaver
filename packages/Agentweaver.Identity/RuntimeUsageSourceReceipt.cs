@@ -38,6 +38,8 @@ public sealed record RuntimeUsageCostSnapshotRequest(
 public sealed record RuntimeUsageCostSnapshotReceipt(
     int ContractVersion, string SourceHash, CostBinding? Binding, CostPrice Quote, UsageRunTotals CopilotTotals)
 {
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RateCardContentHash { get; init; }
     public Guid? DispatchId { get; init; }
     public ImmutableArray<RuntimeUsageCostReceiptReference> RepresentedReceipts { get; init; } = [];
 }
@@ -83,6 +85,8 @@ public static class RuntimeUsageCostSnapshotContract
                      string.IsNullOrWhiteSpace(accounting.RateCardVersion)))
                 throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
             RuntimeContractValidation.ValidateHash(accounting.CanonicalPayloadHash);
+            if (accounting.RateCardContentHash is { } accountingContentHash)
+                RuntimeContractValidation.ValidateHash(accountingContentHash);
         }
         if (request.NativeTurn is { } recorded)
             RuntimeNativeTurnContract.ValidateAccountingSnapshot(request, recorded);
@@ -102,6 +106,16 @@ public static class RuntimeUsageCostSnapshotContract
             receipt.Quote is null || !Enum.IsDefined(receipt.Quote.Disposition) ||
             receipt.CopilotTotals is not { Events: >= 0 } totals ||
             totals.TenantId != scope.TenantId || totals.ProjectId != scope.ProjectId || totals.RunId != scope.RunId)
+            throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
+        if (receipt.RateCardContentHash is { } contentHash)
+            RuntimeContractValidation.ValidateHash(contentHash);
+        if (receipt.RateCardContentHash != receipt.Binding?.RateCard?.ContentHash ||
+            receipt.RepresentedReceipts.Any(reference =>
+                reference is null || reference.Accounting is null ||
+                reference.Accounting.RateCardContentHash != receipt.RateCardContentHash ||
+                receipt.Binding is { RateCard: { ContentHash: not null } binding } &&
+                    (reference.Accounting.RateCardId != binding.Id ||
+                     reference.Accounting.RateCardVersion != binding.Version)))
             throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
         var expected = request.RequiredReceipts.ToDictionary(reference => reference.SourceReceiptId);
         foreach (var represented in receipt.RepresentedReceipts)
@@ -173,8 +187,10 @@ public static class RuntimeUsageCostSnapshotContract
                         NegotiatedCapabilities: not null
                     } ||
                     card.MeterSource != SdkMeterSources.CopilotNanoAiu || card.Unit != "AIC" ||
-                        card.ModelMultipliers is null || card.ModelMultipliers.Count != 0 ||
-                        card.ModelTokenRates is null || card.ModelTokenRates.Count == 0)
+                        card.ModelMultipliers is null || card.ModelTokenRates is null ||
+                        (card.ModelTokenRates.Count == 0
+                            ? card.ModelMultipliers.Count == 0
+                            : card.ModelMultipliers.Count != 0))
                     throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
                 try
                 {
@@ -186,14 +202,22 @@ public static class RuntimeUsageCostSnapshotContract
                 }
 
                 var hasModelRate = card.ModelTokenRates.ContainsKey(modelId);
+                // Legacy snapshots used model multipliers and must retain their fully priced replay contract.
+                var hasLegacyModelMultiplier =
+                    card.ModelTokenRates.Count == 0 && card.ModelMultipliers.ContainsKey(modelId);
                 var quoteMatchesCard = CostRateCardContract.Equals(quote.RateCard, card);
                 var validEstimate = hasModelRate &&
                     quote is { Amount: 0, Unit: "AIC", Disposition: CostDisposition.Estimate,
                         UnpricedReason: null };
+                var validLegacyEstimate = hasLegacyModelMultiplier &&
+                    quote is { Amount: 0, Unit: "AIC", Disposition: CostDisposition.Estimate,
+                        UnpricedReason: null } &&
+                    totals.IsFullyPriced;
                 var validUnpriced = quote is
                     { Amount: null, Unit: "AIC", Disposition: CostDisposition.Unpriced } &&
                     ValidUnpricedReason(quote.UnpricedReason);
-                if (!quoteMatchesCard || !validEstimate && !validUnpriced)
+                if (!quoteMatchesCard ||
+                    !validEstimate && !validLegacyEstimate && !validUnpriced)
                     throw new RuntimeAuthorizationException("runtime_usage_cost_snapshot_invalid");
             }
 
@@ -358,7 +382,11 @@ public sealed record RuntimeUsageCostReconciliationRequest(
     string RateCardVersion,
     string RateCardUnit,
     long MinimumAccountingRevision,
-    ImmutableArray<RuntimeUsageCostReceiptReference> RequiredReceipts);
+    ImmutableArray<RuntimeUsageCostReceiptReference> RequiredReceipts)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RateCardContentHash { get; init; }
+}
 
 /// <summary>Owner receipt proving the exact turn usage has been represented at an accounting revision.</summary>
 public sealed record RuntimeUsageCostReconciliationReceipt(
@@ -381,7 +409,11 @@ public sealed record RuntimeUsageCostReconciliationReceipt(
     string RateCardUnit,
     long AccountingRevision,
     ImmutableArray<RuntimeUsageCostReceiptReference> RepresentedReceipts,
-    UsageRunTotals CopilotTotals);
+    UsageRunTotals CopilotTotals)
+{
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RateCardContentHash { get; init; }
+}
 
 /// <summary>Validates model-turn cost reconciliation requests and exact represented receipt sets.</summary>
 public static class RuntimeUsageCostReconciliationContract
@@ -407,6 +439,8 @@ public static class RuntimeUsageCostReconciliationContract
         RuntimeContractValidation.ValidateIdentifier(request.RateCardId);
         RuntimeContractValidation.ValidateIdentifier(request.RateCardVersion);
         RuntimeContractValidation.ValidateIdentifier(request.RateCardUnit);
+        if (request.RateCardContentHash is { } contentHash)
+            RuntimeContractValidation.ValidateHash(contentHash);
         if (request.MeterSource != SdkMeterSources.CopilotNanoAiu ||
             string.IsNullOrWhiteSpace(request.ModelId) || request.ModelId.Length > 512 ||
             request.ModelId.Any(character => char.IsControl(character) || char.IsWhiteSpace(character)))
@@ -421,6 +455,8 @@ public static class RuntimeUsageCostReconciliationContract
                 !sourceReceiptIds.Add(reference.SourceReceiptId) || !eventIds.Add(accounting.EventId))
                 throw new RuntimeAuthorizationException("runtime_usage_reconciliation_invalid");
             RuntimeContractValidation.ValidateHash(accounting.CanonicalPayloadHash);
+            if (accounting.RateCardContentHash is { } accountingContentHash)
+                RuntimeContractValidation.ValidateHash(accountingContentHash);
             if (accounting.Attribution.SessionId != request.SessionId ||
                 accounting.Attribution.TurnId != request.RuntimeTurnId ||
                 !Enum.IsDefined(accounting.Disposition) || accounting.Amount is < 0 ||
@@ -434,7 +470,8 @@ public static class RuntimeUsageCostReconciliationContract
                     (accounting.RateCardId != request.RateCardId ||
                      accounting.RateCardVersion != request.RateCardVersion ||
                      accounting.Unit != request.RateCardUnit || accounting.Amount is null ||
-                     accounting.UnpricedReason is not null))
+                     accounting.UnpricedReason is not null) ||
+                accounting.RateCardContentHash != request.RateCardContentHash)
                 throw new RuntimeAuthorizationException("runtime_usage_reconciliation_invalid");
         }
     }
@@ -460,6 +497,7 @@ public static class RuntimeUsageCostReconciliationContract
             receipt.ModelId != request.ModelId || receipt.MeterSource != request.MeterSource ||
             receipt.RateCardId != request.RateCardId || receipt.RateCardVersion != request.RateCardVersion ||
             receipt.RateCardUnit != request.RateCardUnit ||
+            receipt.RateCardContentHash != request.RateCardContentHash ||
             receipt.AccountingRevision < request.MinimumAccountingRevision ||
             receipt.CopilotTotals is null || receipt.CopilotTotals.TenantId != tenantId ||
             receipt.CopilotTotals.ProjectId != projectId || receipt.CopilotTotals.RunId != runId ||
@@ -480,7 +518,8 @@ public static class RuntimeUsageCostReconciliationContract
                 reference is null || reference.Accounting is null ||
                 reference.Accounting.RateCardId != request.RateCardId ||
                 reference.Accounting.RateCardVersion != request.RateCardVersion ||
-                reference.Accounting.Unit != request.RateCardUnit) ||
+                reference.Accounting.Unit != request.RateCardUnit ||
+                reference.Accounting.RateCardContentHash != request.RateCardContentHash) ||
             receipt.CopilotTotals.Amounts.Any(amount =>
                 amount.MeterSource != request.MeterSource || amount.Unit != request.RateCardUnit))
             throw new RuntimeAuthorizationException("runtime_usage_reconciliation_invalid");

@@ -91,6 +91,9 @@ public sealed record UsageAccountingReceipt(
     string? RateCardVersion,
     DateTimeOffset RecordedAt)
 {
+    /// <summary>SHA-256 of the exact runtime rate-card document used for this accounting result.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? RateCardContentHash { get; init; }
     /// <summary>Dispatch whose accounting boundary includes this receipt.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DispatchId { get; init; }
@@ -356,6 +359,7 @@ public sealed record UsageIngestionResult(UsageLedgerEntry Entry, bool IsDuplica
         Entry.CostBinding?.RateCard.Version,
         Entry.RecordedAt)
     {
+        RateCardContentHash = Entry.CostBinding?.RateCard?.ContentHash,
         DispatchId = Entry.Usage.Attribution.DispatchId,
         AccountingCursor = Entry.AccountingRevision
     };

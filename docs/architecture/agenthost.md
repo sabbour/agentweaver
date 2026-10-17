@@ -188,7 +188,9 @@ Legacy unpinned factory callers retain their existing API; they do not provide v
 For configured hosted credit limits, coordination root acceptance and backlog claim
 now require a real Events run-admission receipt before their transaction writes the root.
 The receipt binds the trusted Projects selection, selected connection, shared model pin, and Cost identity.
-Unpriced or unavailable models cannot create a capped root.
+An explicit `Unpriced` quote does not itself block admission or dispatch; only known
+priced usage counts toward credit limits. A model missing from the Copilot SDK catalog
+still cannot start a session, and malformed or tampered admission receipts fail closed.
 The durable admission pin propagates through current owner context into the Host registration.
 These source paths still need live PostgreSQL and whole-producer acceptance.
 
