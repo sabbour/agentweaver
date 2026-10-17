@@ -125,7 +125,7 @@ The package and image jobs upload separate artifacts, bound to the same source S
 
 ```mermaid
 flowchart LR
-  Receipt["Merged version-application receipt on v1"] --> Validate["Validate manifest and changesets"]
+  Receipt["Merged version-application receipt on v1"] --> Validate["Wait for CI; validate manifest and changesets"]
   Validate --> Packages["Pack NuGet packages"]
   Validate --> Images["Build product Docker images"]
   Packages --> Artifacts["Upload exact-source artifacts"]
@@ -138,7 +138,9 @@ flowchart LR
 The v1 CI workflows run tests, build, lint, coverage, changeset, release-composition,
 and documentation checks on pull requests and pushes. A committed
 `releases/receipts/**` version-application receipt on `v1` triggers automatic
-publication. `workflow_dispatch` runs the same release path manually from `v1`.
+publication. Before building packages or images, the release workflow waits for
+both CI workflows to pass on the exact source commit. `workflow_dispatch` runs
+the same release path manually from `v1`.
 There is no publish toggle or environment approval. The Foundation Probe is
 excluded from product packages and images.
 

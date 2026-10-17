@@ -35,10 +35,11 @@ render using the original product working directory. The fixture rejects a
 helper HEAD in that product directory, dirty source, and a missing completion
 proof; ordinary publication still rejects a mismatched release HEAD.
 These tests do not execute a live deployment or grant release approval.
-Workflow source checks verify the receipt-based automatic trigger, separate
-package and image jobs, the publisher's dependency on both, exact artifact
-identity, fixed GitHub destinations, job-local write permission, and the
-absence of an approval environment or deployment step. Merge tests reject
+Workflow source checks verify the receipt-based automatic trigger, the
+same-source CI and documentation gate, separate package and image jobs, the
+publisher's dependency on both, exact artifact identity, fixed GitHub
+destinations, job-local write permission, and the absence of an approval
+environment or deployment step. Merge tests reject
 different sources, incomplete component selections, and unlisted files before
 the publisher receives artifacts. They do not authenticate a token, publish a
 package, prove package-write access, or prove that images are publicly pullable.
