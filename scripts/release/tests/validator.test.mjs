@@ -146,7 +146,7 @@ test('the AgentHost collector dependency is present in the fixture and still req
 test('the Orchestrator host is registered as a prepared service with all project dependencies pinned', () => {
   const host = fixture.components.find(component => component.id === 'Agentweaver.Orchestrator');
   assert.equal(host.kind, 'service');
-  assert.equal(host.version, '1.0.0');
+  assert.equal(host.version, '1.1.0');
   assert.equal(host.project, 'services/orchestrator/Agentweaver.Orchestrator/Agentweaver.Orchestrator.csproj');
   assert.deepEqual(fixture.compatibility
     .filter(({ consumer }) => consumer === host.id)
@@ -164,7 +164,7 @@ test('the Orchestrator host is registered as a prepared service with all project
 test('the acceptance-only Probe is tracked as its exact image artifact, not an arbitrary tools project', () => {
   const probe = fixture.components.find(component => component.id === 'Agentweaver.FoundationProbe');
   assert.equal(probe.kind, 'service');
-  assert.equal(probe.version, '0.0.1');
+  assert.equal(probe.version, '0.0.2');
   assert.equal(probe.project, 'tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj');
   assert.throws(() => check(edit(manifest => {
     manifest.components.find(component => component.id === probe.id).project = 'tools/Other/Other.csproj';
@@ -264,17 +264,19 @@ test('P1 preparation records every product component at 1.0.0 and keeps the Prob
   const receipt = JSON.parse(readFileSync(path.join(root, 'releases', 'receipts',
     '62a0dcf5307dc7ef58c805d4c66b45baecd98e43.json'), 'utf8'));
   const byId = new Map(receipt.components.map(component => [component.id, component]));
-  const product = fixture.components.filter(component => component.id !== 'Agentweaver.FoundationProbe');
+  const sourceManifestResult = spawnSync('git', ['show', `${receipt.sourceSha}:releases/foundation.json`],
+    { cwd: root, encoding: 'utf8' });
+  assert.equal(sourceManifestResult.status, 0, sourceManifestResult.stderr);
+  const sourceManifest = JSON.parse(sourceManifestResult.stdout);
+  const product = sourceManifest.components.filter(component => component.id !== 'Agentweaver.FoundationProbe');
   assert.equal(product.length, 23);
   assert.equal(product.filter(component => component.kind !== 'service').length, 13);
   assert.equal(product.filter(component => component.kind === 'service').length, 10);
   assert.equal(receipt.components.length, product.length + 1);
-  for (const { id, version } of product) {
-    assert.equal(version, '1.0.0', id);
+  for (const { id } of product) {
     assert.equal(byId.get(id)?.bump, 'major', id);
     assert.equal(byId.get(id)?.toVersion, '1.0.0', id);
   }
-  assert.equal(fixture.components.find(component => component.id === 'Agentweaver.FoundationProbe').version, '0.0.1');
   assert.equal(byId.get('Agentweaver.FoundationProbe')?.toVersion, '0.0.1');
   assert.equal(byId.get('Agentweaver.FoundationProbe')?.bump, 'patch');
   assert.ok(receipt.changesets.some(({ sourcePath, archivedPath }) =>
@@ -420,6 +422,7 @@ const validEvidence = {
 };
 const release = () => edit((m) => {
   m.stage = 'release';
+  m.components.find(({ id }) => id === 'Agentweaver.FoundationProbe').version = '0.0.1';
   for (const component of m.components) {
     if (component.kind === 'service' && component.id !== 'Agentweaver.FoundationProbe') {
       component.imageDigest = `sha256:${'b'.repeat(64)}`;
@@ -434,8 +437,13 @@ const release = () => edit((m) => {
   });
   m.evidence = structuredClone(validEvidence);
 });
+const exampleProject = '<Project><PropertyGroup><Version>1.0.0</Version></PropertyGroup></Project>';
+const draftProject = (file) => file.includes('Example.csproj') ? exampleProject : readProject(file);
 const releaseProject = (file) => file.includes('Example.csproj')
-  ? '<Project><PropertyGroup><Version>1.0.0</Version></PropertyGroup></Project>' : readProject(file);
+  ? exampleProject
+  : file.includes('Agentweaver.FoundationProbe.csproj')
+    ? readProject(file).replace('<Version>0.0.2</Version>', '<Version>0.0.1</Version>')
+    : readProject(file);
 const checkRelease = (manifest) => check(manifest, { readProject: releaseProject });
 
 test('release requires exact-SHA matching AKS and distinct API/UI/MCP evidence', () => {
@@ -467,7 +475,7 @@ test('draft services may honestly omit an image digest, but release services may
       project: 'services/Agentweaver.Example/Agentweaver.Example.csproj',
     });
   });
-  assert.equal(check(draftWithService, { readProject: releaseProject }).stage, 'draft');
+  assert.equal(check(draftWithService, { readProject: draftProject }).stage, 'draft');
   const draftWithDigest = edit((m) => {
     m.components.push({
       id: 'Agentweaver.Example',
@@ -477,7 +485,7 @@ test('draft services may honestly omit an image digest, but release services may
       imageDigest: `sha256:${'b'.repeat(64)}`,
     });
   });
-  assert.equal(check(draftWithDigest, { readProject: releaseProject }).stage, 'draft');
+  assert.equal(check(draftWithDigest, { readProject: draftProject }).stage, 'draft');
   const draftWithBadDigest = edit((m) => {
     m.components.push({
       id: 'Agentweaver.Example',
@@ -487,7 +495,7 @@ test('draft services may honestly omit an image digest, but release services may
       imageDigest: 'sha256:not-a-digest',
     });
   });
-  assert.throws(() => check(draftWithBadDigest, { readProject: releaseProject }), /sha256 image digest/);
+  assert.throws(() => check(draftWithBadDigest, { readProject: draftProject }), /sha256 image digest/);
   assert.throws(() => checkRelease(editRelease((m) => { delete m.components.at(-1).imageDigest; })),
     /requires a published sha256 image digest/);
 });
@@ -503,7 +511,7 @@ test('release product images are digest-pinned while the acceptance-only Probe s
   });
   assert.throws(() => check(changedProbe, {
     readProject: (file) => file.includes('Agentweaver.FoundationProbe.csproj')
-      ? readProject(file).replace('<Version>0.0.1</Version>', '<Version>0.0.2</Version>')
+      ? releaseProject(file).replace('<Version>0.0.1</Version>', '<Version>0.0.2</Version>')
       : releaseProject(file),
   }), /acceptance-only and must remain service 0.0.1 in a product release/);
 });
