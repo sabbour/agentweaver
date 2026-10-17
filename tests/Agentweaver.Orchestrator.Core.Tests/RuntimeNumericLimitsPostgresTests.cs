@@ -1095,6 +1095,7 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
                 TokensPerRateUnit = 1_000_000m,
                 CreditsPerCurrencyUnit = 100m,
                 LongContextThresholdTokens = 272_000,
+                ContentHash = new string('a', 64),
                 ModelTokenRates = ImmutableDictionary<string, CostModelTokenRates>.Empty
                     .WithComparers(StringComparer.Ordinal)
                     .Add(source.ModelId, new(
@@ -1114,7 +1115,10 @@ public sealed class RuntimeNumericLimitsPostgresTests(CoordinationPostgresFixtur
                 ledgerEventCount, isFullyPriced, agents, amounts);
             return Task.FromResult(new RuntimeUsageCostSnapshotReceipt(1,
                 sourceHash ?? RuntimeUsageSourceReceiptContract.HashSource(registration, source),
-                binding, new(0m, "AIC", CostDisposition.Estimate, card, null), totals));
+                binding, new(0m, "AIC", CostDisposition.Estimate, card, null), totals)
+            {
+                RateCardContentHash = card.ContentHash
+            });
         };
     }
 
