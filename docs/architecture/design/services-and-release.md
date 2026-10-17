@@ -525,8 +525,11 @@ builds NuGet packages and product Docker images in separate jobs. The image
 job uses source-pinned build inputs and excludes the acceptance-only Probe. The
 publisher waits for both jobs, verifies their source SHA, manifest hash, and
 artifacts, then publishes receipt-bumped NuGet package versions and all ten
-product service images. It writes immutable publication claim/result records and the
-receipt used by local deployment tooling. Only the publisher has
+product service images with version-plus-source-SHA tags. The full SHA prevents
+a later receipt from moving an existing version tag. The publisher queues
+receipt-triggered workflows in FIFO order, writes immutable publication claim/result
+records, and produces the receipt used by local deployment tooling. Only the
+publisher has
 `contents: write` and `packages: write`. The workflow has no approval
 environment and never deploys to Azure or AKS. The one-time partial-publication
 continuation remains a separate recovery path; its historical receipts do not

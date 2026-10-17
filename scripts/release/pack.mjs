@@ -45,6 +45,11 @@ export function componentImageRepository(componentId) {
   return componentId.toLowerCase();
 }
 
+/** Builds a registry tag unique to the component version and exact source commit. */
+export function componentImageTag(version, sourceSha) {
+  return `${version.replaceAll('+', '_')}-${sourceSha}`;
+}
+
 /** Selects service image components included in images-only integration releases. */
 export function selectIntegrationImageComponents(manifest) {
   const components = manifest.components.filter(component =>

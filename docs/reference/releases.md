@@ -161,7 +161,10 @@ Before any push, the publisher verifies source HEAD, manifest, selected componen
 and artifact hashes. It records immutable claim and result records and uploads the
 publication receipt for the local deployment tooling. It publishes only NuGet
 packages whose versions changed in the verified receipt, while publishing all
-ten product service images.
+ten product service images. Each service image tag contains its component
+version and the full source SHA, so a later receipt cannot move an existing
+version tag. The workflow queues receipt-triggered runs in FIFO order, so later
+runs cannot replace an earlier pending release.
 
 GitHub Actions never deploys to Azure or AKS. Use the local `release:deploy`
 command for deployment and live acceptance.

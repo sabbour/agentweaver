@@ -16,7 +16,7 @@ import {
   WEB_LOCK_PATH,
   WEB_PROJECT_PATH,
 } from './validate.mjs';
-import { componentImageRepository, selectIntegrationImageComponents } from './pack.mjs';
+import { componentImageRepository, componentImageTag, selectIntegrationImageComponents } from './pack.mjs';
 import { resolveProbeImageSource } from '../azure/build-foundation-probe-image.mjs';
 import { runPublicationCommand as command } from './command.mjs';
 import {
@@ -298,6 +298,9 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     ? components
     : components.filter((component) => component.kind === 'service' ||
       selectedPackageComponents.includes(component.id));
+  // Carry the version-application package set into the receipt for local deployment validation.
+  const requiredPackageIds = [...(selectedPackageComponents ?? components
+    .filter((component) => component.kind !== 'service').map((component) => component.id))].sort();
   const replaceInitialProbe = confirmFoundationProbeInitialReplacement !== undefined;
   const replaceSamplerProbe = confirmFoundationProbeSamplerReplacement !== undefined;
   if (replaceInitialProbe && replaceSamplerProbe) fail('Probe replacement intents are mutually exclusive');
@@ -306,6 +309,12 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
     fail('sampler Probe replacement requires only the exact approved current digest');
   }
   const replaceProbe = replaceInitialProbe || replaceSamplerProbe;
+  // Preserve the one-use Probe's fixed destination; product tags bind each version to this source.
+  const imageTagFor = component => {
+    if (integrationImagesOnly) return sourceSha;
+    if (replaceProbe && component.id === 'Agentweaver.FoundationProbe') return component.version;
+    return componentImageTag(component.version, sourceSha);
+  };
   const replacementDigest = replaceSamplerProbe ? samplerProbeDigest : initialProbeDigest;
   const replacementClaim = replaceSamplerProbe ? samplerProbeClaim : initialProbeClaim;
   const replacementField = replaceSamplerProbe ? 'samplerProbeReplacement' : 'initialProbeReplacement';
@@ -530,10 +539,11 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
   const planned = selected.map(({ component, artifact }) => ({
     id: component.id, version: component.version, kind: artifact.kind, sha256: artifact.sha256,
     destination: artifact.kind === 'package' ? env.RELEASE_NUGET_SOURCE
-      : `${imageRepositories.get(component.id)}:${integrationImagesOnly ? sourceSha : component.version}`,
+      : `${imageRepositories.get(component.id)}:${imageTagFor(component)}`,
   }));
   const receipt = {
     schemaVersion: 1, sourceSha,
+    requiredPackageIds,
     ...(integrationImagesOnly ? { mode: 'images-only', sourceTree: integrationSourceTree } : {}),
     provenanceSha256: hash(readFileSync(path.join(directory, 'provenance.json'))),
     planned, status: 'partial', published: [],
@@ -627,7 +637,7 @@ export function publishArtifacts(manifestPath, outDir, sourceSha, {
           fail('AgentHost has no verified loaded image identity to tag');
         const local = agentHost ? agentHost.loadedImageId
           : localImageReference ?? `${componentImageRepository(component.id)}:${component.version}`;
-        const imageTag = integrationImagesOnly ? sourceSha : component.version;
+        const imageTag = imageTagFor(component);
         const remote = `${imageRepositories.get(component.id)}:${imageTag}`;
         if (localImageReference === undefined) run('docker', ['load', '--input', file]);
         if (replaceProbe) {

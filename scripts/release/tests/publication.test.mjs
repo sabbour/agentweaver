@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, wri
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { packComponentsFromFile } from '../pack.mjs';
+import { componentImageTag, packComponentsFromFile } from '../pack.mjs';
 import { findNugetPushDiagnostic, publishArtifacts } from '../publish.mjs';
 import { resolveProbeImageSource } from '../../azure/build-foundation-probe-image.mjs';
 import { addAgentHostSource, agentHostComponent, agentHostDockerFixture } from './agenthost-fixture.mjs';
@@ -217,7 +217,8 @@ test('AgentHost publication remeasures both archives and checks loaded pinned ru
   const tag = f.externalCalls.find(({ bin, args }) => bin === 'docker' && args[0] === 'tag');
   assert.ok(load >= 0 && runtime > load && login > runtime);
   assert.equal(tag.args[1], artifact.imageId);
-  assert.equal(tag.args[2], 'registry.example.invalid/agentweaver-agenthost:0.1.0');
+  assert.equal(tag.args[2],
+    `registry.example.invalid/agentweaver-agenthost:${componentImageTag('0.1.0', f.sourceSha)}`);
   const published = receipt.published.find(item => item.id === 'Agentweaver.AgentHost');
   assert.equal(published.archiveSha256, artifact.sha256);
   assert.equal(published.ociArchiveSha256, artifact.ociArchive.sha256);
@@ -416,10 +417,10 @@ test('web prepare and publish use the proven source tag and verify the loaded im
   const tagIndex = f.externalCalls.findIndex(({ bin, args }) =>
     bin === 'docker' && args[0] === 'tag' &&
     args[1] === artifact.imageReference &&
-    args[2] === 'registry.example.invalid/agentweaver-web:0.1.0');
+    args[2] === `registry.example.invalid/agentweaver-web:${componentImageTag('0.1.0', f.sourceSha)}`);
   const pushIndex = f.externalCalls.findIndex(({ bin, args }) =>
     bin === 'docker' && args[0] === 'push' &&
-    args[1] === 'registry.example.invalid/agentweaver-web:0.1.0');
+    args[1] === `registry.example.invalid/agentweaver-web:${componentImageTag('0.1.0', f.sourceSha)}`);
   assert.ok(loadIndex >= 0 && verifyIndex > loadIndex && loginIndex > verifyIndex);
   assert.ok(tagIndex > loginIndex && pushIndex > tagIndex);
 });
@@ -663,6 +664,7 @@ test('platform-only publication includes product packages and images but exclude
 
   const receipt = f.publish({ platformOnly: true });
   assert.equal(receipt.status, 'published');
+  assert.deepEqual(receipt.requiredPackageIds, ['Pkg']);
   assert.deepEqual(receipt.planned.map(({ id }) => id), ['Pkg', 'Svc', 'Agentweaver.Web']);
   assert.deepEqual(receipt.published.map(({ id }) => id), ['Pkg', 'Svc', 'Agentweaver.Web']);
   assert.ok(!f.externalCalls.some(({ args }) => args.some(arg => arg.includes('foundation-probe'))));
@@ -672,10 +674,17 @@ test('automatic product publication omits unchanged NuGet versions but still pub
   const f = fixture(t);
   f.prepare({ platformOnly: true });
   const receipt = f.publish({ platformOnly: true, packageComponents: [] });
+  assert.deepEqual(receipt.requiredPackageIds, []);
   assert.deepEqual(receipt.planned.map(({ id, kind }) => ({ id, kind })), [{ id: 'Svc', kind: 'image' }]);
   assert.deepEqual(receipt.published.map(({ id, kind }) => ({ id, kind })), [{ id: 'Svc', kind: 'image' }]);
   assert.ok(!f.externalCalls.some(({ bin, args }) => bin === 'dotnet' && args[0] === 'nuget'));
   assert.ok(f.externalCalls.some(({ bin, args }) => bin === 'docker' && args[0] === 'push'));
+
+  const changed = fixture(t);
+  changed.prepare({ platformOnly: true });
+  const changedReceipt = changed.publish({ platformOnly: true, packageComponents: ['Pkg'] });
+  assert.deepEqual(changedReceipt.requiredPackageIds, ['Pkg']);
+  assert.deepEqual(changedReceipt.planned.map(({ id }) => id), ['Pkg', 'Svc']);
 
   const invalid = fixture(t);
   invalid.prepare({ platformOnly: true });
@@ -718,12 +727,13 @@ test('Probe-only preparation and publication preserve the existing hyphenated im
   delete env.RELEASE_NUGET_API_KEY;
   const receipt = f.publish({ foundationProbeOnly: true, env });
   assert.deepEqual(receipt.planned.map(record => record.destination),
-    ['ghcr.io/sabbour/agentweaver-foundation-probe:0.0.1']);
+    [`ghcr.io/sabbour/agentweaver-foundation-probe:${componentImageTag('0.0.1', f.sourceSha)}`]);
   assert.deepEqual(receipt.published.map(record => record.id), ['Agentweaver.FoundationProbe']);
   assert.equal(receipt.published[0].image, `ghcr.io/sabbour/agentweaver-foundation-probe@sha256:${'b'.repeat(64)}`);
   assert.ok(!f.externalCalls.some(call => call.bin === 'dotnet'));
   assert.deepEqual(f.externalCalls.find(call => call.bin === 'docker' && call.args[0] === 'tag').args,
-    ['tag', 'agentweaver-foundation-probe:0.0.1', 'ghcr.io/sabbour/agentweaver-foundation-probe:0.0.1']);
+    ['tag', 'agentweaver-foundation-probe:0.0.1',
+      `ghcr.io/sabbour/agentweaver-foundation-probe:${componentImageTag('0.0.1', f.sourceSha)}`]);
   assert.ok(!JSON.stringify(receipt).includes('agentweaver.foundationprobe'));
 });
 
@@ -913,6 +923,9 @@ test('sampler replacement rejects an unavailable preserved initial index before 
 test('receipt-triggered release workflow builds separate artifacts and publishes without an approval gate', () => {
   const workflow = readFileSync('.github/workflows/v1-release-pack.yml', 'utf8').replaceAll('\r\n', '\n');
   const publish = workflow.slice(workflow.indexOf('\n  publish:'));
+  assert.match(workflow,
+    /concurrency:\n  group: v1-product-publication-\$\{\{ github\.repository \}\}\n  cancel-in-progress: false\n  queue: max/);
+  assert.doesNotMatch(publish, /concurrency:/);
   assert.match(workflow, /push:\n\s+branches: \[v1\]\n\s+paths:\n\s+-\s+'releases\/receipts\/\*\*'/);
   assert.match(workflow, /workflow_dispatch:/);
   const validate = workflow.slice(workflow.indexOf('\n  validate:'), workflow.indexOf('\n  packages:'));
@@ -1135,7 +1148,8 @@ test('manual publication records actual immutable registry digests and never cha
   assert.equal(receipt.status, 'published');
   assert.equal(receipt.sourceSha, f.sourceSha);
   assert.equal(receipt.published[1].image, `registry.example.invalid/svc@sha256:${'b'.repeat(64)}`);
-  assert.equal(receipt.planned[1].destination, 'registry.example.invalid/svc:0.1.0');
+  assert.equal(receipt.planned[1].destination,
+    `registry.example.invalid/svc:${componentImageTag('0.1.0', f.sourceSha)}`);
   assert.equal(f.externalCalls.find(({ bin, args }) => bin === 'docker' && args[0] === 'login').args[1], 'registry.example.invalid');
   assert.deepEqual(readFileSync(path.join(f.root, 'releases', 'foundation.json')), before);
   const text = readFileSync(path.join(f.outDir, 'publication.json'), 'utf8');
@@ -1159,10 +1173,12 @@ test('GHCR namespace scopes image paths while Docker login uses only the registr
   const registry = 'ghcr.io/sabbour';
   const receipt = f.publish({ env: { ...f.env, RELEASE_REGISTRY: registry } });
   assert.equal(receipt.status, 'published');
-  assert.equal(receipt.planned[1].destination, `${registry}/svc:0.1.0`);
+  const imageTag = componentImageTag('0.1.0', f.sourceSha);
+  assert.equal(receipt.planned[1].destination, `${registry}/svc:${imageTag}`);
   assert.equal(receipt.published[1].image, `${registry}/svc@sha256:${'b'.repeat(64)}`);
   assert.equal(f.externalCalls.find(({ bin, args }) => bin === 'docker' && args[0] === 'login').args[1], 'ghcr.io');
-  assert.ok(f.externalCalls.some(({ bin, args }) => bin === 'docker' && args[0] === 'push' && args[1] === `${registry}/svc:0.1.0`));
+  assert.ok(f.externalCalls.some(({ bin, args }) =>
+    bin === 'docker' && args[0] === 'push' && args[1] === `${registry}/svc:${imageTag}`));
 });
 
 for (const registry of [

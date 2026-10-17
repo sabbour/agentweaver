@@ -18,7 +18,7 @@ import {
   verifyRegistryImage,
   verifyAzureTarget,
 } from '../deploy.mjs';
-import { componentImageRepository } from '../pack.mjs';
+import { componentImageRepository, componentImageTag } from '../pack.mjs';
 import {
   brokerRunBindingFingerprint, createBrokerRunBindingPolicies, createRuntimeList,
   validateBrokerRunBinding,
@@ -90,6 +90,8 @@ function publicationReceipt(manifest = releaseManifest()) {
     sourceSha,
     provenanceSha256: 'b'.repeat(64),
     status: 'published',
+    requiredPackageIds: product.filter((component) => component.kind !== 'service')
+      .map((component) => component.id),
     planned: product.map((component) => {
       const isService = component.kind === 'service';
       return {
@@ -98,7 +100,7 @@ function publicationReceipt(manifest = releaseManifest()) {
         kind: isService ? 'image' : 'package',
         sha256: 'c'.repeat(64),
         destination: isService
-          ? `ghcr.io/sabbour/${componentImageRepository(component.id)}:${component.version}`
+          ? `ghcr.io/sabbour/${componentImageRepository(component.id)}:${componentImageTag(component.version, sourceSha)}`
           : 'https://nuget.pkg.github.com/sabbour/index.json',
       };
     }),
@@ -297,9 +299,10 @@ test('a draft or altered product manifest cannot pass published-release validati
     id !== 'Agentweaver.FoundationProbe' && kind === 'service').length, 10);
 });
 
-test('publication provenance must prove every product image and validates any included package receipts', () => {
+test('publication provenance proves every image and every package selected for this source', () => {
   const manifest = releaseManifest();
   const receipt = publicationReceipt(manifest);
+  const completeReceipt = structuredClone(receipt);
   const images = validatePublicationReceipt(receipt, manifest, sourceSha);
   assert.equal(images.length, 10);
   assert.ok(images.every(({ image }) => image.startsWith('ghcr.io/sabbour/agentweaver')));
@@ -307,22 +310,44 @@ test('publication provenance must prove every product image and validates any in
   assert.equal(agentHost.sandboxImage,
     `ghcr.io/sabbour/${componentImageRepository(agentHost.id)}@sha256:${'a'.repeat(64)}`);
   assert.equal(agentHost.compressedPullBytes, 123456);
+  const unchangedPackageIds = receipt.requiredPackageIds.slice(1);
+  receipt.requiredPackageIds = receipt.requiredPackageIds.slice(0, 1);
   const packagesOmitted = structuredClone(receipt);
-  packagesOmitted.planned = packagesOmitted.planned.filter(({ kind }) => kind === 'image');
-  packagesOmitted.published = packagesOmitted.published.filter(({ kind }) => kind === 'image');
+  packagesOmitted.planned = packagesOmitted.planned.filter(({ id }) => !unchangedPackageIds.includes(id));
+  packagesOmitted.published = packagesOmitted.published.filter(({ id }) => !unchangedPackageIds.includes(id));
   assert.equal(validatePublicationReceipt(packagesOmitted, manifest, sourceSha).length, 10);
+  const missingRequiredPackage = structuredClone(packagesOmitted);
+  missingRequiredPackage.planned = missingRequiredPackage.planned.filter(({ kind }) => kind === 'image');
+  missingRequiredPackage.published = missingRequiredPackage.published.filter(({ kind }) => kind === 'image');
+  assert.throws(() => validatePublicationReceipt(missingRequiredPackage, manifest, sourceSha),
+    /does not prove required package/);
+  const legacyReceipt = publicationReceipt(manifest);
+  delete legacyReceipt.requiredPackageIds;
+  for (const entry of legacyReceipt.planned) {
+    if (entry.kind === 'image') {
+      const component = manifest.components.find(({ id }) => id === entry.id);
+      entry.destination = `ghcr.io/sabbour/${componentImageRepository(component.id)}:${component.version}`;
+    }
+  }
+  assert.equal(validatePublicationReceipt(legacyReceipt, manifest, sourceSha).length, 10);
+  const legacyPackageMissing = structuredClone(legacyReceipt);
+  legacyPackageMissing.planned = legacyPackageMissing.planned.filter(({ kind }) => kind === 'image');
+  legacyPackageMissing.published = legacyPackageMissing.published.filter(({ kind }) => kind === 'image');
+  assert.throws(() => validatePublicationReceipt(legacyPackageMissing, manifest, sourceSha),
+    /does not prove required package/);
   const missingImage = structuredClone(packagesOmitted);
-  missingImage.planned.pop();
-  missingImage.published.pop();
+  const lastImageId = missingImage.planned.filter(({ kind }) => kind === 'image').at(-1).id;
+  missingImage.planned = missingImage.planned.filter(({ id }) => id !== lastImageId);
+  missingImage.published = missingImage.published.filter(({ id }) => id !== lastImageId);
   assert.throws(() => validatePublicationReceipt(missingImage, manifest, sourceSha), /every product service image/);
-  const wrongDigest = structuredClone(receipt);
+  const wrongDigest = structuredClone(completeReceipt);
   wrongDigest.published.find(({ id }) => id === 'Agentweaver.Web').image =
     `ghcr.io/sabbour/agentweaver-web@sha256:${'f'.repeat(64)}`;
   assert.throws(() => validatePublicationReceipt(wrongDigest, manifest, sourceSha), /disagree on the published image/);
-  const wrongArchive = structuredClone(receipt);
+  const wrongArchive = structuredClone(completeReceipt);
   wrongArchive.published.find(({ id }) => id === 'Agentweaver.Web').archiveSha256 = 'f'.repeat(64);
   assert.throws(() => validatePublicationReceipt(wrongArchive, manifest, sourceSha), /disagree on the published image/);
-  const partial = structuredClone(receipt);
+  const partial = structuredClone(completeReceipt);
   partial.status = 'partial';
   assert.throws(() => validatePublicationReceipt(partial, manifest, sourceSha), /partial/);
   for (const [label, change] of [
@@ -332,7 +357,7 @@ test('publication provenance must prove every product image and validates any in
     ['wrong config', (entry) => { entry.imageConfigDigest = `sha256:${'b'.repeat(64)}`; }],
     ['invalid byte count', (entry) => { entry.preparedOciMeasurement.image.compressedPullBytes = 0; }],
   ]) {
-    const invalid = structuredClone(receipt);
+    const invalid = structuredClone(completeReceipt);
     change(invalid.published.find(({ id }) => id === 'Agentweaver.AgentHost'));
     assert.throws(() => validatePublicationReceipt(invalid, manifest, sourceSha),
       /AgentHost publication receipt lacks/ , label);
