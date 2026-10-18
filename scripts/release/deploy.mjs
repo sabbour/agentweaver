@@ -29,7 +29,7 @@ import { verifyPartialPublicationCompletion } from './partial-publication.mjs';
 import { PARTIAL_PUBLICATION } from './partial-publication-contract.mjs';
 import { run as runProcess } from '../azure/lib/exec.mjs';
 import {
-  observeExistingP0BrokerRouting, projectIdentityRoutingReadback,
+  managedBrokerHostname, observeExistingP0BrokerRouting, projectIdentityRoutingReadback,
 } from '../azure/lib/identity-broker-routing.mjs';
 
 export { verifyRegistryImage };
@@ -1276,8 +1276,9 @@ export function verifyExistingP0BrokerRouting(target, { root, run }) {
       cwd: root, projectJson: projectIdentityRoutingReadback, preserveProjectedJson: true,
     }), `${resource} ${name} routing`);
   }
-  return observeExistingP0BrokerRouting({
+  const routing = {
     certificate: read('defaultdomaincertificates', 'identity-broker'),
+    gatewayCertificate: read('defaultdomaincertificates', 'identity-broker', GATEWAY_NAMESPACE),
     gateway: read('gateways', 'identity-broker', GATEWAY_NAMESPACE),
     route: read('httproutes', 'identity-broker'),
     backendPolicy: read('backendtlspolicies', 'identity-broker'),
@@ -1286,7 +1287,19 @@ export function verifyExistingP0BrokerRouting(target, { root, run }) {
     apiBackendPolicy: read('backendtlspolicies', 'gateway-api'),
     mcpRoute: read('httproutes', 'mcp'),
     mcpBackendPolicy: read('backendtlspolicies', 'mcp'),
-  });
+  };
+  const routeResources = Object.entries(routing)
+    .filter(([name]) => name !== 'certificate' && name !== 'gatewayCertificate')
+    .map(([, resource]) => resource);
+  // A fresh rollout may have only the pre-staged certificates; any partial route set stays fail-closed.
+  if (routeResources.every(resource => resource === null)) {
+    const hostname = managedBrokerHostname(routing.certificate, target.namespace);
+    const gatewayHostname = managedBrokerHostname(routing.gatewayCertificate, GATEWAY_NAMESPACE);
+    if (gatewayHostname !== hostname) fail('Managed Gateway and Broker certificate domains differ.');
+    return { hostname, portalHostname: `portal.${hostname.slice('agentweaver.'.length)}`,
+    certificatesConfigured: true, routingConfigured: false, runtimeVerified: false };
+  }
+  return observeExistingP0BrokerRouting(routing);
 }
 
 function checkpointKey(tag, sourceSha, target, identity) {

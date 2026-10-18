@@ -128,8 +128,16 @@ function snapshot() {
     },
   };
 }
-function transport({ native = snapshot(), namespace, failWait = false, deniedWrite,
+function transport({ native: nativeFixture = snapshot(), namespace, failWait = false, deniedWrite,
+  certificateOnlyFresh = false,
   webPolicy = networkPolicy('web-gateway-ingress', 'web') } = {}) {
+  const native = nativeFixture;
+  if (certificateOnlyFresh) {
+    native.gatewayCertificate = null;
+    native.brokerCertificate = null;
+    native.mcpService = null;
+  }
+  const issuedCertificates = snapshot();
   const calls = [];
   const azureCalls = [];
   const policies = {
@@ -157,7 +165,14 @@ function transport({ native = snapshot(), namespace, failWait = false, deniedWri
         return deniedWrite?.(args) ? ok('no\n') : ok('yes\n');
       }
       const command = args.slice(args.findIndex(value => ['get', 'wait', 'apply'].includes(value)));
-      if (command[0] === 'apply') return ok();
+      if (command[0] === 'apply') {
+        if (certificateOnlyFresh && options.input?.includes('kind: DefaultDomainCertificate')) {
+          const isGateway = options.input.includes(`namespace: ${gatewayNamespace}`);
+          native[isGateway ? 'gatewayCertificate' : 'brokerCertificate'] =
+            issuedCertificates[isGateway ? 'gatewayCertificate' : 'brokerCertificate'];
+        }
+        return ok();
+      }
       if (command[0] === 'wait') {
         return failWait ? { status: 1, stdout: '', stderr: 'Gateway Programmed timed out' } : ok();
       }
@@ -254,6 +269,25 @@ test('routing checks all required writes before applying the first manifest', ()
   assert.throws(() => bootstrapIdentityRouting(config, dependencies),
     /Kubernetes API access is unavailable or insufficient for Identity routing bootstrap: required permission "patch gateways" in namespace agentweaver-gateway/);
   assert.equal(calls.filter(call => call.args.includes('apply')).length, 0);
+});
+
+test('fresh certificate-only bootstrap works before identity-broker-tls and Services exist', () => {
+  const { calls, dependencies } = transport({ certificateOnlyFresh: true });
+  const receipt = bootstrapIdentityRouting({
+    ...config, identityRoutingCertificatesOnly: true,
+  }, dependencies);
+
+  assert.equal(receipt.certificatesConfigured, true);
+  assert.equal(receipt.routingConfigured, false);
+  assert.equal(receipt.runtimeVerified, false);
+  assert.equal(receipt.hostname, hostname);
+  const applies = calls.filter(call => call.args.includes('apply'));
+  assert.equal(applies.length, 3);
+  assert.equal(applies.filter(call => call.options.input.includes('kind: DefaultDomainCertificate')).length, 2);
+  assert.equal(calls.some(call => call.args.includes('service')), false);
+  assert.ok(!applies.some(call => /kind: (?:Gateway|HTTPRoute|BackendTLSPolicy|CiliumNetworkPolicy)/.test(call.options.input)));
+  assert.equal(calls.filter(call => call.args.includes('wait') &&
+    call.args.some(value => value.startsWith('--for=condition=Available'))).length, 2);
 });
 
 test('routing waits for policy current-generation evidence before final strict derivation', () => {

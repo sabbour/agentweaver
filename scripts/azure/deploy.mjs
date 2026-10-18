@@ -67,13 +67,17 @@ export async function deploy(config, {
     if (!GUID_PATTERN.test(config.upstreamClientId ?? '')) {
       throw new Error('Identity routing requires the exact upstream public application client ID.');
     }
+    if (config.identityRoutingCertificatesOnly &&
+        (config.verifyBrokerReadiness || config.registerBrokerCallback || config.confirmBrokerCallback)) {
+      throw new Error('Certificate-only identity routing cannot verify Broker readiness or change the public application.');
+    }
     if (config.registerBrokerCallback && !config.confirmBrokerCallback) {
       throw new Error('Callback registration requires --confirm-identity-broker-callback with the exact route-derived URI.');
     }
     if (config.confirmBrokerCallback && !config.registerBrokerCallback) {
       throw new Error('Callback confirmation requires --register-identity-broker-callback.');
     }
-  } else if (config.gatewayNamespace || config.gatewaySecurityPolicy ||
+  } else if (config.identityRoutingCertificatesOnly || config.gatewayNamespace || config.gatewaySecurityPolicy ||
       config.upstreamClientId && !config.bootstrapIdentityBrokerRuntime ||
       config.verifyBrokerReadiness || config.registerBrokerCallback || config.confirmBrokerCallback) {
     throw new Error('Identity routing inputs require the separate --bootstrap-identity-routing option.');
@@ -97,6 +101,7 @@ export async function deploy(config, {
     ...(config.bootstrapIdentityRouting ? { identityRoutingPlan: {
       gatewayNamespace: config.gatewayNamespace, gatewaySecurityPolicy: config.gatewaySecurityPolicy,
       upstreamClientId: config.upstreamClientId, verifyBrokerReadiness: Boolean(config.verifyBrokerReadiness),
+      certificatesOnly: Boolean(config.identityRoutingCertificatesOnly),
       appRegistrationMutationRequested: Boolean(config.registerBrokerCallback),
       callbackConfirmation: config.confirmBrokerCallback,
       appRegistrationMutation: false,
@@ -335,6 +340,7 @@ export async function deploy(config, {
         clusterName: `${config.resourceGroup}-aks`,
         gatewayNamespace: config.gatewayNamespace, gatewaySecurityPolicy: config.gatewaySecurityPolicy,
         upstreamClientId: config.upstreamClientId, verifyBrokerReadiness: Boolean(config.verifyBrokerReadiness),
+        identityRoutingCertificatesOnly: Boolean(config.identityRoutingCertificatesOnly),
         registerBrokerCallback: Boolean(config.registerBrokerCallback), confirmBrokerCallback: config.confirmBrokerCallback,
       });
     } catch (error) {
@@ -363,6 +369,7 @@ export function cliConfig(values) {
     allowStaleAksSubnetRoleCleanup: values['allow-stale-aks-subnet-role-cleanup'],
     bootstrapIdentityPostgres: values['bootstrap-identity-postgres'] ?? false,
     bootstrapIdentityRouting: values['bootstrap-identity-routing'] ?? false,
+    identityRoutingCertificatesOnly: values['identity-routing-certificates-only'] ?? false,
     bootstrapIdentityBrokerState: values['bootstrap-identity-broker-state'] ?? false,
     alignExistingIdentityBrokerHostname: values['align-existing-identity-broker-hostname'] ?? false,
     bootstrapIdentityBrokerRuntime: values['bootstrap-identity-broker-runtime'] ?? false,
@@ -387,6 +394,8 @@ export const cliOptions = {
   'allow-stale-aks-subnet-role-cleanup': { type: 'boolean', default: false },
   'bootstrap-identity-postgres': { type: 'boolean', default: false },
   'bootstrap-identity-routing': { type: 'boolean', default: false },
+  // This stage creates managed TLS certificates only; route writes remain service-guarded.
+  'identity-routing-certificates-only': { type: 'boolean', default: false },
   'bootstrap-identity-broker-state': { type: 'boolean', default: false },
   'align-existing-identity-broker-hostname': { type: 'boolean', default: false },
   'bootstrap-identity-broker-runtime': { type: 'boolean', default: false },

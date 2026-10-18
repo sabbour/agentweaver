@@ -299,12 +299,45 @@ An existing namespace must have matching ownership and policy labels.
 The installer refuses to change its policy.
 The P0 namespace retains restricted enforcement, audit, and warning labels.
 
-After namespace setup, this option creates the approved dedicated Gateway
-namespace and native managed certificates in both namespaces.
-It applies the Gateway, Broker/Web/Gateway API/MCP HTTPRoutes, corresponding
+For a fresh product install, first run the certificate-only stage before
+`release:deploy-bootstrap --execute`. It creates the approved Gateway
+namespace when needed, applies the native managed certificates in both
+namespaces, waits for them to become Available, and returns their managed
+hostnames. It does not require or read the MCP Service and does not apply a
+Gateway, route, policy, or Cilium ingress rule.
+
+```powershell
+node scripts\azure\deploy.mjs `
+  --resource-group agentweaver `
+  --template infra\bicep\aks-redeploy.bicep `
+  --parameters infra\bicep\parameters\<approved-aks-only-parameters>.json `
+  --subscription <subscription-id> `
+  --allowed-subscription <subscription-id> `
+  --tenant <tenant-id> `
+  --allowed-tenant <tenant-id> `
+  --identity-gateway-namespace agentweaver-gateway `
+  --identity-gateway-security-policy <approved-policy> `
+  --identity-upstream-client-id <public-client-guid> `
+  --bootstrap-identity-routing `
+  --identity-routing-certificates-only `
+  --execute
+```
+
+This command uses the guarded AKS-only deployment path and requires the same
+source, target, and permission checks as other Azure writes. The certificate
+stage is a separate, default-off option. It requires
+`--bootstrap-identity-routing` and cannot be combined with Broker readiness
+verification or callback registration.
+
+After the release bootstrap creates the product Services, run the same
+guarded command again without `--identity-routing-certificates-only`. The full
+phase first verifies that the MCP Service is the exact private HTTPS backend,
+then applies the Gateway, Broker/Web/Gateway API/MCP HTTPRoutes, corresponding
 BackendTLSPolicies, and narrow Cilium ingress policies. The portal listener
 sends `/` to Web, `/api/v1` plus exact `/openapi/v1.json` to Gateway, and exact
 `/mcp` plus `/.well-known/oauth-protected-resource/mcp` to MCP over HTTPS.
+The full phase rejects a missing or changed MCP Service before its first
+routing write.
 Gateway and MCP backend TLS use operator-owned
 `gateway-tls` and `mcp-tls` Secrets, validated against the public `ca.crt` in
 the existing `service-backend-ca` ConfigMap. Their leaf certificates must
