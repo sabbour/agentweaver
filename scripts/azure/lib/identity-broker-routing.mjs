@@ -35,6 +35,7 @@ export function projectIdentityRoutingReadback(value) {
   const conditions = items => items?.map(({ type, status, observedGeneration }) => ({ type, status, observedGeneration }));
   const reference = item => item && ({
     name: item.name, namespace: item.namespace, group: item.group, kind: item.kind, sectionName: item.sectionName,
+    port: item.port,
   });
   switch (value?.kind) {
     case 'Namespace':
@@ -330,8 +331,10 @@ export function alignExistingP0BrokerHostname(config, {
   }, { execKubectl });
 }
 
+/** Matches the approved Gateway parent and allows only its HTTPS listener port when specified. */
 function gatewayReference(reference, gatewayNamespace, objectNamespace) {
   return reference?.name === 'identity-broker' &&
+    (reference.port === undefined || reference.port === 443) &&
     (reference.namespace ?? objectNamespace) === gatewayNamespace &&
     (reference.group ?? 'gateway.networking.k8s.io') === 'gateway.networking.k8s.io' &&
     (reference.kind ?? 'Gateway') === 'Gateway';
@@ -385,6 +388,7 @@ function assertManagedRoute(route, {
 /**
  * Validates the root bundle's Web route while the separately managed Gateway is absent.
  * The route must retain the approved parent, managed Portal host, and exact Web backend.
+ * An explicitly supplied parent port must match the approved HTTPS listener.
  */
 export function assertExistingP0BundleWebRoute(webRoute, portalHostname) {
   assertManagedRoute(webRoute, {

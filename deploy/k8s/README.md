@@ -122,7 +122,8 @@ separate overlays.
    The release preflight accepts either this certificate-only state or, after
    a root-bundle apply has started, exactly the bundle-owned
    `web-application` route with no Gateway or BackendTLSPolicy. That route must
-   target Gateway `identity-broker` in `agentweaver-gateway` and preserve the
+   target Gateway `identity-broker` in `agentweaver-gateway` and select its
+   `portal` listener; an explicit parent port must be 443. It must preserve the
    rendered host, path, and Web backend. The preflight inventories all routes;
    extra or mismatched routing resources fail closed.
 

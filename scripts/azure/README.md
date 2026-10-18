@@ -336,8 +336,9 @@ Gateway, route, policy, or Cilium ingress rule.
 If a release-bootstrap attempt has already applied the root bundle, a retry
 also accepts its single `web-application` HTTPRoute when no Gateway or
 BackendTLSPolicy exists. The route must target Gateway `identity-broker` in
-`agentweaver-gateway` and match the managed Portal host, `/` path, and Web
-Service backend. Extra routes and any other partial routing state fail closed.
+`agentweaver-gateway`, select its `portal` listener, and match the managed
+Portal host, `/` path, and Web Service backend. An explicit parent port must be
+443. Extra routes and any other partial routing state fail closed.
 
 ```powershell
 node scripts\azure\deploy.mjs `
