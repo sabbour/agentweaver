@@ -287,6 +287,7 @@ test('runtime configuration retains the run-owned acceptance client and seeds th
   const data = brokerAcceptanceConfiguration(config, {
     issuer: `https://${hostname}/`, identity: { clientId, principalId }, portalHostname,
   });
+  assert.equal(data.IdentityBroker__WebOrigin, `https://${portalHostname}`);
   assert.equal(data.IdentityBroker__Clients__0__Type, 'Public');
   assert.equal(data.IdentityBroker__Clients__0__ClientId, `identity-acceptance-${principalId}`);
   assert.equal(data.IdentityBroker__Clients__0__RedirectUris__0, config.acceptanceRedirectUri);

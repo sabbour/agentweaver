@@ -122,6 +122,7 @@ test('Identity Broker snapshot keeps the acceptance client and adds the versione
     'IdentityBroker__SecretRedemption__WorkloadIdentityClientId',
     'IdentityBroker__SecretRedemption__WorkloadIdentityTenantId',
     'IdentityBroker__SecretRedemption__WorkloadIdentityTokenFilePath',
+    'IdentityBroker__WebOrigin',
   ].sort());
   assert.equal(identityBroker.metadata.name, 'identity-broker-runtime-config-v2');
   assert.equal(identityBroker.immutable, true);
@@ -136,6 +137,7 @@ test('Identity Broker snapshot keeps the acceptance client and adds the versione
   assert.equal(identityBroker.data.IdentityBroker__Clients__1__Type, 'Public');
   assert.equal(identityBroker.data.IdentityBroker__Clients__1__RedirectUris__0,
     `${portalOrigin}/auth/callback`);
+  assert.equal(identityBroker.data.IdentityBroker__WebOrigin, portalOrigin);
   assert.equal(identityBroker.data.IdentityBroker__Clients__1__Resources__0, broker);
   assert.deepEqual(Array.from({ length: 7 }, (_, index) =>
     identityBroker.data[`IdentityBroker__Clients__1__Scopes__${index}`]),

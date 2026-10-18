@@ -203,12 +203,16 @@ Kustomization includes its Web HTTPRoute, while the external Gateway source adds
 the matching `portal` listener under the existing App Routing managed domain.
 Web uses the Identity Broker public client `agentweaver-web` with
 `openid profile email api.read offline_access projects.admin
-projects.orchestrator`; its `/auth/callback` is not added to the upstream Entra
-application, whose `/signin-oidc` callback remains unchanged. The immutable
-Broker ConfigMap is versioned as `identity-broker-runtime-config-v2`, and the
-Deployment reference change rolls the Broker Pod. Knowledge uses PostgreSQL
-role `aw-v1-p0-id-knowledge`, resource ID `agentweaver.knowledge`, and
-generation `1`.
+projects.orchestrator`. For project/run-bound requests, Web omits
+`projects.admin`, which the Broker does not permit with its run-bound
+`projects.orchestrator` authority. `IdentityBroker__WebOrigin` configures the
+exact Portal origin for credentialed Broker OAuth CORS; it is separate from
+`Gateway__WebOrigin`. The Web `/auth/callback` is not added to the upstream
+Entra application, whose `/signin-oidc` callback remains unchanged. The
+immutable Broker ConfigMap is versioned as `identity-broker-runtime-config-v2`,
+and the Deployment reference change rolls the Broker Pod. Knowledge uses
+PostgreSQL role `aw-v1-p0-id-knowledge`, resource ID `agentweaver.knowledge`,
+and generation `1`.
 
 The existing cluster Gateway currently lacks the `portal` listener, so update
 the reviewed Gateway source and verify managed DNS/TLS before claiming Portal

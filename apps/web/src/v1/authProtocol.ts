@@ -112,7 +112,11 @@ export function buildAuthorizeUrl(
   url.searchParams.set('client_id', config.clientId);
   url.searchParams.set('redirect_uri', transaction.redirectUri);
   url.searchParams.set('response_type', 'code');
-  url.searchParams.set('scope', config.scopes.join(' '));
+  // The Broker's run-bound authority rejects projects.admin; keep it only for unbound flows.
+  const scopes = transaction.binding
+    ? config.scopes.filter((scope) => scope !== 'projects.admin')
+    : config.scopes;
+  url.searchParams.set('scope', scopes.join(' '));
   url.searchParams.set('code_challenge', challenge);
   url.searchParams.set('code_challenge_method', 'S256');
   url.searchParams.set('state', transaction.state);

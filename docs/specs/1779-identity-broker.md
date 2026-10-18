@@ -183,6 +183,7 @@ The host supplies native .NET configuration through its deployment secret/config
 | `IdentityBroker:RuntimeBootstrap:OrchestratorOwnerAddress` / `EnvironmentOwnerAddress` | Optional runtime credential composition; both fixed HTTPS root owner addresses are required when configured |
 | `IdentityBroker:RuntimeBootstrap:BootstrapLifetime` / `SourceLifetime` | Explicit positive credential lifetimes, bounded by current registration and actor expiry |
 | `IdentityBroker:Issuer` | Public, absolute HTTPS issuer |
+| `IdentityBroker:WebOrigin` | Exact HTTPS browser origin allowed by the credentialed `/connect` CORS policy |
 | `IdentityBroker:Signing:PfxPath` | Mounted private-key certificate for signing, token encryption, and key-ring protection |
 | `IdentityBroker:Signing:PfxPassword` | Deployment secret, never a checked-in value |
 | `IdentityBroker:DataProtectionKeyPath` | Durable writable key-ring volume protected by the signing certificate |
@@ -220,7 +221,9 @@ is configured. It does not create any of these objects. The runtime ConfigMap
 contains non-secret settings and must register the exact issuer, upstream OIDC
 authority/client, and every accepted client, redirect, scope, and resource
 audience. The P0 v2 snapshot keeps its run-owned acceptance client and adds the
-`agentweaver-web` public client with the Portal `/auth/callback` redirect.
+`agentweaver-web` public client with the Portal `/auth/callback` redirect and
+sets `IdentityBroker:WebOrigin` to that exact Portal origin for browser OAuth
+CORS.
 Confidential client secrets use Secret keys, not ConfigMap values.
 
 The `identity-broker` runtime ServiceAccount is federated to its own UAMI.
