@@ -188,6 +188,12 @@ const BOOTSTRAP_RELEASES = Object.freeze({
     continuation: false,
     allowLightweightTag: true,
   }),
+  // Pin v1.0.2 to this source SHA and its immutable normal publication; reject continuation receipts.
+  'v1.0.2': Object.freeze({
+    sourceSha: '3c834c12cf1e66bf385b3833a7f0a5cdd5782f8a',
+    continuation: false,
+    allowLightweightTag: true,
+  }),
 });
 /** Maps each service to all required Cilium policy names, including shared egress policies. */
 export const SERVICE_NETWORK_POLICY_NAMES = Object.freeze({
@@ -503,10 +509,10 @@ function validateBootstrapPublication(tag, publication) {
     }
   } else {
     if (publication?.sourceSha !== bootstrapRelease.sourceSha || publication.status !== 'published') {
-      fail('pre-acceptance bootstrap requires the exact source-bound v1.0.1 published receipt');
+      fail(`pre-acceptance bootstrap requires the exact source-bound ${tag} published receipt`);
     }
     if (hasContinuation) {
-      fail('v1.0.1 pre-acceptance bootstrap rejects continuation publication receipts');
+      fail(`${tag} pre-acceptance bootstrap rejects continuation publication receipts`);
     }
   }
 }
@@ -2336,11 +2342,12 @@ function bootstrapHelpText() {
 Usage:
   npm run release:deploy-bootstrap -- v1.0.0 --manifest releases/foundation.json --publication <publication.json> --completion <continuation.json> --subscription-id <id> --tenant-id <id> --resource-group agentweaver --cluster agentweaver-aks --namespace agentweaver --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
   npm run release:deploy-bootstrap -- v1.0.1 --manifest releases/foundation.json --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group agentweaver --cluster agentweaver-aks --namespace agentweaver --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
+  npm run release:deploy-bootstrap -- v1.0.2 --manifest releases/foundation.json --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group agentweaver --cluster agentweaver-aks --namespace agentweaver --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
 
 The default is a read-only pre-acceptance dry-run. v1.0.0 requires its immutable
-continuation proof; v1.0.1 accepts only its exact source-bound normal publication
-receipt and rejects --completion. Both require the tracked draft manifest and
-never create release acceptance evidence.
+continuation proof; v1.0.1 and v1.0.2 accept only their exact source-bound normal
+publication receipts and reject --completion. All require the tracked draft
+manifest and never create release acceptance evidence.
 `;
 }
 
