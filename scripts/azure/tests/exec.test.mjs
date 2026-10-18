@@ -44,6 +44,15 @@ test('redact is a no-op on plain text', () => {
   assert.equal(redact('plain status message'), 'plain status message');
 });
 
+test('redact distinguishes managed Broker hostnames from genuine JWTs', () => {
+  const hostname = 'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
+  const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const jwt = `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ sub: 'synthetic-user-123' })}.${'s'.repeat(32)}`;
+
+  assert.equal(redact(`hostname: ${hostname}`), `hostname: ${hostname}`);
+  assert.equal(redact(`token: ${jwt}`), 'token: [redacted]');
+});
+
 test('preserving non-secret projected identifiers is explicit and cannot expose omitted credentials', () => {
   const hostname = 'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
   const value = { hostname, password: SENSITIVE_FIXTURE_VALUE };
