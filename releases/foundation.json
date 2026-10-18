@@ -78,13 +78,13 @@
     {
       "id": "Agentweaver.Identity.Broker",
       "kind": "service",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "project": "services/identity/Agentweaver.Identity.Broker/Agentweaver.Identity.Broker.csproj"
     },
     {
       "id": "Agentweaver.EventsAndSessions",
       "kind": "service",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "project": "services/events-and-sessions/Agentweaver.EventsAndSessions/Agentweaver.EventsAndSessions.csproj"
     },
     {
@@ -102,7 +102,7 @@
     {
       "id": "Agentweaver.Web",
       "kind": "service",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "project": "apps/web/package.json"
     },
     {
@@ -114,13 +114,13 @@
     {
       "id": "Agentweaver.Environment",
       "kind": "service",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "project": "services/environment/Agentweaver.Environment/Agentweaver.Environment.csproj"
     },
     {
       "id": "Agentweaver.Knowledge",
       "kind": "service",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "project": "services/knowledge/Agentweaver.Knowledge/Agentweaver.Knowledge.csproj"
     },
     {
@@ -132,19 +132,19 @@
     {
       "id": "Agentweaver.FoundationProbe",
       "kind": "service",
-      "version": "0.0.2",
+      "version": "0.0.3",
       "project": "tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj"
     },
     {
       "id": "Agentweaver.Providers.Storage.AzureFiles",
       "kind": "library",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "project": "packages/Agentweaver.Providers.Storage.AzureFiles/Agentweaver.Providers.Storage.AzureFiles.csproj"
     },
     {
       "id": "Agentweaver.Providers.Sandbox.AgentSandbox",
       "kind": "library",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "project": "packages/Agentweaver.Providers.Sandbox.AgentSandbox/Agentweaver.Providers.Sandbox.AgentSandbox.csproj"
     }
   ],

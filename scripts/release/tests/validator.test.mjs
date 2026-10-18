@@ -164,8 +164,10 @@ test('the Orchestrator host is registered as a prepared service with all project
 test('the acceptance-only Probe is tracked as its exact image artifact, not an arbitrary tools project', () => {
   const probe = fixture.components.find(component => component.id === 'Agentweaver.FoundationProbe');
   assert.equal(probe.kind, 'service');
-  assert.equal(probe.version, '0.0.2');
   assert.equal(probe.project, 'tools/Agentweaver.FoundationProbe/Agentweaver.FoundationProbe.csproj');
+  const projectVersion = readFileSync(path.join(root, probe.project), 'utf8')
+    .match(/<Version>([^<]+)<\/Version>/)?.[1];
+  assert.equal(probe.version, projectVersion);
   assert.throws(() => check(edit(manifest => {
     manifest.components.find(component => component.id === probe.id).project = 'tools/Other/Other.csproj';
   })), /safe services/);
@@ -439,10 +441,11 @@ const release = () => edit((m) => {
 });
 const exampleProject = '<Project><PropertyGroup><Version>1.0.0</Version></PropertyGroup></Project>';
 const draftProject = (file) => file.includes('Example.csproj') ? exampleProject : readProject(file);
+// Product releases keep the acceptance-only Probe at 0.0.1, even when the draft has advanced.
 const releaseProject = (file) => file.includes('Example.csproj')
   ? exampleProject
   : file.includes('Agentweaver.FoundationProbe.csproj')
-    ? readProject(file).replace('<Version>0.0.2</Version>', '<Version>0.0.1</Version>')
+    ? readProject(file).replace(/<Version>[^<]+<\/Version>/, '<Version>0.0.1</Version>')
     : readProject(file);
 const checkRelease = (manifest) => check(manifest, { readProject: releaseProject });
 
