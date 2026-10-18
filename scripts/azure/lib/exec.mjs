@@ -27,9 +27,8 @@ const SECRET_PATTERNS = [
 
 // JWT-shaped tokens (three base64url segments).
 const JWT_PATTERN = /[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g;
-// Broker hostnames can contain three long DNS labels and end with this
-// managed suffix, so protect those names from the shape-based JWT scan.
-const BROKER_HOSTNAME_PATTERN = /(?:[A-Za-z0-9-]+\.)+aksapp\.io/gi;
+// The managed Broker hostname has JWT-shaped zone and region labels.
+const BROKER_HOSTNAME_PATTERN = /(?<![A-Za-z0-9-])agentweaver\.[A-Za-z0-9-]+\.[A-Za-z0-9-]+\.aksapp\.io(?![A-Za-z0-9-])/gi;
 
 /** Removes known secret-shaped values from text before diagnostics are surfaced. */
 export function redact(text) {
