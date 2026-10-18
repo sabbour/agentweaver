@@ -1016,9 +1016,14 @@ export function validateKustomizeInstall(document, images, namespace, providerCa
       if (status === 'incomplete' &&
           (typeof item.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'] !== 'string' ||
             INCOMPLETE_RUNTIME_CONFIG_MAPS.has(name) &&
-              !/newly provisioned AKS managed domain and workload identity client IDs/i
+              !/P1 initialization is blocked because the initializer requires an already-ready 127\.0\.0\.1:15432 connection.*Guarded PostgreSQL bootstrap did not run because the preflight resource-inventory guard rejected an unexpected type\/name before Azure what-if/i
                 .test(item.metadata.annotations['agentweaver.io/runtime-config-incomplete-reason']))) {
         fail(`ConfigMap/${name} must explain its incomplete pre-provisioning inputs`);
+      }
+      if (status === 'incomplete' && name === 'identity-broker-runtime-config-v2' &&
+          !/signing state was not provisioned.*Key Vault PFX\/password persistence is unavailable/i
+            .test(item.metadata.annotations['agentweaver.io/runtime-config-incomplete-reason'])) {
+        fail(`ConfigMap/${name} must explain its unprovisioned signing and Key Vault state`);
       }
       if (status === 'incomplete') incompleteRuntimeConfigMaps.add(name);
       for (const [key, value] of Object.entries(item.data)) {

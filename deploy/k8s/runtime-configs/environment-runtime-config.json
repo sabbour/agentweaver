@@ -6,17 +6,17 @@
     "namespace": "agentweaver",
     "annotations": {
       "agentweaver.io/runtime-config-status": "incomplete",
-      "agentweaver.io/runtime-config-incomplete-reason": "Awaiting the newly provisioned AKS managed domain and workload identity client IDs."
+      "agentweaver.io/runtime-config-incomplete-reason": "P1 initialization is blocked because the initializer requires an already-ready 127.0.0.1:15432 connection, but the documented bootstrap removes its temporary tunnel before returning and no documented continuation keeps or shares it. Guarded PostgreSQL bootstrap did not run because the preflight resource-inventory guard rejected an unexpected type/name before Azure what-if; the Agentweaver database and roles remain uninitialized."
     }
   },
   "immutable": true,
   "data": {
     "ConnectionStrings__Environment": "Host=agentweaver-pg.postgres.database.azure.com;Port=5432;Database=agentweaver;Username=agentweaver-id-environment;SSL Mode=VerifyFull",
     "Environment__Database__WorkloadIdentity__TenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47",
-    "Environment__Database__WorkloadIdentity__ClientId": "CHANGEME-environment-client-id",
+    "Environment__Database__WorkloadIdentity__ClientId": "47e81803-63aa-4311-8990-98beef468a5c",
     "Environment__Database__WorkloadIdentity__TokenFilePath": "/var/run/secrets/azure/tokens/azure-identity-token",
-    "Environment__Authentication__Authority": "https://CHANGEME-MANAGED-HOST/",
-    "Environment__Authentication__Audience": "https://CHANGEME-MANAGED-HOST/",
+    "Environment__Authentication__Authority": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
+    "Environment__Authentication__Audience": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
     "ProjectsConfig__BaseAddress": "https://projects-config.agentweaver.svc.cluster.local:8443/",
     "Environment__RuntimeBootstrap__OrchestratorOwnerAddress": "https://orchestrator.agentweaver.svc.cluster.local:8443/",
     "Environment__RuntimeBootstrap__BrokerOwnerAddress": "https://identity-broker.agentweaver.svc.cluster.local:443/",

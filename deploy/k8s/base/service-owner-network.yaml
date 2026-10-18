@@ -184,9 +184,9 @@ spec:
               protocol: TCP
           rules:
             dns:
-              - matchName: CHANGEME-MANAGED-HOST
+              - matchName: agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io
     - toFQDNs:
-        - matchName: CHANGEME-MANAGED-HOST
+        - matchName: agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io
       toPorts:
         - ports:
             - port: "443"

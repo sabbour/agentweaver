@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 /** Validate Projects Config runtime data; Kustomize remains the only source of Kubernetes resources. */
 const tenantId = '72f988bf-86f1-41af-91ab-2d7cd011db47';
-const clientId = 'CHANGEME-projects-config-client-id';
+const clientId = 'b65f060f-364b-45ea-adf4-f704c176f33e';
 const postgresHost = 'agentweaver-pg.postgres.database.azure.com';
 const fixedConfiguration = {
   ConnectionStrings__ProjectsConfig: `Host=${postgresHost};Port=5432;Database=agentweaver;Username=agentweaver-id-projects-config;SSL Mode=VerifyFull`,

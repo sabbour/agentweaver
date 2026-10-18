@@ -51,7 +51,7 @@ spec:
               protocol: TCP
           rules:
             dns:
-              - matchName: CHANGEME-MANAGED-HOST
+              - matchName: agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io
               - matchName: login.microsoftonline.com
               - matchName: agentweaverblob.blob.core.windows.net
               - matchName: agentweaverblob.privatelink.blob.core.windows.net
@@ -75,7 +75,7 @@ spec:
             - port: "8443"
               protocol: TCP
     - toFQDNs:
-        - matchName: CHANGEME-MANAGED-HOST
+        - matchName: agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io
         - matchName: login.microsoftonline.com
         - matchName: agentweaverblob.blob.core.windows.net
       toPorts:

@@ -12,21 +12,24 @@ import { parse, parseAllDocuments } from 'yaml';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const namespace = 'agentweaver';
 const tenant = '72f988bf-86f1-41af-91ab-2d7cd011db47';
-const brokerHost = 'CHANGEME-MANAGED-HOST';
+const managedDomain = '6ad4aaa13923a30001c83518.eastus2euap.aksapp.io';
+const brokerHost = `agentweaver.${managedDomain}`;
 const broker = `https://${brokerHost}/`;
-const portalOrigin = 'https://CHANGEME-PORTAL-HOST';
+const portalOrigin = `https://portal.${managedDomain}`;
+const p1InitializationBlockedReason =
+  'P1 initialization is blocked because the initializer requires an already-ready 127.0.0.1:15432 connection, but the documented bootstrap removes its temporary tunnel before returning and no documented continuation keeps or shares it.';
+const postgresBootstrapBlockedReason =
+  'Guarded PostgreSQL bootstrap did not run because the preflight resource-inventory guard rejected an unexpected type/name before Azure what-if; the Agentweaver database and roles remain uninitialized.';
+const incompleteProvisioningReason =
+  `${p1InitializationBlockedReason} ${postgresBootstrapBlockedReason}`;
+const identityBrokerIncompleteReason =
+  `${incompleteProvisioningReason} Broker signing state was not provisioned, and Key Vault PFX/password persistence is unavailable.`;
 const incompleteRuntimeConfigs = new Set([
   'environment-runtime-config', 'events-and-sessions-runtime-config', 'gateway-runtime-config',
   'identity-broker-runtime-config-v2', 'knowledge-runtime-config', 'mcp-runtime-config',
   'orchestrator-runtime-config', 'projects-config-runtime-config', 'web-runtime-config',
 ]);
-const runtimeInputMarkers = new Set([
-  'CHANGEME-MANAGED-HOST', 'CHANGEME-PORTAL-HOST',
-  'CHANGEME-KEYVAULT-HOST',
-  'CHANGEME-identity-broker-client-id', 'CHANGEME-environment-client-id',
-  'CHANGEME-events-and-sessions-client-id', 'CHANGEME-knowledge-client-id',
-  'CHANGEME-orchestrator-client-id', 'CHANGEME-projects-config-client-id',
-]);
+const runtimeInputMarkers = new Set();
 const tokenFile = '/var/run/secrets/azure/tokens/azure-identity-token';
 const host = 'agentweaver-pg.postgres.database.azure.com';
 const database = 'agentweaver';
@@ -72,6 +75,17 @@ const web = manifest('web-runtime-config');
 const knowledge = manifest('knowledge-runtime-config');
 const projects = manifest('projects-config-runtime-config');
 
+test('target-specific acceptance and migration ServiceAccounts use verified client IDs', () => {
+  for (const [relativePath, name, clientId] of [
+    ['acceptance/foundation-probe/serviceaccount.yaml', 'foundation-probe', '30efe293-b1c8-4cc7-93e3-913f14ed18dc'],
+    ['migrations/identity-broker/serviceaccount.yaml', 'identity-broker-migration', '0cf2e9cd-6b0a-45cd-bbaf-fc674a194781'],
+  ]) {
+    const serviceAccount = parse(readFileSync(path.join(root, 'deploy', 'k8s', relativePath), 'utf8'));
+    assert.equal(serviceAccount.metadata.name, name);
+    assert.equal(serviceAccount.metadata.annotations['azure.workload.identity/client-id'], clientId);
+  }
+});
+
 test('P0 runtime ConfigMaps use immutable snapshots except for the operator-updatable Events map', () => {
   for (const [name, resource] of [
     ['environment-runtime-config', environment],
@@ -88,8 +102,10 @@ test('P0 runtime ConfigMaps use immutable snapshots except for the operator-upda
     assert.equal(resource.metadata.annotations?.['agentweaver.io/runtime-config-status'],
       incomplete ? 'incomplete' : undefined);
     if (incomplete) {
-      assert.match(resource.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'] ?? '',
-        /newly provisioned AKS managed domain and workload identity client IDs/);
+      assert.equal(resource.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
+        name === 'identity-broker-runtime-config-v2'
+          ? identityBrokerIncompleteReason
+          : incompleteProvisioningReason);
     } else {
       assert.equal(resource.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'], undefined);
     }
@@ -158,12 +174,20 @@ test('Identity Broker snapshot keeps the acceptance client and adds the versione
     'http://127.0.0.1:49187/callback');
   assert.equal(identityBroker.data.IdentityBroker__Clients__0__Scopes__3, 'api.read');
   assert.equal(identityBroker.data.IdentityBroker__Clients__0__Scopes__4, 'offline_access');
+  assert.equal(identityBroker.data.IdentityBroker__ExternalProvider__ClientId,
+    '3b682024-2c59-4497-aff2-fc6335d12d97');
   assert.equal(identityBroker.data.IdentityBroker__Clients__1__ClientId, 'agentweaver-web');
   assert.equal(identityBroker.data.IdentityBroker__Clients__1__DisplayName, 'Agentweaver Web');
   assert.equal(identityBroker.data.IdentityBroker__Clients__1__Type, 'Public');
   assert.equal(identityBroker.data.IdentityBroker__Clients__1__RedirectUris__0,
     `${portalOrigin}/auth/callback`);
   assert.equal(identityBroker.data.IdentityBroker__WebOrigin, portalOrigin);
+  assert.equal(identityBroker.data.IdentityBroker__SecretRedemption__WorkloadIdentityClientId,
+    '4ee7e4e8-f5c8-445a-9fa4-5cf13afdb067');
+  assert.equal(identityBroker.data.IdentityBroker__SecretRedemption__VaultHost,
+    'agentweaver-kv-v1.vault.azure.net');
+  assert.equal(identityBroker.data.IdentityBroker__SecretRedemption__VaultUri,
+    'https://agentweaver-kv-v1.vault.azure.net/');
   assert.equal(identityBroker.data.IdentityBroker__Clients__1__Resources__0, broker);
   assert.deepEqual(Array.from({ length: 7 }, (_, index) =>
     identityBroker.data[`IdentityBroker__Clients__1__Scopes__${index}`]),
@@ -177,10 +201,10 @@ test('Identity Broker snapshot keeps the acceptance client and adds the versione
 
 test('P0 PostgreSQL roles, projected identity keys, and issuer use the exact pre-provisioning inputs', () => {
   for (const [resource, owner, role, clientId] of [
-    [environment, 'Environment', 'agentweaver-id-environment', 'CHANGEME-environment-client-id'],
-    [orchestrator, 'Orchestrator', 'agentweaver-id-orchestrator', 'CHANGEME-orchestrator-client-id'],
-    [events, 'EventsAndSessions', 'agentweaver-id-events-and-sessions', 'CHANGEME-events-and-sessions-client-id'],
-    [knowledge, 'Knowledge', 'agentweaver-id-knowledge', 'CHANGEME-knowledge-client-id'],
+    [environment, 'Environment', 'agentweaver-id-environment', '47e81803-63aa-4311-8990-98beef468a5c'],
+    [orchestrator, 'Orchestrator', 'agentweaver-id-orchestrator', '039d7849-9fa0-4488-83ed-c52ec55007ea'],
+    [events, 'EventsAndSessions', 'agentweaver-id-events-and-sessions', '23083988-bf80-45c7-84cf-891eb5ed4736'],
+    [knowledge, 'Knowledge', 'agentweaver-id-knowledge', 'faadfa78-1bfc-4a85-a0e5-d9a913630a0f'],
   ]) {
     const identity = `${owner}__Database__WorkloadIdentity__`;
     assert.equal(resource.data[`ConnectionStrings__${owner}`],
@@ -209,7 +233,7 @@ test('Portal route, Gateway listener, and Web origin use the same managed-domain
   assert.deepEqual(route.spec.parentRefs, [{
     name: 'identity-broker', namespace: 'agentweaver-gateway', sectionName: 'portal',
   }]);
-  assert.deepEqual(route.spec.hostnames, [portalHostname.toUpperCase()]);
+  assert.deepEqual(route.spec.hostnames, [portalHostname]);
   assert.deepEqual(route.spec.rules[0].backendRefs, [{ name: 'web', port: 8080 }]);
   assert.equal(gatewaySource.metadata.namespace, 'agentweaver-gateway');
   assert.equal(gatewaySource.spec.listeners.find(({ name }) => name === 'https').hostname,
@@ -317,7 +341,7 @@ test('P0 service addresses and source-backed provider defaults are exact', () =>
   assert.equal(agentHostManifest.immutable, true);
   assert.equal(agentHostManifest.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
   assert.equal(agentHostManifest.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
-    'AgentHost.ConfigureEndpoint and Authentication.Audience require the exact per-Sandbox HTTPS service endpoint; AgentHost.MaximumPendingTurns has no approved P0 value; Environment__Sandbox__AgentSandbox__AgentHost__TlsSecretName has no approved existing Secret name.');
+    `${incompleteProvisioningReason.slice(0, -1)}; AgentHost.ConfigureEndpoint and Authentication.Audience require the exact per-Sandbox HTTPS service endpoint; AgentHost.MaximumPendingTurns has no approved P0 value; Environment__Sandbox__AgentSandbox__AgentHost__TlsSecretName has no approved existing Secret name.`);
   const agentHost = JSON.parse(agentHostManifest.data['appsettings.json']).AgentHost;
   assert.equal(agentHost.ModelBindingsRevision, 'p1-v1.0.1');
   assert.deepEqual(agentHost.ModelBindings, {
@@ -400,7 +424,7 @@ test('P0 values use approved labels and omit unknown resource identities', () =>
 });
 
 // Runtime maps must match their service contracts and reserve incomplete markers for unsourced values.
-test('Gateway, Web, and Knowledge ConfigMaps contain their approved incomplete P0 inputs', () => {
+test('Gateway, Web, Knowledge, and Projects ConfigMaps contain sourced values and blocked initialization state', () => {
   const newMaps = [
     ['gateway-runtime-config', gateway],
     ['mcp-runtime-config', mcp],
@@ -448,8 +472,8 @@ test('Gateway, Web, and Knowledge ConfigMaps contain their approved incomplete P
     serviceAddress('identity-broker', 443));
   assert.equal(gateway.data.Gateway__WebOrigin, portalOrigin);
   assert.equal(gateway.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
-  assert.match(gateway.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'] ?? '',
-    /newly provisioned AKS managed domain and workload identity client IDs/);
+  assert.equal(gateway.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
+    incompleteProvisioningReason);
 
   assert.deepEqual(Object.keys(mcp.data).sort(), [
     'Gateway__BaseAddress', 'Identity__Audience', 'Identity__Issuer',
@@ -460,8 +484,8 @@ test('Gateway, Web, and Knowledge ConfigMaps contain their approved incomplete P
     Gateway__BaseAddress: serviceAddress('gateway'),
   });
   assert.equal(mcp.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
-  assert.match(mcp.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'] ?? '',
-    /newly provisioned AKS managed domain and workload identity client IDs/);
+  assert.equal(mcp.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
+    incompleteProvisioningReason);
 
   assert.deepEqual(Object.keys(web.data).sort(), [
     'VITE_GATEWAY_URL', 'VITE_IDENTITY_BROKER_ISSUER', 'VITE_IDENTITY_BROKER_URL',
@@ -475,8 +499,8 @@ test('Gateway, Web, and Knowledge ConfigMaps contain their approved incomplete P
     'openid profile email api.read offline_access projects.admin projects.orchestrator');
   assert.equal(web.data.VITE_OAUTH_REDIRECT_URI, undefined);
   assert.equal(web.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
-  assert.match(web.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'] ?? '',
-    /newly provisioned AKS managed domain and workload identity client IDs/);
+  assert.equal(web.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
+    incompleteProvisioningReason);
 
   assert.deepEqual(Object.keys(knowledge.data).sort(), [
     'ConnectionStrings__Knowledge',
@@ -499,7 +523,7 @@ test('Gateway, Web, and Knowledge ConfigMaps contain their approved incomplete P
     `Host=${host};Port=5432;Database=${database};Username=agentweaver-id-knowledge;SSL Mode=VerifyFull`);
   assert.equal(knowledge.data.Knowledge__Database__WorkloadIdentity__TenantId, tenant);
   assert.equal(knowledge.data.Knowledge__Database__WorkloadIdentity__ClientId,
-    'CHANGEME-knowledge-client-id');
+    'faadfa78-1bfc-4a85-a0e5-d9a913630a0f');
   assert.equal(knowledge.data.Knowledge__Database__WorkloadIdentity__TokenFilePath, tokenFile);
   assert.equal(knowledge.data.Identity__Issuer, broker);
   assert.equal(knowledge.data.Identity__Audience, broker);
@@ -513,21 +537,21 @@ test('Gateway, Web, and Knowledge ConfigMaps contain their approved incomplete P
   assert.equal(knowledge.data.Knowledge__Provider__OptionsRevision, 'native-postgres-memory-v1');
   assert.equal(knowledge.data.Knowledge__Provider__OptionsSchemaVersion, '1');
   assert.equal(knowledge.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
-  assert.match(knowledge.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'] ?? '',
-    /newly provisioned AKS managed domain and workload identity client IDs/);
+  assert.equal(knowledge.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
+    incompleteProvisioningReason);
 
   assert.deepEqual(projects.data, {
     ConnectionStrings__ProjectsConfig:
       `Host=${host};Port=5432;Database=${database};Username=agentweaver-id-projects-config;SSL Mode=VerifyFull`,
     ProjectsConfig__Database__WorkloadIdentity__TenantId: tenant,
-    ProjectsConfig__Database__WorkloadIdentity__ClientId: 'CHANGEME-projects-config-client-id',
+    ProjectsConfig__Database__WorkloadIdentity__ClientId: 'b65f060f-364b-45ea-adf4-f704c176f33e',
     ProjectsConfig__Database__WorkloadIdentity__TokenFilePath: tokenFile,
     ProjectsConfig__Authentication__Authority: broker,
     ProjectsConfig__Authentication__Audience: broker,
   });
   assert.equal(projects.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
-  assert.match(projects.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'] ?? '',
-    /newly provisioned AKS managed domain and workload identity client IDs/);
+  assert.equal(projects.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
+    incompleteProvisioningReason);
   assert.equal(Object.keys(projects.data).some(key => key.includes('BrokerRunBinding')), false);
 });
 
@@ -730,6 +754,19 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
   assert.deepEqual([...namesFor('Deployment')].sort(), sharedServices);
   assert.deepEqual([...namesFor('Service')].sort(), sharedServices);
   assert.deepEqual([...namesFor('ServiceAccount')].sort(), sharedServices);
+  const serviceAccounts = new Map(resources.filter(resource => resource.kind === 'ServiceAccount')
+    .map(resource => [resource.metadata.name, resource]));
+  for (const [name, runtime, key] of [
+    ['identity-broker', manifest('identity-broker-runtime-config'), 'IdentityBroker__SecretRedemption__WorkloadIdentityClientId'],
+    ['environment', manifest('environment-runtime-config'), 'Environment__Database__WorkloadIdentity__ClientId'],
+    ['events-and-sessions', manifest('events-and-sessions-runtime-config'), 'EventsAndSessions__Database__WorkloadIdentity__ClientId'],
+    ['knowledge', manifest('knowledge-runtime-config'), 'Knowledge__Database__WorkloadIdentity__ClientId'],
+    ['orchestrator', manifest('orchestrator-runtime-config'), 'Orchestrator__Database__WorkloadIdentity__ClientId'],
+    ['projects-config', manifest('projects-config-runtime-config'), 'ProjectsConfig__Database__WorkloadIdentity__ClientId'],
+  ]) {
+    assert.equal(serviceAccounts.get(name)?.metadata.annotations?.['azure.workload.identity/client-id'],
+      runtime.data[key], `${name} ServiceAccount client ID must come from its runtime ConfigMap`);
+  }
 
   const disallowedKinds = new Set([
     'Secret', 'Gateway', 'BackendTLSPolicy', 'Job',
@@ -743,12 +780,12 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
   assert.deepEqual([...new Set([...JSON.stringify(brokerPolicy).matchAll(/matchName["\s:]+([A-Za-z0-9.-]+)/g)]
     .map(match => match[1]))], [
     'login.microsoftonline.com',
-    'CHANGEME-KEYVAULT-HOST',
+    'agentweaver-kv-v1.vault.azure.net',
     'agentweaver-pg.postgres.database.azure.com',
   ]);
   const unresolvedInputs = [...new Set([...JSON.stringify(installation).matchAll(/CHANGEME-[A-Za-z0-9-]+/g)]
     .map(match => match[0]))].sort();
-  assert.deepEqual(unresolvedInputs, [...runtimeInputMarkers].sort());
+  assert.deepEqual(unresolvedInputs, []);
 
   const kustomization = parse(readFileSync(path.join(root, 'deploy', 'k8s', 'kustomization.yaml'), 'utf8'));
   const expectedPins = [

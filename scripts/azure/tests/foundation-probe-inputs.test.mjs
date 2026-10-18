@@ -4,6 +4,7 @@ import { bootstrapFoundationProbeInputs } from '../lib/foundation-probe-inputs.m
 import { foundationProbeEgress } from '../lib/foundation-probe-egress.mjs';
 
 const id = '11111111-1111-1111-1111-111111111111';
+const identityClientId = '30efe293-b1c8-4cc7-93e3-913f14ed18dc';
 const principal = '22222222-2222-2222-2222-222222222222';
 const config = { resourceGroup: 'agentweaver', clusterName: 'agentweaver-aks',
   subscriptionId: id, tenantId: id, keyVaultName: 'agentweaver-kv', repoRoot: process.cwd() };
@@ -42,7 +43,7 @@ function dependencies({
       if (args[0] === 'aks') value = { oidcIssuerProfile: { issuerUrl: issuer } };
       if (args[0] === 'identity' && args[1] === 'show') value = {
         id: `${prefix}Microsoft.ManagedIdentity/userAssignedIdentities/agentweaver-id-foundation-probe`,
-        clientId: id, principalId: principal,
+        clientId: identityClientId, principalId: principal,
       };
       if (args[0] === 'identity' && args[1] === 'federated-credential') value = {
         issuer, subject: `system:serviceaccount:agentweaver:${wrongFic ? 'foreign' : 'foundation-probe'}`,
@@ -82,9 +83,14 @@ function dependencies({
         objects.set(object.metadata.name, object);
       } else {
         assert.ok(!options.input.includes('CHANGEME-'));
+        assert.ok(options.input.includes(
+          `azure.workload.identity/client-id: ${identityClientId}`));
         objects.set('foundation-probe', { kind: 'ServiceAccount', metadata: {
           name: 'foundation-probe', namespace: 'agentweaver', uid: 'sa-uid',
-          annotations: { 'azure.workload.identity/client-id': id, 'azure.workload.identity/tenant-id': id },
+          annotations: {
+            'azure.workload.identity/client-id': identityClientId,
+            'azure.workload.identity/tenant-id': id,
+          },
         } });
       }
       return ok();
