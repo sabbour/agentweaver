@@ -81,9 +81,10 @@ the resulting state.
 
 ## Configure and verify the client
 
-1. Register a public OAuth client with the Identity Broker. Set its redirect
-   URI to the exact Web origin followed by `/auth/callback`, and use the
-   registered scopes and client ID.
+1. Add or update an explicitly seeded public OAuth client in the approved
+   Identity Broker configuration. The Broker does not support dynamic client
+   registration. Set the redirect URI to the exact Web origin followed by
+   `/auth/callback`, and use the registered scopes and client ID.
 2. Set the Broker URL and issuer to the approved HTTPS values. Set the Gateway
    base path to `/api/v1` when the managed portal routes that same-origin path
    to Gateway; use another value only when it matches the reviewed route.
