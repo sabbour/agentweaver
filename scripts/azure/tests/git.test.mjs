@@ -87,16 +87,23 @@ function sourceFixture(overrides = {}) {
   return { config, deps };
 }
 
-test('foundation source admits only the exact approved Key Vault collision fallback', () => {
-  const fallbackInput = sourceFixture({
-    parameterValues: { keyVaultName: { value: 'agentweaver-kv-v1' } },
+test('foundation source requires a valid Key Vault name in the reviewed parameter file', () => {
+  const defaultInput = sourceFixture({
+    parameterValues: { keyVaultName: { value: 'agentweaver-kv' } },
   });
-  const fallback = resolveSource(fallbackInput.config, fallbackInput.deps);
-  assert.equal(fallback.keyVaultName, 'agentweaver-kv-v1');
-  const unsupportedInput = sourceFixture({
-    parameterValues: { keyVaultName: { value: 'agentweaver-kv-v2' } },
+  assert.equal(resolveSource(defaultInput.config, defaultInput.deps).keyVaultName, 'agentweaver-kv');
+  const customInput = sourceFixture({
+    parameterValues: { keyVaultName: { value: 'custom-vault-01' } },
   });
-  assert.throws(() => resolveSource(unsupportedInput.config, unsupportedInput.deps), /Key Vault name/);
+  assert.equal(resolveSource(customInput.config, customInput.deps).keyVaultName, 'custom-vault-01');
+  for (const parameterValues of [
+    { keyVaultName: undefined },
+    { keyVaultName: { value: 'bad--vault' } },
+    { keyVaultName: { value: 'too-long-name-that-is-over-24' } },
+  ]) {
+    const invalidInput = sourceFixture({ parameterValues });
+    assert.throws(() => resolveSource(invalidInput.config, invalidInput.deps), /Key Vault name/);
+  }
 });
 
 test('exact source hashes tracked reviewed inputs and binds JSON parameters to target', () => {

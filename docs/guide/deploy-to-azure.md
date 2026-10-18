@@ -33,7 +33,7 @@ The example resource names in this tutorial are:
 | Resource group | `agentweaver` |
 | AKS cluster | `agentweaver-aks` |
 | PostgreSQL server | `agentweaver-pg` |
-| Key Vault | `agentweaver-kv-v1` (approved collision fallback; default: `agentweaver-kv`) |
+| Key Vault | Value of `keyVaultName` in the reviewed Bicep parameter file |
 | Blob Storage account | `agentweaverblob` |
 | Virtual network | `agentweaver-vnet` |
 | Log Analytics workspace | `agentweaver-law` |
@@ -104,6 +104,12 @@ The infrastructure installer does not create Kubernetes namespaces or grant
 human AKS permissions. It also does not apply product manifests, create the
 Broker's application state, run database migrations, install Gateway routes,
 or create operator-owned Secrets.
+
+The reviewed parameter file supplies the Key Vault name through `keyVaultName`.
+Key Vault is the Identity Broker's secrets backend; its name and
+`IdentityBroker__SecretRedemption__VaultUri` are deployment configuration.
+The installer derives the vault resource ID and exact egress host from that
+parameter. Set the runtime URI to the URI returned for that same vault.
 
 ## 4. Connect to AKS and prepare the namespace
 

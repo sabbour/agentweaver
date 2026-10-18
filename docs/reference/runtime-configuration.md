@@ -113,7 +113,8 @@ Secrets.
 | `IdentityBroker__Clients__<index>__Resources__<item>` | One or more token audiences approved for that client. |
 | `IdentityBroker__DataProtectionKeyPath` | Required path for the durable ASP.NET Data Protection key ring. Mount the retained key-ring volume at this path. |
 | `IdentityBroker__SecretRedemption__Audience` | Required HTTPS audience for the secret-redemption endpoint. |
-| `IdentityBroker__SecretRedemption__VaultUri` | Required URI of the approved Key Vault. Query the actual approved vault name (`agentweaver-kv` by default or `agentweaver-kv-v1` for the collision fallback) with `az keyvault show --resource-group <resource-group> --name <approved-key-vault-name> --query properties.vaultUri --output tsv`. |
+| `IdentityBroker__SecretRedemption__VaultHost` | Required exact public Key Vault host used by the Kubernetes egress policy. Set it to the lowercase host from the vault URI derived from `keyVaultName` in the reviewed Bicep parameter file. |
+| `IdentityBroker__SecretRedemption__VaultUri` | Required URI of the Key Vault secrets backend. Set it from the same reviewed `keyVaultName`; obtain the deployed value with `az keyvault show --resource-group <resource-group> --name <key-vault-name-from-reviewed-parameters> --query properties.vaultUri --output tsv`. The host must match `IdentityBroker__SecretRedemption__VaultHost`. |
 | `IdentityBroker__SecretRedemption__WorkloadIdentityTenantId` | Required Entra tenant GUID for the Broker's Key Vault identity. |
 | `IdentityBroker__SecretRedemption__WorkloadIdentityClientId` | Required client ID of the Broker's user-assigned managed identity. |
 | `IdentityBroker__SecretRedemption__WorkloadIdentityTokenFilePath` | Required absolute path to the projected Broker workload-identity token file. |

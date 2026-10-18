@@ -31,7 +31,7 @@ these example names in reviewed inputs:
 | Resource group | `agentweaver` |
 | AKS cluster | `agentweaver-aks` |
 | PostgreSQL server | `agentweaver-pg` |
-| Key Vault | `agentweaver-kv` (approved collision fallback: `agentweaver-kv-v1`) |
+| Key Vault | Value of `keyVaultName` in the reviewed Bicep parameter file |
 | Blob Storage account | `agentweaverblob` |
 | Virtual network | `agentweaver-vnet` |
 | Log Analytics workspace | `agentweaver-law` |
@@ -46,6 +46,12 @@ These are examples, not target-discovery logic. Use the approved deployment
 inputs for the actual environment. Treat the assigned managed domain and
 managed identity client IDs as dynamic values: read them from the deployed
 resources and do not guess them.
+
+Key Vault is the Identity Broker's secrets backend. Its name is set by the
+reviewed Bicep `keyVaultName` parameter, and its URI and exact host are runtime
+deployment configuration. Use the same configured vault for
+`IdentityBroker__SecretRedemption__VaultUri` and
+`IdentityBroker__SecretRedemption__VaultHost`.
 
 Before applying:
 

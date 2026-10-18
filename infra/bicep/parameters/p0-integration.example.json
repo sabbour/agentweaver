@@ -7,6 +7,7 @@
     "location": { "value": "eastus2euap" },
     "monitorLocation": { "value": "eastus2" },
     "namePrefix": { "value": "agentweaver" },
+    "keyVaultName": { "value": "CHANGEME-key-vault-name" },
     "tenantId": { "value": "00000000-0000-0000-0000-000000000000" },
     "postgresEntraAdminObjectId": { "value": "00000000-0000-0000-0000-000000000000" },
     "postgresEntraAdminPrincipalName": { "value": "CHANGEME-ENTRA-ADMIN-PRINCIPAL-NAME" },

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
   assertDedicatedTarget,
+  assertApprovedKeyVaultName,
   assertImageDigest,
   assertSubscription,
   assertTenant,
@@ -40,6 +41,15 @@ test('assertDedicatedTarget accepts the dedicated naming convention', () => {
 test('assertDedicatedTarget rejects anything outside the convention', () => {
   for (const name of ['agentweaver-prod', 'agentweaver-integration', 'agentweaver_bad', 'agentweaver-legacy', '', undefined, 'shared-rg']) {
     assert.throws(() => assertDedicatedTarget(name), /dedicated v1 P0 naming convention/);
+  }
+});
+
+test('Key Vault name requires a configured default or custom Azure-valid name', () => {
+  assert.equal(assertApprovedKeyVaultName('agentweaver', 'agentweaver-kv'), 'agentweaver-kv');
+  assert.equal(assertApprovedKeyVaultName('agentweaver', 'custom-vault-01'), 'custom-vault-01');
+  for (const name of [undefined, '', 'ab', 'a'.repeat(25), '1-vault', '-vault', 'vault-',
+    'vault--name', 'vault_name']) {
+    assert.throws(() => assertApprovedKeyVaultName('agentweaver', name), /Key Vault name must be configured/);
   }
 });
 
@@ -353,31 +363,20 @@ test('role assignments must have the exact reviewed parent scope and ARM GUID', 
   assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources: [migrationVaultRole] })), /unexpected/);
 });
 
-test('Key Vault fallback is accepted only by its exact approved name and resource scope', () => {
+test('custom Key Vault name is accepted only when the exact target resource matches', () => {
   const keyVault = postDeploymentInventory.find(resource => resource.type === 'Microsoft.KeyVault/vaults');
-  const fallbackName = 'agentweaver-kv-v1';
-  const fallbackVault = {
+  const customName = 'custom-vault-01';
+  const customVault = {
     ...keyVault,
-    id: keyVault.id.replace(keyVault.name, fallbackName),
-    name: fallbackName,
+    id: keyVault.id.replace(keyVault.name, customName),
+    name: customName,
   };
-  const fallbackConfig = { ...fixture, ...source, keyVaultName: fallbackName };
-  assert.doesNotThrow(() => guardAzureTarget(fallbackConfig, fakeAzure({ resources: [fallbackVault] })));
-  assert.throws(() => guardAzureTarget(fallbackConfig, fakeAzure({ resources: [keyVault] })), /unexpected/);
-  const clusterId = `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/agentweaver-aks`;
-  const roleId = 'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba';
-  const roleName = expectedArmGuid(fallbackVault.id, clusterId, roleId);
-  assert.doesNotThrow(() => guardAzureTarget(fallbackConfig, fakeAzure({ resources: [{
-    id: `${fallbackVault.id}/providers/Microsoft.Authorization/roleAssignments/${roleName}`,
-    type: 'Microsoft.Authorization/roleAssignments',
-    name: roleName,
-  }] })));
-  assert.throws(() => guardAzureTarget({
-    ...fixture, ...source, keyVaultName: 'agentweaver-kv-v2',
-  }, fakeAzure({ resources: [fallbackVault] })), /Key Vault name/);
-  assert.throws(() => guardAzureTarget({
-    ...fixture, ...source, resourceGroup: 'agentweaver-test', keyVaultName: 'agentweaver-test-kv-v1',
-  }, fakeAzure({ resources: [fallbackVault] })), /dedicated v1 P0 naming convention/);
+  const customConfig = { ...fixture, ...source, keyVaultName: customName };
+  assert.doesNotThrow(() => guardAzureTarget(customConfig, fakeAzure({ resources: [customVault] })));
+  assert.throws(() => guardAzureTarget(customConfig, fakeAzure({ resources: [keyVault] })), /unexpected/);
+  assert.throws(() => guardAzureTarget(customConfig, fakeAzure({
+    resources: [{ ...customVault, id: customVault.id.replace('/resourceGroups/agentweaver/', '/resourceGroups/foreign/') }],
+  })), /unexpected|outside/);
 });
 
 test('custom App Routing DNS inventory admits only exact scoped roles and module deployments', () => {
@@ -527,14 +526,19 @@ test('deployment configuration requires exact resource IDs/endpoints and a named
   assert.throws(() => readFoundationOutputs(customOutputs, fixture), /App Routing|Deployment outputs/);
 });
 
-test('deployment outputs bind the approved Key Vault fallback name and URI', () => {
-  const keyVaultName = 'agentweaver-kv-v1';
-  const fallbackOutputs = structuredClone(deploymentOutputs);
-  fallbackOutputs.foundationResources.value.keyVaultId =
-    fallbackOutputs.foundationResources.value.keyVaultId.replace('agentweaver-kv', keyVaultName);
-  fallbackOutputs.foundationResources.value.vaultUri = `https://${keyVaultName}.vault.azure.net/`;
-  const result = readFoundationOutputs(fallbackOutputs, { ...fixture, keyVaultName });
-  assert.equal(result.resources.keyVaultId, fallbackOutputs.foundationResources.value.keyVaultId);
-  assert.equal(result.resources.vaultUri, fallbackOutputs.foundationResources.value.vaultUri);
-  assert.throws(() => readFoundationOutputs(fallbackOutputs, fixture), /Deployment output keyVaultId/);
+test('deployment outputs bind the configured Key Vault name and URI to the target resource group', () => {
+  const keyVaultName = 'custom-vault-01';
+  const customOutputs = structuredClone(deploymentOutputs);
+  customOutputs.foundationResources.value.keyVaultId =
+    customOutputs.foundationResources.value.keyVaultId.replace('agentweaver-kv', keyVaultName);
+  customOutputs.foundationResources.value.vaultUri = `https://${keyVaultName}.vault.azure.net/`;
+  const result = readFoundationOutputs(customOutputs, { ...fixture, keyVaultName });
+  assert.equal(result.resources.keyVaultId, customOutputs.foundationResources.value.keyVaultId);
+  assert.equal(result.resources.vaultUri, customOutputs.foundationResources.value.vaultUri);
+  assert.throws(() => readFoundationOutputs(customOutputs, fixture), /Deployment output keyVaultId/);
+  const wrongGroupOutputs = structuredClone(customOutputs);
+  wrongGroupOutputs.foundationResources.value.keyVaultId =
+    wrongGroupOutputs.foundationResources.value.keyVaultId.replace('/resourceGroups/agentweaver/', '/resourceGroups/foreign/');
+  assert.throws(() => readFoundationOutputs(wrongGroupOutputs, { ...fixture, keyVaultName }),
+    /Deployment output keyVaultId/);
 });

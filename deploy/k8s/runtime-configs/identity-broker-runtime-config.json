@@ -6,7 +6,7 @@
     "namespace": "agentweaver",
     "annotations": {
       "agentweaver.io/runtime-config-status": "incomplete",
-      "agentweaver.io/runtime-config-incomplete-reason": "Awaiting the newly provisioned AKS managed domain and workload identity client IDs."
+      "agentweaver.io/runtime-config-incomplete-reason": "Awaiting the newly provisioned AKS managed domain and workload identity client IDs, plus the deployment-configured Key Vault host."
     }
   },
   "immutable": true,
@@ -40,7 +40,8 @@
     "IdentityBroker__Issuer": "https://CHANGEME-MANAGED-HOST/",
     "IdentityBroker__WebOrigin": "https://CHANGEME-PORTAL-HOST",
     "IdentityBroker__SecretRedemption__Audience": "https://CHANGEME-MANAGED-HOST/",
-    "IdentityBroker__SecretRedemption__VaultUri": "https://agentweaver-kv.vault.azure.net/",
+    "IdentityBroker__SecretRedemption__VaultHost": "CHANGEME-KEYVAULT-HOST",
+    "IdentityBroker__SecretRedemption__VaultUri": "https://CHANGEME-KEYVAULT-HOST/",
     "IdentityBroker__SecretRedemption__WorkloadIdentityClientId": "CHANGEME-identity-broker-client-id",
     "IdentityBroker__SecretRedemption__WorkloadIdentityTenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47",
     "IdentityBroker__SecretRedemption__WorkloadIdentityTokenFilePath": "/var/run/secrets/azure/tokens/azure-identity-token"

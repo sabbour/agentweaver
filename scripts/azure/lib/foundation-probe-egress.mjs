@@ -43,7 +43,7 @@ export function foundationProbeEgress(config, { endpoint, nic, record, ingestion
       !/^[a-z0-9]+(?:-[a-z0-9]+)*\.in\.applicationinsights\.azure\.com$/.test(ingestionHost ?? '')) {
     throw new Error('Probe Logs egress requires an exact private API member, matching DNS record and ingestion host.');
   }
-  const keyVaultHost = `${keyVaultName}.vault.azure.net`;
+  const keyVaultHost = `${keyVaultName.toLowerCase()}.vault.azure.net`;
   const baseDns = ['login.microsoftonline.com', keyVaultHost,
     'agentweaverblob.blob.core.windows.net', ingestionHost, 'agentweaver-pg.postgres.database.azure.com'];
   const ports = port => [{ ports: [{ port, protocol: 'TCP' }] }];

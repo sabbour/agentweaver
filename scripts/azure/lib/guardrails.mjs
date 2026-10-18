@@ -46,17 +46,16 @@ export function assertDedicatedTarget(name, kind = 'resource group') {
   return name;
 }
 
-/** Allows the dedicated default Key Vault name and the explicitly approved Agentweaver collision fallback. */
+/** Validates the required deployment-configured Key Vault name. */
 export function assertApprovedKeyVaultName(resourceGroup, name) {
-  const defaultName = `${resourceGroup}-kv`;
-  const fallbackName = resourceGroup === 'agentweaver' ? 'agentweaver-kv-v1' : undefined;
-  const allowedNames = fallbackName ? [defaultName, fallbackName] : [defaultName];
-  const keyVaultName = name === undefined ? defaultName : name;
-  if (typeof keyVaultName !== 'string' || !allowedNames.includes(keyVaultName)) {
-    const fallback = fallbackName ? ` or the exact approved fallback "${fallbackName}"` : '';
-    throw new Error(`Key Vault name must be "${defaultName}"${fallback}.`);
+  if (typeof name !== 'string' || name.length < 3 || name.length > 24 ||
+      !/^[a-z][a-z0-9-]*[a-z0-9]$/i.test(name) || name.includes('--')) {
+    throw new Error(
+      'Key Vault name must be configured and contain 3-24 letters, digits, or single hyphens; ' +
+        'it must start with a letter and end with a letter or digit.',
+    );
   }
-  return keyVaultName;
+  return name;
 }
 
 /** Requires an immutable SHA-256 image digest instead of a mutable tag. */
@@ -164,7 +163,7 @@ export function readFoundationOutputs(outputs, {
   const expected = {
     clusterId: id('Microsoft.ContainerService/managedClusters', `${resourceGroup}-aks`),
     keyVaultId: id('Microsoft.KeyVault/vaults', keyVaultName),
-    vaultUri: `https://${keyVaultName}.vault.azure.net/`,
+    vaultUri: `https://${keyVaultName.toLowerCase()}.vault.azure.net/`,
     storageAccountId: id('Microsoft.Storage/storageAccounts', storageName),
     blobContainerId: id('Microsoft.Storage/storageAccounts', `${storageName}/blobServices/default/containers/platform-artifacts`),
     blobContainerUri: `https://${storageName}.blob.core.windows.net/platform-artifacts`,

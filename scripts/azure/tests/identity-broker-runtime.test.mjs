@@ -9,6 +9,7 @@ const clientId = '11111111-1111-1111-1111-111111111111';
 const principalId = '22222222-2222-2222-2222-222222222222';
 const config = {
   resourceGroup: 'agentweaver', clusterName: 'agentweaver-aks', subscriptionId: clientId, tenantId: clientId,
+  keyVaultName: 'agentweaver-kv',
   upstreamClientId: clientId, acceptanceRunId: principalId, acceptanceRedirectUri: 'http://127.0.0.1:18641/callback',
   brokerImage: 'ghcr.io/sabbour/agentweaver.identity.broker@sha256:' + 'a'.repeat(64),
   repoRoot: process.cwd(),
@@ -289,6 +290,7 @@ test('runtime configuration retains the run-owned acceptance client and seeds th
   });
   assert.equal(data.IdentityBroker__WebOrigin, `https://${portalHostname}`);
   assert.equal(data.IdentityBroker__SecretRedemption__VaultUri, 'https://agentweaver-kv.vault.azure.net/');
+  assert.equal(data.IdentityBroker__SecretRedemption__VaultHost, 'agentweaver-kv.vault.azure.net');
   assert.equal(data.IdentityBroker__Clients__0__Type, 'Public');
   assert.equal(data.IdentityBroker__Clients__0__ClientId, `identity-acceptance-${principalId}`);
   assert.equal(data.IdentityBroker__Clients__0__RedirectUris__0, config.acceptanceRedirectUri);
@@ -304,13 +306,15 @@ test('runtime configuration retains the run-owned acceptance client and seeds th
   assert.throws(() => brokerAcceptanceConfiguration(config, {
     issuer: `https://${hostname}/`, identity: { clientId, principalId }, portalHostname: 'wrong.example.com',
   }), /aligned managed issuer and Portal host/);
-  const fallbackData = brokerAcceptanceConfiguration({ ...config, keyVaultName: 'agentweaver-kv-v1' }, {
+  const customName = 'custom-vault-01';
+  const customData = brokerAcceptanceConfiguration({ ...config, keyVaultName: customName }, {
     issuer: `https://${hostname}/`, identity: { clientId, principalId }, portalHostname,
   });
-  assert.equal(fallbackData.IdentityBroker__SecretRedemption__VaultUri, 'https://agentweaver-kv-v1.vault.azure.net/');
-  assert.throws(() => brokerAcceptanceConfiguration({ ...config, keyVaultName: 'agentweaver-kv-v2' }, {
+  assert.equal(customData.IdentityBroker__SecretRedemption__VaultUri, `https://${customName}.vault.azure.net/`);
+  assert.equal(customData.IdentityBroker__SecretRedemption__VaultHost, `${customName}.vault.azure.net`);
+  assert.throws(() => brokerAcceptanceConfiguration({ ...config, keyVaultName: 'bad--vault' }, {
     issuer: `https://${hostname}/`, identity: { clientId, principalId }, portalHostname,
-  }), /approved fallback/);
+  }), /Key Vault name/);
   for (const redirect of ['http://public.example:80/callback', 'https://127.0.0.1:123/callback',
     'http://127.0.0.1:123/callback?secret=value']) {
     assert.throws(() => assertBrokerRuntimeInputs({ ...config, acceptanceRedirectUri: redirect }), /loopback callback/);
@@ -323,7 +327,7 @@ test('runtime configuration retains the run-owned acceptance client and seeds th
 });
 
 test('runtime setup creates absent native objects once and never overwrites conflicting state', () => {
-  const runtimeConfig = { ...config, keyVaultName: 'agentweaver-kv-v1' };
+  const runtimeConfig = { ...config, keyVaultName: 'custom-vault-01' };
   const state = gatewayRouting(hostname, true);
   const created = new Map();
   const calls = [];
@@ -385,7 +389,7 @@ test('runtime setup creates absent native objects once and never overwrites conf
   assert.equal(receipt.routingBlocked, true);
   assert.equal(receipt.runtimeVerified, false);
   assert.equal(calls.filter(args => args.includes('--dry-run=client')).length, 4);
-  assert.ok(manifests.some(manifest => manifest.includes('agentweaver-kv-v1.vault.azure.net')));
+  assert.ok(manifests.some(manifest => manifest.includes('custom-vault-01.vault.azure.net')));
   assert.ok(manifests.every(manifest => !manifest.includes('agentweaver-kv.vault.azure.net')));
   assert.equal(created.size, 6);
   const writes = calls.filter(args => args.includes('create') && !args.includes('--dry-run=client')).length;
