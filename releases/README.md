@@ -761,12 +761,46 @@ npm run release:deploy-bootstrap -- v1.0.1 `
   --provider-catalog-source-commit <reviewed-40-character-source-sha>
 ```
 
-For the v1.0.0 release, after P1 live acceptance checks complete, build a
-separate `stage: release` manifest from the tracked composition, the exact
-deployed source SHA, and the actual HTTPS API, UI, and MCP persona evidence
-URLs. Only then use the strict `release:deploy` gate. The current gate does not
-accept the mixed-version v1.0.1 composition, and neither bootstrap mode relaxes
-the gate.
+### v1.0.2 pre-acceptance bootstrap
+
+The v1.0.2 bootstrap uses the normal immutable publication result for the exact
+tag source `3c834c12cf1e66bf385b3833a7f0a5cdd5782f8a`. The release workflow
+artifact `v1-publication-receipt-<source-sha>-<run-attempt>` contains
+`publication.json`; after downloading it to `artifacts/release/publish/`, pass
+`--publication artifacts/release/publish/publication.json`. The helper verifies
+the receipt against
+`agentweaver-publication/3c834c12cf1e66bf385b3833a7f0a5cdd5782f8a/result`.
+It also verifies the tracked draft and component project files at that source,
+preserves the draft's mixed component versions, and takes deployed image
+digests only from the verified receipt. Continuation receipts and any
+`--completion` proof are rejected. No artifact is rebuilt or republished.
+
+The default remains a read-only dry-run. `--execute` is required to apply the
+same guarded rollout; its result is still `pre-acceptance`, not release or
+persona acceptance evidence. The strict `release:deploy` gate is unchanged and
+its v1.0.0 product-version constraints do not accept the mixed-version v1.0.2
+composition as release acceptance.
+
+```powershell
+npm run release:deploy-bootstrap -- v1.0.2 `
+  --manifest releases/foundation.json `
+  --publication artifacts/release/publish/publication.json `
+  --subscription-id <subscription-id> `
+  --tenant-id <tenant-id> `
+  --resource-group agentweaver `
+  --cluster agentweaver-aks `
+  --namespace agentweaver `
+  --node-min 2 `
+  --node-max 3 `
+  --provider-catalog-configmap <reviewed-configmap-name> `
+  --provider-catalog-source-commit <reviewed-40-character-source-sha>
+```
+
+After P1 live acceptance checks complete, build a separate `stage: release`
+manifest from the tracked composition, the exact deployed source SHA, and the
+actual HTTPS API, UI, and MCP persona evidence URLs. Only then use the strict
+`release:deploy` gate. The current gate does not accept the mixed-version
+v1.0.1 or v1.0.2 compositions, and none of the bootstrap modes relaxes the gate.
 
 `npm run release:deploy` is the operator-hosted, image-only Kubernetes rollout
 tool. It consumes an already published `v1.x.y` GitHub Release, the release-stage
