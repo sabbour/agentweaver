@@ -50,7 +50,8 @@ The runtime identity does not own the schema or run migrations.
 
 The `identity-broker-runtime-config.json` map supplies the issuer, upstream
 OpenID Connect provider, client registrations, data-protection path, and
-Key Vault redemption settings. Keep client secrets and signing material in
+Key Vault redemption settings. It also supplies the optional browser origin
+used for direct Broker calls. Keep client secrets and signing material in
 Secrets.
 
 | Setting | Contract |
@@ -60,6 +61,7 @@ Secrets.
 | `IdentityBroker__ExternalProvider__ClientId` | Required client ID registered with the upstream provider. |
 | `IdentityBroker__ExternalProvider__ClientSecret` | Optional. Store it in `identity-broker-client-secrets` only when the upstream client is confidential. A public client uses authorization-code flow with PKCE and has no secret. |
 | `IdentityBroker__ExternalProvider__MetadataAddress` | Optional discovery-metadata override. Production normally derives metadata from `Authority`; use an override only when the approved provider requires it. |
+| `IdentityBroker__WebOrigin` | Optional exact HTTPS origin for direct Broker browser calls. It must not contain credentials, a path, a query, or a fragment. It is required when GitHub Repo App or Remote MCP OAuth is configured. |
 | `IdentityBroker__Clients__<index>__ClientId` | Required ID of an explicitly seeded Broker OAuth client. The Broker does not enable dynamic client registration. |
 | `IdentityBroker__Clients__<index>__DisplayName` | Required operator-facing client name. |
 | `IdentityBroker__Clients__<index>__Type` | Required enum: `Public` or `Confidential`. PKCE with S256 is required for both types. |
@@ -81,7 +83,6 @@ not from the checked-in non-secret runtime map:
 | --- | --- |
 | `IdentityBroker:Signing:PfxPath` | Required path to the signing PFX mounted from `identity-broker-signing`. |
 | `IdentityBroker:Signing:PfxPassword` | Required PFX password from the same Kubernetes Secret. Never put it in a ConfigMap. |
-| `IdentityBroker:WebOrigin` | Optional exact HTTPS origin for direct Broker browser calls. It is not a wildcard. |
 | `IdentityBroker:RunBinding:*` | Optional Projects run-binding owner address, audience, and certificate/trust-bundle SHA-256 pins. |
 | `IdentityBroker:RemoteMcpOAuth:*` | Optional remote OAuth allowlist. When enabled, it requires Projects and Environment owner roots and at least one provider. Each provider requires an issuer, client ID, redirect URI, at least one approved resource and scope, and at least two approved OAuth endpoints. The Broker rejects values outside this allowlist. |
 | `IdentityBroker:GitHubRepoApp:*` | Optional GitHub OAuth and App settings. Requires OAuth client ID and secret, HTTPS callback URI, positive App ID, App slug, and exact Key Vault private-key secret ID and version. Store the OAuth secret in the Broker client Secret. |
@@ -369,6 +370,7 @@ resource group. Replace each placeholder with the reviewed target name.
 | Managed identity client ID | `az identity show --resource-group <resource-group> --name agentweaver-id-<service> --query clientId --output tsv` |
 | Key Vault URI | `az keyvault show --resource-group <resource-group> --name agentweaver-kv --query properties.vaultUri --output tsv` |
 | AKS OIDC issuer | `az aks show --resource-group <resource-group> --name agentweaver-aks --query oidcIssuerProfile.issuerUrl --output tsv` |
+| AKS-managed public domain | `az aks show --resource-group <resource-group> --name agentweaver-aks --query ingressProfile.webAppRouting.defaultDomain.domainName --output tsv` |
 
 The identity's client ID is not its principal object ID. Use the field required
 by the specific Azure or PostgreSQL operation. Never put either identifier in

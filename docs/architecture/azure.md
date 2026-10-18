@@ -65,10 +65,12 @@ The template configures the native managed Gateway API installation and
 Application Routing implementation. Its Gateway class is `approuting-istio`.
 The class name describes Azure's internal implementation, not a service-mesh
 addon or an Istio API requirement.
-The separate default-off routing installer uses native managed certificates,
-a v1 Gateway, Broker/Web/Gateway API/MCP HTTPRoutes, and verified backend HTTPS.
-It requires explicit approved Gateway namespace and security-policy inputs.
-The P0 workload namespace remains restricted.
+The root Kustomize bundle supplies the Portal Web HTTPRoute, which references
+the `portal` listener but does not create the Gateway or listener. The separate
+default-off routing installer uses native managed certificates, a v1 Gateway,
+the Broker/Web/Gateway API/MCP HTTPRoutes, and verified backend HTTPS. It
+requires explicit approved Gateway namespace and security-policy inputs.
+The product namespace remains restricted.
 The portal listener routes `/` to Web, `/api/v1` plus exact
 `/openapi/v1.json` to Gateway, and exact `/mcp` plus the MCP protected-resource
 metadata path to MCP. Gateway and MCP use operator-owned TLS Secrets with
@@ -84,7 +86,7 @@ See [the operator interface](https://github.com/sabbour/agentweaver/blob/v1/scri
 Separate default-off installer operations create initial Broker signing
 material, retained key-ring storage, and explicit public acceptance-client
 configuration. Existing state remains unchanged.
-The installer can align only the existing P0 route hostname fields without
+The installer can align only the existing route hostname fields without
 changing Gateway placement or namespace policy.
 An intended route-derived issuer does not prove DNS, trusted TLS, or health.
 The Probe installer derives the existing identity, federation, and Monitor

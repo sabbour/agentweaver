@@ -425,7 +425,7 @@ provenance, and integration publication receipt. It checks the immutable
 publication result and anonymously verifies that each registry image config
 still carries the exact source SHA, source tree, and manifest version.
 AgentHost config and platform evidence are checked separately. The default is
-read-only; `--execute` is required to apply the nine shared P0 services. It
+read-only; `--execute` is required to apply the nine shared services. It
 then verifies the live images and ready pods and creates a local result with
 hashes of the resource readbacks.
 
@@ -435,8 +435,8 @@ npm run release:deploy-integration -- `
   --manifest releases/foundation.json `
   --provenance artifacts/release/integration/provenance.json `
   --publication artifacts/release/integration/integration-publication.json `
-  --subscription-id 90ab3701-83f0-4ba1-a90a-f2e68683adab `
-  --tenant-id 72f988bf-86f1-41af-91ab-2d7cd011db47 `
+  --subscription-id <subscription-id> `
+  --tenant-id <tenant-id> `
   --resource-group agentweaver `
   --cluster agentweaver-aks `
   --namespace agentweaver `
@@ -645,8 +645,8 @@ node "$Helper\scripts\release\deploy.mjs" v1.0.0 `
   --manifest 'C:\release-inputs\published-release-manifest.json' `
   --publication $Receipt `
   --completion $Receipt `
-  --subscription-id 90ab3701-83f0-4ba1-a90a-f2e68683adab `
-  --tenant-id 72f988bf-86f1-41af-91ab-2d7cd011db47 `
+  --subscription-id <subscription-id> `
+  --tenant-id <tenant-id> `
   --resource-group agentweaver `
   --cluster agentweaver-aks `
   --namespace agentweaver `
@@ -689,7 +689,7 @@ workspaces or a global `agentweaver` package.
 
 ### v1.0.0 pre-acceptance bootstrap
 
-The first v1.0.0 P0 rollout must happen before API, UI, and MCP persona evidence
+The first v1.0.0 rollout must happen before API, UI, and MCP persona evidence
 exists. Use the separate `release:deploy-bootstrap` path for that rollout. It
 accepts only the exact published v1.0.0 receipt, its immutable continuation
 completion receipt, and the tracked `releases/foundation.json` draft at the
@@ -697,16 +697,16 @@ published source commit. It does not turn the draft into a release manifest or
 record release acceptance.
 
 The bootstrap path uses the same checked-in nine-service runtime List,
-publication image-digest checks, fixed P0 target checks, runtime prerequisites,
-readback, and checkpoint/resume behavior as `release:deploy`. It requires the
-reviewed provider-catalog ConfigMap name and source commit. Its default is
-read-only; `--execute` is still required for a rollout. Its result is labeled
+publication image-digest checks, approved Agentweaver target checks, runtime
+prerequisites, readback, and checkpoint/resume behavior as `release:deploy`.
+It requires the reviewed provider-catalog ConfigMap name and source commit.
+Its default is read-only; `--execute` is still required for a rollout. Its result is labeled
 `pre-acceptance` and is not release or persona acceptance evidence.
 The source tree also contains non-secret runtime ConfigMap snapshots for the
-provider catalog and required P0 service inputs. The service-map values are
+provider catalog and required service inputs. The service-map values are
 source-backed and have no incomplete markers; the live bootstrap still
 validates applied configuration and cluster prerequisites. See the
-[P0 Kubernetes input inventory](../deploy/k8s/README.md#p0-runtime-configmap-snapshots)
+[Kubernetes runtime ConfigMap inventory](../deploy/k8s/README.md#p0-runtime-configmap-snapshots)
 for value provenance and apply order. Use the catalog PR merge commit for
 `--provider-catalog-source-commit`; the snapshot records the published product
 source separately.
@@ -716,8 +716,8 @@ npm run release:deploy-bootstrap -- v1.0.0 `
   --manifest releases/foundation.json `
   --publication <v1.0.0-publication.json> `
   --completion <v1.0.0-continuation.json> `
-  --subscription-id 90ab3701-83f0-4ba1-a90a-f2e68683adab `
-  --tenant-id 72f988bf-86f1-41af-91ab-2d7cd011db47 `
+  --subscription-id <subscription-id> `
+  --tenant-id <tenant-id> `
   --resource-group agentweaver `
   --cluster agentweaver-aks `
   --namespace agentweaver `
@@ -739,7 +739,7 @@ digests only from the verified receipt. Continuation receipts and any
 `--completion` proof are rejected. No artifact is rebuilt or republished.
 
 The default remains a read-only dry-run. `--execute` is required to apply the
-same guarded P0 rollout; its result is still `pre-acceptance`, not release or
+same guarded rollout; its result is still `pre-acceptance`, not release or
 persona acceptance evidence. The strict `release:deploy` gate is unchanged;
 its v1.0.0 product-version constraints do not accept the mixed-version v1.0.1
 composition as release acceptance.
@@ -748,8 +748,8 @@ composition as release acceptance.
 npm run release:deploy-bootstrap -- v1.0.1 `
   --manifest releases/foundation.json `
   --publication <v1.0.1-publication.json> `
-  --subscription-id 90ab3701-83f0-4ba1-a90a-f2e68683adab `
-  --tenant-id 72f988bf-86f1-41af-91ab-2d7cd011db47 `
+  --subscription-id <subscription-id> `
+  --tenant-id <tenant-id> `
   --resource-group agentweaver `
   --cluster agentweaver-aks `
   --namespace agentweaver `
@@ -774,11 +774,10 @@ from `release:apply`, `release:pack`, and the existing publication workflow;
 it does not build or publish artifacts.
 
 The command requires explicit subscription, tenant, resource group, AKS,
-namespace, and node-bound arguments. These must match the approved P0 target:
-subscription `90ab3701-83f0-4ba1-a90a-f2e68683adab`, tenant
-`72f988bf-86f1-41af-91ab-2d7cd011db47`, resource group `agentweaver`, cluster
-`agentweaver-aks`, namespace `agentweaver`, and node bounds 2–3. It does not
-select a default Azure account, change kubectl context, or request credentials.
+namespace, and node-bound arguments. Use the approved subscription and tenant
+IDs, resource group `agentweaver`, cluster `agentweaver-aks`, namespace
+`agentweaver`, and node bounds 2–3. It does not select a default Azure
+account, change kubectl context, or request credentials.
 The local checkout must be clean at the exact annotated release tag commit.
 The checked-in runtime List source supplies the nine shared Deployment/Service
 pairs from the validated publication receipt. It also requires the existing
@@ -790,8 +789,8 @@ replacement List.
 npm run release:deploy -- v1.0.0 `
   --manifest <published-release-manifest.json> `
   --publication <publication.json> `
-  --subscription-id 90ab3701-83f0-4ba1-a90a-f2e68683adab `
-  --tenant-id 72f988bf-86f1-41af-91ab-2d7cd011db47 `
+  --subscription-id <subscription-id> `
+  --tenant-id <tenant-id> `
   --resource-group agentweaver `
   --cluster agentweaver-aks `
   --namespace agentweaver `
