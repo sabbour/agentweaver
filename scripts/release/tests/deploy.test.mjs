@@ -1676,6 +1676,7 @@ test('release preflight resumes with only the exact root-bundle Web route', () =
     route => { route.spec.parentRefs[0].namespace = target.namespace; },
     route => { delete route.spec.parentRefs[0].namespace; },
     route => { route.spec.parentRefs[0].name = 'unexpected-gateway'; },
+    route => { route.spec.parentRefs[0].port = 80; },
   ]) {
     const invalidRoute = structuredClone(webRoute);
     mutate(invalidRoute);
