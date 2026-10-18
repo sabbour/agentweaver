@@ -99,8 +99,13 @@ test('Core plan includes all 20 registered versions but never 017; source approv
     [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21]);
   assert.equal(plan.executionRequirements.length, 6);
   assert.ok(plan.executionRequirements.some(item => item.includes('separate approval')));
-  assert.ok(plan.executionRequirements.some(item =>
-    item.includes('SELECT,INSERT on environment.runtime_bootstrap_profile_replacements')));
+  const replacementGrant = plan.executionRequirements.find(item =>
+    item.includes('SELECT,INSERT on environment.runtime_bootstrap_profile_replacements'));
+  assert.match(replacementGrant, /exactly SELECT,INSERT/);
+  assert.match(replacementGrant, /no UPDATE, DELETE, or default privileges/);
+  assert.deepEqual(plan.services.find(item => item.schema === 'environment').tables
+    .find(item => item.table === 'runtime_bootstrap_profile_replacements').privileges,
+  ['SELECT', 'INSERT']);
   assert.ok(plan.executionRequirements.some(item => item.includes('restricted-role PostgreSQL tests prove')));
 });
 

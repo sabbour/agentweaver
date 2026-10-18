@@ -121,19 +121,27 @@ Identity creation and federation do not prove database access or service readine
 The [operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#limited-p1-runtime-identities)
 describes the separate approval boundary.
 
-The P1 PostgreSQL initializer remains source-only. No database initialization
-has run. Its pre-write checks reject incompatible existing privileges
-without changing them. Before grants commit, it validates planned row-lock
-mutation guards and reads back each installed trigger/function against the
-exact table, trigger type, function source/owner, and runtime EXECUTE restriction.
-Its role stage checks all five mappings before commit. Its grant checks preserve
-existing ownership and permit only exact runtime grants. The source checks
-functions by owner and effective EXECUTE privileges, not counts alone.
+The P1 PostgreSQL initializer is an explicit operator action, not part of an
+infrastructure deployment. `scripts/azure/bootstrap-p1-postgres.mjs` checks
+the fixed target, current PostgreSQL administrator, and all five live P1
+principal IDs before it starts the temporary tunnel. It runs the Identity
+Broker and P1 database stages through the same loopback-only tunnel and removes
+only its run-owned transport resources. The command creates no Azure role
+assignment and deploys no product workload. Its receipt proves operator
+initialization only, not runtime identity or deployment success.
+The initializer rejects incompatible existing privileges without changing
+them. Before grants commit, it validates planned row-lock mutation guards and
+reads back each installed trigger/function against the exact table, trigger
+type, function source/owner, and runtime EXECUTE restriction. Its role stage
+checks all five mappings before commit. Its grant checks preserve existing
+ownership and permit only exact runtime grants. The source checks functions by
+owner and effective EXECUTE privileges, not counts alone.
 Its source catalog includes 20 Core migration versions, with version 17 excluded, and eight Events versions.
-It retains 94 tables, eight row-lock columns, and 29 exact function signatures.
+It retains 95 tables, eight row-lock columns, and 29 exact function signatures.
 The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
-That grant has not been executed; it adds no `UPDATE`, `DELETE`, or default privilege.
+Its planned access is exactly `SELECT, INSERT`; it adds no `UPDATE`, `DELETE`,
+or default privileges.
 Only casting authority can receive direct runtime EXECUTE.
 Restricted-role behavior and actual PostgreSQL catalog behavior still require
 separate database proof; source tests do not execute the initializer.
@@ -146,7 +154,8 @@ roles. It rejects unplanned views and materialized views, and checks their
 relation and column ACLs. The final grant transaction removes those public
 function grants and applies only the planned casting-function grant.
 These source changes do not change the P0 Azure topology.
-See the [initializer source limits](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal)
+See the [operator initialization procedure](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-operator-initialization),
+the [initializer source limits](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#p1-postgresql-initializer-source-proposal)
 and the [source-test boundary](../guide/testing).
 
 ## Network and acceptance checks
