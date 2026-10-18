@@ -332,6 +332,7 @@ test('runtime setup creates absent native objects once and never overwrites conf
   const created = new Map();
   const calls = [];
   const manifests = [];
+  let denyDeploymentCreate = true;
   const rendered = [
     { apiVersion: 'v1', kind: 'ServiceAccount', metadata: { name: 'identity-broker', namespace },
       automountServiceAccountToken: true },
@@ -360,6 +361,10 @@ test('runtime setup creates absent native objects once and never overwrites conf
     },
     execKubectl(args, options) {
       calls.push(args);
+      if (args.includes('auth')) {
+        return denyDeploymentCreate && args.includes('deployments') && args.includes('create')
+          ? ok('no\n') : ok('yes\n');
+      }
       if (args.includes('--dry-run=client')) {
         assert.ok(!options.input.includes('CHANGEME-'));
         manifests.push(options.input);
@@ -383,18 +388,25 @@ test('runtime setup creates absent native objects once and never overwrites conf
       return ok();
     },
   };
+  assert.throws(() => bootstrapIdentityBrokerRuntime(runtimeConfig, deps),
+    /Kubernetes API access is unavailable or insufficient for Identity Broker runtime bootstrap: required permission "create deployments" in namespace agentweaver/);
+  assert.equal(created.size, 0);
+  assert.equal(calls.filter(args => args.includes('--filename') && !args.includes('--dry-run=client')).length, 0);
+  denyDeploymentCreate = false;
   const receipt = bootstrapIdentityBrokerRuntime(runtimeConfig, deps);
   assert.equal(receipt.configMapCreated, true);
   assert.equal(receipt.configMap, 'identity-broker-runtime-config-v2');
   assert.equal(receipt.routingBlocked, true);
   assert.equal(receipt.runtimeVerified, false);
-  assert.equal(calls.filter(args => args.includes('--dry-run=client')).length, 4);
+  assert.equal(calls.filter(args => args.includes('--dry-run=client')).length, 8);
   assert.ok(manifests.some(manifest => manifest.includes('custom-vault-01.vault.azure.net')));
   assert.ok(manifests.every(manifest => !manifest.includes('agentweaver-kv.vault.azure.net')));
   assert.equal(created.size, 6);
-  const writes = calls.filter(args => args.includes('create') && !args.includes('--dry-run=client')).length;
+  const writes = calls.filter(args =>
+    args.includes('--filename') && !args.includes('--dry-run=client')).length;
   assert.equal(bootstrapIdentityBrokerRuntime(runtimeConfig, deps).configMapCreated, false);
-  assert.equal(calls.filter(args => args.includes('create') && !args.includes('--dry-run=client')).length, writes);
+  assert.equal(calls.filter(args =>
+    args.includes('--filename') && !args.includes('--dry-run=client')).length, writes);
   created.get('Service/identity-broker').spec.ports[0].port = 80;
   assert.throws(() => bootstrapIdentityBrokerRuntime(runtimeConfig, deps), /refusing replacement/);
 });

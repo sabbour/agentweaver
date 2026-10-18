@@ -119,6 +119,8 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   const aksDeployment = template.resources.find(resource =>
     resource.name === "[format('{0}-aks', parameters('namePrefix'))]");
   const aks = aksDeployment.properties.template;
+  assert.equal(Object.hasOwn(template.parameters, 'operatorObjectId'), false);
+  assert.equal(Object.hasOwn(aks.parameters, 'operatorObjectId'), false);
   const cluster = aks.resources.find(resource => resource.type === 'Microsoft.ContainerService/managedClusters');
   assert.equal(cluster.properties.agentPoolProfiles[0].enableAutoScaling, true);
   assert.equal(cluster.properties.agentPoolProfiles[0].minCount, "[parameters('nodePoolMinCount')]");
@@ -155,6 +157,7 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   });
   assert.equal(aksDeployment.properties.parameters.tenantId.value, "[parameters('tenantId')]");
   const assignments = aks.resources.filter(resource => resource.type === 'Microsoft.Authorization/roleAssignments');
+  // The only AKS-module role binds its control-plane identity to the subnet; no human grant is present.
   assert.equal(assignments.length, 1);
   const assignment = assignments[0];
   const principal = "[reference(resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), '2026-07-02-preview', 'full').identity.principalId]";

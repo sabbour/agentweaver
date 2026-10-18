@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { run, runAz, redact } from './exec.mjs';
 import { assertApprovedKeyVaultName } from './guardrails.mjs';
-import { withP0UserKubeconfig } from './namespace-bootstrap.mjs';
+import { assertP0KubernetesPermissions, withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 import { foundationProbeEgress } from './foundation-probe-egress.mjs';
 
 const NAMESPACE = 'agentweaver';
@@ -17,7 +17,7 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 
 /**
  * Reads and validates the probe's Azure, identity, network, and Kubernetes prerequisites.
- * Failed lookups or a resource outside the dedicated target are rejected before workload creation.
+ * Required Kubernetes write permissions are checked after readback and before the first mutation.
  */
 export function bootstrapFoundationProbeInputs(config, {
   execAz = runAz, execKubectl = (args, options) => run('kubectl', args, options),
@@ -158,6 +158,13 @@ export function bootstrapFoundationProbeInputs(config, {
         throw new Error('Existing Probe policy differs from the admitted exact baseline; refusing replacement.');
       }
       const policyChanged = !policy || !equal(policy.spec, egress.spec);
+      const writePermissions = [];
+      if (policyChanged) writePermissions.push([
+        policy ? 'update' : 'create', 'ciliumnetworkpolicies', NAMESPACE,
+      ]);
+      if (!serviceAccount) writePermissions.push(['create', 'serviceaccounts', NAMESPACE]);
+      if (!monitor) writePermissions.push(['create', 'secrets', NAMESPACE]);
+      assertP0KubernetesPermissions(base, execKubectl, writePermissions, 'Foundation Probe input bootstrap');
       if (policyChanged) {
         const manifest = { apiVersion: 'cilium.io/v2', kind: 'CiliumNetworkPolicy',
           metadata: policy?.metadata ?? { name: 'foundation-probe-egress', namespace: NAMESPACE }, spec: egress.spec };
@@ -200,7 +207,7 @@ export function bootstrapFoundationProbeInputs(config, {
           endpointId: egress.endpointId, nicId: egress.nicId, recordId: egress.recordId },
         runtimeVerified: false,
       };
-    });
+    }, { execAz, execKubectl });
   } finally {
     connectionString = undefined;
   }

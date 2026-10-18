@@ -601,10 +601,9 @@ Fixture writes and soft deletion need separate approval and owned cleanup eviden
 ## Acceptance
 
 `verify-acceptance.mjs` accepts the selected infrastructure source/target arguments,
-including the operator object ID, plus `--expected-sha` and `--deployment-name`.
-It checks the exact source-bound deployment, target
-ownership, observed AKS security settings, and exact workload-identity
-federation configuration. AKS-only collection also requires
+plus `--expected-sha` and `--deployment-name`. It checks the exact source-bound
+deployment, target ownership, observed AKS security settings, and exact
+workload-identity federation configuration. AKS-only collection also requires
 `--foundation-expected-sha` and the exact original full-foundation receipt.
 The current selected AKS issuer can differ from the historical foundation issuer.
 These configuration checks do not prove that a Job ran or exchanged a token.
@@ -683,8 +682,12 @@ does not claim that a Cilium policy is effectively enforced.
 
 AKS exposes a public API endpoint and uses managed Entra authentication and
 Azure RBAC, with local accounts disabled. A public FQDN on a private API does
-not satisfy this configuration. Operator access still requires scoped
-Kubernetes permissions; the Bicep definitions do not grant operator access.
+not satisfy this configuration. Provision operator connectivity and Kubernetes
+API permissions outside the tooling. Cluster-dependent scripts check the
+required permissions before they write resources and fail with an actionable
+message when access is missing. Neither Bicep nor the scripts create, require,
+or verify a human AKS Cluster Admin assignment; the tooling never grants a
+person AKS Cluster Admin.
 
 The probe identity has Log Analytics Reader on the exact workspace.
 It has Monitoring Metrics Publisher on the exact Application Insights resource.

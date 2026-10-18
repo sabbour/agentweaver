@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { run, runAz, redact } from './exec.mjs';
 import { assertApprovedKeyVaultName } from './guardrails.mjs';
-import { withP0UserKubeconfig } from './namespace-bootstrap.mjs';
+import { assertP0KubernetesPermissions, withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 import { observeExistingP0BrokerRouting, projectIdentityRoutingReadback } from './identity-broker-routing.mjs';
 
 const NAMESPACE = 'agentweaver';
@@ -139,7 +139,7 @@ function orderedHash(value) {
 
 /**
  * Applies broker runtime resources and verifies their readback through a scoped user kubeconfig.
- * A mismatch or failed command throws; temporary access configuration is cleaned up by its wrapper.
+ * It checks every required create permission after readback and before the first write.
  */
 export function bootstrapIdentityBrokerRuntime(config, {
   withKubeconfig = withP0UserKubeconfig, execAz = runAz,
@@ -256,6 +256,17 @@ export function bootstrapIdentityBrokerRuntime(config, {
       }
       if (!current) absent.push(object);
     }
+    const resourcesByKind = {
+      ServiceAccount: 'serviceaccounts',
+      Service: 'services',
+      CiliumNetworkPolicy: 'ciliumnetworkpolicies',
+      Deployment: 'deployments',
+    };
+    const writePermissions = [
+      ...(!existing ? [['create', 'configmaps', NAMESPACE]] : []),
+      ...absent.map(object => ['create', resourcesByKind[object.kind], NAMESPACE]),
+    ];
+    assertP0KubernetesPermissions(base, execKubectl, writePermissions, 'Identity Broker runtime bootstrap');
     if (!existing) {
       const configMap = { apiVersion: 'v1', kind: 'ConfigMap', metadata: {
         name: CONFIG, namespace: NAMESPACE, labels: {
@@ -288,5 +299,5 @@ export function bootstrapIdentityBrokerRuntime(config, {
       runtimeVerified: false, acceptanceClientId: data.IdentityBroker__Clients__0__ClientId,
       brokerImage: config.brokerImage, runtimeIdentityClientId: identity.clientId,
     };
-  });
+  }, { execAz, execKubectl });
 }

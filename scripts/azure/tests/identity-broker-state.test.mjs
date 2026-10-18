@@ -23,7 +23,7 @@ function collaborators({ secret = signing, pvc = claim, denied, writeFailure = f
     execKubectl(args, options) {
       calls.push({ args, options });
       assert.ok(args.includes('--kubeconfig'));
-      assert.ok(args.includes('--request-timeout=30s'));
+      assert.ok(args.includes('--request-timeout=30s') || args.includes('--request-timeout=15s'));
       if (args.includes('get')) {
         const resource = args[args.indexOf('get') + 1];
         const object = resource === 'namespaces' ? { kind: 'Namespace', metadata: {
@@ -95,7 +95,8 @@ test('empty or foreign signing material blocks creation of durable state without
 });
 test('permission failures stop before generation; secret-write errors never echo private input', () => {
   const denied = collaborators({ secret: null, pvc: null, denied: true });
-  assert.throws(() => bootstrapIdentityBrokerState({}, denied), /permission denied.*Forbidden/);
+  assert.throws(() => bootstrapIdentityBrokerState({}, denied),
+    /Kubernetes API access is unavailable or insufficient.*outside this tooling.*Forbidden/);
   assert.equal(denied.generationCount, 0);
   const failed = collaborators({ secret: null, pvc: null, writeFailure: true });
   assert.throws(() => bootstrapIdentityBrokerState({}, failed), error =>

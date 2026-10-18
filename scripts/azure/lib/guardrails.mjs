@@ -621,7 +621,7 @@ export function guardAzureTarget(config, execAz) {
   const identityBrokerRuntimeId = resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', `${resourceGroup}-id-identity-broker`);
   const aksId = resourceId('Microsoft.ContainerService/managedClusters', `${resourceGroup}-aks`);
   const subnetId = resourceId('Microsoft.Network/virtualNetworks/subnets', `${resourceGroup}-vnet/aks`);
-  // Extension resources retain their exact parent scope and ARM-generated name.
+  // Admit only these exact resource-scoped assignments; an AKS cluster-scope human grant is never expected.
   for (const [scope, principalResource, role] of [
     [resourceId('Microsoft.KeyVault/vaults', keyVaultName), identityId, '4633458b-17de-408a-b874-0445c86b69e6'],
     [resourceId('Microsoft.KeyVault/vaults', keyVaultName), identityBrokerRuntimeId, '4633458b-17de-408a-b874-0445c86b69e6'],

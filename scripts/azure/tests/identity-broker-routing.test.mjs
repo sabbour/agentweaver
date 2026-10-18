@@ -128,7 +128,7 @@ function snapshot() {
     },
   };
 }
-function transport({ native = snapshot(), namespace, failWait = false,
+function transport({ native = snapshot(), namespace, failWait = false, deniedWrite,
   webPolicy = networkPolicy('web-gateway-ingress', 'web') } = {}) {
   const calls = [];
   const azureCalls = [];
@@ -153,6 +153,9 @@ function transport({ native = snapshot(), namespace, failWait = false,
     execKubelogin: () => ok(),
     execKubectl: (args, options) => {
       calls.push({ args, options });
+      if (args.includes('auth')) {
+        return deniedWrite?.(args) ? ok('no\n') : ok('yes\n');
+      }
       const command = args.slice(args.findIndex(value => ['get', 'wait', 'apply'].includes(value)));
       if (command[0] === 'apply') return ok();
       if (command[0] === 'wait') {
@@ -242,6 +245,15 @@ test('omitted native policy namespace binds only to the independently verified r
     mutate(changed);
     assert.throws(() => deriveIdentityRouting(changed));
   }
+});
+
+test('routing checks all required writes before applying the first manifest', () => {
+  const { calls, dependencies } = transport({
+    deniedWrite: args => args.includes('gateways') && args.includes('patch'),
+  });
+  assert.throws(() => bootstrapIdentityRouting(config, dependencies),
+    /Kubernetes API access is unavailable or insufficient for Identity routing bootstrap: required permission "patch gateways" in namespace agentweaver-gateway/);
+  assert.equal(calls.filter(call => call.args.includes('apply')).length, 0);
 });
 
 test('routing waits for policy current-generation evidence before final strict derivation', () => {

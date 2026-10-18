@@ -579,7 +579,7 @@ test('pre-acceptance execute and resume retain a separately labeled checkpoint',
   let clears = 0;
   dependencies.run = (file, args, options) => {
     if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
-        !args.includes('--dry-run=client')) {
+        !args.includes('--dry-run=client') && !args.includes('--dry-run=server')) {
       applies++;
       return '';
     }
@@ -607,6 +607,24 @@ test('pre-acceptance execute and resume retain a separately labeled checkpoint',
   assert.equal(applies, 1);
   assert.equal(liveChecks, 2);
   assert.equal(clears, 2);
+});
+
+test('release execute stops with access guidance when server-side manifest preflight is denied', async () => {
+  const fixture = bootstrapFixture();
+  const dependencies = bootstrapDependencies(fixture);
+  const originalRun = dependencies.run;
+  let applies = 0;
+  dependencies.run = (file, args, options) => {
+    if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=server')) {
+      throw new Error('Kubernetes API returned Forbidden');
+    }
+    if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
+        !args.includes('--dry-run=client') && !args.includes('--dry-run=server')) applies++;
+    return originalRun(file, args, options);
+  };
+  await assert.rejects(deployRelease({ argv: [...bootstrapArgsFor(), '--execute'] }, dependencies),
+    /server-side preflight failed before any workload write.*outside this tooling.*Kubernetes API returned Forbidden/);
+  assert.equal(applies, 0);
 });
 
 test('explicit workload deployment stops on incomplete runtime inputs before target checks or apply', async () => {
@@ -714,7 +732,7 @@ test('v1.0.1 pre-acceptance executes only after verifying the normal publication
   let applies = 0;
   dependencies.run = (file, args, options) => {
     if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
-        !args.includes('--dry-run=client')) {
+        !args.includes('--dry-run=client') && !args.includes('--dry-run=server')) {
       applies++;
       return '';
     }
@@ -1581,6 +1599,10 @@ test('Azure target readbacks preserve exact hostnames without exposing kubeconfi
   };
   const calls = [];
   const run = (file, args, options) => {
+    if (file === 'kubectl' && args[0] === 'auth') {
+      calls.push({ file, args, options, output: 'yes' });
+      return 'yes';
+    }
     const fixture = file === 'az'
       ? args[0] === 'account' ? fixtures.account : fixtures.aks
       : args[0] === 'config' ? fixtures.kubeconfig : fixtures.namespace;
@@ -1598,6 +1620,11 @@ test('Azure target readbacks preserve exact hostnames without exposing kubeconfi
   assert.equal(result.cluster.apiserverAccessProfile.privateFqdn, apiPrivateFqdn);
   assert.equal(result.contextName, 'agentweaver');
   assert.equal(result.server, `https://${apiPrivateFqdn}:443`);
+  assert.equal(calls.length, 5);
+  assert.deepEqual(calls[3].args, [
+    'auth', 'can-i', 'get', `namespace/${target.namespace}`, '--request-timeout=15s',
+  ]);
+  assert.equal(calls[3].output, 'yes');
   assert.deepEqual(JSON.parse(calls[1].output), {
     id: expectedResourceId,
     fqdn,
@@ -1613,9 +1640,45 @@ test('Azure target readbacks preserve exact hostnames without exposing kubeconfi
   assert.ok(calls[1].options.preserveProjectedJson);
   assert.ok(calls[2].options.preserveProjectedJson);
   assert.equal(calls[0].options.projectJson, undefined);
-  assert.equal(calls[3].options.projectJson, undefined);
+  assert.equal(calls[4].options.projectJson, undefined);
   assert.ok(!calls[1].output.includes('sensitive-aks-property'));
   assert.ok(!calls[2].output.includes('sensitive-kubeconfig-token'));
+});
+
+test('release target check fails before namespace reads when Kubernetes API access is missing', () => {
+  const expectedResourceId = `/subscriptions/${target.subscriptionId}/resourceGroups/${target.resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${target.clusterName}`;
+  for (const apiAccess of ['no', new Error('Unable to connect to the server: network is unreachable')]) {
+    const calls = [];
+    const run = (file, args) => {
+      calls.push({ file, args });
+      if (file === 'az' && args[0] === 'account') {
+        return JSON.stringify({ id: target.subscriptionId, tenantId: target.tenantId });
+      }
+      if (file === 'az') {
+        return JSON.stringify({
+          id: expectedResourceId,
+          fqdn: 'api.example.invalid',
+          agentPoolProfiles: [{ enableAutoScaling: true, minCount: 2, maxCount: 3, count: 2 }],
+        });
+      }
+      if (args[0] === 'config') {
+        return JSON.stringify({
+          'current-context': 'agentweaver',
+          contexts: [{ name: 'agentweaver', context: { cluster: 'agentweaver' } }],
+          clusters: [{ name: 'agentweaver', cluster: { server: 'https://api.example.invalid' } }],
+        });
+      }
+      if (args[0] === 'auth') {
+        if (apiAccess instanceof Error) throw apiAccess;
+        return apiAccess;
+      }
+      assert.fail(`unexpected command: ${file} ${args.join(' ')}`);
+    };
+
+    assert.throws(() => verifyAzureTarget(target, { root, run }),
+      /Kubernetes API access is (?:unavailable or insufficient|insufficient).*outside this tooling/);
+    assert.equal(calls.some(({ args }) => args[0] === 'get' && args[1] === 'namespace'), false);
+  }
 });
 
 test('runtime preflight validates the shared backend CA before Broker routing readback', () => {
@@ -1733,7 +1796,9 @@ test('dry-run refuses a GHCR receipt that omits the measured AgentHost platform 
 test('resume rechecks publication, GHCR, target and live deployment health before success', async () => {
   const manifest = releaseManifest();
   const publication = publicationReceipt(manifest);
-  const verification = { release: 0, images: 0, target: 0, prerequisites: 0, live: 0, clear: 0, apply: 0 };
+  const verification = {
+    release: 0, images: 0, target: 0, prerequisites: 0, live: 0, clear: 0, apply: 0, applyPreflight: 0,
+  };
   const directory = path.join(root, 'scripts', 'release', 'tests', 'owned-checkpoint-fixture');
   let checkpoint;
   const dependencies = {
@@ -1756,8 +1821,13 @@ test('resume rechecks publication, GHCR, target and live deployment health befor
       if (file === 'kubectl' && args[0] === 'kustomize') {
         return execFileSync(file, args, { cwd: p0Root, encoding: 'utf8' });
       }
+      if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=server')) {
+        verification.applyPreflight++;
+        assert.ok(args.includes('--request-timeout=30s'));
+        return '';
+      }
       if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
-          !args.includes('--dry-run=client')) verification.apply++;
+          !args.includes('--dry-run=client') && !args.includes('--dry-run=server')) verification.apply++;
       return '';
     },
   };
@@ -1793,6 +1863,7 @@ test('resume rechecks publication, GHCR, target and live deployment health befor
     live: 2,
     clear: 2,
     apply: 1,
+    applyPreflight: 2,
   });
 });
 
@@ -1845,7 +1916,7 @@ test('checkpoint read and write failures are surfaced as deployment failures', a
         return execFileSync(file, args, { cwd: p0Root, encoding: 'utf8' });
       }
       if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
-          !args.includes('--dry-run=client')) applyCount++;
+          !args.includes('--dry-run=client') && !args.includes('--dry-run=server')) applyCount++;
       return '';
     },
   }), /cannot persist deployment checkpoint: disk full/);

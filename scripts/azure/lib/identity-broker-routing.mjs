@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { join } from 'node:path';
 import { run, runAz, redact } from './exec.mjs';
-import { withP0UserKubeconfig } from './namespace-bootstrap.mjs';
+import { assertP0KubernetesPermissions, withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 
 const P0_NAMESPACE = 'agentweaver';
 const GATEWAY_NAMESPACE = 'agentweaver-gateway';
@@ -321,7 +321,7 @@ export function alignExistingP0BrokerHostname(config, {
     });
     if (!receipt.hostnameAligned) throw new Error('Existing P0 hostname alignment did not read back the exact native hostname.');
     return { ...receipt, changed, routingBlocked: !receipt.gatewayProgrammed || !receipt.applicationRoutesConfigured };
-  });
+  }, { execKubectl });
 }
 
 function gatewayReference(reference, gatewayNamespace, objectNamespace) {
@@ -583,7 +583,7 @@ export function verifyIdentityBrokerReadiness(receipt, {
 
 /**
  * Verifies and applies the identity broker routing configuration for the dedicated P0 target.
- * Resource lookup or placement failures stop the bootstrap instead of accepting partial routing.
+ * Required create or patch permissions are checked before the first routing manifest is applied.
  */
 export function bootstrapIdentityRouting(config, {
   execAz = runAz, execKubelogin = (args, options) => run('kubelogin', args, options),
@@ -655,6 +655,7 @@ export function bootstrapIdentityRouting(config, {
         !Array.isArray(publicApplication.publicClient?.redirectUris)) {
       throw new Error('Exact upstream public application metadata is unavailable.');
     }
+    const existingObjects = new Map();
     for (const [kind, namespace, name, service] of [
       ['defaultdomaincertificate', GATEWAY_NAMESPACE, 'identity-broker', 'identity-broker'],
       ['defaultdomaincertificate', P0_NAMESPACE, 'identity-broker', 'identity-broker'],
@@ -678,6 +679,7 @@ export function bootstrapIdentityRouting(config, {
           object.metadata?.labels?.['agentweaver.io/service'] !== service)) {
         throw new Error(`Existing ${kind} is not an owned routing object. Refusing replacement.`);
       }
+      existingObjects.set(`${kind}/${namespace}/${name}`, Boolean(object));
       if (kind === 'service' && (!object ||
           object.spec?.type !== 'ClusterIP' ||
            object.spec?.selector?.['app.kubernetes.io/name'] !== 'mcp' ||
@@ -700,9 +702,29 @@ export function bootstrapIdentityRouting(config, {
           labels?.['pod-security.kubernetes.io/warn'] !== 'restricted') {
         throw new Error('Existing Gateway namespace ownership or security differs. No policy change is permitted.');
       }
-    } else {
-      apply('gateway-namespace.yaml');
     }
+    const routingWrites = [
+      ['defaultdomaincertificate', 'defaultdomaincertificates', GATEWAY_NAMESPACE, 'identity-broker'],
+      ['defaultdomaincertificate', 'defaultdomaincertificates', P0_NAMESPACE, 'identity-broker'],
+      ['gateway', 'gateways', GATEWAY_NAMESPACE, 'identity-broker'],
+      ['httproute', 'httproutes', P0_NAMESPACE, 'identity-broker'],
+      ['backendtlspolicy', 'backendtlspolicies', P0_NAMESPACE, 'identity-broker'],
+      ['httproute', 'httproutes', P0_NAMESPACE, 'web-application'],
+      ['httproute', 'httproutes', P0_NAMESPACE, 'gateway-api'],
+      ['backendtlspolicy', 'backendtlspolicies', P0_NAMESPACE, 'gateway-api'],
+      ['httproute', 'httproutes', P0_NAMESPACE, 'mcp'],
+      ['backendtlspolicy', 'backendtlspolicies', P0_NAMESPACE, 'mcp'],
+      ['ciliumnetworkpolicy', 'ciliumnetworkpolicies', P0_NAMESPACE, 'identity-broker-gateway-ingress'],
+      ['ciliumnetworkpolicy', 'ciliumnetworkpolicies', P0_NAMESPACE, 'web-gateway-ingress'],
+      ['ciliumnetworkpolicy', 'ciliumnetworkpolicies', P0_NAMESPACE, 'gateway-api-ingress'],
+      ['ciliumnetworkpolicy', 'ciliumnetworkpolicies', P0_NAMESPACE, 'mcp-gateway-ingress'],
+    ];
+    const writePermissions = existing ? [] : [['create', 'namespaces']];
+    writePermissions.push(...routingWrites.map(([kind, resource, namespace, name]) => [
+      existingObjects.get(`${kind}/${namespace}/${name}`) ? 'patch' : 'create', resource, namespace,
+    ]));
+    assertP0KubernetesPermissions(baseArgs, execKubectl, writePermissions, 'Identity routing bootstrap');
+    if (!existing) apply('gateway-namespace.yaml');
     for (const [filename, namespace] of [
       ['gateway-certificate.yaml', GATEWAY_NAMESPACE],
       ['default-domain-certificate.yaml', P0_NAMESPACE],
@@ -783,5 +805,5 @@ export function bootstrapIdentityRouting(config, {
     return config.verifyBrokerReadiness
       ? verifyIdentityBrokerReadiness(receipt, { execCurl })
       : receipt;
-  }, { execAz, execKubelogin });
+  }, { execAz, execKubelogin, execKubectl });
 }
