@@ -615,6 +615,26 @@ test('v1.0.1 pre-acceptance dry-run uses the mixed source-bound draft and normal
     ['apply', '--dry-run=client', '-k', path.join('deploy', 'k8s')]);
 });
 
+test('release helper parses Kustomize output containing the managed Broker hostname', () => {
+  const hostname = 'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
+  const output = [
+    'apiVersion: v1',
+    'kind: Ingress',
+    'metadata:',
+    '  name: identity-broker',
+    'spec:',
+    '  rules:',
+    `    - host: ${hostname}`,
+    '',
+  ].join('\n');
+  const result = runProcess(process.execPath, [
+    '-e', `process.stdout.write(${JSON.stringify(output)})`,
+  ]);
+  const resources = parseKustomizeResources(result.stdout);
+
+  assert.equal(resources.items[0].spec.rules[0].host, hostname);
+});
+
 test('v1.0.1 pre-acceptance executes only after verifying the normal publication and keeps its result labeled', async () => {
   const fixture = normalBootstrapFixture();
   const dependencies = bootstrapDependencies(fixture, {
