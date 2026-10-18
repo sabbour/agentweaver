@@ -20,8 +20,10 @@ You need:
 - Azure CLI, the Bicep extension, `kubectl`, Node.js 24, npm, and the .NET 10
   SDK.
 - A clean checkout at the exact v1 source commit approved for deployment.
-- A locally managed Bicep parameter file and the required operator-owned
-  Secrets, TLS certificates, and Gateway values.
+- A reviewed, Git-tracked Bicep parameter file under
+  `infra/bicep/parameters/`. The checked-in examples contain placeholders and
+  cannot run.
+- The required operator-owned Secrets, TLS certificates, and Gateway values.
 
 The example resource names in this tutorial are:
 
@@ -75,58 +77,60 @@ Azure, install resources, or prove that the cluster is ready.
 ## 3. Provision the Azure foundation
 
 Use the guarded installer for an approved initial deployment into an empty
-managed-resource target. Keep the parameter file outside source control when
-it contains target-specific values.
+managed-resource target. The installer accepts only tracked, reviewed
+parameter files under `infra/bicep/parameters/`. Do not put passwords, client
+secrets, tokens, or private keys in a parameter file.
 
 ```powershell
 node scripts\azure\deploy.mjs `
   --resource-group agentweaver `
-  --parameters infra\bicep\parameters\<approved-parameters>.json `
+  --parameters infra\bicep\parameters\<approved-full-foundation-parameters>.json `
   --subscription <subscription-id> `
   --allowed-subscription <subscription-id> `
   --tenant <tenant-id> `
   --allowed-tenant <tenant-id> `
-  --operator-object-id <operator-user-object-guid>
+  --operator-object-id <operator-user-object-guid> `
+  --bootstrap-identity-postgres
 ```
 
-Without `--execute`, the command performs its offline summary or read-only
-what-if path. After the target and effects are approved, add `--execute` to
-request the deployment. The installer still checks the allowed target, exact
-source, resource ownership, and Bicep inputs. Do not use the initial deployment
-template for an existing foundation; use the dedicated AKS-only template and
-parameter file when the reviewed operation is limited to AKS.
+Without `--execute`, `deploy.mjs` prints an offline summary and makes no Azure
+call. After the target and effects are approved, add `--execute` to the same
+command. It provisions the foundation, bootstraps the namespace, and then
+creates the Identity Broker PostgreSQL runtime and migration roles. The
+installer checks the allowed target, exact source, resource ownership, and
+Bicep inputs. The full-foundation template is limited to an empty target. If
+the foundation already exists, use the tracked AKS-only template and its
+matching reviewed parameter file for a separately approved bootstrap; do not
+rerun the full-foundation template.
 
 The deployment helper uses the signed-in user's Entra access and bootstraps
 only the `agentweaver` namespace. It does not apply the product manifests,
 create the Broker's application state, run database migrations, install
 Gateway routes, or create operator-owned Secrets.
 
-## 4. Bootstrap PostgreSQL and workload identities
+## 4. Complete the remaining workload identity setup
 
-Create the runtime and migration PostgreSQL roles through the guarded
-`--bootstrap-identity-postgres` operation. It requires `--execute` and the
-separate default-off bootstrap option. Use the same exact resource-group,
-parameter, subscription, tenant, and operator arguments as the approved
-deployment command:
+The guarded PostgreSQL bootstrap in step 3 creates only the Identity Broker
+runtime and migration roles. It does not create the Projects & Config,
+Environment, Knowledge, Events & Sessions, or Orchestrator runtime identities
+and their ServiceAccount federations. Those five identities use the separate
+P1 runtime-identity template. The current guarded installer does not deploy
+that template, and the repository does not provide a guarded command for it.
+Do not apply it with a direct `az deployment` command. Before you install the
+product bundle, require a separately approved process to provision these
+identities and federations. If that process is not available, stop here. See
+[Limited P1 runtime identities](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#limited-p1-runtime-identities).
+Do not apply that template with an unguarded command.
 
-```powershell
-node scripts\azure\deploy.mjs `
-  --resource-group agentweaver `
-  --parameters infra\bicep\parameters\<approved-parameters>.json `
-  --subscription <subscription-id> `
-  --allowed-subscription <subscription-id> `
-  --tenant <tenant-id> `
-  --allowed-tenant <tenant-id> `
-  --operator-object-id <operator-user-object-guid> `
-  --bootstrap-identity-postgres `
-  --execute
-```
-
-The PostgreSQL bootstrap creates only the approved databases, Entra roles, and
-schema prerequisites. It does not run migrations or grant runtime schema
-permissions. Apply each service's reviewed migration and grants separately.
-Identity Broker uses a dedicated migration identity; its runtime identity does
-not own the schema.
+Before you install the product bundle, confirm that the five identities are
+provisioned and federated to the exact `agentweaver` namespace and service
+ServiceAccounts. Read each client ID from Azure CLI as described in the
+[runtime configuration reference](../reference/runtime-configuration.md).
+Create the required service databases and matching Entra roles, apply each
+reviewed migration and schema grant, and confirm that every required owner
+address and audience is approved. The Broker runtime identity does not own
+the schema. If the separate identity and database setup is not approved or
+complete, stop before applying the product workloads.
 
 For each database workload, verify that:
 
@@ -151,8 +155,9 @@ Kustomize base intentionally does not own:
 2. Provide the Identity Broker, Gateway, and MCP TLS Secrets and the public
    backend CA ConfigMap. Each certificate must match the service DNS name
    required by the manifests.
-3. Resolve all required runtime ConfigMap values. Do not apply a
-   workload-required ConfigMap while it is marked incomplete.
+3. Resolve all required runtime ConfigMap values before the first apply. For
+   an existing installation, use the
+   [immutable ConfigMap update procedure](../reference/runtime-configuration.md#update-an-immutable-configmap).
 4. Set the approved public Web origin and the reviewed Gateway namespace and
    security policy. The product namespace stays `restricted`. The current AKS
    managed Gateway pods cannot set the seccomp profile required by that
