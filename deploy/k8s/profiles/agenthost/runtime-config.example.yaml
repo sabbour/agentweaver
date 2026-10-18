@@ -25,9 +25,9 @@ data:
         "EnvironmentAddress": "https://environment.agentweaver.svc.cluster.local:8443/",
         "EventsAddress": "https://events-and-sessions.agentweaver.svc.cluster.local:8443/",
         "Image": {
-          "Digest": "sha256:17c3da40ab275da28b92a5cf0e23741ae63d34a0877cebf798870a7f51563eb5",
+          "Digest": "sha256:aa5baafb79ca1210188053834ededebe708cc27f167e5b24bab6633199e6245e",
           "Platform": "linux/amd64",
-          "CompressedPullBytes": 321483300
+          "CompressedPullBytes": 321483218
         },
         "Authentication": {
           "Authority": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",

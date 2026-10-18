@@ -53,6 +53,23 @@ const v102SourceSha = '3c834c12cf1e66bf385b3833a7f0a5cdd5782f8a';
 const v102Manifest = JSON.parse(execFileSync('git', [
   'show', `${v102SourceSha}:releases/foundation.json`,
 ], { cwd: root, encoding: 'utf8' }));
+/** The provider-catalog merge SHA is distinct from the v1.0.2 release source SHA. */
+const v102ProviderCatalogSourceSha = 'b002620bd8cb53a971b6d5b082d6ab43dbf11fb7';
+/** Image digests from the immutable publication receipt bound to v102SourceSha. */
+const v102ImageDigests = Object.freeze({
+  'Agentweaver.AgentHost': 'sha256:aa5baafb79ca1210188053834ededebe708cc27f167e5b24bab6633199e6245e',
+  'Agentweaver.Identity.Broker': 'sha256:9c70e405494ae6c2eea7044dc48f97664a819658be387e17b026e436c3cba238',
+  'Agentweaver.EventsAndSessions': 'sha256:0aff1a8944c037aab888dab3c5966420186ecaac6cbfd8ace09e3bf8c87986ae',
+  'Agentweaver.Gateway': 'sha256:8f65db7f52ea0ed09bd84fe125da8c4ce523e93923fef48bc700a13fde731da7',
+  'Agentweaver.Mcp': 'sha256:a722641fe29714797873acaf714778bab7fce76798cf2766b00955efbcbd62f4',
+  'Agentweaver.Web': 'sha256:11b6fcc71c35de9a1d0fbe1ce8922493f7b401627c8b7cbddc31839a471b49d8',
+  'Agentweaver.Orchestrator': 'sha256:f645ea05863bacecca730bda489cdc7ac884b08bb93001412b343adc9e420a34',
+  'Agentweaver.Environment': 'sha256:7101827399e849753d4d8bc94dbbd15390fe545c5f5ce981ea5e7681d9acd0a2',
+  'Agentweaver.Knowledge': 'sha256:1d6452bd908ee1f561d732d5ec38210a997b808cc753224b11ab75b6f113387f',
+  'Agentweaver.Projects.Config': 'sha256:028bbfab0279db719d43379642c91b5044fdffc8dac4cb6eecf52a37acab7c67',
+});
+/** AgentHost's receipt-measured linux/amd64 compressed image size in bytes. */
+const v102AgentHostCompressedPullBytes = 321483218;
 function sourceFixtureRoot(sourceSha, manifest, prefix) {
   const fixtureRoot = mkdtempSync(path.join(tmpdir(), prefix));
   for (const file of [...manifest.components.map(component => component.project), 'apps/web/package-lock.json']) {
@@ -167,7 +184,11 @@ function releaseManifest() {
   return manifest;
 }
 
-function publicationReceipt(manifest = releaseManifest(), receiptSourceSha = sourceSha) {
+/** Builds a test receipt; AgentHost fields can model the measured published image. */
+function publicationReceipt(manifest = releaseManifest(), receiptSourceSha = sourceSha, {
+  agentHostImageDigest = `sha256:${'a'.repeat(64)}`,
+  agentHostCompressedPullBytes = 123456,
+} = {}) {
   const product = manifest.components.filter(({ id }) => id !== 'Agentweaver.FoundationProbe');
   return {
     schemaVersion: 1,
@@ -209,11 +230,11 @@ function publicationReceipt(manifest = releaseManifest(), receiptSourceSha = sou
                 sourceSha: receiptSourceSha,
                 sourceTree: 'f'.repeat(40),
                 image: {
-                  digest: `sha256:${'a'.repeat(64)}`,
+                  digest: agentHostImageDigest,
                   configDigest,
                   platform: 'linux/amd64',
                   version: component.version,
-                  compressedPullBytes: 123456,
+                  compressedPullBytes: agentHostCompressedPullBytes,
                 },
                 measurement: 'platform-manifest plus unique config and gzip-layer blob bytes',
               },
@@ -239,18 +260,25 @@ function bootstrapFixture() {
   return { manifest, publication, completion: structuredClone(publication) };
 }
 
-function normalBootstrapFixture(sourceManifest = v101Manifest, receiptSourceSha = v101SourceSha) {
+/** Creates normal-publication fixtures with optional source-bound image receipt values. */
+function normalBootstrapFixture(sourceManifest = v101Manifest, receiptSourceSha = v101SourceSha, {
+  imageDigests,
+  agentHostCompressedPullBytes,
+} = {}) {
   const manifest = structuredClone(sourceManifest);
   const publishedManifest = structuredClone(manifest);
   for (const component of publishedManifest.components) {
     if (component.kind === 'service' && component.id !== 'Agentweaver.FoundationProbe') {
       const nibble = (component.id.charCodeAt(0) % 15 + 1).toString(16);
-      component.imageDigest = `sha256:${nibble.repeat(64)}`;
+      component.imageDigest = imageDigests?.[component.id] ?? `sha256:${nibble.repeat(64)}`;
     }
   }
   return {
     manifest,
-    publication: publicationReceipt(publishedManifest, receiptSourceSha),
+    publication: publicationReceipt(publishedManifest, receiptSourceSha, {
+      agentHostImageDigest: imageDigests?.['Agentweaver.AgentHost'],
+      agentHostCompressedPullBytes,
+    }),
   };
 }
 
@@ -391,7 +419,12 @@ const bootstrapArgsFor = (overrides = {}) => [
   ...Object.entries(overrides).flatMap(([key, value]) => [`--${key}`, value]),
 ];
 
-const normalBootstrapArgsFor = (overrides = {}, releaseTag = 'v1.0.1') => [
+/** Builds bootstrap args; the provider-catalog commit may differ from the release source. */
+const normalBootstrapArgsFor = (
+  overrides = {},
+  releaseTag = 'v1.0.1',
+  providerCatalogSourceSha = 'd'.repeat(40),
+) => [
   '--pre-acceptance',
   releaseTag,
   '--manifest', 'releases/foundation.json',
@@ -404,16 +437,20 @@ const normalBootstrapArgsFor = (overrides = {}, releaseTag = 'v1.0.1') => [
   '--node-min', String(target.nodeMin),
   '--node-max', String(target.nodeMax),
   '--provider-catalog-configmap', 'projects-config-provider-catalog',
-  '--provider-catalog-source-commit', 'd'.repeat(40),
+  '--provider-catalog-source-commit', providerCatalogSourceSha,
   ...Object.entries(overrides).flatMap(([key, value]) => [`--${key}`, value]),
 ];
 
+/** Rewrites synthetic pins by default; source-bundle tests disable rewriting to catch drift. */
 function bootstrapDependencies(fixture, {
   root: fixtureRoot = p0Root,
   sourceSha: fixtureSourceSha = p0SourceSha,
+  rewriteKustomizeFixture = true,
   ...overrides
 } = {}) {
-  prepareKustomizeFixture(fixture, fixtureRoot, fixtureSourceSha, 'd'.repeat(40));
+  if (rewriteKustomizeFixture) {
+    prepareKustomizeFixture(fixture, fixtureRoot, fixtureSourceSha, 'd'.repeat(40));
+  }
   const commands = [];
   const dependencies = {
     root: fixtureRoot,
@@ -723,13 +760,47 @@ test('v1.0.1 pre-acceptance dry-run uses the mixed source-bound draft and normal
 });
 
 test('v1.0.2 pre-acceptance dry-run uses its exact mixed-version source and publication digests', async () => {
-  const fixture = normalBootstrapFixture(v102Manifest, v102SourceSha);
+  const fixture = normalBootstrapFixture(v102Manifest, v102SourceSha, {
+    imageDigests: v102ImageDigests,
+    agentHostCompressedPullBytes: v102AgentHostCompressedPullBytes,
+  });
+  const kubernetesRoot = path.join(v102Root, 'deploy', 'k8s');
+  const kustomization = parseYaml(readFileSync(path.join(kubernetesRoot, 'kustomization.yaml'), 'utf8'));
+  const pins = new Map(kustomization.images.map(({ name, digest }) => [name, digest]));
+  assert.equal(pins.size, 10);
+  for (const [componentId, digest] of Object.entries(v102ImageDigests)) {
+    assert.equal(
+      pins.get(`ghcr.io/sabbour/${componentImageRepository(componentId)}`),
+      digest,
+      `${componentId} pin in the checked-in helper bundle`,
+    );
+  }
+  const environment = JSON.parse(readFileSync(path.join(
+    kubernetesRoot, 'base', 'workloads', 'environment-deployment.json',
+  ), 'utf8'));
+  const environmentValues = new Map(environment.spec.template.spec.containers[0].env
+    .map(({ name, value }) => [name, value]));
+  assert.equal(
+    environmentValues.get('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes'),
+    String(v102AgentHostCompressedPullBytes),
+  );
+  const agentHostConfig = parseYaml(readFileSync(path.join(
+    kubernetesRoot, 'profiles', 'agenthost', 'runtime-config.example.yaml',
+  ), 'utf8'));
+  const agentHostImage = JSON.parse(agentHostConfig.data['appsettings.json']).AgentHost.Image;
+  assert.deepEqual(agentHostImage, {
+    Digest: v102ImageDigests['Agentweaver.AgentHost'],
+    Platform: 'linux/amd64',
+    CompressedPullBytes: v102AgentHostCompressedPullBytes,
+  });
   const dependencies = bootstrapDependencies(fixture, {
     root: v102Root,
     sourceSha: v102SourceSha,
+    // Exercise the checked-in v1.0.2 receipt pins; synthetic rewriting would mask drift.
+    rewriteKustomizeFixture: false,
   });
   const result = await deployRelease({
-    argv: normalBootstrapArgsFor({}, 'v1.0.2'),
+    argv: normalBootstrapArgsFor({}, 'v1.0.2', v102ProviderCatalogSourceSha),
   }, dependencies);
   const versions = new Set(fixture.manifest.components
     .filter(({ id }) => id !== 'Agentweaver.FoundationProbe')
@@ -740,6 +811,10 @@ test('v1.0.2 pre-acceptance dry-run uses its exact mixed-version source and publ
   assert.equal(result.dryRun, true);
   assert.equal(result.renderedResources, 61);
   assert.equal('acceptedRelease' in result, false);
+  assert.equal(
+    result.perSandboxAgentHost,
+    `ghcr.io/sabbour/${componentImageRepository('Agentweaver.AgentHost')}@${v102ImageDigests['Agentweaver.AgentHost']}`,
+  );
   assert.deepEqual(
     result.services.map(({ id, image }) => [id, image]),
     fixture.publication.published
@@ -749,21 +824,29 @@ test('v1.0.2 pre-acceptance dry-run uses its exact mixed-version source and publ
 });
 
 test('v1.0.2 pre-acceptance rejects changed-source and continuation receipts', async () => {
-  const fixture = normalBootstrapFixture(v102Manifest, v102SourceSha);
+  const fixture = normalBootstrapFixture(v102Manifest, v102SourceSha, {
+    imageDigests: v102ImageDigests,
+    agentHostCompressedPullBytes: v102AgentHostCompressedPullBytes,
+  });
   const dependencies = bootstrapDependencies(fixture, {
     root: v102Root,
     sourceSha: v102SourceSha,
+    rewriteKustomizeFixture: false,
   });
   fixture.publication.sourceSha = 'b'.repeat(40);
   await assert.rejects(
-    deployRelease({ argv: normalBootstrapArgsFor({}, 'v1.0.2') }, dependencies),
+    deployRelease({
+      argv: normalBootstrapArgsFor({}, 'v1.0.2', v102ProviderCatalogSourceSha),
+    }, dependencies),
     /exact source-bound v1\.0\.2 published receipt/,
   );
 
   fixture.publication.sourceSha = v102SourceSha;
   fixture.publication.continuation = { unexpected: true };
   await assert.rejects(
-    deployRelease({ argv: normalBootstrapArgsFor({}, 'v1.0.2') }, dependencies),
+    deployRelease({
+      argv: normalBootstrapArgsFor({}, 'v1.0.2', v102ProviderCatalogSourceSha),
+    }, dependencies),
     /v1\.0\.2 pre-acceptance bootstrap rejects continuation publication receipts/,
   );
 });

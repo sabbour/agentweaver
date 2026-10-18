@@ -774,6 +774,9 @@ It also verifies the tracked draft and component project files at that source,
 preserves the draft's mixed component versions, and takes deployed image
 digests only from the verified receipt. Continuation receipts and any
 `--completion` proof are rejected. No artifact is rebuilt or republished.
+Create the v1.0.2 GitHub Release/tag only after the helper pin update passes its
+checks and is merged; the helper's Kustomize image pins and AgentHost runtime
+measurement must match this receipt exactly.
 
 The default remains a read-only dry-run. `--execute` is required to apply the
 same guarded rollout; its result is still `pre-acceptance`, not release or
