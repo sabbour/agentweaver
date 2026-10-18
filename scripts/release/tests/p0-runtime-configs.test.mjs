@@ -765,17 +765,18 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
   assert.deepEqual(unresolvedInputs, []);
 
   const kustomization = parse(readFileSync(path.join(root, 'deploy', 'k8s', 'kustomization.yaml'), 'utf8'));
+  // Kustomize pins and the linux/amd64 compressed-byte count must match the immutable v1.0.2 publication receipt.
   const expectedPins = [
-    ['agentweaver-agenthost', '17c3da40ab275da28b92a5cf0e23741ae63d34a0877cebf798870a7f51563eb5'],
-    ['agentweaver.identity.broker', '75f92a767b2dcf1fa2011d7ba2f4ca1b6e48b7fe9fda044d4664a34b35681f3c'],
-    ['agentweaver.eventsandsessions', '0c0a12a501c9760df555f7a6ee28fa2fad36ff302edca55d77bfc4c665d9aa5c'],
-    ['agentweaver.gateway', 'd68184c80cb1b3cf82d8741c15de73597efdd2eb1bf03bc0886aecd9b3d4e756'],
-    ['agentweaver.mcp', 'cee4879b11dcafcd7c48681d756b80a8f3661c93c1ded26f4366247b310d880d'],
-    ['agentweaver-web', 'b2359a18b1a6a37c6a3b97665aef550b076b11a30ec6b17f02e2e8809226a4d8'],
-    ['agentweaver.orchestrator', '186116f750594a6d52348945c8da7e2fbc11489bbb4c4d38cac3b7651a9aec14'],
-    ['agentweaver.environment', '5141bc6b46147bd3740675cf150397ced8921c5a6ec195ac2c9121dcac5b22dd'],
-    ['agentweaver.knowledge', 'e5033bee0da22e599dddcc706d2002819187bd5acb63c396214db12ab878c65d'],
-    ['agentweaver.projects.config', 'b165633f1347e941cfff32701ce06217884c71db146aff79edadae7df58cdf9e'],
+    ['agentweaver-agenthost', 'aa5baafb79ca1210188053834ededebe708cc27f167e5b24bab6633199e6245e'],
+    ['agentweaver.identity.broker', '9c70e405494ae6c2eea7044dc48f97664a819658be387e17b026e436c3cba238'],
+    ['agentweaver.eventsandsessions', '0aff1a8944c037aab888dab3c5966420186ecaac6cbfd8ace09e3bf8c87986ae'],
+    ['agentweaver.gateway', '8f65db7f52ea0ed09bd84fe125da8c4ce523e93923fef48bc700a13fde731da7'],
+    ['agentweaver.mcp', 'a722641fe29714797873acaf714778bab7fce76798cf2766b00955efbcbd62f4'],
+    ['agentweaver-web', '11b6fcc71c35de9a1d0fbe1ce8922493f7b401627c8b7cbddc31839a471b49d8'],
+    ['agentweaver.orchestrator', 'f645ea05863bacecca730bda489cdc7ac884b08bb93001412b343adc9e420a34'],
+    ['agentweaver.environment', '7101827399e849753d4d8bc94dbbd15390fe545c5f5ce981ea5e7681d9acd0a2'],
+    ['agentweaver.knowledge', '1d6452bd908ee1f561d732d5ec38210a997b808cc753224b11ab75b6f113387f'],
+    ['agentweaver.projects.config', '028bbfab0279db719d43379642c91b5044fdffc8dac4cb6eecf52a37acab7c67'],
   ].map(([repository, digest]) => ({
     name: `ghcr.io/sabbour/${repository}`,
     newName: `ghcr.io/sabbour/${repository}`,
@@ -790,7 +791,7 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
     `${expectedPins[0].newName}@${expectedPins[0].digest}`);
   assert.equal(environmentEnv.get('Environment__Sandbox__AgentSandbox__ContainerImagePlatform'), 'linux/amd64');
   assert.equal(environmentEnv.get('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes'),
-    '321483300');
+    '321483218');
   const agentHostConfigMap = resources.find(resource =>
     resource.kind === 'ConfigMap' && resource.metadata.name === 'agenthost-runtime-v1');
   const agentHost = JSON.parse(agentHostConfigMap.data['appsettings.json']).AgentHost;
