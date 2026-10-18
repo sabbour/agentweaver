@@ -4,10 +4,7 @@
   "metadata": {
     "name": "environment-runtime-config",
     "namespace": "agentweaver",
-    "annotations": {
-      "agentweaver.io/runtime-config-status": "incomplete",
-      "agentweaver.io/runtime-config-incomplete-reason": "P1 initialization is blocked because the initializer requires an already-ready 127.0.0.1:15432 connection, but the documented bootstrap removes its temporary tunnel before returning and no documented continuation keeps or shares it. Guarded PostgreSQL bootstrap did not run because the preflight resource-inventory guard rejected an unexpected type/name before Azure what-if; the Agentweaver database and roles remain uninitialized."
-    }
+    "annotations": {}
   },
   "immutable": true,
   "data": {
