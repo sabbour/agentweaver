@@ -58,6 +58,17 @@ internal static class IdentityBrokerPostgresBootstrapCommand
         """;
     private static readonly HashSet<string> SystemDatabases = new(
         ["azure_maintenance", "azure_sys", "postgres"], StringComparer.Ordinal);
+    // Keep verification and grant application on the same explicit, migration-owned table set.
+    private static readonly string[] RuntimeTables =
+    [
+        "broker_users", "pending_authorizations", "secret_grant_heads", "secret_grant_revisions",
+        "secret_grant_operations", "OpenIddictApplications", "OpenIddictAuthorizations",
+        "OpenIddictScopes", "OpenIddictTokens", "__ef_migrations_history",
+        "runtime_grant_heads", "runtime_grant_revisions", "runtime_grant_operations",
+        "runtime_grant_operation_receipts", "copilot_connections", "copilot_connection_revisions",
+        "repo_app_authorization_transactions",
+        "repo_app_connections", "repo_app_installations", "repo_app_repository_selections"
+    ];
 
     public static bool IsRequested(string[] args) => args.Length == 1 && args[0] == Argument;
 
@@ -159,6 +170,18 @@ internal static class IdentityBrokerPostgresBootstrapCommand
         {
             await VerifyStateAsync(adminConnection, connectionString, options, cancellationToken)
                 .ConfigureAwait(false);
+            var verificationConnectionString = new NpgsqlConnectionStringBuilder(connectionString)
+            {
+                Database = options.DatabaseName,
+            }.ConnectionString;
+            await using var verificationSource = CreateDataSource(verificationConnectionString, options.PostgresHost);
+            await using var verificationConnection = await verificationSource.OpenConnectionAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var migrated = await VerifyRuntimeGrantsIfMigratedAsync(verificationConnection,
+                options.RuntimeRole, options.MigrationRole, cancellationToken).ConfigureAwait(false);
+            Console.WriteLine(migrated
+                ? "IDENTITY_POSTGRES_RUNTIME_GRANTS_VERIFIED historySelect=TRUE historyWrite=FALSE"
+                : "IDENTITY_POSTGRES_RUNTIME_GRANTS_PENDING migrationHistory=absent");
             Console.WriteLine(
                 $"IDENTITY_POSTGRES_BOOTSTRAP_VERIFIED database={options.DatabaseName} schema=identity_broker");
             return;
@@ -224,36 +247,11 @@ internal static class IdentityBrokerPostgresBootstrapCommand
             .Select(match => match.Groups[1].Value).Distinct(StringComparer.Ordinal).ToArray();
         var statements = Regex.Matches(definition, @"SELECT format\([\s\S]*?\) \\gexec")
             .Select(match => match.Value.Replace(" \\gexec", "", StringComparison.Ordinal)).ToArray();
-        string[] requiredTables =
-        [
-            "broker_users", "pending_authorizations", "secret_grant_heads", "secret_grant_revisions",
-            "secret_grant_operations", "OpenIddictApplications", "OpenIddictAuthorizations",
-            "OpenIddictScopes", "OpenIddictTokens", "__ef_migrations_history",
-            "runtime_grant_heads", "runtime_grant_revisions", "runtime_grant_operations",
-            "runtime_grant_operation_receipts", "copilot_connections", "copilot_connection_revisions",
-            "repo_app_authorization_transactions",
-            "repo_app_connections", "repo_app_installations", "repo_app_repository_selections"
-        ];
-        if (!tables.ToHashSet(StringComparer.Ordinal).SetEquals(requiredTables) ||
+        if (!tables.ToHashSet(StringComparer.Ordinal).SetEquals(RuntimeTables) ||
             statements.Length != 19)
             throw new InvalidOperationException("The canonical Identity runtime grant contract is malformed.");
 
-        await using (var ownership = new NpgsqlCommand("""
-            SELECT count(*) = @tableCount
-            FROM pg_catalog.pg_class relation
-            JOIN pg_catalog.pg_namespace schema ON schema.oid = relation.relnamespace
-            JOIN pg_catalog.pg_roles owner ON owner.oid = relation.relowner
-            WHERE schema.nspname = 'identity_broker' AND relation.relname = ANY(@tables)
-              AND relation.relkind = 'r' AND owner.rolname = @migrationRole
-            """, connection, transaction))
-        {
-            ownership.Parameters.AddWithValue("tables", tables);
-            ownership.Parameters.AddWithValue("tableCount", requiredTables.Length);
-            ownership.Parameters.AddWithValue("migrationRole", migrationRole);
-            if (await ownership.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
-                throw new InvalidOperationException("The exact post-migration tables are missing or have a different owner.");
-        }
-
+        await VerifyTableOwnershipAsync(connection, transaction, migrationRole, cancellationToken).ConfigureAwait(false);
         foreach (var sql in statements)
         {
             await using var format = new NpgsqlCommand(
@@ -263,7 +261,67 @@ internal static class IdentityBrokerPostgresBootstrapCommand
                 ?? throw new InvalidOperationException("A canonical runtime grant did not resolve.");
             await ExecuteAsync(connection, transaction, grant, cancellationToken).ConfigureAwait(false);
         }
-        foreach (var table in tables)
+        await VerifyRuntimeTablePrivilegesAsync(connection, transaction, runtimeRole, cancellationToken)
+            .ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>
+    /// Checks the same ownership and table privileges as grant application in a read-only
+    /// transaction. An unmigrated schema returns false; missing post-migration grants fail.
+    /// </summary>
+    internal static async Task<bool> VerifyRuntimeGrantsIfMigratedAsync(
+        NpgsqlConnection connection,
+        string runtimeRole,
+        string migrationRole,
+        CancellationToken cancellationToken = default)
+    {
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        await ExecuteAsync(connection, transaction, "SET TRANSACTION READ ONLY", cancellationToken).ConfigureAwait(false);
+        await using var history = new NpgsqlCommand(
+            "SELECT to_regclass('identity_broker.__ef_migrations_history') IS NOT NULL", connection, transaction);
+        if (await history.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+            return false;
+
+        await VerifyTableOwnershipAsync(connection, transaction, migrationRole, cancellationToken).ConfigureAwait(false);
+        await VerifyRuntimeTablePrivilegesAsync(connection, transaction, runtimeRole, cancellationToken)
+            .ConfigureAwait(false);
+        return true;
+    }
+
+    /// <summary>Rejects missing tables or ownership outside the dedicated migration role.</summary>
+    private static async Task VerifyTableOwnershipAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string migrationRole,
+        CancellationToken cancellationToken)
+    {
+        await using (var ownership = new NpgsqlCommand("""
+            SELECT count(*) = @tableCount
+            FROM pg_catalog.pg_class relation
+            JOIN pg_catalog.pg_namespace schema ON schema.oid = relation.relnamespace
+            JOIN pg_catalog.pg_roles owner ON owner.oid = relation.relowner
+            WHERE schema.nspname = 'identity_broker' AND relation.relname = ANY(@tables)
+              AND relation.relkind = 'r' AND owner.rolname = @migrationRole
+            """, connection, transaction))
+        {
+            ownership.Parameters.AddWithValue("tables", RuntimeTables);
+            ownership.Parameters.AddWithValue("tableCount", RuntimeTables.Length);
+            ownership.Parameters.AddWithValue("migrationRole", migrationRole);
+            if (await ownership.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+                throw new InvalidOperationException("The exact post-migration tables are missing or have a different owner.");
+        }
+    }
+
+    /// <summary>Requires exact runtime DML, read-only migration history, and no schema creation.</summary>
+    private static async Task VerifyRuntimeTablePrivilegesAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string runtimeRole,
+        CancellationToken cancellationToken)
+    {
+        foreach (var table in RuntimeTables)
         {
             var history = table == "__ef_migrations_history";
             var runtimeGrant = table.StartsWith("runtime_grant_", StringComparison.Ordinal);
@@ -286,10 +344,9 @@ internal static class IdentityBrokerPostgresBootstrapCommand
             readback.Parameters.AddWithValue("delete",
                 !history && !runtimeGrant && !copilotConnection && !repoAppTable);
             if (await readback.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
-                throw new InvalidOperationException("The exact Identity runtime table privileges did not read back.");
+                throw new InvalidOperationException(
+                    $"The Identity runtime privileges for identity_broker.{table} differ from the approved grants. Run the approved post-migration runtime grant step.");
         }
-        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
-        return true;
     }
 
     private static NpgsqlDataSource CreateDataSource(string connectionString, string postgresHost)

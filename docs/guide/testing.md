@@ -62,6 +62,17 @@ run from an older revision is not evidence that the current revision passed.
 
 ## Run focused database checks
 
+Run the Broker migration/grant and read-only bootstrap regressions against
+disposable PostgreSQL:
+
+```powershell
+dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --configuration Release --filter "FullyQualifiedName~IdentityBrokerMigrationCommandTests|FullyQualifiedName~IdentityBrokerPostgresBootstrapCommandTests"
+```
+
+These cases reproduce missing history permission, exercise the migration
+owner's canonical grant step, and verify that the runtime cannot write migration
+history. They do not connect to Azure or authorize a live grant.
+
 The Foundation Probe PostgreSQL initializer has separate source and database
 checks. Run the source preflight without starting PostgreSQL:
 

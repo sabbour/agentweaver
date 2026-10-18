@@ -198,6 +198,7 @@ The host supplies native .NET configuration through its deployment secret/config
 | `IdentityBroker:SecretRedemption:WorkloadIdentityTokenFilePath` | Absolute projected workload-identity token path |
 | `IdentityBroker:Migration:WorkloadIdentityTenantId` / `WorkloadIdentityClientId` | Separate explicit identity used only by the migration Job |
 | `IdentityBroker:Migration:WorkloadIdentityTokenFilePath` | Absolute projected token path for the migration ServiceAccount |
+| `IdentityBroker:Migration:RuntimeRole` | Required runtime PostgreSQL role that receives the canonical explicit table grants after migration |
 
 The upstream app registration must contain the broker's exact public
 `/signin-oidc` callback before deployment. This source change does not modify
@@ -303,12 +304,16 @@ migrations, authentication failure, or incompatible client registration
 fails startup. Missing settings name the exact required configuration key.
 The separate command
 `dotnet Agentweaver.Identity.Broker.dll --migrate` requires only
-`ConnectionStrings:IdentityBrokerMigration` and the three
-`IdentityBroker:Migration:*` workload-identity settings. It applies owned
-migrations under the schema-specific PostgreSQL advisory lock and exits; it
+`ConnectionStrings:IdentityBrokerMigration`, `IdentityBroker:Migration:RuntimeRole`,
+and the three `IdentityBroker:Migration:*` workload-identity settings. It applies owned
+migrations under the schema-specific PostgreSQL advisory lock, applies the canonical
+explicit runtime table grants as the migration owner, and exits; it
 does not start the web host or seed OAuth clients. Operators must first run the
-approved `postgres-identity-bootstrap.sql`, then run the migration Job, then
-apply `postgres-identity-runtime-grants.sql`. No bootstrap or migration write
+approved `postgres-identity-bootstrap.sql`, then run the migration Job.
+The Job applies `postgres-identity-runtime-grants.sql`, including history
+`SELECT` without writes. Read-only bootstrap verification checks the same
+post-migration table contract and fails if the history grant is missing.
+No bootstrap or migration write
 was run against a live database for this source change.
 
 Readiness alone does not prove OAuth or deployed acceptance.

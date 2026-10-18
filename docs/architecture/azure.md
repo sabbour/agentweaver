@@ -10,6 +10,12 @@ Azure Monitor uses a private query path and an explicit ingestion path.
 These definitions do not show that anyone deployed the resources, that private
 DNS resolves, or that a service has live access.
 
+For the Broker, initial schema bootstrap is separate from runtime table access.
+The migration Job applies the canonical table grants as the migration owner,
+and read-only bootstrap verification checks those grants after migration.
+See [Broker database permissions](../reference/runtime-configuration#identity-broker-migration-history-and-grants).
+These steps do not change the resource topology shown below.
+
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">
     <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Structural Azure topology and evidence map. AKS has a public API endpoint with managed Entra, Azure RBAC, and local accounts disabled. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault and Blob private endpoints and the in-VNet AMPLS private endpoint attach to the private-endpoint subnet, while AMPLS remains global. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights. No live deployment or P0 completion is claimed." />

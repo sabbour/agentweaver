@@ -330,6 +330,8 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.ok(migrationJob);
   assert.match(migrationJob, /serviceAccountName: identity-broker-migration/);
   assert.match(migrationJob, /--migrate/);
+  // The migration Job must name the runtime grant recipient without borrowing its credentials.
+  assert.match(migrationJob, /name: IdentityBroker__Migration__RuntimeRole\s+value: agentweaver-id-identity-broker/);
   assert.match(migrationJob, /identity-broker-migration-config/);
   const identityEgress = rendered.split('---').find(document =>
     document.includes('name: identity-broker-egress'));
