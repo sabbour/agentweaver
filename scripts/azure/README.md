@@ -31,6 +31,9 @@ It creates only the Projects & Config, Environment, Knowledge, Events & Sessions
 and Orchestrator runtime identities and their exact ServiceAccount federations.
 Every federation names its service in `agentweaver` and accepts only
 `api://AzureADTokenExchange`.
+The target inventory guard recognizes only these five identity names and each
+`<service>-workload-identity` credential under its matching identity; other
+identity names or credential relationships remain blocked.
 Supply the existing resource group tags and the exact reviewed source SHA.
 
 This template defines no Azure role assignment, database grant, migration,
@@ -481,6 +484,9 @@ resources must match the resource group's ownership tags. Private DNS roots can
 be untagged or have partial tags; any ownership tags that are present must not
 conflict with the dedicated resource group. Missing DNS tags do not trigger
 tag repair or a historical deployment-operation audit.
+The inventory also admits only the five P1 runtime identities and each exact
+`<service>-workload-identity` credential beneath its matching identity; other
+identity names, resource types, IDs, or credential relationships still block.
 The reviewed JSON parameters bind the existing PostgreSQL Entra administrator
 object ID, name, and supported type (`User`, `Group`, or `ServicePrincipal`);
 they do not require a new group. The P0 example keeps `location` for VNet/AKS/

@@ -25,6 +25,16 @@ export const postDeploymentInventory = [
     'Microsoft.ManagedIdentity/userAssignedIdentities', 'agentweaver-id-identity-broker', true),
   item('Microsoft.ManagedIdentity/userAssignedIdentities/agentweaver-id-identity-broker-migration',
     'Microsoft.ManagedIdentity/userAssignedIdentities', 'agentweaver-id-identity-broker-migration', true),
+  ...['projects-config', 'environment', 'knowledge', 'events-and-sessions', 'orchestrator'].flatMap(service => {
+    const identity = `agentweaver-id-${service}`;
+    return [
+      item(`Microsoft.ManagedIdentity/userAssignedIdentities/${identity}`,
+        'Microsoft.ManagedIdentity/userAssignedIdentities', identity, true),
+      item(`Microsoft.ManagedIdentity/userAssignedIdentities/${identity}/federatedIdentityCredentials/${service}-workload-identity`,
+        'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials',
+        `${identity}/${service}-workload-identity`),
+    ];
+  }),
   ...['aks', 'postgres', 'private-endpoints'].map(name => item(
     `Microsoft.Network/virtualNetworks/agentweaver-vnet/subnets/${name}`,
     'Microsoft.Network/virtualNetworks/subnets', `agentweaver-vnet/${name}`)),
@@ -68,8 +78,11 @@ export const postDeploymentInventory = [
     'Microsoft.Storage/storageAccounts/blobServices', 'agentweaverblob/default'),
   item('Microsoft.Storage/storageAccounts/agentweaverblob/blobServices/default/containers/platform-artifacts',
     'Microsoft.Storage/storageAccounts/blobServices/containers', 'agentweaverblob/default/platform-artifacts'),
-  ...['network', 'aks', 'keyvault', 'storage', 'monitor', 'postgres', 'identity', source.sha.slice(0, 12)].map(name =>
+  ...['network', 'aks', 'keyvault', 'storage', 'monitor', 'postgres', 'identity',
+    'workload-identity-federation', 'p1-runtime-federation', source.sha.slice(0, 12)].map(name =>
     item(`Microsoft.Resources/deployments/agentweaver-${name}`, 'Microsoft.Resources/deployments', `agentweaver-${name}`)),
+  item(`Microsoft.Resources/deployments/agentweaver-p1-identities-${source.sha.slice(0, 12)}`,
+    'Microsoft.Resources/deployments', `agentweaver-p1-identities-${source.sha.slice(0, 12)}`),
   ...[
     ['Microsoft.KeyVault/vaults/agentweaver-kv', 'cf9a2ab8-b3f4-5c0a-832d-5a05eeef3a33'],
     ['Microsoft.KeyVault/vaults/agentweaver-kv', 'ac4f4dde-7b16-5392-b3ce-f8a1e7a03fd8'],

@@ -138,6 +138,87 @@ test('populated post-deployment inventory admits exact roots, untagged children,
   for (const args of calls) assert.equal(args[args.indexOf('--subscription') + 1], fixture.subscriptionId);
 });
 
+test('P1 runtime identities admit only the five exact identities and their matching federations', () => {
+  const services = ['projects-config', 'environment', 'knowledge', 'events-and-sessions', 'orchestrator'];
+  const identityType = 'Microsoft.ManagedIdentity/userAssignedIdentities';
+  const credentialType = `${identityType}/federatedIdentityCredentials`;
+  const p1Resources = postDeploymentInventory.filter(resource =>
+    services.some(service => resource.name === `agentweaver-id-${service}` ||
+      resource.name === `agentweaver-id-${service}/${service}-workload-identity`));
+
+  assert.deepEqual(
+    p1Resources.filter(resource => resource.type === identityType).map(resource => resource.name).sort(),
+    services.map(service => `agentweaver-id-${service}`).sort(),
+  );
+  assert.deepEqual(
+    p1Resources.filter(resource => resource.type === credentialType).map(resource => resource.name).sort(),
+    services.map(service => `agentweaver-id-${service}/${service}-workload-identity`).sort(),
+  );
+  assert.doesNotThrow(() => guardAzureTarget(fixture, fakeAzure({ resources: p1Resources })));
+
+  const projectIdentity = p1Resources.find(resource => resource.name === 'agentweaver-id-projects-config');
+  const projectCredential = p1Resources.find(resource =>
+    resource.name === 'agentweaver-id-projects-config/projects-config-workload-identity');
+  const unexpected = [
+    {
+      ...projectIdentity,
+      id: projectIdentity.id.replace('agentweaver-id-projects-config', 'agentweaver-id-unapproved'),
+      name: 'agentweaver-id-unapproved',
+    },
+    {
+      ...projectCredential,
+      id: projectCredential.id.replace('projects-config-workload-identity', 'unapproved-workload-identity'),
+      name: 'agentweaver-id-projects-config/unapproved-workload-identity',
+    },
+    {
+      ...projectCredential,
+      id: projectCredential.id.replace('/agentweaver-id-projects-config/federatedIdentityCredentials/',
+        '/agentweaver-id-environment/federatedIdentityCredentials/'),
+      name: 'agentweaver-id-environment/projects-config-workload-identity',
+    },
+    {
+      ...projectIdentity,
+      type: credentialType,
+    },
+    {
+      ...projectCredential,
+      type: identityType,
+    },
+    {
+      ...projectCredential,
+      id: projectCredential.id.replace('/agentweaver-id-projects-config/federatedIdentityCredentials/',
+        '/agentweaver-id-environment/federatedIdentityCredentials/'),
+    },
+  ];
+  for (const resource of unexpected) {
+    assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources: [resource] })), /unexpected/);
+  }
+
+  const p1Deployments = postDeploymentInventory.filter(resource =>
+    resource.type === 'Microsoft.Resources/deployments' &&
+    (resource.name === 'agentweaver-p1-runtime-federation' ||
+      resource.name === `agentweaver-p1-identities-${source.sha.slice(0, 12)}`));
+  assert.deepEqual(p1Deployments.map(resource => resource.name).sort(), [
+    'agentweaver-p1-runtime-federation',
+    `agentweaver-p1-identities-${source.sha.slice(0, 12)}`,
+  ].sort());
+  assert.doesNotThrow(() => guardAzureTarget(fixture, fakeAzure({ resources: p1Deployments })));
+  for (const resource of [
+    {
+      ...p1Deployments.find(item => item.name.startsWith('agentweaver-p1-identities-')),
+      id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/agentweaver-p1-identities-extra`,
+      name: 'agentweaver-p1-identities-extra',
+    },
+    {
+      ...p1Deployments.find(item => item.name === 'agentweaver-p1-runtime-federation'),
+      id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/agentweaver-p1-runtime-federation-extra`,
+      name: 'agentweaver-p1-runtime-federation-extra',
+    },
+  ]) {
+    assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources: [resource] })), /unexpected/);
+  }
+});
+
 test('generated NRMS NSG requires exact VNet associations and reviewed rules', () => {
   const nsgId = postDeploymentInventory.find(resource =>
     resource.type === 'Microsoft.Network/networkSecurityGroups').id;

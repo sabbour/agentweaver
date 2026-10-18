@@ -536,6 +536,7 @@ export function guardAzureTarget(config, execAz) {
   const resources = jsonResult(boundAz(['resource', 'list', '--resource-group', resourceGroup, '-o', 'json'],
     { check: false, projectJson: value => projectInventory(value, expectedTags) }), 'Resource inventory');
   if (!Array.isArray(resources)) throw new Error('Resource inventory is not an array.');
+  const p1RuntimeServices = ['projects-config', 'environment', 'knowledge', 'events-and-sessions', 'orchestrator'];
   const expectedResources = new Map([
     ['microsoft.network/virtualnetworks', [`${resourceGroup}-vnet`]],
     ['microsoft.containerservice/managedclusters', [`${resourceGroup}-aks`]],
@@ -549,6 +550,7 @@ export function guardAzureTarget(config, execAz) {
       `${resourceGroup}-id-foundation-probe`,
       `${resourceGroup}-id-identity-broker`,
       `${resourceGroup}-id-identity-broker-migration`,
+      ...p1RuntimeServices.map(service => `${resourceGroup}-id-${service}`),
     ]],
     ['microsoft.network/privateendpoints', [`${resourceGroup}-kv-pe`, `${resourceGroup}-blob-pe`, `${resourceGroup}-ampls-pe`]],
     ['microsoft.network/privatednszones', PRIVATE_DNS_ZONES.map(zone => zone.name)],
@@ -608,13 +610,17 @@ export function guardAzureTarget(config, execAz) {
     `${resourceGroup}-id-identity-broker/identity-broker-workload-identity`);
   child('microsoft.managedidentity/userassignedidentities/federatedidentitycredentials',
     `${resourceGroup}-id-identity-broker-migration/identity-broker-migration-workload-identity`);
+  for (const service of p1RuntimeServices) {
+    child('microsoft.managedidentity/userassignedidentities/federatedidentitycredentials',
+      `${resourceGroup}-id-${service}/${service}-workload-identity`);
+  }
   child('microsoft.storage/storageaccounts/blobservices', `${storageName}/default`);
   child('microsoft.storage/storageaccounts/blobservices/containers', `${storageName}/default/platform-artifacts`);
   if (/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(config.postgresEntraAdminObjectId ?? '')) {
     child('microsoft.dbforpostgresql/flexibleservers/administrators', `${resourceGroup}-pg/${config.postgresEntraAdminObjectId}`);
   }
   for (const name of ['network', 'aks', 'keyvault', 'storage', 'monitor', 'postgres', 'identity',
-    'workload-identity-federation']) {
+    'workload-identity-federation', 'p1-runtime-federation']) {
     child('microsoft.resources/deployments', `${resourceGroup}-${name}`);
   }
   const identityId = resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', `${resourceGroup}-id-foundation-probe`);
@@ -748,7 +754,8 @@ export function guardAzureTarget(config, execAz) {
     // Top-level deployment records are control-plane history, not deployed resources.
     if (!expected && type === 'microsoft.resources/deployments' &&
         typeof resource.name === 'string' && resource.name.startsWith(`${resourceGroup}-`) &&
-        /^(?:[0-9a-f]{12}|aks-[0-9a-f]{12})$/.test(resource.name.slice(resourceGroup.length + 1)) &&
+        /^(?:[0-9a-f]{12}|aks-[0-9a-f]{12}|p1-identities-[0-9a-f]{12})$/.test(
+          resource.name.slice(resourceGroup.length + 1)) &&
         sameId(resource.id, resourceId('Microsoft.Resources/deployments', resource.name))) {
       continue;
     }
