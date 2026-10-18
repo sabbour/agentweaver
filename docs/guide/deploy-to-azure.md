@@ -335,11 +335,15 @@ kubectl wait --for=condition=complete job/identity-broker-migration `
 3. Run the source-bound release bootstrap with `--execute`. It verifies the
    publication receipt, image digests, target, complete runtime ConfigMaps,
    managed Broker certificate, operator-owned resources, and rendered bundle
-   before it applies the root Kustomize bundle. The preflight accepts the
-   certificate-only state only when both managed certificates are valid and
-   no Gateway, route, or backend policy exists. A partial or mismatched
-   routing configuration still fails closed. Do not apply the root bundle
-   directly with `kubectl`; the release command is the guarded workload apply.
+   before it applies the root Kustomize bundle. The preflight accepts either
+   both valid managed certificates with no Gateway, route, or BackendTLSPolicy,
+   or the exact `web-application` route installed by the root bundle with no
+   Gateway or BackendTLSPolicy. In that retry state, the route must target
+   Gateway `identity-broker` in namespace `agentweaver-gateway`, use the
+   managed Portal hostname, and route `/` to the Web Service on port 8080.
+   The preflight inventories all routes and rejects extra or mismatched
+   routing resources. Do not apply the root bundle directly with `kubectl`;
+   the release command is the guarded workload apply.
 
    ```powershell
    npm run release:deploy-bootstrap -- v1.0.1 `

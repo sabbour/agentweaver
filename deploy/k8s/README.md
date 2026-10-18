@@ -119,8 +119,12 @@ separate overlays.
    It applies the two managed `DefaultDomainCertificate` resources and waits
    for AKS to create `identity-broker-tls`. It does not apply Gateway, routes,
    backend policies, or ingress policies, and it does not read the MCP Service.
-   The release preflight accepts this state only when both certificates are
-   valid, their domains match, and no partial routing resources exist.
+   The release preflight accepts either this certificate-only state or, after
+   a root-bundle apply has started, exactly the bundle-owned
+   `web-application` route with no Gateway or BackendTLSPolicy. That route must
+   target Gateway `identity-broker` in `agentweaver-gateway` and preserve the
+   rendered host, path, and Web backend. The preflight inventories all routes;
+   extra or mismatched routing resources fail closed.
 
 4. Apply the Identity Broker migration Job after its migration identity,
    connection ConfigMap, and approved immutable Broker image are ready, and
@@ -136,8 +140,10 @@ separate overlays.
 
 5. Run `release:deploy-bootstrap --execute` with the exact published receipt,
    target, and provider-catalog inputs. It performs the guarded root-bundle
-   apply and verifies live workloads. Do not replace this command with a
-   direct `kubectl apply -k deploy\k8s`.
+   apply and verifies live workloads. If an earlier attempt applied the bundle
+   but stopped before routing setup, rerun the same guarded command; it accepts
+   only the exact Web-route-only intermediate state described above. Do not
+   replace this command with a direct `kubectl apply -k deploy\k8s`.
 
 6. After the release bootstrap creates the product Services, run the full
    default-off `--bootstrap-identity-routing` procedure without the

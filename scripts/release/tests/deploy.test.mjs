@@ -36,7 +36,9 @@ import {
 } from '../runtime-list.mjs';
 import { PARTIAL_PUBLICATION } from '../partial-publication-contract.mjs';
 import { run as runProcess } from '../../azure/lib/exec.mjs';
-import { projectIdentityRoutingReadback } from '../../azure/lib/identity-broker-routing.mjs';
+import {
+  projectIdentityRoutingInventory, projectIdentityRoutingReadback,
+} from '../../azure/lib/identity-broker-routing.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const p0SourceSha = PARTIAL_PUBLICATION.sourceSha;
@@ -1439,7 +1441,7 @@ test('preflight requires source-owned Cilium policy names for all product worklo
   assert.match(environmentPolicy, /name: environment-agenthost-egress[\s\S]*?agentweaver\.io\/workload: projects-config[\s\S]*?port: "8443"/);
 });
 
-test('deployment preflight reads exact managed Gateway and application routing resources', () => {
+test('deployment preflight inventories every Gateway, HTTPRoute, and BackendTLSPolicy', () => {
   const calls = [];
   assert.throws(() => verifyExistingP0BrokerRouting(target, {
     root,
@@ -1449,18 +1451,13 @@ test('deployment preflight reads exact managed Gateway and application routing r
     },
   }));
   assert.deepEqual(calls.map(args => [
-    args[1], args[args.indexOf('--field-selector') + 1], args[args.indexOf('--namespace') + 1],
+    args[1], args[args.indexOf('--namespace') + 1], args.includes('--field-selector'), args.at(-1),
   ]), [
-    ['defaultdomaincertificates', 'metadata.name=identity-broker', target.namespace],
-    ['defaultdomaincertificates', 'metadata.name=identity-broker', 'agentweaver-gateway'],
-    ['gateways', 'metadata.name=identity-broker', 'agentweaver-gateway'],
-    ['httproutes', 'metadata.name=identity-broker', target.namespace],
-    ['backendtlspolicies', 'metadata.name=identity-broker', target.namespace],
-    ['httproutes', 'metadata.name=web-application', target.namespace],
-    ['httproutes', 'metadata.name=gateway-api', target.namespace],
-    ['backendtlspolicies', 'metadata.name=gateway-api', target.namespace],
-    ['httproutes', 'metadata.name=mcp', target.namespace],
-    ['backendtlspolicies', 'metadata.name=mcp', target.namespace],
+    ['gateways', 'agentweaver-gateway', false, 'json'],
+    ['httproutes', target.namespace, false, 'json'],
+    ['backendtlspolicies', target.namespace, false, 'json'],
+    ['defaultdomaincertificates', target.namespace, true, 'json'],
+    ['defaultdomaincertificates', 'agentweaver-gateway', true, 'json'],
   ]);
   assert.ok(calls.every(args => args[0] === 'get' && args.includes('--output') &&
     args.at(-1) === 'json'));
@@ -1550,11 +1547,13 @@ test('routing readbacks project actual portal hostnames before output redaction'
   const calls = [];
   const run = (file, args, options) => {
     const resource = args[1];
-    const name = args[args.indexOf('--field-selector') + 1].split('=')[1];
-    const object = resources[resource]?.[name];
-    assert.ok(object, `missing fixture for ${resource}/${name}`);
+    const namespace = args[args.indexOf('--namespace') + 1];
+    const fieldSelector = args.indexOf('--field-selector');
+    const items = fieldSelector >= 0
+      ? [resources[resource]?.[args[fieldSelector + 1].split('=')[1]]].filter(Boolean)
+      : Object.values(resources[resource] ?? {}).filter(object => object.metadata.namespace === namespace);
     const result = runProcess(process.execPath, ['-e',
-      `process.stdout.write(${JSON.stringify(JSON.stringify({ items: [object] }))})`], options);
+      `process.stdout.write(${JSON.stringify(JSON.stringify({ items }))})`], options);
     const output = result.stdout.trim();
     calls.push({ file, args, options, output });
     return output;
@@ -1566,15 +1565,16 @@ test('routing readbacks project actual portal hostnames before output redaction'
   assert.equal(observed.portalHostname, portalHostname);
   assert.equal(observed.hostnameAligned, true);
   assert.equal(observed.gatewayProgrammed, true);
-  assert.equal(calls.length, 10);
+  assert.equal(calls.length, 5);
   assert.ok(calls.every(({ file, options }) => file === 'kubectl' &&
-    options.projectJson === projectIdentityRoutingReadback && options.preserveProjectedJson === true));
-  // Identify route readbacks by resource so certificate reads cannot shift these assertions.
+    [projectIdentityRoutingInventory, projectIdentityRoutingReadback].includes(options.projectJson) &&
+    options.preserveProjectedJson === true));
+  const routeInventory = calls.find(({ args }) => args[1] === 'httproutes');
+  assert.ok(routeInventory, 'missing namespace-wide HTTPRoute inventory');
   const routeHostname = name => {
-    const call = calls.find(({ args }) => args[1] === 'httproutes' &&
-      args[args.indexOf('--field-selector') + 1] === `metadata.name=${name}`);
-    assert.ok(call, `missing HTTPRoute readback for ${name}`);
-    return JSON.parse(call.output).spec.hostnames[0];
+    const route = JSON.parse(routeInventory.output).items.find(item => item.metadata.name === name);
+    assert.ok(route, `missing HTTPRoute readback for ${name}`);
+    return route.spec.hostnames[0];
   };
   assert.equal(routeHostname('web-application'), portalHostname);
   assert.equal(routeHostname('gateway-api'), portalHostname);
@@ -1597,10 +1597,14 @@ test('release preflight accepts only the certificate-only state before a fresh p
   const run = (file, args, options) => {
     const resource = args[1];
     const namespace = args[args.indexOf('--namespace') + 1];
-    const name = args[args.indexOf('--field-selector') + 1].split('=')[1];
-    const object = resources[`${resource}|${namespace}:${name}`] ?? null;
+    const fieldSelector = args.indexOf('--field-selector');
+    const items = fieldSelector >= 0
+      ? [resources[`${resource}|${namespace}:${args[fieldSelector + 1].split('=')[1]}`]].filter(Boolean)
+      : Object.entries(resources)
+        .filter(([key]) => key.startsWith(`${resource}|${namespace}:`))
+        .map(([, object]) => object);
     calls.push(args);
-    return JSON.stringify(options.projectJson({ items: object ? [object] : [] }));
+    return JSON.stringify(options.projectJson({ items }));
   };
 
   const result = verifyExistingP0BrokerRouting(target, { root, run });
@@ -1609,7 +1613,7 @@ test('release preflight accepts only the certificate-only state before a fresh p
   assert.equal(result.routingConfigured, false);
   assert.equal(result.runtimeVerified, false);
   assert.equal(result.hostname, `agentweaver.${domain.slice(2)}`);
-  assert.equal(calls.length, 10);
+  assert.equal(calls.length, 5);
   assert.ok(calls.every(args => args[0] === 'get'));
 
   resources['gateways|agentweaver-gateway:identity-broker'] = {
@@ -1617,6 +1621,88 @@ test('release preflight accepts only the certificate-only state before a fresh p
     metadata: { name: 'identity-broker', namespace: 'agentweaver-gateway', uid: 'gateway', generation: 1 },
   };
   assert.throws(() => verifyExistingP0BrokerRouting(target, { root, run }));
+});
+
+// The bundle Web route may precede Gateway creation, but its parent and backend stay exact.
+test('release preflight resumes with only the exact root-bundle Web route', () => {
+  const domain = '*.0123456789abcdef.eastus2euap.aksapp.io';
+  const portalHostname = `portal.${domain.slice(2)}`;
+  const certificate = namespace => ({
+    apiVersion: 'approuting.kubernetes.azure.com/v1alpha1',
+    kind: 'DefaultDomainCertificate',
+    metadata: { name: 'identity-broker', namespace, uid: `${namespace}-certificate`, generation: 1 },
+    spec: { target: { secret: 'identity-broker-tls' } },
+    status: { domain, conditions: [{ type: 'Available', status: 'True', observedGeneration: 1 }] },
+  });
+  const webRoute = {
+    apiVersion: 'gateway.networking.k8s.io/v1',
+    kind: 'HTTPRoute',
+    metadata: {
+      name: 'web-application', namespace: target.namespace, uid: 'web-route',
+      generation: 1, resourceVersion: '7', labels: { 'agentweaver.io/service': 'web' },
+    },
+    spec: {
+      parentRefs: [{ name: 'identity-broker', namespace: 'agentweaver-gateway', sectionName: 'portal' }],
+      hostnames: [portalHostname],
+      rules: [{ matches: [{ path: { type: 'PathPrefix', value: '/' } }],
+        backendRefs: [{ name: 'web', port: 8080 }] }],
+    },
+  };
+  const resources = {
+    'defaultdomaincertificates|agentweaver:identity-broker': certificate(target.namespace),
+    'defaultdomaincertificates|agentweaver-gateway:identity-broker': certificate('agentweaver-gateway'),
+    'httproutes|agentweaver:web-application': webRoute,
+  };
+  // Namespace-wide reads return every fixture in that namespace; certificate reads stay exact-name.
+  const run = (file, args, options) => {
+    const resource = args[1];
+    const namespace = args[args.indexOf('--namespace') + 1];
+    const fieldSelector = args.indexOf('--field-selector');
+    const items = fieldSelector >= 0
+      ? [resources[`${resource}|${namespace}:${args[fieldSelector + 1].split('=')[1]}`]].filter(Boolean)
+      : Object.entries(resources)
+        .filter(([key]) => key.startsWith(`${resource}|${namespace}:`))
+        .map(([, object]) => object);
+    return JSON.stringify(options.projectJson({ items }));
+  };
+
+  const result = verifyExistingP0BrokerRouting(target, { root, run });
+  assert.equal(result.certificatesConfigured, true);
+  assert.equal(result.routingConfigured, false);
+  assert.equal(result.bundleWebRouteInstalled, true);
+  assert.equal(result.hostname, `agentweaver.${domain.slice(2)}`);
+
+  for (const mutate of [
+    route => { route.spec.parentRefs[0].namespace = target.namespace; },
+    route => { delete route.spec.parentRefs[0].namespace; },
+    route => { route.spec.parentRefs[0].name = 'unexpected-gateway'; },
+  ]) {
+    const invalidRoute = structuredClone(webRoute);
+    mutate(invalidRoute);
+    resources['httproutes|agentweaver:web-application'] = invalidRoute;
+    assert.throws(() => verifyExistingP0BrokerRouting(target, { root, run }),
+      /does not match its exact source-owned host, path, listener, and backend/);
+  }
+  resources['httproutes|agentweaver:web-application'] = webRoute;
+  resources['httproutes|agentweaver:unexpected'] = {
+    ...structuredClone(webRoute), metadata: { ...webRoute.metadata, name: 'unexpected' },
+  };
+  assert.throws(() => verifyExistingP0BrokerRouting(target, { root, run }),
+    /exact approved Gateway, HTTPRoute, and BackendTLSPolicy sets/);
+  delete resources['httproutes|agentweaver:unexpected'];
+  resources['gateways|agentweaver-gateway:unexpected'] = {
+    apiVersion: 'gateway.networking.k8s.io/v1', kind: 'Gateway',
+    metadata: { name: 'unexpected', namespace: 'agentweaver-gateway', uid: 'unexpected-gateway', generation: 1 },
+  };
+  assert.throws(() => verifyExistingP0BrokerRouting(target, { root, run }),
+    /exact approved Gateway, HTTPRoute, and BackendTLSPolicy sets/);
+  delete resources['gateways|agentweaver-gateway:unexpected'];
+  resources['backendtlspolicies|agentweaver:unexpected'] = {
+    apiVersion: 'gateway.networking.k8s.io/v1', kind: 'BackendTLSPolicy',
+    metadata: { name: 'unexpected', namespace: target.namespace, uid: 'unexpected-policy', generation: 1 },
+  };
+  assert.throws(() => verifyExistingP0BrokerRouting(target, { root, run }),
+    /exact approved Gateway, HTTPRoute, and BackendTLSPolicy sets/);
 });
 
 test('Azure target readbacks preserve exact hostnames without exposing kubeconfig credentials', () => {
