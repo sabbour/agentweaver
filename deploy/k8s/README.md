@@ -192,9 +192,12 @@ or release acceptance.
 
 ## Configure a service
 
-Runtime ConfigMaps contain non-secret values. Kubernetes does not restart a
-process when referenced ConfigMap data changes, so restart only the affected
-Deployment after a reviewed configuration change.
+Runtime ConfigMaps contain non-secret values. Most are immutable, so
+Kubernetes rejects changes to their data. For a first installation, apply
+reviewed values before deploying workloads. For an existing installation,
+follow the
+[immutable ConfigMap update procedure](../../docs/reference/runtime-configuration.md#update-an-immutable-configmap).
+Restart only the affected Deployment after its ConfigMap has been recreated.
 
 Use the
 [runtime configuration reference](../../docs/reference/runtime-configuration.md)

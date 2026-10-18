@@ -52,9 +52,15 @@ not prove that this runtime role exists or has the required grants.
    Knowledge managed identity's PostgreSQL role as `Username`. Do not put a
    password in the connection string. TLS uses `SSL Mode=VerifyFull` and the
    PostgreSQL server name as the certificate host.
-5. **Render and apply the configuration.** Follow
-   [deploy Agentweaver to Azure](./deploy-to-azure.md). Restart the Knowledge
-   workload after changing an environment-backed ConfigMap.
+5. **Render and apply the configuration.** For a first installation, set the
+   values before applying the bundle. The Knowledge ConfigMap is immutable, so
+   Kubernetes rejects an in-place data change; reapplying the bundle or
+   restarting the workload alone does not load updated values. For an existing
+   installation, follow the
+   [immutable ConfigMap update procedure](../reference/runtime-configuration.md#update-an-immutable-configmap)
+   before restarting Knowledge. See
+   [deploy Agentweaver to Azure](./deploy-to-azure.md) for the installation
+   sequence.
 
 ## Keep the store identity stable
 

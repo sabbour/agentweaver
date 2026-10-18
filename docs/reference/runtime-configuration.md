@@ -29,6 +29,49 @@ For end-to-end deployment, see
 [Deploy Agentweaver to Azure](../guide/deploy-to-azure.md). For provider
 selection, see [Configure providers](../guide/configure-providers.md).
 
+## Update an immutable ConfigMap
+
+Most checked-in runtime ConfigMaps, including `knowledge-runtime-config`, set
+`immutable` to `true`. Kubernetes rejects changes to an immutable ConfigMap's
+data. Editing its JSON source and applying the bundle does not update the live
+ConfigMap. A Deployment also does not restart automatically when a referenced
+ConfigMap changes.
+
+For a first installation, resolve and review all settings before applying the
+bundle. For an existing installation, replace an immutable ConfigMap during an
+approved maintenance window:
+
+1. Update the reviewed JSON source and render the complete bundle. Confirm the
+   rendered ConfigMap has the expected name, namespace, data, and
+   `immutable: true`.
+2. Delete only the exact ConfigMap being replaced. For example:
+
+   ```powershell
+   kubectl delete configmap knowledge-runtime-config -n agentweaver
+   ```
+
+3. Recreate it from the rendered bundle:
+
+   ```powershell
+   kubectl apply -k deploy\k8s
+   ```
+
+4. Restart the affected Deployment and wait for its rollout:
+
+   ```powershell
+   kubectl rollout restart deployment/knowledge -n agentweaver
+   kubectl rollout status deployment/knowledge -n agentweaver
+   ```
+
+Deleting the ConfigMap creates a short interval when a replacement pod cannot
+start. Keep existing pods running, apply the bundle promptly, and verify the
+new ConfigMap before restarting the Deployment. Do not use a broad delete or
+remove the `immutable` setting to bypass the replacement process.
+
+`events-and-sessions-runtime-config` is mutable in the checked-in profile.
+Apply its reviewed data with the bundle, then restart the Events & Sessions
+Deployment so the process reads the new environment.
+
 ## PostgreSQL connection and workload identity
 
 These settings appear in the service runtime maps. Use the prefix shown in the

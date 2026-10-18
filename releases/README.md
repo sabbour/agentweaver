@@ -706,8 +706,10 @@ The source tree also contains non-secret runtime ConfigMap snapshots for the
 provider catalog and required service inputs. The service-map values are
 source-backed and have no incomplete markers; the live bootstrap still
 validates applied configuration and cluster prerequisites. See the
-[Kubernetes runtime ConfigMap inventory](../deploy/k8s/README.md#p0-runtime-configmap-snapshots)
-for value provenance and apply order. Use the catalog PR merge commit for
+[runtime configuration reference](../docs/reference/runtime-configuration.md)
+for value provenance and the
+[Kubernetes operator guide](../deploy/k8s/README.md#render-and-apply-the-bundle)
+for apply order. Use the catalog PR merge commit for
 `--provider-catalog-source-commit`; the snapshot records the published product
 source separately.
 

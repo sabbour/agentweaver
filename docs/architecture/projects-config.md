@@ -339,8 +339,10 @@ release runtime List sets the five consumer revisions as explicit, non-secret
 `env` values and sets Cilium adapter version `1.0.0` by coordinator decision.
 These take precedence over same-named values from the service runtime ConfigMaps
 while preserving their `envFrom` entries for all other settings. The checked-in
-P0 ConfigMap snapshots and their value provenance are documented in
-[`deploy/k8s/README.md`](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md#p0-runtime-configmap-snapshots).
+runtime settings and their value sources are documented in the
+[runtime configuration reference](../reference/runtime-configuration.md).
+For apply order, see the
+[Kubernetes operator guide](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md#render-and-apply-the-bundle).
 The Environment, Orchestrator, and Events maps have source-backed runtime
 configuration. Live preflight, PostgreSQL migration/role state, and external
 resource connectivity remain separate deployment and acceptance gates:
