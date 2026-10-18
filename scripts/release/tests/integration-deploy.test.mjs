@@ -821,7 +821,7 @@ test('supplied runtime List carries its own catalog identity when CLI catalog va
   });
   await deployIntegration(deployOptions(fixture), dependencies);
 
-  // A caller-supplied List is validated against its paired catalog consumers and annotations.
+  // A caller-supplied List is validated against all catalog consumers and their annotations.
   const result = await deployIntegration(deployOptions(fixture, {
     providerCatalogConfigMapName: undefined,
     providerCatalogSourceCommit: undefined,
@@ -830,8 +830,8 @@ test('supplied runtime List carries its own catalog identity when CLI catalog va
 
   assert.equal(result.renderedResources, 18);
   assert.equal(runtimeManifest.items
-    .filter(item => item.kind === 'Deployment' && ['projects-config', 'orchestrator']
-      .includes(item.metadata.name)).length, 2);
+    .filter(item => item.kind === 'Deployment' &&
+      ['knowledge', 'projects-config', 'orchestrator'].includes(item.metadata.name)).length, 3);
 });
 
 test('Broker run-binding requires the exact generated runtime List and stays opt-in', async t => {

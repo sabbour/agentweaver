@@ -300,10 +300,10 @@ ConfigMap rendering is
 [`projects-config-provider-catalog.json`](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/provider-catalogs/projects-config-provider-catalog.json),
 named `projects-config-provider-catalog`. The .NET startup loader consumes the
 ConfigMap's flattened `Registrations__...` and `Defaults__...` keys after the
-runtime List adds the `ProjectsConfig__ProviderCatalog__` prefix to both
-Projects & Config and Orchestrator. The ConfigMap's product-source annotation
+runtime List adds the `ProjectsConfig__ProviderCatalog__` prefix to Knowledge,
+Projects & Config, and Orchestrator. The ConfigMap's product-source annotation
 identifies the published source used for the snapshot; the runtime List records
-the catalog PR merge commit on both consumer pods.
+the catalog PR merge commit on all three consumer pods.
 
 The catalog registers the P1 Sessions, Memory, Sandbox, Storage, Policy, Source
 Control, Cost, and Cilium providers, plus the foundational Messaging provider
@@ -368,8 +368,8 @@ service `env` entries and preserves the service-named ConfigMap `envFrom`.
 names and values. It mounts nested Cilium endpoint selectors from the immutable
 `environment-cilium-config` file because their `/` and `:` keys cannot be
 represented as Kubernetes environment variable names. The same provider
-catalog ConfigMap is supplied to Projects & Config and Orchestrator with the
-`ProjectsConfig__ProviderCatalog__` prefix.
+catalog ConfigMap is supplied to Knowledge, Projects & Config, and Orchestrator
+with the `ProjectsConfig__ProviderCatalog__` prefix.
 
 GitHub has no independent adapter-local or project-configuration revision
 setting. Its consumer input is nevertheless explicit: `ProjectsConfigService`

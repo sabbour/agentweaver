@@ -229,29 +229,6 @@ if (remoteMcpNativeCallDispatchEnabled)
 app.MapProviderLifecycleReportEndpoints();
 app.Run();
 
-static CiliumEgressProviderOptions ReadCiliumOptions(IConfiguration configuration)
-{
-    var section = configuration.GetSection("Environment:NetworkPolicy:Cilium");
-    var @namespace = Required(section["Namespace"], "Environment:NetworkPolicy:Cilium:Namespace");
-    var versionText = Required(section["AdapterVersion"], "Environment:NetworkPolicy:Cilium:AdapterVersion");
-    if (!Version.TryParse(versionText, out var version))
-        throw new InvalidOperationException("The Cilium adapter version must be a valid semantic version.");
-    var revision = Required(section["OptionsRevision"], "Environment:NetworkPolicy:Cilium:OptionsRevision");
-    var selectors = section.GetSection("EndpointSelectors")
-        .Get<Dictionary<string, Dictionary<string, string>>>()
-        ?? throw new InvalidOperationException(
-            "Environment:NetworkPolicy:Cilium:EndpointSelectors must be configured.");
-    return new CiliumEgressProviderOptions(
-        @namespace,
-        version,
-        section.GetValue("OptionsSchemaVersion", 0),
-        revision,
-        selectors.ToImmutableDictionary(
-            pair => pair.Key,
-            pair => pair.Value.ToImmutableDictionary(StringComparer.Ordinal),
-            StringComparer.Ordinal)).Validate();
-}
-
 static AzureFilesCsiOptions ReadAzureFilesOptions(IConfiguration configuration)
 {
     var section = configuration.GetSection("Environment:Storage:AzureFiles");
@@ -339,6 +316,64 @@ internal sealed class KubernetesServiceAccountHandler : DelegatingHandler
 /// <summary>Provides test-visible configuration readers for the Environment service's Sandbox providers.</summary>
 public partial class Program
 {
+    /// <summary>Reads Cilium settings and restores literal label keys split by the JSON configuration provider.</summary>
+    public static CiliumEgressProviderOptions ReadCiliumOptions(IConfiguration configuration)
+    {
+        var section = configuration.GetSection("Environment:NetworkPolicy:Cilium");
+        var @namespace = Required(section["Namespace"], "Environment:NetworkPolicy:Cilium:Namespace");
+        var versionText = Required(section["AdapterVersion"], "Environment:NetworkPolicy:Cilium:AdapterVersion");
+        if (!Version.TryParse(versionText, out var version))
+            throw new InvalidOperationException("The Cilium adapter version must be a valid semantic version.");
+        var revision = Required(section["OptionsRevision"], "Environment:NetworkPolicy:Cilium:OptionsRevision");
+        return new CiliumEgressProviderOptions(
+            @namespace,
+            version,
+            section.GetValue("OptionsSchemaVersion", 0),
+            revision,
+            ReadCiliumSelectors(section.GetSection("EndpointSelectors"))).Validate();
+    }
+
+    /// <summary>Rebuilds Cilium selector labels from the configuration tree without losing colon prefixes.</summary>
+    private static ImmutableDictionary<string, ImmutableDictionary<string, string>> ReadCiliumSelectors(
+        IConfigurationSection section)
+    {
+        var selectors = ImmutableDictionary.CreateBuilder<string, ImmutableDictionary<string, string>>(
+            StringComparer.Ordinal);
+        foreach (var selector in section.GetChildren())
+        {
+            var labels = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.Ordinal);
+            foreach (var label in selector.GetChildren())
+                AddCiliumLabel(labels, label, label.Key);
+            selectors.Add(selector.Key, labels.ToImmutable());
+        }
+        return selectors.ToImmutable();
+    }
+
+    /// <summary>Reassembles a label key from its configuration-path segments and preserves its value.</summary>
+    private static void AddCiliumLabel(
+        ImmutableDictionary<string, string>.Builder labels,
+        IConfigurationSection section,
+        string key)
+    {
+        if (section.Value is { } value)
+        {
+            labels.Add(key, value);
+            return;
+        }
+
+        var children = section.GetChildren().ToArray();
+        if (children.Length == 0)
+        {
+            // Preserve null leaf labels as empty so validation rejects them instead of widening the selector.
+            labels.Add(key, string.Empty);
+            return;
+        }
+
+        // IConfiguration treats colons in JSON property names as path separators.
+        foreach (var child in children)
+            AddCiliumLabel(labels, child, $"{key}:{child.Key}");
+    }
+
     /// <summary>Reads and validates the complete AgentSandbox provider configuration, including startup budgets.</summary>
     public static AgentSandboxOptions ReadSandboxOptions(IConfiguration configuration)
     {
