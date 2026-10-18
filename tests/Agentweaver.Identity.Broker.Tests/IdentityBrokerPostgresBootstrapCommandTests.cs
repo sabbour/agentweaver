@@ -167,6 +167,7 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
         Assert.Contains("can SET ROLE", rejected.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>Checks grant application and read-only verification against the same explicit table contract.</summary>
     [Fact]
     public async Task AppliesCanonicalRuntimeGrantsOnlyAfterMigrationAndPreservesHistoryReadOnly()
     {
@@ -183,6 +184,8 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
             """, connection))
             await roles.ExecuteNonQueryAsync();
         Assert.False(await IdentityBrokerPostgresBootstrapCommand.ApplyRuntimeGrantsIfMigratedAsync(
+            connection, runtime, migration));
+        Assert.False(await IdentityBrokerPostgresBootstrapCommand.VerifyRuntimeGrantsIfMigratedAsync(
             connection, runtime, migration));
         var tables = new[] {
             "broker_users", "pending_authorizations", "secret_grant_heads", "secret_grant_revisions",
@@ -201,9 +204,39 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
                 """, connection);
             await create.ExecuteNonQueryAsync();
         }
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            IdentityBrokerPostgresBootstrapCommand.VerifyRuntimeGrantsIfMigratedAsync(connection, runtime, migration));
         for (var attempt = 0; attempt < 2; attempt++)
+        {
             Assert.True(await IdentityBrokerPostgresBootstrapCommand.ApplyRuntimeGrantsIfMigratedAsync(
                 connection, runtime, migration));
+            Assert.True(await IdentityBrokerPostgresBootstrapCommand.VerifyRuntimeGrantsIfMigratedAsync(
+                connection, runtime, migration));
+        }
+        await using (var revoke = new NpgsqlCommand(
+            $"REVOKE SELECT ON identity_broker.__ef_migrations_history FROM {QuoteIdentifier(runtime)}", connection))
+            await revoke.ExecuteNonQueryAsync();
+        var missingHistory = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            IdentityBrokerPostgresBootstrapCommand.VerifyRuntimeGrantsIfMigratedAsync(connection, runtime, migration));
+        Assert.Contains("__ef_migrations_history", missingHistory.Message, StringComparison.Ordinal);
+        await using (var unchanged = new NpgsqlCommand(
+            "SELECT has_table_privilege(@runtime, 'identity_broker.__ef_migrations_history', 'SELECT')", connection))
+        {
+            unchanged.Parameters.AddWithValue("runtime", runtime);
+            Assert.Equal(false, await unchanged.ExecuteScalarAsync());
+        }
+        Assert.True(await IdentityBrokerPostgresBootstrapCommand.ApplyRuntimeGrantsIfMigratedAsync(
+            connection, runtime, migration));
+        foreach (var privilege in new[] { "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER" })
+        {
+            await using var grant = new NpgsqlCommand(
+                $"GRANT {privilege} ON identity_broker.__ef_migrations_history TO {QuoteIdentifier(runtime)}", connection);
+            await grant.ExecuteNonQueryAsync();
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                IdentityBrokerPostgresBootstrapCommand.VerifyRuntimeGrantsIfMigratedAsync(connection, runtime, migration));
+            Assert.True(await IdentityBrokerPostgresBootstrapCommand.ApplyRuntimeGrantsIfMigratedAsync(
+                connection, runtime, migration));
+        }
         await using (var useRuntime = new NpgsqlCommand($"SET ROLE {QuoteIdentifier(runtime)}", connection))
             await useRuntime.ExecuteNonQueryAsync();
         await using (var permitted = new NpgsqlCommand("""

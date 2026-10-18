@@ -28,6 +28,12 @@ These files are under `services/identity/Agentweaver.Identity.Broker/` or
 `packages/Agentweaver.Identity/` and
 `packages/Agentweaver.Secrets.AzureKeyVault/`.
 
+The Broker runtime reads `identity_broker.__ef_migrations_history` at startup
+but does not own or write that table. The migration command applies the
+canonical runtime table grants as the separate migration owner.
+[Migration history and grants](../reference/runtime-configuration#identity-broker-migration-history-and-grants)
+defines the runtime role setting and the separately approved repair path.
+
 ## Understand token authority
 
 The Broker creates a local subject after validating upstream identity. It

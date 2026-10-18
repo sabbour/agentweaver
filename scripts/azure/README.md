@@ -22,6 +22,35 @@ No Azure account, credentials, or cluster connection is necessary.
 Tests use fake transports and generated local fixtures.
 The only real Azure CLI test reads local CLI version information.
 
+## Identity Broker post-migration permissions
+
+The initial Broker database bootstrap creates the migration-owned
+`identity_broker` schema and gives the runtime schema `USAGE`. Before tables
+exist, `IDENTITY_POSTGRES_RUNTIME_GRANTS_PENDING` is expected; it does not
+prove runtime readiness.
+
+The Broker migration Job applies migrations and then the embedded
+`infra/bicep/postgres-identity-runtime-grants.sql` as the migration identity.
+The Job explicitly configures `IdentityBroker__Migration__RuntimeRole` as
+`agentweaver-id-identity-broker`. The grant transaction checks ownership of
+20 named tables, applies only their approved permissions, and keeps
+`identity_broker.__ef_migrations_history` read-only for the runtime. A rerun
+with a corrected image also applies grants when there are no pending migrations.
+The guarded operator bootstrap applies the same definition after migration.
+
+Read-only `--verify-identity-postgres-bootstrap` verifies role and schema
+boundaries and, once history exists, the same post-migration table permissions.
+It fails on missing history `SELECT` and never applies a grant.
+
+For the exact repair SQL, identity, and approval boundary, see
+[Identity Broker migration history and grants](../../docs/reference/runtime-configuration.md#identity-broker-migration-history-and-grants).
+Merging a source fix does not repair the existing database. A separately
+approved migration Job rerun must use an image containing the fix; an old
+image does not gain the new grant step. The guarded bootstrap can apply the
+existing canonical grants without a new Broker image, but it reconciles all
+listed table grants and uses temporary cluster resources. Neither path is
+authorized by a successful source test or by merging a pull request.
+
 ## Limited P1 runtime identities
 
 `infra/bicep/p1-runtime-identities.bicep` is separate from the full foundation deployment.

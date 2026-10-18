@@ -36,6 +36,12 @@ The Azure acceptance verifier is
 - Missing runtime prerequisites stop deployment. Rollout does not create new
   credentials or grant itself access.
 
+The Broker migration Job is a separate write boundary: it applies migrations
+and the canonical explicit table grants as the migration owner. Initial
+bootstrap success alone does not prove post-migration runtime access.
+Read-only bootstrap verification checks the table grants without repairing
+them. See [Broker database permissions](../reference/runtime-configuration#identity-broker-migration-history-and-grants).
+
 ## Understand the Azure foundation
 
 `main.bicep` is an Azure infrastructure-as-code template. It targets a

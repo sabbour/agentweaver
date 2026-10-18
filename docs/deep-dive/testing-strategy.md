@@ -39,6 +39,12 @@ Do not replace a required database case with an in-memory provider and claim
 the same evidence: row locks, advisory locks, transactional rollback, and
 lease races require PostgreSQL.
 
+The Broker migration and bootstrap suites use disposable PostgreSQL to
+reproduce SQLSTATE `42501` on migration history, verify the production
+migration/grant path, repair a missing grant on a no-pending-migrations rerun,
+and reject history writes. They also confirm that read-only verification
+does not repair missing grants. These cases do not change live permissions.
+
 Harnesses preserve HTTP errors, owner denials, and `202 Accepted` responses as
 distinct from completed work. They record correlation and revision/fence
 evidence. Redaction runs before durable JSON Lines output; transient raw

@@ -735,6 +735,13 @@ connection. The runtime username is the separately bootstrapped Entra runtime ro
 
 Ordinary host startup verifies that the `identity_broker` schema exists and that all migrations are applied; it never applies migrations or creates database roles. Only the explicit `--migrate` command runs migrations, in a separate one-shot Job with its own ServiceAccount, workload identity, connection-string key, token settings, and schema-owner role. See [PostgreSQL configuration and roles](../reference/contracts#identity-postgresql-access).
 
+That Job also applies the canonical table grants to its explicitly configured
+runtime role before reporting success. The runtime needs `SELECT`, not write
+access, on `identity_broker.__ef_migrations_history` for its EF pending-migration
+check. Read-only bootstrap verification rejects missing post-migration grants.
+See [migration history and grants](../reference/runtime-configuration#identity-broker-migration-history-and-grants)
+for the separately approved repair path.
+
 The Kubernetes source defines an HTTPS Deployment behind an HTTPS `ClusterIP`
 Service. It defines no Ingress, Gateway, or ingress controller. The source has
 not been deployed. Operators must supply the real issuer and external OIDC

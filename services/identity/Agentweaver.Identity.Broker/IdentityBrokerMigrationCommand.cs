@@ -28,7 +28,8 @@ internal static class IdentityBrokerMigrationCommand
 
     /// <summary>
     /// Validates explicit migration credentials, creates an Entra-authenticated PostgreSQL
-    /// data source and runs migrations under the schema-specific advisory lock. A supplied
+    /// data source, runs migrations under the schema-specific advisory lock, and applies the
+    /// canonical grants to the explicitly configured runtime role. A supplied
     /// credential factory supports tests; disposable credentials are always disposed.
     /// </summary>
     public static async Task RunAsync(
@@ -39,6 +40,10 @@ internal static class IdentityBrokerMigrationCommand
     {
         var connectionString = Required(configuration.GetConnectionString("IdentityBrokerMigration"),
             "ConnectionStrings:IdentityBrokerMigration");
+        var runtimeRole = Required(configuration["IdentityBroker:Migration:RuntimeRole"],
+            "IdentityBroker:Migration:RuntimeRole");
+        var migrationRole = Required(new NpgsqlConnectionStringBuilder(connectionString).Username,
+            "ConnectionStrings:IdentityBrokerMigration Username");
         var tenantId = Required(configuration["IdentityBroker:Migration:WorkloadIdentityTenantId"],
             "IdentityBroker:Migration:WorkloadIdentityTenantId");
         var clientId = Required(configuration["IdentityBroker:Migration:WorkloadIdentityClientId"],
@@ -71,6 +76,13 @@ internal static class IdentityBrokerMigrationCommand
                 .Options;
 
             await IdentityBrokerMigrator.MigrateAsync(dataSource, options, cancellationToken).ConfigureAwait(false);
+
+            // The migration owner applies the reviewed table grants before the Job can succeed.
+            // Repeating a completed migration also repairs missing grants without changing history.
+            await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
+            if (!await IdentityBrokerPostgresBootstrapCommand.ApplyRuntimeGrantsIfMigratedAsync(
+                    connection, runtimeRole, migrationRole, cancellationToken).ConfigureAwait(false))
+                throw new InvalidOperationException("Identity broker migrations completed without migration history.");
         }
         finally
         {

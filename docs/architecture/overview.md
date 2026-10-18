@@ -16,6 +16,10 @@ downstream effect-call-site wiring is not claimed.
 
 The Identity Broker is the host for caller authentication and secret-redemption authorization. It constructs the Key Vault backend and the authorization wrapper; it is a service host in source, not a claim that a service is deployed.
 
+Its separate migration Job applies the canonical explicit runtime table grants
+after migration. The runtime checks migration history with read-only access;
+it does not migrate or grant itself permissions.
+
 The Foundation Probe resolves provider descriptors and pins binding evidence for acceptance checks. The IDs `azure-blob`, `azure-key-vault`, and `azure-monitor` identify catalog entries; they do not instantiate adapters. `AzureProbeOperations` separately constructs the Key Vault and Blob classes, while `Program` registers telemetry composition. The probe is not an agent runtime.
 
 Projects & Config loads the catalog owner's meter-source selections and uses the

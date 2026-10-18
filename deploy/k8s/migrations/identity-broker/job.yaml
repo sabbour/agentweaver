@@ -35,6 +35,10 @@ spec:
             - dotnet
             - Agentweaver.Identity.Broker.dll
             - --migrate
+          # The migration owner grants only the canonical table permissions to this runtime role.
+          env:
+            - name: IdentityBroker__Migration__RuntimeRole
+              value: agentweaver-id-identity-broker
           envFrom:
             - configMapRef:
                 name: identity-broker-migration-config

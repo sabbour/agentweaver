@@ -20,6 +20,22 @@ public sealed class IdentityBrokerMigrationCommandTests(PostgresContainerFixture
         Assert.Contains("ConnectionStrings:IdentityBrokerMigration", exception.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>Rejects an omitted grant recipient before obtaining migration credentials.</summary>
+    [Fact]
+    public async Task MigrationCommandRequiresExplicitRuntimeRole()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:IdentityBrokerMigration"] = "Host=localhost;Username=migration",
+            }).Build();
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            IdentityBrokerMigrationCommand.RunAsync(configuration));
+
+        Assert.Contains("IdentityBroker:Migration:RuntimeRole", exception.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Runs the production migration/grant path as the owner and repairs a missing history grant.</summary>
     [Fact]
     public async Task MigrationIdentityOwnsSchemaAndRuntimeHasOnlyExplicitDml()
     {
@@ -43,6 +59,7 @@ public sealed class IdentityBrokerMigrationCommandTests(PostgresContainerFixture
         var values = new Dictionary<string, string?>
         {
             ["ConnectionStrings:IdentityBrokerMigration"] = migrationConnectionString,
+            ["IdentityBroker:Migration:RuntimeRole"] = runtimeRole,
             ["IdentityBroker:Migration:WorkloadIdentityTenantId"] = tenantId,
             ["IdentityBroker:Migration:WorkloadIdentityClientId"] = clientId,
             ["IdentityBroker:Migration:WorkloadIdentityTokenFilePath"] = tokenFilePath,
@@ -62,8 +79,6 @@ public sealed class IdentityBrokerMigrationCommandTests(PostgresContainerFixture
 
         Assert.Equal(new IdentityBrokerMigrationIdentity(tenantId, clientId, tokenFilePath), usedIdentity);
         Assert.Contains("https://ossrdbms-aad.database.windows.net/.default", migrationCredential.Scopes);
-        await GrantRuntimePermissionsAsync(adminConnectionString, runtimeRole);
-
         var runtimeCredential = new PasswordTokenCredential(runtimePassword);
         await using var runtimeDataSource = IdentityBrokerPostgresDataSource.Create(
             runtimeConnectionString, runtimeCredential, SslMode.Disable);
@@ -71,6 +86,25 @@ public sealed class IdentityBrokerMigrationCommandTests(PostgresContainerFixture
             .UseNpgsql(runtimeDataSource, npgsql => npgsql.MigrationsHistoryTable(
                 "__ef_migrations_history", IdentityBrokerDbContext.Schema))
             .Options;
+        await IdentityBrokerMigrator.VerifyMigrationsAppliedAsync(runtimeDataSource, options);
+
+        // Reproduce the deployed failure without weakening the startup check or granting history writes.
+        await using (var admin = new NpgsqlConnection(adminConnectionString))
+        {
+            await admin.OpenAsync();
+            await using var revoke = new NpgsqlCommand(
+                $"REVOKE SELECT ON identity_broker.__ef_migrations_history FROM {QuoteIdentifier(runtimeRole)}", admin);
+            await revoke.ExecuteNonQueryAsync();
+            var denied = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                IdentityBrokerMigrator.VerifyMigrationsAppliedAsync(runtimeDataSource, options));
+            Assert.Equal(PostgresErrorCodes.InsufficientPrivilege,
+                Assert.IsType<PostgresException>(denied.InnerException).SqlState);
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                IdentityBrokerPostgresBootstrapCommand.VerifyRuntimeGrantsIfMigratedAsync(
+                    admin, runtimeRole, migrationRole));
+        }
+        await IdentityBrokerMigrationCommand.RunAsync(
+            configuration, _ => migrationCredential, SslMode.Disable);
         await IdentityBrokerMigrator.VerifyMigrationsAppliedAsync(runtimeDataSource, options);
 
         await using (var db = new IdentityBrokerDbContext(options))
@@ -156,33 +190,6 @@ public sealed class IdentityBrokerMigrationCommandTests(PostgresContainerFixture
             REVOKE ALL ON SCHEMA identity_broker FROM PUBLIC;
             GRANT USAGE ON SCHEMA identity_broker TO {QuoteIdentifier(runtimeRole)};
             """;
-        await using var command = new NpgsqlCommand(sql, connection);
-        await command.ExecuteNonQueryAsync();
-    }
-
-    private static async Task GrantRuntimePermissionsAsync(string adminConnectionString, string runtimeRole)
-    {
-        string[] tables =
-        [
-            "broker_users",
-            "pending_authorizations",
-            "secret_grant_heads",
-            "secret_grant_revisions",
-            "secret_grant_operations",
-            "OpenIddictApplications",
-            "OpenIddictAuthorizations",
-            "OpenIddictScopes",
-            "OpenIddictTokens",
-        ];
-        var qualifiedTables = string.Join(", ", tables.Select(table =>
-            $"identity_broker.{QuoteIdentifier(table)}"));
-        var sql = $"""
-            GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE {qualifiedTables} TO {QuoteIdentifier(runtimeRole)};
-            GRANT SELECT ON TABLE identity_broker.__ef_migrations_history TO {QuoteIdentifier(runtimeRole)};
-            """;
-
-        await using var connection = new NpgsqlConnection(adminConnectionString);
-        await connection.OpenAsync();
         await using var command = new NpgsqlCommand(sql, connection);
         await command.ExecuteNonQueryAsync();
     }

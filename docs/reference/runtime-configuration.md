@@ -113,6 +113,50 @@ The `IdentityBroker` database connection is configured at
 operator-supplied to the migration Job and is not a runtime ConfigMap setting.
 The runtime identity does not own the schema or run migrations.
 
+### Identity Broker migration history and grants
+
+At startup, the Broker calls EF Core `GetPendingMigrationsAsync`. EF reads
+`identity_broker.__ef_migrations_history` to compare applied migrations with
+the executable. The migration role, `agentweaver-id-identity-broker-migration`
+in the checked-in profile, owns the schema and history table. The runtime
+role, `agentweaver-id-identity-broker`, requires schema `USAGE` and table
+`SELECT`. It must not receive history writes or schema creation.
+
+The separate `--migrate` command requires
+`IdentityBroker__Migration__RuntimeRole` in addition to its migration connection
+and workload-identity settings. The checked-in migration Job supplies the
+runtime role explicitly. After migrations, the command applies the canonical
+[runtime grant definition](https://github.com/sabbour/agentweaver/blob/v1/infra/bicep/postgres-identity-runtime-grants.sql)
+as the migration owner and verifies the exact table permissions. Repeating
+the command applies missing grants even when no migration is pending.
+
+Initial database bootstrap grants schema access only. If migrations have not
+run, bootstrap reports `IDENTITY_POSTGRES_RUNTIME_GRANTS_PENDING`; that result
+does not prove runtime readiness. After migration, read-only bootstrap
+verification checks the full explicit table set, including history `SELECT`
+and the absence of history writes. Missing grants fail verification without
+repairing them.
+
+For an existing database that fails with SQLSTATE `42501` on this history
+table, obtain approval before changing permissions. The narrow repair in the
+`agentweaver` database on `agentweaver-pg.postgres.database.azure.com` is:
+
+```sql
+GRANT SELECT ON TABLE identity_broker.__ef_migrations_history
+TO "agentweaver-id-identity-broker";
+```
+
+Run it through the approved private database connection as the table owner,
+`agentweaver-id-identity-broker-migration`, or an approved administrator with
+grant authority on that table. This lets the runtime check applied migrations;
+it does not let the runtime change history or run migrations.
+
+Merging source does not change live grants. After separate approval, running
+the migration Job with an image built from this fix applies the canonical
+grants without a manual `GRANT`. Rerunning an older migration image does not.
+The guarded operator bootstrap can also apply the canonical grant file after
+migration; it changes all listed table grants, not just history access.
+
 ## Identity Broker settings
 
 The `identity-broker-runtime-config.json` map supplies the issuer, upstream
