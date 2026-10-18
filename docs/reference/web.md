@@ -77,9 +77,10 @@ absent.
 | `OAUTH_REDIRECT_URI` | `VITE_OAUTH_REDIRECT_URI` | Current browser origin plus `/auth/callback`. It must match client registration. |
 | `OAUTH_SCOPES` | `VITE_OAUTH_SCOPES` | Required whitespace-separated registered scopes. |
 
-The P0 runtime snapshot uses the public Broker client `agentweaver-web` and the
-scopes `openid profile email api.read offline_access projects.admin
-projects.orchestrator`. `IdentityBroker__WebOrigin` configures the exact Portal
+The checked-in runtime snapshot uses the public Broker client
+`agentweaver-web` and these scopes:
+`openid profile email api.read offline_access projects.admin projects.orchestrator`.
+`IdentityBroker__WebOrigin` configures the exact Portal
 origin for credentialed OAuth CORS; `Gateway__WebOrigin` is a separate setting.
 For project/run-bound requests, Web omits `projects.admin`, which the Broker
 does not permit with its run-bound `projects.orchestrator` authority. The
