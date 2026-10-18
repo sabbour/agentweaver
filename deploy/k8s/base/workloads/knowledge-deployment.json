@@ -26,6 +26,9 @@
           "agentweaver.io/service": "knowledge",
           "agentweaver.io/workload": "knowledge",
           "azure.workload.identity/use": "true"
+        },
+        "annotations": {
+          "agentweaver.io/provider-catalog-source": "b002620bd8cb53a971b6d5b082d6ab43dbf11fb7"
         }
       },
       "spec": {
@@ -98,6 +101,13 @@
               {
                 "configMapRef": {
                   "name": "knowledge-runtime-config",
+                  "optional": false
+                }
+              },
+              {
+                "prefix": "ProjectsConfig__ProviderCatalog__",
+                "configMapRef": {
+                  "name": "projects-config-provider-catalog",
                   "optional": false
                 }
               }

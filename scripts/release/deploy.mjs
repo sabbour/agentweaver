@@ -694,7 +694,7 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
     fail('runtime manifest must include exactly one Service and Deployment for each of the nine shared product services');
   }
 
-  // Projects & Config and Orchestrator must consume the same reviewed catalog snapshot.
+  // Knowledge, Projects & Config, and Orchestrator must consume the same reviewed catalog snapshot.
   const catalogReference = (name) => {
     const pod = deployments.get(name)?.spec?.template;
     const container = pod?.spec?.containers?.[0];
@@ -716,7 +716,7 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
       !SHA.test(expectedCatalog.sourceCommit ?? '') || /^0+$/.test(expectedCatalog.sourceCommit)) {
     fail('runtime validation requires the exact provider catalog ConfigMap name and source commit');
   }
-  for (const name of ['projects-config', 'orchestrator']) {
+  for (const name of ['knowledge', 'projects-config', 'orchestrator']) {
     const reference = catalogReference(name);
     if (reference.configMapName !== expectedCatalog.configMapName ||
         reference.sourceCommit !== expectedCatalog.sourceCommit) {
@@ -2084,7 +2084,8 @@ function matchesKustomizeRuntimeInputs(directory, images, providerCatalog) {
       agentHostImage?.CompressedPullBytes !== expectedHost?.compressedPullBytes) {
     return false;
   }
-  for (const name of ['orchestrator', 'projects-config']) {
+  // Validate the same catalog input on every service that resolves provider options.
+  for (const name of ['knowledge', 'orchestrator', 'projects-config']) {
     const workload = readKustomizeJson(
       path.join(directory, 'base', 'workloads', `${name}-deployment.json`),
       `${name} Kustomize source`,
@@ -2173,7 +2174,8 @@ function prepareKustomizeSource(root, releaseTag, images, providerCatalog) {
     writeFileSync(environmentPath, `${JSON.stringify(environment, null, 2)}\n`, 'utf8');
     setAgentHostRuntimeImage(temporaryDirectory, host);
 
-    for (const name of ['orchestrator', 'projects-config']) {
+    // Bind all provider-catalog consumers to the exact source commit used for this deployment.
+    for (const name of ['knowledge', 'orchestrator', 'projects-config']) {
       const file = path.join(temporaryDirectory, 'base', 'workloads', `${name}-deployment.json`);
       const workload = readKustomizeJson(file, `${name} Kustomize source`);
       const annotations = workload.spec?.template?.metadata?.annotations;

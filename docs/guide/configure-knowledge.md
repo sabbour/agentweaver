@@ -7,6 +7,10 @@ the Sessions journal: Sessions stores run events and session history.
 The default v1 catalog selects native PostgreSQL Memory. Cosmos and Redis
 options exist in source, but the checked-in catalog does not register those
 providers. Adding their settings to a ConfigMap does not switch the provider.
+The Knowledge Deployment also imports the immutable
+`projects-config-provider-catalog` ConfigMap under the
+`ProjectsConfig__ProviderCatalog__` prefix. This catalog is separate from
+`knowledge-runtime-config` and is required for Knowledge startup.
 
 ## Before you begin
 

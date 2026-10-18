@@ -249,7 +249,9 @@ The `projects-config-runtime-config.json` map contains:
 The provider catalog is supplied separately with the
 `ProjectsConfig__ProviderCatalog__` prefix. See
 [Configure providers](../guide/configure-providers.md) for the active catalog
-and its selection limits.
+and its selection limits. The Knowledge Deployment imports the same immutable
+`projects-config-provider-catalog` ConfigMap under that prefix; it is not part
+of `knowledge-runtime-config`.
 
 ## Orchestrator settings
 
@@ -375,10 +377,23 @@ workload label in the checked-in Cilium policies. Each selector key is
 `k8s:io.kubernetes.pod.namespace` label for that namespace plus at least one
 other nonempty, non-wildcard label. Labels such as
 `agentweaver.io/workload` are JSON properties because `/` and `:` are not
-valid environment-variable key separators. Do not replace exact selectors
+valid environment-variable key separators. The JSON configuration provider
+uses colons as path separators, so Environment reconstructs colon-prefixed
+Cilium labels from their configuration path before validation. Keep the
+`k8s:` prefix and namespace value unchanged. Do not replace exact selectors
 with a broad namespace or wildcard selector. The checked-in service set
 covers `agenthost`, `environment`, `events-and-sessions`, `gateway`,
 `identity-broker`, `knowledge`, `mcp`, `orchestrator`, and `projects-config`.
+
+This correction does not change the immutable `environment-cilium-config`
+data. For an existing installation, the Knowledge fix changes only its
+Deployment and uses the existing Knowledge image. Reapply the reviewed bundle
+through the [guarded deployment procedure](../guide/deploy-to-azure.md) to roll
+out the catalog reference. The Environment fix changes service code,
+so wait for a new Environment image before reapplying the bundle to that
+Deployment. The v1.0.1 Environment image does not contain the corrected
+configuration reader. Keep the Cilium ConfigMap unchanged; do not delete or
+recreate it.
 
 Agent Sandbox also validates the image and measured image metadata supplied
 by the provider profile: the OCI image must be pinned by SHA-256 digest, use

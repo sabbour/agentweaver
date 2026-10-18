@@ -325,8 +325,8 @@ function createWorkload(name, image, namespace, providerCatalog, agentHost, brok
     });
   }
 
-  if (['orchestrator', 'projects-config'].includes(name)) {
-    // Both services resolve and validate the same provider choices and source revision.
+  if (['knowledge', 'orchestrator', 'projects-config'].includes(name)) {
+    // All catalog consumers need the same immutable provider choices and source revision.
     envFrom.push({
       prefix: 'ProjectsConfig__ProviderCatalog__',
       configMapRef: { name: providerCatalog.configMapName, optional: false },
@@ -350,7 +350,7 @@ function createWorkload(name, image, namespace, providerCatalog, agentHost, brok
     labels: { ...labels },
   };
   const podMetadata = { labels: podLabels };
-  if (['orchestrator', 'projects-config'].includes(name)) {
+  if (['knowledge', 'orchestrator', 'projects-config'].includes(name)) {
     podMetadata.annotations = { 'agentweaver.io/provider-catalog-source': providerCatalog.sourceCommit };
   }
   if (brokerRunBinding && ['identity-broker', 'projects-config'].includes(name)) {

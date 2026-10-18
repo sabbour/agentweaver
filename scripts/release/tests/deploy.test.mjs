@@ -501,7 +501,7 @@ function prepareKustomizeFixture(fixture, fixtureRoot, receiptSourceSha, catalog
   agentHostSettings.AgentHost.Image.CompressedPullBytes = host.compressedPullBytes;
   agentHostConfig.data['appsettings.json'] = JSON.stringify(agentHostSettings, null, 2);
   writeFileSync(agentHostConfigPath, stringifyYaml(agentHostConfig), 'utf8');
-  for (const name of ['orchestrator', 'projects-config']) {
+  for (const name of ['knowledge', 'orchestrator', 'projects-config']) {
     const file = path.join(sourceDirectory, 'base', 'workloads', `${name}-deployment.json`);
     const workload = JSON.parse(readFileSync(file, 'utf8'));
     workload.spec.template.metadata.annotations['agentweaver.io/provider-catalog-source'] =
@@ -1036,7 +1036,12 @@ test('runtime manifest requires nine shared workloads and pins AgentHost through
   assert.ok(projects.spec.containers[0].envFrom.some(({ prefix, configMapRef }) =>
     prefix === 'ProjectsConfig__ProviderCatalog__' &&
     configMapRef?.name === 'projects-config-provider-catalog' && configMapRef.optional === false));
-  // The source-control resolver and Projects & Config must consume the same catalog snapshot.
+  // Every catalog consumer shares the source commit and immutable ConfigMap.
+  const knowledge = item('Deployment', 'knowledge').spec.template;
+  assert.equal(knowledge.metadata.annotations['agentweaver.io/provider-catalog-source'], sourceSha);
+  assert.ok(knowledge.spec.containers[0].envFrom.some(({ prefix, configMapRef }) =>
+    prefix === 'ProjectsConfig__ProviderCatalog__' &&
+    configMapRef?.name === 'projects-config-provider-catalog' && configMapRef.optional === false));
   const orchestrator = item('Deployment', 'orchestrator').spec.template;
   assert.equal(orchestrator.metadata.annotations['agentweaver.io/provider-catalog-source'], sourceSha);
   assert.ok(orchestrator.spec.containers[0].envFrom.some(({ prefix, configMapRef }) =>
@@ -1068,6 +1073,13 @@ test('runtime manifest requires nine shared workloads and pins AgentHost through
     .filter(({ prefix }) => prefix !== 'ProjectsConfig__ProviderCatalog__');
   assert.throws(() => validateRuntimeManifest(missingOrchestratorCatalog, images, target.namespace),
     /orchestrator must load one immutable-source Projects provider catalog ConfigMap/);
+  const missingKnowledgeCatalog = structuredClone(rendered);
+  const knowledgeContainer = missingKnowledgeCatalog.items.find(({ kind, metadata }) =>
+    kind === 'Deployment' && metadata.name === 'knowledge').spec.template.spec.containers[0];
+  knowledgeContainer.envFrom = knowledgeContainer.envFrom
+    .filter(({ prefix }) => prefix !== 'ProjectsConfig__ProviderCatalog__');
+  assert.throws(() => validateRuntimeManifest(missingKnowledgeCatalog, images, target.namespace),
+    /knowledge must load one immutable-source Projects provider catalog ConfigMap/);
   const mismatchedOrchestratorCatalog = structuredClone(rendered);
   const mismatchedOrchestrator = mismatchedOrchestratorCatalog.items.find(({ kind, metadata }) =>
     kind === 'Deployment' && metadata.name === 'orchestrator').spec.template;
