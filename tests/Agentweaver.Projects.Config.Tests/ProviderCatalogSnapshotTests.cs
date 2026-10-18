@@ -90,6 +90,9 @@ public sealed class ProviderCatalogSnapshotTests
         Assert.Equal("cilium", networkLayer.GetProperty("ProviderId").GetString());
     }
 
+    /// <summary>
+    /// Verifies runtime inputs use service-named ConfigMaps except for the immutable Broker v2 map.
+    /// </summary>
     [Fact]
     public void CatalogRevisionsMatchReleaseDefaultsAndGeneratedRuntimeInputs()
     {
@@ -161,8 +164,8 @@ public sealed class ProviderCatalogSnapshotTests
             StringComparison.Ordinal);
 
         Assert.Contains(
-            "configMapRef: { name: `${name}-runtime-config`, optional: false }",
-            runtimeList,
+            "configMapRef: {\n      name: identity ? 'identity-broker-runtime-config-v2' : `${name}-runtime-config`,\n      optional: false,",
+            runtimeList.Replace("\r\n", "\n", StringComparison.Ordinal),
             StringComparison.Ordinal);
         Assert.Contains("'environment'", runtimeList, StringComparison.Ordinal);
         Assert.Contains("'orchestrator'", runtimeList, StringComparison.Ordinal);
