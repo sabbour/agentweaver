@@ -21,13 +21,13 @@ export const P1_POSTGRES_TARGET = Object.freeze({
   sslMode: 'VerifyFull',
 });
 
-// Source these principal IDs from the current target's Bicep outputs before initialization.
+// Revalidate these target-specific IDs against the current deployment outputs before initialization.
 const SERVICES = [
-  ['projects-config', 'projects_config', 'CHANGEME-PRINCIPAL-OBJECT-ID-projects-config'],
-  ['environment', 'environment', 'CHANGEME-PRINCIPAL-OBJECT-ID-environment'],
-  ['knowledge', 'knowledge', 'CHANGEME-PRINCIPAL-OBJECT-ID-knowledge'],
-  ['events-and-sessions', 'events_sessions', 'CHANGEME-PRINCIPAL-OBJECT-ID-events-and-sessions'],
-  ['orchestrator', 'orchestrator', 'CHANGEME-PRINCIPAL-OBJECT-ID-orchestrator'],
+  ['projects-config', 'projects_config', 'df4f3934-9585-47c7-b923-d9abca981dfe'],
+  ['environment', 'environment', '3f94ddf2-a376-4d8e-8e8f-ad24e96f7417'],
+  ['knowledge', 'knowledge', '9bc761f0-f192-41c6-a2d7-bbee1b83a1f2'],
+  ['events-and-sessions', 'events_sessions', '7045d349-8e2d-40d1-a492-039540465780'],
+  ['orchestrator', 'orchestrator', 'bb6f5b78-1f0e-4e56-a93c-31d96d9e1aa7'],
 ];
 
 const GROUPS = {

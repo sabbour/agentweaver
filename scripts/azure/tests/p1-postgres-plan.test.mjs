@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 import { buildP1PostgresPlan, p1PostgresPlanHash } from '../lib/p1-postgres-plan.mjs';
 
-test('P1 plan binds five service roles and leaves new principal IDs unresolved until provisioned', () => {
+test('P1 plan binds five service roles to the provisioned principal IDs', () => {
   const plan = buildP1PostgresPlan();
   assert.equal(plan.target.database, 'agentweaver');
   assert.equal(plan.target.operatorName, 'asabbour@microsoft.com');
@@ -12,8 +12,13 @@ test('P1 plan binds five service roles and leaves new principal IDs unresolved u
   assert.equal(plan.target.sslMode, 'VerifyFull');
   assert.equal(plan.services.length, 5);
   assert.equal(new Set(plan.services.map(item => item.principalObjectId)).size, 5);
-  assert.ok(plan.services.every(item =>
-    item.principalObjectId === `CHANGEME-PRINCIPAL-OBJECT-ID-${item.service}`));
+  assert.deepEqual(plan.services.map(item => [item.service, item.principalObjectId]), [
+    ['projects-config', 'df4f3934-9585-47c7-b923-d9abca981dfe'],
+    ['environment', '3f94ddf2-a376-4d8e-8e8f-ad24e96f7417'],
+    ['knowledge', '9bc761f0-f192-41c6-a2d7-bbee1b83a1f2'],
+    ['events-and-sessions', '7045d349-8e2d-40d1-a492-039540465780'],
+    ['orchestrator', 'bb6f5b78-1f0e-4e56-a93c-31d96d9e1aa7'],
+  ]);
   assert.equal(new Set(plan.services.map(item => item.role)).size, 5);
   assert.deepEqual(plan.services.map(item => item.schema),
     ['projects_config', 'environment', 'knowledge', 'events_sessions', 'orchestrator']);
