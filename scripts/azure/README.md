@@ -89,8 +89,9 @@ The source catalog requires Core versions 1 through 16 and 18 through 21.
 These are 20 registered versions; version 17 remains excluded.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
 The plan retains 94 tables and eight exact row-lock columns.
-The five runtime principal IDs must be read from the current target identity
-deployment outputs before initialization; unresolved markers are rejected
+The plan contains the five runtime principal IDs verified from the current
+target's Azure Resource Graph outputs. Revalidate every ID against the live
+target immediately before initialization; unresolved markers are rejected
 before credential requests.
 The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
