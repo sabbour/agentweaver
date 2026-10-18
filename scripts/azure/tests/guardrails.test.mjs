@@ -126,6 +126,27 @@ test('unexpected inventory entries report only the exact resource type and name'
   });
 });
 
+/** Ownership failures identify the exact inventory item without returning tag values or IDs. */
+test('inventory ownership failures report only the resource type and name', () => {
+  for (const [type, name] of [
+    ['Microsoft.ManagedIdentity/userAssignedIdentities', 'agentweaver-id-knowledge'],
+    ['Microsoft.Network/privateDnsZones', 'privatelink.vaultcore.azure.net'],
+  ]) {
+    const evidence = clonePostDeployment();
+    const resource = evidence.resources.find(item => item.type === type && item.name === name);
+    assert.ok(resource, `fixture contains ${type} ${name}`);
+    resource.tags = { ...(resource.tags ?? tags), 'agentweaver:owner': 'unreviewed-owner' };
+
+    assert.throws(() => guardPopulatedTarget(evidence), error => {
+      assert.ok(error.message.includes(type));
+      assert.ok(error.message.includes(name));
+      assert.ok(!error.message.includes(resource.id));
+      assert.ok(!error.message.includes('unreviewed-owner'));
+      return true;
+    });
+  }
+});
+
 /** The early NRMS checks report the offending network-security-group names before relationship reads. */
 test('invalid NRMS inventory entries report their type and name', () => {
   const nsg = name => ({

@@ -774,10 +774,10 @@ export function guardAzureTarget(config, execAz) {
       const tags = resource.tagEvidence;
       if (expected.kind === 'private-dns-root') {
         if (!tags?.valid || !tags.ownershipMatches) {
-          throw new Error('Private DNS root ownership conflicts with the dedicated resource group.');
+          throw new Error(`Resource inventory rejected ${describeResource(resource)}: private DNS root ownership conflicts with the dedicated resource group.`);
         }
       } else if (!tags?.valid || !tags.ownershipComplete) {
-        throw new Error('Resource ownership differs from the dedicated resource group.');
+        throw new Error(`Resource inventory rejected ${describeResource(resource)}: ownership differs from the dedicated resource group.`);
       }
     }
   }

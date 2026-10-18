@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { PassThrough } from 'node:stream';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import {
   bootstrapIdentityPostgres,
   startIdentityPostgresPortForward,
@@ -11,7 +11,7 @@ import {
 import { p1PostgresPlanHash } from '../lib/p1-postgres-plan.mjs';
 
 const options = {
-  repoRoot: 'C:\\agentweaver',
+  repoRoot: resolve('agentweaver-test-root'),
   resourceGroup: 'agentweaver',
   subscriptionId: '11111111-1111-4111-8111-111111111111',
   tenantId: '22222222-2222-4222-8222-222222222222',
@@ -264,7 +264,7 @@ test('bootstraps through the owned pod and loopback tunnel with the Entra token 
 /** Both database stages use the same ready loopback forward, which stays open until P1 completes. */
 test('combined Identity and P1 PostgreSQL bootstrap keeps the tunnel through P1 initialization', async () => {
   const fakes = dependencies({ assertTunnelActiveForP1: true });
-  const p1Receipt = 'C:\\agentweaver\\Temp\\p1-postgres-123456789abc.jsonl';
+  const p1Receipt = join(options.repoRoot, 'Temp', 'p1-postgres-123456789abc.jsonl');
   const receipt = await bootstrapIdentityPostgres({
     ...options,
     p1Initializer: {
@@ -298,7 +298,7 @@ test('combined PostgreSQL bootstrap rejects a plan hash that differs from the lo
       sourceSha: 'a'.repeat(40),
       coreMergeSha: 'b'.repeat(40),
       planSha256: 'c'.repeat(64),
-      receiptPath: 'C:\\agentweaver\\Temp\\p1-postgres-123456789abc.jsonl',
+      receiptPath: join(options.repoRoot, 'Temp', 'p1-postgres-123456789abc.jsonl'),
     },
   }, fakes.deps), /Combined PostgreSQL initialization requires exact lowercase source hashes/);
   assert.equal(fakes.calls.length, 0);
@@ -317,7 +317,7 @@ test('combined PostgreSQL bootstrap reports P1 failure after cleanup', async () 
       sourceSha: 'a'.repeat(40),
       coreMergeSha: 'b'.repeat(40),
       planSha256: p1PostgresPlanHash(),
-      receiptPath: 'C:\\agentweaver\\Temp\\p1-postgres-123456789abc.jsonl',
+      receiptPath: join(options.repoRoot, 'Temp', 'p1-postgres-123456789abc.jsonl'),
     },
   }, fakes.deps), /P1 PostgreSQL initialization failed; inspect its stage receipt/);
   assert.equal(fakes.portForwardStopped, true);

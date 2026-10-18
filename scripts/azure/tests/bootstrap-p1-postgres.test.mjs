@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { basename, dirname, resolve } from 'node:path';
 import {
   bootstrapP1Postgres,
 } from '../bootstrap-p1-postgres.mjs';
@@ -10,6 +11,7 @@ import {
 } from '../lib/p1-postgres-plan.mjs';
 
 const coreMergeSha = 'b'.repeat(40);
+const repoRoot = resolve('agentweaver-test-root');
 const source = {
   sha: 'a'.repeat(40),
   location: 'eastus2euap',
@@ -41,7 +43,7 @@ function sourceResolver(config) {
 /** The offline mode describes the exact plan and must not query Azure or create a tunnel. */
 test('P1 PostgreSQL summary mode is source-only and makes no Azure calls', async () => {
   const result = await bootstrapP1Postgres({
-    repoRoot: 'C:\\agentweaver',
+    repoRoot,
     coreMergeSha,
   }, {
     sourceResolver,
@@ -62,7 +64,7 @@ test('P1 PostgreSQL execution verifies target ownership and all five live princi
   const calls = [];
   let initializerInput;
   const result = await bootstrapP1Postgres({
-    repoRoot: 'C:\\agentweaver',
+    repoRoot,
     coreMergeSha,
     execute: true,
   }, {
@@ -115,8 +117,8 @@ test('P1 PostgreSQL execution verifies target ownership and all five live princi
     coreMergeSha,
     planSha256: p1PostgresPlanHash(),
   });
-  assert.match(receiptPath, /^C:\\agentweaver\\Temp\\p1-postgres-/i);
-  assert.match(receiptPath, /\.jsonl$/);
+  assert.equal(dirname(receiptPath), resolve(repoRoot, 'Temp'));
+  assert.match(basename(receiptPath), /^p1-postgres-[0-9a-f]{32}\.jsonl$/);
   assert.equal(result.receipt.database, 'agentweaver');
 });
 
@@ -124,7 +126,7 @@ test('P1 PostgreSQL execution verifies target ownership and all five live princi
 test('P1 PostgreSQL execution refuses a live identity that differs from the reviewed plan', async () => {
   let initializerCalled = false;
   await assert.rejects(bootstrapP1Postgres({
-    repoRoot: 'C:\\agentweaver',
+    repoRoot,
     coreMergeSha,
     execute: true,
   }, {
