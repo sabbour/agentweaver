@@ -23,14 +23,24 @@ const SECRET_PATTERNS = [
   /(AccountKey|SharedAccessKey|sig)=[^&\s"']+/gi,
   // Connection strings containing a key= component.
   /(key|password|secret|pwd)=[^;\s"']+/gi,
-  // JWT-shaped tokens (three base64url segments).
-  /[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
 ];
+
+// JWT-shaped tokens (three base64url segments).
+const JWT_PATTERN = /[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g;
+// Broker hostnames can contain three long DNS labels and end with this
+// managed suffix, so protect those names from the shape-based JWT scan.
+const BROKER_HOSTNAME_PATTERN = /(?:[A-Za-z0-9-]+\.)+aksapp\.io/gi;
 
 /** Removes known secret-shaped values from text before diagnostics are surfaced. */
 export function redact(text) {
   if (typeof text !== 'string' || text.length === 0) return text;
-  return SECRET_PATTERNS.reduce((value, pattern) => value.replace(pattern, '[redacted]'), text);
+  const redacted = SECRET_PATTERNS.reduce((value, pattern) => value.replace(pattern, '[redacted]'), text);
+  const brokerHostnames = [...redacted.matchAll(BROKER_HOSTNAME_PATTERN)];
+  return redacted.replace(JWT_PATTERN, (candidate, offset) => {
+    const isBrokerHostname = brokerHostnames.some(({ 0: hostname, index }) =>
+      offset >= index && offset + candidate.length <= index + hostname.length);
+    return isBrokerHostname ? candidate : '[redacted]';
+  });
 }
 
 // Escapes a single argument for safe inclusion in a cmd.exe command line
