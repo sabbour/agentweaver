@@ -101,6 +101,21 @@ test('deployment reader requires exact successful Bicep output receipt, not fict
   ]) assert.equal(checkDeployedSha(config, fakeAzure({ create })).status, 'blocked');
 });
 
+test('deployment reader binds outputs to the configured custom Key Vault name', () => {
+  const keyVaultName = 'custom-vault-01';
+  const outputs = structuredClone(deploymentOutputs);
+  outputs.foundationResources.value.keyVaultId =
+    outputs.foundationResources.value.keyVaultId.replace('agentweaver-kv', keyVaultName);
+  outputs.foundationResources.value.vaultUri = `https://${keyVaultName}.vault.azure.net/`;
+  const create = { status: 0, stdout: JSON.stringify({
+    id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${fixture.deploymentName}`,
+    properties: { provisioningState: 'Succeeded', outputs },
+  }) };
+  const result = checkDeployedSha({ ...fixture, ...source, keyVaultName }, fakeAzure({ create }));
+  assert.equal(result.status, 'passed');
+  assert.equal(result.evidence.resources.vaultUri, outputs.foundationResources.value.vaultUri);
+});
+
 test('acceptance receipt reader rejects missing tree, wrong deployment ID and cross-target output substitutions', () => {
   const valid = { id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${fixture.deploymentName}`,
     properties: { provisioningState: 'Succeeded', outputs: deploymentOutputs } };
@@ -148,6 +163,7 @@ test('acceptance binds the actual AKS-only receipt and original full-foundation 
     sourceTree: '20d54d53867e091a62ed25b52681c53e49b0de05',
     sourceHash: aksSource.sourceHash,
     scope: 'infrastructure-only',
+    keyVaultName: source.keyVaultName,
     appRoutingDnsZoneResourceIds: [],
   };
   const aksName = `agentweaver-aks-${aksSource.sha.slice(0, 12)}`;

@@ -72,7 +72,7 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.equal(template.parameters.sourceHash.type, 'string');
   assert.equal(template.parameters.monitorLocation.type, 'string');
   assert.equal(template.parameters.keyVaultName.type, 'string');
-  assert.ok(template.parameters.keyVaultName.defaultValue.includes('-kv'));
+  assert.equal(Object.hasOwn(template.parameters.keyVaultName, 'defaultValue'), false);
   assert.deepEqual(template.parameters.postgresEntraAdminPrincipalType.allowedValues, [
     'User', 'Group', 'ServicePrincipal',
   ]);

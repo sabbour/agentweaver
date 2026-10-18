@@ -90,21 +90,41 @@ public sealed class ProbeContractTests
     }
 
     [Fact]
-    public void AcceptsOnlyTheExactKeyVaultFallbackWithItsMatchingUri()
+    public void AcceptsTheConfiguredKeyVaultNameOnlyWithItsMatchingResourceIdAndUri()
     {
         var target = ProbeFixtures.Target();
+        const string customName = "custom-vault-01";
         var resources = target.FoundationResources with
         {
             KeyVaultId = target.FoundationResources.KeyVaultId.Replace(
-            "/vaults/agentweaver-kv", "/vaults/agentweaver-kv-v1", StringComparison.Ordinal),
-            VaultUri = "https://agentweaver-kv-v1.vault.azure.net/",
+                "/vaults/agentweaver-kv", $"/vaults/{customName}", StringComparison.Ordinal),
+            VaultUri = $"https://{customName}.vault.azure.net/",
         };
         ProbeTargetValidator.Validate(target with { FoundationResources = resources }, ProbeFixtures.Source);
 
         Assert.Equal("resource_mismatch", Assert.Throws<ProbeException>(() =>
             ProbeTargetValidator.Validate(target with
             {
-            FoundationResources = resources with { VaultUri = "https://agentweaver-kv.vault.azure.net/" },
+                FoundationResources = resources with { VaultUri = "https://different-vault.vault.azure.net/" },
+            }, ProbeFixtures.Source)).Code);
+        Assert.Equal("resource_mismatch", Assert.Throws<ProbeException>(() =>
+            ProbeTargetValidator.Validate(target with
+            {
+                FoundationResources = resources with
+                {
+                    KeyVaultId = resources.KeyVaultId.Replace(
+                        "/resourceGroups/agentweaver/", "/resourceGroups/foreign/", StringComparison.Ordinal),
+                },
+            }, ProbeFixtures.Source)).Code);
+        Assert.Equal("resource_mismatch", Assert.Throws<ProbeException>(() =>
+            ProbeTargetValidator.Validate(target with
+            {
+                FoundationResources = resources with
+                {
+                    KeyVaultId = resources.KeyVaultId.Replace(
+                        $"/vaults/{customName}", "/vaults/invalid--vault", StringComparison.Ordinal),
+                    VaultUri = "https://invalid--vault.vault.azure.net/",
+                },
             }, ProbeFixtures.Source)).Code);
     }
 

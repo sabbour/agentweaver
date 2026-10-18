@@ -65,6 +65,7 @@ function completePreprovisioningRuntimeInputs(kubernetesRoot) {
   // Deployment-flow tests use synthetic finalized values only in their disposable source copy.
   const managedHost = 'agentweaver.0123456789abcdef.eastus2euap.aksapp.io';
   const replacements = new Map([
+    ['CHANGEME-KEYVAULT-HOST', 'configured-kv-01.vault.azure.net'],
     ['CHANGEME-MANAGED-HOST', managedHost],
     ['CHANGEME-PORTAL-HOST', `portal.${managedHost}`],
     ['CHANGEME-identity-broker-client-id', '00000000-0000-4000-8000-000000000001'],

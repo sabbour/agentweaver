@@ -209,18 +209,19 @@ test('runtime and Probe inputs are separately default-off and plans never invoke
     });
     assert.equal(result.bootstrapIdentityBrokerRuntime, true);
     assert.equal(result.bootstrapFoundationProbeInputs, true);
-    const fallbackSource = { ...source, keyVaultName: 'agentweaver-kv-v1' };
+    const customName = 'custom-vault-01';
+    const customSource = { ...source, keyVaultName: customName };
     const az = fakeAzure();
     const steps = [];
     await deploy({ ...fixture, ...runtime, bootstrapIdentityBrokerState: true, execute: true }, {
-      sourceResolver: () => fallbackSource,
+      sourceResolver: () => customSource,
       execAz(args, options) {
         const result = az(args, options);
         if (args[0] === 'deployment' && args[2] === 'create') {
           const deployment = JSON.parse(result.stdout);
           deployment.properties.outputs.foundationResources.value.keyVaultId =
-            deployment.properties.outputs.foundationResources.value.keyVaultId.replace('agentweaver-kv', 'agentweaver-kv-v1');
-          deployment.properties.outputs.foundationResources.value.vaultUri = 'https://agentweaver-kv-v1.vault.azure.net/';
+            deployment.properties.outputs.foundationResources.value.keyVaultId.replace('agentweaver-kv', customName);
+          deployment.properties.outputs.foundationResources.value.vaultUri = `https://${customName}.vault.azure.net/`;
           return { ...result, stdout: JSON.stringify(deployment) };
         }
         return result;
@@ -234,11 +235,11 @@ test('runtime and Probe inputs are separately default-off and plans never invoke
         return { database: 'agentweaver', schema: 'identity_broker' };
       },
       initializeIdentityBrokerRuntime(config) {
-        assert.equal(config.keyVaultName, 'agentweaver-kv-v1');
+        assert.equal(config.keyVaultName, customName);
         steps.push('runtime');
       },
       initializeFoundationProbeInputs(config) {
-        assert.equal(config.keyVaultName, 'agentweaver-kv-v1');
+        assert.equal(config.keyVaultName, customName);
         steps.push('probe');
       },
     });

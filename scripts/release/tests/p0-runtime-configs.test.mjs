@@ -22,6 +22,7 @@ const incompleteRuntimeConfigs = new Set([
 ]);
 const runtimeInputMarkers = new Set([
   'CHANGEME-MANAGED-HOST', 'CHANGEME-PORTAL-HOST',
+  'CHANGEME-KEYVAULT-HOST',
   'CHANGEME-identity-broker-client-id', 'CHANGEME-environment-client-id',
   'CHANGEME-events-and-sessions-client-id', 'CHANGEME-knowledge-client-id',
   'CHANGEME-orchestrator-client-id', 'CHANGEME-projects-config-client-id',
@@ -142,6 +143,7 @@ test('Identity Broker snapshot keeps the acceptance client and adds the versione
     'IdentityBroker__ExternalProvider__ClientId',
     'IdentityBroker__Issuer',
     'IdentityBroker__SecretRedemption__Audience',
+    'IdentityBroker__SecretRedemption__VaultHost',
     'IdentityBroker__SecretRedemption__VaultUri',
     'IdentityBroker__SecretRedemption__WorkloadIdentityClientId',
     'IdentityBroker__SecretRedemption__WorkloadIdentityTenantId',
@@ -738,11 +740,10 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
   const brokerPolicy = resources.find(resource =>
     resource.kind === 'CiliumNetworkPolicy' && resource.metadata.name === 'identity-broker-egress');
   assert.ok(brokerPolicy);
-  assert.doesNotMatch(JSON.stringify(brokerPolicy), /CHANGEME-/);
-  assert.deepEqual([...new Set([...JSON.stringify(brokerPolicy).matchAll(/matchName["\s:]+([a-z0-9.-]+)/g)]
+  assert.deepEqual([...new Set([...JSON.stringify(brokerPolicy).matchAll(/matchName["\s:]+([A-Za-z0-9.-]+)/g)]
     .map(match => match[1]))], [
     'login.microsoftonline.com',
-    'agentweaver-kv.vault.azure.net',
+    'CHANGEME-KEYVAULT-HOST',
     'agentweaver-pg.postgres.database.azure.com',
   ]);
   const unresolvedInputs = [...new Set([...JSON.stringify(installation).matchAll(/CHANGEME-[A-Za-z0-9-]+/g)]

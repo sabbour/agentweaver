@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { run, runAz, redact } from './exec.mjs';
+import { assertApprovedKeyVaultName } from './guardrails.mjs';
 import { withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 import { foundationProbeEgress } from './foundation-probe-egress.mjs';
 
@@ -22,6 +23,7 @@ export function bootstrapFoundationProbeInputs(config, {
   execAz = runAz, execKubectl = (args, options) => run('kubectl', args, options),
   withKubeconfig = withP0UserKubeconfig,
 } = {}) {
+  assertApprovedKeyVaultName(config.resourceGroup, config.keyVaultName);
   if (config.resourceGroup !== 'agentweaver' || config.clusterName !== 'agentweaver-aks' ||
       !GUID.test(config.subscriptionId ?? '') || !GUID.test(config.tenantId ?? '')) {
     throw new Error('Probe inputs require the explicit dedicated P0 target.');

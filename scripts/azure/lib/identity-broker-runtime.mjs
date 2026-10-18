@@ -53,7 +53,8 @@ export function brokerAcceptanceConfiguration(config, { issuer, identity, portal
     IdentityBroker__ExternalProvider__Authority: `https://login.microsoftonline.com/${config.tenantId}/v2.0`,
     IdentityBroker__ExternalProvider__ClientId: config.upstreamClientId,
     IdentityBroker__SecretRedemption__Audience: issuer,
-    IdentityBroker__SecretRedemption__VaultUri: `https://${keyVaultName}.vault.azure.net/`,
+    IdentityBroker__SecretRedemption__VaultHost: `${keyVaultName.toLowerCase()}.vault.azure.net`,
+    IdentityBroker__SecretRedemption__VaultUri: `https://${keyVaultName.toLowerCase()}.vault.azure.net/`,
     IdentityBroker__SecretRedemption__WorkloadIdentityTenantId: config.tenantId,
     IdentityBroker__SecretRedemption__WorkloadIdentityClientId: identity.clientId,
     IdentityBroker__SecretRedemption__WorkloadIdentityTokenFilePath: '/var/run/secrets/azure/tokens/azure-identity-token',
@@ -226,7 +227,7 @@ export function bootstrapIdentityBrokerRuntime(config, {
       const manifest = readFileSync(join(root, file), 'utf8')
         .replaceAll('CHANGEME-identity-broker-client-id', identity.clientId)
         .replaceAll('CHANGEME-tenant-id', config.tenantId)
-        .replaceAll('CHANGEME-KEYVAULT-HOST', `${keyVaultName}.vault.azure.net`)
+        .replaceAll('CHANGEME-KEYVAULT-HOST', `${keyVaultName.toLowerCase()}.vault.azure.net`)
         .replaceAll('CHANGEME-POSTGRES-HOST', `${config.resourceGroup}-pg.postgres.database.azure.com`)
         .replaceAll('CHANGEME-UPSTREAM-OIDC-AUTHORITY', 'login.microsoftonline.com')
         .replaceAll('CHANGEME-UPSTREAM-OIDC-METADATA-HOST', 'login.microsoftonline.com')

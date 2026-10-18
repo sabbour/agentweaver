@@ -6,7 +6,7 @@ import { foundationProbeEgress } from '../lib/foundation-probe-egress.mjs';
 const id = '11111111-1111-1111-1111-111111111111';
 const principal = '22222222-2222-2222-2222-222222222222';
 const config = { resourceGroup: 'agentweaver', clusterName: 'agentweaver-aks',
-  subscriptionId: id, tenantId: id, repoRoot: process.cwd() };
+  subscriptionId: id, tenantId: id, keyVaultName: 'agentweaver-kv', repoRoot: process.cwd() };
 const prefix = `/subscriptions/${id}/resourceGroups/agentweaver/providers/`;
 const issuer = `https://eastus2euap.oic.prod-aks.azure.com/${id}/cluster/`;
 const connectionString = `InstrumentationKey=${principal};IngestionEndpoint=https://eastus-1.in.applicationinsights.azure.com/`;
@@ -102,6 +102,13 @@ test('Probe install derives existing federation and Monitor configuration withou
   assert.ok(!deps.calls.some(call => call.args.includes('apply') || call.args.includes('patch') || call.args.includes('delete')));
 });
 
+test('Probe input setup rejects a missing vault name before Azure lookups', () => {
+  const deps = dependencies();
+  assert.throws(() => bootstrapFoundationProbeInputs({ ...config, keyVaultName: undefined }, deps),
+    /Key Vault name must be configured/);
+  assert.equal(deps.azureOutput.length, 0);
+});
+
 test('Probe Logs route permits only owned private API /32 and exact DNS names', () => {
   const egress = foundationProbeEgress(config, route());
   const rule = egress.spec.egress.at(-1);
@@ -113,15 +120,22 @@ test('Probe Logs route permits only owned private API /32 and exact DNS names', 
   assert.ok(!egress.spec.egress.some(value => value.toFQDNs?.some(host => host.matchName === 'api.loganalytics.io')));
 });
 
-test('Probe egress binds DNS and FQDN rules to the approved Key Vault fallback', () => {
-  const egress = foundationProbeEgress({ ...config, keyVaultName: 'agentweaver-kv-v1' }, route());
+test('Probe egress binds exact DNS and FQDN rules to the configured default or custom Key Vault', () => {
+  const defaultEgress = foundationProbeEgress(config, route());
+  const defaultNames = defaultEgress.baseline.egress[0].toPorts[0].rules.dns.map(value => value.matchName);
+  assert.ok(defaultNames.includes('agentweaver-kv.vault.azure.net'));
+
+  const customName = 'custom-vault-01';
+  const egress = foundationProbeEgress({ ...config, keyVaultName: customName }, route());
   const names = egress.baseline.egress[0].toPorts[0].rules.dns.map(value => value.matchName);
-  assert.ok(names.includes('agentweaver-kv-v1.vault.azure.net'));
+  assert.ok(names.includes(`${customName}.vault.azure.net`));
   assert.ok(!names.includes('agentweaver-kv.vault.azure.net'));
   assert.deepEqual(egress.baseline.egress[1].toFQDNs.map(value => value.matchName),
-    ['login.microsoftonline.com', 'agentweaver-kv-v1.vault.azure.net']);
-  assert.throws(() => foundationProbeEgress({ ...config, keyVaultName: 'agentweaver-kv-v2' }, route()),
-    /approved fallback/);
+    ['login.microsoftonline.com', `${customName}.vault.azure.net`]);
+  assert.throws(() => foundationProbeEgress({ ...config, keyVaultName: 'bad--vault' }, route()),
+    /Key Vault name/);
+  assert.throws(() => foundationProbeEgress({ ...config, keyVaultName: undefined }, route()),
+    /Key Vault name/);
 });
 
 test('Probe Logs route rejects wrong host, public IP and foreign or inconsistent ownership', () => {

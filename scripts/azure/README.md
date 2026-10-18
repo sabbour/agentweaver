@@ -586,10 +586,11 @@ create a public route, app registration, secret, or Azure role assignment.
 Ordinary `--execute` does not run this initializer. A failed bootstrap or
 transport cleanup is reported and is not converted into a successful receipt.
 
-The existing TCP proxy also accepts either exact approved Key Vault host:
-`--key-vault agentweaver-kv.vault.azure.net` or the collision fallback
-`--key-vault agentweaver-kv-v1.vault.azure.net`. It relays TCP from port 8443
-to that fixed vault on port 443.
+The TCP proxy accepts `--key-vault <host>` only when the host exactly matches
+the URI configured by `IdentityBroker__SecretRedemption__VaultUri`. The URI
+comes from the reviewed Bicep `keyVaultName` parameter; the proxy does not
+contain a compiled-in vault name. It relays TCP from port 8443 to that host on
+port 443.
 The loopback forward requires port 15443 and the P0 namespace.
 The PostgreSQL argument and port 5432 remain unchanged.
 The proxy receives encrypted TLS bytes, not an operator credential.

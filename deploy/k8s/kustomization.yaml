@@ -64,9 +64,6 @@ patches:
       name: identity-broker-egress
     patch: |-
       - op: replace
-        path: /spec/egress/0/toPorts/0/rules/dns/1/matchName
-        value: agentweaver-kv.vault.azure.net
-      - op: replace
         path: /spec/egress/0/toPorts/0/rules/dns/2/matchName
         value: agentweaver-pg.postgres.database.azure.com
       - op: replace
@@ -75,9 +72,6 @@ patches:
       - op: replace
         path: /spec/egress/0/toPorts/0/rules/dns/4/matchName
         value: login.microsoftonline.com
-      - op: replace
-        path: /spec/egress/2/toFQDNs/0/matchName
-        value: agentweaver-kv.vault.azure.net
       - op: replace
         path: /spec/egress/2/toFQDNs/1/matchName
         value: login.microsoftonline.com
@@ -96,6 +90,19 @@ patches:
       - op: remove
         path: /spec/egress/2/toFQDNs/1
 replacements:
+  - source:
+      kind: ConfigMap
+      name: identity-broker-runtime-config-v2
+      fieldPath: data.IdentityBroker__SecretRedemption__VaultHost
+    targets:
+      - select:
+          group: cilium.io
+          version: v2
+          kind: CiliumNetworkPolicy
+          name: identity-broker-egress
+        fieldPaths:
+          - spec.egress.0.toPorts.0.rules.dns.1.matchName
+          - spec.egress.2.toFQDNs.0.matchName
   - source:
       kind: ConfigMap
       name: identity-broker-runtime-config-v2

@@ -154,6 +154,10 @@ internal static class ProbeTargetValidator
     private static readonly System.Text.RegularExpressions.Regex GuidPattern =
         new("^[0-9a-fA-F]{8}(-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$",
             System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+    private static readonly System.Text.RegularExpressions.Regex KeyVaultNamePattern =
+        new("^[a-z](?:[a-z0-9]|-(?=[a-z0-9])){1,22}[a-z0-9]$",
+            System.Text.RegularExpressions.RegexOptions.CultureInvariant |
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
     private static readonly System.Text.RegularExpressions.Regex ResourceName =
         new("^[a-z][a-z0-9_]{0,62}$", System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
@@ -206,11 +210,15 @@ internal static class ProbeTargetValidator
         var storageName = $"{ExpectedResourceGroup.Replace("-", "", StringComparison.Ordinal)}blob";
         string ResourceId(string type, string name) => $"{target.ResourceGroupId}/providers/{type}/{name}";
         var resources = target.FoundationResources;
+        var keyVaultPrefix = $"{target.ResourceGroupId}/providers/Microsoft.KeyVault/vaults/";
+        var keyVaultName = resources.KeyVaultId.StartsWith(keyVaultPrefix, StringComparison.OrdinalIgnoreCase)
+            ? resources.KeyVaultId[keyVaultPrefix.Length..]
+            : null;
         bool MatchesKeyVault(string name) =>
             Equal(resources.KeyVaultId, ResourceId("Microsoft.KeyVault/vaults", name)) &&
-            resources.VaultUri == $"https://{name}.vault.azure.net/";
-        var keyVaultMatches = MatchesKeyVault($"{ExpectedResourceGroup}-kv") ||
-            ExpectedResourceGroup == "agentweaver" && MatchesKeyVault("agentweaver-kv-v1");
+            resources.VaultUri == $"https://{name.ToLowerInvariant()}.vault.azure.net/";
+        var keyVaultMatches = keyVaultName is not null && KeyVaultNamePattern.IsMatch(keyVaultName) &&
+            MatchesKeyVault(keyVaultName);
         if (!Equal(resources.ClusterId, ResourceId("Microsoft.ContainerService/managedClusters", $"{ExpectedResourceGroup}-aks")) ||
             !keyVaultMatches ||
             !Equal(resources.StorageAccountId, ResourceId("Microsoft.Storage/storageAccounts", storageName)) ||

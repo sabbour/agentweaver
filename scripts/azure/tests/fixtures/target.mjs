@@ -20,6 +20,7 @@ export const source = { sha: 'a'.repeat(40), sourceTree: 'c'.repeat(40), sourceH
   appRoutingDnsZoneResourceIds: [] };
 export const fixture = { ...ids, resourceGroup: 'agentweaver', repoRoot: process.cwd(),
   template: source.template, parametersFile: source.parametersFile, expectedSha: source.sha,
+  keyVaultName: source.keyVaultName,
   deploymentName: `agentweaver-${source.sha.slice(0, 12)}`,
   groupId: `/subscriptions/${ids.subscriptionId}/resourceGroups/agentweaver` };
 export const clusterId = `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/agentweaver-aks`;

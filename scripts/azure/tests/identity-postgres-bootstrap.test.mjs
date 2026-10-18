@@ -37,12 +37,12 @@ test('Probe principal registration and validation use postgres before the transa
   assert.match(source, /if \(!schemaExists\)[\s\S]*CREATE SCHEMA foundation_probe/);
 });
 
-test('TCP proxy preserves PostgreSQL defaults and admits only the two exact approved Key Vault targets', () => {
+test('TCP proxy preserves PostgreSQL defaults and admits only the exact configured Key Vault target', () => {
   const source = readFileSync('tools/IdentityPostgresTcpProxy/Program.cs', 'utf8');
   assert.match(source, /const int postgresPort = 5432/);
-  assert.match(source, /const string defaultVaultHost = "agentweaver-kv\.vault\.azure\.net"/);
-  assert.match(source, /const string fallbackVaultHost = "agentweaver-kv-v1\.vault\.azure\.net"/);
-  assert.match(source, /args\[1\] == defaultVaultHost \|\| args\[1\] == fallbackVaultHost/);
+  assert.match(source, /IdentityBroker__SecretRedemption__VaultUri/);
+  assert.match(source, /string\.Equals\(args\[1\], configuredVaultHost, StringComparison\.OrdinalIgnoreCase\)/);
+  assert.match(source, /GetConfiguredVaultHost/);
   assert.match(source, /EndsWith\("\.postgres\.database\.azure\.com"/);
   assert.match(source, /targetPort = keyVault \? 443 : postgresPort/);
   assert.match(source, /listenPort = keyVault \? 8443 : postgresPort/);

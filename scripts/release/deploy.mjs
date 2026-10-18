@@ -119,6 +119,7 @@ const INCOMPLETE_RUNTIME_CONFIG_MAPS = new Set([
 ]);
 const INCOMPLETE_CONFIG_MAPS = new Set([...INCOMPLETE_RUNTIME_CONFIG_MAPS, 'agenthost-runtime-v1']);
 const PREPROVISIONING_RUNTIME_MARKERS = new Set([
+  'CHANGEME-KEYVAULT-HOST',
   'CHANGEME-MANAGED-HOST',
   'CHANGEME-PORTAL-HOST',
   'CHANGEME-identity-broker-client-id',
@@ -1046,9 +1047,14 @@ export function validateKustomizeInstall(document, images, namespace, providerCa
               ?.IdentityBroker__SecretRedemption__WorkloadIdentityClientId === marker;
       }
       if (item.kind === 'CiliumNetworkPolicy') {
-        return marker === 'CHANGEME-MANAGED-HOST' &&
+        // The Broker egress host may mirror only the marker in its incomplete runtime ConfigMap.
+        return (marker === 'CHANGEME-MANAGED-HOST' &&
           ['broker-issuer-egress', 'events-and-sessions-network', 'projects-config-network'].includes(name) &&
-          incompleteRuntimeConfigMaps.size > 0;
+          incompleteRuntimeConfigMaps.size > 0) ||
+          (marker === 'CHANGEME-KEYVAULT-HOST' && name === 'identity-broker-egress' &&
+            incompleteRuntimeConfigMaps.has('identity-broker-runtime-config-v2') &&
+            configMaps.get('identity-broker-runtime-config-v2')?.data
+              ?.IdentityBroker__SecretRedemption__VaultHost === marker);
       }
       if (item.kind === 'HTTPRoute') {
         return marker === 'CHANGEME-PORTAL-HOST' && name === 'web-application' &&
