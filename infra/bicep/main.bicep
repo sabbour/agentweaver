@@ -23,6 +23,9 @@ param monitorLocation string
 @description('Dedicated naming prefix for this environment, e.g. agentweaver. Must be unique per environment and never reused from a 0.x deployment.')
 param namePrefix string
 
+@description('Dedicated Key Vault name. Defaults to the resource group name plus -kv; only agentweaver-kv-v1 is an approved fallback.')
+param keyVaultName string = '${resourceGroup().name}-kv'
+
 @description('Microsoft Entra tenant ID that owns Key Vault and the PostgreSQL administrator.')
 param tenantId string = subscription().tenantId
 
@@ -111,6 +114,7 @@ module keyVault 'modules/keyvault.bicep' = {
   params: {
     location: location
     namePrefix: namePrefix
+    keyVaultName: keyVaultName
     tags: tags
     tenantId: tenantId
     privateEndpointsSubnetId: network.outputs.privateEndpointsSubnetId

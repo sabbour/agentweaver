@@ -90,6 +90,25 @@ public sealed class ProbeContractTests
     }
 
     [Fact]
+    public void AcceptsOnlyTheExactKeyVaultFallbackWithItsMatchingUri()
+    {
+        var target = ProbeFixtures.Target();
+        var resources = target.FoundationResources with
+        {
+            KeyVaultId = target.FoundationResources.KeyVaultId.Replace(
+            "/vaults/agentweaver-kv", "/vaults/agentweaver-kv-v1", StringComparison.Ordinal),
+            VaultUri = "https://agentweaver-kv-v1.vault.azure.net/",
+        };
+        ProbeTargetValidator.Validate(target with { FoundationResources = resources }, ProbeFixtures.Source);
+
+        Assert.Equal("resource_mismatch", Assert.Throws<ProbeException>(() =>
+            ProbeTargetValidator.Validate(target with
+            {
+            FoundationResources = resources with { VaultUri = "https://agentweaver-kv.vault.azure.net/" },
+            }, ProbeFixtures.Source)).Code);
+    }
+
+    [Fact]
     public void RejectsMalformedOrInconsistentNativeDeploymentProvenance()
     {
         var target = ProbeFixtures.Target();

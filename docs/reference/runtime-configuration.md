@@ -113,7 +113,7 @@ Secrets.
 | `IdentityBroker__Clients__<index>__Resources__<item>` | One or more token audiences approved for that client. |
 | `IdentityBroker__DataProtectionKeyPath` | Required path for the durable ASP.NET Data Protection key ring. Mount the retained key-ring volume at this path. |
 | `IdentityBroker__SecretRedemption__Audience` | Required HTTPS audience for the secret-redemption endpoint. |
-| `IdentityBroker__SecretRedemption__VaultUri` | Required URI of the approved Key Vault. Obtain it with `az keyvault show --resource-group <resource-group> --name agentweaver-kv --query properties.vaultUri --output tsv`. |
+| `IdentityBroker__SecretRedemption__VaultUri` | Required URI of the approved Key Vault. Query the actual approved vault name (`agentweaver-kv` by default or `agentweaver-kv-v1` for the collision fallback) with `az keyvault show --resource-group <resource-group> --name <approved-key-vault-name> --query properties.vaultUri --output tsv`. |
 | `IdentityBroker__SecretRedemption__WorkloadIdentityTenantId` | Required Entra tenant GUID for the Broker's Key Vault identity. |
 | `IdentityBroker__SecretRedemption__WorkloadIdentityClientId` | Required client ID of the Broker's user-assigned managed identity. |
 | `IdentityBroker__SecretRedemption__WorkloadIdentityTokenFilePath` | Required absolute path to the projected Broker workload-identity token file. |
@@ -411,7 +411,7 @@ resource group. Replace each placeholder with the reviewed target name.
 | Current tenant ID | `az account show --query tenantId --output tsv` |
 | PostgreSQL server FQDN | `az postgres flexible-server show --resource-group <resource-group> --name <server> --query fullyQualifiedDomainName --output tsv` |
 | Managed identity client ID | `az identity show --resource-group <resource-group> --name agentweaver-id-<service> --query clientId --output tsv` |
-| Key Vault URI | `az keyvault show --resource-group <resource-group> --name agentweaver-kv --query properties.vaultUri --output tsv` |
+| Key Vault URI | `az keyvault show --resource-group <resource-group> --name <approved-key-vault-name> --query properties.vaultUri --output tsv` |
 | AKS OIDC issuer | `az aks show --resource-group <resource-group> --name agentweaver-aks --query oidcIssuerProfile.issuerUrl --output tsv` |
 | AKS-managed public domain | `az aks show --resource-group <resource-group> --name agentweaver-aks --query ingressProfile.webAppRouting.defaultDomain.domainName --output tsv` |
 

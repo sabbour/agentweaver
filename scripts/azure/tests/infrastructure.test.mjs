@@ -71,6 +71,8 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.equal(template.parameters.sourceTree.type, 'string');
   assert.equal(template.parameters.sourceHash.type, 'string');
   assert.equal(template.parameters.monitorLocation.type, 'string');
+  assert.equal(template.parameters.keyVaultName.type, 'string');
+  assert.ok(template.parameters.keyVaultName.defaultValue.includes('-kv'));
   assert.deepEqual(template.parameters.postgresEntraAdminPrincipalType.allowedValues, [
     'User', 'Group', 'ServicePrincipal',
   ]);
@@ -84,6 +86,12 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.match(postgresDeployment.properties.parameters.delegatedSubnetId.value, /postgresSubnetId/);
   assert.equal(postgresDeployment.properties.parameters.entraAdminPrincipalType.value,
     "[parameters('postgresEntraAdminPrincipalType')]");
+  const keyVaultDeployment = template.resources.find(resource =>
+    resource.name === "[format('{0}-keyvault', parameters('namePrefix'))]");
+  assert.equal(keyVaultDeployment.properties.parameters.keyVaultName.value, "[parameters('keyVaultName')]");
+  const keyVaultResource = keyVaultDeployment.properties.template.resources.find(resource =>
+    resource.type === 'Microsoft.KeyVault/vaults');
+  assert.equal(keyVaultResource.name, "[parameters('keyVaultName')]");
   const postgres = postgresDeployment.properties.template;
   const postgresServer = postgres.resources.find(resource =>
     resource.type === 'Microsoft.DBforPostgreSQL/flexibleServers');

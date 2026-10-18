@@ -16,6 +16,7 @@ export const source = { sha: 'a'.repeat(40), sourceTree: 'c'.repeat(40), sourceH
   postgresEntraAdminObjectId: '33333333-3333-3333-3333-333333333333',
   postgresEntraAdminPrincipalName: 'generated-admin-principal',
   postgresEntraAdminPrincipalType: 'User',
+  keyVaultName: 'agentweaver-kv',
   appRoutingDnsZoneResourceIds: [] };
 export const fixture = { ...ids, resourceGroup: 'agentweaver', repoRoot: process.cwd(),
   template: source.template, parametersFile: source.parametersFile, expectedSha: source.sha,

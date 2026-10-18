@@ -353,6 +353,33 @@ test('role assignments must have the exact reviewed parent scope and ARM GUID', 
   assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources: [migrationVaultRole] })), /unexpected/);
 });
 
+test('Key Vault fallback is accepted only by its exact approved name and resource scope', () => {
+  const keyVault = postDeploymentInventory.find(resource => resource.type === 'Microsoft.KeyVault/vaults');
+  const fallbackName = 'agentweaver-kv-v1';
+  const fallbackVault = {
+    ...keyVault,
+    id: keyVault.id.replace(keyVault.name, fallbackName),
+    name: fallbackName,
+  };
+  const fallbackConfig = { ...fixture, ...source, keyVaultName: fallbackName };
+  assert.doesNotThrow(() => guardAzureTarget(fallbackConfig, fakeAzure({ resources: [fallbackVault] })));
+  assert.throws(() => guardAzureTarget(fallbackConfig, fakeAzure({ resources: [keyVault] })), /unexpected/);
+  const clusterId = `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/agentweaver-aks`;
+  const roleId = 'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba';
+  const roleName = expectedArmGuid(fallbackVault.id, clusterId, roleId);
+  assert.doesNotThrow(() => guardAzureTarget(fallbackConfig, fakeAzure({ resources: [{
+    id: `${fallbackVault.id}/providers/Microsoft.Authorization/roleAssignments/${roleName}`,
+    type: 'Microsoft.Authorization/roleAssignments',
+    name: roleName,
+  }] })));
+  assert.throws(() => guardAzureTarget({
+    ...fixture, ...source, keyVaultName: 'agentweaver-kv-v2',
+  }, fakeAzure({ resources: [fallbackVault] })), /Key Vault name/);
+  assert.throws(() => guardAzureTarget({
+    ...fixture, ...source, resourceGroup: 'agentweaver-test', keyVaultName: 'agentweaver-test-kv-v1',
+  }, fakeAzure({ resources: [fallbackVault] })), /dedicated v1 P0 naming convention/);
+});
+
 test('custom App Routing DNS inventory admits only exact scoped roles and module deployments', () => {
   const zoneIds = [
     `${fixture.groupId}/providers/Microsoft.Network/dnsZones/apps.example.com`,
@@ -498,4 +525,16 @@ test('deployment configuration requires exact resource IDs/endpoints and a named
     { ...deploymentOutputs, appRoutingDomain: { value: { managedDefaultRequested: false, domainName: 'test-only.invalid' } } },
   ]) assert.throws(() => readFoundationOutputs(outputs, fixture));
   assert.throws(() => readFoundationOutputs(customOutputs, fixture), /App Routing|Deployment outputs/);
+});
+
+test('deployment outputs bind the approved Key Vault fallback name and URI', () => {
+  const keyVaultName = 'agentweaver-kv-v1';
+  const fallbackOutputs = structuredClone(deploymentOutputs);
+  fallbackOutputs.foundationResources.value.keyVaultId =
+    fallbackOutputs.foundationResources.value.keyVaultId.replace('agentweaver-kv', keyVaultName);
+  fallbackOutputs.foundationResources.value.vaultUri = `https://${keyVaultName}.vault.azure.net/`;
+  const result = readFoundationOutputs(fallbackOutputs, { ...fixture, keyVaultName });
+  assert.equal(result.resources.keyVaultId, fallbackOutputs.foundationResources.value.keyVaultId);
+  assert.equal(result.resources.vaultUri, fallbackOutputs.foundationResources.value.vaultUri);
+  assert.throws(() => readFoundationOutputs(fallbackOutputs, fixture), /Deployment output keyVaultId/);
 });

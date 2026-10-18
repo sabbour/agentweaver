@@ -113,6 +113,17 @@ test('Probe Logs route permits only owned private API /32 and exact DNS names', 
   assert.ok(!egress.spec.egress.some(value => value.toFQDNs?.some(host => host.matchName === 'api.loganalytics.io')));
 });
 
+test('Probe egress binds DNS and FQDN rules to the approved Key Vault fallback', () => {
+  const egress = foundationProbeEgress({ ...config, keyVaultName: 'agentweaver-kv-v1' }, route());
+  const names = egress.baseline.egress[0].toPorts[0].rules.dns.map(value => value.matchName);
+  assert.ok(names.includes('agentweaver-kv-v1.vault.azure.net'));
+  assert.ok(!names.includes('agentweaver-kv.vault.azure.net'));
+  assert.deepEqual(egress.baseline.egress[1].toFQDNs.map(value => value.matchName),
+    ['login.microsoftonline.com', 'agentweaver-kv-v1.vault.azure.net']);
+  assert.throws(() => foundationProbeEgress({ ...config, keyVaultName: 'agentweaver-kv-v2' }, route()),
+    /approved fallback/);
+});
+
 test('Probe Logs route rejects wrong host, public IP and foreign or inconsistent ownership', () => {
   for (const change of [
     value => { value.nic.ipConfigurations[0].privateLinkConnectionProperties.fqdns = ['foreign.monitor.azure.com']; },

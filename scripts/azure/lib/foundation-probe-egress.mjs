@@ -1,5 +1,6 @@
 /** Checks that probe traffic is restricted to the approved Azure Monitor private-link path. */
 import { isIPv4 } from 'node:net';
+import { assertApprovedKeyVaultName } from './guardrails.mjs';
 
 const logsHost = 'api.loganalytics.io';
 const logsAliases = ['api.monitor.azure.com', 'api.privatelink.monitor.azure.com'];
@@ -10,6 +11,7 @@ const sameId = (actual, expected) => typeof actual === 'string' && actual.toLowe
  * Returns structured evidence when they match the fixed P0 topology; mismatches throw.
  */
 export function foundationProbeEgress(config, { endpoint, nic, record, ingestionHost }) {
+  const keyVaultName = assertApprovedKeyVaultName(config.resourceGroup, config.keyVaultName);
   const prefix = `/subscriptions/${config.subscriptionId}/resourceGroups/agentweaver/providers/`;
   const endpointId = `${prefix}Microsoft.Network/privateEndpoints/agentweaver-ampls-pe`;
   const subnetId = `${prefix}Microsoft.Network/virtualNetworks/agentweaver-vnet/subnets/private-endpoints`;
@@ -41,7 +43,8 @@ export function foundationProbeEgress(config, { endpoint, nic, record, ingestion
       !/^[a-z0-9]+(?:-[a-z0-9]+)*\.in\.applicationinsights\.azure\.com$/.test(ingestionHost ?? '')) {
     throw new Error('Probe Logs egress requires an exact private API member, matching DNS record and ingestion host.');
   }
-  const baseDns = ['login.microsoftonline.com', 'agentweaver-kv.vault.azure.net',
+  const keyVaultHost = `${keyVaultName}.vault.azure.net`;
+  const baseDns = ['login.microsoftonline.com', keyVaultHost,
     'agentweaverblob.blob.core.windows.net', ingestionHost, 'agentweaver-pg.postgres.database.azure.com'];
   const ports = port => [{ ports: [{ port, protocol: 'TCP' }] }];
   const baseline = {
@@ -50,7 +53,7 @@ export function foundationProbeEgress(config, { endpoint, nic, record, ingestion
       { toEndpoints: [{ matchLabels: { 'k8s:io.kubernetes.pod.namespace': 'kube-system', 'k8s:k8s-app': 'kube-dns' } }],
         toPorts: [{ ports: [{ port: '53', protocol: 'UDP' }, { port: '53', protocol: 'TCP' }],
           rules: { dns: baseDns.map(matchName => ({ matchName })) } }] },
-      { toFQDNs: ['login.microsoftonline.com', 'agentweaver-kv.vault.azure.net'].map(matchName => ({ matchName })),
+      { toFQDNs: ['login.microsoftonline.com', keyVaultHost].map(matchName => ({ matchName })),
         toPorts: ports('443') },
       { toFQDNs: ['agentweaverblob.blob.core.windows.net', ingestionHost].map(matchName => ({ matchName })),
         toPorts: ports('443') },
