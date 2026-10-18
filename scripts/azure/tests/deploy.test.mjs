@@ -291,6 +291,8 @@ test('runtime phase cannot reuse the earlier initial PostgreSQL bootstrap receip
 test('Identity routing is default-off with explicit placement, policy, and public client inputs', async () => {
   assert.equal(cliOptions['bootstrap-identity-routing'].default, false);
   assert.equal(cliConfig({}).bootstrapIdentityRouting, false);
+  assert.equal(cliOptions['identity-routing-certificates-only'].default, false);
+  assert.equal(cliConfig({}).identityRoutingCertificatesOnly, false);
   assert.equal(cliOptions['identity-gateway-namespace'].default, undefined);
   assert.equal(cliOptions['identity-gateway-security-policy'].default, undefined);
   assert.equal(cliOptions['verify-identity-broker-readiness'].default, false);
@@ -305,6 +307,7 @@ test('Identity routing is default-off with explicit placement, policy, and publi
   });
   assert.equal(result.executed, false);
   assert.equal(result.identityRoutingPlan.gatewaySecurityPolicy, 'baseline');
+  assert.equal(result.identityRoutingPlan.certificatesOnly, false);
   assert.equal(result.identityRoutingPlan.appRegistrationMutation, false);
   await assert.rejects(deploy({ ...fixture, bootstrapIdentityRouting: true }), /requires explicit/);
   await assert.rejects(deploy({ ...fixture, gatewaySecurityPolicy: 'baseline' }), /require the separate/);
@@ -318,6 +321,20 @@ test('Identity routing is default-off with explicit placement, policy, and publi
   });
   assert.equal(confirmedPlan.identityRoutingPlan.appRegistrationMutationRequested, true);
   assert.equal(confirmedPlan.identityRoutingPlan.appRegistrationMutation, false);
+  const certificatePlan = await deploy({
+    ...fixture, ...routing, identityRoutingCertificatesOnly: true,
+  }, {
+    sourceResolver: () => source,
+    execAz: () => { throw new Error('dry-run certificate write'); },
+    initializeIdentityRouting: () => { throw new Error('dry-run certificate mutation'); },
+  });
+  assert.equal(certificatePlan.identityRoutingPlan.certificatesOnly, true);
+  await assert.rejects(deploy({
+    ...fixture, identityRoutingCertificatesOnly: true,
+  }), /require the separate --bootstrap-identity-routing option/);
+  await assert.rejects(deploy({
+    ...fixture, ...routing, identityRoutingCertificatesOnly: true, verifyBrokerReadiness: true,
+  }), /cannot verify Broker readiness/);
 });
 
 test('guarded routing runs without namespace bootstrap, PostgreSQL, or application mutation', async () => {
@@ -343,6 +360,21 @@ test('guarded routing runs without namespace bootstrap, PostgreSQL, or applicati
     sourceResolver: () => source, execAz: fakeAzure(),
     initializeIdentityRouting: () => { throw new Error('Gateway not Programmed'); },
   }), /Identity routing bootstrap failed: Gateway not Programmed/);
+});
+
+test('certificate-only routing stage is passed only through the guarded identity-routing operation', async () => {
+  const routing = { bootstrapIdentityRouting: true, identityRoutingCertificatesOnly: true,
+    gatewayNamespace: 'agentweaver-gateway', gatewaySecurityPolicy: 'baseline',
+    upstreamClientId: ids.subscriptionId };
+  const result = await deploy({ ...fixture, ...routing, execute: true }, {
+    sourceResolver: () => source, execAz: fakeAzure(),
+    initializeIdentityRouting(config) {
+      assert.equal(config.identityRoutingCertificatesOnly, true);
+      return { certificatesConfigured: true, routingConfigured: false, runtimeVerified: false };
+    },
+  });
+  assert.equal(result.receipt.identityRouting.certificatesConfigured, true);
+  assert.equal(result.receipt.identityRouting.routingConfigured, false);
 });
 
 test('deployment checks real account, group and resources, then what-if before create', async () => {

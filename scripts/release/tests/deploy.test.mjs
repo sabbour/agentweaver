@@ -1452,6 +1452,7 @@ test('deployment preflight reads exact managed Gateway and application routing r
     args[1], args[args.indexOf('--field-selector') + 1], args[args.indexOf('--namespace') + 1],
   ]), [
     ['defaultdomaincertificates', 'metadata.name=identity-broker', target.namespace],
+    ['defaultdomaincertificates', 'metadata.name=identity-broker', 'agentweaver-gateway'],
     ['gateways', 'metadata.name=identity-broker', 'agentweaver-gateway'],
     ['httproutes', 'metadata.name=identity-broker', target.namespace],
     ['backendtlspolicies', 'metadata.name=identity-broker', target.namespace],
@@ -1565,11 +1566,57 @@ test('routing readbacks project actual portal hostnames before output redaction'
   assert.equal(observed.portalHostname, portalHostname);
   assert.equal(observed.hostnameAligned, true);
   assert.equal(observed.gatewayProgrammed, true);
-  assert.equal(calls.length, 9);
+  assert.equal(calls.length, 10);
   assert.ok(calls.every(({ file, options }) => file === 'kubectl' &&
     options.projectJson === projectIdentityRoutingReadback && options.preserveProjectedJson === true));
-  assert.equal(JSON.parse(calls[5].output).spec.hostnames[0], portalHostname);
-  assert.equal(JSON.parse(calls[7].output).spec.hostnames[0], portalHostname);
+  // Identify route readbacks by resource so certificate reads cannot shift these assertions.
+  const routeHostname = name => {
+    const call = calls.find(({ args }) => args[1] === 'httproutes' &&
+      args[args.indexOf('--field-selector') + 1] === `metadata.name=${name}`);
+    assert.ok(call, `missing HTTPRoute readback for ${name}`);
+    return JSON.parse(call.output).spec.hostnames[0];
+  };
+  assert.equal(routeHostname('web-application'), portalHostname);
+  assert.equal(routeHostname('gateway-api'), portalHostname);
+});
+
+test('release preflight accepts only the certificate-only state before a fresh product apply', () => {
+  const domain = '*.0123456789abcdef.eastus2euap.aksapp.io';
+  const certificate = namespace => ({
+    apiVersion: 'approuting.kubernetes.azure.com/v1alpha1',
+    kind: 'DefaultDomainCertificate',
+    metadata: { name: 'identity-broker', namespace, uid: `${namespace}-certificate`, generation: 1 },
+    spec: { target: { secret: 'identity-broker-tls' } },
+    status: { domain, conditions: [{ type: 'Available', status: 'True', observedGeneration: 1 }] },
+  });
+  const resources = {
+    'defaultdomaincertificates|agentweaver:identity-broker': certificate(target.namespace),
+    'defaultdomaincertificates|agentweaver-gateway:identity-broker': certificate('agentweaver-gateway'),
+  };
+  const calls = [];
+  const run = (file, args, options) => {
+    const resource = args[1];
+    const namespace = args[args.indexOf('--namespace') + 1];
+    const name = args[args.indexOf('--field-selector') + 1].split('=')[1];
+    const object = resources[`${resource}|${namespace}:${name}`] ?? null;
+    calls.push(args);
+    return JSON.stringify(options.projectJson({ items: object ? [object] : [] }));
+  };
+
+  const result = verifyExistingP0BrokerRouting(target, { root, run });
+
+  assert.equal(result.certificatesConfigured, true);
+  assert.equal(result.routingConfigured, false);
+  assert.equal(result.runtimeVerified, false);
+  assert.equal(result.hostname, `agentweaver.${domain.slice(2)}`);
+  assert.equal(calls.length, 10);
+  assert.ok(calls.every(args => args[0] === 'get'));
+
+  resources['gateways|agentweaver-gateway:identity-broker'] = {
+    kind: 'Gateway', apiVersion: 'gateway.networking.k8s.io/v1',
+    metadata: { name: 'identity-broker', namespace: 'agentweaver-gateway', uid: 'gateway', generation: 1 },
+  };
+  assert.throws(() => verifyExistingP0BrokerRouting(target, { root, run }));
 });
 
 test('Azure target readbacks preserve exact hostnames without exposing kubeconfig credentials', () => {

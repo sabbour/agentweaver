@@ -265,9 +265,10 @@ Kustomize base intentionally does not own:
 
 1. Create the approved Identity Broker signing Secret and durable data
    protection key-ring volume.
-2. Provide the Identity Broker, Gateway, and MCP TLS Secrets and the public
-   backend CA ConfigMap. Each certificate must match the service DNS name
-   required by the manifests.
+2. Provide the operator-owned Gateway and MCP backend TLS Secrets and the
+   public backend CA ConfigMap. Each certificate must match the service DNS
+   name required by the manifests. AKS creates `identity-broker-tls` from a
+   managed `DefaultDomainCertificate`; do not create that Secret manually.
 3. Resolve all required runtime ConfigMap values before applying the product
    bundle. For an existing installation, use the
    [immutable ConfigMap update procedure](../reference/runtime-configuration.md#update-an-immutable-configmap).
@@ -281,7 +282,9 @@ Kustomize base intentionally does not own:
 
 Do not copy acceptance-only OAuth client IDs or loopback redirect URIs into a
 production registration. Keep passwords, OAuth secrets, PFX passwords, tokens,
-and private keys out of ConfigMaps and command-line arguments.
+and private keys out of ConfigMaps and command-line arguments. For a fresh
+install, the certificate-only routing stage in step 7 creates the managed
+`identity-broker-tls` Secret before the release preflight.
 
 ## 7. Render and install the Kustomize bundle
 
@@ -306,34 +309,67 @@ kubectl apply --dry-run=client -k deploy\k8s
 This command validates the rendered objects locally; it does not prove that
 the cluster will accept them.
 
-After the required configuration and operator-owned resources pass the
-release preflight, apply the complete product bundle:
+For a fresh install, use this order after the target, database, workload
+identities, operator-owned TLS resources, and runtime values are ready:
 
-```powershell
-kubectl apply -k deploy\k8s
-```
+1. Create the managed certificates before the release bootstrap. Use the
+   certificate-only form of the guarded routing installer from the
+   [Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#application-routing-source-setting).
+   It waits for both `DefaultDomainCertificate` resources to become Available
+   and for AKS to create `identity-broker-tls`. It does not create routes and
+   does not require product Services. Use the returned managed hostname to
+   confirm that the approved runtime configuration uses the same issuer and
+   Web origin.
 
-The root Kustomization includes the Portal Web HTTPRoute and Cilium ingress
-policies. The Web route depends on the `portal` listener in the separately
-managed Gateway; the root bundle does not create that Gateway, listener,
-certificate, or public DNS. The root also does not apply the Identity Broker
-migration Job or acceptance Foundation Probe. Apply the reviewed migration
-overlay separately after its database identity and connection are ready:
+2. Apply the Identity Broker migration overlay after its migration identity,
+   connection ConfigMap, and approved immutable Broker image are ready. Wait
+   for the Job to complete, then verify the runtime database grants. The Broker
+   runtime checks its schema at startup and does not run migrations.
 
 ```powershell
 kubectl kustomize deploy\k8s\migrations\identity-broker
 kubectl apply -k deploy\k8s\migrations\identity-broker
+kubectl wait --for=condition=complete job/identity-broker-migration `
+  --namespace agentweaver --timeout=10m
 ```
 
-If public Portal, Gateway API, or MCP routes are in scope, configure them only
-after the product Services exist. Use the separate, default-off
-`--bootstrap-identity-routing` operation in the
-[Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#application-routing-source-setting).
-It applies the reviewed AKS-managed Gateway, certificates, HTTPRoutes, backend
-TLS policies, and narrow ingress policies, then verifies their current
-conditions. The installer does not guess `<managed-domain>`, change the Broker
-application, or create service TLS certificates. An optional callback append
-requires a separate explicit flag and the exact route-derived URI.
+3. Run the source-bound release bootstrap with `--execute`. It verifies the
+   publication receipt, image digests, target, complete runtime ConfigMaps,
+   managed Broker certificate, operator-owned resources, and rendered bundle
+   before it applies the root Kustomize bundle. The preflight accepts the
+   certificate-only state only when both managed certificates are valid and
+   no Gateway, route, or backend policy exists. A partial or mismatched
+   routing configuration still fails closed. Do not apply the root bundle
+   directly with `kubectl`; the release command is the guarded workload apply.
+
+   ```powershell
+   npm run release:deploy-bootstrap -- v1.0.1 `
+     --manifest releases/foundation.json `
+     --publication <v1.0.1-publication.json> `
+     --subscription-id <subscription-id> `
+     --tenant-id <tenant-id> `
+     --resource-group agentweaver `
+     --cluster agentweaver-aks `
+     --namespace agentweaver `
+     --node-min 2 `
+     --node-max 3 `
+     --provider-catalog-configmap <reviewed-configmap-name> `
+     --provider-catalog-source-commit <reviewed-40-character-source-sha> `
+     --execute
+   ```
+
+   Use the exact reviewed receipt and catalog values for the selected release.
+   See [local v1 release deployment](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#local-v1-release-deployment)
+   for the full admission contract.
+
+4. After the release bootstrap succeeds and the product Services exist, run
+   the full, default-off `--bootstrap-identity-routing` operation without
+   `--identity-routing-certificates-only`. It checks the exact private HTTPS
+   MCP Service before any route write, then applies and verifies the Gateway,
+   routes, backend TLS policies, and narrow ingress policies. The installer
+   does not guess `<managed-domain>`, change the Broker application, or create
+   service TLS certificates. An optional callback append requires a separate
+   explicit flag and the exact route-derived URI.
 
 Use the guarded release tooling for a published-image rollout. The
 `release:deploy-bootstrap` path is for its explicitly admitted pre-acceptance

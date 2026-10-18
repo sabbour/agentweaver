@@ -582,13 +582,14 @@ export function verifyIdentityBrokerReadiness(receipt, {
 }
 
 /**
- * Verifies and applies the identity broker routing configuration for the dedicated P0 target.
- * Required create or patch permissions are checked before the first routing manifest is applied.
+ * Verifies and applies identity broker certificates and routing for the dedicated P0 target.
+ * Certificate-only mode stages the managed TLS Secret before workloads; full routing still checks the exact MCP Service.
  */
 export function bootstrapIdentityRouting(config, {
   execAz = runAz, execKubelogin = (args, options) => run('kubelogin', args, options),
   execKubectl = (args, options) => run('kubectl', args, options), execCurl,
 } = {}) {
+  const certificatesOnly = config.identityRoutingCertificatesOnly === true;
   assertIdentityRoutingPlacement(config);
   if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(config.upstreamClientId ?? '')) {
     throw new Error('Identity routing requires the exact upstream public application client ID.');
@@ -673,6 +674,11 @@ export function bootstrapIdentityRouting(config, {
       ['ciliumnetworkpolicy', P0_NAMESPACE, 'gateway-api-ingress', 'gateway'],
       ['ciliumnetworkpolicy', P0_NAMESPACE, 'mcp-gateway-ingress', 'mcp'],
     ]) {
+      // Certificate staging applies no route, so the full phase owns the MCP Service check.
+      if (kind === 'service' && certificatesOnly) {
+        existingObjects.set(`${kind}/${namespace}/${name}`, false);
+        continue;
+      }
       const object = JSON.parse(command(['get', kind, `--field-selector=metadata.name=${name}`,
         '--namespace', namespace, '-o', 'json']));
       if (object && (object.metadata?.name !== name || object.metadata?.namespace !== namespace ||
@@ -719,11 +725,15 @@ export function bootstrapIdentityRouting(config, {
       ['ciliumnetworkpolicy', 'ciliumnetworkpolicies', P0_NAMESPACE, 'gateway-api-ingress'],
       ['ciliumnetworkpolicy', 'ciliumnetworkpolicies', P0_NAMESPACE, 'mcp-gateway-ingress'],
     ];
+    const certificateWrites = certificatesOnly
+      ? routingWrites.filter(([kind]) => kind === 'defaultdomaincertificate')
+      : routingWrites;
     const writePermissions = existing ? [] : [['create', 'namespaces']];
-    writePermissions.push(...routingWrites.map(([kind, resource, namespace, name]) => [
+    writePermissions.push(...certificateWrites.map(([kind, resource, namespace, name]) => [
       existingObjects.get(`${kind}/${namespace}/${name}`) ? 'patch' : 'create', resource, namespace,
     ]));
-    assertP0KubernetesPermissions(baseArgs, execKubectl, writePermissions, 'Identity routing bootstrap');
+    assertP0KubernetesPermissions(baseArgs, execKubectl, writePermissions,
+      certificatesOnly ? 'Identity routing certificate bootstrap' : 'Identity routing bootstrap');
     if (!existing) apply('gateway-namespace.yaml');
     for (const [filename, namespace] of [
       ['gateway-certificate.yaml', GATEWAY_NAMESPACE],
@@ -740,6 +750,13 @@ export function bootstrapIdentityRouting(config, {
       throw new Error('Managed Gateway and Broker certificate domains differ.');
     }
     const portalHostname = managedPortalHostname(gatewayCertificate, GATEWAY_NAMESPACE);
+    // Return after both managed certificates converge; only the full phase may apply routes.
+    if (certificatesOnly) {
+      return {
+        certificatesConfigured: true, hostname, portalHostname,
+        routingConfigured: false, runtimeVerified: false,
+      };
+    }
     for (const [filename, replacements] of [
       ['gateway.yaml', {
         'CHANGEME-MANAGED-HOST': hostname, 'CHANGEME-PORTAL-HOST': portalHostname,

@@ -57,11 +57,15 @@ Before applying:
 
 1. Complete every workload-required runtime ConfigMap value.
 2. Create the operator-owned Secrets and backend CA ConfigMap referenced by
-   the workloads.
-3. Confirm the database, Entra roles, migrations, and required grants.
-4. Confirm the external Gateway has the `portal` listener required by the Web
-   HTTPRoute.
-5. Run the source-bound release preflight for the exact target and images.
+   the workloads. AKS creates `identity-broker-tls` from the managed
+   `DefaultDomainCertificate` during the guarded certificate-only routing
+   stage.
+3. Confirm the database, Entra roles, completed Broker migration, and runtime
+   grants.
+4. Run the guarded certificate-only routing stage before the product release
+   bootstrap. It does not require the product Services.
+5. Run the source-bound release preflight and apply for the exact target and
+   images. Configure full Gateway routing after the product Services exist.
 
 The ordinary `kubectl apply` command does not validate image provenance,
 database readiness, identity federation, TLS trust, or external permissions.
@@ -110,33 +114,41 @@ separate overlays.
    The `routing\identity-broker` directory supplies selected resources to the
    root Kustomization; it is not a standalone Kustomize overlay.
 
-3. After the target, images, runtime values, and operator-owned resources pass
-   the approved preflight, apply the product bundle:
+3. On a fresh install, run the default-off certificate-only phase of
+   `--bootstrap-identity-routing` before `release:deploy-bootstrap --execute`.
+   It applies the two managed `DefaultDomainCertificate` resources and waits
+   for AKS to create `identity-broker-tls`. It does not apply Gateway, routes,
+   backend policies, or ingress policies, and it does not read the MCP Service.
+   The release preflight accepts this state only when both certificates are
+   valid, their domains match, and no partial routing resources exist.
 
-   ```powershell
-   kubectl apply -k deploy\k8s
-   ```
-
-   This changes cluster state. Apply it only to the approved context.
-
-4. Apply the Identity Broker migration Job only after its migration identity
-   and database connection are ready:
+4. Apply the Identity Broker migration Job after its migration identity,
+   connection ConfigMap, and approved immutable Broker image are ready, and
+   before the release bootstrap. Wait for the Job to complete and apply the
+   required runtime grants. Broker startup checks the schema; it does not run
+   migrations.
 
    ```powershell
    kubectl apply -k deploy\k8s\migrations\identity-broker
+   kubectl wait --for=condition=complete job/identity-broker-migration `
+     --namespace agentweaver --timeout=10m
    ```
 
-   The root Kustomization does not run migrations. The Broker runtime identity
-   does not own the schema.
+5. Run `release:deploy-bootstrap --execute` with the exact published receipt,
+   target, and provider-catalog inputs. It performs the guarded root-bundle
+   apply and verifies live workloads. Do not replace this command with a
+   direct `kubectl apply -k deploy\k8s`.
 
-5. If public Portal, Gateway API, or MCP routes are in scope, use the separate
-   default-off `--bootstrap-identity-routing` procedure in the
+6. After the release bootstrap creates the product Services, run the full
+   default-off `--bootstrap-identity-routing` procedure without the
+   certificate-only option. Before any route write, it requires the exact
+   private HTTPS MCP Service. It then installs and verifies the managed Gateway,
+   certificates, HTTPRoutes, backend TLS policies, and narrow ingress policies.
+   The full installer is in the
    [Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#application-routing-source-setting).
-   It installs and verifies the managed Gateway, certificates, HTTPRoutes,
-   backend TLS policies, and narrow ingress policies. Use the approved
-   `<managed-domain>` and route-derived issuer. This operation does not create
-   service TLS certificates or change the Broker application. An optional
-   callback append requires a separate explicit flag and the exact
+   Use the approved managed hostname and route-derived issuer. This operation
+   does not create service TLS certificates or change the Broker application.
+   An optional callback append requires a separate explicit flag and the exact
    route-derived URI.
 
 Use the guarded
