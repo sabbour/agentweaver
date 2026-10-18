@@ -10,6 +10,14 @@ This article describes the checked-in v1 client and its contracts. The source
 and route manifests do not prove that the Web image, Gateway, Broker, or owner
 services are deployed or available.
 
+## Before you begin
+
+To run or build the client, install Node.js 24 and npm. To test sign-in and
+product requests, you also need a deployed Identity Broker and Gateway, a
+registered public Web client, its exact HTTPS callback URI, and a Web origin
+allowed by the Gateway. Use the runtime configuration reference for the
+deployment values.
+
 ## Understand how the client connects
 
 The browser sends product API requests to the Gateway. The Gateway validates
@@ -70,6 +78,19 @@ ID and journal position. A pending action requires the exact request ID and
 decision version from the latest owner snapshot. Owner acceptance is not shown
 as delivery, completion, or a state transition; the refreshed snapshot shows
 the resulting state.
+
+## Configure and verify the client
+
+1. Register a public OAuth client with the Identity Broker. Set its redirect
+   URI to the exact Web origin followed by `/auth/callback`, and use the
+   registered scopes and client ID.
+2. Set the Broker URL and issuer to the approved HTTPS values. Set the Gateway
+   base path to `/api/v1` when the managed portal routes that same-origin path
+   to Gateway; use another value only when it matches the reviewed route.
+3. Open the client, complete the authorization-code flow with PKCE, and
+   confirm that the callback returns to the registered URI.
+4. Make a versioned API request through Gateway. Confirm that the owner
+   enforces current authorization for the requested operation.
 
 ## Configure browser origins
 
@@ -252,3 +273,11 @@ reference, not a provisioned provider pin or runtime SDK model ID. Usage
 reports run totals without per-event model-binding details. The UI does not
 infer those identities from configuration or usage, and it does not replace
 missing measurements with zero.
+
+## Expected result
+
+The client returns to its exact registered callback after sign-in and sends
+product API and event-stream requests through the configured Gateway. The
+client keeps tokens in memory; owner services remain responsible for current
+authorization. A successful client build alone does not prove live sign-in or
+API access.

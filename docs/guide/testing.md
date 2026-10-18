@@ -14,6 +14,13 @@ tests at a shared or production database.
 
 Run commands from the repository root unless a procedure says otherwise.
 
+## Choose and run a test procedure
+
+1. Identify the service, provider, or documentation surface you changed.
+2. Run the matching standard or focused command in the sections below.
+3. Record the command, result, and exact source SHA. Mark unrun tests as not
+   run; do not count a compile-only or older-source result as a pass.
+
 ## Run the standard test suites
 
 Run the following commands to restore, build, and test the main .NET and Node.js
@@ -245,3 +252,9 @@ Some GitHub Canvas checks documented in the issue tracker are planned
 requirements, not an implemented adapter or a passing test suite. Treat
 controlled fixtures, compiled cases, and unexecuted requirements as distinct
 from live or deployed evidence.
+
+## Expected result
+
+The selected commands exit successfully, and the recorded results identify the
+source revision that ran. A passing test proves only the behavior described
+for its test area; it does not prove deployment or live external access.

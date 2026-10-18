@@ -16,7 +16,10 @@ Run commands from the repository root. The actual Host image check in this
 article builds and runs a container; run it only after approving local image
 construction and execution.
 
-## Test suspend and flush contracts
+Each numbered section is an independent test procedure. Run only the sections
+that match the behavior you changed or need to verify.
+
+## 1. Test suspend and flush contracts
 
 Run the focused suspend and flush tests without PostgreSQL or native mounted
 storage:
@@ -40,7 +43,7 @@ but compiling that case is not evidence that it ran.
 The tests do not prove native cache capture, mounted flush durability,
 placement retirement, or a complete deployed suspend/resume flow.
 
-## Test resume and provider behavior
+## 2. Test resume and provider behavior
 
 Run the bounded resume and provider selections:
 
@@ -74,7 +77,7 @@ cases require their PostgreSQL execution; compilation alone does not prove
 them. None of these controlled tests proves native TLS, remount contents,
 Cilium datapath enforcement, or a complete deployed resume.
 
-## Test Sandbox leases and BuildTest contracts
+## 3. Test Sandbox leases and BuildTest contracts
 
 Run the focused Sandbox and lease tests:
 
@@ -121,7 +124,7 @@ It checks recovery of versioned checkpoint metadata, current owner decision,
 execution fence, selection, and terminal replay. Metadata validation does not
 replace the final execution check that requires the actual seed bytes.
 
-## Test captured documents and durable BuildTest operations
+## 4. Test captured documents and durable BuildTest operations
 
 Run the pure document and partial-write checks without a native Git process or
 container:
@@ -158,7 +161,7 @@ Pure request tests reject empty version 2 preparation or capture when the
 fields are absent or version 1, and controlled Kubernetes tests reject forged
 or mismatched collector versions before an HTTP request.
 
-## Run the actual Host image check
+## 5. Run the actual Host image check
 
 This opt-in check builds the actual Host Dockerfile for Linux amd64 and runs
 the production Host image and Git package. It requires approval for local
@@ -205,7 +208,7 @@ collector behavior only; the production profile requires Linux amd64. The
 check does not prove command-Pod execution, deployed PVC isolation, or Cilium
 enforcement.
 
-## Run PostgreSQL lifecycle and authorization tests
+## 6. Run PostgreSQL lifecycle and authorization tests
 
 The lease and lifecycle tests use disposable PostgreSQL 16 containers through
 Testcontainers. For the named Windows Podman machine, set its Docker
@@ -244,7 +247,7 @@ Placement observations remain `Pending` without AgentHost configure evidence.
 The same fixture does not execute an accepted Orchestrator checkpoint,
 command Pod, or output collector.
 
-## Test Orchestrator recovery
+## 7. Test Orchestrator recovery
 
 Run the focused PostgreSQL owner-store cases:
 
@@ -268,7 +271,7 @@ The Broker integration checks current role revocation, exact run registration,
 and persisted recovery context. Recovered logical run state does not prove
 that physical SDK effects were replayed or that an SDK process is ready.
 
-## Build the Environment service
+## 8. Build the Environment service
 
 Build the service and its referenced provider projects with:
 
@@ -280,3 +283,10 @@ dotnet build services\environment\Agentweaver.Environment\Agentweaver.Environmen
 The build verifies compilation only. Use the test selections above for
 contract and database behavior, and [Azure acceptance](./azure-acceptance)
 for the separate live-environment checks.
+
+## Expected result
+
+The selected commands complete successfully for the exact source revision.
+Their results cover only the contracts and fixtures described in each
+procedure; they do not prove live Kubernetes, CSI, Cilium, mounted-data, or
+deployed suspend/resume behavior.

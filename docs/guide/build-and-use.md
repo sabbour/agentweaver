@@ -69,3 +69,9 @@ exporter configuration.
 
 For exact API signatures, see [contracts and endpoints](../reference/contracts).
 For package preparation, see [component releases](../reference/releases).
+
+## Expected result
+
+The locked restore, Release build, and release-manifest validation complete
+successfully. The checks validate source and local tooling; they do not deploy
+services or provision the resources that an adapter uses.

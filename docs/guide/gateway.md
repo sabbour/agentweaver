@@ -10,6 +10,13 @@ This article describes the checked-in v1 host. Source code and Kubernetes
 manifests do not establish that the Gateway, its owners, or a public endpoint
 are deployed or available.
 
+## Before you begin
+
+To make a live request, you need a deployed Gateway, its required owner
+services, and a Broker-issued access token for a registered client. The client
+must use the configured HTTPS issuer and audience. To build or inspect the
+source contract, use the .NET 10 SDK selected by `global.json`.
+
 ## Understand request authorization
 
 The versioned HTTP API uses the `/api/v1` prefix. The Gateway publishes its
@@ -29,6 +36,16 @@ that allow the selector. The owner validates it and checks current authority.
 The authorization-context endpoint returns advisory information for a client;
 it is not a permission grant and is not safe to cache as an authorization
 decision.
+
+## Call a Gateway API operation
+
+1. Read `GET /openapi/v1.json` to find a supported route, its owner, and its
+   request and response contract.
+2. Obtain an access token from the Identity Broker for a registered client.
+3. Send the request to the exact versioned route with the bearer token. Send
+   `X-Agentweaver-Tenant` only when that route allows the selector.
+4. Check the owning service's response. A Gateway-accepted request does not
+   prove that an asynchronous operation completed.
 
 ## Configure the Gateway
 
@@ -253,3 +270,10 @@ The test uses a Broker-issued token and the live Projects/PostgreSQL
 authorization boundary with controlled owner transports. It checks owner
 status forwarding, cursor replay, and authorization before SSE writes. It does
 not prove that Gateway or owner services are deployed.
+
+## Expected result
+
+The Gateway validates the configured issuer, signature, lifetime, and
+audience, then forwards only the supported route to its fixed owner. The owner
+checks current authority and returns its contract response. A `202 Accepted`
+response means accepted, not completed.
