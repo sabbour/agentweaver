@@ -102,6 +102,18 @@ for (const name of ['aks', 'postgres', 'private-endpoints']) {
   };
 }
 
+postDeploymentDetails[vnetId] = {
+  id: vnetId,
+  type: 'Microsoft.Network/virtualNetworks',
+  name: 'agentweaver-vnet',
+  properties: {
+    subnets: ['aks', 'postgres', 'private-endpoints'].map(name => ({
+      id: `${prefix}Microsoft.Network/virtualNetworks/agentweaver-vnet/subnets/${name}`,
+      properties: { networkSecurityGroup: { id: nsgId } },
+    })),
+  },
+};
+
 for (const [zone, suffix] of [
   ['privatelink.vaultcore.azure.net', 'kv'], ['privatelink.blob.core.windows.net', 'blob'],
   ['privatelink.monitor.azure.com', 'monitor'], ['privatelink.oms.opinsights.azure.com', 'oms'],

@@ -24,7 +24,6 @@ const PRIVATE_DNS_ZONES = [
   { name: 'privatelink.agentsvc.azure-automation.net', suffix: 'agentsvc' },
   { name: 'privatelink.postgres.database.azure.com', suffix: 'pg' },
 ];
-const NRMS_NSG_NAME = 'NRMS-gxlttooqhupscagentweaver-vnet';
 const FAILURE_ANOMALIES_NAME = 'Failure Anomalies - agentweaver-appi';
 export const AKS_NETWORK_CONTRIBUTOR_ROLE_ID = '4d97b98b-1d4f-4787-a291-c67834d212e7';
 const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -34,6 +33,67 @@ const AKS_WORKLOAD_IDENTITIES = [
   ['identity-broker', 'identity-broker-workload-identity'],
   ['identity-broker-migration', 'identity-broker-migration-workload-identity'],
 ];
+
+const nrmsRule = (number, access, protocol, sourceAddressPrefix, destinationPortRange, destinationPortRanges = []) => ({
+  name: `NRMS-Rule-${number}`,
+  properties: {
+    priority: number,
+    direction: 'Inbound',
+    access,
+    protocol,
+    sourcePortRange: '*',
+    sourcePortRanges: [],
+    sourceAddressPrefix,
+    sourceAddressPrefixes: [],
+    destinationAddressPrefix: '*',
+    destinationAddressPrefixes: [],
+    destinationPortRange,
+    destinationPortRanges,
+    sourceApplicationSecurityGroups: [],
+    destinationApplicationSecurityGroups: [],
+  },
+});
+
+const normalizeNrmsRules = rules => Array.isArray(rules)
+  ? rules.map(rule => {
+    const properties = rule?.properties ?? {};
+    const normalizeArray = value => Array.isArray(value) ? [...value].sort() : value ?? [];
+    return {
+      name: rule?.name,
+      priority: properties.priority,
+      direction: properties.direction,
+      access: properties.access,
+      protocol: properties.protocol,
+      sourcePortRange: properties.sourcePortRange ?? null,
+      sourcePortRanges: normalizeArray(properties.sourcePortRanges),
+      sourceAddressPrefix: properties.sourceAddressPrefix ?? null,
+      sourceAddressPrefixes: normalizeArray(properties.sourceAddressPrefixes),
+      destinationAddressPrefix: properties.destinationAddressPrefix ?? null,
+      destinationAddressPrefixes: normalizeArray(properties.destinationAddressPrefixes),
+      destinationPortRange: properties.destinationPortRange ?? null,
+      destinationPortRanges: normalizeArray(properties.destinationPortRanges),
+      sourceApplicationSecurityGroups: normalizeArray(properties.sourceApplicationSecurityGroups),
+      destinationApplicationSecurityGroups: normalizeArray(properties.destinationApplicationSecurityGroups),
+    };
+  }).sort((left, right) => String(left.name).localeCompare(String(right.name)))
+  : null;
+
+const NRMS_EXPECTED_RULES = normalizeNrmsRules([
+  nrmsRule(101, 'Allow', 'Tcp', 'VirtualNetwork', '443'),
+  nrmsRule(103, 'Allow', '*', 'CorpNetPublic', '*'),
+  nrmsRule(104, 'Allow', '*', 'CorpNetSaw', '*'),
+  nrmsRule(105, 'Deny', '*', 'Internet', null,
+    ['1433', '1434', '3306', '4333', '5432', '6379', '7000', '7001', '7199',
+      '9042', '9160', '9300', '16379', '26379', '27017']),
+  nrmsRule(106, 'Deny', 'Tcp', 'Internet', null, ['22', '3389']),
+  nrmsRule(107, 'Deny', 'Tcp', 'Internet', null, ['23', '135', '445', '5985', '5986']),
+  nrmsRule(108, 'Deny', '*', 'Internet', null,
+    ['13', '17', '19', '53', '69', '111', '123', '512', '514', '593', '873',
+      '1900', '5353', '11211']),
+  nrmsRule(109, 'Deny', '*', 'Internet', null,
+    ['119', '137', '138', '139', '161', '162', '389', '636', '2049', '2301',
+      '2381', '3268', '5800', '5900']),
+]);
 
 /** Rejects a resource-group or target name that is not the explicitly approved dedicated P0 name. */
 export function assertDedicatedTarget(name, kind = 'resource group') {
@@ -437,6 +497,7 @@ function assertExistingAksFederatedCredentials({ resourceGroup }, execAz) {
 // Shared by plan, deploy and acceptance. A caller's ID is not account evidence.
 /**
  * Validates the Azure account, dedicated resource group, and expected existing-resource metadata.
+ * Generated NRMS NSGs are accepted only when exact P0 subnets reference them and their policy rules match.
  * Returns the verified group and a target-bound Azure executor; unsafe or ambiguous targets throw.
  */
 export function guardAzureTarget(config, execAz) {
@@ -498,6 +559,18 @@ export function guardAzureTarget(config, execAz) {
     return `${groupId}/providers/${provider}/${segments.map((segment, i) => `${segment}/${names[i]}`).join('/')}`;
   };
   const sameId = (left, right) => typeof left === 'string' && left.toLowerCase() === right.toLowerCase();
+  const vnetId = resourceId('Microsoft.Network/virtualNetworks', `${resourceGroup}-vnet`);
+  const nrmsNsgResources = resources.filter(resource =>
+    typeof resource.type === 'string' && resource.type.toLowerCase() === 'microsoft.network/networksecuritygroups');
+  if (nrmsNsgResources.length > 1) {
+    throw new Error('Resource inventory contains an unexpected type/name outside the reviewed P0 layout.');
+  }
+  const nrmsNsg = nrmsNsgResources[0];
+  if (nrmsNsg && (typeof nrmsNsg.name !== 'string' ||
+      !new RegExp(`^NRMS-[a-z0-9]+${resourceGroup}-vnet$`, 'i').test(nrmsNsg.name) ||
+      !sameId(nrmsNsg.id, resourceId('Microsoft.Network/networkSecurityGroups', nrmsNsg.name)))) {
+    throw new Error('Resource inventory contains an unexpected type/name outside the reviewed P0 layout.');
+  }
   const expectedIds = new Map();
   for (const [type, names] of expectedResources) {
     for (const name of names) expectedIds.set(resourceId(type, name).toLowerCase(), {
@@ -505,11 +578,10 @@ export function guardAzureTarget(config, execAz) {
       ...(type === 'microsoft.network/privatednszones' ? { kind: 'private-dns-root' } : {}),
     });
   }
-  const nrmsNsgId = resourceId('Microsoft.Network/networkSecurityGroups', NRMS_NSG_NAME);
-  const failureAnomaliesId = resourceId('Microsoft.AlertsManagement/smartDetectorAlertRules', FAILURE_ANOMALIES_NAME);
-  expectedIds.set(nrmsNsgId.toLowerCase(), {
-    type: 'microsoft.network/networksecuritygroups', name: NRMS_NSG_NAME, tagged: false,
+  if (nrmsNsg) expectedIds.set(nrmsNsg.id.toLowerCase(), {
+    type: 'microsoft.network/networksecuritygroups', name: nrmsNsg.name, tagged: false,
   });
+  const failureAnomaliesId = resourceId('Microsoft.AlertsManagement/smartDetectorAlertRules', FAILURE_ANOMALIES_NAME);
   expectedIds.set(failureAnomaliesId.toLowerCase(), {
     type: 'microsoft.alertsmanagement/smartdetectoralertrules',
     name: FAILURE_ANOMALIES_NAME, tagged: false,
@@ -581,6 +653,53 @@ export function guardAzureTarget(config, execAz) {
   }
   const readResource = (id, projectJson) => jsonResult(boundAz(['resource', 'show', '--ids', id, '-o', 'json'],
     { check: false, ...(projectJson ? { projectJson } : {}) }), 'Resource relationship lookup');
+  if (nrmsNsg) {
+    const expectedSubnetIds = ['aks', 'postgres', 'private-endpoints'].map(name =>
+      resourceId('Microsoft.Network/virtualNetworks/subnets', `${resourceGroup}-vnet/${name}`));
+    const exactIds = (observed, expected) => {
+      if (!Array.isArray(observed) || observed.length !== expected.length) return false;
+      const normalized = observed.map(id => typeof id === 'string' ? id.toLowerCase() : null);
+      return normalized.every(Boolean) && new Set(normalized).size === expected.length &&
+        expected.every(id => normalized.includes(id.toLowerCase()));
+    };
+    const nsg = readResource(nrmsNsg.id, value => ({
+      id: value?.id,
+      type: value?.type,
+      name: value?.name,
+      properties: {
+        securityRules: normalizeNrmsRules(value?.properties?.securityRules),
+        subnets: Array.isArray(value?.properties?.subnets)
+          ? value.properties.subnets.map(subnet => subnet?.id) : value?.properties?.subnets,
+        networkInterfaces: Array.isArray(value?.properties?.networkInterfaces)
+          ? value.properties.networkInterfaces.map(networkInterface => networkInterface?.id)
+          : value?.properties?.networkInterfaces ?? [],
+      },
+    }));
+    const vnet = readResource(vnetId, value => ({
+      id: value?.id,
+      type: value?.type,
+      name: value?.name,
+      properties: {
+        subnets: Array.isArray(value?.properties?.subnets)
+          ? value.properties.subnets.map(subnet => ({
+            id: subnet?.id,
+            networkSecurityGroupId: subnet?.properties?.networkSecurityGroup?.id,
+          })) : value?.properties?.subnets,
+      },
+    }));
+    if (!sameId(nsg.id, nrmsNsg.id) || nsg.type?.toLowerCase() !== 'microsoft.network/networksecuritygroups' ||
+        nsg.name?.toLowerCase() !== nrmsNsg.name.toLowerCase() ||
+        !exactIds(nsg.properties?.subnets, expectedSubnetIds) ||
+        !Array.isArray(nsg.properties?.networkInterfaces) || nsg.properties.networkInterfaces.length !== 0 ||
+        JSON.stringify(nsg.properties?.securityRules) !== JSON.stringify(NRMS_EXPECTED_RULES) ||
+        !sameId(vnet.id, vnetId) || vnet.type?.toLowerCase() !== 'microsoft.network/virtualnetworks' ||
+        vnet.name?.toLowerCase() !== `${resourceGroup}-vnet`.toLowerCase() ||
+        !Array.isArray(vnet.properties?.subnets) ||
+        !exactIds(vnet.properties.subnets.map(subnet => subnet.id), expectedSubnetIds) ||
+        vnet.properties.subnets.some(subnet => !sameId(subnet.networkSecurityGroupId, nrmsNsg.id))) {
+      throw new Error('Generated NRMS NSG does not match the exact P0 VNet, subnet, or security-rule evidence.');
+    }
+  }
   const seen = new Set();
   let observedPostgresAdministrator;
   for (const resource of resources) {
@@ -651,7 +770,6 @@ export function guardAzureTarget(config, execAz) {
     resourceId('Microsoft.Network/privateDnsZones', name));
   const privateDnsLinkIds = PRIVATE_DNS_ZONES.map(({ name, suffix }) =>
     resourceId('Microsoft.Network/privateDnsZones/virtualNetworkLinks', `${name}/${resourceGroup}-${suffix}-dns-link`));
-  const vnetId = resourceId('Microsoft.Network/virtualNetworks', `${resourceGroup}-vnet`);
   const hasPrivateDnsInventory = privateDnsRootIds.some(id => seen.has(id.toLowerCase()));
   const validatePrivateDns = hasPrivateDnsInventory;
   const inventoryEvidence = {};

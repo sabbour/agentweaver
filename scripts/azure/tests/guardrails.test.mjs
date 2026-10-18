@@ -128,7 +128,7 @@ test('assertDedicatedResourceGroupOwnership rejects an existing resource group t
 test('populated post-deployment inventory admits exact roots, untagged children, deployments and generated PE NICs', () => {
   const calls = [];
   const target = guardAzureTarget({ ...fixture, ...source }, fakeAzure(postDeploymentAzure, calls));
-  assert.equal(calls.filter(args => args[0] === 'resource' && args[1] === 'show').length, 13);
+  assert.equal(calls.filter(args => args[0] === 'resource' && args[1] === 'show').length, 15);
   assert.equal(target.inventoryEvidence.privateDnsZones.rootCount, 7);
   assert.equal(target.inventoryEvidence.privateDnsZones.vnetLinkCount, 7);
   assert.equal('tagsPersisted' in target.inventoryEvidence.privateDnsZones, false);
@@ -136,6 +136,39 @@ test('populated post-deployment inventory admits exact roots, untagged children,
   assert.ok(!calls.some(args => args[0] === 'policy' || args.includes('activity-log') ||
     args.includes('operation') || args[0] === 'deployment' && args.includes('show')));
   for (const args of calls) assert.equal(args[args.indexOf('--subscription') + 1], fixture.subscriptionId);
+});
+
+test('generated NRMS NSG requires exact VNet associations and reviewed rules', () => {
+  const nsgId = postDeploymentInventory.find(resource =>
+    resource.type === 'Microsoft.Network/networkSecurityGroups').id;
+  const vnetId = `${fixture.groupId}/providers/Microsoft.Network/virtualNetworks/agentweaver-vnet`;
+  const rejected = [
+    evidence => {
+      evidence.details[vnetId].properties.subnets[0].properties.networkSecurityGroup.id =
+        `${fixture.groupId}/providers/Microsoft.Network/networkSecurityGroups/unapproved`;
+    },
+    evidence => {
+      evidence.details[nsgId].properties.subnets.pop();
+    },
+    evidence => {
+      evidence.details[nsgId].properties.securityRules.find(rule => rule.name === 'NRMS-Rule-101')
+        .properties.destinationPortRange = '80';
+    },
+    evidence => {
+      evidence.details[nsgId].properties.securityRules.push(
+        structuredClone(evidence.details[nsgId].properties.securityRules[0]));
+    },
+    evidence => {
+      const nsg = evidence.resources.find(resource => resource.id === nsgId);
+      nsg.name = 'NRMS-unapproved-agentweaver-vnet';
+      nsg.id = nsg.id.replace('NRMS-5laalxivhkqhwagentweaver-vnet', nsg.name);
+    },
+  ];
+  for (const mutate of rejected) {
+    const evidence = clonePostDeployment();
+    mutate(evidence);
+    assert.throws(() => guardPopulatedTarget(evidence), /NRMS NSG|unexpected/);
+  }
 });
 
 test('the same populated layout reaches plan, redeploy and configuration acceptance, never runtime success', async () => {
