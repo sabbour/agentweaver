@@ -223,11 +223,27 @@ Before you install the product bundle, confirm that the five identities are
 provisioned and federated to the exact `agentweaver` namespace and service
 ServiceAccounts. Read each client ID from Azure CLI as described in the
 [runtime configuration reference](../reference/runtime-configuration.md).
-Create the required service databases and matching Entra roles, apply each
-reviewed migration and schema grant, and confirm that every required owner
-address and audience is approved. The Broker runtime identity does not own
-the schema. If the separate identity and database setup is not approved or
-complete, stop before applying the product workloads.
+Then review and run the source-bound PostgreSQL initializer:
+
+```powershell
+node scripts\azure\bootstrap-p1-postgres.mjs `
+  --core-merge-sha <reviewed-core-merge-sha>
+node scripts\azure\bootstrap-p1-postgres.mjs `
+  --core-merge-sha <reviewed-core-merge-sha> `
+  --execute
+```
+
+The first command prints the fixed target and planned roles without contacting
+Azure. The execution command verifies the PostgreSQL Entra administrator and
+all five live P1 identity principals, then runs the Identity Broker and P1
+database stages through one temporary loopback tunnel. It requires a clean
+checkout at the reviewed `origin/v1` source. The operator must already have the
+required AKS access and PostgreSQL Entra administrator authority; the command
+creates no Azure role assignments, access grants, or product workloads. Keep
+the P1 receipt and verify the database and roles with read-only catalog queries
+before installing the product bundle. The Broker runtime identity does not own
+the schema. If the identity or database setup is not approved or complete,
+stop before applying product workloads.
 
 For each database workload, verify that:
 

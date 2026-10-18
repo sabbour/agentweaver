@@ -111,6 +111,41 @@ test('shared guard rejects disabled account, missing IDs, bad JSON and mismatche
   ]) assert.throws(() => guardAzureTarget(fixture, fakeAzure(overrides)));
 });
 
+/** Rejected inventory diagnostics identify the resource without exposing its ARM ID or properties. */
+test('unexpected inventory entries report only the exact resource type and name', () => {
+  const resource = {
+    id: `${fixture.groupId}/providers/Microsoft.Compute/virtualMachines/agentweaver-unreviewed`,
+    type: 'Microsoft.Compute/virtualMachines',
+    name: 'agentweaver-unreviewed',
+  };
+  assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources: [resource] })), error => {
+    assert.match(error.message, /Microsoft\.Compute\/virtualMachines/);
+    assert.match(error.message, /agentweaver-unreviewed/);
+    assert.ok(!error.message.includes(resource.id));
+    return true;
+  });
+});
+
+/** The early NRMS checks report the offending network-security-group names before relationship reads. */
+test('invalid NRMS inventory entries report their type and name', () => {
+  const nsg = name => ({
+    id: `${fixture.groupId}/providers/Microsoft.Network/networkSecurityGroups/${name}`,
+    type: 'Microsoft.Network/networkSecurityGroups',
+    name,
+  });
+  for (const [resources, expectedNames] of [
+    [[nsg('NRMS-allowed-agentweaver-vnet'), nsg('NRMS-extra-agentweaver-vnet')],
+      ['NRMS-allowed-agentweaver-vnet', 'NRMS-extra-agentweaver-vnet']],
+    [[nsg('unreviewed-agentweaver-vnet')], ['unreviewed-agentweaver-vnet']],
+  ]) {
+    assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources })), error => {
+      assert.match(error.message, /Microsoft\.Network\/networkSecurityGroups/);
+      for (const name of expectedNames) assert.ok(error.message.includes(name));
+      return true;
+    });
+  }
+});
+
 test('assertDedicatedResourceGroupOwnership rejects an existing resource group with no matching tag', () => {
   assert.throws(
     () => assertDedicatedResourceGroupOwnership('agentweaver', { owner: 'someone-else' }),

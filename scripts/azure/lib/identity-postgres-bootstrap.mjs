@@ -5,12 +5,13 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { run, runAz, redact } from './exec.mjs';
 import { assertP0KubernetesPermissions } from './namespace-bootstrap.mjs';
+import { p1PostgresPlanHash } from './p1-postgres-plan.mjs';
 
 const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const NAMESPACE = 'agentweaver';
@@ -191,6 +192,8 @@ function buildProxy(repoRoot, outputDirectory, {
 
 /**
  * Applies the identity PostgreSQL bootstrap through the validated private connection path.
+ * An optional P1 initializer must use the locally computed plan hash and a new source-local receipt;
+ * it runs over the same ready tunnel before owned transport cleanup.
  * Required Kubernetes access is checked before building the proxy or creating temporary resources.
  */
 export async function bootstrapIdentityPostgres({
@@ -198,6 +201,7 @@ export async function bootstrapIdentityPostgres({
   postgresHost, adminUsername, runtimePrincipalObjectId, migrationPrincipalObjectId,
   verifyOnly = false,
   foundationProbePrincipalObjectId,
+  p1Initializer,
 }, {
   execAz = runAz,
   execKubelogin = (args, options) => run('kubelogin', args, options),
@@ -220,6 +224,25 @@ export async function bootstrapIdentityPostgres({
        [runtimePrincipalObjectId, migrationPrincipalObjectId].some(value =>
          value.toLowerCase() === foundationProbePrincipalObjectId.toLowerCase()))) {
     throw new Error('Probe PostgreSQL bootstrap requires its distinct exact native principal and cannot run Identity verification.');
+  }
+  if (p1Initializer !== undefined) {
+    if (p1Initializer === null || typeof p1Initializer !== 'object') {
+      throw new Error('Combined PostgreSQL initialization requires a P1 initializer receipt configuration.');
+    }
+    const receiptPath = typeof p1Initializer.receiptPath === 'string'
+      ? resolve(p1Initializer.receiptPath) : '';
+    const receiptRelativePath = receiptPath ? relative(resolve(repoRoot, 'Temp'), receiptPath) : '';
+    if (verifyOnly || !GUID_PATTERN.test(runtimePrincipalObjectId ?? '') ||
+        !GUID_PATTERN.test(migrationPrincipalObjectId ?? '') ||
+        !/^[0-9a-f]{40}$/.test(p1Initializer.sourceSha ?? '') ||
+        !/^[0-9a-f]{40}$/.test(p1Initializer.coreMergeSha ?? '') ||
+        !/^[0-9a-f]{64}$/.test(p1Initializer.planSha256 ?? '') ||
+        p1Initializer.planSha256 !== p1PostgresPlanHash() ||
+        !receiptPath || !receiptRelativePath || receiptRelativePath === '..' ||
+        receiptRelativePath.startsWith(`..${sep}`) || isAbsolute(receiptRelativePath) ||
+        existsSync(receiptPath)) {
+      throw new Error('Combined PostgreSQL initialization requires exact lowercase source hashes and a new receipt under the source Temp directory.');
+    }
   }
 
   const account = parseJson(
@@ -397,6 +420,28 @@ export async function bootstrapIdentityPostgres({
       proxyConfigMap: configMapName,
       portForwardPid: portForward.pid,
     };
+
+    if (p1Initializer) {
+      const p1Result = execDotnet([
+        'run', '--project', join(repoRoot, 'tools', 'P1PostgresInitializer', 'P1PostgresInitializer.csproj'),
+        '--no-launch-profile', '--', '--initialize',
+        '--source-sha', p1Initializer.sourceSha,
+        '--core-merge-sha', p1Initializer.coreMergeSha,
+        '--plan-sha256', p1Initializer.planSha256,
+        '--receipt', p1Initializer.receiptPath,
+      ], { check: false, cwd: repoRoot, timeout: 600_000 });
+      const p1Output = [p1Result.stderr, p1Result.stdout].filter(Boolean).join('\n').trim();
+      const p1Marker = 'P1_POSTGRES_OPERATOR_INITIALIZATION_FINISHED runtimeIdentityProof=false deploymentProof=false';
+      if (p1Result.status !== 0 || !p1Result.stdout.includes(p1Marker))
+        throw new Error(`P1 PostgreSQL initialization failed; inspect its stage receipt ${p1Initializer.receiptPath}: ${redact(p1Output || `dotnet exited with status ${p1Result.status}`)}`);
+      bootstrapReceipt.p1Initializer = {
+        verification: 'operator-initialization',
+        planSha256: p1Initializer.planSha256,
+        receiptPath: p1Initializer.receiptPath,
+        runtimeIdentityProof: false,
+        deploymentProof: false,
+      };
+    }
   } catch (error) {
     primaryError = error;
   }

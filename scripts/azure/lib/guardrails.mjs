@@ -204,6 +204,13 @@ function projectInventory(resources, expectedTags) {
   });
 }
 
+/** Describes a rejected inventory item using only its non-secret ARM type and resource name. */
+function describeResource(resource) {
+  const type = typeof resource?.type === 'string' ? resource.type : '<missing>';
+  const name = typeof resource?.name === 'string' ? resource.name : '<missing>';
+  return `type ${JSON.stringify(type)}, name ${JSON.stringify(name)}`;
+}
+
 // Deployment outputs select configuration, never prove a workload ran.
 /** Validates infrastructure outputs against the configured target and returns normalized deployment values. */
 export function readFoundationOutputs(outputs, {
@@ -565,13 +572,14 @@ export function guardAzureTarget(config, execAz) {
   const nrmsNsgResources = resources.filter(resource =>
     typeof resource.type === 'string' && resource.type.toLowerCase() === 'microsoft.network/networksecuritygroups');
   if (nrmsNsgResources.length > 1) {
-    throw new Error('Resource inventory contains an unexpected type/name outside the reviewed P0 layout.');
+    const rejected = nrmsNsgResources.map(describeResource).join('; ');
+    throw new Error(`Resource inventory contains multiple network security groups: ${rejected}.`);
   }
   const nrmsNsg = nrmsNsgResources[0];
   if (nrmsNsg && (typeof nrmsNsg.name !== 'string' ||
       !new RegExp(`^NRMS-[a-z0-9]+${resourceGroup}-vnet$`, 'i').test(nrmsNsg.name) ||
       !sameId(nrmsNsg.id, resourceId('Microsoft.Network/networkSecurityGroups', nrmsNsg.name)))) {
-    throw new Error('Resource inventory contains an unexpected type/name outside the reviewed P0 layout.');
+    throw new Error(`Resource inventory rejected ${describeResource(nrmsNsg)}: unexpected outside the reviewed NRMS NSG name and ID pattern.`);
   }
   const expectedIds = new Map();
   for (const [type, names] of expectedResources) {
@@ -703,18 +711,18 @@ export function guardAzureTarget(config, execAz) {
         !Array.isArray(vnet.properties?.subnets) ||
         !exactIds(vnet.properties.subnets.map(subnet => subnet.id), expectedSubnetIds) ||
         vnet.properties.subnets.some(subnet => !sameId(subnet.networkSecurityGroupId, nrmsNsg.id))) {
-      throw new Error('Generated NRMS NSG does not match the exact P0 VNet, subnet, or security-rule evidence.');
+      throw new Error(`Generated NRMS NSG ${describeResource(nrmsNsg)} does not match the exact P0 VNet, subnet, or security-rule evidence.`);
     }
   }
   const seen = new Set();
   let observedPostgresAdministrator;
   for (const resource of resources) {
     if (typeof resource.id !== 'string' || !resource.id.toLowerCase().startsWith(`${groupId.toLowerCase()}/providers/`)) {
-      throw new Error('Resource inventory contains a resource outside the exact dedicated group.');
+      throw new Error(`Resource inventory rejected ${describeResource(resource)}: outside the exact dedicated group.`);
     }
     const id = resource.id.toLowerCase();
     const type = resource.type?.toLowerCase();
-    if (seen.has(id)) throw new Error('Resource inventory contains a duplicate ID.');
+    if (seen.has(id)) throw new Error(`Resource inventory contains a duplicate ID for ${describeResource(resource)}.`);
     seen.add(id);
     const expected = expectedIds.get(id);
     if (!expected && config.scope === 'aks-only' &&
@@ -724,7 +732,7 @@ export function guardAzureTarget(config, execAz) {
       if (observedPostgresAdministrator || !GUID_PATTERN.test(principalObjectId) ||
           !sameId(resource.id, `${parentId}${principalObjectId}`) ||
           resource.name?.toLowerCase() !== `${resourceGroup}-pg/${principalObjectId}`.toLowerCase()) {
-        throw new Error('Existing PostgreSQL administrator is not the single exact P0 server binding.');
+        throw new Error(`Resource inventory rejected ${describeResource(resource)}: not the single exact P0 PostgreSQL administrator binding.`);
       }
       observedPostgresAdministrator = principalObjectId;
       continue;
@@ -737,7 +745,7 @@ export function guardAzureTarget(config, execAz) {
           !endpointIds.some(approved => sameId(endpointId, approved)) ||
           !resources.some(item => sameId(item.id, endpointId) &&
             item.type?.toLowerCase() === 'microsoft.network/privateendpoints')) {
-        throw new Error('NIC is not owned by an exact approved Private Endpoint.');
+        throw new Error(`Resource inventory rejected ${describeResource(resource)}: NIC is not owned by an exact approved Private Endpoint.`);
       }
       const endpoint = readResource(endpointId);
       const privateSubnet = resourceId('Microsoft.Network/virtualNetworks/subnets', `${resourceGroup}-vnet/private-endpoints`);
@@ -747,7 +755,7 @@ export function guardAzureTarget(config, execAz) {
           !sameId(endpoint.properties.networkInterfaces[0].id, nic.id) ||
           !Array.isArray(nic.properties?.ipConfigurations) || nic.properties.ipConfigurations.length === 0 ||
           !nic.properties.ipConfigurations.every(ip => sameId(ip.properties?.subnet?.id, privateSubnet))) {
-        throw new Error('Private Endpoint NIC/subnet relationship is not the exact approved layout.');
+        throw new Error(`Resource inventory rejected ${describeResource(resource)}: Private Endpoint NIC/subnet relationship is not the exact approved layout.`);
       }
       continue;
     }
@@ -760,7 +768,7 @@ export function guardAzureTarget(config, execAz) {
       continue;
     }
     if (!expected || type !== expected.type || resource.name?.toLowerCase() !== expected.name.toLowerCase()) {
-      throw new Error('Resource inventory contains an unexpected type/name outside the reviewed P0 layout.');
+      throw new Error(`Resource inventory rejected ${describeResource(resource)}: unexpected outside the reviewed P0 layout.`);
     }
     if (expected.tagged) {
       const tags = resource.tagEvidence;

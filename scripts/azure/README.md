@@ -34,6 +34,8 @@ Every federation names its service in `agentweaver` and accepts only
 The target inventory guard recognizes only these five identity names and each
 `<service>-workload-identity` credential under its matching identity; other
 identity names or credential relationships remain blocked.
+Inventory rejection errors report the ARM resource type and name only; they do
+not include resource IDs or resource properties.
 Supply the existing resource group tags and the exact reviewed source SHA.
 
 This template defines no Azure role assignment, database grant, migration,
@@ -44,7 +46,7 @@ A created identity does not prove database access or a ready service.
 
 ### P1 PostgreSQL initializer source proposal
 
-The initializer has not completed successfully against the approved database.
+Earlier initializer attempts did not complete successfully against the approved database.
 An earlier attempt from source `8476c16337fa015031124196d57979159eca1958`
 stopped during live preflight after recording `fresh_target_checked`, before
 role creation. A separate attempt from source
@@ -91,14 +93,15 @@ exact table, trigger type, function body/owner, and absence of runtime EXECUTE.
 The source catalog requires Core versions 1 through 16 and 18 through 21.
 These are 20 registered versions; version 17 remains excluded.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
-The plan retains 94 tables and eight exact row-lock columns.
+The plan retains 95 tables and eight exact row-lock columns.
 The plan contains the five runtime principal IDs verified from the current
 target's Azure Resource Graph outputs. Revalidate every ID against the live
 target immediately before initialization; unresolved markers are rejected
 before credential requests.
-The Environment runtime bootstrap profile replacement store requires a separate
-`SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
-That grant has not been executed; it adds no `UPDATE`, `DELETE`, or default privilege.
+The Environment runtime bootstrap profile replacement store receives exactly
+`SELECT, INSERT` on `environment.runtime_bootstrap_profile_replacements`. It
+receives no `UPDATE`, `DELETE`, or default privileges. The preceding catalog
+snapshot records that this grant was absent at the time of that read.
 It includes 29 exact function signatures, with runtime EXECUTE only for casting authority.
 The read-only catalog snapshot above records the point-in-time catalog state; it
 does not establish successful initialization or deployment.
@@ -592,6 +595,45 @@ its port-forward process, and deletes its temporary local files. It does not
 create a public route, app registration, secret, or Azure role assignment.
 Ordinary `--execute` does not run this initializer. A failed bootstrap or
 transport cleanup is reported and is not converted into a successful receipt.
+
+### P1 PostgreSQL operator initialization
+
+`bootstrap-p1-postgres.mjs` initializes the `agentweaver` database on the
+existing PostgreSQL server after the five P1 runtime identities and the
+Identity Broker identities exist.
+Without `--execute`, it prints the source-bound target and role plan without
+calling Azure. Execution requires the exact reviewed Core merge SHA:
+
+```powershell
+node scripts\azure\bootstrap-p1-postgres.mjs `
+  --core-merge-sha <reviewed-core-merge-sha>
+node scripts\azure\bootstrap-p1-postgres.mjs `
+  --core-merge-sha <reviewed-core-merge-sha> `
+  --execute
+```
+
+The command requires a clean checkout whose `HEAD` and fetched `origin/v1`
+match the reviewed source SHA. Before opening a tunnel, it checks the exact
+subscription, tenant, resource group, PostgreSQL Entra administrator, and all
+five live P1 principal IDs against the reviewed plan. It then runs the Identity
+Broker bootstrap and P1 initializer through one temporary loopback-only
+PostgreSQL tunnel. The tunnel remains open through both database stages, and
+the owned Pod, ConfigMap, port-forward, isolated kubeconfig, proxy files, and
+temporary files are removed by the operator script's cleanup path. The P1
+receipt remains under the source checkout's `Temp` directory for audit.
+
+This command initializes PostgreSQL only. It does not deploy Bicep or product
+workloads and creates no Azure role assignment or other Azure access grant.
+It requires the operator's existing AKS access and PostgreSQL Entra
+administrator authority; stop if either permission is unavailable rather than
+creating a grant. The P1 receipt records operator initialization only, not
+runtime identity or deployment proof. The initializer reads back its planned
+roles and grants before commit; perform a separate read-only catalog check
+before treating the setup as ready.
+
+The P1 initializer source proposal section above records earlier failed
+attempts and a point-in-time catalog snapshot. Those records do not establish
+the result of a later operator initialization.
 
 The TCP proxy accepts `--key-vault <host>` only when the host exactly matches
 the URI configured by `IdentityBroker__SecretRedemption__VaultUri`. The URI

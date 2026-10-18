@@ -8,6 +8,7 @@ import {
   bootstrapIdentityPostgres,
   startIdentityPostgresPortForward,
 } from '../lib/identity-postgres-bootstrap.mjs';
+import { p1PostgresPlanHash } from '../lib/p1-postgres-plan.mjs';
 
 const options = {
   repoRoot: 'C:\\agentweaver',
@@ -81,10 +82,14 @@ test('Key Vault loopback forwarding uses only 15443:8443 and stops its owned pro
   assert.equal(child.exitCode, 0);
 });
 
-function dependencies({ dotnetResult, alterPodOwner = false, authorization = () => ok('yes\n') } = {}) {
+function dependencies({
+  dotnetResult, p1DotnetResult, alterPodOwner = false, assertTunnelActiveForP1 = false,
+  authorization = () => ok('yes\n'),
+} = {}) {
   const calls = [];
   const resources = new Map();
   const pathNames = [];
+  const dotnetInvocations = [];
   let portForwardStopped = false;
   let dotnetInvocation;
   let portForwardOptions;
@@ -140,6 +145,13 @@ function dependencies({ dotnetResult, alterPodOwner = false, authorization = () 
   };
   const execDotnet = (args, settings) => {
     dotnetInvocation = { args, settings };
+    dotnetInvocations.push(dotnetInvocation);
+    if (args.includes('--initialize')) {
+      if (assertTunnelActiveForP1) assert.equal(portForwardStopped, false);
+      return p1DotnetResult ?? ok(
+        'P1_POSTGRES_OPERATOR_INITIALIZATION_FINISHED runtimeIdentityProof=false deploymentProof=false\n',
+      );
+    }
     if (alterPodOwner) {
       const pod = [...resources.values()].find(value => value.kind === 'Pod');
       pod.metadata.labels['agentweaver.io/task-owner'] = 'different-task';
@@ -160,6 +172,7 @@ function dependencies({ dotnetResult, alterPodOwner = false, authorization = () 
     calls,
     resources,
     pathNames,
+    dotnetInvocations,
     get dotnetInvocation() { return dotnetInvocation; },
     get portForwardOptions() { return portForwardOptions; },
     get portForwardStopped() { return portForwardStopped; },
@@ -246,6 +259,69 @@ test('bootstraps through the owned pod and loopback tunnel with the Entra token 
   assert.ok(!dotnet.settings.env.ConnectionStrings__IdentityBrokerBootstrap.includes('Password='));
   assert.ok(!dotnet.settings.env.IdentityBroker__Bootstrap__PostgresHost.includes('token'));
   assert.equal(existsSync(dirname(fakes.pathNames[0])), false);
+});
+
+/** Both database stages use the same ready loopback forward, which stays open until P1 completes. */
+test('combined Identity and P1 PostgreSQL bootstrap keeps the tunnel through P1 initialization', async () => {
+  const fakes = dependencies({ assertTunnelActiveForP1: true });
+  const p1Receipt = 'C:\\agentweaver\\Temp\\p1-postgres-123456789abc.jsonl';
+  const receipt = await bootstrapIdentityPostgres({
+    ...options,
+    p1Initializer: {
+      sourceSha: 'a'.repeat(40),
+      coreMergeSha: 'b'.repeat(40),
+      planSha256: p1PostgresPlanHash(),
+      receiptPath: p1Receipt,
+    },
+  }, fakes.deps);
+
+  assert.equal(fakes.dotnetInvocations.length, 2);
+  assert.ok(fakes.dotnetInvocations[0].args.includes('--bootstrap-identity-postgres'));
+  assert.deepEqual(fakes.dotnetInvocations[1].args.slice(-9), [
+    '--initialize',
+    '--source-sha', 'a'.repeat(40),
+    '--core-merge-sha', 'b'.repeat(40),
+    '--plan-sha256', p1PostgresPlanHash(),
+    '--receipt', p1Receipt,
+  ]);
+  assert.equal(receipt.p1Initializer.receiptPath, p1Receipt);
+  assert.equal(receipt.p1Initializer.planSha256, p1PostgresPlanHash());
+  assert.equal(receipt.cleanup.portForwardStopped, true);
+  assert.deepEqual(fakes.resources, new Map());
+});
+
+test('combined PostgreSQL bootstrap rejects a plan hash that differs from the local reviewed plan before transport setup', async () => {
+  const fakes = dependencies();
+  await assert.rejects(bootstrapIdentityPostgres({
+    ...options,
+    p1Initializer: {
+      sourceSha: 'a'.repeat(40),
+      coreMergeSha: 'b'.repeat(40),
+      planSha256: 'c'.repeat(64),
+      receiptPath: 'C:\\agentweaver\\Temp\\p1-postgres-123456789abc.jsonl',
+    },
+  }, fakes.deps), /Combined PostgreSQL initialization requires exact lowercase source hashes/);
+  assert.equal(fakes.calls.length, 0);
+  assert.equal(fakes.resources.size, 0);
+  assert.equal(fakes.portForwardOptions, undefined);
+});
+
+/** P1 failures remain visible and still remove the exact temporary transport resources. */
+test('combined PostgreSQL bootstrap reports P1 failure after cleanup', async () => {
+  const fakes = dependencies({
+    p1DotnetResult: { status: 1, stdout: '', stderr: 'P1 initialization failed' },
+  });
+  await assert.rejects(bootstrapIdentityPostgres({
+    ...options,
+    p1Initializer: {
+      sourceSha: 'a'.repeat(40),
+      coreMergeSha: 'b'.repeat(40),
+      planSha256: p1PostgresPlanHash(),
+      receiptPath: 'C:\\agentweaver\\Temp\\p1-postgres-123456789abc.jsonl',
+    },
+  }, fakes.deps), /P1 PostgreSQL initialization failed; inspect its stage receipt/);
+  assert.equal(fakes.portForwardStopped, true);
+  assert.deepEqual(fakes.resources, new Map());
 });
 
 test('read-only verification uses only the verify command and cleans its exact transport', async () => {
