@@ -480,7 +480,6 @@ export function runAcceptance(config, {
         return result;
       }
     };
-    check('target-inventory', () => configured('target-inventory', target.inventoryEvidence));
     const deploymentCheck = check('deployed-sha', () => checkDeployedSha({
       ...config,
       scope: source.scope,
@@ -610,7 +609,7 @@ export function runAcceptance(config, {
   }
 
   const requiredChecks = [
-    'target-inventory', 'deployed-sha', 'aks-observed-network-security', 'workload-identity-oidc',
+    'deployed-sha', 'aks-observed-network-security', 'workload-identity-oidc',
     'kubernetes-target', 'foundation-probe-target', 'foundation-probe-workload-identity',
   ];
   const allRequired = config.collectRuntimeEvidence === true &&

@@ -285,7 +285,8 @@ prove that it was used against a live database.
 The installer runs this command only when both `--execute` and the separate,
 default-off `--bootstrap-identity-postgres` option are supplied. It supports
 the guarded full-foundation path and AKS-only redeployment to the exact existing
-P0 target; the full-foundation empty-resource-group guard remains unchanged.
+P0 target. The Azure preflight checks the selected target and does not inspect
+the resource inventory or verify existing resource properties.
 For the private PostgreSQL endpoint, the installer creates a temporary TCP-only
 proxy pod and loopback-only port-forward. The operator host keeps the
 password-free Azure CLI Entra token and uses `VerifyFull` TLS with the

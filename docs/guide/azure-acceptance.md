@@ -90,10 +90,11 @@ receipts.
 
 The system node pool scales automatically between two and three
 `Standard_D2s_v5` nodes. The AKS-only installer preserves the observed node
-count within those bounds and stops if the count changes after the what-if
-operation. Its receipt reports the observed bounds and count; it does not prove
-that the pool scaled. Available vCPU quota also does not prove that the region
-has VM capacity.
+count within those bounds and passes it as a deployment input. It rechecks the
+count immediately before create and stops if the count changed after what-if.
+Its receipt reports the submitted bounds and count; it does not read back the
+resulting pool state or prove that the pool scaled. Available vCPU quota also
+does not prove that the region has VM capacity.
 
 The AKS API uses managed Microsoft Entra ID authentication and Azure RBAC,
 with local accounts disabled. The deployment keeps PostgreSQL, Key Vault,
@@ -157,9 +158,8 @@ The verifier compares the Probe image with its exact build source. It also
 compares each native deployment receipt with its source, input hash, resource
 IDs, and deployment scope. An AKS-only receipt cannot stand in for the
 full-foundation receipt, and neither image evidence nor infrastructure
-evidence replaces the other. Legacy tag-count, inherited policy-origin,
-provider-generated resource inventory, and historical receipt audits are not
-acceptance steps.
+evidence replaces the other. The deployment preflight does not enumerate Azure resources or verify their
+post-deployment properties.
 
 See [Test Agentweaver](./testing) for the limits of source and integration
 tests.

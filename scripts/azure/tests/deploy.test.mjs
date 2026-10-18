@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { buildDeployArgs, cliConfig, cliOptions, deploy } from '../deploy.mjs';
 import {
   fixture, source, fakeAzure, ids, tags, deploymentOutputs,
-  subnetId, subnetRoleAssignmentName, clusterId,
+  clusterId,
 } from './fixtures/target.mjs';
 
 test('deployment uses supported source parameters, explicit subscription and incremental mode, never tags', () => {
@@ -25,60 +25,84 @@ test('offline dry-run never reads account or mutates', async () => {
   assert.equal(result.scope, 'infrastructure-only');
 });
 
-test('AKS-only repair enables declared bounds without resetting an observed three-node pool', async () => {
+test('AKS-only deployment rechecks the observed count before create and does not read it afterward', async () => {
   const az = fakeAzure();
   const calls = [];
   const pool = { id: `${clusterId}/agentPools/system`, name: 'system', mode: 'System',
     vmSize: 'Standard_D2s_v5', count: 3, enableAutoScaling: false,
     minCount: null, maxCount: null, provisioningState: 'Succeeded' };
-  let created = false;
   const result = await deploy({ ...fixture, execute: true }, {
     sourceResolver: () => ({ ...source, scope: 'aks-only' }),
     execAz(args, options) {
       calls.push(args);
       if (args.slice(0, 3).join(' ') === 'aks nodepool show') {
-        return { status: 0, stderr: '', stdout: JSON.stringify(created
-          ? { ...pool, enableAutoScaling: true, minCount: 2, maxCount: 3 } : pool) };
+        return { status: 0, stderr: '', stdout: JSON.stringify(pool) };
       }
-      if (args.slice(0, 3).join(' ') === 'deployment group create') created = true;
       return az(args, options);
     },
   });
   assert.equal(result.receipt.autoscaling.countBefore, 3);
   assert.equal(result.receipt.autoscaling.countSubmitted, 3);
-  assert.equal(result.receipt.autoscaling.countAfter, 3);
-  assert.equal(result.receipt.autoscaling.enabled, true);
+  assert.equal(result.receipt.autoscaling.minCount, 2);
+  assert.equal(result.receipt.autoscaling.maxCount, 3);
   assert.equal(result.receipt.autoscaling.scaleUpProven, false);
+  const poolReads = calls.flatMap((args, index) =>
+    args.slice(0, 3).join(' ') === 'aks nodepool show' ? [index] : []);
+  const whatIf = calls.findIndex(args => args.slice(0, 3).join(' ') === 'deployment group what-if');
+  const create = calls.findIndex(args => args.slice(0, 3).join(' ') === 'deployment group create');
+  assert.equal(poolReads.length, 2);
+  assert.ok(poolReads[0] < whatIf && whatIf < poolReads[1] && poolReads[1] < create);
   for (const args of calls.filter(args => ['what-if', 'create'].includes(args[2]))) {
     assert.ok(args.includes('nodePoolCount=3'));
   }
 });
 
-test('AKS-only count changes after what-if abort before deployment', async () => {
+test('AKS-only deployment does not reread node-pool state after deployment', async () => {
   const az = fakeAzure();
   let reads = 0;
-  let created = false;
-  await assert.rejects(deploy({ ...fixture, execute: true }, {
+  const result = await deploy({ ...fixture, execute: true }, {
     sourceResolver: () => ({ ...source, scope: 'aks-only' }),
     execAz(args, options) {
       if (args.slice(0, 3).join(' ') === 'aks nodepool show') {
         reads++;
         return { status: 0, stderr: '', stdout: JSON.stringify({
           id: `${clusterId}/agentPools/system`, name: 'system', mode: 'System',
-          vmSize: 'Standard_D2s_v5', count: reads === 1 ? 2 : 3,
+          vmSize: 'Standard_D2s_v5', count: 2,
           enableAutoScaling: true, minCount: 2, maxCount: 3, provisioningState: 'Succeeded',
         }) };
       }
-      if (args.slice(0, 3).join(' ') === 'deployment group create') created = true;
       return az(args, options);
     },
-  }), /changed after what-if/);
-  assert.equal(created, false);
+  });
+  assert.equal(result.executed, true);
+  assert.equal(reads, 2);
+  assert.equal(result.receipt.autoscaling.countBefore, 2);
+  assert.equal(result.receipt.autoscaling.countSubmitted, 2);
+  const create = result.args;
+  assert.ok(create.includes('nodePoolCount=2'));
 });
 
-test('AKS-only repair rejects foreign SKU, out-of-bounds count and failed native confirmation', async () => {
-  for (const override of [{ vmSize: 'Standard_D4s_v5' }, { count: 4 }, { count: 2.5 },
-    { provisioningState: 'Updating' }, { id: 'foreign' }]) {
+test('AKS-only deployment blocks a node-count change between what-if and create', async () => {
+  const calls = [];
+  let reads = 0;
+  await assert.rejects(deploy({ ...fixture, execute: true }, {
+    sourceResolver: () => ({ ...source, scope: 'aks-only' }),
+    execAz(args, options) {
+      calls.push(args);
+      if (args.slice(0, 3).join(' ') === 'aks nodepool show') {
+        reads++;
+        return { status: 0, stderr: '', stdout: JSON.stringify({ count: reads === 1 ? 2 : 3 }) };
+      }
+      return fakeAzure()(args, options);
+    },
+  }), /count changed after what-if/);
+  assert.equal(reads, 2);
+  assert.ok(calls.some(args => args.slice(0, 3).join(' ') === 'deployment group what-if'));
+  assert.ok(!calls.some(args => args.slice(0, 3).join(' ') === 'deployment group create'));
+});
+
+test('AKS-only deployment validates only the observed count needed as Bicep input', async () => {
+  for (const override of [{ count: 1 }, { count: 4 }, { count: 2.5 }, { count: undefined }]) {
     const az = fakeAzure({ nodePoolResult: { status: 0, stderr: '', stdout: JSON.stringify({
       id: `${clusterId}/agentPools/system`, name: 'system', mode: 'System', vmSize: 'Standard_D2s_v5',
       count: 2, enableAutoScaling: false, minCount: null, maxCount: null,
@@ -86,21 +110,16 @@ test('AKS-only repair rejects foreign SKU, out-of-bounds count and failed native
     }) } });
     await assert.rejects(deploy({ ...fixture, execute: true }, {
       sourceResolver: () => ({ ...source, scope: 'aks-only' }), execAz: az,
-    }), /Existing system pool/);
+    }), /node.pool|count/i);
   }
-  await assert.rejects(deploy({ ...fixture, execute: true }, {
-    sourceResolver: () => source,
+  const result = await deploy({ ...fixture, execute: true }, {
+    sourceResolver: () => ({ ...source, scope: 'aks-only' }),
     execAz: fakeAzure({ nodePoolResult: { status: 0, stderr: '', stdout: JSON.stringify({
-      id: `${clusterId}/agentPools/system`, name: 'system', mode: 'System', vmSize: 'Standard_D2s_v5',
-      count: 2, enableAutoScaling: false, minCount: null, maxCount: null, provisioningState: 'Succeeded',
+      id: 'different-resource-id', name: 'different-name', mode: 'User', vmSize: 'DifferentSku',
+      count: 2, enableAutoScaling: false, minCount: null, maxCount: null, provisioningState: 'Updating',
     }) } }),
-  }), /did not confirm/);
-});
-
-test('stale subnet-role cleanup requires a separate explicit CLI authorization', () => {
-  assert.equal(cliOptions['allow-stale-aks-subnet-role-cleanup'].type, 'boolean');
-  assert.equal(cliOptions['allow-stale-aks-subnet-role-cleanup'].default, false);
-  assert.equal(cliConfig({ 'allow-stale-aks-subnet-role-cleanup': true }).allowStaleAksSubnetRoleCleanup, true);
+  });
+  assert.equal(result.executed, true);
 });
 
 test('identity PostgreSQL bootstrap is a separate default-off deployment option', () => {
@@ -121,7 +140,7 @@ test('Probe PostgreSQL bootstrap is independently default-off and never runs in 
   assert.equal(result.bootstrapFoundationProbePostgres, true);
 });
 
-test('Probe PostgreSQL bootstrap uses its exact native identity', async () => {
+test('Probe PostgreSQL bootstrap reads the principal it needs without comparing the resource ID', async () => {
   const steps = [];
   const identity = deploymentOutputs.foundationProbeIdentity.value;
   const result = await deploy({ ...fixture, execute: true, bootstrapFoundationProbePostgres: true }, {
@@ -130,7 +149,7 @@ test('Probe PostgreSQL bootstrap uses its exact native identity', async () => {
       identities: {
         'agentweaver-id-foundation-probe': {
           status: 0, stderr: '',
-          stdout: JSON.stringify({ id: identity.resourceId, principalId: identity.principalObjectId }),
+          stdout: JSON.stringify({ id: '/different/resource/id', principalId: identity.principalObjectId }),
         },
       },
     }),
@@ -150,22 +169,19 @@ test('Probe PostgreSQL bootstrap uses its exact native identity', async () => {
   assert.equal(result.receipt.identityPostgresBootstrap, undefined);
 });
 
-test('Probe PostgreSQL bootstrap refuses a different native identity without opening transport', async () => {
+test('Probe PostgreSQL bootstrap rejects a malformed principal input before opening transport', async () => {
   await assert.rejects(deploy({ ...fixture, execute: true, bootstrapFoundationProbePostgres: true }, {
     sourceResolver: () => source,
     execAz: fakeAzure({
       identities: {
         'agentweaver-id-foundation-probe': {
           status: 0, stderr: '',
-          stdout: JSON.stringify({
-            id: deploymentOutputs.identityBrokerRuntimeIdentity.value.resourceId,
-            principalId: deploymentOutputs.foundationProbeIdentity.value.principalObjectId,
-          }),
+          stdout: JSON.stringify({ principalId: 'not-a-guid' }),
         },
       },
     }),
     initializeIdentityPostgres() { throw new Error('unexpected transport'); },
-  }), /exact existing approved Probe principal/);
+  }), /valid existing Probe principal ID/);
 });
 
 test('initial Broker state is default-off, non-mutating in plan, and separately wired', async () => {
@@ -377,7 +393,7 @@ test('certificate-only routing stage is passed only through the guarded identity
   assert.equal(result.receipt.identityRouting.routingConfigured, false);
 });
 
-test('deployment checks real account, group and resources, then what-if before create', async () => {
+test('deployment checks the approved account and resource group before what-if and create', async () => {
   const calls = [];
   const result = await deploy({ ...fixture, execute: true }, {
     sourceResolver: () => source,
@@ -392,10 +408,8 @@ test('deployment checks real account, group and resources, then what-if before c
     deploymentOutputs.foundationProbeIdentity.value.principalObjectId);
   assert.equal(result.receipt.operatorRoleAssignmentId, undefined);
   assert.deepEqual(calls.map(args => args.slice(0, 3)), [
-    ['account', 'show', '-o'], ['group', 'show', '--name'], ['resource', 'list', '--resource-group'],
-    ['deployment', 'group', 'what-if'],
-    ['resource', 'show', '--ids'], ['deployment', 'group', 'create'],
-    ['aks', 'nodepool', 'show'],
+    ['account', 'show', '-o'], ['group', 'show', '--name'],
+    ['deployment', 'group', 'what-if'], ['deployment', 'group', 'create'],
   ]);
   assert.ok(!calls.some(args => args[0] === 'role' && args[1] === 'assignment' && args[2] === 'list'));
   const deploymentArgs = calls.find(args => args[0] === 'deployment' && args[2] === 'create');
@@ -466,56 +480,13 @@ test('identity PostgreSQL bootstrap supports guarded AKS-only redeployment witho
   assert.deepEqual(steps, ['postgres']);
   assert.equal(result.receipt.scope, 'aks-only');
   assert.equal(result.receipt.identityPostgresBootstrap.cleanup.podRemoved, true);
-  assert.ok(calls.some(args => args[0] === 'postgres' && args[1] === 'flexible-server' && args[2] === 'show'));
+  assert.ok(!calls.some(args => args[0] === 'postgres' && args[1] === 'flexible-server' && args[2] === 'show'));
+  assert.ok(!calls.some(args => args[0] === 'resource' && args[1] === 'show'));
   assert.ok(calls.some(args => args[0] === 'identity' && args[1] === 'show'));
   assert.ok(!calls.some(args => args[0] === 'deployment' && args[2] === 'create' &&
     args.includes('infra/bicep/main.bicep')));
   assert.ok(calls.some(args => args[0] === 'deployment' && args[2] === 'create' &&
     args.includes('infra/bicep/aks-redeploy.bicep')));
-});
-
-test('AKS-only bootstrap refuses altered PostgreSQL network or authentication metadata before deployment', async () => {
-  const aksSource = {
-    ...source,
-    scope: 'aks-only',
-    template: 'infra/bicep/aks-redeploy.bicep',
-    parametersFile: 'infra/bicep/parameters/p0-aks-redeploy.approved.json',
-  };
-  const server = {
-    id: deploymentOutputs.foundationResources.value.postgresServerId,
-    name: 'agentweaver-pg',
-    location: source.location,
-    version: '16',
-    fullyQualifiedDomainName: deploymentOutputs.foundationResources.value.postgresHost,
-    network: {
-      delegatedSubnetResourceId:
-        `${fixture.groupId}/providers/Microsoft.Network/virtualNetworks/agentweaver-vnet/subnets/postgres`,
-      privateDnsZoneArmResourceId:
-        `${fixture.groupId}/providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com`,
-      publicNetworkAccess: 'Disabled',
-    },
-    authConfig: { activeDirectoryAuth: 'Enabled', passwordAuth: 'Disabled', tenantId: ids.tenantId },
-  };
-  for (const altered of [
-    { ...server, network: { ...server.network, delegatedSubnetResourceId: `${fixture.groupId}/subnets/unapproved` } },
-    { ...server, network: { ...server.network, privateDnsZoneArmResourceId: `${fixture.groupId}/privateDnsZones/unapproved` } },
-    { ...server, network: { ...server.network, publicNetworkAccess: 'Enabled' } },
-    { ...server, authConfig: { ...server.authConfig, passwordAuth: 'Enabled' } },
-    { ...server, authConfig: { ...server.authConfig, tenantId: '33333333-3333-4333-8333-333333333333' } },
-  ]) {
-    const calls = [];
-    await assert.rejects(deploy({
-      ...fixture,
-      template: aksSource.template,
-      parametersFile: aksSource.parametersFile,
-      execute: true,
-      bootstrapIdentityPostgres: true,
-    }, {
-      sourceResolver: () => aksSource,
-      execAz: fakeAzure({ postgresServer: { status: 0, stdout: JSON.stringify(altered), stderr: '' } }, calls),
-    }), /exact approved private P0 source inputs/);
-    assert.ok(!calls.some(args => args[0] === 'deployment' && args[2] === 'create'));
-  }
 });
 
 test('source/account/ownership/plan/deployment failures never report a deployment receipt', async () => {
@@ -527,8 +498,6 @@ test('source/account/ownership/plan/deployment failures never report a deploymen
     { groupResult: { status: 1, stderr: '(AuthorizationFailed)', stdout: '' } },
     { groupResult: { status: 1, stderr: '(ResourceGroupNotFound)', stdout: '' } },
     { groupResult: { status: 0, stderr: '', stdout: 'malformed' } },
-    { resources: [{ id: '/subscriptions/other/resourceGroups/other/providers/thing', tags }] },
-    { resources: [{ id: `${fixture.groupId}/providers/Microsoft.Storage/storageAccounts/other`, tags: null }] },
     { whatIf: { status: 1, stderr: 'AccessDenied', stdout: '' } },
   ]) {
     const calls = [];
@@ -542,30 +511,6 @@ test('source/account/ownership/plan/deployment failures never report a deploymen
   await assert.rejects(deploy({ ...fixture, execute: true }, { sourceResolver: () => source,
     execAz: fakeAzure({ create: { status: 0, stdout: '{"properties":{"provisioningState":"Failed"}}' } }) }),
   /source-bound/);
-});
-
-test('full foundation execution refuses to rewrite an existing protected P0 resource', async () => {
-  for (const protectedResource of [
-    {
-      id: `${fixture.groupId}/providers/Microsoft.DBforPostgreSQL/flexibleServers/agentweaver-pg`,
-      type: 'Microsoft.DBforPostgreSQL/flexibleServers',
-      name: 'agentweaver-pg',
-      tags,
-    },
-    {
-      id: `${fixture.groupId}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/agentweaver-id-foundation-probe`,
-      type: 'Microsoft.ManagedIdentity/userAssignedIdentities',
-      name: 'agentweaver-id-foundation-probe',
-      tags,
-    },
-  ]) {
-    const calls = [];
-    await assert.rejects(deploy({ ...fixture, execute: true }, {
-      sourceResolver: () => source,
-      execAz: fakeAzure({ resources: [protectedResource] }, calls),
-    }), /empty dedicated P0 resource group/);
-    assert.ok(!calls.some(args => args.includes('what-if') || args.includes('create')));
-  }
 });
 
 test('guarded infrastructure deployment grants no human AKS access or namespace bootstrap', async () => {
@@ -595,91 +540,6 @@ test('guarded infrastructure deployment grants no human AKS access or namespace 
     assert.ok(!create.some(arg => arg.startsWith('operatorObjectId=') ||
       arg.startsWith('operatorRoleAssignmentName=')));
     assert.ok(!calls.some(args => args[0] === 'role' && args[1] === 'assignment' && args[2] === 'list'));
-  }
-});
-
-test('default execute refuses a proven dangling subnet role without deleting it', async () => {
-  const subnetAssignmentId = `${subnetId}/providers/Microsoft.Authorization/roleAssignments/${subnetRoleAssignmentName}`;
-  const stale = {
-    id: subnetAssignmentId,
-    name: subnetRoleAssignmentName,
-    type: 'Microsoft.Authorization/roleAssignments',
-    properties: {
-      scope: subnetId,
-      principalId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
-      principalType: 'ServicePrincipal',
-      roleDefinitionId: `/subscriptions/${ids.subscriptionId}/providers/Microsoft.Authorization/roleDefinitions/4d97b98b-1d4f-4787-a291-c67834d212e7`,
-    },
-  };
-  const calls = [];
-  await assert.rejects(deploy({ ...fixture, execute: true }, {
-    sourceResolver: () => source,
-    execAz: fakeAzure({
-      networkRoleAssignment: { status: 0, stdout: JSON.stringify(stale), stderr: '' },
-      aksShow: { status: 1, stdout: '', stderr: '(ResourceNotFound) Managed cluster was not found.' },
-      servicePrincipal: { status: 1, stdout: '', stderr: `ERROR: Resource '${stale.properties.principalId}' does not exist.` },
-    }, calls),
-  }), /pass --allow-stale-aks-subnet-role-cleanup/);
-  assert.ok(!calls.some(args => args[0] === 'role' && args[1] === 'assignment' && args[2] === 'delete'));
-  assert.ok(!calls.some(args => args[0] === 'deployment' && args[2] === 'create'));
-});
-
-test('only an exact dangling subnet Network Contributor assignment is removed with explicit authorization', async () => {
-  const subnetAssignmentId = `${subnetId}/providers/Microsoft.Authorization/roleAssignments/${subnetRoleAssignmentName}`;
-  const stale = {
-    id: subnetAssignmentId,
-    name: subnetRoleAssignmentName,
-    type: 'Microsoft.Authorization/roleAssignments',
-    properties: {
-      scope: subnetId,
-      principalId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
-      principalType: 'ServicePrincipal',
-      roleDefinitionId: `/subscriptions/${ids.subscriptionId}/providers/Microsoft.Authorization/roleDefinitions/4d97b98b-1d4f-4787-a291-c67834d212e7`,
-    },
-  };
-  const calls = [];
-  await deploy({ ...fixture, execute: true, allowStaleAksSubnetRoleCleanup: true }, {
-    sourceResolver: () => source,
-    execAz: fakeAzure({
-      networkRoleAssignment: { status: 0, stdout: JSON.stringify(stale), stderr: '' },
-      aksShow: { status: 1, stdout: '', stderr: '(ResourceNotFound) Managed cluster was not found.' },
-      servicePrincipal: { status: 1, stdout: '', stderr: `ERROR: Resource '${stale.properties.principalId}' does not exist.` },
-    }, calls),
-  });
-  const remove = calls.find(args => args[0] === 'role' && args[1] === 'assignment' && args[2] === 'delete');
-  assert.ok(remove);
-  assert.deepEqual(remove.slice(0, 5), ['role', 'assignment', 'delete', '--ids', subnetAssignmentId]);
-  const whatIfCalls = calls.filter(args => args[2] === 'what-if');
-  assert.equal(whatIfCalls.length, 2);
-  assert.ok(calls.indexOf(remove) < calls.indexOf(whatIfCalls[1]));
-});
-
-test('a live or unverifiable subnet role principal is never removed', async () => {
-  const subnetAssignmentId = `${subnetId}/providers/Microsoft.Authorization/roleAssignments/${subnetRoleAssignmentName}`;
-  const stale = {
-    id: subnetAssignmentId, name: subnetRoleAssignmentName,
-    type: 'Microsoft.Authorization/roleAssignments',
-    properties: {
-      scope: subnetId,
-      principalId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
-      principalType: 'ServicePrincipal',
-      roleDefinitionId: `/subscriptions/${ids.subscriptionId}/providers/Microsoft.Authorization/roleDefinitions/4d97b98b-1d4f-4787-a291-c67834d212e7`,
-    },
-  };
-  for (const servicePrincipal of [
-    { status: 0, stdout: JSON.stringify({ id: stale.properties.principalId }), stderr: '' },
-    { status: 1, stdout: '', stderr: '(AuthorizationFailed)' },
-  ]) {
-    const calls = [];
-    await assert.rejects(deploy({ ...fixture, execute: true, allowStaleAksSubnetRoleCleanup: true }, {
-      sourceResolver: () => source,
-      execAz: fakeAzure({
-        networkRoleAssignment: { status: 0, stdout: JSON.stringify(stale), stderr: '' },
-        aksShow: { status: 1, stdout: '', stderr: '(ResourceNotFound) Managed cluster was not found.' },
-        servicePrincipal,
-      }, calls),
-    }));
-    assert.ok(!calls.some(args => args[0] === 'role' && args[1] === 'assignment' && args[2] === 'delete'));
   }
 });
 

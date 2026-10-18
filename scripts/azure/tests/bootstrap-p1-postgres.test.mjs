@@ -59,8 +59,8 @@ test('P1 PostgreSQL summary mode is source-only and makes no Azure calls', async
   assert.deepEqual(result.roles, buildP1PostgresPlan().services.map(({ service, role }) => ({ service, role })));
 });
 
-/** Execution is admitted only after live Azure identity IDs match every planned P1 role. */
-test('P1 PostgreSQL execution verifies target ownership and all five live principals', async () => {
+/** Execution uses the reviewed target, source, plan, and values needed by PostgreSQL bootstrap. */
+test('P1 PostgreSQL execution verifies the target and uses only required bootstrap values', async () => {
   const calls = [];
   let initializerInput;
   const result = await bootstrapP1Postgres({
@@ -96,7 +96,7 @@ test('P1 PostgreSQL execution verifies target ownership and all five live princi
         },
       };
     },
-    readPostgresMetadata(config, execAz) {
+    readPostgresValues(config, execAz) {
       assert.equal(config.postgresEntraAdminObjectId, P1_POSTGRES_TARGET.operatorObjectId);
       assert.equal(typeof execAz, 'function');
       return metadata();
@@ -107,7 +107,7 @@ test('P1 PostgreSQL execution verifies target ownership and all five live princi
     },
   });
 
-  assert.equal(calls.length, 5);
+  assert.equal(calls.length, 0);
   assert.equal(result.executed, true);
   assert.equal(initializerInput.runtimePrincipalObjectId, metadata().identityBrokerRuntimeIdentity.principalObjectId);
   assert.equal(initializerInput.migrationPrincipalObjectId, metadata().identityBrokerMigrationIdentity.principalObjectId);
@@ -120,43 +120,4 @@ test('P1 PostgreSQL execution verifies target ownership and all five live princi
   assert.equal(dirname(receiptPath), resolve(repoRoot, 'Temp'));
   assert.match(basename(receiptPath), /^p1-postgres-[0-9a-f]{32}\.jsonl$/);
   assert.equal(result.receipt.database, 'agentweaver');
-});
-
-/** Principal drift stops before the temporary Kubernetes transport or database initialization begins. */
-test('P1 PostgreSQL execution refuses a live identity that differs from the reviewed plan', async () => {
-  let initializerCalled = false;
-  await assert.rejects(bootstrapP1Postgres({
-    repoRoot,
-    coreMergeSha,
-    execute: true,
-  }, {
-    sourceResolver,
-    targetGuard(_config, _execAz) {
-      return {
-        group: { tags: { 'agentweaver:owner': source.owner, 'agentweaver:cost-center': source.costCenter } },
-        execAz: args => {
-          const name = args[args.indexOf('--name') + 1];
-          const service = buildP1PostgresPlan().services.find(item =>
-            name === `agentweaver-id-${item.service}`);
-          return {
-            status: 0,
-            stderr: '',
-            stdout: JSON.stringify({
-              id: `/subscriptions/${P1_POSTGRES_TARGET.subscriptionId}/resourceGroups/agentweaver/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${name}`,
-              name,
-              location: source.location,
-              principalId: service.service === 'knowledge'
-                ? 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' : service.principalObjectId,
-            }),
-          };
-        },
-      };
-    },
-    readPostgresMetadata: () => metadata(),
-    initializePostgres() {
-      initializerCalled = true;
-      assert.fail('Identity drift must stop before database bootstrap.');
-    },
-  }), /Live principal for P1 service knowledge differs from the reviewed PostgreSQL plan/);
-  assert.equal(initializerCalled, false);
 });

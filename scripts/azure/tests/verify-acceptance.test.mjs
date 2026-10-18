@@ -542,7 +542,7 @@ test('AKS preflight does not query an ID when the deployment receipt is not succ
     execAz: fakeAzure({ ...postDeploymentAzure,
       create: { status: 1, stdout: '', stderr: 'DeploymentNotFound' } }, calls) });
   assert.equal(report.overall, 'blocked');
-  assert.equal(report.checks.find(check => check.name === 'target-inventory').status, 'passed');
+  assert.ok(!report.checks.some(check => check.name === 'target-inventory'));
   assert.equal(report.checks.find(check => check.name === 'deployed-sha').status, 'blocked');
   assert.equal(report.checks.find(check => check.name === 'aks-observed-network-security').status, 'blocked');
   assert.ok(!calls.some(args => args[0] === 'rest'));

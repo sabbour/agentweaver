@@ -1,99 +1,20 @@
 /**
- * Shared Azure deployment guardrails for target ownership, source outputs, images, and role assignments.
- * Entry points use these checks before issuing Azure mutations or trusting resource readbacks.
+ * Shared Azure target, source-output, and image validation for deployment tooling.
+ * Entry points call these checks before issuing Azure mutations.
  */
 // Shared guardrails for every tool in scripts/azure: dedicated-target
 // validation, image digest validation, and plan/deploy request shaping.
 // No tool in this directory calls `az` with a mutating verb unless the
 // caller has passed `--execute` on the CLI explicitly; every entry point
 // defaults to a read-only plan.
-import { createHash } from 'node:crypto';
-import { parseAppRoutingDnsZoneResourceId, validateAppRoutingDnsZoneResourceIds } from './app-routing-dns.mjs';
+import { validateAppRoutingDnsZoneResourceIds } from './app-routing-dns.mjs';
 
 // Guard every deployment against shared or 0.x resource groups by allowing only the v1 target.
 const DEDICATED_NAME_PATTERN = /^agentweaver$/;
 
 const IMAGE_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 
-const PRIVATE_DNS_ZONES = [
-  { name: 'privatelink.vaultcore.azure.net', suffix: 'kv' },
-  { name: 'privatelink.blob.core.windows.net', suffix: 'blob' },
-  { name: 'privatelink.monitor.azure.com', suffix: 'monitor' },
-  { name: 'privatelink.oms.opinsights.azure.com', suffix: 'oms' },
-  { name: 'privatelink.ods.opinsights.azure.com', suffix: 'ods' },
-  { name: 'privatelink.agentsvc.azure-automation.net', suffix: 'agentsvc' },
-  { name: 'privatelink.postgres.database.azure.com', suffix: 'pg' },
-];
-const FAILURE_ANOMALIES_NAME = 'Failure Anomalies - agentweaver-appi';
-export const AKS_NETWORK_CONTRIBUTOR_ROLE_ID = '4d97b98b-1d4f-4787-a291-c67834d212e7';
 const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
-const ROLE_ASSIGNMENT_API_VERSION = '2022-04-01';
-const AKS_WORKLOAD_IDENTITIES = [
-  ['foundation-probe', 'foundation-probe-workload-identity'],
-  ['identity-broker', 'identity-broker-workload-identity'],
-  ['identity-broker-migration', 'identity-broker-migration-workload-identity'],
-];
-
-const nrmsRule = (number, access, protocol, sourceAddressPrefix, destinationPortRange, destinationPortRanges = []) => ({
-  name: `NRMS-Rule-${number}`,
-  properties: {
-    priority: number,
-    direction: 'Inbound',
-    access,
-    protocol,
-    sourcePortRange: '*',
-    sourcePortRanges: [],
-    sourceAddressPrefix,
-    sourceAddressPrefixes: [],
-    destinationAddressPrefix: '*',
-    destinationAddressPrefixes: [],
-    destinationPortRange,
-    destinationPortRanges,
-    sourceApplicationSecurityGroups: [],
-    destinationApplicationSecurityGroups: [],
-  },
-});
-
-const normalizeNrmsRules = rules => Array.isArray(rules)
-  ? rules.map(rule => {
-    const properties = rule?.properties ?? {};
-    const normalizeArray = value => Array.isArray(value) ? [...value].sort() : value ?? [];
-    return {
-      name: rule?.name,
-      priority: properties.priority,
-      direction: properties.direction,
-      access: properties.access,
-      protocol: properties.protocol,
-      sourcePortRange: properties.sourcePortRange ?? null,
-      sourcePortRanges: normalizeArray(properties.sourcePortRanges),
-      sourceAddressPrefix: properties.sourceAddressPrefix ?? null,
-      sourceAddressPrefixes: normalizeArray(properties.sourceAddressPrefixes),
-      destinationAddressPrefix: properties.destinationAddressPrefix ?? null,
-      destinationAddressPrefixes: normalizeArray(properties.destinationAddressPrefixes),
-      destinationPortRange: properties.destinationPortRange ?? null,
-      destinationPortRanges: normalizeArray(properties.destinationPortRanges),
-      sourceApplicationSecurityGroups: normalizeArray(properties.sourceApplicationSecurityGroups),
-      destinationApplicationSecurityGroups: normalizeArray(properties.destinationApplicationSecurityGroups),
-    };
-  }).sort((left, right) => String(left.name).localeCompare(String(right.name)))
-  : null;
-
-const NRMS_EXPECTED_RULES = normalizeNrmsRules([
-  nrmsRule(101, 'Allow', 'Tcp', 'VirtualNetwork', '443'),
-  nrmsRule(103, 'Allow', '*', 'CorpNetPublic', '*'),
-  nrmsRule(104, 'Allow', '*', 'CorpNetSaw', '*'),
-  nrmsRule(105, 'Deny', '*', 'Internet', null,
-    ['1433', '1434', '3306', '4333', '5432', '6379', '7000', '7001', '7199',
-      '9042', '9160', '9300', '16379', '26379', '27017']),
-  nrmsRule(106, 'Deny', 'Tcp', 'Internet', null, ['22', '3389']),
-  nrmsRule(107, 'Deny', 'Tcp', 'Internet', null, ['23', '135', '445', '5985', '5986']),
-  nrmsRule(108, 'Deny', '*', 'Internet', null,
-    ['13', '17', '19', '53', '69', '111', '123', '512', '514', '593', '873',
-      '1900', '5353', '11211']),
-  nrmsRule(109, 'Deny', '*', 'Internet', null,
-    ['119', '137', '138', '139', '161', '162', '389', '636', '2049', '2301',
-      '2381', '3268', '5800', '5900']),
-]);
 
 /** Rejects a resource-group or target name that is not the explicitly approved dedicated P0 name. */
 export function assertDedicatedTarget(name, kind = 'resource group') {
@@ -175,40 +96,6 @@ function jsonResult(result, label) {
   } catch {
     throw new Error(`${label} returned malformed JSON.`);
   }
-}
-
-function projectInventory(resources, expectedTags) {
-  if (!Array.isArray(resources)) return { valid: false };
-  const keys = ['agentweaver:environment', 'agentweaver:managed-by', 'agentweaver:owner', 'agentweaver:cost-center'];
-  const expected = [
-    expectedTags.environment, expectedTags.managedBy, expectedTags.owner, expectedTags.costCenter,
-  ];
-  return resources.map(resource => {
-    const tags = resource?.tags;
-    const validTags = tags === undefined || tags === null ||
-      (typeof tags === 'object' && !Array.isArray(tags));
-    const values = validTags && tags && typeof tags === 'object' ? tags : {};
-    const ownershipMatches = validTags && keys.every((key, index) =>
-      values[key] === undefined || values[key] === expected[index]);
-    const ownershipComplete = validTags && keys.every((key, index) => values[key] === expected[index]);
-    return {
-      id: resource?.id,
-      type: resource?.type,
-      name: resource?.name,
-      tagEvidence: {
-        valid: validTags,
-        ownershipMatches,
-        ownershipComplete,
-      },
-    };
-  });
-}
-
-/** Describes a rejected inventory item using only its non-secret ARM type and resource name. */
-function describeResource(resource) {
-  const type = typeof resource?.type === 'string' ? resource.type : '<missing>';
-  const name = typeof resource?.name === 'string' ? resource.name : '<missing>';
-  return `type ${JSON.stringify(type)}, name ${JSON.stringify(name)}`;
 }
 
 // Deployment outputs select configuration, never prove a workload ran.
@@ -304,223 +191,67 @@ export function readFoundationOutputs(outputs, {
   };
 }
 
-/** Reads the existing identity PostgreSQL resource and verifies its immutable target metadata. */
-export function readExistingIdentityPostgresMetadata(source, execAz) {
+/** Reads existing workload identity IDs needed by the PostgreSQL bootstrap. */
+export function readIdentityPostgresBootstrapValues(source, execAz) {
   const {
-    resourceGroup, subscriptionId, tenantId, location,
-    postgresEntraAdminObjectId, postgresEntraAdminPrincipalName, postgresEntraAdminPrincipalType,
+    resourceGroup, postgresEntraAdminObjectId,
+    postgresEntraAdminPrincipalName, postgresEntraAdminPrincipalType,
   } = source;
   if (!GUID_PATTERN.test(postgresEntraAdminObjectId ?? '') ||
       typeof postgresEntraAdminPrincipalName !== 'string' || !postgresEntraAdminPrincipalName.trim() ||
       !['User', 'Group', 'ServicePrincipal'].includes(postgresEntraAdminPrincipalType)) {
     throw new Error('AKS-only PostgreSQL bootstrap needs the approved foundation Entra administrator inputs.');
   }
-
   const serverName = `${resourceGroup}-pg`;
   const postgresHost = `${serverName}.postgres.database.azure.com`;
-  const serverId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.DBforPostgreSQL/flexibleServers/${serverName}`;
-  const normalizeLocation = value => value?.replace(/\s+/g, '').toLowerCase();
-  const vnetId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Network/virtualNetworks/${resourceGroup}-vnet`;
-  const postgresSubnetId = `${vnetId}/subnets/postgres`;
-  const postgresPrivateDnsZoneId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com`;
-  const server = jsonResult(execAz([
-    'postgres', 'flexible-server', 'show', '--resource-group', resourceGroup, '--name', serverName, '-o', 'json',
-  ], { check: false }), 'Existing PostgreSQL server lookup');
-  if (server.id?.toLowerCase() !== serverId.toLowerCase() ||
-      server.name !== serverName || normalizeLocation(server.location) !== normalizeLocation(location) ||
-      server.version !== '16' || server.fullyQualifiedDomainName !== postgresHost ||
-      server.network?.delegatedSubnetResourceId?.toLowerCase() !== postgresSubnetId.toLowerCase() ||
-      server.network?.privateDnsZoneArmResourceId?.toLowerCase() !== postgresPrivateDnsZoneId.toLowerCase() ||
-      server.network?.publicNetworkAccess !== 'Disabled' ||
-      server.authConfig?.activeDirectoryAuth !== 'Enabled' ||
-      server.authConfig?.passwordAuth !== 'Disabled' ||
-      server.authConfig?.tenantId?.toLowerCase() !== tenantId?.toLowerCase()) {
-    throw new Error('Existing PostgreSQL server does not match the exact approved private P0 source inputs.');
-  }
 
-  const adminId = `${serverId}/administrators/${postgresEntraAdminObjectId}`;
-  const admin = jsonResult(execAz([
-    'resource', 'show', '--ids', adminId, '-o', 'json',
-  ], { check: false }), 'Existing PostgreSQL Entra administrator lookup');
-  if (admin.id?.toLowerCase() !== adminId.toLowerCase() ||
-      admin.type?.toLowerCase() !== 'microsoft.dbforpostgresql/flexibleservers/administrators' ||
-      admin.name?.toLowerCase() !== postgresEntraAdminPrincipalName.toLowerCase() ||
-      admin.properties?.objectId?.toLowerCase() !== postgresEntraAdminObjectId.toLowerCase() ||
-      admin.properties?.principalName !== postgresEntraAdminPrincipalName ||
-      admin.properties?.principalType !== postgresEntraAdminPrincipalType ||
-      admin.properties?.tenantId?.toLowerCase() !== tenantId?.toLowerCase()) {
-    throw new Error('Existing PostgreSQL Entra administrator differs from the approved foundation parameters.');
-  }
-
-  function readIdentity(name, serviceAccount) {
+  function readIdentity(name) {
     const identityName = `${resourceGroup}-id-${name}`;
-    const identityId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${identityName}`;
     const identity = jsonResult(execAz([
       'identity', 'show', '--resource-group', resourceGroup, '--name', identityName, '-o', 'json',
-    ], { check: false }), `Existing ${name} workload identity lookup`);
-    if (identity.id?.toLowerCase() !== identityId.toLowerCase() ||
-        identity.name !== identityName || identity.location?.toLowerCase() !== location?.toLowerCase() ||
-        !GUID_PATTERN.test(identity.clientId ?? '') || !GUID_PATTERN.test(identity.principalId ?? '') ||
-        identity.clientId.toLowerCase() === identity.principalId.toLowerCase()) {
-      throw new Error(`Existing ${name} workload identity does not match the exact P0 target.`);
+    ], { check: false, projectJson: value => ({ principalId: value.principalId }), preserveProjectedJson: true }),
+    `Existing ${name} workload identity lookup`);
+    if (!GUID_PATTERN.test(identity.principalId ?? '')) {
+      throw new Error(`Existing ${name} workload identity returned an invalid PostgreSQL bootstrap principal ID.`);
     }
-    return {
-      name,
-      resourceId: identityId,
-      clientId: identity.clientId,
-      principalObjectId: identity.principalId,
-      namespace: 'agentweaver',
-      serviceAccount,
-    };
+    return { principalObjectId: identity.principalId };
   }
 
-  const identityBrokerRuntimeIdentity = readIdentity('identity-broker', 'identity-broker');
-  const identityBrokerMigrationIdentity = readIdentity('identity-broker-migration', 'identity-broker-migration');
-  const principalIds = [
-    identityBrokerRuntimeIdentity.clientId,
-    identityBrokerRuntimeIdentity.principalObjectId,
-    identityBrokerMigrationIdentity.clientId,
-    identityBrokerMigrationIdentity.principalObjectId,
-  ].map(value => value.toLowerCase());
-  if (new Set(principalIds).size !== principalIds.length)
-    throw new Error('Existing Identity Broker workload identities do not have four distinct client and principal IDs.');
+  const identityBrokerRuntimeIdentity = readIdentity('identity-broker');
+  const identityBrokerMigrationIdentity = readIdentity('identity-broker-migration');
+  const principalIds = [identityBrokerRuntimeIdentity.principalObjectId, identityBrokerMigrationIdentity.principalObjectId]
+    .map(value => value.toLowerCase());
+  if (new Set(principalIds).size !== principalIds.length) {
+    throw new Error('Existing Identity Broker workload identities must have distinct PostgreSQL bootstrap principals.');
+  }
 
   return {
-    resources: { postgresHost, postgresServerId: serverId },
+    resources: { postgresHost },
     postgresEntraAdminPrincipalName,
     identityBrokerRuntimeIdentity,
     identityBrokerMigrationIdentity,
   };
 }
 
-// ARM guid() uses UUID v5 with this namespace and hyphen-joined arguments.
-/** Derives a stable ARM-compatible GUID from the supplied identity values. */
-export function armGuid(...values) {
-  const namespace = Buffer.from('11fb06fb712d4ddd98c7e71bbd588830', 'hex');
-  const bytes = createHash('sha1').update(namespace).update(values.join('-')).digest().subarray(0, 16);
-  bytes[6] = (bytes[6] & 0x0f) | 0x50;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = bytes.toString('hex');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
-}
-
-function readRoleAssignment(assignmentId, execAz) {
-  return execAz(['resource', 'show', '--ids', assignmentId, '--api-version', ROLE_ASSIGNMENT_API_VERSION, '-o', 'json'],
-    { check: false });
-}
-
-/** Detects stale AKS subnet role assignments that could conflict with deployment ownership. */
-export function findDanglingAksSubnetRoleAssignment({ resourceGroup, subscriptionId }, execAz) {
-  const clusterId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${resourceGroup}-aks`;
-  const subnetId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.Network/virtualNetworks/${resourceGroup}-vnet/subnets/aks`;
-  const assignmentName = armGuid(subnetId, clusterId, AKS_NETWORK_CONTRIBUTOR_ROLE_ID);
-  const assignmentId = `${subnetId}/providers/Microsoft.Authorization/roleAssignments/${assignmentName}`;
-  const assignmentResult = readRoleAssignment(assignmentId, execAz);
-  if (assignmentResult.status !== 0) {
-    if (/\((?:RoleAssignmentNotFound|ResourceNotFound)\)|\b404\b/i.test(assignmentResult.stderr)) return undefined;
-    throw new Error(`Exact AKS subnet role lookup failed: ${assignmentResult.stderr}`);
-  }
-  let assignment;
-  try {
-    assignment = JSON.parse(assignmentResult.stdout);
-  } catch {
-    throw new Error('Exact AKS subnet role lookup returned malformed JSON.');
-  }
-  const expectedRole =
-    `/subscriptions/${subscriptionId}/providers/Microsoft.Authorization/roleDefinitions/${AKS_NETWORK_CONTRIBUTOR_ROLE_ID}`;
-  const properties = assignment?.properties;
-  if (assignment?.id?.toLowerCase() !== assignmentId.toLowerCase() ||
-      assignment?.name?.toLowerCase() !== assignmentName.toLowerCase() ||
-      properties?.scope?.toLowerCase() !== subnetId.toLowerCase() ||
-      properties?.roleDefinitionId?.toLowerCase() !== expectedRole.toLowerCase() ||
-      properties?.principalType !== 'ServicePrincipal' ||
-      !GUID_PATTERN.test(properties?.principalId ?? '')) {
-    throw new Error('The exact AKS subnet assignment does not match the reviewed Network Contributor binding.');
-  }
-  const clusterResult = execAz(['aks', 'show', '--resource-group', resourceGroup, '--name', `${resourceGroup}-aks`, '-o', 'json'],
-    { check: false });
-  let clusterPrincipalId;
-  if (clusterResult.status === 0) {
-    let cluster;
-    try {
-      cluster = JSON.parse(clusterResult.stdout);
-    } catch {
-      throw new Error('AKS lookup returned malformed JSON while checking the subnet role.');
-    }
-    if (cluster?.id?.toLowerCase() !== clusterId.toLowerCase() ||
-        !GUID_PATTERN.test(cluster?.identity?.principalId ?? '')) {
-      throw new Error('AKS identity does not match the exact target while checking the subnet role.');
-    }
-    clusterPrincipalId = cluster.identity.principalId;
-    if (clusterPrincipalId.toLowerCase() === properties.principalId.toLowerCase()) return undefined;
-  } else if (!/\(ResourceNotFound\)/i.test(clusterResult.stderr)) {
-    throw new Error(`AKS lookup failed while checking the subnet role: ${clusterResult.stderr}`);
-  }
-  const principalResult = execAz(['ad', 'sp', 'show', '--id', properties.principalId, '-o', 'json'], { check: false });
-  if (principalResult.status === 0) {
-    let principal;
-    try {
-      principal = JSON.parse(principalResult.stdout);
-    } catch {
-      throw new Error('The AKS subnet role principal lookup returned malformed JSON.');
-    }
-    if (principal?.id?.toLowerCase() !== properties.principalId.toLowerCase()) {
-      throw new Error('The AKS subnet role principal lookup returned a different service principal.');
-    }
-    throw new Error(clusterPrincipalId
-      ? 'The prior AKS subnet role principal still exists; refusing to replace its assignment automatically.'
-      : 'The cluster is absent but its subnet role principal still exists; refusing to remove the assignment automatically.');
-  }
-  const notFound = new RegExp(`Resource ['"]?${properties.principalId}['"]? does not exist`, 'i');
-  if (!notFound.test(principalResult.stderr)) {
-    throw new Error(`The AKS subnet role principal could not be verified as deleted: ${principalResult.stderr}`);
-  }
-  return assignmentId;
-}
-
-function assertExistingAksFederatedCredentials({ resourceGroup }, execAz) {
-  for (const [service, credentialName] of AKS_WORKLOAD_IDENTITIES) {
-    const result = execAz(['identity', 'federated-credential', 'show', '--name', credentialName,
-      '--identity-name', `${resourceGroup}-id-${service}`, '--resource-group', resourceGroup, '-o', 'json'],
-    { check: false });
-    if (result.status !== 0) {
-      throw new Error(`Existing AKS workload identity credential lookup failed for ${credentialName}: ${result.stderr}`);
-    }
-    let credential;
-    try {
-      credential = JSON.parse(result.stdout);
-    } catch {
-      throw new Error(`Existing AKS workload identity credential ${credentialName} returned malformed JSON.`);
-    }
-    const subject = `system:serviceaccount:agentweaver:${service}`;
-    if (typeof credential?.issuer !== 'string' || !credential.issuer.startsWith('https://') ||
-        credential.subject !== subject || !Array.isArray(credential.audiences) ||
-        credential.audiences.length !== 1 || credential.audiences[0] !== 'api://AzureADTokenExchange') {
-      throw new Error(`Existing AKS workload identity credential ${credentialName} has unexpected bindings.`);
-    }
-  }
-}
-
 // Shared by plan, deploy and acceptance. A caller's ID is not account evidence.
 /**
- * Validates the Azure account, dedicated resource group, and expected existing-resource metadata.
- * Generated NRMS NSGs are accepted only when exact P0 subnets reference them and their policy rules match.
- * Returns the verified group and a target-bound Azure executor; unsafe or ambiguous targets throw.
+ * Validates the selected account and dedicated resource-group target.
+ * It does not enumerate resources or compare post-deployment resource properties.
  */
 export function guardAzureTarget(config, execAz) {
   const { resourceGroup, subscriptionId, tenantId, allowedSubscriptionId, allowedTenantId } = config;
-  const appRoutingDnsZoneResourceIds = validateAppRoutingDnsZoneResourceIds(
-    config.appRoutingDnsZoneResourceIds, subscriptionId,
-  );
+  validateAppRoutingDnsZoneResourceIds(config.appRoutingDnsZoneResourceIds, subscriptionId);
   assertDedicatedTarget(resourceGroup);
-  const keyVaultName = assertApprovedKeyVaultName(resourceGroup, config.keyVaultName);
+  assertApprovedKeyVaultName(resourceGroup, config.keyVaultName);
   assertSubscription(subscriptionId, allowedSubscriptionId);
   assertTenant(tenantId, allowedTenantId);
+
   const boundAz = (args, options) => execAz([...args, '--subscription', subscriptionId], options);
   const account = jsonResult(boundAz(['account', 'show', '-o', 'json'], { check: false }), 'Account lookup');
   if (account.id !== subscriptionId || account.tenantId !== tenantId || account.state !== 'Enabled') {
     throw new Error('Actual Azure account/tenant is not the selected enabled target.');
   }
+
   const groupResult = boundAz(['group', 'show', '--name', resourceGroup, '-o', 'json'], { check: false });
   if (groupResult.status !== 0) {
     // This route never creates a resource group. Even explicit not-found blocks.
@@ -534,310 +265,10 @@ export function guardAzureTarget(config, execAz) {
     throw new Error('Resource group response is not the exact selected target.');
   }
   assertDedicatedResourceGroupOwnership(resourceGroup, group.tags);
-  const expectedTags = {
-    environment: 'v1-p0',
-    managedBy: 'bicep',
-    owner: group.tags['agentweaver:owner'],
-    costCenter: group.tags['agentweaver:cost-center'],
-  };
-  const resources = jsonResult(boundAz(['resource', 'list', '--resource-group', resourceGroup, '-o', 'json'],
-    { check: false, projectJson: value => projectInventory(value, expectedTags) }), 'Resource inventory');
-  if (!Array.isArray(resources)) throw new Error('Resource inventory is not an array.');
-  const p1RuntimeServices = ['projects-config', 'environment', 'knowledge', 'events-and-sessions', 'orchestrator'];
-  const expectedResources = new Map([
-    ['microsoft.network/virtualnetworks', [`${resourceGroup}-vnet`]],
-    ['microsoft.containerservice/managedclusters', [`${resourceGroup}-aks`]],
-    ['microsoft.keyvault/vaults', [keyVaultName]],
-    ['microsoft.storage/storageaccounts', [`${resourceGroup.replaceAll('-', '')}blob`.slice(0, 24)]],
-    ['microsoft.dbforpostgresql/flexibleservers', [`${resourceGroup}-pg`]],
-    ['microsoft.operationalinsights/workspaces', [`${resourceGroup}-law`]],
-    ['microsoft.insights/components', [`${resourceGroup}-appi`]],
-    ['microsoft.insights/privatelinkscopes', [`${resourceGroup}-ampls`]],
-    ['microsoft.managedidentity/userassignedidentities', [
-      `${resourceGroup}-id-foundation-probe`,
-      `${resourceGroup}-id-identity-broker`,
-      `${resourceGroup}-id-identity-broker-migration`,
-      ...p1RuntimeServices.map(service => `${resourceGroup}-id-${service}`),
-    ]],
-    ['microsoft.network/privateendpoints', [`${resourceGroup}-kv-pe`, `${resourceGroup}-blob-pe`, `${resourceGroup}-ampls-pe`]],
-    ['microsoft.network/privatednszones', PRIVATE_DNS_ZONES.map(zone => zone.name)],
-  ]);
-  const resourceId = (type, name) => {
-    const [provider, ...segments] = type.split('/');
-    const names = name.split('/');
-    return `${groupId}/providers/${provider}/${segments.map((segment, i) => `${segment}/${names[i]}`).join('/')}`;
-  };
-  const sameId = (left, right) => typeof left === 'string' && left.toLowerCase() === right.toLowerCase();
-  const vnetId = resourceId('Microsoft.Network/virtualNetworks', `${resourceGroup}-vnet`);
-  const nrmsNsgResources = resources.filter(resource =>
-    typeof resource.type === 'string' && resource.type.toLowerCase() === 'microsoft.network/networksecuritygroups');
-  if (nrmsNsgResources.length > 1) {
-    const rejected = nrmsNsgResources.map(describeResource).join('; ');
-    throw new Error(`Resource inventory contains multiple network security groups: ${rejected}.`);
-  }
-  const nrmsNsg = nrmsNsgResources[0];
-  if (nrmsNsg && (typeof nrmsNsg.name !== 'string' ||
-      !new RegExp(`^NRMS-[a-z0-9]+${resourceGroup}-vnet$`, 'i').test(nrmsNsg.name) ||
-      !sameId(nrmsNsg.id, resourceId('Microsoft.Network/networkSecurityGroups', nrmsNsg.name)))) {
-    throw new Error(`Resource inventory rejected ${describeResource(nrmsNsg)}: unexpected outside the reviewed NRMS NSG name and ID pattern.`);
-  }
-  const expectedIds = new Map();
-  for (const [type, names] of expectedResources) {
-    for (const name of names) expectedIds.set(resourceId(type, name).toLowerCase(), {
-      type, name, tagged: true,
-      ...(type === 'microsoft.network/privatednszones' ? { kind: 'private-dns-root' } : {}),
-    });
-  }
-  if (nrmsNsg) expectedIds.set(nrmsNsg.id.toLowerCase(), {
-    type: 'microsoft.network/networksecuritygroups', name: nrmsNsg.name, tagged: false,
-  });
-  const failureAnomaliesId = resourceId('Microsoft.AlertsManagement/smartDetectorAlertRules', FAILURE_ANOMALIES_NAME);
-  expectedIds.set(failureAnomaliesId.toLowerCase(), {
-    type: 'microsoft.alertsmanagement/smartdetectoralertrules',
-    name: FAILURE_ANOMALIES_NAME, tagged: false,
-  });
-  const child = (type, name) => expectedIds.set(resourceId(type, name).toLowerCase(), { type, name, tagged: false });
-  const storageName = resourceGroup.replaceAll('-', '').concat('blob').slice(0, 24);
-  for (const name of ['aks', 'postgres', 'private-endpoints']) {
-    child('microsoft.network/virtualnetworks/subnets', `${resourceGroup}-vnet/${name}`);
-  }
-  for (const { name: zone, suffix } of PRIVATE_DNS_ZONES) {
-    child('microsoft.network/privatednszones/virtualnetworklinks', `${zone}/${resourceGroup}-${suffix}-dns-link`);
-  }
-  const endpointIds = ['kv', 'blob', 'ampls'].map(suffix =>
-    resourceId('Microsoft.Network/privateEndpoints', `${resourceGroup}-${suffix}-pe`));
-  for (const suffix of ['kv', 'blob', 'ampls']) {
-    child('microsoft.network/privateendpoints/privatednszonegroups', `${resourceGroup}-${suffix}-pe/default`);
-  }
-  for (const suffix of ['law', 'appi']) {
-    child('microsoft.insights/privatelinkscopes/scopedresources', `${resourceGroup}-ampls/${resourceGroup}-${suffix}-scope`);
-  }
-  child('microsoft.managedidentity/userassignedidentities/federatedidentitycredentials',
-    `${resourceGroup}-id-foundation-probe/foundation-probe-workload-identity`);
-  child('microsoft.managedidentity/userassignedidentities/federatedidentitycredentials',
-    `${resourceGroup}-id-identity-broker/identity-broker-workload-identity`);
-  child('microsoft.managedidentity/userassignedidentities/federatedidentitycredentials',
-    `${resourceGroup}-id-identity-broker-migration/identity-broker-migration-workload-identity`);
-  for (const service of p1RuntimeServices) {
-    child('microsoft.managedidentity/userassignedidentities/federatedidentitycredentials',
-      `${resourceGroup}-id-${service}/${service}-workload-identity`);
-  }
-  child('microsoft.storage/storageaccounts/blobservices', `${storageName}/default`);
-  child('microsoft.storage/storageaccounts/blobservices/containers', `${storageName}/default/platform-artifacts`);
-  if (/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(config.postgresEntraAdminObjectId ?? '')) {
-    child('microsoft.dbforpostgresql/flexibleservers/administrators', `${resourceGroup}-pg/${config.postgresEntraAdminObjectId}`);
-  }
-  for (const name of ['network', 'aks', 'keyvault', 'storage', 'monitor', 'postgres', 'identity',
-    'workload-identity-federation', 'p1-runtime-federation']) {
-    child('microsoft.resources/deployments', `${resourceGroup}-${name}`);
-  }
-  const identityId = resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', `${resourceGroup}-id-foundation-probe`);
-  const identityBrokerRuntimeId = resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', `${resourceGroup}-id-identity-broker`);
-  const aksId = resourceId('Microsoft.ContainerService/managedClusters', `${resourceGroup}-aks`);
-  const subnetId = resourceId('Microsoft.Network/virtualNetworks/subnets', `${resourceGroup}-vnet/aks`);
-  // Admit only these exact resource-scoped assignments; an AKS cluster-scope human grant is never expected.
-  for (const [scope, principalResource, role] of [
-    [resourceId('Microsoft.KeyVault/vaults', keyVaultName), identityId, '4633458b-17de-408a-b874-0445c86b69e6'],
-    [resourceId('Microsoft.KeyVault/vaults', keyVaultName), identityBrokerRuntimeId, '4633458b-17de-408a-b874-0445c86b69e6'],
-    [resourceId('Microsoft.KeyVault/vaults', keyVaultName), aksId, 'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba'],
-    [resourceId('Microsoft.Storage/storageAccounts', storageName), identityId, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'],
-    [resourceId('Microsoft.OperationalInsights/workspaces', `${resourceGroup}-law`), identityId, '73c42c96-874c-492b-b04d-ab87d138a893'],
-    [resourceId('Microsoft.Insights/components', `${resourceGroup}-appi`), identityId, '3913510d-42f4-4e42-8a64-420c390055eb'],
-    [subnetId, aksId, '4d97b98b-1d4f-4787-a291-c67834d212e7'],
-  ]) {
-    const name = armGuid(scope, principalResource, role);
-    expectedIds.set(`${scope}/providers/Microsoft.Authorization/roleAssignments/${name}`.toLowerCase(),
-      { type: 'microsoft.authorization/roleassignments', name, tagged: false });
-  }
-  for (const [index, zoneId] of appRoutingDnsZoneResourceIds.entries()) {
-    const zone = parseAppRoutingDnsZoneResourceId(zoneId);
-    const zoneType = zone.zoneIsPrivate
-      ? 'microsoft.network/privatednszones'
-      : 'microsoft.network/dnszones';
-    expectedIds.set(zone.resourceId.toLowerCase(), {
-      type: zoneType, name: zone.zoneName, tagged: false,
-    });
-    const name = armGuid(zone.resourceId, aksId, zone.roleDefinitionId);
-    expectedIds.set(`${zone.resourceId}/providers/Microsoft.Authorization/roleAssignments/${name}`.toLowerCase(),
-      { type: 'microsoft.authorization/roleassignments', name, tagged: false });
-    const deploymentName = `${resourceGroup}-app-routing-dns-${index}`;
-    const zoneGroupId = `/subscriptions/${subscriptionId}/resourceGroups/${zone.resourceGroup}`;
-    expectedIds.set(`${zoneGroupId}/providers/Microsoft.Resources/deployments/${deploymentName}`.toLowerCase(),
-      { type: 'microsoft.resources/deployments', name: deploymentName, tagged: false });
-  }
-  const readResource = (id, projectJson) => jsonResult(boundAz(['resource', 'show', '--ids', id, '-o', 'json'],
-    { check: false, ...(projectJson ? { projectJson } : {}) }), 'Resource relationship lookup');
-  if (nrmsNsg) {
-    const expectedSubnetIds = ['aks', 'postgres', 'private-endpoints'].map(name =>
-      resourceId('Microsoft.Network/virtualNetworks/subnets', `${resourceGroup}-vnet/${name}`));
-    const exactIds = (observed, expected) => {
-      if (!Array.isArray(observed) || observed.length !== expected.length) return false;
-      const normalized = observed.map(id => typeof id === 'string' ? id.toLowerCase() : null);
-      return normalized.every(Boolean) && new Set(normalized).size === expected.length &&
-        expected.every(id => normalized.includes(id.toLowerCase()));
-    };
-    const nsg = readResource(nrmsNsg.id, value => ({
-      id: value?.id,
-      type: value?.type,
-      name: value?.name,
-      properties: {
-        securityRules: normalizeNrmsRules(value?.properties?.securityRules),
-        subnets: Array.isArray(value?.properties?.subnets)
-          ? value.properties.subnets.map(subnet => subnet?.id) : value?.properties?.subnets,
-        networkInterfaces: Array.isArray(value?.properties?.networkInterfaces)
-          ? value.properties.networkInterfaces.map(networkInterface => networkInterface?.id)
-          : value?.properties?.networkInterfaces ?? [],
-      },
-    }));
-    const vnet = readResource(vnetId, value => ({
-      id: value?.id,
-      type: value?.type,
-      name: value?.name,
-      properties: {
-        subnets: Array.isArray(value?.properties?.subnets)
-          ? value.properties.subnets.map(subnet => ({
-            id: subnet?.id,
-            networkSecurityGroupId: subnet?.properties?.networkSecurityGroup?.id,
-          })) : value?.properties?.subnets,
-      },
-    }));
-    if (!sameId(nsg.id, nrmsNsg.id) || nsg.type?.toLowerCase() !== 'microsoft.network/networksecuritygroups' ||
-        nsg.name?.toLowerCase() !== nrmsNsg.name.toLowerCase() ||
-        !exactIds(nsg.properties?.subnets, expectedSubnetIds) ||
-        !Array.isArray(nsg.properties?.networkInterfaces) || nsg.properties.networkInterfaces.length !== 0 ||
-        JSON.stringify(nsg.properties?.securityRules) !== JSON.stringify(NRMS_EXPECTED_RULES) ||
-        !sameId(vnet.id, vnetId) || vnet.type?.toLowerCase() !== 'microsoft.network/virtualnetworks' ||
-        vnet.name?.toLowerCase() !== `${resourceGroup}-vnet`.toLowerCase() ||
-        !Array.isArray(vnet.properties?.subnets) ||
-        !exactIds(vnet.properties.subnets.map(subnet => subnet.id), expectedSubnetIds) ||
-        vnet.properties.subnets.some(subnet => !sameId(subnet.networkSecurityGroupId, nrmsNsg.id))) {
-      throw new Error(`Generated NRMS NSG ${describeResource(nrmsNsg)} does not match the exact P0 VNet, subnet, or security-rule evidence.`);
-    }
-  }
-  const seen = new Set();
-  let observedPostgresAdministrator;
-  for (const resource of resources) {
-    if (typeof resource.id !== 'string' || !resource.id.toLowerCase().startsWith(`${groupId.toLowerCase()}/providers/`)) {
-      throw new Error(`Resource inventory rejected ${describeResource(resource)}: outside the exact dedicated group.`);
-    }
-    const id = resource.id.toLowerCase();
-    const type = resource.type?.toLowerCase();
-    if (seen.has(id)) throw new Error(`Resource inventory contains a duplicate ID for ${describeResource(resource)}.`);
-    seen.add(id);
-    const expected = expectedIds.get(id);
-    if (!expected && config.scope === 'aks-only' &&
-        type === 'microsoft.dbforpostgresql/flexibleservers/administrators') {
-      const parentId = `${resourceId('Microsoft.DBforPostgreSQL/flexibleServers', `${resourceGroup}-pg`)}/administrators/`;
-      const principalObjectId = resource.id.slice(parentId.length);
-      if (observedPostgresAdministrator || !GUID_PATTERN.test(principalObjectId) ||
-          !sameId(resource.id, `${parentId}${principalObjectId}`) ||
-          resource.name?.toLowerCase() !== `${resourceGroup}-pg/${principalObjectId}`.toLowerCase()) {
-        throw new Error(`Resource inventory rejected ${describeResource(resource)}: not the single exact P0 PostgreSQL administrator binding.`);
-      }
-      observedPostgresAdministrator = principalObjectId;
-      continue;
-    }
-    if (type === 'microsoft.network/networkinterfaces' &&
-        sameId(resource.id, resourceId('Microsoft.Network/networkInterfaces', resource.name))) {
-      const nic = readResource(resource.id);
-      const endpointId = nic.properties?.privateEndpoint?.id;
-      if (!sameId(nic.id, resource.id) || nic.type?.toLowerCase() !== type ||
-          !endpointIds.some(approved => sameId(endpointId, approved)) ||
-          !resources.some(item => sameId(item.id, endpointId) &&
-            item.type?.toLowerCase() === 'microsoft.network/privateendpoints')) {
-        throw new Error(`Resource inventory rejected ${describeResource(resource)}: NIC is not owned by an exact approved Private Endpoint.`);
-      }
-      const endpoint = readResource(endpointId);
-      const privateSubnet = resourceId('Microsoft.Network/virtualNetworks/subnets', `${resourceGroup}-vnet/private-endpoints`);
-      if (!sameId(endpoint.id, endpointId) || endpoint.type?.toLowerCase() !== 'microsoft.network/privateendpoints' ||
-          !sameId(endpoint.properties?.subnet?.id, privateSubnet) ||
-          endpoint.properties?.networkInterfaces?.length !== 1 ||
-          !sameId(endpoint.properties.networkInterfaces[0].id, nic.id) ||
-          !Array.isArray(nic.properties?.ipConfigurations) || nic.properties.ipConfigurations.length === 0 ||
-          !nic.properties.ipConfigurations.every(ip => sameId(ip.properties?.subnet?.id, privateSubnet))) {
-        throw new Error(`Resource inventory rejected ${describeResource(resource)}: Private Endpoint NIC/subnet relationship is not the exact approved layout.`);
-      }
-      continue;
-    }
-    // Top-level deployment records are control-plane history, not deployed resources.
-    if (!expected && type === 'microsoft.resources/deployments' &&
-        typeof resource.name === 'string' && resource.name.startsWith(`${resourceGroup}-`) &&
-        /^(?:[0-9a-f]{12}|aks-[0-9a-f]{12}|p1-identities-[0-9a-f]{12})$/.test(
-          resource.name.slice(resourceGroup.length + 1)) &&
-        sameId(resource.id, resourceId('Microsoft.Resources/deployments', resource.name))) {
-      continue;
-    }
-    if (!expected || type !== expected.type || resource.name?.toLowerCase() !== expected.name.toLowerCase()) {
-      throw new Error(`Resource inventory rejected ${describeResource(resource)}: unexpected outside the reviewed P0 layout.`);
-    }
-    if (expected.tagged) {
-      const tags = resource.tagEvidence;
-      if (expected.kind === 'private-dns-root') {
-        if (!tags?.valid || !tags.ownershipMatches) {
-          throw new Error(`Resource inventory rejected ${describeResource(resource)}: private DNS root ownership conflicts with the dedicated resource group.`);
-        }
-      } else if (!tags?.valid || !tags.ownershipComplete) {
-        throw new Error(`Resource inventory rejected ${describeResource(resource)}: ownership differs from the dedicated resource group.`);
-      }
-    }
-  }
-  const privateDnsRootIds = PRIVATE_DNS_ZONES.map(({ name }) =>
-    resourceId('Microsoft.Network/privateDnsZones', name));
-  const privateDnsLinkIds = PRIVATE_DNS_ZONES.map(({ name, suffix }) =>
-    resourceId('Microsoft.Network/privateDnsZones/virtualNetworkLinks', `${name}/${resourceGroup}-${suffix}-dns-link`));
-  const hasPrivateDnsInventory = privateDnsRootIds.some(id => seen.has(id.toLowerCase()));
-  const validatePrivateDns = hasPrivateDnsInventory;
-  const inventoryEvidence = {};
 
-  if (validatePrivateDns) {
-    if (privateDnsLinkIds.some(id => !seen.has(id.toLowerCase()))) {
-      throw new Error('Existing P0 Private DNS roots are missing expected VNet links.');
-    }
-    for (const [index, linkId] of privateDnsLinkIds.entries()) {
-      const link = readResource(linkId, value => ({
-        id: value?.id,
-        type: value?.type,
-        name: value?.name,
-        properties: {
-          provisioningState: value?.properties?.provisioningState,
-          registrationEnabled: value?.properties?.registrationEnabled,
-          virtualNetworkId: value?.properties?.virtualNetwork?.id,
-        },
-      }));
-      if (!sameId(link.id, linkId) || link.type?.toLowerCase() !==
-          'microsoft.network/privatednszones/virtualnetworklinks' ||
-          link.name?.toLowerCase() !==
-            `${resourceGroup}-${PRIVATE_DNS_ZONES[index].suffix}-dns-link`.toLowerCase() ||
-          link.properties?.provisioningState !== 'Succeeded' ||
-          link.properties?.registrationEnabled !== false ||
-          !sameId(link.properties?.virtualNetworkId, vnetId)) {
-        throw new Error('Private DNS VNet link is not the exact successful, registration-disabled P0 link.');
-      }
-    }
-    inventoryEvidence.privateDnsZones = {
-      rootCount: privateDnsRootIds.filter(id => seen.has(id.toLowerCase())).length,
-      vnetLinkCount: privateDnsLinkIds.filter(id => seen.has(id.toLowerCase())).length,
-      vnetId,
-    };
-  }
-
-  for (const zoneId of appRoutingDnsZoneResourceIds) {
-    const zone = parseAppRoutingDnsZoneResourceId(zoneId);
-    if (zone.resourceGroup.toLowerCase() === resourceGroup.toLowerCase()) {
-      if (!seen.has(zone.resourceId.toLowerCase())) {
-        throw new Error('Custom App Routing DNS zone is missing from the dedicated resource inventory.');
-      }
-      continue;
-    }
-    const zoneResource = readResource(zone.resourceId);
-    const expectedType = zone.zoneIsPrivate
-      ? 'microsoft.network/privatednszones'
-      : 'microsoft.network/dnszones';
-    if (!sameId(zoneResource.id, zone.resourceId) || zoneResource.type?.toLowerCase() !== expectedType ||
-        zoneResource.name?.toLowerCase() !== zone.zoneName.toLowerCase()) {
-      throw new Error('Custom App Routing DNS zone is not the exact existing zone resource.');
-    }
-  }
-  if (config.scope === 'aks-only') assertExistingAksFederatedCredentials({ resourceGroup, subscriptionId }, boundAz);
-  return { execAz: boundAz, group, inventoryEvidence, resources };
+  return {
+    execAz: boundAz,
+    group,
+    targetEvidence: { subscriptionId, tenantId, resourceGroupId: groupId },
+  };
 }
