@@ -17,10 +17,9 @@ import {
   assertDedicatedTarget,
   assertSubscription,
   assertTenant,
-  findDanglingAksSubnetRoleAssignment,
   guardAzureTarget,
   readFoundationOutputs,
-  readExistingIdentityPostgresMetadata,
+  readIdentityPostgresBootstrapValues,
 } from './lib/guardrails.mjs';
 
 const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -107,20 +106,21 @@ export async function deploy(config, {
       appRegistrationMutation: false,
     } } : {}) };
   if (!config.execute) return summary;
-  const { execAz: boundAz, group, resources } = guardAzureTarget({ ...config, ...source }, execAz);
+  const { execAz: boundAz, group } = guardAzureTarget({ ...config, ...source }, execAz);
   if (group.tags['agentweaver:owner'] !== source.owner || group.tags['agentweaver:cost-center'] !== source.costCenter) {
     throw new Error('Source parameter ownership differs from the actual target.');
   }
-  if (source.scope === 'infrastructure-only' &&
-      resources.some(resource => resource.type?.toLowerCase() !== 'microsoft.resources/deployments')) {
-    throw new Error('Full foundation deployment is limited to an empty dedicated P0 resource group; use the AKS-only template to preserve existing resources.');
-  }
   const existingIdentityPostgres = (config.bootstrapIdentityPostgres || config.bootstrapFoundationProbePostgres ||
     config.bootstrapIdentityBrokerRuntime) && source.scope === 'aks-only'
-    ? readExistingIdentityPostgresMetadata({ ...config, ...source }, boundAz)
+    ? readIdentityPostgresBootstrapValues({ ...config, ...source }, boundAz)
     : undefined;
   const autoscalerTarget = { ...config, ...source };
   const poolBefore = source.scope === 'aks-only' ? readSystemNodePool(autoscalerTarget, boundAz) : undefined;
+  // The observed count is a Bicep input and must stay inside the reviewed bounds.
+  if (poolBefore &&
+      (poolBefore.count < source.nodePoolMinCount || poolBefore.count > source.nodePoolMaxCount)) {
+    throw new Error('Observed system node-pool count is outside the reviewed deployment input bounds.');
+  }
   const nodePoolCount = poolBefore?.count ?? source.nodePoolMinCount;
   args = buildDeployArgs({ resourceGroup: config.resourceGroup, ...source,
     subscription: config.subscriptionId, sourceSha: source.sha, deploymentName, nodePoolCount });
@@ -147,24 +147,9 @@ export async function deploy(config, {
   }
   runWhatIf();
   assertSourceUnchanged();
-  const staleAssignmentId = findDanglingAksSubnetRoleAssignment(config, boundAz);
-  if (staleAssignmentId) {
-    if (!config.allowStaleAksSubnetRoleCleanup) {
-      throw new Error('An exact stale AKS subnet role assignment was proven; pass --allow-stale-aks-subnet-role-cleanup to authorize its removal.');
-    }
-    const cleanup = boundAz(['role', 'assignment', 'delete', '--ids', staleAssignmentId, '--yes', '-o', 'none'],
-      { check: false });
-    if (cleanup.status !== 0) throw new Error(`Exact stale AKS subnet role cleanup failed: ${cleanup.stderr}`);
-    runWhatIf();
-    assertSourceUnchanged();
-  }
-  if (poolBefore) {
-    const poolAtCreate = readSystemNodePool(autoscalerTarget, boundAz);
-    if (poolAtCreate.count !== nodePoolCount ||
-        poolAtCreate.enableAutoScaling !== poolBefore.enableAutoScaling ||
-        poolAtCreate.minCount !== poolBefore.minCount || poolAtCreate.maxCount !== poolBefore.maxCount) {
-      throw new Error('System node pool changed after what-if; refusing to reset autoscaler state or count.');
-    }
+  // Recheck this Bicep input before create so a concurrent scale change is not overwritten.
+  if (poolBefore && readSystemNodePool(autoscalerTarget, boundAz).count !== nodePoolCount) {
+    throw new Error('System node-pool count changed after what-if; refusing to submit a stale Bicep input.');
   }
   const result = execAz(args, { check: false });
   if (result.status !== 0) throw new Error(`Infrastructure deployment failed: ${result.stderr}`);
@@ -177,11 +162,13 @@ export async function deploy(config, {
       outputs?.sourceHash?.value !== source.sourceHash) {
     throw new Error('Deployment did not return a successful source-bound infrastructure receipt.');
   }
-  const poolAfter = readSystemNodePool(autoscalerTarget, boundAz, { requireAutoscaling: true });
-  const autoscaling = { poolName: poolAfter.name, vmSize: poolAfter.vmSize,
-    enabled: poolAfter.enableAutoScaling, minCount: poolAfter.minCount, maxCount: poolAfter.maxCount,
-    countBefore: poolBefore?.count ?? null, countSubmitted: nodePoolCount, countAfter: poolAfter.count,
-    provisioningState: poolAfter.provisioningState, scaleUpProven: false };
+  const autoscaling = {
+    minCount: source.nodePoolMinCount,
+    maxCount: source.nodePoolMaxCount,
+    countBefore: poolBefore?.count ?? null,
+    countSubmitted: nodePoolCount,
+    scaleUpProven: false,
+  };
   let deploymentReceipt;
   if (source.scope === 'aks-only') {
     const issuer = outputs?.oidcIssuerUrl?.value;
@@ -241,12 +228,11 @@ export async function deploy(config, {
       };
       const probe = boundAz(['identity', 'show', '--resource-group', config.resourceGroup,
         '--name', `${config.resourceGroup}-id-foundation-probe`, '-o', 'json'],
-      { check: false, projectJson: value => ({ id: value.id, principalId: value.principalId }), preserveProjectedJson: true });
+      { check: false, projectJson: value => ({ principalId: value.principalId }), preserveProjectedJson: true });
       if (probe.status !== 0) throw new Error(`Probe native identity lookup failed: ${probe.stderr}`);
       const identity = JSON.parse(probe.stdout);
-      const expected = `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${config.resourceGroup}-id-foundation-probe`;
-      if (identity.id?.toLowerCase() !== expected.toLowerCase() || !GUID_PATTERN.test(identity.principalId ?? '')) {
-        throw new Error('Probe PostgreSQL bootstrap requires the exact existing approved Probe principal.');
+      if (!GUID_PATTERN.test(identity.principalId ?? '')) {
+        throw new Error('Probe PostgreSQL bootstrap requires a valid existing Probe principal ID.');
       }
       foundationProbePostgresBootstrap = await initializeIdentityPostgres({
         repoRoot: config.repoRoot, resourceGroup: config.resourceGroup,
@@ -366,7 +352,6 @@ export function cliConfig(values) {
   return { resourceGroup: values['resource-group'], template: values.template, parametersFile: values.parameters,
     repoRoot: process.cwd(), execute: values.execute, subscriptionId: values.subscription,
     allowedSubscriptionId: values['allowed-subscription'], tenantId: values.tenant, allowedTenantId: values['allowed-tenant'],
-    allowStaleAksSubnetRoleCleanup: values['allow-stale-aks-subnet-role-cleanup'],
     bootstrapIdentityPostgres: values['bootstrap-identity-postgres'] ?? false,
     bootstrapIdentityRouting: values['bootstrap-identity-routing'] ?? false,
     identityRoutingCertificatesOnly: values['identity-routing-certificates-only'] ?? false,
@@ -391,7 +376,6 @@ export const cliOptions = {
   'resource-group': { type: 'string' }, template: { type: 'string', default: 'infra/bicep/main.bicep' },
   parameters: { type: 'string' }, subscription: { type: 'string' }, 'allowed-subscription': { type: 'string' },
   tenant: { type: 'string' }, 'allowed-tenant': { type: 'string' },
-  'allow-stale-aks-subnet-role-cleanup': { type: 'boolean', default: false },
   'bootstrap-identity-postgres': { type: 'boolean', default: false },
   'bootstrap-identity-routing': { type: 'boolean', default: false },
   // This stage creates managed TLS certificates only; route writes remain service-guarded.

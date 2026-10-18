@@ -34,20 +34,17 @@ Every subsequent Azure command also includes the explicit subscription.
 
 The resource group must already exist after separately approved bootstrap.
 Its full resource ID and ownership tags must match the target.
-The target guard checks the exact account, tenant, resource group, approved
-resource IDs, types, names, and role scopes. Core managed resources must match
-the resource group's ownership tags. Existing Private DNS roots may be untagged
-or partially tagged; any ownership tags that are present must not conflict
-with the dedicated resource group. Missing DNS tags do not trigger tag repair
-or historical deployment-operation checks.
+The target preflight checks the selected enabled account, tenant, dedicated
+resource-group ID and name, ownership tags, and configured Key Vault name. It
+does not enumerate existing resources or compare their post-deployment
+properties. Every Azure command explicitly binds the selected subscription.
 Access denied, malformed JSON, unapproved null tags, and missing groups block execution.
 No failed lookup permits creation or fallback to the default subscription.
 
-The seven exact Private DNS roots and their VNet links remain allow-listed.
-Observed links are checked for successful provisioning, registration disabled,
-and the exact dedicated VNet. The selected deployment is still checked against
-its exact source SHA/tree/input-hash receipt; older deployment records do not
-need retrofitted source outputs or successful-create-operation collections.
+Custom DNS resource IDs are validated as deployment inputs. The selected
+deployment is still checked against its exact source SHA/tree/input-hash
+receipt; older deployment records do not need retrofitted source outputs or
+successful-create-operation collections.
 The roots are `privatelink.vaultcore.azure.net`,
 `privatelink.blob.core.windows.net`, `privatelink.monitor.azure.com`,
 `privatelink.oms.opinsights.azure.com`, `privatelink.ods.opinsights.azure.com`,
@@ -73,8 +70,9 @@ admitted `origin/v1` tip. An unreviewed descendant does not pass.
 It accepts only tracked `infra/bicep/main.bicep` or
 `infra/bicep/aks-redeploy.bicep` and their dedicated tracked JSON parameters
 beneath `infra/bicep/parameters`. Use the full foundation template only for an
-approved initial deployment into an empty managed-resource target. The
-AKS-only template updates an existing cluster and its three workload-identity
+approved full-foundation deployment. The target preflight does not check
+resource inventory or prove that existing resources are absent. The AKS-only
+template updates an existing cluster and its three workload-identity
 federated credentials without redeploying external data, network, DNS, or
 monitoring resources.
 Select the AKS-only route with `--template infra\bicep\aks-redeploy.bicep` and
@@ -145,8 +143,10 @@ Digest format checks alone cannot prove a running pod.
 The shared AKS module enables system-pool autoscaling between two and three
 `Standard_D2s_v5` nodes. Full and AKS-only parameters declare the same bounds.
 The initial count is two. AKS-only deployment preserves an observed count of
-two or three and rejects changes after what-if.
-Native receipts report the pool configuration, not proof of scale-up or regional capacity.
+two or three and rereads that count after what-if, immediately before create.
+It stops if the count changed so the deployment does not overwrite a concurrent
+scale event. The receipt reports the submitted bounds and count; the installer
+does not read back pool state after deployment or prove scale-up or regional capacity.
 
 AKS exposes a public API endpoint and uses managed Entra authentication with
 Azure RBAC; local accounts are disabled. A public FQDN on a private API does
@@ -198,8 +198,9 @@ The `foundation-probe` principal receives two additional built-in role definitio
 - Log Analytics Reader (`73c42c96-874c-492b-b04d-ab87d138a893`) on the exact workspace
 - Monitoring Metrics Publisher (`3913510d-42f4-4e42-8a64-420c390055eb`) on the exact Application Insights resource.
 
-The inventory guard admits only these exact role scopes and ARM-generated assignment IDs.
-It uses the principal object ID, not the client ID.
+The Bicep template scopes these role assignments to the workspace and
+Application Insights resources. It uses the principal object ID, not the
+client ID.
 These definitions support private Logs queries and authenticated telemetry ingestion.
 They do not prove actual role propagation, token exchange, private connectivity, or complete executable permission coverage.
 No live grant occurred.
@@ -224,9 +225,8 @@ IDs for public or private zones in the authorized subscription. Public zones
 must share one resource group. Private zones must share one resource group.
 These two groups can differ. The source guard rejects malformed IDs, duplicate
 IDs, PrivateLink zones, cross-subscription zones, and invalid group combinations.
-The target guard checks that the zones exist and have the expected type and name.
-For zones outside the cluster resource group, it reads each exact ID. It does
-not list those resource groups.
+The source guard validates the zone IDs before deployment. The target preflight
+does not read the referenced zones or list their resource groups.
 
 AKS supplies the Application Routing identity. The `appRoutingIdentity` output
 contains its resource ID, client ID, and object ID. Role assignments use its

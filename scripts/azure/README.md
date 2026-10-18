@@ -31,11 +31,8 @@ It creates only the Projects & Config, Environment, Knowledge, Events & Sessions
 and Orchestrator runtime identities and their exact ServiceAccount federations.
 Every federation names its service in `agentweaver` and accepts only
 `api://AzureADTokenExchange`.
-The target inventory guard recognizes only these five identity names and each
-`<service>-workload-identity` credential under its matching identity; other
-identity names or credential relationships remain blocked.
-Inventory rejection errors report the ARM resource type and name only; they do
-not include resource IDs or resource properties.
+The target preflight does not enumerate existing resources or compare
+federated-credential bindings after deployment.
 Supply the existing resource group tags and the exact reviewed source SHA.
 
 This template defines no Azure role assignment, database grant, migration,
@@ -94,10 +91,10 @@ The source catalog requires Core versions 1 through 16 and 18 through 21.
 These are 20 registered versions; version 17 remains excluded.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
 The plan retains 95 tables and eight exact row-lock columns.
-The plan contains the five runtime principal IDs verified from the current
-target's Azure Resource Graph outputs. Revalidate every ID against the live
-target immediately before initialization; unresolved markers are rejected
-before credential requests.
+The plan contains five principal object IDs from the approved target snapshot.
+The initializer does not query Azure to refresh those IDs. Review the plan and
+its hash against the approved deployment before initialization; unresolved
+markers are rejected before credential requests.
 The Environment runtime bootstrap profile replacement store receives exactly
 `SELECT, INSERT` on `environment.runtime_bootstrap_profile_replacements`. It
 receives no `UPDATE`, `DELETE`, or default privileges. The preceding catalog
@@ -210,13 +207,15 @@ Both templates enable autoscaling on the existing `system` pool with explicit
 `Standard_D2s_v5`. The initial foundation starts with two nodes.
 
 The AKS-only installer reads the exact native pool before what-if.
-It passes the observed count to both what-if and deployment.
-It stops if the count or autoscaler configuration changes before deployment.
+It passes the observed count to both what-if and deployment, then rechecks the
+count immediately before create.
+The count must stay within the reviewed two-to-three-node bounds.
 This preserves a valid three-node count instead of resetting it to two.
 Tracked parameters cannot override the current count or expand the approved bounds.
 
-The receipt records native autoscaler bounds and counts before and after deployment.
-It does not claim that demand created another node.
+The receipt records the submitted bounds and the count used as the deployment input.
+The installer does not read back the pool after deployment or claim that demand
+created another node.
 The two-node baseline remains unchanged. Three nodes can increase node compute
 cost by 50%, plus per-node service charges. Quota headroom does not prove regional capacity.
 
@@ -251,11 +250,10 @@ When the array contains IDs, the template requests custom DNS zones and turns
 off the managed default domain. Use one to five existing public or private
 application DNS zone IDs from the exact authorized subscription. Put all public
 zones in one resource group. Put all private zones in one resource group. The
-two resource groups can differ. The source guard validates the zone IDs. The
-target guard checks that the zones exist. It rejects malformed, duplicate,
-PrivateLink, cross-subscription, and ungrouped zone IDs. A guarded target
-operation reads each zone outside the cluster resource group by its exact ID.
-It does not list or inspect unrelated resources in those groups.
+two resource groups can differ. The source guard validates the zone IDs. It
+rejects malformed, duplicate, PrivateLink, cross-subscription, and ungrouped
+zone IDs. The deployment passes the reviewed IDs to AKS; target preflight does
+not read or inventory the referenced zones.
 
 The AKS-generated Application Routing identity receives DNS Zone Contributor
 on each public zone or Private DNS Zone Contributor on each private zone.
@@ -509,20 +507,12 @@ separate explicit approval for its dedicated Azure target and effects.
 Strings on the allow list and `--execute` are technical guards, not approval.
 
 The resource group must exist with matching ownership tags after approved bootstrap.
-The tools query its exact account, tenant, full ID, tags, and resource inventory.
-Access denied, missing targets, malformed responses, and untagged managed roots
-outside the exact seven-zone evidence path block.
-Every Azure command explicitly binds the selected subscription.
+The preflight checks the selected enabled account, tenant, dedicated resource
+group ID and name, ownership tags, and configured Key Vault name. Every Azure
+command explicitly binds the selected subscription. It does not enumerate
+resource groups or compare existing resource properties, federated credentials,
+role assignments, Private Endpoints, or Private DNS links.
 
-The target guard checks the selected account, tenant, resource-group ownership,
-and exact approved resource IDs, types, names, and role scopes. Core managed
-resources must match the resource group's ownership tags. Private DNS roots can
-be untagged or have partial tags; any ownership tags that are present must not
-conflict with the dedicated resource group. Missing DNS tags do not trigger
-tag repair or a historical deployment-operation audit.
-The inventory also admits only the five P1 runtime identities and each exact
-`<service>-workload-identity` credential beneath its matching identity; other
-identity names, resource types, IDs, or credential relationships still block.
 The reviewed JSON parameters bind the existing PostgreSQL Entra administrator
 object ID, name, and supported type (`User`, `Group`, or `ServicePrincipal`);
 they do not require a new group. The P0 example keeps `location` for VNet/AKS/
@@ -531,25 +521,14 @@ PostgreSQL and subnet-bound resources separate from required
 The selected deployment's source SHA, Git tree, and infrastructure hash are
 checked against its exact successful receipt. Older deployment-history entries
 do not have to be repacked or contain retrofitted outputs.
-Generated NICs still require reciprocal links to an approved Private Endpoint.
-Both the endpoint and all NIC IP configurations must use the dedicated private-endpoints subnet.
-Unexpected resource IDs, child names, scopes, and types still block. Known
-inherited NSG and Smart Detector resources do not trigger management-group
-policy-origin, Activity Log, or provider-generated metadata audits.
-
-The seven P0 Private DNS roots and their VNet links remain exact resource names
-on the allow list. Existing links are checked for successful provisioning,
-registration disabled, and the dedicated VNet. Missing or provider-omitted
-root tags and old resource-operation metadata are not deployment blockers.
 
 The source must be a clean full HEAD commit equal to the locally fetched
 admitted `origin/v1` tip. Unreviewed descendants fail closed.
 Only the tracked `main.bicep` and `aks-redeploy.bicep` templates and their
 dedicated tracked JSON parameter files under `infra/bicep/parameters` are
-supported. Use `main.bicep` only for an approved initial deployment into an
-empty managed-resource target. Use the AKS-only template for an existing P0
-foundation; it does not redeploy the VNet, PostgreSQL, Key Vault, Blob, private
-DNS, or Monitor resources.
+supported. Use `main.bicep` for a full-foundation deployment. Use the AKS-only
+template to update AKS without redeploying the VNet, PostgreSQL, Key Vault,
+Blob, private DNS, or Monitor resources.
 The checked-in examples contain placeholders and cannot run.
 The selected JSON parameters must bind prefix, tenant, owner, and cost center.
 The input hash covers all tracked infrastructure files.
@@ -565,19 +544,13 @@ provenance of an already deployed artifact.
 
 The guarded deployment does not grant human AKS access or accept an operator
 object ID. Service-identity permissions and the existing subnet Network
-Contributor assignment remain scoped to their required resources. If the exact
-subnet assignment is proven to reference a deleted cluster principal,
-deployment stops without deleting it. Only after separate operator approval,
-pass `--allow-stale-aks-subnet-role-cleanup` to authorize deletion of that exact
-assignment; the flag alone cannot bypass the stale-principal proof.
+Contributor assignment remain scoped to their required resources.
 
 The AKS-only template reads the issuer URL from the deployed cluster and
-updates exactly the three existing P0 workload-identity federated credentials.
-It preserves their ServiceAccount subjects and
-`api://AzureADTokenExchange` audience. The guard requires all three credentials
-to exist with those exact bindings; missing or changed credentials block before
-deployment. Its source-bound receipt covers only the AKS update and is not a
-full-foundation receipt for the Foundation Probe acceptance collector.
+updates the three P0 workload-identity federated credentials. It preserves
+their ServiceAccount subjects and `api://AzureADTokenExchange` audience. Its
+source-bound receipt covers only the AKS update and is not a full-foundation
+receipt for the Foundation Probe acceptance collector.
 
 After separate approval, the operator command shape is:
 
@@ -585,9 +558,9 @@ After separate approval, the operator command shape is:
 node scripts\azure\deploy.mjs --resource-group agentweaver --parameters infra\bicep\parameters\approved.json --subscription <id> --allowed-subscription <id> --tenant <id> --allowed-tenant <id>
 ```
 
-The default template is `infra\bicep\main.bicep`; it is for an approved initial
-deployment into an empty managed-resource target. To update an existing P0
-foundation, select the dedicated template and parameter file explicitly:
+The default template is `infra\bicep\main.bicep` for a full-foundation
+deployment. To update only AKS in an existing P0 foundation, select the
+dedicated template and parameter file explicitly:
 
 ```powershell
 node scripts\azure\deploy.mjs --resource-group agentweaver --template infra\bicep\aks-redeploy.bicep --parameters infra\bicep\parameters\p0-aks-redeploy.approved.json --subscription <id> --allowed-subscription <id> --tenant <id> --allowed-tenant <id>
@@ -595,6 +568,9 @@ node scripts\azure\deploy.mjs --resource-group agentweaver --template infra\bice
 
 Without `--execute`, this command produces an offline infrastructure summary.
 It makes no Azure call.
+The target preflight does not inspect resource inventory or guarantee that a
+full-foundation deployment preserves existing resources. Select the template
+that matches the intended change and review its what-if output.
 For either template, `plan.mjs` accepts the same selection and target
 arguments for a guarded live read-only what-if. `deploy.mjs --execute` performs
 the guarded what-if before Incremental create. The source guard requires a
@@ -612,10 +588,11 @@ kubeconfig or applies Kubernetes manifests.
 Initial Identity PostgreSQL setup has a separate default-off
 `--bootstrap-identity-postgres` option. It is available after either an
 approved full foundation deployment or an AKS-only redeployment to the exact
-existing P0 target. The full-foundation empty-resource-group guard is unchanged.
-The installer verifies the existing PostgreSQL server, Entra administrator,
-and both workload identities before an AKS-only deployment. After namespace
-setup, it starts a temporary TCP-only proxy pod and a loopback-only
+existing P0 target.
+The bootstrap uses the reviewed PostgreSQL host and administrator inputs and
+reads the two Identity Broker principal IDs required by database setup. It
+does not re-read PostgreSQL server or Entra administrator properties. After
+namespace setup, it starts a temporary TCP-only proxy pod and a loopback-only
 `kubectl port-forward`. The internal proxy is part of the solution build and
 publishes with locked dependency restore. Its pod runs on the pinned public
 ASP.NET 10 base image, not a historical Broker product image.
@@ -646,9 +623,11 @@ node scripts\azure\bootstrap-p1-postgres.mjs `
 ```
 
 The command requires a clean checkout whose `HEAD` and fetched `origin/v1`
-match the reviewed source SHA. Before opening a tunnel, it checks the exact
-subscription, tenant, resource group, PostgreSQL Entra administrator, and all
-five live P1 principal IDs against the reviewed plan. It then runs the Identity
+match the reviewed source SHA. Before opening a tunnel, it checks the selected
+account and dedicated resource group, validates the approved PostgreSQL Entra
+administrator inputs, and reads the two Identity Broker principal IDs required
+by database bootstrap. It does not re-read PostgreSQL server or administrator
+metadata or refresh the five P1 plan IDs from Azure. It then runs the Identity
 Broker bootstrap and P1 initializer through one temporary loopback-only
 PostgreSQL tunnel. The tunnel remains open through both database stages, and
 the owned Pod, ConfigMap, port-forward, isolated kubeconfig, proxy files, and

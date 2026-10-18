@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Runs the approved Identity and P1 PostgreSQL initializers without redeploying Azure resources.
- * The exact target, current source, live identities, and explicit execution switch are checked first.
+ * The exact target, current source, approved plan, and execution switch are checked first.
  */
 import { randomUUID } from 'node:crypto';
 import { parseArgs } from 'node:util';
@@ -11,7 +11,7 @@ import { runAz } from './lib/exec.mjs';
 import { resolveSource } from './lib/git.mjs';
 import {
   guardAzureTarget,
-  readExistingIdentityPostgresMetadata,
+  readIdentityPostgresBootstrapValues,
 } from './lib/guardrails.mjs';
 import {
   buildP1PostgresPlan,
@@ -22,18 +22,8 @@ import { bootstrapIdentityPostgres } from './lib/identity-postgres-bootstrap.mjs
 
 const CORE_MERGE_SHA_PATTERN = /^[0-9a-f]{40}$/;
 
-/** Parses one live identity response without placing its properties in an error message. */
-function parseIdentity(result, name) {
-  if (result.status !== 0) throw new Error(`Could not read the exact P1 workload identity ${name}.`);
-  try {
-    return JSON.parse(result.stdout);
-  } catch {
-    throw new Error(`The P1 workload identity ${name} returned malformed JSON.`);
-  }
-}
-
 /**
- * Verifies the five P1 principal IDs against Azure and runs both database stages on one temporary tunnel.
+ * Uses approved plan principals and bootstrap values to run both database stages on one temporary tunnel.
  * Without execute, this returns the source-bound plan and does not call Azure or create temporary resources.
  */
 export async function bootstrapP1Postgres({
@@ -44,7 +34,7 @@ export async function bootstrapP1Postgres({
   execAz = runAz,
   sourceResolver = resolveSource,
   targetGuard = guardAzureTarget,
-  readPostgresMetadata = readExistingIdentityPostgresMetadata,
+  readPostgresValues = readIdentityPostgresBootstrapValues,
   initializePostgres = bootstrapIdentityPostgres,
 } = {}) {
   if (typeof execute !== 'boolean' || !CORE_MERGE_SHA_PATTERN.test(coreMergeSha ?? '')) {
@@ -92,22 +82,7 @@ export async function bootstrapP1Postgres({
     throw new Error('The approved PostgreSQL administrator differs from the P1 initializer operator.');
   }
 
-  const metadata = readPostgresMetadata(config, boundAz);
-  if (metadata.postgresEntraAdminPrincipalName !== target.operatorName) {
-    throw new Error('The live PostgreSQL Entra administrator differs from the P1 initializer operator.');
-  }
-  for (const service of plan.services) {
-    const identityName = `${target.resourceGroup}-id-${service.service}`;
-    const identity = parseIdentity(boundAz([
-      'identity', 'show', '--resource-group', target.resourceGroup, '--name', identityName, '-o', 'json',
-    ], { check: false }), identityName);
-    const expectedId = `/subscriptions/${target.subscriptionId}/resourceGroups/${target.resourceGroup}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${identityName}`;
-    if (identity.id?.toLowerCase() !== expectedId.toLowerCase() ||
-        identity.name !== identityName || identity.location?.toLowerCase() !== source.location?.toLowerCase() ||
-        identity.principalId?.toLowerCase() !== service.principalObjectId.toLowerCase()) {
-      throw new Error(`Live principal for P1 service ${service.service} differs from the reviewed PostgreSQL plan.`);
-    }
-  }
+  const postgresValues = readPostgresValues(config, boundAz);
 
   const receiptPath = join(repoRoot, 'Temp', `p1-postgres-${randomUUID().replaceAll('-', '')}.jsonl`);
   const receipt = await initializePostgres({
@@ -116,10 +91,10 @@ export async function bootstrapP1Postgres({
     subscriptionId: target.subscriptionId,
     tenantId: target.tenantId,
     clusterName: target.clusterName,
-    postgresHost: metadata.resources.postgresHost,
-    adminUsername: metadata.postgresEntraAdminPrincipalName,
-    runtimePrincipalObjectId: metadata.identityBrokerRuntimeIdentity.principalObjectId,
-    migrationPrincipalObjectId: metadata.identityBrokerMigrationIdentity.principalObjectId,
+    postgresHost: postgresValues.resources.postgresHost,
+    adminUsername: postgresValues.postgresEntraAdminPrincipalName,
+    runtimePrincipalObjectId: postgresValues.identityBrokerRuntimeIdentity.principalObjectId,
+    migrationPrincipalObjectId: postgresValues.identityBrokerMigrationIdentity.principalObjectId,
     p1Initializer: {
       sourceSha: source.sha,
       coreMergeSha,

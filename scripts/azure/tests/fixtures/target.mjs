@@ -1,5 +1,3 @@
-import { armGuid, AKS_NETWORK_CONTRIBUTOR_ROLE_ID } from '../../lib/guardrails.mjs';
-
 export const ids = {
   subscriptionId: '11111111-1111-1111-1111-111111111111',
   allowedSubscriptionId: '11111111-1111-1111-1111-111111111111',
@@ -24,9 +22,6 @@ export const fixture = { ...ids, resourceGroup: 'agentweaver', repoRoot: process
   deploymentName: `agentweaver-${source.sha.slice(0, 12)}`,
   groupId: `/subscriptions/${ids.subscriptionId}/resourceGroups/agentweaver` };
 export const clusterId = `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/agentweaver-aks`;
-export const subnetId = `${fixture.groupId}/providers/Microsoft.Network/virtualNetworks/agentweaver-vnet/subnets/aks`;
-export const subnetRoleAssignmentName =
-  armGuid(subnetId, clusterId, AKS_NETWORK_CONTRIBUTOR_ROLE_ID);
 export const deploymentOutputs = {
   sourceSha: { value: source.sha }, sourceTree: { value: source.sourceTree }, sourceHash: { value: source.sourceHash },
   aksClusterName: { value: 'agentweaver-aks' }, storageAccountName: { value: 'agentweaverblob' },
@@ -96,22 +91,6 @@ export function fakeAzure(overrides = {}, calls = []) {
       return { ...result, stdout: JSON.stringify(options.projectJson(JSON.parse(result.stdout))) };
     };
     calls.push(args);
-    if (args[0] === 'postgres' && args[1] === 'flexible-server' && args[2] === 'show') {
-      return overrides.postgresServer ?? ok({
-        id: deploymentOutputs.foundationResources.value.postgresServerId,
-        name: 'agentweaver-pg',
-        location: source.location,
-        version: '16',
-        fullyQualifiedDomainName: deploymentOutputs.foundationResources.value.postgresHost,
-        network: {
-          delegatedSubnetResourceId: `${fixture.groupId}/providers/Microsoft.Network/virtualNetworks/agentweaver-vnet/subnets/postgres`,
-          privateDnsZoneArmResourceId:
-            `${fixture.groupId}/providers/Microsoft.Network/privateDnsZones/privatelink.postgres.database.azure.com`,
-          publicNetworkAccess: 'Disabled',
-        },
-        authConfig: { activeDirectoryAuth: 'Enabled', passwordAuth: 'Disabled', tenantId: ids.tenantId },
-      });
-    }
     if (args[0] === 'identity' && args[1] === 'show') {
       const name = args[args.indexOf('--name') + 1];
       const runtime = name.endsWith('-identity-broker');
@@ -126,35 +105,6 @@ export function fakeAzure(overrides = {}, calls = []) {
         principalId: identity.principalObjectId,
       });
     }
-    if (args[0] === 'resource' && args[1] === 'show') {
-      const id = args[args.indexOf('--ids') + 1];
-      if (id?.toLowerCase().includes('/administrators/')) {
-        return overrides.postgresAdmin ?? ok({
-          id,
-          type: 'Microsoft.DBforPostgreSQL/flexibleServers/administrators',
-          name: source.postgresEntraAdminPrincipalName,
-          properties: {
-            objectId: source.postgresEntraAdminObjectId,
-            principalName: source.postgresEntraAdminPrincipalName,
-            principalType: source.postgresEntraAdminPrincipalType,
-            tenantId: ids.tenantId,
-          },
-        });
-      }
-      if (id?.toLowerCase().includes('/providers/microsoft.authorization/roleassignments/')) {
-        if (id.toLowerCase() ===
-          `${subnetId}/providers/Microsoft.Authorization/roleAssignments/${subnetRoleAssignmentName}`.toLowerCase()) {
-          return overrides.networkRoleAssignment ?? {
-            status: 1, stdout: '', stderr: '(RoleAssignmentNotFound) The role assignment does not exist.',
-          };
-        }
-        return project(overrides.detailResult ?? ok(overrides.details?.[id]));
-      }
-      return project(overrides.detailResult ?? ok(overrides.details?.[id]));
-    }
-    if (args[0] === 'role' && args[1] === 'assignment' && args[2] === 'delete') {
-      return overrides.roleAssignmentDelete ?? ok({});
-    }
     if (args[0] === 'aks' && args[1] === 'nodepool' && args[2] === 'show') {
       return overrides.nodePoolResult ?? ok({
         id: `${clusterId}/agentPools/system`, name: 'system', mode: 'System', vmSize: 'Standard_D2s_v5',
@@ -166,7 +116,6 @@ export function fakeAzure(overrides = {}, calls = []) {
       { id: ids.subscriptionId, tenantId: ids.tenantId, state: 'Enabled' });
     if (args[0] === 'group') return overrides.groupResult ?? ok({ id: fixture.groupId, name: 'agentweaver',
       tags, ...overrides.group });
-    if (args[0] === 'resource') return project(overrides.resourceResult ?? ok(overrides.resources ?? []));
     if (args[0] === 'policy' && args[1] === 'state') {
       return project(overrides.policyStateResult ?? ok(overrides.policyStates ?? []));
     }

@@ -77,10 +77,10 @@ Azure, install resources, or prove that the cluster is ready.
 
 ## 3. Provision the Azure foundation
 
-Use the guarded installer for an approved initial deployment into an empty
-managed-resource target. The installer accepts only tracked, reviewed
-parameter files under `infra/bicep/parameters/`. Do not put passwords, client
-secrets, tokens, or private keys in a parameter file.
+Use the installer for an approved full-foundation deployment. The installer
+accepts only tracked, reviewed parameter files under
+`infra/bicep/parameters/`. Do not put passwords, client secrets, tokens, or
+private keys in a parameter file.
 
 ```powershell
 node scripts\azure\deploy.mjs `
@@ -94,11 +94,12 @@ node scripts\azure\deploy.mjs `
 
 Without `--execute`, `deploy.mjs` prints an offline summary and makes no Azure
 call. After the target and effects are approved, add `--execute` to the same
-command. It provisions the Azure foundation. The installer checks the allowed
-target, exact source, resource ownership, and Bicep inputs. The
-full-foundation template is limited to an empty target. Use the tracked
-AKS-only template and its matching reviewed parameter file for the later
-PostgreSQL bootstrap; do not rerun the full-foundation template.
+command. It provisions the Azure foundation. The preflight checks the allowed
+subscription and tenant, enabled account, dedicated resource group, configured
+Key Vault name, exact source, and Bicep inputs. It does not enumerate existing
+resources or compare their properties after deployment. Choose the full
+foundation or AKS-only template for the intended change and review the
+what-if output before execution.
 
 The infrastructure installer does not create Kubernetes namespaces or grant
 human AKS permissions. It never creates, requires, or verifies a human
@@ -108,16 +109,11 @@ installer also does not apply product manifests, create the Broker's application
 state, run database migrations, install Gateway routes, or create operator-owned
 Secrets.
 
-Azure Network Manager generates the NSG name. For a populated target, the
-guard accepts it only when the exact `aks`, `postgres`, and `private-endpoints`
-subnets reference the same NSG, it has no network-interface associations, and
-its eight reviewed inbound rules match.
-
 The reviewed parameter file supplies the Key Vault name through `keyVaultName`.
 Key Vault is the Identity Broker's secrets backend; its name and
 `IdentityBroker__SecretRedemption__VaultUri` are deployment configuration.
-The installer derives the vault resource ID and exact egress host from that
-parameter. Set the runtime URI to the URI returned for that same vault.
+The deployment uses that configured name and returns the vault URI for runtime
+configuration.
 
 ## 4. Connect to AKS and prepare the namespace
 
@@ -234,16 +230,19 @@ node scripts\azure\bootstrap-p1-postgres.mjs `
 ```
 
 The first command prints the fixed target and planned roles without contacting
-Azure. The execution command verifies the PostgreSQL Entra administrator and
-all five live P1 identity principals, then runs the Identity Broker and P1
-database stages through one temporary loopback tunnel. It requires a clean
-checkout at the reviewed `origin/v1` source. The operator must already have the
-required AKS access and PostgreSQL Entra administrator authority; the command
-creates no Azure role assignments, access grants, or product workloads. Keep
-the P1 receipt and verify the database and roles with read-only catalog queries
-before installing the product bundle. The Broker runtime identity does not own
-the schema. If the identity or database setup is not approved or complete,
-stop before applying product workloads.
+Azure. The execution command checks the selected account and dedicated resource
+group, validates the approved PostgreSQL Entra administrator inputs, and reads
+the two Identity Broker principal IDs needed for database bootstrap. The five
+P1 principal IDs come from the reviewed plan and are not refreshed from Azure.
+The command then runs the Identity Broker and P1 database stages through one
+temporary loopback tunnel. It requires a clean checkout at the reviewed
+`origin/v1` source. The operator must already have the required AKS access and
+PostgreSQL Entra administrator authority; the command creates no Azure role
+assignments, access grants, or product workloads. Keep the P1 receipt and
+verify the database and roles with read-only catalog queries before installing
+the product bundle. The Broker runtime identity does not own the schema. If
+the identity or database setup is not approved or complete, stop before
+applying product workloads.
 
 For each database workload, verify that:
 

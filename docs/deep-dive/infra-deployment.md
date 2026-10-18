@@ -71,14 +71,15 @@ admitted by `origin/v1`, and select the dedicated target.
 `scripts/azure/lib/git.mjs` resolves the checkout and validates the selected
 source SHA. It compares committed infrastructure inputs and computes the
 source tree and input hash. `plan.mjs` checks the target and ownership before
-building an Azure what-if request. `deploy.mjs` defaults to a nonexecuting
-summary. Its write path requires `--execute`, checks the target, runs what-if,
-and rechecks source inputs before mutation.
+building an Azure what-if request. `deploy.mjs` defaults to a nonexecuting summary. Its write path requires
+`--execute`, checks the selected account and dedicated target, runs what-if,
+and rechecks source inputs before mutation. The target preflight does not
+enumerate resources or verify their resulting properties.
 
-The full foundation path accepts an empty dedicated resource group. The
-AKS-only path preserves existing foundation resources and checks autoscaler
-state. Source SHA, tree, and input hash bind the deployment arguments and
-returned outputs.
+The full foundation path applies the full template; the AKS-only path updates
+AKS without redeploying the foundation resources. The AKS-only path reads the
+system node-pool count used as a deployment input. Source SHA, tree, and input
+hash bind the deployment arguments and returned outputs.
 
 Namespace bootstrap, database setup, Broker runtime/state, routing, and
 acceptance inputs are separate operations; compiling Bicep does not imply them.

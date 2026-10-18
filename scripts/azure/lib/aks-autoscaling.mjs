@@ -8,31 +8,19 @@ export function assertAutoscalerBounds(values) {
   return { minCount, maxCount };
 }
 
-/**
- * Reads the system node pool and projects only fields used by deployment checks.
- * Throws when Azure cannot provide the pool or when required autoscaling bounds are absent.
- */
-export function readSystemNodePool(config, execAz, { requireAutoscaling = false } = {}) {
+/** Reads the current count used as the AKS-only deployment input. */
+export function readSystemNodePool(config, execAz) {
   const result = execAz(['aks', 'nodepool', 'show', '--resource-group', config.resourceGroup,
     '--cluster-name', `${config.resourceGroup}-aks`, '--name', 'system', '-o', 'json'], {
-    projectJson: value => ({ id: value.id, name: value.name, mode: value.mode, vmSize: value.vmSize,
-      count: value.count, minCount: value.minCount, maxCount: value.maxCount,
-      enableAutoScaling: value.enableAutoScaling, provisioningState: value.provisioningState }),
+    projectJson: value => ({ count: value.count }),
     preserveProjectedJson: true,
   });
   if (result.status !== 0) throw new Error('Exact system node pool read failed.');
   let pool;
   try { pool = JSON.parse(result.stdout); }
   catch { throw new Error('System node pool read returned malformed JSON.'); }
-  const id = `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${config.resourceGroup}-aks/agentPools/system`;
-  if (pool?.id?.toLowerCase() !== id.toLowerCase() || pool.name !== 'system' || pool.mode !== 'System' ||
-      pool.vmSize !== 'Standard_D2s_v5' || pool.provisioningState !== 'Succeeded' ||
-      !Number.isInteger(pool.count) || pool.count < config.nodePoolMinCount || pool.count > config.nodePoolMaxCount) {
-    throw new Error('Existing system pool must match the approved target, SKU, successful state and 2-3 count; refusing a resize or replacement.');
-  }
-  if (requireAutoscaling && (pool.enableAutoScaling !== true ||
-      pool.minCount !== config.nodePoolMinCount || pool.maxCount !== config.nodePoolMaxCount)) {
-    throw new Error('Native system pool did not confirm the approved autoscaler bounds.');
+  if (!pool || typeof pool !== 'object' || !Number.isInteger(pool.count)) {
+    throw new Error('System node pool read did not provide the count needed for deployment.');
   }
   return pool;
 }
