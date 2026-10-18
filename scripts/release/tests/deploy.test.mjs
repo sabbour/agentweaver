@@ -638,7 +638,7 @@ test('explicit workload deployment stops on incomplete runtime inputs before tar
       ...runtime.metadata.annotations,
       'agentweaver.io/runtime-config-status': 'incomplete',
       'agentweaver.io/runtime-config-incomplete-reason':
-        'Awaiting the newly provisioned AKS managed domain and workload identity client IDs.',
+        'P1 initialization is blocked because the initializer requires an already-ready 127.0.0.1:15432 connection, but the documented bootstrap removes its temporary tunnel before returning and no documented continuation keeps or shares it. Guarded PostgreSQL bootstrap did not run because the preflight resource-inventory guard rejected an unexpected type/name before Azure what-if; the Agentweaver database and roles remain uninitialized.',
     };
     runtime.data.Environment__Authentication__Authority = 'https://CHANGEME-MANAGED-HOST/';
     writeFileSync(runtimePath, `${JSON.stringify(runtime, null, 2)}\n`, 'utf8');

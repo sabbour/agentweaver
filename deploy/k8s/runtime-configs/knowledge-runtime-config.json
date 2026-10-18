@@ -6,20 +6,20 @@
     "namespace": "agentweaver",
     "annotations": {
       "agentweaver.io/runtime-config-status": "incomplete",
-      "agentweaver.io/runtime-config-incomplete-reason": "Awaiting the newly provisioned AKS managed domain and workload identity client IDs."
+      "agentweaver.io/runtime-config-incomplete-reason": "P1 initialization is blocked because the initializer requires an already-ready 127.0.0.1:15432 connection, but the documented bootstrap removes its temporary tunnel before returning and no documented continuation keeps or shares it. Guarded PostgreSQL bootstrap did not run because the preflight resource-inventory guard rejected an unexpected type/name before Azure what-if; the Agentweaver database and roles remain uninitialized."
     }
   },
   "immutable": true,
   "data": {
     "ConnectionStrings__Knowledge": "Host=agentweaver-pg.postgres.database.azure.com;Port=5432;Database=agentweaver;Username=agentweaver-id-knowledge;SSL Mode=VerifyFull",
     "Knowledge__Database__WorkloadIdentity__TenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47",
-    "Knowledge__Database__WorkloadIdentity__ClientId": "CHANGEME-knowledge-client-id",
+    "Knowledge__Database__WorkloadIdentity__ClientId": "faadfa78-1bfc-4a85-a0e5-d9a913630a0f",
     "Knowledge__Database__WorkloadIdentity__TokenFilePath": "/var/run/secrets/azure/tokens/azure-identity-token",
-    "Identity__Issuer": "https://CHANGEME-MANAGED-HOST/",
-    "Identity__Audience": "https://CHANGEME-MANAGED-HOST/",
+    "Identity__Issuer": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
+    "Identity__Audience": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
     "ProjectsConfig__BaseAddress": "https://projects-config.agentweaver.svc.cluster.local:8443/",
     "Knowledge__Events__BaseAddress": "https://events-and-sessions.agentweaver.svc.cluster.local:8443/",
-    "Knowledge__Events__Audience": "https://CHANGEME-MANAGED-HOST/",
+    "Knowledge__Events__Audience": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
     "Knowledge__Provider__ResourceId": "agentweaver.knowledge",
     "Knowledge__Provider__DatabaseName": "agentweaver",
     "Knowledge__Provider__ResourceGeneration": "1",

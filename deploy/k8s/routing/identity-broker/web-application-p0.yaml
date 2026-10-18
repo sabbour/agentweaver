@@ -11,7 +11,7 @@ spec:
       namespace: agentweaver-gateway
       sectionName: portal
   hostnames:
-    - CHANGEME-PORTAL-HOST
+    - portal.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io
   rules:
     - matches:
         - path:

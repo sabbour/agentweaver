@@ -6,7 +6,7 @@
     "namespace": "agentweaver",
     "annotations": {
       "agentweaver.io/runtime-config-status": "incomplete",
-      "agentweaver.io/runtime-config-incomplete-reason": "Awaiting the newly provisioned AKS managed domain and workload identity client IDs, plus the deployment-configured Key Vault host."
+      "agentweaver.io/runtime-config-incomplete-reason": "P1 initialization is blocked because the initializer requires an already-ready 127.0.0.1:15432 connection, but the documented bootstrap removes its temporary tunnel before returning and no documented continuation keeps or shares it. Guarded PostgreSQL bootstrap did not run because the preflight resource-inventory guard rejected an unexpected type/name before Azure what-if; the Agentweaver database and roles remain uninitialized. Broker signing state was not provisioned, and Key Vault PFX/password persistence is unavailable."
     }
   },
   "immutable": true,
@@ -15,7 +15,7 @@
     "IdentityBroker__Clients__0__ClientId": "identity-acceptance-5860d27c-cc2d-4097-8f0a-680316cc5b46",
     "IdentityBroker__Clients__0__DisplayName": "P0 acceptance 5860d27c-cc2d-4097-8f0a-680316cc5b46",
     "IdentityBroker__Clients__0__RedirectUris__0": "http://127.0.0.1:49187/callback",
-    "IdentityBroker__Clients__0__Resources__0": "https://CHANGEME-MANAGED-HOST/",
+    "IdentityBroker__Clients__0__Resources__0": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
     "IdentityBroker__Clients__0__Scopes__0": "openid",
     "IdentityBroker__Clients__0__Scopes__1": "profile",
     "IdentityBroker__Clients__0__Scopes__2": "email",
@@ -24,8 +24,8 @@
     "IdentityBroker__Clients__0__Type": "Public",
     "IdentityBroker__Clients__1__ClientId": "agentweaver-web",
     "IdentityBroker__Clients__1__DisplayName": "Agentweaver Web",
-    "IdentityBroker__Clients__1__RedirectUris__0": "https://CHANGEME-PORTAL-HOST/auth/callback",
-    "IdentityBroker__Clients__1__Resources__0": "https://CHANGEME-MANAGED-HOST/",
+    "IdentityBroker__Clients__1__RedirectUris__0": "https://portal.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/auth/callback",
+    "IdentityBroker__Clients__1__Resources__0": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
     "IdentityBroker__Clients__1__Scopes__0": "openid",
     "IdentityBroker__Clients__1__Scopes__1": "profile",
     "IdentityBroker__Clients__1__Scopes__2": "email",
@@ -37,12 +37,12 @@
     "IdentityBroker__DataProtectionKeyPath": "/var/lib/identity-broker/key-ring",
     "IdentityBroker__ExternalProvider__Authority": "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/v2.0",
     "IdentityBroker__ExternalProvider__ClientId": "3b682024-2c59-4497-aff2-fc6335d12d97",
-    "IdentityBroker__Issuer": "https://CHANGEME-MANAGED-HOST/",
-    "IdentityBroker__WebOrigin": "https://CHANGEME-PORTAL-HOST",
-    "IdentityBroker__SecretRedemption__Audience": "https://CHANGEME-MANAGED-HOST/",
-    "IdentityBroker__SecretRedemption__VaultHost": "CHANGEME-KEYVAULT-HOST",
-    "IdentityBroker__SecretRedemption__VaultUri": "https://CHANGEME-KEYVAULT-HOST/",
-    "IdentityBroker__SecretRedemption__WorkloadIdentityClientId": "CHANGEME-identity-broker-client-id",
+    "IdentityBroker__Issuer": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
+    "IdentityBroker__WebOrigin": "https://portal.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io",
+    "IdentityBroker__SecretRedemption__Audience": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
+    "IdentityBroker__SecretRedemption__VaultHost": "agentweaver-kv-v1.vault.azure.net",
+    "IdentityBroker__SecretRedemption__VaultUri": "https://agentweaver-kv-v1.vault.azure.net/",
+    "IdentityBroker__SecretRedemption__WorkloadIdentityClientId": "4ee7e4e8-f5c8-445a-9fa4-5cf13afdb067",
     "IdentityBroker__SecretRedemption__WorkloadIdentityTenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47",
     "IdentityBroker__SecretRedemption__WorkloadIdentityTokenFilePath": "/var/run/secrets/azure/tokens/azure-identity-token"
   }

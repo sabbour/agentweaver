@@ -6,6 +6,11 @@ metadata:
   annotations:
     agentweaver.io/runtime-config-status: incomplete
     agentweaver.io/runtime-config-incomplete-reason: >-
+      P1 initialization is blocked because the initializer requires an already-ready 127.0.0.1:15432 connection,
+      but the documented bootstrap removes its temporary tunnel before returning and no documented continuation
+      keeps or shares it. Guarded PostgreSQL bootstrap did not run because the preflight resource-inventory guard
+      rejected an unexpected type/name before Azure what-if; the Agentweaver database and roles remain
+      uninitialized;
       AgentHost.ConfigureEndpoint and Authentication.Audience require the exact per-Sandbox HTTPS service endpoint;
       AgentHost.MaximumPendingTurns has no approved P0 value; Environment__Sandbox__AgentSandbox__AgentHost__TlsSecretName
       has no approved existing Secret name.
@@ -25,7 +30,7 @@ data:
           "CompressedPullBytes": 321483300
         },
         "Authentication": {
-          "Authority": "https://CHANGEME-MANAGED-HOST/",
+          "Authority": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
           "Audience": ""
         },
         "ModelBindingsRevision": "p1-v1.0.1",

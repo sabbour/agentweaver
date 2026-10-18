@@ -6,18 +6,18 @@
     "namespace": "agentweaver",
     "annotations": {
       "agentweaver.io/runtime-config-status": "incomplete",
-      "agentweaver.io/runtime-config-incomplete-reason": "Awaiting the newly provisioned AKS managed domain and workload identity client IDs."
+      "agentweaver.io/runtime-config-incomplete-reason": "P1 initialization is blocked because the initializer requires an already-ready 127.0.0.1:15432 connection, but the documented bootstrap removes its temporary tunnel before returning and no documented continuation keeps or shares it. Guarded PostgreSQL bootstrap did not run because the preflight resource-inventory guard rejected an unexpected type/name before Azure what-if; the Agentweaver database and roles remain uninitialized."
     }
   },
   "immutable": true,
   "data": {
-    "Identity__Issuer": "https://CHANGEME-MANAGED-HOST/",
-    "Identity__Audience": "https://CHANGEME-MANAGED-HOST/",
+    "Identity__Issuer": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
+    "Identity__Audience": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
     "Gateway__Owners__Projects": "https://projects-config.agentweaver.svc.cluster.local:8443/",
     "Gateway__Owners__Orchestrator": "https://orchestrator.agentweaver.svc.cluster.local:8443/",
     "Gateway__Owners__Knowledge": "https://knowledge.agentweaver.svc.cluster.local:8443/",
     "Gateway__Owners__Events": "https://events-and-sessions.agentweaver.svc.cluster.local:8443/",
     "Gateway__Owners__IdentityBrokerAddress": "https://identity-broker.agentweaver.svc.cluster.local:443/",
-    "Gateway__WebOrigin": "https://CHANGEME-PORTAL-HOST"
+    "Gateway__WebOrigin": "https://portal.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io"
   }
 }

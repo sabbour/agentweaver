@@ -25,6 +25,19 @@ into a deployed or selectable provider.
 - A grouped path such as `<Service>__Database__WorkloadIdentity__ClientId`
   represents that exact suffix under each service prefix named in its row.
 
+The checked-in P0 runtime snapshots contain the verified non-secret managed
+AKS hostnames, PostgreSQL endpoint and role names, workload-identity client
+IDs, and Key Vault URI. They remain marked `incomplete`: the P1 initializer
+requires an already-ready connection to `127.0.0.1:15432`, but the documented
+bootstrap removes its temporary tunnel before returning and no documented
+continuation keeps or shares that connection. Guarded PostgreSQL bootstrap
+also did not run: the preflight resource-inventory guard rejected an
+unexpected type/name before Azure what-if, so the Agentweaver database and
+roles remain uninitialized. The Identity Broker signing state was not
+provisioned, and Key Vault PFX/password persistence is unavailable. These
+snapshots are therefore not deploy-ready. Do not replace the status
+annotation or add secrets to resolve the outstanding prerequisites.
+
 For end-to-end deployment, see
 [Deploy Agentweaver to Azure](../guide/deploy-to-azure.md). For provider
 selection, see [Configure providers](../guide/configure-providers.md).
