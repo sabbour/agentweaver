@@ -160,3 +160,9 @@ acceptance steps.
 
 See [Test Agentweaver](./testing) for the limits of source and integration
 tests.
+
+## Expected result
+
+You have recorded each check as passed, failed, or not run against the
+approved source and deployment receipt. Source checks and Foundation Probe
+evidence remain distinct from live user-workflow acceptance.

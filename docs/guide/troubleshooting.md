@@ -56,3 +56,10 @@ If the failure remains, include the safe diagnostic details and the exact
 source SHA. Redact access tokens, client secrets, connection strings, private
 keys, and secret values. Do not change Azure permissions, delete data, or
 replace a persistent store as a troubleshooting step without separate review.
+
+## Expected result
+
+You have either isolated the failure to its owning service and recorded a
+sanitized diagnostic, or corrected the approved configuration and verified
+the affected workload. Do not report a resolution based only on a successful
+manifest render or an accepted asynchronous request.
