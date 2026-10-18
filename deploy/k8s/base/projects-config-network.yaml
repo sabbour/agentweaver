@@ -1,0 +1,77 @@
+# Projects accepts requests only from source-backed service callers and node health probes.
+# Its egress is limited to the Broker, Entra, PostgreSQL, and its marketplace hosts.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: projects-config-network
+  namespace: agentweaver-v1-p0
+  labels:
+    agentweaver.io/service: projects-config
+spec:
+  endpointSelector:
+    matchLabels:
+      agentweaver.io/workload: projects-config
+  ingress:
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: identity-broker
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: orchestrator
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: gateway
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: events-and-sessions
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: knowledge
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: environment
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchName: agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io
+              - matchName: login.microsoftonline.com
+              - matchName: api.github.com
+              - matchName: raw.githubusercontent.com
+              - matchName: aw-v1-p0-pg.postgres.database.azure.com
+              - matchName: aw-v1-p0-pg.privatelink.postgres.database.azure.com
+    - toFQDNs:
+        - matchName: agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io
+        - matchName: login.microsoftonline.com
+        - matchName: api.github.com
+        - matchName: raw.githubusercontent.com
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    - toFQDNs:
+        - matchName: aw-v1-p0-pg.postgres.database.azure.com
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP

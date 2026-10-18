@@ -12,6 +12,7 @@ import {
   SERVICE_NETWORK_POLICY_NAMES,
   validatePublicationReceipt,
   validatePublishedManifest,
+  validateKustomizeInstall,
   validateRuntimeManifest,
   validateTarget,
   verifyAgentHostRegistryImage,
@@ -23,6 +24,10 @@ import {
   verifyRuntimePrerequisites,
 } from '../deploy.mjs';
 import { componentImageRepository, componentImageTag } from '../pack.mjs';
+import {
+  createKustomizeImageEntries, parseKustomizeResources, validateKustomizeImagePins,
+} from '../kustomize-runtime.mjs';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import {
   brokerRunBindingFingerprint, createBrokerRunBindingPolicies, createRuntimeList,
   validateBrokerRunBinding,
@@ -309,7 +314,6 @@ const argsFor = (overrides = {}) => [
   'v1.0.0',
   '--manifest', 'release.json',
   '--publication', 'publication.json',
-  '--runtime-manifest', 'runtime.json',
   '--subscription-id', target.subscriptionId,
   '--tenant-id', target.tenantId,
   '--resource-group', target.resourceGroup,
@@ -317,6 +321,8 @@ const argsFor = (overrides = {}) => [
   '--namespace', target.namespace,
   '--node-min', String(target.nodeMin),
   '--node-max', String(target.nodeMax),
+  '--provider-catalog-configmap', 'projects-config-provider-catalog',
+  '--provider-catalog-source-commit', sourceSha,
   ...Object.entries(overrides).flatMap(([key, value]) => [`--${key}`, value]),
 ];
 
@@ -360,6 +366,7 @@ function bootstrapDependencies(fixture, {
   sourceSha: fixtureSourceSha = p0SourceSha,
   ...overrides
 } = {}) {
+  prepareKustomizeFixture(fixture, fixtureRoot, fixtureSourceSha, 'd'.repeat(40));
   const commands = [];
   const dependencies = {
     root: fixtureRoot,
@@ -402,14 +409,66 @@ function bootstrapDependencies(fixture, {
         }
         return readFileSync(path.join(fixtureRoot, sourcePath.replaceAll('/', path.sep)), 'utf8');
       }
-      if (file === 'kubectl' && args[0] === 'apply' && args[1] === '--dry-run=client') {
-        commands.push({ file, args, input: options.input });
+      if (file === 'kubectl' && args[0] === 'kustomize') {
+        return execFileSync('kubectl', ['kustomize', args[1]], {
+          cwd: fixtureRoot,
+          encoding: 'utf8',
+        });
+      }
+      if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=client')) {
+        commands.push({ file, args });
         return '';
       }
+      if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k')) return '';
       assert.fail(`unexpected command: ${file} ${args.join(' ')}`);
     },
   };
   return { ...dependencies, ...overrides, commands };
+}
+
+// Isolate fixture image and catalog pins so release-helper tests exercise real Kustomize rendering.
+function prepareKustomizeFixture(fixture, fixtureRoot, receiptSourceSha, catalogSourceCommit) {
+  if (fixture.publication.sourceSha !== receiptSourceSha || fixture.publication.status !== 'published') return;
+  const receiptManifest = structuredClone(fixture.manifest);
+  for (const component of receiptManifest.components) {
+    const image = fixture.publication.published?.find((entry) => entry.id === component.id)?.image;
+    const separator = typeof image === 'string' ? image.lastIndexOf('@') : -1;
+    if (component.kind === 'service' && separator > 0) {
+      component.imageDigest = image.slice(separator + 1);
+    }
+  }
+  const images = validatePublicationReceipt(fixture.publication, receiptManifest, receiptSourceSha);
+  const sourceDirectory = path.join(fixtureRoot, 'deploy', 'k8s');
+  const kustomizationPath = path.join(sourceDirectory, 'kustomization.yaml');
+  const kustomization = parseYaml(readFileSync(kustomizationPath, 'utf8'));
+  kustomization.images = createKustomizeImageEntries(images);
+  writeFileSync(kustomizationPath, stringifyYaml(kustomization), 'utf8');
+  const host = images.find(({ id }) => id === 'Agentweaver.AgentHost');
+  const environmentPath = path.join(sourceDirectory, 'base', 'workloads', 'environment-deployment.json');
+  const environment = JSON.parse(readFileSync(environmentPath, 'utf8'));
+  const environmentValues = new Map(environment.spec.template.spec.containers[0].env
+    .map(entry => [entry.name, entry]));
+  assert.match(environmentValues.get('Environment__Sandbox__AgentSandbox__ContainerImage').value,
+    /:receipt-pinned$/, 'AgentHost image source stays a Kustomize transformer target');
+  environmentValues.get('Environment__Sandbox__AgentSandbox__ContainerImagePlatform').value = 'linux/amd64';
+  environmentValues.get('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes').value =
+    String(host.compressedPullBytes);
+  writeFileSync(environmentPath, `${JSON.stringify(environment, null, 2)}\n`, 'utf8');
+  const agentHostConfigPath = path.join(sourceDirectory, 'profiles', 'agenthost', 'runtime-config.example.yaml');
+  const agentHostConfig = parseYaml(readFileSync(agentHostConfigPath, 'utf8'));
+  const agentHostSettings = JSON.parse(agentHostConfig.data['appsettings.json']);
+  agentHostSettings.AgentHost.Image.Digest = host.sandboxImageDigest;
+  agentHostSettings.AgentHost.Image.Platform = 'linux/amd64';
+  agentHostSettings.AgentHost.Image.CompressedPullBytes = host.compressedPullBytes;
+  agentHostConfig.data['appsettings.json'] = JSON.stringify(agentHostSettings, null, 2);
+  writeFileSync(agentHostConfigPath, stringifyYaml(agentHostConfig), 'utf8');
+  for (const name of ['orchestrator', 'projects-config']) {
+    const file = path.join(sourceDirectory, 'base', 'workloads', `${name}-deployment.json`);
+    const workload = JSON.parse(readFileSync(file, 'utf8'));
+    workload.spec.template.metadata.annotations['agentweaver.io/provider-catalog-source'] =
+      catalogSourceCommit;
+    writeFileSync(file, `${JSON.stringify(workload, null, 2)}\n`, 'utf8');
+  }
 }
 
 test('P0 target and every required deployment target input are explicit and exact', () => {
@@ -421,12 +480,11 @@ test('P0 target and every required deployment target input are explicit and exac
     /--tenant-id is required/);
   assert.throws(() => parseArgs(argsFor({ 'subscription-id': 'wrong' })), /target.subscriptionId/);
   assert.equal(parseArgs(argsFor()).dryRun, true);
-  const generatedListArgs = argsFor().filter((value, index, values) =>
-    value !== '--runtime-manifest' && values[index - 1] !== '--runtime-manifest');
-  assert.throws(() => parseArgs(generatedListArgs), /--provider-catalog-configmap is required/);
-  generatedListArgs.push('--provider-catalog-configmap', 'projects-catalog',
-    '--provider-catalog-source-commit', sourceSha);
-  assert.equal(parseArgs(generatedListArgs).runtimeManifestPath, undefined);
+  const missingCatalogArgs = argsFor().filter((value, index, values) =>
+    !['--provider-catalog-configmap', '--provider-catalog-source-commit'].includes(value) &&
+    !['--provider-catalog-configmap', '--provider-catalog-source-commit'].includes(values[index - 1]));
+  assert.throws(() => parseArgs(missingCatalogArgs), /--provider-catalog-configmap is required/);
+  assert.equal(parseArgs(argsFor()).providerCatalogConfigMapName, 'projects-config-provider-catalog');
   assert.throws(() => parseArgs([...argsFor(), '--execute', '--dry-run']), /mutually exclusive/);
 });
 
@@ -439,7 +497,7 @@ test('pre-acceptance mode is explicit and requires its exact v1.0.0 inputs', () 
   assert.throws(() => parseArgs(bootstrapArgsFor().filter((value, index, values) =>
     value !== '--completion' && values[index - 1] !== '--completion')), /--completion is required/);
   assert.throws(() => parseArgs([...bootstrapArgsFor(), '--runtime-manifest', 'runtime.json']),
-    /must generate the runtime List/);
+    /unknown argument "--runtime-manifest"/);
   const wrongTag = bootstrapArgsFor();
   wrongTag[wrongTag.indexOf('v1.0.0')] = 'v1.0.2';
   assert.throws(() => parseArgs(wrongTag), /limited to the exact v1.0.0 and v1.0.1/);
@@ -454,7 +512,7 @@ test('v1.0.1 pre-acceptance requires the normal publication inputs and rejects c
   assert.throws(() => parseArgs([...normalBootstrapArgsFor(), '--completion', 'continuation.json']),
     /not accepted for the v1.0.1 normal publication/);
   assert.throws(() => parseArgs(normalBootstrapArgsFor({ 'runtime-manifest': 'runtime.json' })),
-    /must generate the runtime List/);
+    /unknown argument "--runtime-manifest"/);
 });
 
 test('pre-acceptance dry-run accepts only the tracked draft and returns a non-release result', async () => {
@@ -464,12 +522,12 @@ test('pre-acceptance dry-run accepts only the tracked draft and returns a non-re
   assert.equal(result.resultType, 'pre-acceptance');
   assert.equal(result.sourceSha, PARTIAL_PUBLICATION.sourceSha);
   assert.equal(result.dryRun, true);
-  assert.equal(result.renderedResources, 18);
+  assert.equal(result.renderedResources, 60);
   assert.equal('acceptedRelease' in result, false);
   assert.doesNotMatch(JSON.stringify(result), /"stage":"release"/);
   assert.equal(dependencies.commands.length, 1);
   assert.deepEqual(dependencies.commands[0].args,
-    ['apply', '--dry-run=client', '--filename', '-']);
+    ['apply', '--dry-run=client', '-k', path.join('deploy', 'k8s')]);
 });
 
 test('pre-acceptance execute and resume retain a separately labeled checkpoint', async () => {
@@ -481,7 +539,8 @@ test('pre-acceptance execute and resume retain a separately labeled checkpoint',
   let liveChecks = 0;
   let clears = 0;
   dependencies.run = (file, args, options) => {
-    if (file === 'kubectl' && args[0] === 'apply' && args[1] === '--filename') {
+    if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
+        !args.includes('--dry-run=client')) {
       applies++;
       return '';
     }
@@ -537,7 +596,7 @@ test('v1.0.1 pre-acceptance dry-run uses the mixed source-bound draft and normal
   assert.equal(result.resultType, 'pre-acceptance');
   assert.equal(result.sourceSha, v101SourceSha);
   assert.equal(result.dryRun, true);
-  assert.equal(result.renderedResources, 18);
+  assert.equal(result.renderedResources, 60);
   assert.equal(completionChecks, 0);
   assert.deepEqual(
     result.services.map(({ id, image }) => [id, image]),
@@ -553,7 +612,7 @@ test('v1.0.1 pre-acceptance dry-run uses the mixed source-bound draft and normal
   assert.equal('acceptedRelease' in result, false);
   assert.equal(dependencies.commands.length, 1);
   assert.deepEqual(dependencies.commands[0].args,
-    ['apply', '--dry-run=client', '--filename', '-']);
+    ['apply', '--dry-run=client', '-k', path.join('deploy', 'k8s')]);
 });
 
 test('v1.0.1 pre-acceptance executes only after verifying the normal publication and keeps its result labeled', async () => {
@@ -565,7 +624,8 @@ test('v1.0.1 pre-acceptance executes only after verifying the normal publication
   const originalRun = dependencies.run;
   let applies = 0;
   dependencies.run = (file, args, options) => {
-    if (file === 'kubectl' && args[0] === 'apply' && args[1] === '--filename') {
+    if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
+        !args.includes('--dry-run=client')) {
       applies++;
       return '';
     }
@@ -737,7 +797,6 @@ test('strict release deployment still rejects a lightweight release tag', async 
     argv: argsFor(),
     manifest,
     publication,
-    runtimeManifest: runtimeManifest(manifest),
   }, {
     root: p0Root,
     run,
@@ -1232,12 +1291,17 @@ test('preflight requires source-owned Cilium policy names for all product worklo
   assert.deepEqual(SERVICE_NETWORK_POLICY_NAMES, {
     'identity-broker': 'identity-broker-egress',
     'events-and-sessions': 'events-and-sessions-network',
-    agenthost: 'agenthost-environment-ingress',
-    environment: ['environment-agenthost-egress', 'environment-agenthost-ingress'],
-    gateway: ['gateway-owner-network', 'gateway-api-ingress'],
-    mcp: ['mcp-gateway-network', 'mcp-gateway-ingress'],
-    orchestrator: 'orchestrator-owner-network',
-    knowledge: 'knowledge-owner-network',
+    agenthost: ['agenthost-environment-ingress', 'agenthost-egress', 'broker-issuer-egress'],
+    environment: [
+      'environment-agenthost-egress', 'environment-agenthost-ingress',
+      'database-workload-identity-egress', 'broker-issuer-egress',
+    ],
+    gateway: ['gateway-owner-network', 'gateway-api-ingress', 'broker-issuer-egress'],
+    mcp: ['mcp-gateway-network', 'mcp-gateway-ingress', 'broker-issuer-egress'],
+    orchestrator: [
+      'orchestrator-owner-network', 'database-workload-identity-egress', 'broker-issuer-egress',
+    ],
+    knowledge: ['knowledge-owner-network', 'database-workload-identity-egress', 'broker-issuer-egress'],
     'projects-config': 'projects-config-network',
     web: 'web-gateway-ingress',
   });
@@ -1465,35 +1529,14 @@ test('Azure target readbacks preserve exact hostnames without exposing kubeconfi
   assert.ok(!calls[2].output.includes('sensitive-kubeconfig-token'));
 });
 
-test('runtime preflight checks shared backend certificates once after verifying required policy names', async () => {
-  const manifest = releaseManifest();
-  const publication = publicationReceipt(manifest);
-  const names = new Set(Object.values(SERVICE_NETWORK_POLICY_NAMES).flatMap(value =>
-    Array.isArray(value) ? value : [value]));
+test('runtime preflight validates the shared backend CA before Broker routing readback', () => {
   const calls = [];
-  await assert.rejects(deployRelease({
-    releaseTag: 'v1.0.0', target, manifest, publication,
-    runtimeManifest: runtimeManifest(manifest), dryRun: true,
-  }, {
-    root: p0Root,
-    verifyRelease: async () => sourceSha,
-    verifyImages: async () => verifiedImageDigests(manifest),
-    verifyTarget: async () => undefined,
-    run: (file, args) => {
+  assert.throws(() => verifyRuntimePrerequisites({ items: [] }, target, {
+    root,
+    managedResources: { items: [] },
+    run: (_file, args) => {
       calls.push(args);
-      if (args[0] !== 'get') return '';
-      if (args[1] === 'networkpolicies.networking.k8s.io') {
-        return JSON.stringify({ items: [{ metadata: { name: 'default-deny-all' } },
-          { metadata: { name: 'allow-dns-egress' } }] });
-      }
-      if (args[1] === 'ciliumnetworkpolicies.cilium.io') {
-        return JSON.stringify({ items: [...names].map(name => ({ metadata: { name } })) });
-      }
-      if (args[1] === 'configmap' && args[2] === 'service-backend-ca') {
-        if (args.at(-1).startsWith('jsonpath=')) return '';
-        return JSON.stringify({ metadata: { name: 'service-backend-ca', namespace: target.namespace } });
-      }
-      return JSON.stringify({ metadata: { name: args[2], namespace: target.namespace } });
+      return '';
     },
   }), /exact service-backend-ca ConfigMap must contain its public ca\.crt/);
   assert.equal(calls.filter(args => args[1] === 'configmap' && args[2] === 'service-backend-ca' &&
@@ -1505,11 +1548,12 @@ test('runtime preflight rejects an incomplete service ConfigMap before other clu
   const manifest = {
     items: [{
       kind: 'Deployment',
+      metadata: { name: 'gateway' },
       spec: {
         template: {
           spec: {
             containers: [{
-              envFrom: [{ configMapRef: { name: 'environment-runtime-config', optional: false } }],
+              envFrom: [{ configMapRef: { name: 'gateway-runtime-config', optional: false } }],
             }],
           },
         },
@@ -1520,20 +1564,20 @@ test('runtime preflight rejects an incomplete service ConfigMap before other clu
 
   assert.throws(() => verifyRuntimePrerequisites(manifest, target, {
     root,
+    managedResources: { items: [{
+      kind: 'ConfigMap',
+      metadata: {
+        name: 'gateway-runtime-config',
+        namespace: target.namespace,
+        annotations: { 'agentweaver.io/runtime-config-status': 'incomplete' },
+      },
+    }] },
     run: (_file, args) => {
       calls.push(args);
-      return JSON.stringify({
-        metadata: {
-          name: 'environment-runtime-config',
-          namespace: target.namespace,
-          annotations: { 'agentweaver.io/runtime-config-status': 'incomplete' },
-        },
-      });
+      return '';
     },
-  }), /environment-runtime-config is marked incomplete/);
-  assert.deepEqual(calls, [[
-    'get', 'configmap', 'environment-runtime-config', '--namespace', target.namespace, '--output', 'json',
-  ]]);
+  }), /gateway-runtime-config is marked incomplete/);
+  assert.deepEqual(calls, []);
 });
 
 test('default dry-run validates and renders without issuing any external write', async () => {
@@ -1558,15 +1602,21 @@ test('default dry-run validates and renders without issuing any external write',
     verifyTarget: async () => { targetVerified++; return { exact: true }; },
     verifyPrerequisites: () => { prerequisitesVerified++; },
     run: (file, args) => {
+      if (file === 'kubectl' && args[0] === 'kustomize') {
+        return execFileSync(file, args, { cwd: p0Root, encoding: 'utf8' });
+      }
       commands.push([file, args]);
-      assert.deepEqual([file, ...args], ['kubectl', 'apply', '--dry-run=client', '--filename', '-']);
+      assert.equal(file, 'kubectl');
+      assert.equal(args[0], 'apply');
+      assert.ok(args.includes('--dry-run=client'));
+      assert.ok(args.includes('-k'));
       return '';
     },
   });
   assert.equal(result.dryRun, true);
   assert.equal(result.services.length, deployedServices.length);
   assert.equal(result.perSandboxAgentHost, imagesExpectedHost(manifest));
-  assert.equal(result.renderedResources, 18);
+  assert.equal(result.renderedResources, 60);
   assert.equal(imagesVerified, 1);
   assert.equal(targetVerified, 1);
   assert.equal(prerequisitesVerified, 1);
@@ -1580,7 +1630,6 @@ test('dry-run refuses a GHCR receipt that omits the measured AgentHost platform 
     target,
     manifest,
     publication: publicationReceipt(manifest),
-    runtimeManifest: runtimeManifest(manifest),
     dryRun: true,
   }, {
     root: p0Root,
@@ -1595,33 +1644,15 @@ test('dry-run refuses a GHCR receipt that omits the measured AgentHost platform 
 test('resume rechecks publication, GHCR, target and live deployment health before success', async () => {
   const manifest = releaseManifest();
   const publication = publicationReceipt(manifest);
-  const runtime = runtimeManifest(manifest);
-  const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
   const verification = { release: 0, images: 0, target: 0, prerequisites: 0, live: 0, clear: 0, apply: 0 };
   const directory = path.join(root, 'scripts', 'release', 'tests', 'owned-checkpoint-fixture');
-  const result = await deployRelease({
-    releaseTag: 'v1.0.0',
-    target,
-    manifest,
-    publication,
-    runtimeManifest: runtime,
-    execute: true,
-    dryRun: false,
-    resume: true,
-  }, {
+  let checkpoint;
+  const dependencies = {
     root: p0Root,
     checkpointDirectory: directory,
-    checkpointReadFile: (file) => JSON.stringify({
-      version: 1,
-      key: path.basename(file, '.json'),
-      releaseTag: 'v1.0.0',
-      sourceSha,
-      target,
-      manifestSha256: hash(manifest),
-      runtimeManifestSha256: hash(runtime),
-      publicationSha256: hash(publication),
-      stages: { apply: { completed: true } },
-    }),
+    checkpointMkdir: () => undefined,
+    checkpointReadFile: () => checkpoint,
+    checkpointWriteFile: (_file, text) => { checkpoint = text; },
     checkpointRm: () => { verification.clear++; },
     verifyRelease: async () => { verification.release++; return sourceSha; },
     verifyImages: async () => { verification.images++; return verifiedImageDigests(manifest); },
@@ -1633,19 +1664,46 @@ test('resume rechecks publication, GHCR, target and live deployment health befor
       assert.ok(images.some(image => image.id === 'Agentweaver.AgentHost'));
     },
     run: (file, args) => {
-      if (args[0] === 'apply' && args[1] === '--filename') verification.apply++;
+      if (file === 'kubectl' && args[0] === 'kustomize') {
+        return execFileSync(file, args, { cwd: p0Root, encoding: 'utf8' });
+      }
+      if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
+          !args.includes('--dry-run=client')) verification.apply++;
       return '';
     },
-  });
+  };
+  const first = await deployRelease({
+    releaseTag: 'v1.0.0',
+    target,
+    manifest,
+    publication,
+    providerCatalogConfigMapName: 'projects-config-provider-catalog',
+    providerCatalogSourceCommit: 'd'.repeat(40),
+    execute: true,
+    dryRun: false,
+  }, dependencies);
+  assert.equal(first.dryRun, false);
+  assert.ok(checkpoint);
+  const result = await deployRelease({
+    releaseTag: 'v1.0.0',
+    target,
+    manifest,
+    publication,
+    providerCatalogConfigMapName: 'projects-config-provider-catalog',
+    providerCatalogSourceCommit: 'd'.repeat(40),
+    execute: true,
+    dryRun: false,
+    resume: true,
+  }, dependencies);
   assert.equal(result.resumed, true);
   assert.deepEqual(verification, {
-    release: 2,
-    images: 2,
-    target: 2,
-    prerequisites: 1,
-    live: 1,
-    clear: 1,
-    apply: 0,
+    release: 4,
+    images: 4,
+    target: 4,
+    prerequisites: 2,
+    live: 2,
+    clear: 2,
+    apply: 1,
   });
 });
 
@@ -1657,7 +1715,8 @@ test('checkpoint read and write failures are surfaced as deployment failures', a
     target,
     manifest,
     publication,
-    runtimeManifest: runtimeManifest(manifest),
+    providerCatalogConfigMapName: 'projects-config-provider-catalog',
+    providerCatalogSourceCommit: 'd'.repeat(40),
     execute: true,
     dryRun: false,
   };
@@ -1667,7 +1726,16 @@ test('checkpoint read and write failures are surfaced as deployment failures', a
     verifyImages: async () => verifiedImageDigests(manifest),
     verifyTarget: async () => undefined,
     verifyPrerequisites: () => undefined,
-    run: () => '',
+    run: (file, args) => {
+      if (file === 'kubectl' && args[0] === 'kustomize') {
+        return execFileSync(file, args, { cwd: p0Root, encoding: 'utf8' });
+      }
+      if (file === 'kubectl' && args[0] === 'kustomize') {
+        return execFileSync(file, args, { cwd: p0Root, encoding: 'utf8' });
+      }
+      if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k')) return '';
+      return '';
+    },
   };
   const readError = new Error('access denied');
   readError.code = 'EACCES';
@@ -1684,7 +1752,11 @@ test('checkpoint read and write failures are surfaced as deployment failures', a
     checkpointMkdir: () => undefined,
     checkpointWriteFile: () => { throw new Error('disk full'); },
     run: (file, args) => {
-      if (file === 'kubectl' && args[0] === 'apply' && args[1] === '--filename') applyCount++;
+      if (file === 'kubectl' && args[0] === 'kustomize') {
+        return execFileSync(file, args, { cwd: p0Root, encoding: 'utf8' });
+      }
+      if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
+          !args.includes('--dry-run=client')) applyCount++;
       return '';
     },
   }), /cannot persist deployment checkpoint: disk full/);
@@ -1761,9 +1833,14 @@ test('default dry-run uses the verified published AgentHost platform child and i
     verifyTarget: async () => undefined,
     verifyPrerequisites: () => undefined,
     fetch: fixture.fetch,
-    run: (_file, args, options) => {
-      assert.deepEqual(args, ['apply', '--dry-run=client', '--filename', '-']);
-      runtimeInput = JSON.parse(options.input);
+    run: (file, args) => {
+      if (file === 'kubectl' && args[0] === 'kustomize') {
+        const output = execFileSync(file, args, { cwd: p0Root, encoding: 'utf8' });
+        runtimeInput = parseKustomizeResources(output);
+        return output;
+      }
+      assert.equal(file, 'kubectl');
+      assert.deepEqual(args.slice(0, 3), ['apply', '--dry-run=client', '-k']);
       return '';
     },
   });
@@ -1775,7 +1852,15 @@ test('default dry-run uses the verified published AgentHost platform child and i
   assert.equal(env.get('Environment__Sandbox__AgentSandbox__ContainerImagePlatform'), 'linux/amd64');
   assert.equal(env.get('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes'),
     String(Buffer.byteLength(fixture.childText) + fixture.configBytes.length + 4));
+  const agentHostConfig = runtimeInput.items.find(({ kind, metadata }) =>
+    kind === 'ConfigMap' && metadata.name === 'agenthost-runtime-v1');
+  const agentHostImage = JSON.parse(agentHostConfig.data['appsettings.json']).AgentHost.Image;
+  assert.equal(agentHostImage.Digest, fixture.childDigest);
+  assert.equal(agentHostImage.Platform, env.get('Environment__Sandbox__AgentSandbox__ContainerImagePlatform'));
+  assert.equal(agentHostImage.CompressedPullBytes,
+    Number(env.get('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes')));
   assert.equal(runtimeInput.items.some(({ metadata }) => metadata.name === 'agenthost'), false);
+  assert.equal(result.renderedResources, runtimeInput.items.length);
   assert.equal(result.dryRun, true);
 });
 

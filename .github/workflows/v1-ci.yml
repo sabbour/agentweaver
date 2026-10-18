@@ -22,6 +22,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Install locked root Node.js tooling dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Record coverage candidate
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}

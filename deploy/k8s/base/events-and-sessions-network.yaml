@@ -1,0 +1,90 @@
+# Events accepts requests only from its configured runtime owners and node health probes.
+# Its egress allows those owners, the configured data services, Broker metadata, and Entra.
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: events-and-sessions-network
+  namespace: agentweaver-v1-p0
+  labels:
+    agentweaver.io/service: events-and-sessions
+spec:
+  endpointSelector:
+    matchLabels:
+      agentweaver.io/workload: events-and-sessions
+  ingress:
+    - fromEntities:
+        - host
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: agenthost
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: orchestrator
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: gateway
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: knowledge
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: environment
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s:k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchName: agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io
+              - matchName: login.microsoftonline.com
+              - matchName: awv1p0blob.blob.core.windows.net
+              - matchName: awv1p0blob.privatelink.blob.core.windows.net
+              - matchName: aw-v1-p0-pg.postgres.database.azure.com
+              - matchName: aw-v1-p0-pg.privatelink.postgres.database.azure.com
+              - matchName: knowledge.agentweaver-v1-p0.svc.cluster.local
+              - matchName: projects-config.agentweaver-v1-p0.svc.cluster.local
+              - matchName: orchestrator.agentweaver-v1-p0.svc.cluster.local
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: knowledge
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: projects-config
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: orchestrator
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+    - toFQDNs:
+        - matchName: agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io
+        - matchName: login.microsoftonline.com
+        - matchName: awv1p0blob.blob.core.windows.net
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    - toFQDNs:
+        - matchName: aw-v1-p0-pg.postgres.database.azure.com
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP

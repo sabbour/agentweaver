@@ -8,8 +8,26 @@ resources:
   - networkpolicy-default-deny.yaml
   - environment-agenthost-network.yaml
   - service-owner-network.yaml
-  - serviceaccounts/foundation-probe-sa.yaml
+  - events-and-sessions-network.yaml
+  - projects-config-network.yaml
+  - serviceaccounts.yaml
   - identity-broker
+  - workloads/events-and-sessions-deployment.json
+  - workloads/events-and-sessions-service.json
+  - workloads/gateway-deployment.json
+  - workloads/gateway-service.json
+  - workloads/mcp-deployment.json
+  - workloads/mcp-service.json
+  - workloads/web-deployment.json
+  - workloads/web-service.json
+  - workloads/orchestrator-deployment.json
+  - workloads/orchestrator-service.json
+  - workloads/environment-deployment.json
+  - workloads/environment-service.json
+  - workloads/knowledge-deployment.json
+  - workloads/knowledge-service.json
+  - workloads/projects-config-deployment.json
+  - workloads/projects-config-service.json
 labels:
   - pairs:
       agentweaver.io/environment: v1-p0

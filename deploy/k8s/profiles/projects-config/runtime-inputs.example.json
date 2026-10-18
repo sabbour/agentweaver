@@ -1,15 +1,4 @@
 {
-  "subscriptionId": "90ab3701-83f0-4ba1-a90a-f2e68683adab",
-  "resourceGroup": "aw-v1-p0",
-  "clusterName": "aw-v1-p0-aks",
-  "image": null,
-  "imageUser": null,
-  "imageGroup": null,
-  "tlsSecretName": null,
-  "providerCatalog": {
-    "configMapName": null,
-    "sourceCommit": null
-  },
   "configuration": {
     "ConnectionStrings__ProjectsConfig": "Host=aw-v1-p0-pg.postgres.database.azure.com;Port=5432;Database=agentweaver;Username=aw-v1-p0-id-projects-config;SSL Mode=VerifyFull",
     "ProjectsConfig__Database__WorkloadIdentity__TenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47",

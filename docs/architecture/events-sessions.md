@@ -542,49 +542,42 @@ Use these separate settings:
 
 The migration job and its database grants are not provisioned by this source candidate.
 
-## Selected Events workload profile
+## Events runtime input validation
 
-`deploy/k8s/profiles/events-and-sessions/render.mjs` renders a separate Events profile.
-The ordinary Broker and Foundation Probe compositions do not include it.
-The profile configures the existing typed session material store with existing keys.
-It does not add another content API or change ordinary service startup.
+The complete v1 product installation, including the Events Deployment, Service,
+ServiceAccount, runtime ConfigMap, and Cilium policy, is maintained in the root
+Kustomization at `deploy/k8s`. The static workload pins its release image through
+Kustomize; the install does not generate a Deployment or Service from a
+JavaScript profile.
 
-The input fixes the approved 1.x target, Events tenant/client identity, database role,
-database name, token path, and `events_sessions` schema.
-It requires the actual Sessions resource ID and generation, Broker issuer,
-three audiences, private Knowledge/Projects/Orchestrator owner addresses, and one explicit Blob container.
-The Blob account must be `awv1p0blob`; credentials, SAS, extra paths, and encoded paths are rejected.
-The connection remains password-free with `VerifyFull`.
-No migration, bootstrap, secret, or additional TLS setting is accepted.
+`deploy/k8s/profiles/events-and-sessions/render.mjs` validates operator-selected
+runtime values before they are written to the checked-in
+`events-and-sessions-runtime-config.json`. It requires the admitted P0 database
+and workload identity, Sessions resource identity and generation, Broker
+issuer/audiences, private Knowledge/Projects/Orchestrator owner addresses, a
+Blob container in `awv1p0blob`, and valid model-binding and rate-card values.
+Database access remains password-free with `VerifyFull`; credentials, SAS
+tokens, extra Blob paths, and encoded paths are rejected. This validator emits
+configuration data only. It does not produce a Kubernetes List, image,
+Deployment, Service, policy, Secret, or certificate.
 
-The product image must use `ghcr.io/sabbour/agentweaver.eventsandsessions` with a nonzero immutable digest.
-The operator must review its positive numeric user and group and supply an existing Events TLS Secret.
-These inputs are requirements, not verified image metadata or proof that the Secret exists.
-The PEM files use a read-only Events-only mount and mode `0440`.
-The supplied group also sets `fsGroup`; `/tmp` is the only writable mount, bounded to 64 MiB.
-The private service uses HTTPS on port 8443 and requires current database schema at startup and readiness.
-CPU, memory, namespace, caller labels, DNS names, and outbound destinations remain bounded.
-
-Owner addresses must name the exact private service in `agentweaver-v1-p0`.
-Each address supplies its reviewed HTTPS port; that port must match the selected owner's endpoint port.
-Selected owner Pods must use the corresponding `agentweaver.io/workload` label.
-The profile allows only system-trusted outbound HTTPS.
-Missing trusted endpoints, certificates, image metadata, grants, or migrated tables block deployment.
-It creates none of these prerequisites and does not grant direct Blob access to AgentHost.
-The separate private `RemoteToolResults` listener remains disabled.
-
-The example leaves unresolved operator values as `null` and cannot render successfully.
-After the exact inputs are reviewed, render source from the repository root:
+After reviewing a configuration update, render the complete bundle and apply
+it through Kustomize:
 
 ```powershell
-node deploy\k8s\profiles\events-and-sessions\render.mjs .\Temp\events-operator-reviewed.json
+kubectl kustomize deploy\k8s
+kubectl apply -k deploy\k8s
+kubectl rollout restart deployment/events-and-sessions -n agentweaver-v1-p0
+kubectl rollout status deployment/events-and-sessions -n agentweaver-v1-p0
 ```
 
-This command only prints a Kubernetes JSON list.
-It does not call Azure, Kubernetes, a database, a registry, or a container engine.
-Pure source checks do not prove live TLS/file access, network enforcement, owner availability,
-published images, or a healthy deployment.
-This profile alone does not complete the five-owner deployment or full P1 acceptance.
+Kubernetes does not restart a process when data in a referenced ConfigMap
+changes, so restart the affected workload after changing environment-backed
+configuration. The release helper validates receipt-pinned images and all
+operator-owned prerequisites before applying the same bundle. It does not
+create the operator-supplied TLS Secret, public CA data, database grants,
+migrations, or Gateway placement. The private `RemoteToolResults` listener
+remains disabled.
 
 The [contract reference](../reference/contracts.md) lists routes and configuration.
 The [testing guide](../guide/testing.md) describes the disposable-PostgreSQL tests and

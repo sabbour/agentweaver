@@ -1,0 +1,161 @@
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "name": "gateway",
+    "namespace": "agentweaver-v1-p0",
+    "labels": {
+      "app.kubernetes.io/name": "gateway",
+      "agentweaver.io/service": "gateway"
+    }
+  },
+  "spec": {
+    "replicas": 1,
+    "strategy": {
+      "type": "Recreate"
+    },
+    "selector": {
+      "matchLabels": {
+        "app.kubernetes.io/name": "gateway"
+      }
+    },
+    "template": {
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/name": "gateway",
+          "agentweaver.io/service": "gateway",
+          "agentweaver.io/workload": "gateway",
+          "agentweaver.io/identity-client": "true"
+        }
+      },
+      "spec": {
+        "serviceAccountName": "gateway",
+        "automountServiceAccountToken": true,
+        "securityContext": {
+          "runAsNonRoot": true,
+          "runAsUser": 1654,
+          "runAsGroup": 1654,
+          "fsGroup": 1654,
+          "fsGroupChangePolicy": "OnRootMismatch",
+          "seccompProfile": {
+            "type": "RuntimeDefault"
+          }
+        },
+        "terminationGracePeriodSeconds": 30,
+        "volumes": [
+          {
+            "name": "tmp",
+            "emptyDir": {
+              "sizeLimit": "64Mi"
+            }
+          },
+          {
+            "name": "tls",
+            "secret": {
+              "secretName": "gateway-tls",
+              "optional": false,
+              "defaultMode": 288,
+              "items": [
+                {
+                  "key": "tls.crt",
+                  "path": "tls.crt"
+                },
+                {
+                  "key": "tls.key",
+                  "path": "tls.key"
+                }
+              ]
+            }
+          }
+        ],
+        "containers": [
+          {
+            "name": "gateway",
+            "image": "ghcr.io/sabbour/agentweaver.gateway:receipt-pinned",
+            "imagePullPolicy": "IfNotPresent",
+            "ports": [
+              {
+                "name": "https",
+                "containerPort": 8443,
+                "protocol": "TCP"
+              }
+            ],
+            "env": [
+              {
+                "name": "ASPNETCORE_URLS",
+                "value": "https://+:8443"
+              },
+              {
+                "name": "ASPNETCORE_Kestrel__Certificates__Default__Path",
+                "value": "/var/run/gateway-tls/tls.crt"
+              },
+              {
+                "name": "ASPNETCORE_Kestrel__Certificates__Default__KeyPath",
+                "value": "/var/run/gateway-tls/tls.key"
+              }
+            ],
+            "envFrom": [
+              {
+                "configMapRef": {
+                  "name": "gateway-runtime-config",
+                  "optional": false
+                }
+              }
+            ],
+            "volumeMounts": [
+              {
+                "name": "tmp",
+                "mountPath": "/tmp"
+              },
+              {
+                "name": "tls",
+                "mountPath": "/var/run/gateway-tls",
+                "readOnly": true
+              }
+            ],
+            "livenessProbe": {
+              "httpGet": {
+                "path": "/health/live",
+                "port": "https",
+                "scheme": "HTTPS"
+              },
+              "periodSeconds": 10,
+              "timeoutSeconds": 3,
+              "failureThreshold": 3
+            },
+            "readinessProbe": {
+              "httpGet": {
+                "path": "/health/ready",
+                "port": "https",
+                "scheme": "HTTPS"
+              },
+              "periodSeconds": 5,
+              "timeoutSeconds": 3,
+              "failureThreshold": 3
+            },
+            "resources": {
+              "requests": {
+                "cpu": "100m",
+                "memory": "128Mi"
+              },
+              "limits": {
+                "cpu": "500m",
+                "memory": "512Mi"
+              }
+            },
+            "securityContext": {
+              "runAsNonRoot": true,
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "drop": [
+                  "ALL"
+                ]
+              },
+              "readOnlyRootFilesystem": true
+            }
+          }
+        ]
+      }
+    }
+  }
+}

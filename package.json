@@ -1,6 +1,9 @@
 {
   "name": "agentweaver-v1-tooling",
   "private": true,
+  "dependencies": {
+    "yaml": "2.9.1"
+  },
   "scripts": {
     "release:validate": "node scripts/release/validate.mjs releases/foundation.json",
     "release:plan": "node scripts/release/plan.mjs releases/foundation.json",

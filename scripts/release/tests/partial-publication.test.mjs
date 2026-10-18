@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -543,7 +543,7 @@ test('helper admission finds the exact merged result on non-default v1 without c
   assert.match(world.calls[0], /\/pulls\?state=closed&base=v1&/);
 });
 
-test('helper deploy CLI uses a separate original product cwd and accepts its valid continuation', withDirectory(async directory => {
+test('helper deploy CLI uses a product cwd with the Kustomize bundle and accepts its valid continuation', withDirectory(async directory => {
   const world = newWorld();
   const completion = await continuePartialPublication(options(world, directory));
   const productRoot = path.join(directory, 'original-product');
@@ -568,6 +568,8 @@ test('helper deploy CLI uses a separate original product cwd and accepts its val
       cwd: root, encoding: 'utf8',
     }));
   }
+  // The release helper resolves and renders the install bundle from its product working directory.
+  cpSync(path.join(root, 'deploy', 'k8s'), path.join(productRoot, 'deploy', 'k8s'), { recursive: true });
   const manifestPath = path.join(directory, 'release-manifest.json');
   const publicationPath = path.join(directory, 'publication.json');
   writeFileSync(manifestPath, JSON.stringify(manifest));
@@ -578,7 +580,7 @@ test('helper deploy CLI uses a separate original product cwd and accepts its val
     nodeMin: 2, nodeMax: 3,
   };
   const argv = ['v1.0.0', '--manifest', manifestPath, '--publication', publicationPath,
-    '--completion', publicationPath, '--provider-catalog-configmap', 'reviewed-provider-catalog',
+    '--completion', publicationPath, '--provider-catalog-configmap', 'projects-config-provider-catalog',
     '--provider-catalog-source-commit', P.sourceSha,
     '--subscription-id', target.subscriptionId, '--tenant-id', target.tenantId,
     '--resource-group', target.resourceGroup, '--cluster', target.clusterName,
@@ -614,8 +616,14 @@ test('helper deploy CLI uses a separate original product cwd and accepts its val
       }
       if (file === 'gh') return world.run(file, args, opts.input);
       if (file === 'kubectl') {
-        assert.deepEqual(args, ['apply', '--dry-run=client', '--filename', '-']);
         assert.equal(opts.cwd, productRoot);
+        if (args[0] === 'kustomize') {
+          return execFileSync('kubectl', args, { cwd: opts.cwd, encoding: 'utf8' });
+        }
+        assert.deepEqual(args.slice(0, 3), ['apply', '--dry-run=client', '-k']);
+        assert.equal(args.length, 4);
+        assert.equal(path.basename(args[3]), 'k8s');
+        assert.equal(path.basename(path.dirname(args[3])), 'deploy');
         rendered += 1;
         return '';
       }

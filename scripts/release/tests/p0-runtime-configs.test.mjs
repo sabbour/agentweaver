@@ -1,9 +1,13 @@
 // Checks that committed P0 runtime values are sourced and that unknown values stay visibly incomplete.
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { SERVICE_NAMES, SERVICE_NETWORK_POLICY_NAMES } from '../deploy.mjs';
+import { parseKustomizeResources } from '../kustomize-runtime.mjs';
+import { parse, parseAllDocuments } from 'yaml';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const namespace = 'agentweaver-v1-p0';
@@ -43,16 +47,23 @@ const serviceAddress = (name, port = 8443) =>
   `https://${name}.${namespace}.svc.cluster.local:${port}/`;
 const manifest = (name) => JSON.parse(readFileSync(
   path.join(root, 'deploy', 'k8s', 'runtime-configs', `${name}.json`), 'utf8'));
+const identityBroker = manifest('identity-broker-runtime-config');
 const environment = manifest('environment-runtime-config');
 const orchestrator = manifest('orchestrator-runtime-config');
 const events = manifest('events-and-sessions-runtime-config');
 const cilium = manifest('environment-cilium-config');
+const gateway = manifest('gateway-runtime-config');
+const mcp = manifest('mcp-runtime-config');
+const web = manifest('web-runtime-config');
+const knowledge = manifest('knowledge-runtime-config');
+const projects = manifest('projects-config-runtime-config');
 
 test('P0 runtime ConfigMaps use immutable snapshots except for the operator-updatable Events map', () => {
   for (const [name, resource] of [
     ['environment-runtime-config', environment],
     ['orchestrator-runtime-config', orchestrator],
     ['events-and-sessions-runtime-config', events],
+    ['identity-broker-runtime-config', identityBroker],
     ['environment-cilium-config', cilium],
   ]) {
     assert.equal(resource.apiVersion, 'v1');
@@ -74,6 +85,41 @@ test('P0 runtime ConfigMaps use immutable snapshots except for the operator-upda
   for (const resource of [environment, orchestrator, events])
     assert.ok(Object.keys(resource.data).every(key => /^[A-Za-z][A-Za-z0-9_.-]*$/.test(key)));
   assert.equal(events.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'], undefined);
+});
+
+test('Identity Broker snapshot preserves only the live non-secret P0 runtime configuration', () => {
+  assert.deepEqual(Object.keys(identityBroker.data).sort(), [
+    'ConnectionStrings__IdentityBroker',
+    'IdentityBroker__Clients__0__ClientId',
+    'IdentityBroker__Clients__0__DisplayName',
+    'IdentityBroker__Clients__0__RedirectUris__0',
+    'IdentityBroker__Clients__0__Resources__0',
+    'IdentityBroker__Clients__0__Scopes__0',
+    'IdentityBroker__Clients__0__Scopes__1',
+    'IdentityBroker__Clients__0__Scopes__2',
+    'IdentityBroker__Clients__0__Scopes__3',
+    'IdentityBroker__Clients__0__Scopes__4',
+    'IdentityBroker__Clients__0__Type',
+    'IdentityBroker__DataProtectionKeyPath',
+    'IdentityBroker__ExternalProvider__Authority',
+    'IdentityBroker__ExternalProvider__ClientId',
+    'IdentityBroker__Issuer',
+    'IdentityBroker__SecretRedemption__Audience',
+    'IdentityBroker__SecretRedemption__VaultUri',
+    'IdentityBroker__SecretRedemption__WorkloadIdentityClientId',
+    'IdentityBroker__SecretRedemption__WorkloadIdentityTenantId',
+    'IdentityBroker__SecretRedemption__WorkloadIdentityTokenFilePath',
+  ].sort());
+  assert.equal(identityBroker.immutable, true);
+  assert.equal(identityBroker.metadata.labels?.['agentweaver.io/acceptance-run'], undefined);
+  assert.equal(identityBroker.data.IdentityBroker__Clients__0__Type, 'Public');
+  assert.equal(identityBroker.data.IdentityBroker__Clients__0__RedirectUris__0,
+    'http://127.0.0.1:49187/callback');
+  assert.equal(identityBroker.data.IdentityBroker__Clients__0__Scopes__3, 'api.read');
+  assert.equal(identityBroker.data.IdentityBroker__Clients__0__Scopes__4, 'offline_access');
+  assert.equal(web.data.VITE_OAUTH_CLIENT_ID, '');
+  assert.notEqual(web.data.VITE_OAUTH_CLIENT_ID,
+    identityBroker.data.IdentityBroker__Clients__0__ClientId);
 });
 
 test('P0 PostgreSQL roles, projected identities, and issuer use the exact approved inputs', () => {
@@ -193,13 +239,13 @@ test('P0 service addresses and source-backed provider defaults are exact', () =>
     assert.equal(evt[`AgentHost__ModelBindings__${reference}__ModelId`], modelId);
     assert.equal(evt[`AgentHost__ModelBindings__${reference}__SourceMode`], 'HostedCopilot');
   }
-  const agentHostYaml = readFileSync(
-    path.join(root, 'deploy', 'k8s', 'profiles', 'agenthost', 'runtime-config.example.yaml'),
-    'utf8').replaceAll('\r\n', '\n');
-  assert.match(agentHostYaml, /^immutable: false$/m);
-  const appSettings = agentHostYaml.split('  appsettings.json: |\n')[1]
-    .split('\n').map(line => line.slice(4)).join('\n');
-  const agentHost = JSON.parse(appSettings).AgentHost;
+  const agentHostManifest = parse(readFileSync(
+    path.join(root, 'deploy', 'k8s', 'profiles', 'agenthost', 'runtime-config.example.yaml'), 'utf8'));
+  assert.equal(agentHostManifest.immutable, true);
+  assert.equal(agentHostManifest.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
+  assert.equal(agentHostManifest.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
+    'AgentHost.ConfigureEndpoint and Authentication.Audience require the exact per-Sandbox HTTPS service endpoint; AgentHost.MaximumPendingTurns has no approved P0 value; Environment__Sandbox__AgentSandbox__AgentHost__TlsSecretName has no approved existing Secret name.');
+  const agentHost = JSON.parse(agentHostManifest.data['appsettings.json']).AgentHost;
   assert.equal(agentHost.ModelBindingsRevision, 'p1-v1.0.1');
   assert.deepEqual(agentHost.ModelBindings, {
     reasoning: { ModelId: 'gpt-6.1-sol', SourceMode: 'HostedCopilot' },
@@ -207,6 +253,17 @@ test('P0 service addresses and source-backed provider defaults are exact', () =>
     'gpt-6.1-sol': { ModelId: 'gpt-6.1-sol', SourceMode: 'HostedCopilot' },
     'gpt-6-luna': { ModelId: 'gpt-6-luna', SourceMode: 'HostedCopilot' },
   });
+  assert.equal(agentHost.ConfigureEndpoint, '');
+  assert.equal(agentHost.Authentication.Audience, '');
+  assert.equal(agentHost.MaximumPendingTurns, undefined);
+  assert.equal(agentHost.BrokerAddress, serviceAddress('identity-broker', 443));
+  assert.equal(agentHost.OrchestratorAddress, serviceAddress('orchestrator'));
+  assert.equal(agentHost.EnvironmentAddress, serviceAddress('environment'));
+  assert.equal(agentHost.EventsAddress, serviceAddress('events-and-sessions'));
+  assert.equal(agentHost.Authentication.Authority, broker);
+  assert.equal(agentHost.Image.Platform, 'linux/amd64');
+  assert.equal(environment.data['Environment__Sandbox__AgentSandbox__AgentHost__ConfigurationMapName'], undefined);
+  assert.equal(environment.data['Environment__Sandbox__AgentSandbox__AgentHost__TlsSecretName'], undefined);
 });
 
 test('nested Cilium selectors match the existing source policies and contain no env-unsafe keys', () => {
@@ -267,4 +324,384 @@ test('P0 values use approved labels and omit unknown resource identities', () =>
   assert.equal(events.data['AgentHost__ModelBindings__gpt-6-luna__ModelId'], 'gpt-6-luna');
   assert.ok(!Object.values(events.data).includes(
     '/subscriptions/90ab3701-83f0-4ba1-a90a-f2e68683adab/resourceGroups/aw-v1-p0/providers/Microsoft.DBforPostgreSQL/flexibleServers/aw-v1-p0-pg'));
+});
+
+// Runtime maps must match their service contracts and reserve incomplete markers for unsourced values.
+test('additional service ConfigMaps use exact runtime keys and expose only unresolved inputs as incomplete', () => {
+  const newMaps = [
+    ['gateway-runtime-config', gateway],
+    ['mcp-runtime-config', mcp],
+    ['web-runtime-config', web],
+    ['knowledge-runtime-config', knowledge],
+    ['projects-config-runtime-config', projects],
+  ];
+  for (const [name, resource] of newMaps) {
+    assert.equal(resource.apiVersion, 'v1');
+    assert.equal(resource.kind, 'ConfigMap');
+    assert.equal(resource.metadata.name, name);
+    assert.equal(resource.metadata.namespace, namespace);
+    assert.equal(resource.immutable, true);
+    assert.ok(Object.keys(resource.data).length > 0);
+    for (const [key, value] of Object.entries(resource.data)) {
+      assert.equal(typeof value, 'string', `${name}: ${key}`);
+      assert.doesNotMatch(value, /CHANGEME|TODO|PLACEHOLDER|DUMMY|<[^>]+>/i, `${name}: ${key}`);
+      assert.doesNotMatch(key, /(?:^|__)(?:Password|ClientSecret|CredentialValue|SecretKey)(?:__|$)/i,
+        `${name}: ${key}`);
+      assert.doesNotMatch(value, /(?:^|;)Password\s*=|sig=|SharedAccessSignature=/i, `${name}: ${key}`);
+    }
+  }
+
+  assert.deepEqual(Object.keys(gateway.data).sort(), [
+    'Gateway__Owners__Events',
+    'Gateway__Owners__IdentityBrokerAddress',
+    'Gateway__Owners__Knowledge',
+    'Gateway__Owners__Orchestrator',
+    'Gateway__Owners__Projects',
+    'Gateway__WebOrigin',
+    'Identity__Audience',
+    'Identity__Issuer',
+  ].sort());
+  assert.equal(gateway.data.Identity__Issuer, broker);
+  assert.equal(gateway.data.Identity__Audience, broker);
+  assert.equal(gateway.data.Gateway__Owners__Projects, serviceAddress('projects-config'));
+  assert.equal(gateway.data.Gateway__Owners__Orchestrator, serviceAddress('orchestrator'));
+  assert.equal(gateway.data.Gateway__Owners__Knowledge, serviceAddress('knowledge'));
+  assert.equal(gateway.data.Gateway__Owners__Events, serviceAddress('events-and-sessions'));
+  assert.equal(gateway.data.Gateway__Owners__IdentityBrokerAddress,
+    serviceAddress('identity-broker', 443));
+  assert.equal(gateway.data.Gateway__WebOrigin, '');
+  assert.equal(gateway.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
+  assert.equal(gateway.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
+    'Gateway__WebOrigin requires the approved Portal origin.');
+
+  assert.deepEqual(Object.keys(mcp.data).sort(), [
+    'Gateway__BaseAddress', 'Identity__Audience', 'Identity__Issuer',
+  ].sort());
+  assert.deepEqual(mcp.data, {
+    Identity__Issuer: broker,
+    Identity__Audience: broker,
+    Gateway__BaseAddress: serviceAddress('gateway'),
+  });
+  assert.equal(mcp.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
+
+  assert.deepEqual(Object.keys(web.data).sort(), [
+    'VITE_GATEWAY_URL', 'VITE_IDENTITY_BROKER_ISSUER', 'VITE_IDENTITY_BROKER_URL',
+    'VITE_OAUTH_CLIENT_ID', 'VITE_OAUTH_SCOPES',
+  ].sort());
+  assert.equal(web.data.VITE_GATEWAY_URL, '/api/v1');
+  assert.equal(web.data.VITE_IDENTITY_BROKER_URL, broker);
+  assert.equal(web.data.VITE_IDENTITY_BROKER_ISSUER, broker);
+  assert.equal(web.data.VITE_OAUTH_CLIENT_ID, '');
+  assert.equal(web.data.VITE_OAUTH_SCOPES, '');
+  assert.equal(web.data.VITE_OAUTH_REDIRECT_URI, undefined);
+  assert.equal(web.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
+  assert.equal(web.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
+    'VITE_OAUTH_CLIENT_ID and VITE_OAUTH_SCOPES require the approved production Web client registration.');
+
+  assert.deepEqual(Object.keys(knowledge.data).sort(), [
+    'ConnectionStrings__Knowledge',
+    'Identity__Audience',
+    'Identity__Issuer',
+    'Knowledge__Database__WorkloadIdentity__ClientId',
+    'Knowledge__Database__WorkloadIdentity__TenantId',
+    'Knowledge__Database__WorkloadIdentity__TokenFilePath',
+    'Knowledge__Events__Audience',
+    'Knowledge__Events__BaseAddress',
+    'Knowledge__Provider__DatabaseName',
+    'Knowledge__Provider__OptionsRevision',
+    'Knowledge__Provider__OptionsSchemaVersion',
+    'Knowledge__Provider__ResourceGeneration',
+    'Knowledge__Provider__ResourceId',
+    'Knowledge__Provider__Schema',
+    'ProjectsConfig__BaseAddress',
+  ].sort());
+  assert.equal(knowledge.data.ConnectionStrings__Knowledge,
+    `Host=${host};Port=5432;Database=${database};Username=;SSL Mode=VerifyFull`);
+  assert.equal(knowledge.data.Knowledge__Database__WorkloadIdentity__TenantId, tenant);
+  assert.equal(knowledge.data.Knowledge__Database__WorkloadIdentity__ClientId,
+    'c9188440-b79e-46c2-ad02-4b0218868648');
+  assert.equal(knowledge.data.Knowledge__Database__WorkloadIdentity__TokenFilePath, tokenFile);
+  assert.equal(knowledge.data.Identity__Issuer, broker);
+  assert.equal(knowledge.data.Identity__Audience, broker);
+  assert.equal(knowledge.data.ProjectsConfig__BaseAddress, serviceAddress('projects-config'));
+  assert.equal(knowledge.data.Knowledge__Events__BaseAddress, serviceAddress('events-and-sessions'));
+  assert.equal(knowledge.data.Knowledge__Events__Audience, broker);
+  assert.equal(knowledge.data.Knowledge__Provider__ResourceId, '');
+  assert.equal(knowledge.data.Knowledge__Provider__DatabaseName, database);
+  assert.equal(knowledge.data.Knowledge__Provider__ResourceGeneration, '');
+  assert.equal(knowledge.data.Knowledge__Provider__Schema, 'knowledge');
+  assert.equal(knowledge.data.Knowledge__Provider__OptionsRevision, 'native-postgres-memory-v1');
+  assert.equal(knowledge.data.Knowledge__Provider__OptionsSchemaVersion, '1');
+  assert.equal(knowledge.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
+  assert.equal(knowledge.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
+    'ConnectionStrings__Knowledge username, Knowledge__Provider__ResourceId, and Knowledge__Provider__ResourceGeneration require authoritative P0 inputs.');
+
+  assert.deepEqual(projects.data, {
+    ConnectionStrings__ProjectsConfig:
+      `Host=${host};Port=5432;Database=${database};Username=aw-v1-p0-id-projects-config;SSL Mode=VerifyFull`,
+    ProjectsConfig__Database__WorkloadIdentity__TenantId: tenant,
+    ProjectsConfig__Database__WorkloadIdentity__ClientId: '4ca461a5-f347-4ed8-9923-a6e135145aaa',
+    ProjectsConfig__Database__WorkloadIdentity__TokenFilePath: tokenFile,
+    ProjectsConfig__Authentication__Authority: broker,
+    ProjectsConfig__Authentication__Audience: broker,
+  });
+  assert.equal(projects.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
+  assert.equal(Object.keys(projects.data).some(key => key.includes('BrokerRunBinding')), false);
+});
+
+// Keep the base policies in Kustomize and bound external names to their required ports.
+test('new Events and Projects Cilium policies admit only source-backed callers and exact destinations', () => {
+  const readPolicy = name => readFileSync(
+    path.join(root, 'deploy', 'k8s', 'base', `${name}.yaml`), 'utf8').replaceAll('\r\n', '\n');
+  const base = readFileSync(path.join(root, 'deploy', 'k8s', 'base', 'kustomization.yaml'), 'utf8');
+  const policyContracts = [
+    {
+      name: 'events-and-sessions',
+      callers: ['agenthost', 'orchestrator', 'gateway', 'knowledge', 'environment'],
+      owners: ['knowledge', 'projects-config', 'orchestrator'],
+      fqdns: [
+        'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io',
+        'login.microsoftonline.com',
+        'awv1p0blob.blob.core.windows.net',
+        'awv1p0blob.privatelink.blob.core.windows.net',
+        'aw-v1-p0-pg.postgres.database.azure.com',
+        'aw-v1-p0-pg.privatelink.postgres.database.azure.com',
+        'knowledge.agentweaver-v1-p0.svc.cluster.local',
+        'projects-config.agentweaver-v1-p0.svc.cluster.local',
+        'orchestrator.agentweaver-v1-p0.svc.cluster.local',
+      ],
+      fqdnRules: [
+        {
+          hosts: [
+            'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io',
+            'login.microsoftonline.com',
+            'awv1p0blob.blob.core.windows.net',
+          ],
+          port: '443',
+        },
+        { hosts: ['aw-v1-p0-pg.postgres.database.azure.com'], port: '5432' },
+      ],
+    },
+    {
+      name: 'projects-config',
+      callers: ['identity-broker', 'orchestrator', 'gateway', 'events-and-sessions',
+        'knowledge', 'environment'],
+      owners: [],
+      fqdns: [
+        'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io',
+        'login.microsoftonline.com',
+        'api.github.com',
+        'raw.githubusercontent.com',
+        'aw-v1-p0-pg.postgres.database.azure.com',
+        'aw-v1-p0-pg.privatelink.postgres.database.azure.com',
+      ],
+      fqdnRules: [
+        {
+          hosts: [
+            'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io',
+            'login.microsoftonline.com',
+            'api.github.com',
+            'raw.githubusercontent.com',
+          ],
+          port: '443',
+        },
+        { hosts: ['aw-v1-p0-pg.postgres.database.azure.com'], port: '5432' },
+      ],
+    },
+  ];
+
+  for (const contract of policyContracts) {
+    const policy = readPolicy(`${contract.name}-network`);
+    assert.match(base, new RegExp(`- ${contract.name}-network\\.yaml`));
+    assert.match(policy, new RegExp(`name: ${contract.name}-network`));
+    assert.match(policy, new RegExp(`namespace: ${namespace}`));
+    assert.match(policy, new RegExp(`agentweaver.io/workload: ${contract.name}`));
+    const ingress = policy.split('  ingress:\n')[1].split('  egress:\n')[0];
+    const egress = policy.split('  egress:\n')[1];
+    const callers = [...ingress.matchAll(/agentweaver\.io\/workload:\s*([a-z0-9-]+)/g)]
+      .map(match => match[1]);
+    assert.deepEqual(callers.sort(), [...contract.callers].sort(), `${contract.name} ingress callers`);
+    assert.equal((ingress.match(/k8s:io\.kubernetes\.pod\.namespace: agentweaver-v1-p0/g) ?? []).length,
+      contract.callers.length);
+    const owners = [...egress.matchAll(/agentweaver\.io\/workload:\s*([a-z0-9-]+)/g)]
+      .map(match => match[1]);
+    assert.deepEqual(owners.sort(), [...contract.owners].sort(), `${contract.name} egress owners`);
+    const fqdns = [...new Set([...policy.matchAll(/matchName:\s*([a-z0-9.-]+)/g)]
+      .map(match => match[1]))].sort();
+    assert.deepEqual(fqdns, [...contract.fqdns].sort(), `${contract.name} permitted DNS names`);
+    assert.deepEqual([...new Set([...policy.matchAll(/port:\s*"(\d+)"/g)]
+      .map(match => match[1]))].sort(), ['443', '53', '5432', '8443']);
+    const fqdnRules = egress.split(/\n    - /).filter(rule => rule.startsWith('toFQDNs:\n'))
+      .map(rule => ({
+        hosts: [...rule.matchAll(/matchName:\s*([a-z0-9.-]+)/g)].map(match => match[1]),
+        port: rule.match(/port:\s*"(\d+)"/)?.[1],
+      }));
+    assert.deepEqual(fqdnRules, contract.fqdnRules, `${contract.name} FQDN ports`);
+    assert.doesNotMatch(policy, /toEntities:|toCIDR(?:Set)?:|matchPattern:|world|0\.0\.0\.0\/0|\*/i);
+  }
+});
+
+// Keep new external egress scoped to the P0 issuer, database, and workload call graph.
+test('runtime owner policies allow only configured issuer, database, and Kubernetes API paths', () => {
+  const policyFiles = [
+    'service-owner-network.yaml',
+    'environment-agenthost-network.yaml',
+    path.join('identity-broker', 'egress.yaml'),
+  ];
+  const policies = policyFiles.flatMap(file => parseAllDocuments(readFileSync(
+    path.join(root, 'deploy', 'k8s', 'base', file), 'utf8'))
+    .map(document => document.toJS()));
+  const byName = new Map(policies.map(policy => [policy.metadata.name, policy]));
+  const getPolicy = name => {
+    const policy = byName.get(name);
+    assert.ok(policy, `${name} is included in the P0 policy sources`);
+    return policy;
+  };
+  const workloads = policy => policy.spec.endpointSelector.matchExpressions
+    .find(expression => expression.key === 'agentweaver.io/workload').values;
+  const endpoints = rule => rule.toEndpoints.map(endpoint =>
+    endpoint.matchLabels['agentweaver.io/workload']).sort();
+  const ports = rule => rule.toPorts.flatMap(group => group.ports)
+    .map(({ port, protocol }) => ({ port, protocol }));
+  const brokerHost = 'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
+  const issuer = getPolicy('broker-issuer-egress');
+  assert.deepEqual([...workloads(issuer)].sort(),
+    ['agenthost', 'environment', 'gateway', 'knowledge', 'mcp', 'orchestrator']);
+  assert.deepEqual(issuer.spec.egress[0].toPorts[0].rules.dns.map(({ matchName }) => matchName),
+    [brokerHost]);
+  assert.deepEqual(issuer.spec.egress[1].toFQDNs, [{ matchName: brokerHost }]);
+  assert.deepEqual(ports(issuer.spec.egress[1]), [{ port: '443', protocol: 'TCP' }]);
+
+  const database = getPolicy('database-workload-identity-egress');
+  assert.deepEqual([...workloads(database)].sort(), ['environment', 'knowledge', 'orchestrator']);
+  assert.deepEqual(database.spec.egress[0].toPorts[0].rules.dns
+    .map(({ matchName }) => matchName).sort(), [
+    'aw-v1-p0-pg.postgres.database.azure.com',
+    'aw-v1-p0-pg.privatelink.postgres.database.azure.com',
+    'login.microsoftonline.com',
+  ]);
+  assert.deepEqual(database.spec.egress.slice(1).map(rule => ({
+    host: rule.toFQDNs[0].matchName,
+    port: rule.toPorts[0].ports[0].port,
+  })).sort((left, right) => left.host.localeCompare(right.host)), [
+    { host: 'aw-v1-p0-pg.postgres.database.azure.com', port: '5432' },
+    { host: 'login.microsoftonline.com', port: '443' },
+  ]);
+
+  const environment = getPolicy('environment-agenthost-egress');
+  const environmentOwners = environment.spec.egress.find(rule => rule.toEndpoints);
+  assert.deepEqual(endpoints(environmentOwners), [
+    'agenthost', 'events-and-sessions', 'identity-broker', 'orchestrator', 'projects-config',
+  ]);
+  assert.deepEqual(ports(environmentOwners), [{ port: '8443', protocol: 'TCP' }]);
+  const api = environment.spec.egress.find(rule => rule.toEntities);
+  assert.deepEqual(api.toEntities, ['kube-apiserver']);
+  assert.deepEqual(ports(api), [{ port: '443', protocol: 'TCP' }]);
+
+  const broker = getPolicy('identity-broker-egress');
+  const environmentBrokerIngress = broker.spec.ingress.find(rule => rule.fromEndpoints
+    ?.some(endpoint => endpoint.matchLabels['agentweaver.io/workload'] === 'environment'));
+  assert.deepEqual(environmentBrokerIngress.fromEndpoints, [{
+    matchLabels: {
+      'k8s:io.kubernetes.pod.namespace': namespace,
+      'agentweaver.io/workload': 'environment',
+    },
+  }]);
+  assert.deepEqual(ports(environmentBrokerIngress), [{ port: '8443', protocol: 'TCP' }]);
+
+  const agenthost = getPolicy('agenthost-egress');
+  assert.deepEqual(endpoints(agenthost.spec.egress[0]), [
+    'environment', 'events-and-sessions', 'identity-broker', 'orchestrator',
+  ]);
+  assert.deepEqual(ports(agenthost.spec.egress[0]), [{ port: '8443', protocol: 'TCP' }]);
+});
+
+// The install root is the complete P0 source bundle; credentials and Gateway placement stay external.
+test('P0 Kustomize install renders every workload, identity, runtime map, and network policy', () => {
+  const rendered = spawnSync('kubectl', ['kustomize', path.join(root, 'deploy', 'k8s')], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  assert.equal(rendered.error, undefined, rendered.error?.message);
+  assert.equal(rendered.status, 0, rendered.stderr);
+  const installation = parseKustomizeResources(rendered.stdout);
+  const resources = installation.items;
+  const namesFor = kind => new Set(resources.filter(resource => resource.kind === kind)
+    .map(resource => resource.metadata.name));
+  const configMapNames = namesFor('ConfigMap');
+  const requiredServiceConfigMaps = Object.values(SERVICE_NAMES)
+    .filter(name => name !== 'agenthost')
+    .map(name => `${name}-runtime-config`);
+  for (const name of [...requiredServiceConfigMaps, 'environment-cilium-config',
+    'agenthost-runtime-v1', 'projects-config-provider-catalog']) {
+    assert.ok(configMapNames.has(name), `${name} must be rendered by the P0 prerequisite overlay`);
+  }
+
+  const ciliumPolicyNames = namesFor('CiliumNetworkPolicy');
+  const requiredCiliumPolicies = Object.values(SERVICE_NETWORK_POLICY_NAMES)
+    .flatMap(names => Array.isArray(names) ? names : [names]);
+  for (const name of requiredCiliumPolicies)
+    assert.ok(ciliumPolicyNames.has(name), `${name} must be rendered by the P0 prerequisite overlay`);
+  assert.deepEqual([...namesFor('NetworkPolicy')].sort(), ['allow-dns-egress', 'default-deny-all']);
+  const sharedServices = Object.values(SERVICE_NAMES).filter(name => name !== 'agenthost').sort();
+  assert.deepEqual([...namesFor('Deployment')].sort(), sharedServices);
+  assert.deepEqual([...namesFor('Service')].sort(), sharedServices);
+  assert.deepEqual([...namesFor('ServiceAccount')].sort(), sharedServices);
+
+  const disallowedKinds = new Set([
+    'Secret', 'Gateway', 'HTTPRoute', 'BackendTLSPolicy', 'Job',
+  ]);
+  assert.deepEqual(resources.filter(resource => disallowedKinds.has(resource.kind))
+    .map(resource => `${resource.kind}/${resource.metadata.name}`), []);
+
+  const brokerPolicy = resources.find(resource =>
+    resource.kind === 'CiliumNetworkPolicy' && resource.metadata.name === 'identity-broker-egress');
+  assert.ok(brokerPolicy);
+  assert.doesNotMatch(JSON.stringify(brokerPolicy), /CHANGEME-/);
+  assert.deepEqual([...new Set([...JSON.stringify(brokerPolicy).matchAll(/matchName["\s:]+([a-z0-9.-]+)/g)]
+    .map(match => match[1]))], [
+    'login.microsoftonline.com',
+    'aw-v1-p0-kv.vault.azure.net',
+    'aw-v1-p0-pg.postgres.database.azure.com',
+  ]);
+  const unresolvedInputs = [...new Set([...JSON.stringify(installation).matchAll(/CHANGEME-[A-Z0-9-]+/g)]
+    .map(match => match[0]))];
+  assert.deepEqual(unresolvedInputs, ['CHANGEME-GATEWAY-NAMESPACE']);
+
+  const kustomization = parse(readFileSync(path.join(root, 'deploy', 'k8s', 'kustomization.yaml'), 'utf8'));
+  const expectedPins = [
+    ['agentweaver-agenthost', '17c3da40ab275da28b92a5cf0e23741ae63d34a0877cebf798870a7f51563eb5'],
+    ['agentweaver.identity.broker', '75f92a767b2dcf1fa2011d7ba2f4ca1b6e48b7fe9fda044d4664a34b35681f3c'],
+    ['agentweaver.eventsandsessions', '0c0a12a501c9760df555f7a6ee28fa2fad36ff302edca55d77bfc4c665d9aa5c'],
+    ['agentweaver.gateway', 'd68184c80cb1b3cf82d8741c15de73597efdd2eb1bf03bc0886aecd9b3d4e756'],
+    ['agentweaver.mcp', 'cee4879b11dcafcd7c48681d756b80a8f3661c93c1ded26f4366247b310d880d'],
+    ['agentweaver-web', 'b2359a18b1a6a37c6a3b97665aef550b076b11a30ec6b17f02e2e8809226a4d8'],
+    ['agentweaver.orchestrator', '186116f750594a6d52348945c8da7e2fbc11489bbb4c4d38cac3b7651a9aec14'],
+    ['agentweaver.environment', '5141bc6b46147bd3740675cf150397ced8921c5a6ec195ac2c9121dcac5b22dd'],
+    ['agentweaver.knowledge', 'e5033bee0da22e599dddcc706d2002819187bd5acb63c396214db12ab878c65d'],
+    ['agentweaver.projects.config', 'b165633f1347e941cfff32701ce06217884c71db146aff79edadae7df58cdf9e'],
+  ].map(([repository, digest]) => ({
+    name: `ghcr.io/sabbour/${repository}`,
+    newName: `ghcr.io/sabbour/${repository}`,
+    digest: `sha256:${digest}`,
+  }));
+  assert.deepEqual(kustomization.images, expectedPins);
+  const environment = resources.find(resource =>
+    resource.kind === 'Deployment' && resource.metadata.name === 'environment');
+  const environmentEnv = new Map(environment.spec.template.spec.containers[0].env
+    .map(({ name, value }) => [name, value]));
+  assert.equal(environmentEnv.get('Environment__Sandbox__AgentSandbox__ContainerImage'),
+    `${expectedPins[0].newName}@${expectedPins[0].digest}`);
+  assert.equal(environmentEnv.get('Environment__Sandbox__AgentSandbox__ContainerImagePlatform'), 'linux/amd64');
+  assert.equal(environmentEnv.get('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes'),
+    '321483300');
+  const agentHostConfigMap = resources.find(resource =>
+    resource.kind === 'ConfigMap' && resource.metadata.name === 'agenthost-runtime-v1');
+  const agentHost = JSON.parse(agentHostConfigMap.data['appsettings.json']).AgentHost;
+  assert.equal(agentHost.Image.Digest, expectedPins[0].digest);
+  assert.equal(agentHost.Image.Platform,
+    environmentEnv.get('Environment__Sandbox__AgentSandbox__ContainerImagePlatform'));
+  assert.equal(agentHost.Image.CompressedPullBytes,
+    Number(environmentEnv.get('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes')));
+  assert.equal(agentHostConfigMap.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
 });

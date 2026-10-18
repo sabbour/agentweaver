@@ -34,7 +34,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: identity-broker
-          image: registry.invalid/agentweaver-identity-broker@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          image: ghcr.io/sabbour/agentweaver.identity.broker:receipt-pinned
           imagePullPolicy: IfNotPresent
           ports:
             - name: https

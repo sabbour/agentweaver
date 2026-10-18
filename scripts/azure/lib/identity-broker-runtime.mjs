@@ -10,7 +10,7 @@ const NAMESPACE = 'agentweaver-v1-p0';
 const CONFIG = 'identity-broker-runtime-config';
 const GUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const OPTIONS = { check: false, timeout: 35_000 };
-const SENTINEL = 'registry.invalid/agentweaver-identity-broker@sha256:' + '0'.repeat(64);
+const SENTINEL = 'ghcr.io/sabbour/agentweaver.identity.broker:receipt-pinned';
 const SCOPES = ['openid', 'profile', 'email', 'api.read', 'offline_access'];
 
 /** Checks the required broker runtime source and target inputs before resource generation. */

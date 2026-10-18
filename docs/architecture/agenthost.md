@@ -529,11 +529,23 @@ The executable process keeps `/app` as its working directory.
 The provider validates this profile on template readback and on the actual Pod.
 An absent profile preserves the legacy template and does not configure the new executable.
 
-`deploy/k8s/profiles/agenthost/runtime-config.example.yaml` describes the required ConfigMap shape.
-Its `.invalid` addresses, required image digest, zero byte count, and model markers deliberately fail startup until a trusted composition supplies real values.
-The operator supplies the matching existing TLS Secret with `tls.crt` and `tls.key`.
-The source creates neither TLS material nor cloud permission.
-The provider creates the actual fenced template from accepted options; the example is not a disconnected replacement Pod.
+`deploy/k8s/profiles/agenthost/runtime-config.example.yaml` is included in the root
+Kustomize installation as the source ConfigMap. It carries only the values sourced
+from the P0 Service definitions, non-secret Broker issuer, shared Events model map,
+and receipt-measured AgentHost image. The immutable ConfigMap is marked incomplete:
+the exact receiver endpoint is per-Sandbox and must match its authentication
+audience, no P0 queue bound is approved, and no exact existing AgentHost TLS Secret
+name is available. Environment's optional `AgentHost` profile therefore remains
+unset; the source creates neither TLS material nor a Secret reference.
+
+The AgentHost digest, `linux/amd64` platform, and compressed bytes are kept aligned
+with the same receipt values Environment uses for per-Sandbox image provisioning.
+The release helper validates these fields in the rendered ConfigMap and, for the
+v1.0.0 compatibility path, applies the verified values to its temporary Kustomize
+source copy. The ConfigMap does not make AgentHost runnable until the documented
+per-Sandbox endpoint, queue bound, and operator-provided TLS Secret name are
+available. The provider still creates the actual fenced template from accepted
+options; this ConfigMap is not a disconnected replacement Pod.
 
 The CI image check builds one unpublished amd64 candidate and measures its local OCI archive.
 `scripts/release/measure-agenthost-image.mjs` verifies actual manifest, config, and compressed layer bytes against their descriptors.

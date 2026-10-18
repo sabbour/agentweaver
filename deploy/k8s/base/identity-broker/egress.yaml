@@ -24,6 +24,15 @@ spec:
         - ports:
             - port: "8443"
               protocol: TCP
+    # Environment uses the Broker owner API for runtime bootstrap delivery.
+    - fromEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: environment
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
   egress:
     - toEndpoints:
         - matchLabels:

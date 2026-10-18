@@ -171,8 +171,8 @@ export function bootstrapFoundationProbeInputs(config, {
         throw new Error('Probe policy readback differs from the exact private Logs egress.');
       }
       if (!serviceAccount) {
-        const manifest = readFileSync(join(config.repoRoot ?? process.cwd(), 'deploy', 'k8s', 'base',
-          'serviceaccounts', 'foundation-probe-sa.yaml'), 'utf8')
+        const manifest = readFileSync(join(config.repoRoot ?? process.cwd(), 'deploy', 'k8s', 'acceptance',
+          'foundation-probe', 'serviceaccount.yaml'), 'utf8')
           .replaceAll('CHANGEME-foundation-probe-client-id', identity.clientId)
           .replaceAll('CHANGEME-tenant-id', config.tenantId);
         const result = execKubectl([...args, 'create', '--filename', '-', '-o', 'name'], { ...OPTIONS, input: manifest });

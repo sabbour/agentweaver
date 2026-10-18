@@ -154,6 +154,93 @@ spec:
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
+  name: broker-issuer-egress
+  namespace: agentweaver-v1-p0
+  labels:
+    agentweaver.io/service: broker-issuer-consumers
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: agentweaver.io/workload
+        operator: In
+        values:
+          - agenthost
+          - environment
+          - gateway
+          - knowledge
+          - mcp
+          - orchestrator
+  # These workloads fetch signing metadata only from the configured public Broker issuer.
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchName: agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io
+    - toFQDNs:
+        - matchName: agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: database-workload-identity-egress
+  namespace: agentweaver-v1-p0
+  labels:
+    agentweaver.io/service: database-clients
+spec:
+  endpointSelector:
+    matchExpressions:
+      - key: agentweaver.io/workload
+        operator: In
+        values:
+          - environment
+          - knowledge
+          - orchestrator
+  # These services use workload identity for Entra tokens and connect to the P0 PostgreSQL host.
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: kube-system
+            k8s-app: kube-dns
+      toPorts:
+        - ports:
+            - port: "53"
+              protocol: UDP
+            - port: "53"
+              protocol: TCP
+          rules:
+            dns:
+              - matchName: login.microsoftonline.com
+              - matchName: aw-v1-p0-pg.postgres.database.azure.com
+              - matchName: aw-v1-p0-pg.privatelink.postgres.database.azure.com
+    - toFQDNs:
+        - matchName: login.microsoftonline.com
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    - toFQDNs:
+        - matchName: aw-v1-p0-pg.postgres.database.azure.com
+      toPorts:
+        - ports:
+            - port: "5432"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
   name: knowledge-owner-network
   namespace: agentweaver-v1-p0
   labels:
