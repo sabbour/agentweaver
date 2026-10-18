@@ -323,9 +323,9 @@ The `web-runtime-config.json` map contains:
 
 | Setting | Contract |
 | --- | --- |
-| `VITE_GATEWAY_URL` | Required Gateway base path or URL used by the browser application. The checked-in profile uses the same-origin path `/api/v1`, which the managed portal routes to Gateway; the client also falls back to `/api/v1`. Use a different value only when it matches the reviewed route configuration. |
+| `VITE_GATEWAY_URL` | Optional Gateway base path or URL. The client defaults to `/api/v1`; the checked-in profile explicitly sets that same-origin path, which the managed portal routes to Gateway. Use a different value only when it matches the reviewed route configuration. |
 | `VITE_IDENTITY_BROKER_URL` | Required HTTPS Broker URL used for OAuth. |
-| `VITE_IDENTITY_BROKER_ISSUER` | Required Broker issuer; it must match the issuer configured in Gateway and Broker. |
+| `VITE_IDENTITY_BROKER_ISSUER` | Optional when the Broker URL is a valid HTTPS issuer. The client derives the issuer from that URL; when set, it must exactly match the issuer configured in Gateway and Broker. The checked-in profile sets it explicitly. |
 | `VITE_OAUTH_CLIENT_ID` | Required ID of the explicitly registered public Web client. Do not reuse an acceptance-only client in production. |
 | `VITE_OAUTH_SCOPES` | Required space-separated scopes registered for that client. |
 
