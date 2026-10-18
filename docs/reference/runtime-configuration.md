@@ -27,16 +27,27 @@ into a deployed or selectable provider.
 
 The checked-in P0 runtime snapshots contain the verified non-secret managed
 AKS hostnames, PostgreSQL endpoint and role names, workload-identity client
-IDs, and Key Vault URI. They remain marked `incomplete`: the P1 initializer
-requires an already-ready connection to `127.0.0.1:15432`, but the documented
-bootstrap removes its temporary tunnel before returning and no documented
-continuation keeps or shares that connection. Guarded PostgreSQL bootstrap
-also did not run: the preflight resource-inventory guard rejected an
-unexpected type/name before Azure what-if, so the Agentweaver database and
-roles remain uninitialized. The Identity Broker signing state was not
-provisioned, and Key Vault PFX/password persistence is unavailable. These
-snapshots are therefore not deploy-ready. Do not replace the status
-annotation or add secrets to resolve the outstanding prerequisites.
+IDs, and Key Vault URI. PostgreSQL bootstrap and the P1 initializer have
+succeeded and the database result has been independently verified. The nine
+shared-service runtime snapshots no longer carry the
+`agentweaver.io/runtime-config-status: incomplete` or
+`agentweaver.io/runtime-config-incomplete-reason` annotations.
+
+The deploy gate rejects shared-service runtime ConfigMaps marked `incomplete`.
+Completion is represented by removing both annotations after resolving and
+verifying the inputs, not by setting a new status value. Completed ConfigMaps
+must contain no unresolved `CHANGEME-*` markers and must still satisfy the
+normal installation and workload-identity checks. Removing the annotations
+does not provision Secrets, deploy workloads, or prove live service readiness.
+
+Identity Broker signing is a separate deploy-time prerequisite. The
+`scripts/azure/lib/identity-broker-state.mjs` helper creates or validates the
+`identity-broker-signing` Kubernetes Secret and the retained
+`identity-broker-key-ring` PVC. Signing PFX/password material goes directly
+into the Kubernetes Secret; this path does not require a Key Vault write.
+Existing signing state is validated, not replaced or rotated. The Broker's
+Key Vault settings remain required for secret redemption, not signing-state
+persistence.
 
 For end-to-end deployment, see
 [Deploy Agentweaver to Azure](../guide/deploy-to-azure.md). For provider

@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { SERVICE_NAMES, SERVICE_NETWORK_POLICY_NAMES } from '../deploy.mjs';
+import { SERVICE_NAMES, SERVICE_NETWORK_POLICY_NAMES, validateKustomizeInstall } from '../deploy.mjs';
 import { parseKustomizeResources } from '../kustomize-runtime.mjs';
 import { parse, parseAllDocuments } from 'yaml';
 
@@ -22,14 +22,6 @@ const postgresBootstrapBlockedReason =
   'Guarded PostgreSQL bootstrap did not run because the preflight resource-inventory guard rejected an unexpected type/name before Azure what-if; the Agentweaver database and roles remain uninitialized.';
 const incompleteProvisioningReason =
   `${p1InitializationBlockedReason} ${postgresBootstrapBlockedReason}`;
-const identityBrokerIncompleteReason =
-  `${incompleteProvisioningReason} Broker signing state was not provisioned, and Key Vault PFX/password persistence is unavailable.`;
-const incompleteRuntimeConfigs = new Set([
-  'environment-runtime-config', 'events-and-sessions-runtime-config', 'gateway-runtime-config',
-  'identity-broker-runtime-config-v2', 'knowledge-runtime-config', 'mcp-runtime-config',
-  'orchestrator-runtime-config', 'projects-config-runtime-config', 'web-runtime-config',
-]);
-const runtimeInputMarkers = new Set();
 const tokenFile = '/var/run/secrets/azure/tokens/azure-identity-token';
 const host = 'agentweaver-pg.postgres.database.azure.com';
 const database = 'agentweaver';
@@ -98,27 +90,15 @@ test('P0 runtime ConfigMaps use immutable snapshots except for the operator-upda
     assert.equal(resource.kind, 'ConfigMap');
     assert.equal(resource.metadata.name, name);
     assert.equal(resource.metadata.namespace, namespace);
-    const incomplete = incompleteRuntimeConfigs.has(name);
-    assert.equal(resource.metadata.annotations?.['agentweaver.io/runtime-config-status'],
-      incomplete ? 'incomplete' : undefined);
-    if (incomplete) {
-      assert.equal(resource.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
-        name === 'identity-broker-runtime-config-v2'
-          ? identityBrokerIncompleteReason
-          : incompleteProvisioningReason);
-    } else {
-      assert.equal(resource.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'], undefined);
-    }
+    assert.equal(resource.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
+    assert.equal(resource.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'], undefined);
     assert.equal(resource.immutable, name !== 'events-and-sessions-runtime-config');
     assert.ok(Object.keys(resource.data).length > 0);
     for (const [key, value] of Object.entries(resource.data)) {
       assert.equal(typeof value, 'string', `${name}: ${key}`);
       assert.ok(value.trim(), `${name}: ${key} must not be blank`);
-      if (/CHANGEME|TODO|PLACEHOLDER|DUMMY|<[^>]+>/i.test(value)) {
-        const markers = [...value.matchAll(/CHANGEME-[A-Z0-9-]+/gi)].map(([marker]) => marker);
-        assert.ok(incomplete && markers.length > 0 && markers.every(marker => runtimeInputMarkers.has(marker)),
-          `${name}: ${key} contains only approved pre-provisioning markers`);
-      }
+      assert.doesNotMatch(value, /CHANGEME|TODO|PLACEHOLDER|DUMMY|<[^>]+>/i,
+        `${name}: ${key} must contain no unresolved runtime inputs`);
       assert.doesNotMatch(key, /(?:^|__)(?:Password|ClientSecret|CredentialValue|SecretKey)(?:__|$)/i,
         `${name}: ${key}`);
       assert.doesNotMatch(value, /(?:^|;)Password\s*=|sig=|SharedAccessSignature=/i, `${name}: ${key}`);
@@ -423,8 +403,8 @@ test('P0 values use approved labels and omit unknown resource identities', () =>
     '/subscriptions/90ab3701-83f0-4ba1-a90a-f2e68683adab/resourceGroups/agentweaver/providers/Microsoft.DBforPostgreSQL/flexibleServers/agentweaver-pg'));
 });
 
-// Runtime maps must match their service contracts and reserve incomplete markers for unsourced values.
-test('Gateway, Web, Knowledge, and Projects ConfigMaps contain sourced values and blocked initialization state', () => {
+// Runtime maps must match their service contracts without unresolved inputs.
+test('Gateway, Web, Knowledge, and Projects ConfigMaps contain complete sourced values', () => {
   const newMaps = [
     ['gateway-runtime-config', gateway],
     ['mcp-runtime-config', mcp],
@@ -441,11 +421,8 @@ test('Gateway, Web, Knowledge, and Projects ConfigMaps contain sourced values an
     assert.ok(Object.keys(resource.data).length > 0);
     for (const [key, value] of Object.entries(resource.data)) {
       assert.equal(typeof value, 'string', `${name}: ${key}`);
-      if (/CHANGEME|TODO|PLACEHOLDER|DUMMY|<[^>]+>/i.test(value)) {
-        const markers = [...value.matchAll(/CHANGEME-[A-Z0-9-]+/gi)].map(([marker]) => marker);
-        assert.ok(incompleteRuntimeConfigs.has(name) && markers.length > 0 &&
-          markers.every(marker => runtimeInputMarkers.has(marker)), `${name}: ${key} incomplete input`);
-      }
+      assert.doesNotMatch(value, /CHANGEME|TODO|PLACEHOLDER|DUMMY|<[^>]+>/i,
+        `${name}: ${key} must contain no unresolved runtime inputs`);
       assert.doesNotMatch(key, /(?:^|__)(?:Password|ClientSecret|CredentialValue|SecretKey)(?:__|$)/i,
         `${name}: ${key}`);
       assert.doesNotMatch(value, /(?:^|;)Password\s*=|sig=|SharedAccessSignature=/i, `${name}: ${key}`);
@@ -471,9 +448,9 @@ test('Gateway, Web, Knowledge, and Projects ConfigMaps contain sourced values an
   assert.equal(gateway.data.Gateway__Owners__IdentityBrokerAddress,
     serviceAddress('identity-broker', 443));
   assert.equal(gateway.data.Gateway__WebOrigin, portalOrigin);
-  assert.equal(gateway.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
+  assert.equal(gateway.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
   assert.equal(gateway.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
-    incompleteProvisioningReason);
+    undefined);
 
   assert.deepEqual(Object.keys(mcp.data).sort(), [
     'Gateway__BaseAddress', 'Identity__Audience', 'Identity__Issuer',
@@ -483,9 +460,9 @@ test('Gateway, Web, Knowledge, and Projects ConfigMaps contain sourced values an
     Identity__Audience: broker,
     Gateway__BaseAddress: serviceAddress('gateway'),
   });
-  assert.equal(mcp.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
+  assert.equal(mcp.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
   assert.equal(mcp.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
-    incompleteProvisioningReason);
+    undefined);
 
   assert.deepEqual(Object.keys(web.data).sort(), [
     'VITE_GATEWAY_URL', 'VITE_IDENTITY_BROKER_ISSUER', 'VITE_IDENTITY_BROKER_URL',
@@ -498,9 +475,9 @@ test('Gateway, Web, Knowledge, and Projects ConfigMaps contain sourced values an
   assert.equal(web.data.VITE_OAUTH_SCOPES,
     'openid profile email api.read offline_access projects.admin projects.orchestrator');
   assert.equal(web.data.VITE_OAUTH_REDIRECT_URI, undefined);
-  assert.equal(web.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
+  assert.equal(web.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
   assert.equal(web.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
-    incompleteProvisioningReason);
+    undefined);
 
   assert.deepEqual(Object.keys(knowledge.data).sort(), [
     'ConnectionStrings__Knowledge',
@@ -536,9 +513,9 @@ test('Gateway, Web, Knowledge, and Projects ConfigMaps contain sourced values an
   assert.equal(knowledge.data.Knowledge__Provider__Schema, 'knowledge');
   assert.equal(knowledge.data.Knowledge__Provider__OptionsRevision, 'native-postgres-memory-v1');
   assert.equal(knowledge.data.Knowledge__Provider__OptionsSchemaVersion, '1');
-  assert.equal(knowledge.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
+  assert.equal(knowledge.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
   assert.equal(knowledge.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
-    incompleteProvisioningReason);
+    undefined);
 
   assert.deepEqual(projects.data, {
     ConnectionStrings__ProjectsConfig:
@@ -549,9 +526,9 @@ test('Gateway, Web, Knowledge, and Projects ConfigMaps contain sourced values an
     ProjectsConfig__Authentication__Authority: broker,
     ProjectsConfig__Authentication__Audience: broker,
   });
-  assert.equal(projects.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
+  assert.equal(projects.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
   assert.equal(projects.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
-    incompleteProvisioningReason);
+    undefined);
   assert.equal(Object.keys(projects.data).some(key => key.includes('BrokerRunBinding')), false);
 });
 
@@ -823,4 +800,31 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
   assert.equal(agentHost.Image.CompressedPullBytes,
     Number(environmentEnv.get('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes')));
   assert.equal(agentHostConfigMap.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
+
+  const images = Object.entries(SERVICE_NAMES).map(([id, name]) => ({
+    id,
+    name,
+    image: resources.find(resource => resource.kind === 'Deployment' && resource.metadata.name === name)
+      ?.spec.template.spec.containers[0].image,
+    ...(name === 'agenthost' ? {
+      sandboxImage: environmentEnv.get('Environment__Sandbox__AgentSandbox__ContainerImage'),
+      sandboxImageDigest: agentHost.Image.Digest,
+      compressedPullBytes: agentHost.Image.CompressedPullBytes,
+    } : {}),
+  }));
+  const providerCatalog = {
+    configMapName: 'projects-config-provider-catalog',
+    sourceCommit: resources.find(resource => resource.kind === 'Deployment' &&
+      resource.metadata.name === 'projects-config')
+      .spec.template.metadata.annotations['agentweaver.io/provider-catalog-source'],
+  };
+  assert.deepEqual(validateKustomizeInstall(installation, images, namespace, providerCatalog)
+    .incompleteRuntimeConfigMaps, []);
+
+  const unresolvedBroker = structuredClone(installation);
+  unresolvedBroker.items.find(resource => resource.kind === 'ConfigMap' &&
+    resource.metadata.name === 'identity-broker-runtime-config-v2')
+    .data.IdentityBroker__SecretRedemption__VaultHost = 'CHANGEME-KEYVAULT-HOST';
+  assert.throws(() => validateKustomizeInstall(unresolvedBroker, images, namespace, providerCatalog),
+    /ConfigMap\/identity-broker-runtime-config-v2 contains an unresolved runtime input/);
 });
