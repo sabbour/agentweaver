@@ -17,8 +17,9 @@ You need:
 - An Azure subscription and tenant selected for the deployment.
 - Authorization to provision the exact resource group, AKS cluster, private
   endpoints, and managed identities in the reviewed Bicep parameters.
-- Azure CLI, the Bicep extension, `kubectl`, Node.js 24, npm, and the .NET 10
-  SDK.
+- Azure CLI, the Bicep extension, `kubectl`, and `kubelogin` ([AKS
+  authentication guidance](https://learn.microsoft.com/azure/aks/kubelogin-authentication)),
+  plus Node.js 24, npm, and the .NET 10 SDK.
 - A clean checkout at the exact v1 source commit approved for deployment.
 - A reviewed, Git-tracked Bicep parameter file under
   `infra/bicep/parameters/`. The checked-in examples contain placeholders and
@@ -88,29 +89,107 @@ node scripts\azure\deploy.mjs `
   --subscription <subscription-id> `
   --allowed-subscription <subscription-id> `
   --tenant <tenant-id> `
-  --allowed-tenant <tenant-id> `
-  --operator-object-id <operator-user-object-guid> `
-  --bootstrap-identity-postgres
+  --allowed-tenant <tenant-id>
 ```
 
 Without `--execute`, `deploy.mjs` prints an offline summary and makes no Azure
 call. After the target and effects are approved, add `--execute` to the same
-command. It provisions the foundation, bootstraps the namespace, and then
-creates the Identity Broker PostgreSQL runtime and migration roles. The
-installer checks the allowed target, exact source, resource ownership, and
-Bicep inputs. The full-foundation template is limited to an empty target. If
-the foundation already exists, use the tracked AKS-only template and its
-matching reviewed parameter file for a separately approved bootstrap; do not
-rerun the full-foundation template.
+command. It provisions the Azure foundation. The installer checks the allowed
+target, exact source, resource ownership, and Bicep inputs. The
+full-foundation template is limited to an empty target. Use the tracked
+AKS-only template and its matching reviewed parameter file for the later
+PostgreSQL bootstrap; do not rerun the full-foundation template.
 
-The deployment helper uses the signed-in user's Entra access and bootstraps
-only the `agentweaver` namespace. It does not apply the product manifests,
-create the Broker's application state, run database migrations, install
-Gateway routes, or create operator-owned Secrets.
+The infrastructure installer does not create Kubernetes namespaces or grant
+human AKS permissions. It also does not apply product manifests, create the
+Broker's application state, run database migrations, install Gateway routes,
+or create operator-owned Secrets.
 
-## 4. Complete the remaining workload identity setup
+## 4. Connect to AKS and prepare the namespace
 
-The guarded PostgreSQL bootstrap in step 3 creates only the Identity Broker
+The AKS template enables Microsoft Entra authentication with Azure RBAC and
+disables local accounts. Before you run Kubernetes commands, an administrator
+must assign your identity the `Azure Kubernetes Service Cluster User Role` so
+you can retrieve credentials. Your identity also needs an Azure Kubernetes
+Service RBAC assignment that permits namespace creation and the approved
+Kubernetes operations, including the temporary resources used by the
+PostgreSQL bootstrap. The installer does not grant these permissions. See
+[Microsoft Entra authorization for AKS](https://learn.microsoft.com/azure/aks/entra-id-authorization).
+
+Run these commands from an operator machine that can reach the AKS API server.
+The selected Azure subscription must still be the approved subscription from
+step 1.
+
+1. Retrieve the user kubeconfig for the approved cluster:
+
+   ```powershell
+   az aks get-credentials `
+     --resource-group agentweaver `
+     --name agentweaver-aks `
+     --subscription <subscription-id>
+   ```
+
+2. Configure the kubeconfig to use the signed-in Azure CLI identity:
+
+   ```powershell
+   kubelogin convert-kubeconfig -l azurecli
+   ```
+
+3. Verify the active context and API server before writing to Kubernetes:
+
+   ```powershell
+   kubectl config current-context
+   kubectl config view --minify --output 'jsonpath={.clusters[0].cluster.server}'
+   az aks show `
+     --resource-group agentweaver `
+     --name agentweaver-aks `
+     --subscription <subscription-id> `
+     --query "{name:name, fqdn:fqdn}" `
+     --output yaml
+   ```
+
+   Confirm the active context is the one created by `az aks get-credentials`.
+   Compare the API-server URL host with the `fqdn` value returned by Azure
+   CLI. Stop if the host does not identify `agentweaver-aks`. The AKS
+   API-server host is separate from `<managed-domain>`, which is used for
+   application routes.
+
+4. Create only the product namespace:
+
+   ```powershell
+   kubectl apply --dry-run=client --filename deploy\k8s\base\namespace.yaml
+   kubectl apply --filename deploy\k8s\base\namespace.yaml
+   kubectl get namespace agentweaver --show-labels
+   ```
+
+   Confirm that the namespace exists and has the restricted Pod Security
+   labels from the manifest. This step does not apply product workloads.
+
+5. Bootstrap the Identity Broker PostgreSQL roles with the reviewed AKS-only
+   template and parameter file:
+
+   ```powershell
+   node scripts\azure\deploy.mjs `
+     --resource-group agentweaver `
+     --template infra\bicep\aks-redeploy.bicep `
+     --parameters infra\bicep\parameters\<approved-aks-only-parameters>.json `
+     --subscription <subscription-id> `
+     --allowed-subscription <subscription-id> `
+     --tenant <tenant-id> `
+     --allowed-tenant <tenant-id> `
+     --bootstrap-identity-postgres
+   ```
+
+   The command prints an offline summary unless you add `--execute`. Review
+   the target and what-if, then add `--execute` only for the separately
+   approved AKS-only deployment and PostgreSQL bootstrap. The bootstrap uses a
+   temporary user-authenticated kubeconfig, a run-owned proxy Pod and
+   ConfigMap, and a loopback-only port-forward. It removes these temporary
+   resources and local files after it finishes.
+
+## 5. Complete the remaining workload identity setup
+
+The guarded PostgreSQL bootstrap in step 4 creates only the Identity Broker
 runtime and migration roles. It does not create the Projects & Config,
 Environment, Knowledge, Events & Sessions, or Orchestrator runtime identities
 and their ServiceAccount federations. Those five identities use the separate
@@ -145,7 +224,7 @@ For each database workload, verify that:
 See the [runtime configuration reference](../reference/runtime-configuration.md)
 for identity, connection, audience, and provider settings.
 
-## 5. Prepare operator-owned resources
+## 6. Prepare operator-owned resources
 
 Before applying the product bundle, create or verify the resources that the
 Kustomize base intentionally does not own:
@@ -155,8 +234,8 @@ Kustomize base intentionally does not own:
 2. Provide the Identity Broker, Gateway, and MCP TLS Secrets and the public
    backend CA ConfigMap. Each certificate must match the service DNS name
    required by the manifests.
-3. Resolve all required runtime ConfigMap values before the first apply. For
-   an existing installation, use the
+3. Resolve all required runtime ConfigMap values before applying the product
+   bundle. For an existing installation, use the
    [immutable ConfigMap update procedure](../reference/runtime-configuration.md#update-an-immutable-configmap).
 4. Set the approved public Web origin and the reviewed Gateway namespace and
    security policy. The product namespace stays `restricted`. The current AKS
@@ -170,18 +249,28 @@ Do not copy acceptance-only OAuth client IDs or loopback redirect URIs into a
 production registration. Keep passwords, OAuth secrets, PFX passwords, tokens,
 and private keys out of ConfigMaps and command-line arguments.
 
-## 6. Render and install the Kustomize bundle
+## 7. Render and install the Kustomize bundle
 
 Render the complete bundle and inspect it before applying:
 
 ```powershell
 kubectl kustomize deploy\k8s
+```
+
+This command renders the product Deployments, Services, ServiceAccounts,
+runtime ConfigMaps, provider catalog, namespace controls, and network policies.
+
+Before applying, confirm that the active context and API-server host still
+match the approved cluster verified in step 4.
+
+After you verify the target, run client-side validation:
+
+```powershell
 kubectl apply --dry-run=client -k deploy\k8s
 ```
 
-The first command renders the product Deployments, Services, ServiceAccounts,
-runtime ConfigMaps, provider catalog, namespace controls, and network policies.
-The second command performs client-side validation only.
+This command validates the rendered objects locally; it does not prove that
+the cluster will accept them.
 
 After the required configuration and operator-owned resources pass the
 release preflight, apply the complete product bundle:
@@ -219,7 +308,7 @@ path. Both require a source-bound publication and explicit `--execute` for
 cluster writes. See [local v1 release deployment](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#local-v1-release-deployment)
 and the [Kubernetes operator guide](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md).
 
-## 7. Verify the installation
+## 8. Verify the installation
 
 1. Confirm the expected namespace and workloads exist:
 
