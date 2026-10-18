@@ -45,6 +45,7 @@ export function brokerAcceptanceConfiguration(config, { issuer, identity, portal
   const data = {
     ConnectionStrings__IdentityBroker: `Host=${config.resourceGroup}-pg.postgres.database.azure.com;Database=agentweaver;Username=${config.resourceGroup}-id-identity-broker;SSL Mode=VerifyFull`,
     IdentityBroker__Issuer: issuer,
+    IdentityBroker__WebOrigin: `https://${portalHostname}`,
     IdentityBroker__DataProtectionKeyPath: '/var/lib/identity-broker/key-ring',
     IdentityBroker__ExternalProvider__Authority: `https://login.microsoftonline.com/${config.tenantId}/v2.0`,
     IdentityBroker__ExternalProvider__ClientId: config.upstreamClientId,

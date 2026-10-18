@@ -34,6 +34,7 @@
     "IdentityBroker__ExternalProvider__Authority": "https://login.microsoftonline.com/72f988bf-86f1-41af-91ab-2d7cd011db47/v2.0",
     "IdentityBroker__ExternalProvider__ClientId": "3b682024-2c59-4497-aff2-fc6335d12d97",
     "IdentityBroker__Issuer": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
+    "IdentityBroker__WebOrigin": "https://portal.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io",
     "IdentityBroker__SecretRedemption__Audience": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
     "IdentityBroker__SecretRedemption__VaultUri": "https://aw-v1-p0-kv.vault.azure.net/",
     "IdentityBroker__SecretRedemption__WorkloadIdentityClientId": "a3de9c74-a778-4cdb-92d2-df9da5984f8f",

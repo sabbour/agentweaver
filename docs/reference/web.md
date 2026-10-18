@@ -71,10 +71,14 @@ absent.
 
 The P0 runtime snapshot uses the public Broker client `agentweaver-web` and the
 scopes `openid profile email api.read offline_access projects.admin
-projects.orchestrator`. Its `/auth/callback` redirect is registered on that
-Identity Broker client. The upstream Entra application remains the Broker's
-server-side provider and keeps its `/signin-oidc` callback; the Web callback is
-not added to that Entra application.
+projects.orchestrator`. `IdentityBroker__WebOrigin` configures the exact Portal
+origin for credentialed OAuth CORS; `Gateway__WebOrigin` is a separate setting.
+For project/run-bound requests, Web omits `projects.admin`, which the Broker
+does not permit with its run-bound `projects.orchestrator` authority. The
+`/auth/callback` redirect is registered on the Identity Broker client. The
+upstream Entra application remains the Broker's server-side provider and keeps
+its `/signin-oidc` callback; the Web callback is not added to that Entra
+application.
 
 The static host serves public settings at `GET /env-config.js` with
 `Cache-Control: no-store`. It base64-encodes values as data, not executable text.
