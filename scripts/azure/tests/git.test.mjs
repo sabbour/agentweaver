@@ -27,6 +27,7 @@ function sourceFixture(overrides = {}) {
     : { namePrefix: { value: 'agentweaver' },
       tenantId: { value: ids.tenantId }, owner: { value: 'team' }, costCenter: { value: 'p0' },
       location: { value: source.location }, monitorLocation: { value: source.monitorLocation },
+      keyVaultName: { value: 'agentweaver-kv' },
       postgresEntraAdminObjectId: { value: source.postgresEntraAdminObjectId },
       postgresEntraAdminPrincipalName: { value: source.postgresEntraAdminPrincipalName },
       postgresEntraAdminPrincipalType: { value: source.postgresEntraAdminPrincipalType } };
@@ -41,6 +42,7 @@ function sourceFixture(overrides = {}) {
       parameters: {
         nodePoolMinCount: { value: 2 }, nodePoolMaxCount: { value: 3 },
         namePrefix: { value: 'agentweaver' },
+        keyVaultName: { value: 'agentweaver-kv' },
         tenantId: { value: ids.tenantId },
         owner: { value: 'team' },
         costCenter: { value: 'p0' },
@@ -85,6 +87,18 @@ function sourceFixture(overrides = {}) {
   return { config, deps };
 }
 
+test('foundation source admits only the exact approved Key Vault collision fallback', () => {
+  const fallbackInput = sourceFixture({
+    parameterValues: { keyVaultName: { value: 'agentweaver-kv-v1' } },
+  });
+  const fallback = resolveSource(fallbackInput.config, fallbackInput.deps);
+  assert.equal(fallback.keyVaultName, 'agentweaver-kv-v1');
+  const unsupportedInput = sourceFixture({
+    parameterValues: { keyVaultName: { value: 'agentweaver-kv-v2' } },
+  });
+  assert.throws(() => resolveSource(unsupportedInput.config, unsupportedInput.deps), /Key Vault name/);
+});
+
 test('exact source hashes tracked reviewed inputs and binds JSON parameters to target', () => {
   const { config, deps } = sourceFixture();
   const receipt = resolveSource(config, deps);
@@ -96,6 +110,7 @@ test('exact source hashes tracked reviewed inputs and binds JSON parameters to t
   assert.equal(receipt.owner, 'team');
   assert.equal(receipt.location, 'eastus2euap');
   assert.equal(receipt.monitorLocation, 'eastus2');
+  assert.equal(receipt.keyVaultName, 'agentweaver-kv');
   assert.equal(receipt.postgresEntraAdminObjectId, source.postgresEntraAdminObjectId);
   assert.equal(receipt.postgresEntraAdminPrincipalName, source.postgresEntraAdminPrincipalName);
   assert.equal(receipt.postgresEntraAdminPrincipalType, 'User');

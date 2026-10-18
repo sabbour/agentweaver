@@ -206,9 +206,13 @@ internal static class ProbeTargetValidator
         var storageName = $"{ExpectedResourceGroup.Replace("-", "", StringComparison.Ordinal)}blob";
         string ResourceId(string type, string name) => $"{target.ResourceGroupId}/providers/{type}/{name}";
         var resources = target.FoundationResources;
+        bool MatchesKeyVault(string name) =>
+            Equal(resources.KeyVaultId, ResourceId("Microsoft.KeyVault/vaults", name)) &&
+            resources.VaultUri == $"https://{name}.vault.azure.net/";
+        var keyVaultMatches = MatchesKeyVault($"{ExpectedResourceGroup}-kv") ||
+            ExpectedResourceGroup == "agentweaver" && MatchesKeyVault("agentweaver-kv-v1");
         if (!Equal(resources.ClusterId, ResourceId("Microsoft.ContainerService/managedClusters", $"{ExpectedResourceGroup}-aks")) ||
-            !Equal(resources.KeyVaultId, ResourceId("Microsoft.KeyVault/vaults", $"{ExpectedResourceGroup}-kv")) ||
-            resources.VaultUri != $"https://{ExpectedResourceGroup}-kv.vault.azure.net/" ||
+            !keyVaultMatches ||
             !Equal(resources.StorageAccountId, ResourceId("Microsoft.Storage/storageAccounts", storageName)) ||
             !Equal(resources.BlobContainerId, ResourceId("Microsoft.Storage/storageAccounts",
                 $"{storageName}/blobServices/default/containers/platform-artifacts")) ||

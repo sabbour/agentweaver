@@ -209,9 +209,22 @@ test('runtime and Probe inputs are separately default-off and plans never invoke
     });
     assert.equal(result.bootstrapIdentityBrokerRuntime, true);
     assert.equal(result.bootstrapFoundationProbeInputs, true);
+    const fallbackSource = { ...source, keyVaultName: 'agentweaver-kv-v1' };
+    const az = fakeAzure();
     const steps = [];
     await deploy({ ...fixture, ...runtime, bootstrapIdentityBrokerState: true, execute: true }, {
-      sourceResolver: () => source, execAz: fakeAzure(),
+      sourceResolver: () => fallbackSource,
+      execAz(args, options) {
+        const result = az(args, options);
+        if (args[0] === 'deployment' && args[2] === 'create') {
+          const deployment = JSON.parse(result.stdout);
+          deployment.properties.outputs.foundationResources.value.keyVaultId =
+            deployment.properties.outputs.foundationResources.value.keyVaultId.replace('agentweaver-kv', 'agentweaver-kv-v1');
+          deployment.properties.outputs.foundationResources.value.vaultUri = 'https://agentweaver-kv-v1.vault.azure.net/';
+          return { ...result, stdout: JSON.stringify(deployment) };
+        }
+        return result;
+      },
       initializeIdentityBrokerState() { steps.push('state'); },
       alignIdentityBrokerHostname() { steps.push('alignment'); },
       initializeIdentityPostgres(config) {
@@ -220,8 +233,14 @@ test('runtime and Probe inputs are separately default-off and plans never invoke
         assert.equal(config.migrationPrincipalObjectId, deploymentOutputs.identityBrokerMigrationIdentity.value.principalObjectId);
         return { database: 'agentweaver', schema: 'identity_broker' };
       },
-      initializeIdentityBrokerRuntime() { steps.push('runtime'); },
-      initializeFoundationProbeInputs() { steps.push('probe'); },
+      initializeIdentityBrokerRuntime(config) {
+        assert.equal(config.keyVaultName, 'agentweaver-kv-v1');
+        steps.push('runtime');
+      },
+      initializeFoundationProbeInputs(config) {
+        assert.equal(config.keyVaultName, 'agentweaver-kv-v1');
+        steps.push('probe');
+      },
     });
     assert.deepEqual(steps, ['alignment', 'state', 'runtime-grants', 'runtime', 'probe']);
     await assert.rejects(deploy({ ...fixture, brokerImage: runtime.brokerImage }), /require --bootstrap/);

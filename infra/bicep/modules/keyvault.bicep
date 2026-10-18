@@ -10,6 +10,9 @@ param location string
 @description('Dedicated naming prefix, e.g. agentweaver.')
 param namePrefix string
 
+@description('Globally unique name for the dedicated Key Vault.')
+param keyVaultName string
+
 @description('Resource tags applied to the vault.')
 param tags object
 
@@ -23,7 +26,7 @@ param privateEndpointsSubnetId string
 param privateDnsZoneId string
 
 resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
-  name: '${namePrefix}-kv'
+  name: keyVaultName
   location: location
   tags: tags
   properties: {

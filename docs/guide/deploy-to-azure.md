@@ -33,7 +33,7 @@ The example resource names in this tutorial are:
 | Resource group | `agentweaver` |
 | AKS cluster | `agentweaver-aks` |
 | PostgreSQL server | `agentweaver-pg` |
-| Key Vault | `agentweaver-kv` |
+| Key Vault | `agentweaver-kv-v1` (approved collision fallback; default: `agentweaver-kv`) |
 | Blob Storage account | `agentweaverblob` |
 | Virtual network | `agentweaver-vnet` |
 | Log Analytics workspace | `agentweaver-law` |

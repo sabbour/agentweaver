@@ -46,6 +46,19 @@ export function assertDedicatedTarget(name, kind = 'resource group') {
   return name;
 }
 
+/** Allows the dedicated default Key Vault name and the explicitly approved Agentweaver collision fallback. */
+export function assertApprovedKeyVaultName(resourceGroup, name) {
+  const defaultName = `${resourceGroup}-kv`;
+  const fallbackName = resourceGroup === 'agentweaver' ? 'agentweaver-kv-v1' : undefined;
+  const allowedNames = fallbackName ? [defaultName, fallbackName] : [defaultName];
+  const keyVaultName = name === undefined ? defaultName : name;
+  if (typeof keyVaultName !== 'string' || !allowedNames.includes(keyVaultName)) {
+    const fallback = fallbackName ? ` or the exact approved fallback "${fallbackName}"` : '';
+    throw new Error(`Key Vault name must be "${defaultName}"${fallback}.`);
+  }
+  return keyVaultName;
+}
+
 /** Requires an immutable SHA-256 image digest instead of a mutable tag. */
 export function assertImageDigest(digest, imageRef = 'image') {
   if (typeof digest !== 'string' || !IMAGE_DIGEST_PATTERN.test(digest)) {
@@ -134,8 +147,11 @@ function projectInventory(resources, expectedTags) {
 
 // Deployment outputs select configuration, never prove a workload ran.
 /** Validates infrastructure outputs against the configured target and returns normalized deployment values. */
-export function readFoundationOutputs(outputs, { resourceGroup, subscriptionId, appRoutingDnsZoneResourceIds = [] }) {
+export function readFoundationOutputs(outputs, {
+  resourceGroup, subscriptionId, keyVaultName: configuredKeyVaultName, appRoutingDnsZoneResourceIds = [],
+}) {
   const zoneIds = validateAppRoutingDnsZoneResourceIds(appRoutingDnsZoneResourceIds, subscriptionId);
+  const keyVaultName = assertApprovedKeyVaultName(resourceGroup, configuredKeyVaultName);
   const groupId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}`;
   const id = (type, name) => `${groupId}/providers/${type}/${name}`;
   const storageName = `${resourceGroup.replaceAll('-', '')}blob`.slice(0, 24);
@@ -147,8 +163,8 @@ export function readFoundationOutputs(outputs, { resourceGroup, subscriptionId, 
   const appRoutingDomain = outputs?.appRoutingDomain?.value;
   const expected = {
     clusterId: id('Microsoft.ContainerService/managedClusters', `${resourceGroup}-aks`),
-    keyVaultId: id('Microsoft.KeyVault/vaults', `${resourceGroup}-kv`),
-    vaultUri: `https://${resourceGroup}-kv.vault.azure.net/`,
+    keyVaultId: id('Microsoft.KeyVault/vaults', keyVaultName),
+    vaultUri: `https://${keyVaultName}.vault.azure.net/`,
     storageAccountId: id('Microsoft.Storage/storageAccounts', storageName),
     blobContainerId: id('Microsoft.Storage/storageAccounts', `${storageName}/blobServices/default/containers/platform-artifacts`),
     blobContainerUri: `https://${storageName}.blob.core.windows.net/platform-artifacts`,
@@ -430,6 +446,7 @@ export function guardAzureTarget(config, execAz) {
     config.appRoutingDnsZoneResourceIds, subscriptionId,
   );
   assertDedicatedTarget(resourceGroup);
+  const keyVaultName = assertApprovedKeyVaultName(resourceGroup, config.keyVaultName);
   assertSubscription(subscriptionId, allowedSubscriptionId);
   assertTenant(tenantId, allowedTenantId);
   const boundAz = (args, options) => execAz([...args, '--subscription', subscriptionId], options);
@@ -462,7 +479,7 @@ export function guardAzureTarget(config, execAz) {
   const expectedResources = new Map([
     ['microsoft.network/virtualnetworks', [`${resourceGroup}-vnet`]],
     ['microsoft.containerservice/managedclusters', [`${resourceGroup}-aks`]],
-    ['microsoft.keyvault/vaults', [`${resourceGroup}-kv`]],
+    ['microsoft.keyvault/vaults', [keyVaultName]],
     ['microsoft.storage/storageaccounts', [`${resourceGroup.replaceAll('-', '')}blob`.slice(0, 24)]],
     ['microsoft.dbforpostgresql/flexibleservers', [`${resourceGroup}-pg`]],
     ['microsoft.operationalinsights/workspaces', [`${resourceGroup}-law`]],
@@ -535,9 +552,9 @@ export function guardAzureTarget(config, execAz) {
   const subnetId = resourceId('Microsoft.Network/virtualNetworks/subnets', `${resourceGroup}-vnet/aks`);
   // Extension resources retain their exact parent scope and ARM-generated name.
   for (const [scope, principalResource, role] of [
-    [resourceId('Microsoft.KeyVault/vaults', `${resourceGroup}-kv`), identityId, '4633458b-17de-408a-b874-0445c86b69e6'],
-    [resourceId('Microsoft.KeyVault/vaults', `${resourceGroup}-kv`), identityBrokerRuntimeId, '4633458b-17de-408a-b874-0445c86b69e6'],
-    [resourceId('Microsoft.KeyVault/vaults', `${resourceGroup}-kv`), aksId, 'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba'],
+    [resourceId('Microsoft.KeyVault/vaults', keyVaultName), identityId, '4633458b-17de-408a-b874-0445c86b69e6'],
+    [resourceId('Microsoft.KeyVault/vaults', keyVaultName), identityBrokerRuntimeId, '4633458b-17de-408a-b874-0445c86b69e6'],
+    [resourceId('Microsoft.KeyVault/vaults', keyVaultName), aksId, 'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba'],
     [resourceId('Microsoft.Storage/storageAccounts', storageName), identityId, 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'],
     [resourceId('Microsoft.OperationalInsights/workspaces', `${resourceGroup}-law`), identityId, '73c42c96-874c-492b-b04d-ab87d138a893'],
     [resourceId('Microsoft.Insights/components', `${resourceGroup}-appi`), identityId, '3913510d-42f4-4e42-8a64-420c390055eb'],

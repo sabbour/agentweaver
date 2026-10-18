@@ -31,7 +31,7 @@ these example names in reviewed inputs:
 | Resource group | `agentweaver` |
 | AKS cluster | `agentweaver-aks` |
 | PostgreSQL server | `agentweaver-pg` |
-| Key Vault | `agentweaver-kv` |
+| Key Vault | `agentweaver-kv` (approved collision fallback: `agentweaver-kv-v1`) |
 | Blob Storage account | `agentweaverblob` |
 | Virtual network | `agentweaver-vnet` |
 | Log Analytics workspace | `agentweaver-law` |

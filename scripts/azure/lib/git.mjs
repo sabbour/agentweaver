@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import { validateFile } from '../../release/validate.mjs';
 import { validateAppRoutingDnsZoneResourceIds } from './app-routing-dns.mjs';
 import { assertAutoscalerBounds } from './aks-autoscaling.mjs';
+import { assertApprovedKeyVaultName } from './guardrails.mjs';
 
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -113,6 +114,7 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   const { minCount: nodePoolMinCount, maxCount: nodePoolMaxCount } = assertAutoscalerBounds(values);
   const location = values?.location?.value;
   const namePrefix = values?.namePrefix?.value;
+  let keyVaultName;
   const parameterTenantId = values?.tenantId?.value;
   const owner = values?.owner?.value;
   const costCenter = values?.costCenter?.value;
@@ -129,6 +131,7 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   let postgresEntraAdminPrincipalName;
   let postgresEntraAdminPrincipalType;
   if (scope === 'infrastructure-only') {
+    keyVaultName = assertApprovedKeyVaultName(resourceGroup, values?.keyVaultName?.value);
     monitorLocation = values?.monitorLocation?.value;
     postgresEntraAdminObjectId = values?.postgresEntraAdminObjectId?.value;
     postgresEntraAdminPrincipalName = values?.postgresEntraAdminPrincipalName?.value;
@@ -147,6 +150,7 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
     const approvedFoundation = trackedPath('infra/bicep/parameters/p0-integration.approved.json');
     const foundationValues = JSON.parse(readFile(approvedFoundation.absolute, 'utf8')).parameters;
     assertAutoscalerBounds(foundationValues);
+    keyVaultName = assertApprovedKeyVaultName(resourceGroup, foundationValues?.keyVaultName?.value);
     postgresEntraAdminObjectId = foundationValues?.postgresEntraAdminObjectId?.value;
     postgresEntraAdminPrincipalName = foundationValues?.postgresEntraAdminPrincipalName?.value;
     postgresEntraAdminPrincipalType = foundationValues?.postgresEntraAdminPrincipalType?.value;
@@ -167,7 +171,7 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   validateRelease(resolve(root, 'releases/foundation.json'), { root });
   return { sha, verifierSha: headSha, branch, sourceTree, sourceHash: hash.digest('hex'), template: inputTemplate.absolute,
     parametersFile: parameters.absolute, owner, costCenter,
-    location, monitorLocation, postgresEntraAdminObjectId, postgresEntraAdminPrincipalName,
+    location, monitorLocation, keyVaultName, postgresEntraAdminObjectId, postgresEntraAdminPrincipalName,
     nodePoolMinCount, nodePoolMaxCount,
     postgresEntraAdminPrincipalType,
     appRoutingDnsZoneResourceIds,

@@ -304,6 +304,7 @@ export async function deploy(config, {
         repoRoot: config.repoRoot, resourceGroup: config.resourceGroup,
         subscriptionId: config.subscriptionId, tenantId: config.tenantId,
         clusterName: `${config.resourceGroup}-aks`, upstreamClientId: config.upstreamClientId,
+        keyVaultName: source.keyVaultName,
         acceptanceRunId: config.acceptanceRunId, acceptanceRedirectUri: config.acceptanceRedirectUri,
         brokerImage: config.brokerImage,
       });
@@ -318,7 +319,7 @@ export async function deploy(config, {
       foundationProbeInputs = await initializeFoundationProbeInputs({
         repoRoot: config.repoRoot, resourceGroup: config.resourceGroup,
         subscriptionId: config.subscriptionId, tenantId: config.tenantId,
-        clusterName: `${config.resourceGroup}-aks`,
+        clusterName: `${config.resourceGroup}-aks`, keyVaultName: source.keyVaultName,
       });
     } catch (error) {
       throw new Error(`Infrastructure deployment succeeded, but Foundation Probe input setup failed: ${error.message}`);

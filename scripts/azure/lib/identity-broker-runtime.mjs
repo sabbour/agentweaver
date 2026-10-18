@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { run, runAz, redact } from './exec.mjs';
+import { assertApprovedKeyVaultName } from './guardrails.mjs';
 import { withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 import { observeExistingP0BrokerRouting, projectIdentityRoutingReadback } from './identity-broker-routing.mjs';
 
@@ -16,6 +17,7 @@ const WEB_SCOPES = [...SCOPES, 'projects.admin', 'projects.orchestrator'];
 
 /** Checks the required broker runtime source and target inputs before resource generation. */
 export function assertBrokerRuntimeInputs(config) {
+  assertApprovedKeyVaultName(config.resourceGroup, config.keyVaultName);
   if (config.resourceGroup !== 'agentweaver' || config.clusterName !== 'agentweaver-aks' ||
       !GUID.test(config.subscriptionId ?? '') || !GUID.test(config.tenantId ?? '') ||
       !GUID.test(config.upstreamClientId ?? '') || !GUID.test(config.acceptanceRunId ?? '') ||
@@ -36,6 +38,7 @@ export function assertBrokerRuntimeInputs(config) {
 /** Builds the run-owned acceptance client and stable Web client from validated routing and identity values. */
 export function brokerAcceptanceConfiguration(config, { issuer, identity, portalHostname }) {
   assertBrokerRuntimeInputs(config);
+  const keyVaultName = assertApprovedKeyVaultName(config.resourceGroup, config.keyVaultName);
   if (!/^https:\/\/agentweaver\.[a-z0-9.-]+\.aksapp\.io\/$/.test(issuer) ||
       !GUID.test(identity?.clientId ?? '') || !GUID.test(identity?.principalId ?? '') ||
       !/^portal\.[a-z0-9.-]+\.aksapp\.io$/.test(portalHostname ?? '') ||
@@ -50,7 +53,7 @@ export function brokerAcceptanceConfiguration(config, { issuer, identity, portal
     IdentityBroker__ExternalProvider__Authority: `https://login.microsoftonline.com/${config.tenantId}/v2.0`,
     IdentityBroker__ExternalProvider__ClientId: config.upstreamClientId,
     IdentityBroker__SecretRedemption__Audience: issuer,
-    IdentityBroker__SecretRedemption__VaultUri: `https://${config.resourceGroup}-kv.vault.azure.net/`,
+    IdentityBroker__SecretRedemption__VaultUri: `https://${keyVaultName}.vault.azure.net/`,
     IdentityBroker__SecretRedemption__WorkloadIdentityTenantId: config.tenantId,
     IdentityBroker__SecretRedemption__WorkloadIdentityClientId: identity.clientId,
     IdentityBroker__SecretRedemption__WorkloadIdentityTokenFilePath: '/var/run/secrets/azure/tokens/azure-identity-token',
@@ -142,6 +145,7 @@ export function bootstrapIdentityBrokerRuntime(config, {
   execKubectl = (args, options) => run('kubectl', args, options),
 } = {}) {
   assertBrokerRuntimeInputs(config);
+  const keyVaultName = assertApprovedKeyVaultName(config.resourceGroup, config.keyVaultName);
   function azureJson(args, projectJson) {
     const result = execAz(args, { ...OPTIONS, projectJson, preserveProjectedJson: true });
     if (result.status !== 0) throw new Error(`Broker runtime target lookup failed: ${redact(result.stderr)}`);
@@ -222,7 +226,7 @@ export function bootstrapIdentityBrokerRuntime(config, {
       const manifest = readFileSync(join(root, file), 'utf8')
         .replaceAll('CHANGEME-identity-broker-client-id', identity.clientId)
         .replaceAll('CHANGEME-tenant-id', config.tenantId)
-        .replaceAll('CHANGEME-KEYVAULT-HOST', `${config.resourceGroup}-kv.vault.azure.net`)
+        .replaceAll('CHANGEME-KEYVAULT-HOST', `${keyVaultName}.vault.azure.net`)
         .replaceAll('CHANGEME-POSTGRES-HOST', `${config.resourceGroup}-pg.postgres.database.azure.com`)
         .replaceAll('CHANGEME-UPSTREAM-OIDC-AUTHORITY', 'login.microsoftonline.com')
         .replaceAll('CHANGEME-UPSTREAM-OIDC-METADATA-HOST', 'login.microsoftonline.com')

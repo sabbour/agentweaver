@@ -109,7 +109,7 @@ export function checkAksNetworkSecurity({ clusterId, resourceGroup, subscription
 /** Compares deployed image/source evidence with the exact source SHA selected for acceptance. */
 export function checkDeployedSha({
   resourceGroup, subscriptionId, deploymentName, expectedSha, sourceTree, sourceHash, scope = 'infrastructure-only',
-  foundationSource,
+  foundationSource, keyVaultName,
   appRoutingDnsZoneResourceIds = [],
 }, execAz) {
   const name = 'deployed-sha';
@@ -189,6 +189,7 @@ export function checkDeployedSha({
     const foundationResources = readFoundationOutputs(foundationOutputs, {
       resourceGroup,
       subscriptionId,
+      keyVaultName: scope === 'aks-only' ? foundationSource.keyVaultName : keyVaultName,
       appRoutingDnsZoneResourceIds: scope === 'aks-only'
         ? foundationSource.appRoutingDnsZoneResourceIds
         : appRoutingDnsZoneResourceIds,
@@ -486,6 +487,7 @@ export function runAcceptance(config, {
       sourceTree: source.sourceTree,
       sourceHash: source.sourceHash,
       foundationSource,
+      keyVaultName: source.keyVaultName,
       appRoutingDnsZoneResourceIds: source.appRoutingDnsZoneResourceIds,
     }, boundAz));
     deploymentEvidence = deploymentCheck.status === 'passed' ? deploymentCheck.evidence : undefined;
