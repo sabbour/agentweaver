@@ -42,7 +42,7 @@ public static class AddressedMessageCapabilities
 /// <summary>Configures the PostgreSQL addressed-message lease and lifetime limits.</summary>
 /// <param name="OptionsRevision">Provider configuration revision used to match the catalog entry.</param>
 /// <param name="ClaimLeaseSeconds">Duration a consumer may hold a message claim; defaults to 120 and must be 10 through 3600 seconds.</param>
-/// <param name="MaximumMessageLifetimeDays">Maximum configured message lifetime; defaults to 1 and cannot exceed the system maximum.</param>
+/// <param name="MaximumMessageLifetimeDays">Maximum configured message lifetime; defaults to 1 and must be 1 through 7 days.</param>
 /// <param name="OptionsSchemaVersion">Options contract version; defaults to and must equal version 1.</param>
 public sealed record NativePostgresMessagingProviderOptions(
     string OptionsRevision,
@@ -52,8 +52,8 @@ public sealed record NativePostgresMessagingProviderOptions(
 {
     /// <summary>
     /// Requires a nonempty revision without whitespace or control characters, options schema
-    /// version 1, a claim lease of 10 through 3600 seconds, and a message lifetime within the
-    /// system-supported range.
+    /// version 1, a claim lease of 10 through 3600 seconds, and a message lifetime of 1
+    /// through 7 days.
     /// </summary>
     public void Validate()
     {
