@@ -2,6 +2,17 @@
 
 Applied component version changes, newest first.
 
+## 2026-10-18T21:08:13.458Z — source `0d9ead8705f44e4bf56c6ca2c3492a6cb0971287`
+
+- `Agentweaver.Environment`: 1.1.0 -> 1.1.1 (patch) — .changeset/configuration-contract-docs.md, .changeset/environment-cilium-config-reader.md
+- `Agentweaver.EventsAndSessions`: 1.1.0 -> 1.1.1 (patch) — .changeset/configuration-contract-docs.md
+- `Agentweaver.FoundationProbe`: 0.0.2 -> 0.0.3 (patch) — .changeset/foundation-probe-deployment-key-vault.md, .changeset/foundation-probe-environment-rename.md
+- `Agentweaver.Identity.Broker`: 1.1.0 -> 1.1.1 (patch) — .changeset/broker-migration-history-grants.md, .changeset/configuration-contract-docs.md
+- `Agentweaver.Knowledge`: 1.0.1 -> 1.0.2 (patch) — .changeset/configuration-contract-docs.md
+- `Agentweaver.Providers.Sandbox.AgentSandbox`: 1.1.1 -> 1.1.2 (patch) — .changeset/configuration-contract-docs.md
+- `Agentweaver.Providers.Storage.AzureFiles`: 1.0.2 -> 1.0.3 (patch) — .changeset/configuration-contract-docs.md
+- `Agentweaver.Web`: 1.0.1 -> 1.0.2 (patch) — .changeset/p0-web-broker-auth.md
+
 ## 2026-10-17T21:54:16.861Z — source `50664e006b07fd187cbe086288dbbbf0e1584f38`
 
 - `Agentweaver.Abstractions`: 1.1.0 -> 1.1.1 (patch) — .changeset/republication-abstractions-2026-10-17.md

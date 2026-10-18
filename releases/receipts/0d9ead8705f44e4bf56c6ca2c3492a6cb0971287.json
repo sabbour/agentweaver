@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "0d9ead8705f44e4bf56c6ca2c3492a6cb0971287",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "6965cfccf326af885cb38f38533661db17782f5e7ae790baf7e04431a14c8feb",
+  "appliedAt": "2026-10-18T21:08:13.458Z",
+  "components": [
+    {
+      "id": "Agentweaver.Environment",
+      "fromVersion": "1.1.0",
+      "toVersion": "1.1.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.EventsAndSessions",
+      "fromVersion": "1.1.0",
+      "toVersion": "1.1.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.FoundationProbe",
+      "fromVersion": "0.0.2",
+      "toVersion": "0.0.3",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Identity.Broker",
+      "fromVersion": "1.1.0",
+      "toVersion": "1.1.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Knowledge",
+      "fromVersion": "1.0.1",
+      "toVersion": "1.0.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Providers.Sandbox.AgentSandbox",
+      "fromVersion": "1.1.1",
+      "toVersion": "1.1.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Providers.Storage.AzureFiles",
+      "fromVersion": "1.0.2",
+      "toVersion": "1.0.3",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Web",
+      "fromVersion": "1.0.1",
+      "toVersion": "1.0.2",
+      "bump": "patch"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/broker-migration-history-grants.md",
+      "archivedPath": ".changeset/archive/broker-migration-history-grants.md",
+      "sha256": "0a80bf19b63e1b30599d0531b7625c83188b391156f40682c62000b65c81a3ad"
+    },
+    {
+      "sourcePath": ".changeset/configuration-contract-docs.md",
+      "archivedPath": ".changeset/archive/configuration-contract-docs.md",
+      "sha256": "633c0f530982b0c52fa8c1e21a297b62e7d3ca7736245f89869effc3ecfcdf53"
+    },
+    {
+      "sourcePath": ".changeset/environment-cilium-config-reader.md",
+      "archivedPath": ".changeset/archive/environment-cilium-config-reader.md",
+      "sha256": "dac7f64d2adcc60c0dbf2b279c420a966280ad77765caf9092eb0101207497a0"
+    },
+    {
+      "sourcePath": ".changeset/foundation-probe-deployment-key-vault.md",
+      "archivedPath": ".changeset/archive/foundation-probe-deployment-key-vault.md",
+      "sha256": "f956cd7917acf6e25ec55ff32322c474cb283e1ebf567c2fe50c06340f775ae4"
+    },
+    {
+      "sourcePath": ".changeset/foundation-probe-environment-rename.md",
+      "archivedPath": ".changeset/archive/foundation-probe-environment-rename.md",
+      "sha256": "cc949116804b2a0e1e6f0a1c634478cf3f5103d847c46f3f40b0227ada7324ed"
+    },
+    {
+      "sourcePath": ".changeset/p0-web-broker-auth.md",
+      "archivedPath": ".changeset/archive/p0-web-broker-auth.md",
+      "sha256": "c8c76afc0ec607e6a7476534534497ba732648f433caeeb648d6792bf991fe3b"
+    }
+  ]
+}

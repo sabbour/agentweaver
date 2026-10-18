@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <PropertyGroup>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
     <Description>Environment lifecycle ownership and verified egress intent service.</Description>
     <InvariantGlobalization>true</InvariantGlobalization>
     <ContainerRuntimeIdentifier>linux-x64</ContainerRuntimeIdentifier>
