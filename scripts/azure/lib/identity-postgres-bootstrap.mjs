@@ -10,9 +10,21 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { run, runAz, redact } from './exec.mjs';
+import { assertP0KubernetesPermissions } from './namespace-bootstrap.mjs';
 
 const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const NAMESPACE = 'agentweaver';
+const KUBERNETES_PERMISSIONS = [
+  ['create', 'configmaps', NAMESPACE],
+  ['get', 'configmaps', NAMESPACE],
+  ['delete', 'configmaps', NAMESPACE],
+  ['create', 'pods', NAMESPACE],
+  ['get', 'pods', NAMESPACE],
+  ['list', 'pods', NAMESPACE],
+  ['watch', 'pods', NAMESPACE],
+  ['delete', 'pods', NAMESPACE],
+  ['create', 'pods', NAMESPACE, 'portforward'],
+];
 const OWNER_LABEL = 'agentweaver.io/task-owner';
 const RUN_LABEL = 'agentweaver.io/task-run';
 const OWNER = 'identity-postgres-bootstrap';
@@ -179,7 +191,7 @@ function buildProxy(repoRoot, outputDirectory, {
 
 /**
  * Applies the identity PostgreSQL bootstrap through the validated private connection path.
- * Temporary credentials and port-forward resources are cleaned up even when bootstrap commands fail.
+ * Required Kubernetes access is checked before building the proxy or creating temporary resources.
  */
 export async function bootstrapIdentityPostgres({
   repoRoot = process.cwd(), resourceGroup, subscriptionId, tenantId, clusterName,
@@ -249,6 +261,10 @@ export async function bootstrapIdentityPostgres({
     assertCommand(execKubelogin([
       'convert-kubeconfig', '--login', 'azurecli', '--kubeconfig', kubeconfig,
     ], { check: false, timeout: 30_000 }), 'Could not configure the normal-user AKS kubeconfig');
+    assertP0KubernetesPermissions(['--kubeconfig', kubeconfig], execKubectl, [
+      ['get', `namespace/${NAMESPACE}`],
+      ...KUBERNETES_PERMISSIONS,
+    ], 'Identity PostgreSQL bootstrap');
     clusterAccessReady = true;
 
     (buildProxyDependency ?? ((root, output) => buildProxy(root, output, { execDotnet })))(repoRoot, proxyOutput);

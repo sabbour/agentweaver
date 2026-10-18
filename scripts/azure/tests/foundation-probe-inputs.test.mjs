@@ -27,7 +27,10 @@ const route = () => ({
   ingestionHost: 'eastus-1.in.applicationinsights.azure.com',
 });
 
-function dependencies({ failWrite = false, wrongFic = false, failPolicyWrite = false, wrongPolicyReadback = false } = {}) {
+function dependencies({
+  failWrite = false, wrongFic = false, failPolicyWrite = false, wrongPolicyReadback = false,
+  authorization = () => ok('yes\n'),
+} = {}) {
   const calls = [];
   const azureOutput = [];
   const objects = new Map();
@@ -56,6 +59,7 @@ function dependencies({ failWrite = false, wrongFic = false, failPolicyWrite = f
     },
     execKubectl(args, options) {
       calls.push({ args, options });
+      if (args.includes('auth')) return authorization(args);
       if (args.includes('get')) {
         const name = args[args.indexOf('--field-selector') + 1].split('=')[1];
         const object = objects.get(name);
@@ -96,10 +100,21 @@ test('Probe install derives existing federation and Monitor configuration withou
   assert.equal(receipt.runtimeVerified, false);
   assert.ok(!JSON.stringify(receipt).includes(connectionString));
   assert.ok(!deps.azureOutput.join().includes(connectionString));
-  const writes = deps.calls.filter(call => call.args.includes('create')).length;
+  const writes = deps.calls.filter(call => call.args.includes('create') && !call.args.includes('auth')).length;
   assert.equal(bootstrapFoundationProbeInputs(config, deps).monitor.created, false);
-  assert.equal(deps.calls.filter(call => call.args.includes('create')).length, writes);
+  assert.equal(deps.calls.filter(call => call.args.includes('create') && !call.args.includes('auth')).length, writes);
   assert.ok(!deps.calls.some(call => call.args.includes('apply') || call.args.includes('patch') || call.args.includes('delete')));
+});
+
+test('Probe input setup checks all required writes before changing policy or creating resources', () => {
+  const deps = dependencies({
+    authorization: args => args.includes('secrets') && args[args.indexOf('can-i') + 1] === 'create'
+      ? ok('no\n') : ok('yes\n'),
+  });
+  assert.throws(() => bootstrapFoundationProbeInputs(config, deps),
+    /Kubernetes API access is unavailable or insufficient for Foundation Probe input bootstrap: required permission "create secrets"/);
+  assert.equal(deps.objects.size, 0);
+  assert.equal(deps.calls.filter(call => call.args.includes('--filename')).length, 0);
 });
 
 test('Probe input setup rejects a missing vault name before Azure lookups', () => {

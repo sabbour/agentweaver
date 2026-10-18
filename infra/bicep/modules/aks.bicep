@@ -2,6 +2,7 @@
 // per-service user-assigned identities can federate without storing any
 // client secret. Public API endpoint, system-assigned control-plane identity,
 // and a single system node pool sized for the foundation smoke workload.
+// Human Kubernetes API access is provisioned outside this template.
 @description('Azure region for the cluster.')
 param location string
 

@@ -101,9 +101,12 @@ AKS-only template and its matching reviewed parameter file for the later
 PostgreSQL bootstrap; do not rerun the full-foundation template.
 
 The infrastructure installer does not create Kubernetes namespaces or grant
-human AKS permissions. It also does not apply product manifests, create the
-Broker's application state, run database migrations, install Gateway routes,
-or create operator-owned Secrets.
+human AKS permissions. It never creates, requires, or verifies a human
+`Azure Kubernetes Service RBAC Cluster Admin` assignment. Cluster connectivity
+and Kubernetes API permissions are provisioned outside this tooling. The
+installer also does not apply product manifests, create the Broker's application
+state, run database migrations, install Gateway routes, or create operator-owned
+Secrets.
 
 The reviewed parameter file supplies the Key Vault name through `keyVaultName`.
 Key Vault is the Identity Broker's secrets backend; its name and
@@ -115,11 +118,15 @@ parameter. Set the runtime URI to the URI returned for that same vault.
 
 The AKS template enables Microsoft Entra authentication with Azure RBAC and
 disables local accounts. Before you run Kubernetes commands, an administrator
-must assign your identity the `Azure Kubernetes Service Cluster User Role` so
-you can retrieve credentials. Your identity also needs an Azure Kubernetes
-Service RBAC assignment that permits namespace creation and the approved
-Kubernetes operations, including the temporary resources used by the
-PostgreSQL bootstrap. The installer does not grant these permissions. See
+must provision authorization for your identity to retrieve user credentials,
+such as the `Azure Kubernetes Service Cluster User Role`. This Azure role does
+not grant Kubernetes API permissions. Your identity also needs API connectivity
+and the Kubernetes permissions required by each operation, including namespace
+creation and the temporary resources used by the PostgreSQL bootstrap. Provision
+that access outside this tooling. The tooling checks required permissions
+before it applies resources and stops with an actionable error when access is
+missing. It never grants a person AKS Cluster Admin or another replacement
+role. See
 [Microsoft Entra authorization for AKS](https://learn.microsoft.com/azure/aks/entra-id-authorization).
 
 Run these commands from an operator machine that can reach the AKS API server.

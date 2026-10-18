@@ -81,7 +81,7 @@ test('Key Vault loopback forwarding uses only 15443:8443 and stops its owned pro
   assert.equal(child.exitCode, 0);
 });
 
-function dependencies({ dotnetResult, alterPodOwner = false } = {}) {
+function dependencies({ dotnetResult, alterPodOwner = false, authorization = () => ok('yes\n') } = {}) {
   const calls = [];
   const resources = new Map();
   const pathNames = [];
@@ -111,6 +111,7 @@ function dependencies({ dotnetResult, alterPodOwner = false } = {}) {
     calls.push({ kind: 'kubectl', args, settings });
     const commandIndex = args.indexOf('--kubeconfig') + 2;
     const action = args[commandIndex];
+    if (action === 'auth') return authorization(args.slice(commandIndex + 1), calls);
     if (action === 'create') {
       const object = JSON.parse(settings.input);
       resources.set(`${object.kind.toLowerCase()}/${object.metadata.name}`, object);
@@ -166,6 +167,30 @@ function dependencies({ dotnetResult, alterPodOwner = false } = {}) {
   };
 }
 
+test('Identity PostgreSQL bootstrap fails before proxy build or writes when access is denied', async () => {
+  const fakes = dependencies({
+    authorization: check => check[1] === 'create' && check[2] === 'pods' ? ok('no\n') : ok('yes\n'),
+  });
+  await assert.rejects(bootstrapIdentityPostgres(options, fakes.deps),
+    /Kubernetes API access is unavailable or insufficient for Identity PostgreSQL bootstrap: required permission "create pods" in namespace agentweaver/);
+  assert.equal(fakes.dotnetInvocation, undefined);
+  assert.equal(fakes.resources.size, 0);
+  assert.equal(fakes.portForwardOptions, undefined);
+  assert.equal(fakes.calls.filter(call => call.kind === 'kubectl' &&
+    call.args[call.args.indexOf('--kubeconfig') + 2] === 'create').length, 0);
+});
+
+test('Identity PostgreSQL bootstrap preflights the port-forward subresource before building or writing', async () => {
+  const fakes = dependencies({
+    authorization: check => check.includes('--subresource=portforward') ? ok('no\n') : ok('yes\n'),
+  });
+  await assert.rejects(bootstrapIdentityPostgres(options, fakes.deps),
+    /required permission "create pods \(subresource portforward\)" in namespace agentweaver/);
+  assert.equal(fakes.dotnetInvocation, undefined);
+  assert.equal(fakes.resources.size, 0);
+  assert.equal(fakes.portForwardOptions, undefined);
+});
+
 test('bootstraps through the owned pod and loopback tunnel with the Entra token kept local', async () => {
   const fakes = dependencies();
   const receipt = await bootstrapIdentityPostgres(options, fakes.deps);
@@ -193,7 +218,8 @@ test('bootstraps through the owned pod and loopback tunnel with the Entra token 
   const kubelogin = fakes.calls.find(call => call.kind === 'kubelogin').args;
   assert.deepEqual(kubelogin.slice(0, 3), ['convert-kubeconfig', '--login', 'azurecli']);
 
-  const createCalls = fakes.calls.filter(call => call.kind === 'kubectl' && call.args.includes('create'));
+  const createCalls = fakes.calls.filter(call => call.kind === 'kubectl' &&
+    call.args[call.args.indexOf('--kubeconfig') + 2] === 'create');
   assert.equal(createCalls.length, 2);
   const configMap = JSON.parse(createCalls[0].settings.input);
   const pod = JSON.parse(createCalls[1].settings.input);

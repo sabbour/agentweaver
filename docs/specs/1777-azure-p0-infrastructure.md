@@ -79,8 +79,7 @@ federated credentials without redeploying external data, network, DNS, or
 monitoring resources.
 Select the AKS-only route with `--template infra\bicep\aks-redeploy.bicep` and
 `--parameters infra\bicep\parameters\p0-aks-redeploy.approved.json`.
-Both `plan.mjs` and `deploy.mjs` require the approved `--operator-object-id`;
-the deploy guard requires a clean HEAD equal to the fetched admitted
+The deploy guard requires a clean HEAD equal to the fetched admitted
 `origin/v1` tip rather than a caller-supplied expected SHA.
 Untracked, ignored, changed, outside-repository, and 0.x inputs fail closed.
 The source hash covers all tracked infrastructure inputs.
@@ -101,12 +100,13 @@ tenant, resource group, source SHA, Git tree SHA, and input hash.
 The Git tree SHA has 40 hexadecimal characters.
 It is not the 64-character SHA-256 infrastructure input hash.
 
-Both deployment paths require the approved operator's Entra object ID as an
-explicit input. They create or reuse only the built-in Azure Kubernetes
-Service RBAC Cluster Admin assignment for that principal at the exact AKS
-resource scope. The grant is permanent and is never broadened or removed by
-the tooling. The AKS-only template reads the issuer URL from the cluster and
-updates exactly the existing probe, broker, and migration federated
+Neither deployment path accepts an operator object ID for AKS access, creates,
+requires, or verifies a human Azure Kubernetes Service RBAC Cluster Admin
+assignment. Cluster connectivity and Kubernetes API permissions are provisioned
+outside this tooling. Cluster-dependent bootstrap commands check their required
+permissions before writing resources and stop with an actionable error when
+access is missing. The AKS-only template reads the issuer URL from the cluster
+and updates exactly the existing probe, broker, and migration federated
 credentials, preserving their ServiceAccount subjects and
 `api://AzureADTokenExchange` audience. The guard requires all three credentials
 to exist with those bindings before deployment. Its deployment receipt is
@@ -150,10 +150,10 @@ Native receipts report the pool configuration, not proof of scale-up or regional
 
 AKS exposes a public API endpoint and uses managed Entra authentication with
 Azure RBAC; local accounts are disabled. A public FQDN on a private API does
-not meet this requirement. The tenant comes from the exact reviewed parameters. The operator object ID
-must be explicitly approved; the template grants only the built-in AKS
-Cluster Admin role at the cluster resource scope. It does not enable local
-accounts or grant Azure permissions at resource-group or subscription scope.
+not meet this requirement. The tenant comes from the exact reviewed parameters.
+Neither the template nor the deployment scripts grant a person AKS Cluster
+Admin or another replacement role. They do not enable local accounts or grant
+Azure permissions at resource-group or subscription scope.
 
 AKS enables ACNS security and leaves ACNS observability disabled. This
 security-only setting supports the #1784 FQDN-filtering work; it does not

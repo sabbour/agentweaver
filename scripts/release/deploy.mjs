@@ -1567,7 +1567,10 @@ function projectKubeconfigReadback(value) {
   };
 }
 
-/** Confirms the active Azure account and target resource metadata match the explicit deployment target. */
+/**
+ * Confirms the explicit Azure target and checks Kubernetes API access before release preflight.
+ * Missing access stops before the target namespace or workload resources are read.
+ */
 export function verifyAzureTarget(target, { root, run }) {
   const account = parseJson(run('az', ['account', 'show', '--subscription', target.subscriptionId, '--output', 'json'], { cwd: root }), 'Azure account');
   if (account.id?.toLowerCase() !== target.subscriptionId.toLowerCase() ||
@@ -1600,6 +1603,25 @@ export function verifyAzureTarget(target, { root, run }) {
     cluster.apiserverAccessProfile?.privateFqdn].filter(Boolean).map((host) => host.toLowerCase());
   if (!serverHost || !expectedHosts.includes(serverHost)) {
     fail('the current kubectl context does not point to the exact Azure-verified AKS API endpoint; no context fallback is allowed');
+  }
+  let namespaceReadAccess;
+  try {
+    namespaceReadAccess = run('kubectl', [
+      'auth', 'can-i', 'get', `namespace/${target.namespace}`, '--request-timeout=15s',
+    ], { cwd: root, timeout: 20_000 });
+  } catch (error) {
+    fail(
+      `Kubernetes API access is unavailable or insufficient to read namespace ${target.namespace}. ` +
+        `Provision the required API connectivity and permissions outside this tooling, then retry. ` +
+        `The release tooling never grants a person AKS Cluster Admin. ${error.message}`,
+    );
+  }
+  if (namespaceReadAccess.trim().toLowerCase() !== 'yes') {
+    fail(
+      `Kubernetes API access is insufficient to read namespace ${target.namespace}. ` +
+        `Provision the required API connectivity and permissions outside this tooling, then retry. ` +
+        'The release tooling never grants a person AKS Cluster Admin.',
+    );
   }
   const namespace = parseJson(run('kubectl', ['get', 'namespace', target.namespace, '--output', 'json'], { cwd: root }), 'target namespace');
   if (namespace.metadata?.name !== target.namespace ||
@@ -2372,6 +2394,21 @@ export async function deployRelease(options = {}, dependencies = {}) {
     const targetInfo = await (dependencies.verifyTarget ?? verifyAzureTarget)(parsed.target, { root, run });
     (dependencies.verifyPrerequisites ?? verifyRuntimePrerequisites)(
       runtimeManifest, parsed.target, { root, run, managedResources: installationManifest });
+    if (parsed.execute) {
+      try {
+        // Server-side dry-run validates cluster authorization before the first workload write.
+        run('kubectl', [
+          'apply', '--dry-run=server', '--request-timeout=30s', '-k', kustomizeSource.path,
+        ], { cwd: root, timeout: 45_000 });
+      } catch (error) {
+        fail(
+          'Release manifest server-side preflight failed before any workload write. Check the Kubernetes API ' +
+            'diagnostic and provision required connectivity and permissions outside this tooling. The tooling ' +
+            'never grants a person AKS Cluster Admin. ' +
+            (error?.message ?? String(error)),
+        );
+      }
+    }
     run('kubectl', ['apply', '--dry-run=client', '-k', kustomizeSource.path], { cwd: root });
 
     if (parsed.dryRun || !parsed.execute) {

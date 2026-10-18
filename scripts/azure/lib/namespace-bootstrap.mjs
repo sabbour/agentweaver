@@ -8,6 +8,7 @@ const NAMESPACE = 'agentweaver';
 const MAX_ATTEMPTS = 12;
 const RETRY_DELAY_MS = 5_000;
 const COMMAND_TIMEOUT_MS = 15_000;
+const DEFAULT_REQUIRED_PERMISSIONS = [['get', `namespace/${NAMESPACE}`]];
 const REQUIRED_LABELS = {
   'agentweaver.io/environment': 'v1-p0',
   'agentweaver.io/managed-by': 'kustomize',
@@ -34,6 +35,37 @@ function assertCommand(result, action) {
   if (result.status !== 0) throw new Error(`${action}: ${diagnostic(result)}`);
 }
 
+/**
+ * Checks the exact Kubernetes permissions a P0 operation needs before it reads or writes resources.
+ * API failures and denied checks stop immediately; this tooling never grants a person AKS access.
+ */
+export function assertP0KubernetesPermissions(kubeconfigArgs, execKubectl, permissions, purpose) {
+  for (const [verb, resource, namespace, subresource] of permissions) {
+    const args = [...kubeconfigArgs, 'auth', 'can-i', verb, resource, '--request-timeout=15s'];
+    if (namespace) args.push('--namespace', namespace);
+    if (subresource) args.push(`--subresource=${subresource}`);
+    let result;
+    try {
+      result = execKubectl(args, { check: false, timeout: COMMAND_TIMEOUT_MS });
+    } catch (error) {
+      result = { status: 1, stdout: '', stderr: redact(error?.message ?? String(error)) };
+    }
+    const output = typeof result.stdout === 'string' ? result.stdout.trim() : '';
+    if (result.status === 0 && output.toLowerCase() === 'yes') continue;
+    const detail = result.status === 0
+      ? `authorization check returned "${output || 'no response'}"`
+      : diagnostic(result);
+    const permission = `"${verb} ${resource}${subresource ? ` (subresource ${subresource})` : ''}"` +
+      `${namespace ? ` in namespace ${namespace}` : ''}`;
+    throw new Error(
+      `Kubernetes API access is unavailable or insufficient for ${purpose}: ` +
+        `required permission ${permission}. ` +
+        `Provision the required API connectivity and permissions outside this tooling, then retry. ` +
+        `The tooling never grants a person AKS Cluster Admin. ${detail}`,
+    );
+  }
+}
+
 function assertNamespaceReadback(result) {
   if (result.status !== 0) return `namespace readback: ${diagnostic(result)}`;
   let namespace;
@@ -54,12 +86,15 @@ function assertNamespaceReadback(result) {
 
 /**
  * Obtains a short-lived kubeconfig, runs the supplied action, then removes the temporary directory.
- * Cleanup is attempted on both success and failure; the action or Azure command error is propagated.
+ * Required API permissions are checked before the action, and temporary credentials are always removed.
  */
 export function withP0UserKubeconfig({
   resourceGroup, subscriptionId, clusterName,
 }, action, {
   execAz = runAz, execKubelogin = (args, options) => run('kubelogin', args, options),
+  execKubectl = (args, options) => run('kubectl', args, options),
+  requiredPermissions = DEFAULT_REQUIRED_PERMISSIONS,
+  permissionContext = 'P0 cluster operation',
 } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'agentweaver-p0-kubeconfig-'));
   const kubeconfig = join(directory, 'config');
@@ -77,6 +112,8 @@ export function withP0UserKubeconfig({
     ], { check: false, timeout: COMMAND_TIMEOUT_MS });
     assertCommand(conversion, 'Could not configure AKS kubeconfig to use the signed-in Azure CLI identity');
 
+    assertP0KubernetesPermissions(['--kubeconfig', kubeconfig], execKubectl,
+      requiredPermissions, permissionContext);
     receipt = action(['--kubeconfig', kubeconfig]);
   } catch (error) {
     failure = error;
@@ -96,8 +133,8 @@ export function withP0UserKubeconfig({
 }
 
 /**
- * Verifies operator access and creates or validates the P0 namespace using bounded retries.
- * It rejects unauthorized access and unexpected namespace ownership rather than continuing.
+ * Checks namespace permissions before applying the P0 namespace and retries only its readback.
+ * It rejects denied access and unexpected namespace ownership rather than continuing.
  */
 export function bootstrapP0Namespace({
   resourceGroup, subscriptionId, repoRoot = process.cwd(), clusterName,
@@ -106,26 +143,6 @@ export function bootstrapP0Namespace({
   execKubectl = (args, options) => run('kubectl', args, options), pause = wait,
 } = {}) {
   return withP0UserKubeconfig({ resourceGroup, subscriptionId, clusterName }, baseArgs => {
-    let authorized = false;
-    let authorizationFailure = '';
-    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-      authorized = true;
-      for (const [verb, resource] of PERMISSIONS) {
-        const result = execKubectl([...baseArgs, 'auth', 'can-i', verb, resource],
-          { check: false, timeout: COMMAND_TIMEOUT_MS });
-        if (result.status !== 0 || result.stdout.trim().toLowerCase() !== 'yes') {
-          authorized = false;
-          authorizationFailure = `${verb} ${resource}: ${diagnostic(result)}`;
-          break;
-        }
-      }
-      if (authorized) break;
-      if (attempt < MAX_ATTEMPTS) pause(RETRY_DELAY_MS);
-    }
-    if (!authorized) {
-      throw new Error(`Kubernetes namespace permissions did not become available within ${MAX_ATTEMPTS} attempts (${authorizationFailure}).`);
-    }
-
     const manifest = join(repoRoot, 'deploy', 'k8s', 'base', 'namespace.yaml');
     const apply = execKubectl([...baseArgs, 'apply', '--filename', manifest],
       { check: false, timeout: COMMAND_TIMEOUT_MS });
@@ -147,5 +164,9 @@ export function bootstrapP0Namespace({
       throw new Error(`P0 namespace readback did not converge within ${MAX_ATTEMPTS} attempts (${readbackFailure}).`);
     }
     return receipt;
-  }, { execAz, execKubelogin });
+  }, {
+    execAz, execKubelogin, execKubectl,
+    requiredPermissions: PERMISSIONS,
+    permissionContext: 'P0 namespace bootstrap',
+  });
 }

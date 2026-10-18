@@ -2,7 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { run, redact } from './exec.mjs';
-import { withP0UserKubeconfig } from './namespace-bootstrap.mjs';
+import { assertP0KubernetesPermissions, withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 
 const NAMESPACE = 'agentweaver';
 const SIGNING = 'identity-broker-signing';
@@ -64,7 +64,7 @@ export function generateBrokerSigning(repoRoot) {
 
 /**
  * Creates or validates broker signing and key-ring resources in the scoped P0 namespace.
- * Invalid state or failed Kubernetes operations throw rather than accepting an incomplete key ring.
+ * It checks required create permissions before generating or writing signing state.
  */
 export function bootstrapIdentityBrokerState(config, {
   withKubeconfig = withP0UserKubeconfig,
@@ -78,12 +78,6 @@ export function bootstrapIdentityBrokerState(config, {
         { ...OPTIONS, projectJson: projectBrokerState, preserveProjectedJson: true });
       if (result.status !== 0) throw new Error(`Broker ${resource} readback failed: ${redact(result.stderr)}`);
       return JSON.parse(result.stdout);
-    }
-    function permission(verb, resource) {
-      const result = execKubectl([...args, 'auth', 'can-i', verb, resource], OPTIONS);
-      if (result.status !== 0 || result.stdout.trim() !== 'yes') {
-        throw new Error(`Broker state permission denied: ${verb} ${resource}: ${redact(result.stderr || result.stdout)}`);
-      }
     }
     const namespace = read('namespaces', NAMESPACE);
     if (namespace?.kind !== 'Namespace' || namespace.metadata.name !== NAMESPACE ||
@@ -114,8 +108,11 @@ export function bootstrapIdentityBrokerState(config, {
     if (keyRing) assertKeyRing(keyRing);
     // A surviving key ring cannot be unsealed with newly generated signing material.
     if (!signing && keyRing) throw new Error('Broker key-ring PVC exists without its signing Secret; recover the original signing material before retry.');
-    if (!signing) permission('create', 'secrets');
-    if (!keyRing) permission('create', 'persistentvolumeclaims');
+    const writePermissions = [
+      ...(!signing ? [['create', 'secrets', NAMESPACE]] : []),
+      ...(!keyRing ? [['create', 'persistentvolumeclaims', NAMESPACE]] : []),
+    ];
+    assertP0KubernetesPermissions(base, execKubectl, writePermissions, 'Identity Broker state bootstrap');
     let signingReadback = signing;
     if (!signing) {
       const secret = generateSigning(config.repoRoot ?? process.cwd());
@@ -141,5 +138,5 @@ export function bootstrapIdentityBrokerState(config, {
       keyRing: { name: KEY_RING, uid: keyRingReadback.metadata.uid, created: !keyRing, phase: keyRingReadback.phase },
       runtimeVerified: false,
     };
-  });
+  }, { execKubectl });
 }

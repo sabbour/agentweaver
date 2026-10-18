@@ -58,15 +58,6 @@ test('AKS bootstrap uses normal user credentials and applies then reads back onl
   const kubeloginCalls = [];
   const waits = [];
   const { calls, execKubectl } = fakeKubernetes({
-    authorization: (() => {
-      const counts = new Map();
-      return command => {
-        const key = command.slice(2).join(' ');
-        const count = (counts.get(key) ?? 0) + 1;
-        counts.set(key, count);
-        return key === 'create namespaces' && count === 1 ? ok('no\n') : ok('yes\n');
-      };
-    })(),
     readback: (() => {
       let count = 0;
       return () => (++count === 1
@@ -95,7 +86,12 @@ test('AKS bootstrap uses normal user credentials and applies then reads back onl
   assert.equal(kubeloginCalls[0].args[kubeloginCalls[0].args.indexOf('--kubeconfig') + 1],
     azureCalls[0].args[azureCalls[0].args.indexOf('--file') + 1]);
   assert.ok(!azureCalls[0].args.includes('--admin'));
-  assert.deepEqual(waits, [5_000, 5_000]);
+  assert.deepEqual(waits, [5_000]);
+  assert.deepEqual(calls.filter(({ args }) => args[2] === 'auth').map(({ args }) => args.slice(4, 6)), [
+    ['create', 'namespaces'],
+    ['get', 'namespace/agentweaver'],
+    ['patch', 'namespace/agentweaver'],
+  ]);
   const applyCalls = calls.filter(({ args }) => args.includes('apply'));
   assert.equal(applyCalls.length, 1);
   assert.equal(applyCalls[0].args[applyCalls[0].args.indexOf('--filename') + 1],
@@ -128,7 +124,7 @@ test('namespace bootstrap fails explicitly and cleans up if Azure CLI login conv
   assert.equal(existsSync(dirname(kubeconfig)), false);
 });
 
-test('namespace bootstrap stops before apply when scoped namespace permissions remain denied', () => {
+test('namespace bootstrap fails before apply when required namespace permissions are denied', () => {
   const waits = [];
   const { calls, execKubectl } = fakeKubernetes({
     authorization: command => command[2] === 'patch' ? ok('no\n') : ok('yes\n'),
@@ -138,9 +134,37 @@ test('namespace bootstrap stops before apply when scoped namespace permissions r
     execKubelogin: fakeKubelogin(),
     execKubectl,
     pause: milliseconds => waits.push(milliseconds),
-  }), /permissions did not become available within 12 attempts \(patch namespace\/agentweaver/);
+  }), /Kubernetes API access is unavailable or insufficient for P0 namespace bootstrap: required permission "patch namespace\/agentweaver"/);
   assert.equal(calls.filter(({ args }) => args.includes('apply')).length, 0);
-  assert.equal(waits.length, 11);
+  assert.deepEqual(waits, []);
+  assert.equal(existsSync(dirname(kubeconfigPath(calls))), false);
+});
+
+test('namespace bootstrap reports unavailable Kubernetes API access before applying resources', () => {
+  const { calls, execKubectl } = fakeKubernetes({
+    authorization: () => denied('Unable to connect to the server: network is unreachable'),
+  });
+  assert.throws(() => bootstrapP0Namespace(target, {
+    execAz: () => ok(),
+    execKubelogin: fakeKubelogin(),
+    execKubectl,
+    pause() {},
+  }), /Kubernetes API access is unavailable or insufficient.*network is unreachable/);
+  assert.equal(calls.filter(({ args }) => args.includes('apply')).length, 0);
+  assert.equal(existsSync(dirname(kubeconfigPath(calls))), false);
+});
+
+test('namespace bootstrap turns a timed-out authorization check into an actionable access error', () => {
+  const { calls, execKubectl } = fakeKubernetes({
+    authorization: () => { throw new Error('kubectl request timed out'); },
+  });
+  assert.throws(() => bootstrapP0Namespace(target, {
+    execAz: () => ok(),
+    execKubelogin: fakeKubelogin(),
+    execKubectl,
+    pause() {},
+  }), /Kubernetes API access is unavailable or insufficient.*outside this tooling.*kubectl request timed out/);
+  assert.equal(calls.filter(({ args }) => args.includes('apply')).length, 0);
   assert.equal(existsSync(dirname(kubeconfigPath(calls))), false);
 });
 

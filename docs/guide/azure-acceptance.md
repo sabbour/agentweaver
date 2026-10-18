@@ -76,14 +76,17 @@ For an existing environment, use the guarded AKS-only update path when the
 approved change is limited to AKS. That path updates the cluster and its three
 existing workload-identity federation records. It does not redeploy PostgreSQL,
 Key Vault, Blob Storage, the VNet, private DNS, or Monitor. Supply the approved
-operator's Microsoft Entra ID object ID.
+infrastructure inputs only; the deployment does not take an operator object ID
+for Kubernetes access.
 
-The installer creates or reuses a permanent Azure Kubernetes Service RBAC
-Cluster Admin assignment at the AKS resource scope. It does not grant a
-broader Azure role or remove that assignment. An AKS-only receipt is scoped to
-that update; it does not replace the verified full-foundation resource
-receipt required for Foundation Probe acceptance. The Probe image and
-infrastructure deployment have separate source receipts.
+The tooling never creates, requires, or verifies a human Azure Kubernetes
+Service RBAC Cluster Admin assignment. Provision cluster connectivity and
+Kubernetes API permissions outside the tooling. The cluster-dependent bootstrap
+steps check the access they need and stop before writing resources when it is
+missing. An AKS-only receipt is scoped to that update; it does not replace the
+verified full-foundation resource receipt required for Foundation Probe
+acceptance. The Probe image and infrastructure deployment have separate source
+receipts.
 
 The system node pool scales automatically between two and three
 `Standard_D2s_v5` nodes. The AKS-only installer preserves the observed node

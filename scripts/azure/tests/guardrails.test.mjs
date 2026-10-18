@@ -328,10 +328,15 @@ test('role assignments must have the exact reviewed parent scope and ARM GUID', 
   const vaultId = `${fixture.groupId}/providers/Microsoft.KeyVault/vaults/agentweaver-kv`;
   const clusterId = `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/agentweaver-aks`;
   const clusterRoleName = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  // A role assignment at cluster scope is never part of the reviewed resource inventory.
   assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources: [{
     id: `${clusterId}/providers/Microsoft.Authorization/roleAssignments/${clusterRoleName}`,
     type: 'Microsoft.Authorization/roleAssignments',
     name: clusterRoleName,
+    properties: {
+      principalId: '33333333-3333-3333-3333-333333333333',
+      roleDefinitionId: 'built-in-aks-cluster-admin-role',
+    },
   }] })), /unexpected/);
   const roleId = 'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba';
   const name = expectedArmGuid(vaultId, clusterId, roleId);
