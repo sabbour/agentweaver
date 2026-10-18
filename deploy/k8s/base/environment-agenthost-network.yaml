@@ -37,6 +37,7 @@ spec:
     matchLabels:
       agentweaver.io/workload: environment
   egress:
+    # These owner APIs are configured by Environment for provisioning and runtime delivery.
     - toEndpoints:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
@@ -44,9 +45,25 @@ spec:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
             agentweaver.io/workload: projects-config
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: orchestrator
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: identity-broker
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: events-and-sessions
       toPorts:
         - ports:
             - port: "8443"
+              protocol: TCP
+    # Sandbox reconciliation uses the Kubernetes API through the Cilium entity.
+    - toEntities:
+        - kube-apiserver
+      toPorts:
+        - ports:
+            - port: "443"
               protocol: TCP
 ---
 apiVersion: cilium.io/v2
@@ -68,6 +85,37 @@ spec:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
             agentweaver.io/workload: orchestrator
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: agenthost-egress
+  namespace: agentweaver-v1-p0
+  labels:
+    agentweaver.io/service: agenthost
+spec:
+  endpointSelector:
+    matchLabels:
+      agentweaver.io/workload: agenthost
+  # AgentHost calls only the runtime owners named by its P0 profile.
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: identity-broker
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: orchestrator
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: environment
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            agentweaver.io/workload: events-and-sessions
       toPorts:
         - ports:
             - port: "8443"

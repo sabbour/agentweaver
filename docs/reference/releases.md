@@ -175,15 +175,45 @@ tracked draft, rejecting continuation receipts and completion proofs. Both
 bootstrap results are pre-acceptance only; neither replaces or weakens
 `release:deploy`, which remains the strict gate for the v1.0.0 product-version
 composition. Its current version constraints do not accept v1.0.1's
-mixed-version composition, even after persona evidence exists. The three checked-in
-P0 service ConfigMap snapshots now have source-backed runtime values and no
-incomplete markers. Apply them only through the reviewed bootstrap sequence,
-which still checks the applied maps and live Kubernetes prerequisites. The
+mixed-version composition, even after persona evidence exists. The complete
+P0 product installation is expressed by the root Kustomization at
+`deploy/k8s`. After workload-required runtime inputs and Gateway placement are approved, the
+operator can apply it with `kubectl apply -k deploy\k8s`. The bundle contains
+all nine shared-service Deployments and Services, ServiceAccounts, runtime
+ConfigMaps, the Environment Cilium settings, Projects provider catalog,
+NetworkPolicies, and required Cilium policies. Product images are pinned with
+Kustomize `images:` entries. The service-owner policies allow only configured
+Broker issuer HTTPS, workload-scoped Entra/PostgreSQL access, Environment's
+Kubernetes API path, and configured owner-service calls. Secrets, private keys,
+certificates, public CA data, database grants and migrations, and Gateway
+placement remain operator-supplied.
+
+`release:deploy` and `release:deploy-bootstrap` use the same Kustomize source.
+They verify the source-bound publication receipt, all ten product image
+digests, the Azure and Kubernetes target, runtime prerequisites, TLS/CA
+requirements, and existing Broker routing before applying. Dry-run is
+read-only; `--execute` applies the rendered installation with `kubectl apply -k`
+and then performs live rollout and image checks. The helper no longer generates
+Deployments or Services from a JavaScript List. The bootstrap is pre-acceptance
+only and does not record release acceptance.
+
+Gateway, Web, and Knowledge remain marked incomplete until their documented
+inputs are resolved: the approved Portal origin, production Web client ID and
+scopes, and Knowledge database role, provider resource ID, and generation.
+Bootstrap rejects each incomplete map. The three existing Gateway ingress
+policies remain in the bundle without changing Gateway placement; they require
+an approved Gateway namespace and namespace policy mode (`restricted` or
+`baseline`). The source also includes an incomplete `agenthost-runtime-v1`
+ConfigMap, but it is not a deployment prerequisite while Environment's optional
+AgentHost profile remains unset. Enabling that profile requires the exact
+per-Sandbox configure endpoint and matching audience, an approved
+`MaximumPendingTurns`, and the name of an existing operator-supplied TLS Secret.
+The
 [P0 Kubernetes input inventory](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md#p0-runtime-configmap-snapshots)
-records their provenance and apply order. Pass the catalog PR merge commit as
-`--provider-catalog-source-commit`; the catalog snapshot separately records the
-published product source.
-The source contains a prepared platform release composition, not an actual deployment or live acceptance gate. Release preparation does not prove Azure acceptance.
+records value provenance, remaining inputs, and the install command. Pass the
+catalog PR merge commit as `--provider-catalog-source-commit`; the catalog
+snapshot separately records the published product source. Applying the
+Kustomize bundle does not prove Azure acceptance.
 
 ## One-use v1.0.0 completion
 

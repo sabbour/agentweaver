@@ -1,0 +1,178 @@
+{
+  "apiVersion": "apps/v1",
+  "kind": "Deployment",
+  "metadata": {
+    "name": "mcp",
+    "namespace": "agentweaver-v1-p0",
+    "labels": {
+      "app.kubernetes.io/name": "mcp",
+      "agentweaver.io/service": "mcp"
+    }
+  },
+  "spec": {
+    "replicas": 1,
+    "strategy": {
+      "type": "Recreate"
+    },
+    "selector": {
+      "matchLabels": {
+        "app.kubernetes.io/name": "mcp"
+      }
+    },
+    "template": {
+      "metadata": {
+        "labels": {
+          "app.kubernetes.io/name": "mcp",
+          "agentweaver.io/service": "mcp",
+          "agentweaver.io/workload": "mcp"
+        }
+      },
+      "spec": {
+        "serviceAccountName": "mcp",
+        "automountServiceAccountToken": true,
+        "securityContext": {
+          "runAsNonRoot": true,
+          "runAsUser": 1654,
+          "runAsGroup": 1654,
+          "fsGroup": 1654,
+          "fsGroupChangePolicy": "OnRootMismatch",
+          "seccompProfile": {
+            "type": "RuntimeDefault"
+          }
+        },
+        "terminationGracePeriodSeconds": 30,
+        "volumes": [
+          {
+            "name": "tmp",
+            "emptyDir": {
+              "sizeLimit": "64Mi"
+            }
+          },
+          {
+            "name": "tls",
+            "secret": {
+              "secretName": "mcp-tls",
+              "optional": false,
+              "defaultMode": 288,
+              "items": [
+                {
+                  "key": "tls.crt",
+                  "path": "tls.crt"
+                },
+                {
+                  "key": "tls.key",
+                  "path": "tls.key"
+                }
+              ]
+            }
+          },
+          {
+            "name": "backend-ca",
+            "configMap": {
+              "name": "service-backend-ca",
+              "optional": false,
+              "items": [
+                {
+                  "key": "ca.crt",
+                  "path": "ca.crt"
+                }
+              ]
+            }
+          }
+        ],
+        "containers": [
+          {
+            "name": "mcp",
+            "image": "ghcr.io/sabbour/agentweaver.mcp:receipt-pinned",
+            "imagePullPolicy": "IfNotPresent",
+            "ports": [
+              {
+                "name": "https",
+                "containerPort": 8443,
+                "protocol": "TCP"
+              }
+            ],
+            "env": [
+              {
+                "name": "ASPNETCORE_URLS",
+                "value": "https://+:8443"
+              },
+              {
+                "name": "ASPNETCORE_Kestrel__Certificates__Default__Path",
+                "value": "/var/run/mcp-tls/tls.crt"
+              },
+              {
+                "name": "ASPNETCORE_Kestrel__Certificates__Default__KeyPath",
+                "value": "/var/run/mcp-tls/tls.key"
+              }
+            ],
+            "envFrom": [
+              {
+                "configMapRef": {
+                  "name": "mcp-runtime-config",
+                  "optional": false
+                }
+              }
+            ],
+            "volumeMounts": [
+              {
+                "name": "tmp",
+                "mountPath": "/tmp"
+              },
+              {
+                "name": "tls",
+                "mountPath": "/var/run/mcp-tls",
+                "readOnly": true
+              },
+              {
+                "name": "backend-ca",
+                "mountPath": "/var/run/service-backend-ca",
+                "readOnly": true
+              }
+            ],
+            "livenessProbe": {
+              "httpGet": {
+                "path": "/health/live",
+                "port": "https",
+                "scheme": "HTTPS"
+              },
+              "periodSeconds": 10,
+              "timeoutSeconds": 3,
+              "failureThreshold": 3
+            },
+            "readinessProbe": {
+              "httpGet": {
+                "path": "/health/ready",
+                "port": "https",
+                "scheme": "HTTPS"
+              },
+              "periodSeconds": 5,
+              "timeoutSeconds": 3,
+              "failureThreshold": 3
+            },
+            "resources": {
+              "requests": {
+                "cpu": "100m",
+                "memory": "128Mi"
+              },
+              "limits": {
+                "cpu": "500m",
+                "memory": "512Mi"
+              }
+            },
+            "securityContext": {
+              "runAsNonRoot": true,
+              "allowPrivilegeEscalation": false,
+              "capabilities": {
+                "drop": [
+                  "ALL"
+                ]
+              },
+              "readOnlyRootFilesystem": true
+            }
+          }
+        ]
+      }
+    }
+  }
+}

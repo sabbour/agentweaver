@@ -4,21 +4,25 @@
  */
 import { createHash, X509Certificate } from 'node:crypto';
 import {
-  mkdirSync, readFileSync, rmSync, writeFileSync,
+  cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
 } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { componentImageRepository, componentImageTag } from './pack.mjs';
 import {
   BROKER_RUN_BINDING_ANNOTATION,
   PROJECTS_CONFIG_TLS_CERTIFICATE_PATH,
   PROJECTS_CONFIG_TLS_KEY_PATH, brokerRunBindingFingerprint,
-  createBrokerRunBindingPolicies, createRuntimeList,
+  createBrokerRunBindingPolicies,
   PROVIDER_ADAPTER_VERSION_RUNTIME_INPUTS, PROVIDER_OPTIONS_REVISION_RUNTIME_INPUTS,
   validateBrokerRunBinding,
 } from './runtime-list.mjs';
+import {
+  createKustomizeImageEntries, parseKustomizeResources, validateKustomizeImagePins,
+} from './kustomize-runtime.mjs';
 import { validateManifest } from './validate.mjs';
 import { verifyRegistryImage } from './registry.mjs';
 import { verifyPartialPublicationCompletion } from './partial-publication.mjs';
@@ -97,6 +101,48 @@ const WORKLOAD_IDENTITY_SERVICES = new Set([
   'identity-broker', 'events-and-sessions', 'environment', 'knowledge', 'orchestrator', 'projects-config',
 ]);
 const IDENTITY_CLIENT_SERVICES = new Set(['gateway', 'orchestrator']);
+const SERVICE_RUNTIME_CONFIG_MAP_NAMES = Object.freeze(DEPLOYED_SERVICES
+  .map((id) => `${SERVICE_NAMES[id]}-runtime-config`));
+const REQUIRED_INSTALL_CONFIG_MAPS = new Set([
+  ...SERVICE_RUNTIME_CONFIG_MAP_NAMES,
+  'environment-cilium-config',
+  'agenthost-runtime-v1',
+  'projects-config-provider-catalog',
+]);
+const WORKLOAD_IDENTITY_CONFIG = Object.freeze({
+  'identity-broker': {
+    configMap: 'identity-broker-runtime-config',
+    clientId: 'IdentityBroker__SecretRedemption__WorkloadIdentityClientId',
+    tenantId: 'IdentityBroker__SecretRedemption__WorkloadIdentityTenantId',
+  },
+  'events-and-sessions': {
+    configMap: 'events-and-sessions-runtime-config',
+    clientId: 'EventsAndSessions__Database__WorkloadIdentity__ClientId',
+    tenantId: 'EventsAndSessions__Database__WorkloadIdentity__TenantId',
+  },
+  environment: {
+    configMap: 'environment-runtime-config',
+    clientId: 'Environment__Database__WorkloadIdentity__ClientId',
+    tenantId: 'Environment__Database__WorkloadIdentity__TenantId',
+  },
+  knowledge: {
+    configMap: 'knowledge-runtime-config',
+    clientId: 'Knowledge__Database__WorkloadIdentity__ClientId',
+    tenantId: 'Knowledge__Database__WorkloadIdentity__TenantId',
+  },
+  orchestrator: {
+    configMap: 'orchestrator-runtime-config',
+    clientId: 'Orchestrator__Database__WorkloadIdentity__ClientId',
+    tenantId: 'Orchestrator__Database__WorkloadIdentity__TenantId',
+  },
+  'projects-config': {
+    configMap: 'projects-config-runtime-config',
+    clientId: 'ProjectsConfig__Database__WorkloadIdentity__ClientId',
+    tenantId: 'ProjectsConfig__Database__WorkloadIdentity__TenantId',
+  },
+});
+const P0_PROVIDER_CATALOG_CONFIG_MAP = 'projects-config-provider-catalog';
+const KUSTOMIZE_INSTALL_PATH = path.join('deploy', 'k8s');
 const BACKEND_TLS_HOSTNAMES = Object.freeze({
   gateway: 'gateway.agentweaver-v1-p0.svc.cluster.local',
   mcp: 'mcp.agentweaver-v1-p0.svc.cluster.local',
@@ -116,16 +162,21 @@ const BOOTSTRAP_RELEASES = Object.freeze({
     allowLightweightTag: true,
   }),
 });
-/** Maps services to the expected Kubernetes network-policy names. */
+/** Maps each service to all required Cilium policy names, including shared egress policies. */
 export const SERVICE_NETWORK_POLICY_NAMES = Object.freeze({
   'identity-broker': 'identity-broker-egress',
   'events-and-sessions': 'events-and-sessions-network',
-  agenthost: 'agenthost-environment-ingress',
-  environment: ['environment-agenthost-egress', 'environment-agenthost-ingress'],
-  gateway: ['gateway-owner-network', 'gateway-api-ingress'],
-  mcp: ['mcp-gateway-network', 'mcp-gateway-ingress'],
-  orchestrator: 'orchestrator-owner-network',
-  knowledge: 'knowledge-owner-network',
+  agenthost: ['agenthost-environment-ingress', 'agenthost-egress', 'broker-issuer-egress'],
+  environment: [
+    'environment-agenthost-egress', 'environment-agenthost-ingress',
+    'database-workload-identity-egress', 'broker-issuer-egress',
+  ],
+  gateway: ['gateway-owner-network', 'gateway-api-ingress', 'broker-issuer-egress'],
+  mcp: ['mcp-gateway-network', 'mcp-gateway-ingress', 'broker-issuer-egress'],
+  orchestrator: [
+    'orchestrator-owner-network', 'database-workload-identity-egress', 'broker-issuer-egress',
+  ],
+  knowledge: ['knowledge-owner-network', 'database-workload-identity-egress', 'broker-issuer-egress'],
   'projects-config': 'projects-config-network',
   web: 'web-gateway-ingress',
 });
@@ -184,7 +235,6 @@ export function parseArgs(argv = []) {
     ['--manifest', 'manifestPath'],
     ['--publication', 'publicationPath'],
     ['--completion', 'completionPath'],
-    ['--runtime-manifest', 'runtimeManifestPath'],
     ['--provider-catalog-configmap', 'providerCatalogConfigMapName'],
     ['--provider-catalog-source-commit', 'providerCatalogSourceCommit'],
     ['--subscription-id', 'subscriptionId'],
@@ -251,18 +301,16 @@ export function parseArgs(argv = []) {
     } else if (values.completionPath !== undefined) {
       fail(`--completion is not accepted for the ${releaseTag} normal publication`);
     }
-    if (values.runtimeManifestPath) {
-      fail('--pre-acceptance must generate the runtime List from the verified receipt');
-    }
     requiredString(values.providerCatalogConfigMapName, '--provider-catalog-configmap');
     if (!SHA.test(values.providerCatalogSourceCommit ?? '') ||
         /^0+$/.test(values.providerCatalogSourceCommit)) {
       fail('--provider-catalog-source-commit must be a nonzero full Git commit SHA');
     }
   }
-  if (!values.runtimeManifestPath) {
-    requiredString(values.providerCatalogConfigMapName, '--provider-catalog-configmap');
-    requiredString(values.providerCatalogSourceCommit, '--provider-catalog-source-commit');
+  requiredString(values.providerCatalogConfigMapName, '--provider-catalog-configmap');
+  if (!SHA.test(values.providerCatalogSourceCommit ?? '') ||
+      /^0+$/.test(values.providerCatalogSourceCommit)) {
+    fail('--provider-catalog-source-commit must be a nonzero full Git commit SHA');
   }
   const target = {
     subscriptionId: values.subscriptionId,
@@ -893,6 +941,151 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
   return { apiVersion: 'v1', kind: 'List', items };
 }
 
+/** Validates the complete P0 Kustomize bundle and its rendered shared-service workload contract. */
+export function validateKustomizeInstall(document, images, namespace, providerCatalog) {
+  const items = document?.kind === 'List' ? document.items
+    : Array.isArray(document) ? document : null;
+  if (!Array.isArray(items) || items.length === 0) fail('Kustomize install must render Kubernetes resources');
+  const allowedKinds = new Set([
+    'Namespace', 'ResourceQuota', 'LimitRange', 'ServiceAccount', 'ConfigMap',
+    'Service', 'Deployment', 'NetworkPolicy', 'CiliumNetworkPolicy',
+  ]);
+  const keyedResources = new Map();
+  const namesByKind = new Map();
+  for (const item of items) {
+    if (!item || typeof item !== 'object' || Array.isArray(item) ||
+        !allowedKinds.has(item.kind) || typeof item.metadata?.name !== 'string') {
+      fail('Kustomize install contains an unsupported or invalid resource');
+    }
+    const name = item.metadata.name;
+    const key = `${item.kind}/${item.kind === 'Namespace' ? '' : item.metadata.namespace ?? ''}/${name}`;
+    if (keyedResources.has(key)) fail(`Kustomize install contains duplicate ${key}`);
+    keyedResources.set(key, item);
+    if (!namesByKind.has(item.kind)) namesByKind.set(item.kind, new Set());
+    namesByKind.get(item.kind).add(name);
+    if (item.kind === 'Namespace') {
+      if (name !== namespace || item.metadata.namespace !== undefined ||
+          item.metadata.labels?.['agentweaver.io/environment'] !== 'v1-p0') {
+        fail('Kustomize install must include only the exact v1 P0 Namespace');
+      }
+    } else if (item.metadata.namespace !== namespace) {
+      fail(`${item.kind}/${name} must use the exact v1 P0 namespace`);
+    }
+    const unresolved = [...JSON.stringify(item).matchAll(/CHANGEME-[A-Z0-9-]+/g)]
+      .map(([marker]) => marker);
+    if (unresolved.some((marker) => marker !== 'CHANGEME-GATEWAY-NAMESPACE' ||
+        item.kind !== 'CiliumNetworkPolicy' ||
+        !['gateway-api-ingress', 'mcp-gateway-ingress', 'web-gateway-ingress'].includes(name))) {
+      fail(`${item.kind}/${name} contains an unresolved non-Gateway runtime input`);
+    }
+    if (item.kind === 'ConfigMap') {
+      if (!item.data || typeof item.data !== 'object' || Array.isArray(item.data) ||
+          Object.values(item.data).some((value) => typeof value !== 'string')) {
+        fail(`ConfigMap/${name} must contain only string data`);
+      }
+      const status = item.metadata.annotations?.['agentweaver.io/runtime-config-status'];
+      if (status === 'incomplete' &&
+          !['agenthost-runtime-v1', 'gateway-runtime-config', 'web-runtime-config',
+            'knowledge-runtime-config'].includes(name)) {
+        fail(`ConfigMap/${name} is unexpectedly marked incomplete`);
+      }
+      if (status === 'incomplete' &&
+          typeof item.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'] !== 'string') {
+        fail(`ConfigMap/${name} must explain its incomplete inputs`);
+      }
+    }
+  }
+
+  const expectNames = (kind, expected, description) => {
+    const actual = namesByKind.get(kind) ?? new Set();
+    if (actual.size !== expected.size || [...expected].some((name) => !actual.has(name))) {
+      fail(`Kustomize install must include the exact ${description}`);
+    }
+  };
+  expectNames('Namespace', new Set([namespace]), 'P0 Namespace');
+  expectNames('ResourceQuota', new Set([`${namespace}-quota`]), 'P0 ResourceQuota');
+  expectNames('LimitRange', new Set([`${namespace}-limits`]), 'P0 LimitRange');
+  expectNames('ServiceAccount', new Set(DEPLOYED_SERVICES.map((id) => SERVICE_NAMES[id])),
+    'nine product ServiceAccounts');
+  expectNames('ConfigMap', REQUIRED_INSTALL_CONFIG_MAPS, 'runtime ConfigMaps and provider catalog');
+  expectNames('NetworkPolicy', new Set(['allow-dns-egress', 'default-deny-all']),
+    'default-deny and DNS NetworkPolicies');
+  const requiredCiliumPolicies = new Set(Object.values(SERVICE_NETWORK_POLICY_NAMES)
+    .flatMap((names) => Array.isArray(names) ? names : [names]));
+  expectNames('CiliumNetworkPolicy', requiredCiliumPolicies, 'service Cilium policies');
+
+  const configMaps = new Map(items.filter(({ kind }) => kind === 'ConfigMap')
+    .map((resource) => [resource.metadata.name, resource]));
+  for (const name of SERVICE_RUNTIME_CONFIG_MAP_NAMES) {
+    if (!configMaps.has(name)) fail(`Kustomize install is missing ${name}`);
+  }
+  const agentHostConfig = configMaps.get('agenthost-runtime-v1');
+  if (!agentHostConfig?.immutable) {
+    fail('Kustomize install must include immutable agenthost-runtime-v1 source configuration');
+  }
+  let agentHostSettings;
+  try {
+    agentHostSettings = JSON.parse(agentHostConfig.data?.['appsettings.json'] ?? '');
+  } catch {
+    fail('agenthost-runtime-v1 must contain valid appsettings.json');
+  }
+  const agentHost = images.find((image) => image.id === 'Agentweaver.AgentHost');
+  const imageSettings = agentHostSettings?.AgentHost?.Image;
+  if (!agentHost?.sandboxImageDigest ||
+      imageSettings?.Digest !== agentHost.sandboxImageDigest ||
+      imageSettings?.Platform !== 'linux/amd64' ||
+      imageSettings?.CompressedPullBytes !== agentHost.compressedPullBytes) {
+    fail('agenthost-runtime-v1 image digest, platform, and compressed bytes must match the verified publication receipt');
+  }
+  const catalog = configMaps.get(providerCatalog?.configMapName);
+  if (providerCatalog?.configMapName !== P0_PROVIDER_CATALOG_CONFIG_MAP ||
+      !catalog?.immutable ||
+      catalog.metadata.annotations?.['agentweaver.io/provider-catalog-product-source'] === undefined) {
+    fail('Kustomize install must include the checked-in immutable Projects provider catalog');
+  }
+
+  const serviceAccounts = new Map(items.filter(({ kind }) => kind === 'ServiceAccount')
+    .map((resource) => [resource.metadata.name, resource]));
+  for (const [name, account] of serviceAccounts) {
+    if (account.metadata.labels?.['agentweaver.io/service'] !== name ||
+        account.automountServiceAccountToken !== true) {
+      fail(`ServiceAccount/${name} must preserve its exact service identity contract`);
+    }
+  }
+  for (const [name, identity] of Object.entries(WORKLOAD_IDENTITY_CONFIG)) {
+    const account = serviceAccounts.get(name);
+    const configMap = configMaps.get(identity.configMap);
+    const clientId = configMap?.data?.[identity.clientId];
+    const tenantId = configMap?.data?.[identity.tenantId];
+    const annotations = account?.metadata.annotations ?? {};
+    if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(clientId ?? '') ||
+        !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(tenantId ?? '') ||
+        annotations['azure.workload.identity/client-id'] !== clientId ||
+        annotations['azure.workload.identity/tenant-id'] !== tenantId ||
+        account.metadata.labels?.['azure.workload.identity/use'] !== 'true') {
+      fail(`ServiceAccount/${name} must use the exact client and tenant IDs from ${identity.configMap}`);
+    }
+  }
+  for (const name of ['gateway', 'mcp', 'web']) {
+    const account = serviceAccounts.get(name);
+    if (account.metadata.labels?.['azure.workload.identity/use'] !== undefined ||
+        account.metadata.annotations?.['azure.workload.identity/client-id'] !== undefined ||
+        account.metadata.annotations?.['azure.workload.identity/tenant-id'] !== undefined) {
+      fail(`ServiceAccount/${name} must not receive an unapproved workload identity`);
+    }
+  }
+
+  const runtimeManifest = validateRuntimeManifest({
+    apiVersion: 'v1',
+    kind: 'List',
+    items: items.filter(({ kind }) => kind === 'Deployment' || kind === 'Service'),
+  }, images, namespace, undefined, providerCatalog);
+  return {
+    installationManifest: { apiVersion: 'v1', kind: 'List', items },
+    runtimeManifest,
+  };
+}
+
 function resolvePodReferences(runtimeManifest) {
   const references = new Map();
   for (const item of runtimeManifest.items) {
@@ -1312,13 +1505,34 @@ export function verifyAzureTarget(target, { root, run }) {
   return { cluster, contextName, server };
 }
 
-/** Checks referenced cluster resources and their source-bound configuration before deployment begins. */
-export function verifyRuntimePrerequisites(runtimeManifest, target, { root, run, brokerRunBinding }) {
+/** Checks source-managed bundle contents and operator-owned cluster prerequisites before deployment. */
+export function verifyRuntimePrerequisites(
+  runtimeManifest, target, { root, run, brokerRunBinding, managedResources } = {},
+) {
+  const managedByKey = new Map((managedResources?.items ?? []).map((resource) => [
+    `${resource.kind}/${resource.metadata?.name}`,
+    resource,
+  ]));
   for (const reference of resolvePodReferences(runtimeManifest)) {
     const plural = reference.kind === 'serviceaccount' ? 'serviceaccount'
       : reference.kind === 'configmap' ? 'configmap'
         : reference.kind === 'secret' ? 'secret'
           : 'persistentvolumeclaim';
+    const managedKind = reference.kind === 'serviceaccount' ? 'ServiceAccount'
+      : reference.kind === 'configmap' ? 'ConfigMap' : undefined;
+    const managed = managedKind
+      ? managedByKey.get(`${managedKind}/${reference.name}`)
+      : undefined;
+    if (managed) {
+      if (managed.metadata?.namespace !== target.namespace) {
+        fail(`required source-managed ${reference.kind} ${reference.name} is not in the exact v1 P0 namespace`);
+      }
+      if (reference.kind === 'configmap' &&
+          managed.metadata?.annotations?.['agentweaver.io/runtime-config-status'] === 'incomplete') {
+        fail(`${reference.name} is marked incomplete; resolve its runtime inputs before deployment`);
+      }
+      continue;
+    }
     if (reference.kind === 'secret' && brokerRunBinding) {
       const output = run('kubectl', [
         'get', plural, reference.name, '--namespace', target.namespace,
@@ -1334,29 +1548,40 @@ export function verifyRuntimePrerequisites(runtimeManifest, target, { root, run,
     if (resource.metadata?.name !== reference.name || resource.metadata?.namespace !== target.namespace) {
       fail(`required existing ${reference.kind} ${reference.name} is not in the exact v1 P0 namespace`);
     }
-    // Do not let a deployment consume a runtime ConfigMap until every required value is resolved.
+    // External runtime references must also be complete before a workload can consume them.
     if (reference.kind === 'configmap' &&
         resource.metadata?.annotations?.['agentweaver.io/runtime-config-status'] === 'incomplete') {
       fail(`${reference.name} is marked incomplete; resolve its runtime inputs before deployment`);
     }
   }
-  const defaultPolicies = parseJson(run('kubectl', ['get', 'networkpolicies.networking.k8s.io',
-    '--namespace', target.namespace, '--output', 'json'], { cwd: root }), 'namespace network policies');
-  const defaultPolicyNames = new Set((defaultPolicies.items ?? []).map((entry) => entry.metadata?.name));
-  if (!defaultPolicyNames.has('default-deny-all') || !defaultPolicyNames.has('allow-dns-egress')) {
-    fail('the existing namespace default-deny and DNS-only network policies are required');
-  }
-  const policies = parseJson(run('kubectl', ['get', 'ciliumnetworkpolicies.cilium.io',
-    '--namespace', target.namespace, '--output', 'json'], { cwd: root }), 'existing Cilium network policies');
-  const policyNames = new Set((policies.items ?? []).map((entry) => entry.metadata?.name));
-  for (const name of PRODUCT_SERVICES.map((id) => SERVICE_NAMES[id])) {
-    const configuredPolicies = SERVICE_NETWORK_POLICY_NAMES[name];
-    if (!configuredPolicies) {
-      fail(`no v1 Cilium policy contract is defined for ${name}; deployment is blocked until its service-specific network policy is reviewed and checked in`);
+  if (managedResources) {
+    const unresolvedGatewayPolicy = managedResources.items.some((resource) =>
+      resource.kind === 'CiliumNetworkPolicy' &&
+      ['gateway-api-ingress', 'mcp-gateway-ingress', 'web-gateway-ingress']
+        .includes(resource.metadata?.name) &&
+      JSON.stringify(resource).includes('CHANGEME-GATEWAY-NAMESPACE'));
+    if (unresolvedGatewayPolicy) {
+      fail('Gateway ingress policies require the approved Gateway namespace and its namespace policy mode (restricted or baseline)');
     }
-    for (const policyName of Array.isArray(configuredPolicies) ? configuredPolicies : [configuredPolicies]) {
-      if (!policyNames.has(policyName)) {
-        fail(`operator-reviewed ${policyName} Cilium policy must already exist; deployment does not create or broaden network access`);
+  } else {
+    const defaultPolicies = parseJson(run('kubectl', ['get', 'networkpolicies.networking.k8s.io',
+      '--namespace', target.namespace, '--output', 'json'], { cwd: root }), 'namespace network policies');
+    const defaultPolicyNames = new Set((defaultPolicies.items ?? []).map((entry) => entry.metadata?.name));
+    if (!defaultPolicyNames.has('default-deny-all') || !defaultPolicyNames.has('allow-dns-egress')) {
+      fail('the existing namespace default-deny and DNS-only network policies are required');
+    }
+    const policies = parseJson(run('kubectl', ['get', 'ciliumnetworkpolicies.cilium.io',
+      '--namespace', target.namespace, '--output', 'json'], { cwd: root }), 'existing Cilium network policies');
+    const policyNames = new Set((policies.items ?? []).map((entry) => entry.metadata?.name));
+    for (const name of PRODUCT_SERVICES.map((id) => SERVICE_NAMES[id])) {
+      const configuredPolicies = SERVICE_NETWORK_POLICY_NAMES[name];
+      if (!configuredPolicies) {
+        fail(`no v1 Cilium policy contract is defined for ${name}; deployment is blocked until its service-specific network policy is reviewed and checked in`);
+      }
+      for (const policyName of Array.isArray(configuredPolicies) ? configuredPolicies : [configuredPolicies]) {
+        if (!policyNames.has(policyName)) {
+          fail(`operator-reviewed ${policyName} Cilium policy must already exist; deployment does not create or broaden network access`);
+        }
       }
     }
   }
@@ -1633,6 +1858,209 @@ export function verifyBrokerRunBindingConfiguration(binding, target, { root, run
   };
 }
 
+function readKustomizeJson(file, location) {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch (error) {
+    fail(`${location} is not valid JSON: ${error.message}`);
+  }
+}
+
+function readAgentHostRuntimeSettings(directory) {
+  let configMap;
+  try {
+    configMap = parseYaml(readFileSync(
+      path.join(directory, 'profiles', 'agenthost', 'runtime-config.example.yaml'), 'utf8'));
+  } catch (error) {
+    fail(`AgentHost Kustomize ConfigMap is not valid YAML: ${error.message}`);
+  }
+  if (configMap?.kind !== 'ConfigMap' || configMap.metadata?.name !== 'agenthost-runtime-v1' ||
+      !configMap.immutable || typeof configMap.data?.['appsettings.json'] !== 'string') {
+    fail('AgentHost Kustomize source must define its immutable runtime ConfigMap');
+  }
+  try {
+    return JSON.parse(configMap.data['appsettings.json']);
+  } catch (error) {
+    fail(`AgentHost Kustomize appsettings.json is not valid JSON: ${error.message}`);
+  }
+}
+
+function setAgentHostRuntimeImage(directory, host) {
+  const file = path.join(directory, 'profiles', 'agenthost', 'runtime-config.example.yaml');
+  let configMap;
+  try {
+    configMap = parseYaml(readFileSync(file, 'utf8'));
+  } catch (error) {
+    fail(`AgentHost Kustomize ConfigMap is not valid YAML: ${error.message}`);
+  }
+  let settings;
+  try {
+    settings = JSON.parse(configMap?.data?.['appsettings.json'] ?? '');
+  } catch (error) {
+    fail(`AgentHost Kustomize appsettings.json is not valid JSON: ${error.message}`);
+  }
+  const image = settings?.AgentHost?.Image;
+  if (!image || typeof image !== 'object' || Array.isArray(image)) {
+    fail('AgentHost Kustomize source must include its receipt-pinned image identity');
+  }
+  // Keep the ConfigMap image identity bound to the same registry measurement as Environment.
+  image.Digest = host.sandboxImageDigest;
+  image.Platform = 'linux/amd64';
+  image.CompressedPullBytes = host.compressedPullBytes;
+  configMap.data['appsettings.json'] = JSON.stringify(settings, null, 2);
+  writeFileSync(file, stringifyYaml(configMap), 'utf8');
+}
+
+function matchesKustomizeRuntimeInputs(directory, images, providerCatalog) {
+  const expectedHost = images.find((image) => image.id === 'Agentweaver.AgentHost');
+  const agentHostSettings = readAgentHostRuntimeSettings(directory)?.AgentHost;
+  const agentHostImage = agentHostSettings?.Image;
+  const environment = readKustomizeJson(
+    path.join(directory, 'base', 'workloads', 'environment-deployment.json'),
+    'Environment Kustomize source',
+  );
+  const environmentContainer = environment.spec?.template?.spec?.containers?.[0];
+  if (!Array.isArray(environment.spec?.template?.spec?.containers) ||
+      environment.spec.template.spec.containers.length !== 1 ||
+      !Array.isArray(environmentContainer?.env)) {
+    fail('Environment Kustomize source must define one container with explicit runtime environment fields');
+  }
+  const environmentValues = new Map();
+  for (const entry of environmentContainer.env) {
+    if (typeof entry?.name !== 'string') continue;
+    environmentValues.set(entry.name, (environmentValues.get(entry.name) ?? []).concat(entry));
+  }
+  const exactEnvironmentValue = (name) => {
+    const matches = environmentValues.get(name) ?? [];
+    if (matches.length !== 1 || typeof matches[0].value !== 'string' || !matches[0].value) {
+      fail(`Environment Kustomize source must define exactly one nonempty ${name}`);
+    }
+    return matches[0].value;
+  };
+  const agentHostImageSource =
+    `ghcr.io/sabbour/${componentImageRepository('Agentweaver.AgentHost')}:receipt-pinned`;
+  // The validated `images:` entry transforms this source token into the receipt digest during rendering.
+  if (exactEnvironmentValue('Environment__Sandbox__AgentSandbox__ContainerImage') !== agentHostImageSource ||
+      exactEnvironmentValue('Environment__Sandbox__AgentSandbox__ContainerImagePlatform') !== 'linux/amd64' ||
+      exactEnvironmentValue('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes') !==
+        String(expectedHost?.compressedPullBytes) ||
+      agentHostImage?.Digest !== expectedHost?.sandboxImageDigest ||
+      agentHostImage?.Platform !== 'linux/amd64' ||
+      agentHostImage?.CompressedPullBytes !== expectedHost?.compressedPullBytes) {
+    return false;
+  }
+  for (const name of ['orchestrator', 'projects-config']) {
+    const workload = readKustomizeJson(
+      path.join(directory, 'base', 'workloads', `${name}-deployment.json`),
+      `${name} Kustomize source`,
+    );
+    const pod = workload.spec?.template;
+    const envFrom = pod?.spec?.containers?.[0]?.envFrom;
+    if (!Array.isArray(envFrom)) {
+      fail(`${name} Kustomize source must include its explicit Projects provider catalog reference`);
+    }
+    const catalogs = envFrom
+      .filter((entry) => entry?.prefix === 'ProjectsConfig__ProviderCatalog__');
+    if (catalogs.length !== 1 ||
+        catalogs[0].configMapRef?.name !== providerCatalog.configMapName ||
+        catalogs[0].configMapRef?.optional === true) {
+      fail(`${name} Kustomize source must reference the exact required Projects provider catalog`);
+    }
+    if (pod?.metadata?.annotations?.['agentweaver.io/provider-catalog-source'] !== providerCatalog.sourceCommit) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Selects the checked-in release bundle or a temporary v1.0.0 compatibility render. */
+function prepareKustomizeSource(root, releaseTag, images, providerCatalog) {
+  if (providerCatalog.configMapName !== P0_PROVIDER_CATALOG_CONFIG_MAP) {
+    fail(`the checked-in P0 installation uses ${P0_PROVIDER_CATALOG_CONFIG_MAP} as its provider catalog`);
+  }
+  const sourceDirectory = path.join(root, KUSTOMIZE_INSTALL_PATH);
+  let sourceKustomization;
+  try {
+    sourceKustomization = parseYaml(readFileSync(path.join(sourceDirectory, 'kustomization.yaml'), 'utf8'));
+  } catch (error) {
+    fail(`cannot read the checked-in P0 Kustomization: ${error.message}`);
+  }
+  if (sourceKustomization?.apiVersion !== 'kustomize.config.k8s.io/v1beta1' ||
+      sourceKustomization.kind !== 'Kustomization') {
+    fail('the checked-in P0 Kustomization has an unsupported API version or kind');
+  }
+  let sourcePinsMatch = true;
+  try {
+    validateKustomizeImagePins(sourceKustomization, images);
+  } catch (error) {
+    if (!error.message.startsWith('release deployment: Kustomization')) throw error;
+    sourcePinsMatch = false;
+  }
+  const sourceRuntimeMatches = matchesKustomizeRuntimeInputs(
+    sourceDirectory, images, providerCatalog);
+  if (sourcePinsMatch && sourceRuntimeMatches) {
+    return { path: KUSTOMIZE_INSTALL_PATH, cleanup: () => undefined };
+  }
+  if (releaseTag !== BOOTSTRAP_RELEASE_TAG) {
+    fail('checked-in P0 Kustomize images and runtime pins must match the exact publication receipt');
+  }
+
+  const temporaryRoot = mkdtempSync(path.join(os.tmpdir(), 'agentweaver-v1-kustomize-'));
+  const temporaryDirectory = path.join(temporaryRoot, KUSTOMIZE_INSTALL_PATH);
+  try {
+    cpSync(sourceDirectory, temporaryDirectory, { recursive: true });
+    const kustomizationPath = path.join(temporaryDirectory, 'kustomization.yaml');
+    const kustomization = parseYaml(readFileSync(kustomizationPath, 'utf8'));
+    kustomization.images = createKustomizeImageEntries(images);
+    validateKustomizeImagePins(kustomization, images);
+    writeFileSync(kustomizationPath, stringifyYaml(kustomization), 'utf8');
+
+    const host = images.find((image) => image.id === 'Agentweaver.AgentHost');
+    const environmentPath = path.join(temporaryDirectory, 'base', 'workloads', 'environment-deployment.json');
+    const environment = readKustomizeJson(environmentPath, 'Environment Kustomize source');
+    const environmentContainer = environment.spec?.template?.spec?.containers?.[0];
+    if (!Array.isArray(environment.spec?.template?.spec?.containers) ||
+        environment.spec.template.spec.containers.length !== 1 ||
+        !Array.isArray(environmentContainer?.env)) {
+      fail('Environment Kustomize source must define one container with explicit runtime environment fields');
+    }
+    const setEnvironmentValue = (name, value) => {
+      const matches = environmentContainer.env.filter((entry) => entry?.name === name);
+      if (matches.length !== 1 || typeof matches[0].value !== 'string') {
+        fail(`Environment Kustomize source must define exactly one ${name}`);
+      }
+      matches[0].value = value;
+    };
+    // Keep the image-transform target intact; only receipt-measured metadata is injected here.
+    setEnvironmentValue('Environment__Sandbox__AgentSandbox__ContainerImagePlatform', 'linux/amd64');
+    setEnvironmentValue('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes',
+      String(host.compressedPullBytes));
+    writeFileSync(environmentPath, `${JSON.stringify(environment, null, 2)}\n`, 'utf8');
+    setAgentHostRuntimeImage(temporaryDirectory, host);
+
+    for (const name of ['orchestrator', 'projects-config']) {
+      const file = path.join(temporaryDirectory, 'base', 'workloads', `${name}-deployment.json`);
+      const workload = readKustomizeJson(file, `${name} Kustomize source`);
+      const annotations = workload.spec?.template?.metadata?.annotations;
+      if (!annotations || typeof annotations !== 'object' || Array.isArray(annotations)) {
+        fail(`${name} Kustomize source must define pod annotations for its provider catalog source`);
+      }
+      annotations['agentweaver.io/provider-catalog-source'] = providerCatalog.sourceCommit;
+      writeFileSync(file, `${JSON.stringify(workload, null, 2)}\n`, 'utf8');
+    }
+    if (!matchesKustomizeRuntimeInputs(temporaryDirectory, images, providerCatalog)) {
+      fail('temporary v1.0.0 Kustomize source does not match its publication receipt');
+    }
+    return {
+      path: temporaryDirectory,
+      cleanup: () => rmSync(temporaryRoot, { recursive: true, force: true }),
+    };
+  } catch (error) {
+    rmSync(temporaryRoot, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 function verifyImageIds(runtimeManifest, images) {
   const expected = new Map(images.map((item) => [item.name, item.image]));
   for (const item of runtimeManifest.items.filter((resource) => resource.kind === 'Deployment')) {
@@ -1713,15 +2141,15 @@ function helpText() {
   return `release:deploy -- verify and deploy an already-published v1 product release
 
 Usage:
-  npm run release:deploy -- v1.0.0 --manifest <release-manifest.json> --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group <name> --cluster <name> --namespace <name> --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--runtime-manifest <runtime-list.json>] [--execute] [--resume]
+  npm run release:deploy -- v1.0.0 --manifest <release-manifest.json> --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group <name> --cluster <name> --namespace <name> --node-min 2 --node-max 3 --provider-catalog-configmap projects-config-provider-catalog --provider-catalog-source-commit <sha> [--execute] [--resume]
 
 The default is read-only dry-run. The exact P0 target is mandatory. A write requires
 --execute. Deployment uses only digest-pinned GHCR images, never Docker or Podman.
-Without --runtime-manifest, the checked-in runtime List source builds the nine
-shared workloads from the verified publication receipt. The Projects provider
-catalog ConfigMap name and reviewed source commit are required. A supplied
-runtime manifest may reference pre-existing objects only; it cannot create
-credentials, identities, routes, policies, namespaces, migrations, or databases.
+The checked-in deploy/k8s Kustomize source supplies the complete P0 installation.
+Its image pins must match the verified publication receipt exactly. Kustomize
+renders the workloads, ServiceAccounts, runtime ConfigMaps, and network policies;
+operator-owned credentials, certificates, and Gateway placement remain external.
+The Projects provider catalog name and reviewed source commit are required.
 Partial-publication receipts also require --completion, which verifies the
 original partial receipt, immutable continuation records, the successful run,
 and the exact merged helper PR. No environment approval history is required.
@@ -1756,8 +2184,8 @@ export async function deployRelease(options = {}, dependencies = {}) {
       text: parsed.preAcceptance ? bootstrapHelpText() : helpText(),
     };
   }
-  if (parsed.preAcceptance && (parsed.runtimeManifestPath || options.runtimeManifest)) {
-    fail('--pre-acceptance must generate the runtime List from the verified receipt');
+  if (parsed.runtimeManifestPath || Object.hasOwn(options, 'runtimeManifest')) {
+    fail('release deployment uses the checked-in Kustomize installation; runtime manifests are not accepted');
   }
   const bootstrapRelease = parsed.preAcceptance ? BOOTSTRAP_RELEASES[parsed.releaseTag] : undefined;
   if (parsed.preAcceptance && !bootstrapRelease) {
@@ -1787,10 +2215,6 @@ export async function deployRelease(options = {}, dependencies = {}) {
   const completion = parsed.completionPath
     ? options.completion ?? parseJson(readFile(path.resolve(root, parsed.completionPath), 'utf8'), 'completion receipt')
     : undefined;
-  const runtimeDocument = options.runtimeManifest ??
-    (parsed.runtimeManifestPath
-      ? parseJson(readFile(path.resolve(root, parsed.runtimeManifestPath), 'utf8'), 'runtime manifest')
-      : undefined);
   if (parsed.preAcceptance) validateBootstrapPublication(parsed.releaseTag, publication);
 
   const verifyCompletion = dependencies.verifyCompletion ??
@@ -1835,99 +2259,96 @@ export async function deployRelease(options = {}, dependencies = {}) {
   });
   let acceptedDigests = await verifyImages(images);
   verifyMeasuredAgentHostDigest(images, acceptedDigests);
-  // Supplied runtime Lists carry their own catalog identity; generated Lists require explicit CLI values.
-  const providerCatalog = parsed.providerCatalogConfigMapName === undefined &&
-    parsed.providerCatalogSourceCommit === undefined
-    ? undefined
-    : {
-      configMapName: parsed.providerCatalogConfigMapName,
-      sourceCommit: parsed.providerCatalogSourceCommit,
-    };
-  const runtimeList = runtimeDocument ?? createRuntimeList(images, parsed.target.namespace, providerCatalog);
-  const runtimeManifest = validateRuntimeManifest(
-    runtimeList, images, parsed.target.namespace, undefined, providerCatalog);
-  verifyImageIds(runtimeManifest, images);
-  const targetInfo = await (dependencies.verifyTarget ?? verifyAzureTarget)(parsed.target, { root, run });
-  (dependencies.verifyPrerequisites ?? verifyRuntimePrerequisites)(runtimeManifest, parsed.target, { root, run });
-  run('kubectl', ['apply', '--dry-run=client', '--filename', '-'], {
-    cwd: root,
-    input: `${JSON.stringify(runtimeManifest)}\n`,
-  });
+  const providerCatalog = {
+    configMapName: parsed.providerCatalogConfigMapName,
+    sourceCommit: parsed.providerCatalogSourceCommit,
+  };
+  const kustomizeSource = prepareKustomizeSource(root, parsed.releaseTag, images, providerCatalog);
+  try {
+    const renderedText = run('kubectl', ['kustomize', kustomizeSource.path], { cwd: root });
+    const installation = validateKustomizeInstall(
+      parseKustomizeResources(renderedText), images, parsed.target.namespace, providerCatalog);
+    const { installationManifest, runtimeManifest } = installation;
+    verifyImageIds(runtimeManifest, images);
+    const targetInfo = await (dependencies.verifyTarget ?? verifyAzureTarget)(parsed.target, { root, run });
+    (dependencies.verifyPrerequisites ?? verifyRuntimePrerequisites)(
+      runtimeManifest, parsed.target, { root, run, managedResources: installationManifest });
+    run('kubectl', ['apply', '--dry-run=client', '-k', kustomizeSource.path], { cwd: root });
 
-  if (parsed.dryRun || !parsed.execute) {
-    return {
-      ok: true,
-      dryRun: true,
+    if (parsed.dryRun || !parsed.execute) {
+      return {
+        ok: true,
+        dryRun: true,
+        ...(parsed.preAcceptance ? { resultType: 'pre-acceptance' } : {}),
+        sourceSha,
+        target: parsed.target,
+        services: images.filter((image) => image.id !== 'Agentweaver.AgentHost')
+          .map(({ id, image }) => ({ id, image })),
+        perSandboxAgentHost: images.find((image) => image.id === 'Agentweaver.AgentHost').sandboxImage,
+        renderedResources: installationManifest.items.length,
+        targetInfo,
+      };
+    }
+
+    const identity = {
       ...(parsed.preAcceptance ? { resultType: 'pre-acceptance' } : {}),
+      releaseTag: parsed.releaseTag,
       sourceSha,
       target: parsed.target,
-      services: images.filter((image) => image.id !== 'Agentweaver.AgentHost')
-        .map(({ id, image }) => ({ id, image })),
-      perSandboxAgentHost: images.find((image) => image.id === 'Agentweaver.AgentHost').sandboxImage,
-      renderedResources: runtimeManifest.items.length,
-      targetInfo,
+      manifestSha256: createHash('sha256').update(JSON.stringify(manifest)).digest('hex'),
+      runtimeManifestSha256: createHash('sha256').update(JSON.stringify(installationManifest)).digest('hex'),
+      publicationSha256: createHash('sha256').update(JSON.stringify(publication)).digest('hex'),
     };
-  }
+    const key = checkpointKey(parsed.releaseTag, sourceSha, parsed.target, identity);
+    let checkpoint;
+    if (parsed.restart) {
+      clearCheckpoint(key, checkpointIo);
+    } else if (parsed.resume) {
+      checkpoint = loadCheckpoint(key, identity, checkpointIo);
+    }
+    if (!checkpoint) {
+      checkpoint = {
+        version: CHECKPOINT_VERSION,
+        key,
+        ...identity,
+        stages: {},
+      };
+    }
+    const applied = checkpoint.stages.apply?.completed === true;
+    if (!applied) {
+      run('kubectl', ['apply', '-k', kustomizeSource.path], { cwd: root });
+      checkpoint = {
+        ...checkpoint,
+        updatedAt: new Date().toISOString(),
+        stages: { ...checkpoint.stages, apply: { completed: true, completedAt: new Date().toISOString() } },
+      };
+      saveCheckpoint(key, checkpoint, checkpointIo);
+    }
 
-  const identity = {
-    ...(parsed.preAcceptance ? { resultType: 'pre-acceptance' } : {}),
-    releaseTag: parsed.releaseTag,
-    sourceSha,
-    target: parsed.target,
-    manifestSha256: createHash('sha256').update(JSON.stringify(manifest)).digest('hex'),
-    runtimeManifestSha256: createHash('sha256').update(JSON.stringify(runtimeManifest)).digest('hex'),
-    publicationSha256: createHash('sha256').update(JSON.stringify(publication)).digest('hex'),
-  };
-  const key = checkpointKey(parsed.releaseTag, sourceSha, parsed.target, identity);
-  let checkpoint;
-  if (parsed.restart) {
+    // Resume never skips current target, release, image, rollout, pod or health checks.
+    validateTarget(parsed.target);
+    const freshSourceSha = await verifySource();
+    if (freshSourceSha !== sourceSha) fail('release source changed during deployment');
+    acceptedDigests = await verifyImages(images);
+    verifyMeasuredAgentHostDigest(images, acceptedDigests);
+    await (dependencies.verifyTarget ?? verifyAzureTarget)(parsed.target, { root, run });
+    const verifyLive = dependencies.verifyLive ?? ((refs, target, digests) =>
+      verifyLiveDeployment(refs, target, digests, { root, run }));
+    const deployedImages = images.filter((image) => image.id !== 'Agentweaver.AgentHost');
+    await verifyLive(images, parsed.target, acceptedDigests);
     clearCheckpoint(key, checkpointIo);
-  } else if (parsed.resume) {
-    checkpoint = loadCheckpoint(key, identity, checkpointIo);
-  }
-  if (!checkpoint) {
-    checkpoint = {
-      version: CHECKPOINT_VERSION,
-      key,
-      ...identity,
-      stages: {},
+    return {
+      ok: true,
+      dryRun: false,
+      resumed: parsed.resume && applied,
+      ...(parsed.preAcceptance ? { resultType: 'pre-acceptance' } : {}),
+      sourceSha,
+      services: deployedImages.map(({ id }) => id),
+      perSandboxAgentHost: images.find((image) => image.id === 'Agentweaver.AgentHost').sandboxImage,
     };
+  } finally {
+    kustomizeSource.cleanup();
   }
-  const applied = checkpoint.stages.apply?.completed === true;
-  if (!applied) {
-    run('kubectl', ['apply', '--filename', '-'], {
-      cwd: root,
-      input: `${JSON.stringify(runtimeManifest)}\n`,
-    });
-    checkpoint = {
-      ...checkpoint,
-      updatedAt: new Date().toISOString(),
-      stages: { ...checkpoint.stages, apply: { completed: true, completedAt: new Date().toISOString() } },
-    };
-    saveCheckpoint(key, checkpoint, checkpointIo);
-  }
-
-  // Resume never skips current target, release, image, rollout, pod or health checks.
-  validateTarget(parsed.target);
-  const freshSourceSha = await verifySource();
-  if (freshSourceSha !== sourceSha) fail('release source changed during deployment');
-  acceptedDigests = await verifyImages(images);
-  verifyMeasuredAgentHostDigest(images, acceptedDigests);
-  await (dependencies.verifyTarget ?? verifyAzureTarget)(parsed.target, { root, run });
-  const verifyLive = dependencies.verifyLive ?? ((refs, target, digests) =>
-    verifyLiveDeployment(refs, target, digests, { root, run }));
-  const deployedImages = images.filter((image) => image.id !== 'Agentweaver.AgentHost');
-  await verifyLive(images, parsed.target, acceptedDigests);
-  clearCheckpoint(key, checkpointIo);
-  return {
-    ok: true,
-    dryRun: false,
-    resumed: parsed.resume && applied,
-    ...(parsed.preAcceptance ? { resultType: 'pre-acceptance' } : {}),
-    sourceSha,
-    services: deployedImages.map(({ id }) => id),
-    perSandboxAgentHost: images.find((image) => image.id === 'Agentweaver.AgentHost').sandboxImage,
-  };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

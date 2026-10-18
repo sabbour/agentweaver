@@ -1,0 +1,14 @@
+{
+  "apiVersion": "v1",
+  "kind": "ConfigMap",
+  "metadata": {
+    "name": "mcp-runtime-config",
+    "namespace": "agentweaver-v1-p0"
+  },
+  "immutable": true,
+  "data": {
+    "Identity__Issuer": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
+    "Identity__Audience": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
+    "Gateway__BaseAddress": "https://gateway.agentweaver-v1-p0.svc.cluster.local:8443/"
+  }
+}

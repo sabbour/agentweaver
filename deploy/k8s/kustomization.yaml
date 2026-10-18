@@ -1,0 +1,216 @@
+# Compose the complete v1 P0 installation from reviewed manifests and release-pinned images.
+# Operator-owned credentials, certificates, and approved Gateway placement remain external.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: agentweaver-v1-p0
+resources:
+  - base
+  - provider-catalogs/projects-config-provider-catalog.json
+  - runtime-configs/identity-broker-runtime-config.json
+  - runtime-configs/environment-runtime-config.json
+  - runtime-configs/environment-cilium-config.json
+  - runtime-configs/orchestrator-runtime-config.json
+  - runtime-configs/events-and-sessions-runtime-config.json
+  - runtime-configs/gateway-runtime-config.json
+  - runtime-configs/mcp-runtime-config.json
+  - runtime-configs/web-runtime-config.json
+  - runtime-configs/knowledge-runtime-config.json
+  - runtime-configs/projects-config-runtime-config.json
+  - profiles/agenthost/runtime-config.example.yaml
+  - routing/identity-broker/gateway-api-ingress.yaml
+  - routing/identity-broker/mcp-gateway-ingress.yaml
+  - routing/identity-broker/web-gateway-ingress.yaml
+configurations:
+  - kustomizeconfig/image-env.yaml
+images:
+  - name: ghcr.io/sabbour/agentweaver-agenthost
+    newName: ghcr.io/sabbour/agentweaver-agenthost
+    digest: sha256:17c3da40ab275da28b92a5cf0e23741ae63d34a0877cebf798870a7f51563eb5
+  - name: ghcr.io/sabbour/agentweaver.identity.broker
+    newName: ghcr.io/sabbour/agentweaver.identity.broker
+    digest: sha256:75f92a767b2dcf1fa2011d7ba2f4ca1b6e48b7fe9fda044d4664a34b35681f3c
+  - name: ghcr.io/sabbour/agentweaver.eventsandsessions
+    newName: ghcr.io/sabbour/agentweaver.eventsandsessions
+    digest: sha256:0c0a12a501c9760df555f7a6ee28fa2fad36ff302edca55d77bfc4c665d9aa5c
+  - name: ghcr.io/sabbour/agentweaver.gateway
+    newName: ghcr.io/sabbour/agentweaver.gateway
+    digest: sha256:d68184c80cb1b3cf82d8741c15de73597efdd2eb1bf03bc0886aecd9b3d4e756
+  - name: ghcr.io/sabbour/agentweaver.mcp
+    newName: ghcr.io/sabbour/agentweaver.mcp
+    digest: sha256:cee4879b11dcafcd7c48681d756b80a8f3661c93c1ded26f4366247b310d880d
+  - name: ghcr.io/sabbour/agentweaver-web
+    newName: ghcr.io/sabbour/agentweaver-web
+    digest: sha256:b2359a18b1a6a37c6a3b97665aef550b076b11a30ec6b17f02e2e8809226a4d8
+  - name: ghcr.io/sabbour/agentweaver.orchestrator
+    newName: ghcr.io/sabbour/agentweaver.orchestrator
+    digest: sha256:186116f750594a6d52348945c8da7e2fbc11489bbb4c4d38cac3b7651a9aec14
+  - name: ghcr.io/sabbour/agentweaver.environment
+    newName: ghcr.io/sabbour/agentweaver.environment
+    digest: sha256:5141bc6b46147bd3740675cf150397ced8921c5a6ec195ac2c9121dcac5b22dd
+  - name: ghcr.io/sabbour/agentweaver.knowledge
+    newName: ghcr.io/sabbour/agentweaver.knowledge
+    digest: sha256:e5033bee0da22e599dddcc706d2002819187bd5acb63c396214db12ab878c65d
+  - name: ghcr.io/sabbour/agentweaver.projects.config
+    newName: ghcr.io/sabbour/agentweaver.projects.config
+    digest: sha256:b165633f1347e941cfff32701ce06217884c71db146aff79edadae7df58cdf9e
+patches:
+  # Resolve the existing Broker egress template from its non-secret P0 runtime settings.
+  - target:
+      group: cilium.io
+      version: v2
+      kind: CiliumNetworkPolicy
+      name: identity-broker-egress
+    patch: |-
+      - op: replace
+        path: /spec/egress/0/toPorts/0/rules/dns/1/matchName
+        value: aw-v1-p0-kv.vault.azure.net
+      - op: replace
+        path: /spec/egress/0/toPorts/0/rules/dns/2/matchName
+        value: aw-v1-p0-pg.postgres.database.azure.com
+      - op: replace
+        path: /spec/egress/0/toPorts/0/rules/dns/3/matchName
+        value: login.microsoftonline.com
+      - op: replace
+        path: /spec/egress/0/toPorts/0/rules/dns/4/matchName
+        value: login.microsoftonline.com
+      - op: replace
+        path: /spec/egress/2/toFQDNs/0/matchName
+        value: aw-v1-p0-kv.vault.azure.net
+      - op: replace
+        path: /spec/egress/2/toFQDNs/1/matchName
+        value: login.microsoftonline.com
+      - op: replace
+        path: /spec/egress/2/toFQDNs/2/matchName
+        value: login.microsoftonline.com
+      - op: replace
+        path: /spec/egress/3/toFQDNs/0/matchName
+        value: aw-v1-p0-pg.postgres.database.azure.com
+      - op: remove
+        path: /spec/egress/0/toPorts/0/rules/dns/4
+      - op: remove
+        path: /spec/egress/0/toPorts/0/rules/dns/3
+      - op: remove
+        path: /spec/egress/2/toFQDNs/2
+      - op: remove
+        path: /spec/egress/2/toFQDNs/1
+replacements:
+  - source:
+      kind: ConfigMap
+      name: identity-broker-runtime-config
+      fieldPath: data.IdentityBroker__SecretRedemption__WorkloadIdentityClientId
+    targets:
+      - select:
+          kind: ServiceAccount
+          name: identity-broker
+        fieldPaths:
+          - metadata.annotations.[azure.workload.identity/client-id]
+  - source:
+      kind: ConfigMap
+      name: identity-broker-runtime-config
+      fieldPath: data.IdentityBroker__SecretRedemption__WorkloadIdentityTenantId
+    targets:
+      - select:
+          kind: ServiceAccount
+          name: identity-broker
+        fieldPaths:
+          - metadata.annotations.[azure.workload.identity/tenant-id]
+  - source:
+      kind: ConfigMap
+      name: environment-runtime-config
+      fieldPath: data.Environment__Database__WorkloadIdentity__ClientId
+    targets:
+      - select:
+          kind: ServiceAccount
+          name: environment
+        fieldPaths:
+          - metadata.annotations.[azure.workload.identity/client-id]
+  - source:
+      kind: ConfigMap
+      name: environment-runtime-config
+      fieldPath: data.Environment__Database__WorkloadIdentity__TenantId
+    targets:
+      - select:
+          kind: ServiceAccount
+          name: environment
+        fieldPaths:
+          - metadata.annotations.[azure.workload.identity/tenant-id]
+  - source:
+      kind: ConfigMap
+      name: events-and-sessions-runtime-config
+      fieldPath: data.EventsAndSessions__Database__WorkloadIdentity__ClientId
+    targets:
+      - select:
+          kind: ServiceAccount
+          name: events-and-sessions
+        fieldPaths:
+          - metadata.annotations.[azure.workload.identity/client-id]
+  - source:
+      kind: ConfigMap
+      name: events-and-sessions-runtime-config
+      fieldPath: data.EventsAndSessions__Database__WorkloadIdentity__TenantId
+    targets:
+      - select:
+          kind: ServiceAccount
+          name: events-and-sessions
+        fieldPaths:
+          - metadata.annotations.[azure.workload.identity/tenant-id]
+  - source:
+      kind: ConfigMap
+      name: orchestrator-runtime-config
+      fieldPath: data.Orchestrator__Database__WorkloadIdentity__ClientId
+    targets:
+      - select:
+          kind: ServiceAccount
+          name: orchestrator
+        fieldPaths:
+          - metadata.annotations.[azure.workload.identity/client-id]
+  - source:
+      kind: ConfigMap
+      name: orchestrator-runtime-config
+      fieldPath: data.Orchestrator__Database__WorkloadIdentity__TenantId
+    targets:
+      - select:
+          kind: ServiceAccount
+          name: orchestrator
+        fieldPaths:
+          - metadata.annotations.[azure.workload.identity/tenant-id]
+  - source:
+      kind: ConfigMap
+      name: knowledge-runtime-config
+      fieldPath: data.Knowledge__Database__WorkloadIdentity__ClientId
+    targets:
+      - select:
+          kind: ServiceAccount
+          name: knowledge
+        fieldPaths:
+          - metadata.annotations.[azure.workload.identity/client-id]
+  - source:
+      kind: ConfigMap
+      name: knowledge-runtime-config
+      fieldPath: data.Knowledge__Database__WorkloadIdentity__TenantId
+    targets:
+      - select:
+          kind: ServiceAccount
+          name: knowledge
+        fieldPaths:
+          - metadata.annotations.[azure.workload.identity/tenant-id]
+  - source:
+      kind: ConfigMap
+      name: projects-config-runtime-config
+      fieldPath: data.ProjectsConfig__Database__WorkloadIdentity__ClientId
+    targets:
+      - select:
+          kind: ServiceAccount
+          name: projects-config
+        fieldPaths:
+          - metadata.annotations.[azure.workload.identity/client-id]
+  - source:
+      kind: ConfigMap
+      name: projects-config-runtime-config
+      fieldPath: data.ProjectsConfig__Database__WorkloadIdentity__TenantId
+    targets:
+      - select:
+          kind: ServiceAccount
+          name: projects-config
+        fieldPaths:
+          - metadata.annotations.[azure.workload.identity/tenant-id]

@@ -3,5 +3,6 @@ kind: Kustomization
 namespace: agentweaver-v1-p0
 resources:
   - ../../base
+  - serviceaccount.yaml
   - job.yaml
   - egress.yaml

@@ -1,10 +1,16 @@
 # P0 Kubernetes source layout (Kustomize)
 
-**Status:** source definitions only. No cluster was changed. The base renders
-the Identity runtime Deployment, an HTTPS `ClusterIP` Service, its dedicated
-runtime `ServiceAccount`, and scoped Cilium egress. It also contains the
-acceptance-only `foundation-probe` ServiceAccount. The separate migration
-Job is not included in the base and does not run during ordinary host startup.
+**Status:** source definitions only. No cluster was changed. The root
+Kustomization renders the complete P0 product installation: nine shared service
+Deployments and Services, their ServiceAccounts, runtime ConfigMaps, the provider
+catalog, namespace controls, and required network policies. The AgentHost image
+and per-Sandbox image metadata are pinned through Environment's runtime configuration.
+The root also includes the AgentHost runtime ConfigMap, but it is marked
+incomplete and Environment's optional AgentHost launch profile stays unset until
+the exact receiver endpoint, queue bound, and existing TLS Secret name are sourced.
+Operator-owned Secrets, public CA data, Gateway placement and routes, and TLS
+certificates remain outside this installation. The separate migration Job and acceptance
+Foundation Probe are not part of the product bundle.
 
 The base contains no public Ingress or Gateway.
 The separate candidate routing manifests use the native `approuting-istio`
@@ -17,23 +23,35 @@ The Identity Service remains a ClusterIP Service.
 | --- | --- |
 | `base/namespace.yaml`, `resourcequota.yaml`, `limitrange.yaml` | Bounded namespace and pod/resource ceilings. |
 | `base/networkpolicy-default-deny.yaml` | Default-deny ingress/egress and DNS-only standard NetworkPolicy. |
-| `base/environment-agenthost-network.yaml`, `base/service-owner-network.yaml` | Cilium policies for the per-Sandbox AgentHost and source-verified in-cluster service-owner edges. |
-| `base/serviceaccounts/foundation-probe-sa.yaml` | Reserved identity for the #1784 acceptance-only Job. |
-| `base/identity-broker/` | Identity runtime ServiceAccount, HTTPS Deployment, ClusterIP Service, and narrow Cilium policy. |
+| `base/environment-agenthost-network.yaml`, `base/service-owner-network.yaml` | Cilium policies for AgentHost, exact service-owner calls, Broker issuer validation, and workload-identity database access. |
+| `base/events-and-sessions-network.yaml`, `base/projects-config-network.yaml` | Cilium policies for source-backed owner callers and exact database, identity, Blob, and marketplace egress. |
+| `base/serviceaccounts.yaml`, `base/workloads/` | Product ServiceAccounts and static Deployment/Service resources for the shared workloads. |
+| `base/identity-broker/` | Identity runtime Deployment, HTTPS ClusterIP Service, and narrow Cilium policy. |
 | `migrations/identity-broker/` | Separate migration ServiceAccount, one-shot Job, and PostgreSQL/token egress policy. |
 | `routing/identity-broker/` | Explicit Gateway namespace/policy, native certificates, HTTPS Gateway, Broker/Web/Gateway API/MCP HTTPRoutes, backend TLS policies, and narrow ingress policies. |
-| `acceptance/foundation-probe/` | #1784 executable Job and its own scoped egress overlay. |
-| `profiles/projects-config/` | Separately selected Projects runtime source renderer; requires existing catalog and TLS references and explicit runtime inputs. |
+| `acceptance/foundation-probe/` | #1784 executable Job, ServiceAccount, and its own scoped egress overlay. |
+| `profiles/` | The source-managed AgentHost runtime ConfigMap and runtime-value validators. |
 | `provider-catalogs/` | Source-bound Projects & Config provider snapshot and immutable ConfigMap manifest. |
-| `runtime-configs/` | Non-secret immutable P0 runtime ConfigMaps and nested Environment Cilium options. |
-| `scripts/release/runtime-list.mjs` | Checked-in source for the nine shared-service Kubernetes `List`, rendered from validated publication images and explicit provider-catalog inputs. |
+| `runtime-configs/` | Non-secret P0 runtime ConfigMaps and nested Environment Cilium options. |
+| `kustomization.yaml` | Complete P0 product bundle; receipt-pinned images, workloads, runtime maps, provider catalog, namespace controls, and network policies. |
+| `scripts/release/runtime-list.mjs` | Runtime workload contract and integration-harness List source; the release installer applies the checked-in Kustomize bundle. |
 
 The runtime listens with HTTPS on port 8443. Its ClusterIP Service exposes
 port 443. Cilium permits health probes from the node and requests only from
-same-namespace pods labeled `agentweaver.io/identity-client: "true"`.
+same-namespace pods labeled `agentweaver.io/identity-client: "true"`, plus
+Environment's exact runtime-owner path on TCP 8443.
 It permits DNS, Entra token exchange, the configured upstream OIDC hosts,
 the exact PostgreSQL host, and the exact Key Vault host. The migration policy
 permits DNS, Entra token exchange, and PostgreSQL only.
+
+The shared owner policies keep external egress workload-scoped. OIDC consumers
+can resolve and reach only the configured public Broker issuer on TCP 443.
+Environment, Knowledge, and Orchestrator can reach Entra on TCP 443 and the
+P0 PostgreSQL host on TCP 5432. Environment can reach only its configured owner
+Services on TCP 8443 and the Kubernetes API entity on TCP 443. AgentHost can
+reach only its configured Broker, Orchestrator, Environment, and Events
+Services on TCP 8443. Events and Projects retain their service-specific exact
+FQDN and owner rules.
 
 The typed AgentHost Sandbox profile adds the stable `agentweaver.io/workload: agenthost`
 and `agentweaver.io/identity-client: "true"` labels to the actual controller-owned Pod.
@@ -43,35 +61,22 @@ ClusterIP Service. The provider accepts only HTTPS on TCP 8443 and verifies that
 Service selector resolves to the actual AgentHost Pod. The profile does not create a
 shared AgentHost Deployment or Service.
 
-## Selected Projects runtime profile
+## Runtime configuration inputs
 
-The ordinary Broker base and Foundation Probe do not include this profile.
-`profiles/projects-config/render.mjs` reads operator-reviewed JSON and prints
-a Kubernetes `List`. It never runs a cloud command or applies that output.
-The example leaves the image, image user/group, TLS Secret, catalog reference,
-catalog source commit, authority, and audience unset. Missing inputs stop rendering.
+The runtime ConfigMap JSON files and static workload manifests under
+`runtime-configs/` and `base/workloads/`, plus the AgentHost ConfigMap under
+`profiles/agenthost/`, are the product's Kustomize source. The Projects and
+Events profile scripts validate reviewed runtime values only; they do not emit
+Kubernetes resources. Update the appropriate checked-in
+ConfigMap data and use the root Kustomization to render or apply the complete
+bundle. Images, ServiceAccounts, ports, TLS mounts, and the provider-catalog
+prefix stay in Kustomize, not in a JavaScript-generated workload list.
 
-The profile fixes the existing Projects identity and passwordless database mapping.
-It exposes only private HTTPS on port 8443 with system trust unchanged.
-It requires an existing Projects-only PEM Secret and a nonzero immutable
-`ghcr.io/sabbour/agentweaver.projects.config` product digest.
-The image user and group must match the reviewed image.
-
-The catalog owner must supply an existing, immutable, nonempty ConfigMap
-in `agentweaver-v1-p0`, reviewed against the exact `providerCatalog.sourceCommit`.
-Its keys are relative catalog keys, such as `Registrations__0__Id`.
-The renderer adds `ProjectsConfig__ProviderCatalog__` through `envFrom.prefix`.
-Catalog keys cannot replace database, authentication, or HTTPS listener settings.
-The real .NET catalog loader remains responsible for catalog validation.
-Rendering checks the reference and commit format, not object existence,
-catalog contents, immutability, source binding, or production suitability.
-Those checks remain prerequisites for any separately approved deployment.
-
-The profile neither creates that catalog nor changes provider selections.
-It adds no Blob permission, credential, custom certificate trust, database grant,
-migration job, or public route. Existing database roles, applied migrations,
-runtime rights, trusted TLS, and healthy owner flows remain unverified here.
-See [Projects & Config](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/projects-config.md)
+The Projects runtime uses the existing password-free database mapping and
+workload identity. Its static Deployment reads the immutable provider catalog
+with the `ProjectsConfig__ProviderCatalog__` prefix. The catalog, TLS Secret,
+database grants, migrations, runtime rights, and trusted TLS remain separate
+prerequisites. See [Projects & Config](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/projects-config.md)
 for the startup and acceptance boundary.
 
 ### Projects & Config provider catalog
@@ -84,12 +89,13 @@ ConfigMap manifest is
 `deploy/k8s/provider-catalogs/projects-config-provider-catalog.json`. It is
 named `projects-config-provider-catalog` in `agentweaver-v1-p0`; its
 `agentweaver.io/provider-catalog-product-source` annotation identifies the
-published source used to derive the registrations and defaults. Apply it first
-in the ordered operator handoff after local configuration checks pass. This
-source change does not apply any manifests to the cluster.
+published source used to derive the registrations and defaults. The root
+Kustomize composition includes this catalog with the workloads, runtime
+ConfigMaps, and network policies. This source change does not apply any
+manifests to the cluster.
 
 The manifest uses the relative double-underscore keys expected by the
-Projects runtime profile; the profile adds the
+Projects runtime; the static Deployment adds the
 `ProjectsConfig__ProviderCatalog__` prefix. It registers Native Sessions,
 Native Memory, Agent Sandbox, Azure Files CSI, AGT Policy, GitHub, Copilot Cost,
 and Cilium, plus the foundational native Messaging provider. Cilium's
@@ -103,9 +109,9 @@ The namespace `agentweaver-v1-p0` and endpoint selectors are derived from
 Each selector pins `k8s:io.kubernetes.pod.namespace` to that namespace and
 `agentweaver.io/workload` to the policy's exact workload label. Environment
 still requires these options through its separate runtime configuration,
-along with other startup inputs. The catalog and List entries do not prove
-that the service runtime ConfigMaps are ready. The bootstrap List supplies
-the catalog to both Projects & Config and Orchestrator, and records the
+along with other startup inputs. The catalog and Kustomize resources do not
+prove that the service runtime ConfigMaps are ready. The Kustomize workloads
+supply the catalog to both Projects & Config and Orchestrator, and record the
 catalog-review commit in each pod's
 `agentweaver.io/provider-catalog-source` annotation. Use the merge commit of
 this catalog PR as `--provider-catalog-source-commit`; do not substitute the
@@ -115,7 +121,7 @@ Release-source defaults are used for Sessions, Messaging, and Memory. The other
 included P1 options revisions use the authorized bounded label
 `p1-v1.0.0`; this is not an artifact or deployment claim.
 
-The bootstrap List explicitly sets the five matching `p1-v1.0.0` revision
+The Kustomize workloads explicitly set the five matching `p1-v1.0.0` revision
 values for Environment Sandbox, Storage, and Cilium, Orchestrator AGT Policy,
 and Events & Sessions Copilot Cost. It also sets the decided Cilium adapter
 version. These `env` entries override same-named `envFrom` values while
@@ -126,8 +132,8 @@ GitHub has no adapter-local or project-configuration revision setting, but its
 existing accepted run-selection input contains
 `providers[].candidates[].optionsRevision`. Projects & Config copies the
 catalog candidate's revision into that input, and Orchestrator checks it
-against the catalog before use. The bootstrap List passes the same catalog
-ConfigMap to Projects & Config and Orchestrator using the
+against the catalog before use. The checked-in Deployments pass the same
+catalog ConfigMap to Projects & Config and Orchestrator using the
 `ProjectsConfig__ProviderCatalog__` prefix. Exact keys and schema values for included providers are documented in
 [Projects & Config](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/projects-config.md#checked-in-p1-provider-catalog).
 The catalog defaults only documented providers, selects Cilium for the L3/L4
@@ -138,31 +144,54 @@ catalog ConfigMap contains no credentials, endpoint values, or secret references
 
 ### P0 runtime ConfigMap snapshots
 
-The manifests under `deploy/k8s/runtime-configs/` contain no credentials. The
-Environment, Orchestrator, and Cilium maps are immutable. The Events and
-Sessions map is mutable so an operator can update its versioned rate-card
-document without rebuilding the product; the rendered Deployment hashes the
-resolved data to trigger a rollout. The bootstrap List requires the three service-named
-`<service>-runtime-config` maps through `envFrom`. It also mounts
+The manifests under `deploy/k8s/runtime-configs/` contain no credentials. All
+nine service runtime ConfigMaps are checked-in snapshots and are resources in
+the root Kustomization. The Identity Broker snapshot preserves the live public
+P0 acceptance client and loopback redirect; neither value is a production Web
+OAuth input. The Environment, Orchestrator, Identity Broker, and Cilium maps
+are immutable. The Events and Sessions map is mutable so an operator can
+update its versioned rate-card document without rebuilding the product. After
+changing that mutable map, apply the full Kustomize bundle and restart the
+affected workload so it reads the new values. Replacing an immutable runtime
+map requires an explicitly reviewed Kustomize resource and reference update;
+do not try to patch immutable data in place.
+Each static Deployment references its service-named
+`<service>-runtime-config` map through `envFrom`. Environment mounts
 `environment-cilium-config` read-only at
 `/app/appsettings.Production.json`. The nested Cilium selector keys contain
 `/` and `:`, so they are supplied as JSON rather than Kubernetes environment
-variable names. The List supplies Cilium `AdapterVersion` `1.0.0` by
-coordinator decision and the selected `OptionsRevision` `p1-v1.0.0`.
+variable names. The Environment Deployment supplies Cilium `AdapterVersion`
+`1.0.0` by coordinator decision and the selected `OptionsRevision`
+`p1-v1.0.0`.
 
-The Environment and Orchestrator maps now have source-backed runtime inputs and
-no longer carry the `agentweaver.io/runtime-config-status: incomplete` marker.
-This source change does not run a live runtime preflight; the bootstrap checks
-the applied ConfigMaps and Kubernetes prerequisites before rollout. The
-Cilium-only map is complete for its options but does not by itself establish
-Environment readiness.
+The Environment, Orchestrator, Events and Sessions, MCP, and Projects & Config
+maps have source-backed runtime inputs and no incomplete marker. Gateway, Web,
+and Knowledge snapshots are present but remain marked
+`agentweaver.io/runtime-config-status: incomplete`; the release helper rejects
+them until each documented input is resolved. This source change does not run a
+live runtime preflight. The helper validates the rendered install and live
+operator-owned prerequisites before applying it. The Cilium-only map is
+complete for its options but does not by itself establish Environment readiness.
+The per-Sandbox `agenthost-runtime-v1` map is also rendered and marked incomplete.
+It carries only source-backed owner addresses, the broker issuer, shared model
+bindings, and the measured AgentHost image identity. It is not mounted because
+the optional Environment AgentHost profile is absent. Do not enable that profile
+until a per-Sandbox receiver endpoint/audience, approved `MaximumPendingTurns`,
+and an exact existing AgentHost TLS Secret name are available.
 
 | Manifest | Value provenance | Remaining live gates |
 | --- | --- | --- |
-| `environment-runtime-config.json` | Database host, name, role, and tenant come from P0 handoff §7. The client ID is the live user-assigned identity matched to the handoff principal ID. The projected token path follows the checked-in runtime input profile. Broker authority/audience come from the existing non-secret `identity-broker-runtime-config`. Service addresses and ports come from the generated runtime List. Namespace, StorageClass, and RuntimeClass are the approved P0 AKS values. Approved sizing: 1 CPU and 2 GiB per Sandbox, 600-second reconciliation and provisioning timeouts, 250-ms polls, startup budgets 30/90/30/30/30/180 seconds, and a 100-GiB Azure Files cap. These values pass the Agent Sandbox and Azure Files validators; the checked-in namespace LimitRange permits the 2-GiB container limit. Provider IDs, schema versions, image receipt inputs, and options revisions come from the catalog and bootstrap List. | No additional snapshot values are awaiting a source. Live preflight and database readiness remain separate acceptance gates. |
-| `orchestrator-runtime-config.json` | Database and workload identity follow the same P0 handoff and live identity lookup. Schema is `orchestrator` from handoff §7. Issuer/audiences come from the existing non-secret Broker ConfigMap. Owner addresses come from the generated runtime List. The approved AGT Policy resource is `agt-policy:p1-v1.0.0`, generation `1`, revision `p1-v1.0.0`. The platform document defaults to deny and has one exact `action_id ==` allow rule for each ID in `RuntimeActionContract.ActionIds`: `model.turn`, `tool.read`, `tool.write`, `exec.shell`, `exec.read`, `exec.write`, and `exec.stop`. The provider test validates and evaluates this document. The `grant_id != '' and fence != ''` expression did not allow a request with the runtime's numeric fence, so the policy uses the explicit catalog-action fallback. `ExecutableActionGuard` checks the current grant and fence before policy evaluation. | No additional snapshot values are awaiting a source. Live preflight and database readiness remain separate acceptance gates. |
-| `events-and-sessions-runtime-config.json` | Database, role, tenant, and schema follow handoff §7 and the live identity lookup. Issuer/audiences come from the Broker ConfigMap; owner addresses come from the runtime List. Provider and Copilot Cost resource IDs are coordinator-approved opaque labels, not Azure resource IDs; both generations are `1`. Sessions and Messaging revisions, schema, polling, retention, claim lease, and message lifetime use release-source defaults. Copilot Cost schema `2`, adapter options revision `p1-v1.0.0`, meter `copilot.nano_aiu`, unit `AIC`, and the nano-AIU conversion follow the adapter contract. Its versioned JSON rate card is runtime ConfigMap data, not compiled model pricing. Card ID `github-copilot-published`, version `2026-10-17`, source URL, retrieval date, 33 published model entries, and content hash identify the GitHub snapshot. The shared model map preserves the `reasoning` and `coding` aliases and adds exact `gpt-6.1-sol` and `gpt-6-luna` keys as `HostedCopilot` at revision `p1-v1.0.1`; the AgentHost profile uses the same map. The approved Session Material URI is `https://awv1p0blob.blob.core.windows.net/session-material`; the Events profile renderer requires and uses this explicit input. | No additional snapshot values are awaiting a source. The container's private access and workload-identity request remain live acceptance checks. |
-| `environment-cilium-config.json` | Namespace and endpoint selectors follow the checked-in P0 Cilium policies. Options schema `1` follows the release-source adapter contract. Adapter version is `1.0.0` by coordinator decision; options revision `p1-v1.0.0` is selected and supplied by the bootstrap List. | None for the Cilium options in this file. Environment runtime values are source-backed; live readiness is checked separately. |
+| `identity-broker-runtime-config.json` | Captured from the existing non-secret P0 ConfigMap. It contains the password-free PostgreSQL connection, public issuer and Entra authority/client ID, Key Vault URI and workload-identity inputs, plus the current public acceptance client. Its loopback redirect and acceptance client ID are retained only for that acceptance registration; they are not Web production OAuth settings. No Secret data or run labels are included. | The acceptance client and redirect are run-scoped. A later acceptance run must use the guarded Broker runtime bootstrap to supply its own matching values. |
+| `environment-runtime-config.json` | Database host, name, role, and tenant come from P0 handoff §7. The client ID is the live user-assigned identity matched to the handoff principal ID. The projected token path follows the checked-in runtime input profile. Broker authority/audience come from the existing non-secret `identity-broker-runtime-config`. Service addresses and ports come from the checked-in Kustomize Service definitions. Namespace, StorageClass, and RuntimeClass are the approved P0 AKS values. Approved sizing: 1 CPU and 2 GiB per Sandbox, 600-second reconciliation and provisioning timeouts, 250-ms polls, startup budgets 30/90/30/30/30/180 seconds, and a 100-GiB Azure Files cap. These values pass the Agent Sandbox and Azure Files validators; the checked-in namespace LimitRange permits the 2-GiB container limit. Provider IDs, schema versions, image receipt inputs, and options revisions come from the catalog and Kustomize workloads. | No additional snapshot values are awaiting a source. Live preflight and database readiness remain separate acceptance gates. |
+| `profiles/agenthost/runtime-config.example.yaml` | Broker, Orchestrator, Environment, and Events addresses match the Kustomize Services; the authority comes from the non-secret Broker issuer. Model bindings/revision match Events. Image digest, `linux/amd64` platform, and compressed bytes match the receipt-pinned Kustomize image and Environment's existing deployment inputs. | Incomplete: `AgentHost.ConfigureEndpoint` and `Authentication.Audience` require the exact per-Sandbox HTTPS service endpoint; `AgentHost.MaximumPendingTurns` has no approved P0 value; `Environment__Sandbox__AgentSandbox__AgentHost__TlsSecretName` has no approved existing Secret name. The Environment AgentHost profile remains unset. |
+| `orchestrator-runtime-config.json` | Database and workload identity follow the same P0 handoff and live identity lookup. Schema is `orchestrator` from handoff §7. Issuer/audiences come from the existing non-secret Broker ConfigMap. Owner addresses match checked-in Kustomize Services. The approved AGT Policy resource is `agt-policy:p1-v1.0.0`, generation `1`, revision `p1-v1.0.0`. The platform document defaults to deny and has one exact `action_id ==` allow rule for each ID in `RuntimeActionContract.ActionIds`: `model.turn`, `tool.read`, `tool.write`, `exec.shell`, `exec.read`, `exec.write`, and `exec.stop`. The provider test validates and evaluates this document. The `grant_id != '' and fence != ''` expression did not allow a request with the runtime's numeric fence, so the policy uses the explicit catalog-action fallback. `ExecutableActionGuard` checks the current grant and fence before policy evaluation. | No additional snapshot values are awaiting a source. Live preflight and database readiness remain separate acceptance gates. |
+| `events-and-sessions-runtime-config.json` | Database, role, tenant, and schema follow handoff §7 and the live identity lookup. Issuer/audiences come from the Broker ConfigMap; owner addresses match checked-in Kustomize Services. Provider and Copilot Cost resource IDs are coordinator-approved opaque labels, not Azure resource IDs; both generations are `1`. Sessions and Messaging revisions, schema, polling, retention, claim lease, and message lifetime use release-source defaults. Copilot Cost schema `2`, adapter options revision `p1-v1.0.0`, meter `copilot.nano_aiu`, unit `AIC`, and the nano-AIU conversion follow the adapter contract. Its versioned JSON rate card is runtime ConfigMap data, not compiled model pricing. Card ID `github-copilot-published`, version `2026-10-17`, source URL, retrieval date, 33 published model entries, and content hash identify the GitHub snapshot. The shared model map preserves the `reasoning` and `coding` aliases and adds exact `gpt-6.1-sol` and `gpt-6-luna` keys as `HostedCopilot` at revision `p1-v1.0.1`; the per-Sandbox AgentHost settings use the same map. The approved Session Material URI is `https://awv1p0blob.blob.core.windows.net/session-material`. | No additional snapshot values are awaiting a source. The container's private access and workload-identity request remain live acceptance checks. |
+| `gateway-runtime-config.json` | Issuer and audience come from the existing non-secret Broker ConfigMap. Five HTTPS owner addresses match checked-in Kustomize Services. | Incomplete: `Gateway__WebOrigin` requires the approved Portal origin. Do not substitute the acceptance client or an unapproved host. |
+| `mcp-runtime-config.json` | Issuer and audience come from the existing non-secret Broker ConfigMap. The HTTPS Gateway address matches the checked-in Kustomize Service. | No additional snapshot values are awaiting a source. Live preflight and Gateway readiness remain separate acceptance gates. |
+| `web-runtime-config.json` | Gateway path and Broker URL/issuer follow the Web host and browser runtime defaults plus the existing non-secret Broker ConfigMap. The redirect URI is omitted so the browser uses its own origin with `/auth/callback`. | Incomplete: `VITE_OAUTH_CLIENT_ID` and `VITE_OAUTH_SCOPES` require the approved production Web client registration. The acceptance-only Broker client is not reused. |
+| `knowledge-runtime-config.json` | Broker issuer/audience come from the existing non-secret Broker ConfigMap. Projects and Events addresses match checked-in Kustomize Services. The Knowledge client ID maps by read-only Azure lookup to `aw-v1-p0-id-knowledge`; tenant and token path follow the checked-in profile. The read-only PostgreSQL Entra-admin listing does not establish this identity's database role. Provider database name, schema default, and options revision/schema version follow the source and native-memory catalog. | Incomplete: the PostgreSQL role in `ConnectionStrings__Knowledge`, `Knowledge__Provider__ResourceId`, and `Knowledge__Provider__ResourceGeneration` require authoritative P0 inputs. The catalog adapter ID is not a resource ID, and it does not define the instance generation. |
+| `projects-config-runtime-config.json` | Database and workload identity values follow the approved Projects runtime mapping. Authentication authority and audience come from the existing non-secret Broker ConfigMap. The product Deployment uses the existing catalog reference; Broker run-binding is not enabled, so Identity Broker ingress remains for its direct Copilot connection and Remote MCP Projects API calls. | No additional snapshot values are awaiting a source. Live preflight and database readiness remain separate acceptance gates. |
+| `environment-cilium-config.json` | Namespace and endpoint selectors follow the checked-in P0 Cilium policies. Options schema `1` follows the release-source adapter contract. Adapter version is `1.0.0` by coordinator decision; options revision `p1-v1.0.0` is set in the Environment Deployment. | None for the Cilium options in this file. Environment runtime values are source-backed; live readiness is checked separately. |
 
 Built-in task defaults reference `gpt-6.1-sol` for planning, review, design,
 security, creative writing, and complex work, and `gpt-6-luna` for code-writing
@@ -202,38 +231,37 @@ and receipts.
 
 To enable a Copilot model, use its exact ID from the SDK model list. AgentHost
 already calls `Models.ListAsync` and checks the configured ID; this path needs no
-new network egress or cloud permission. Add or change
+new network egress or cloud permission. Update
 `AgentHost__ModelBindings__<reference>__ModelId` and
-`AgentHost__ModelBindings__<reference>__SourceMode=HostedCopilot`, then increment
-`AgentHost__ModelBindingsRevision` in both the AgentHost runtime configuration
-and the Events runtime configuration. Add published token rates under the same
-exact ID when they exist. The provider catalog registers provider adapters; it
-is not the per-model allowlist. Projects & Config accepts a selected reference
-only when it appears in `AvailableModelSelectionReferences`; reuse an existing
-available reference such as `reasoning` or `coding`, or add the exact task-default
-reference when configuring built-in task routes. A model ID used as a task
-reference must also be an exact key in `AgentHost:ModelBindings`. Projects returns
-`model_selection_unavailable` when a selected reference is not available or no
-model selection is configured. A missing rate for an otherwise available model
-does not block admission or dispatch.
+`AgentHost__ModelBindings__<reference>__SourceMode=HostedCopilot` in
+`events-and-sessions-runtime-config.json`, then increment
+`AgentHost__ModelBindingsRevision` there. Add published token rates under the
+same exact ID when they exist. The provider catalog registers provider adapters;
+it is not the per-model allowlist. Projects & Config accepts a selected
+reference only when it appears in `AvailableModelSelectionReferences`; reuse an
+existing available reference such as `reasoning` or `coding`, or add the exact
+task-default reference when configuring built-in task routes. A model ID used
+as a task reference must also be an exact key in `AgentHost:ModelBindings`.
+Projects returns `model_selection_unavailable` when a selected reference is not
+available or no model selection is configured. A missing rate for an otherwise
+available model does not block admission or dispatch.
 
-Update the operator input's `configuration` values and the AgentHost runtime
-configuration together, then render and apply the Events profile:
+Edit the checked-in runtime ConfigMap and Deployment source, then use the same
+root Kustomize path as every other product change:
 
 ```powershell
-node deploy\k8s\profiles\events-and-sessions\render.mjs .\events-profile-input.json > .\events-profile-rendered.json
-kubectl apply -f .\events-profile-rendered.json
+kubectl kustomize deploy\k8s
+kubectl apply -k deploy\k8s
+kubectl rollout restart deployment/events-and-sessions -n agentweaver-v1-p0
 kubectl rollout status deployment/events-and-sessions -n agentweaver-v1-p0
 ```
 
-The renderer hashes the resolved runtime configuration into the Deployment pod
-template. A rate-card or model-binding change therefore updates the mutable
-ConfigMap and starts a new Events rollout when the rendered List is applied.
-Apply and roll out the matching AgentHost configuration through its existing
-runtime deployment process. The checked-in AgentHost configuration example is
-`profiles/agenthost/runtime-config.example.yaml`; the Events profile does not
-render or apply AgentHost workloads. These steps change configuration and
-deployment state only; they do not rebuild the product.
+Kubernetes does not restart a process when data in a referenced ConfigMap
+changes. Restart the affected workload after changing environment-backed
+configuration. Keep the Events runtime map and Environment AgentHost runtime
+settings aligned when changing model bindings. The profile script validates
+operator-selected Events values; it does not produce manifests. These steps
+change configuration and deployment state only; they do not rebuild the product.
 
 The P0 handoff supplies the PostgreSQL roles, schemas, and Entra principal IDs.
 Read-only Azure identity lookup supplied the corresponding client IDs; the
@@ -246,21 +274,33 @@ command's `--provider-catalog-source-commit` identifies the catalog review
 commit instead.
 
 The source-backed values are covered by local configuration checks. The live
-runtime preflight checks the applied ConfigMaps and other Kubernetes
-prerequisites before acceptance. This source PR does not apply any map or run
-that preflight. The operator apply order is:
+runtime preflight checks the selected target, source-managed configuration, and
+operator-owned prerequisites before applying anything. The full product
+installation uses one Kustomize bundle:
 
 ```powershell
-kubectl apply -f deploy\k8s\provider-catalogs\projects-config-provider-catalog.json
-kubectl apply -f deploy\k8s\runtime-configs\environment-runtime-config.json
-kubectl apply -f deploy\k8s\runtime-configs\environment-cilium-config.json
-kubectl apply -f deploy\k8s\runtime-configs\orchestrator-runtime-config.json
-kubectl apply -f deploy\k8s\runtime-configs\events-and-sessions-runtime-config.json
+kubectl apply -k deploy\k8s
 ```
 
-These commands are documented for the operator handoff; this source PR does
-not run them. The bootstrap preflight validates the applied ConfigMaps before
-rollout.
+The root composition includes all product Deployments, Services, ServiceAccounts,
+runtime ConfigMaps, the Environment Cilium options, Projects provider catalog,
+default-deny/DNS NetworkPolicies, and Cilium policies required by the
+bootstrap. The owner policies include exact Broker-issuer HTTPS, scoped
+workload-identity PostgreSQL/Entra access, Environment's Kubernetes API path,
+and configured owner-service calls; they do not grant broad external egress.
+It resolves the Identity Broker egress template from the checked-in non-secret
+P0 map and pins product images through Kustomize `images:` entries.
+Secrets, public CA data, migration resources, and Gateway placement remain
+operator-owned. The three existing Gateway ingress policies are included
+without creating Gateway placement resources. Do not apply or bootstrap while a
+workload-required runtime ConfigMap is marked incomplete or while
+`CHANGEME-GATEWAY-NAMESPACE` remains unresolved. The unreferenced
+`agenthost-runtime-v1` ConfigMap is intentionally incomplete and does not block
+preflight while Environment's optional AgentHost profile remains unset. The
+approved Gateway namespace and enforcement policy (`restricted` or `baseline`)
+remain explicit inputs; the Portal origin is also required to complete
+`Gateway__WebOrigin`. The release helper checks these inputs and receipt-pinned
+images before it invokes `kubectl apply -k`.
 
 ## Managed routing candidate
 
@@ -421,11 +461,16 @@ The default-deny policy only allows DNS to `kube-system` pods labeled
 `k8s-app: kube-dns`, on TCP/UDP port 53. Each workload has its own Cilium
 policy for destinations beyond DNS. The `CHANGEME-*` values make these
 definitions non-deployable until approved environment inputs are supplied.
+The P0 runtime prerequisite composition binds the Identity
+Broker policy to its exact P0 PostgreSQL, Key Vault, and Entra hosts. It leaves
+the existing Gateway ingress policy selectors unchanged until the Gateway
+namespace and enforcement policy are approved.
 
 ## Validating locally
 
 ```powershell
 kubectl kustomize deploy\k8s\base
+kubectl kustomize deploy\k8s
 kubectl kustomize deploy\k8s\migrations\identity-broker
 kubectl kustomize deploy\k8s\routing\identity-broker
 kubectl kustomize deploy\k8s\acceptance\foundation-probe
@@ -437,69 +482,71 @@ permission.
 
 ## Published v1 release rollout
 
-The local `npm run release:deploy` command is a separate, opt-in consumer of a
-published v1 composition. Its default is a read-only dry-run. It requires a
-release-stage manifest with exact image digests and the matching
-`publication.json` receipt from the immutable source-bound GitHub result. By
-default, the checked-in `scripts/release/runtime-list.mjs` source renders a
-Kubernetes `List` containing one restricted Deployment and private ClusterIP
-Service for each of the nine shared product services. It takes the Projects
-provider-catalog ConfigMap name and reviewed source commit explicitly. An
-operator can instead supply a complete rendered list with `--runtime-manifest`.
-The tool verifies the GitHub
-annotated tag and Release, source SHA, all ten public GHCR manifests, the exact
-Azure/kubectl target, and referenced prerequisites before it can render or apply.
-The measured AgentHost image is not deployed as a shared workload. Anonymous
-GHCR verification resolves the exact published `linux/amd64` child manifest.
-It checks the image config against the prepared source labels and measures the
-published manifest, config, and compressed layers. The Environment Deployment pins that
-child digest, platform, and byte total for the per-Sandbox provider. Resume also
-checks the live Environment pin and liveness/readiness probes. The Foundation
-Probe is excluded.
+Use the root Kustomization for the complete product installation. The
+interactive operator path is `kubectl apply -k deploy\k8s`, after all
+workload-required runtime inputs and Gateway placement values have been
+resolved. The optional AgentHost ConfigMap can remain incomplete while its
+Environment profile is unset. The guarded
+local `npm run release:deploy` and `npm run release:deploy-bootstrap` commands
+use that same source bundle. Their default is a read-only dry-run; `--execute`
+applies the rendered Kustomize bundle only after receipt, image, target, runtime
+preflight, TLS/CA, and existing Broker-routing checks pass. The bootstrap
+command is pre-acceptance only; it does not record release acceptance.
 
-The target must be passed explicitly each time: subscription
+The helper verifies the GitHub annotated tag and Release, tagged source SHA,
+publication receipt, all ten public GHCR images, and the exact Azure/kubectl
+target. It creates a temporary Kustomize copy with product image digests
+replaced by the verified receipt values, then checks that those exact pins are
+present in the rendered install. It runs `kubectl apply --dry-run=client -k`
+before any write and uses `kubectl apply -k` for execution. It does not create a
+JavaScript-generated Deployment or Service list. `scripts/release/runtime-list.mjs`
+remains the shared service contract used by the integration harness and
+preflight checks. The measured AgentHost image is configured in the Environment
+runtime map for per-Sandbox creation; AgentHost is not a shared Deployment.
+Anonymous GHCR verification resolves its exact published `linux/amd64` child
+manifest, checks image labels, and measures the manifest, config, and compressed
+layers. The Environment settings pin that digest, platform, and byte total.
+
+Pass the target explicitly each time: subscription
 `90ab3701-83f0-4ba1-a90a-f2e68683adab`, tenant
 `72f988bf-86f1-41af-91ab-2d7cd011db47`, resource group `aw-v1-p0`, cluster
-`aw-v1-p0-aks`, namespace `agentweaver-v1-p0`, and node bounds 2–3. The tool
-uses the existing Azure CLI and kubectl contexts only after verifying them
-against those values. It does not login, fetch AKS credentials, switch contexts,
-or consult any 0.x target.
+`aw-v1-p0-aks`, namespace `agentweaver-v1-p0`, and node bounds 2–3. The helper
+uses existing Azure CLI and kubectl contexts only after verifying them against
+those values. It does not login, fetch AKS credentials, switch contexts, or
+consult any 0.x target.
 
-The supplied runtime List can contain only nine pairs of `Deployment` and
-`Service` objects. AgentHost must not appear there. All referenced ServiceAccounts,
-runtime ConfigMaps, Secrets, PVCs, and service-specific Cilium policies must
-already exist in this namespace.
-Deployments must pin the exact GHCR digest, use the existing per-service
-identity, use HTTPS health endpoints, and retain the restricted pod/container
-security profile. No Secret or ConfigMap data is supplied through the release
-tool. It will not create a Namespace, identity, access policy, migration Job,
-database, ingress, Gateway, or TLS certificate, and it will not broaden the
-default-deny network policy.
+The Kustomize bundle includes the nine shared product Deployments and private
+ClusterIP Services, ServiceAccounts, runtime ConfigMaps, provider catalog,
+default-deny/DNS NetworkPolicies, and required Cilium policies. Each workload
+uses its service identity, HTTPS health endpoints, and restricted pod/container
+security profile. The bundle does not contain Secrets, private keys, public CA
+data, a database migration Job, database grants, TLS certificates, or Gateway
+placement resources. Those remain explicit operator prerequisites; the
+installer does not broaden default-deny policy.
 
-The checked-in source defines required Cilium policy names for Identity Broker,
-Events & Sessions, Projects & Config, AgentHost, Environment, Gateway, MCP,
-Orchestrator, Knowledge, and Web. The optional routing overlay defines Web
-ingress only from node health probes and the exact `identity-broker` Gateway
-pods in the explicitly selected Gateway namespace, on HTTP port 8080. The source also defines the Web root route and Gateway API routes for `/api/v1`
-and exact `/openapi/v1.json`. It defines exact `/mcp` and the protected-resource
-metadata path to MCP. The release tool does not create or manage these routes.
-The other owner policies cover source-verified internal service edges; they do
-not supply missing external endpoints or prove live traffic.
+The checked-in Cilium policies cover Identity Broker, Events & Sessions,
+Projects & Config, AgentHost, Environment, Gateway, MCP, Orchestrator, Knowledge,
+and Web. Events accepts requests from AgentHost, Orchestrator, Gateway,
+Knowledge, and Environment, plus node health probes. Its egress is limited to
+the configured service owners, Broker issuer, Entra, PostgreSQL, and Blob
+endpoint. Projects accepts requests from Identity Broker, Orchestrator,
+Gateway, Events, Knowledge, and Environment, plus node health probes. Its
+egress is limited to Broker, Entra, PostgreSQL, GitHub API, and raw content
+hosts; it does not permit optional Blob storage. Both policies constrain DNS
+and use exact Cilium FQDN and port rules. The three Gateway ingress policies
+remain blocked on the approved Gateway namespace and namespace policy mode
+(`restricted` or `baseline`). This source does not create or select Gateway
+placement. Route and certificate resources remain outside the root product
+bundle.
 
-No current source release is deployable: `releases/foundation.json` remains
-`draft`, no product publication receipt exists, and the nine-service runtime
-List is generated from checked-in source but has not been deployed. The source
-now supports a run-scoped AgentHost
-Sandbox profile, but the profile does not prove production scheduling, a live
-controller-created Service, or complete runtime delivery. Existing
-service-specific runtime configuration, including service ConfigMaps, TLS
-Secrets, the Projects provider catalog, and database/access/TLS prerequisites
-also remain operator-owned. The renderer only references those existing objects;
-it does not supply values, create them, or guess database mappings.
-
-An explicit `--execute` applies only those nine shared-workload Deployments and
-ClusterIP Services. `--resume` can skip an already-applied stage only when its
-checkpoint binds the exact tag, source SHA, release manifest, publication
-receipt, runtime List, and target. It always repeats live target, image
-provenance, rollout, pod-readiness, and running-image-ID checks. A successful
-verification removes that checkpoint; checkpoint I/O errors are reported.
+The release helper verifies the source-managed resources in the rendered
+Kustomize bundle and checks operator-owned ServiceAccounts, ConfigMaps, Secrets,
+PVCs, certificates, and routing prerequisites in the target namespace. It
+rejects every ConfigMap marked incomplete and Gateway policies that still
+contain `CHANGEME-GATEWAY-NAMESPACE`. An explicit `--execute` applies the whole
+Kustomize installation, then repeats live target, receipt/image provenance,
+rollout, pod-readiness, and running-image-ID checks. `--resume` can skip the
+apply stage only when its checkpoint binds the exact tag, source SHA, release
+manifest, publication receipt, rendered Kustomize resources, and target. A
+successful verification removes that checkpoint; checkpoint I/O errors are
+reported.

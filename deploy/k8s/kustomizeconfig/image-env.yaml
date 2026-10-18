@@ -1,0 +1,4 @@
+# Kustomize also pins the per-Sandbox AgentHost image stored in Environment options.
+images:
+  - path: spec/template/spec/containers/env/value
+    kind: Deployment

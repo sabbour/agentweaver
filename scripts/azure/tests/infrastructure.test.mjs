@@ -288,7 +288,7 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   ]);
   const rendered = run('kubectl', ['kustomize', 'deploy/k8s/base']).stdout;
   assert.match(rendered, /kind: ServiceAccount/);
-  assert.match(rendered, /foundation-probe/);
+  assert.doesNotMatch(rendered, /foundation-probe/);
   assert.match(rendered, /kind: Deployment/);
   assert.match(rendered, /kind: Service/);
   assert.doesNotMatch(rendered, /^kind: (Ingress|IngressClass|Gateway|StatefulSet|DaemonSet|Job)$/m);
@@ -297,7 +297,8 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.ok(identityDeploymentDocument);
   assert.match(identityDeploymentDocument, /serviceAccountName: identity-broker/);
   assert.match(identityDeploymentDocument, /azure\.workload\.identity\/use: "true"/);
-  assert.match(identityDeploymentDocument, /image: registry\.invalid\/agentweaver-identity-broker@sha256:0{64}/);
+  assert.match(identityDeploymentDocument,
+    /image: ghcr\.io\/sabbour\/agentweaver\.identity\.broker:receipt-pinned/);
   assert.match(identityDeploymentDocument, /ASPNETCORE_URLS\s*\n\s+value: https:\/\/\+:8443/);
   assert.match(identityDeploymentDocument, /ASPNETCORE_Kestrel__Certificates__Default__Path\s*\n\s+value: \/var\/run\/identity-broker-tls\/tls\.crt/);
   assert.match(identityDeploymentDocument, /ASPNETCORE_Kestrel__Certificates__Default__KeyPath\s*\n\s+value: \/var\/run\/identity-broker-tls\/tls\.key/);
@@ -358,6 +359,7 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.doesNotMatch(dnsPolicy, /namespaceSelector: \{\}/);
 
   const probeOverlay = run('kubectl', ['kustomize', 'deploy/k8s/acceptance/foundation-probe']).stdout;
+  assert.match(probeOverlay, /kind: ServiceAccount[\s\S]*name: foundation-probe/);
   const probeEgress = probeOverlay.split('---').find(document =>
     document.includes('name: foundation-probe-egress'));
   assert.ok(probeEgress);
