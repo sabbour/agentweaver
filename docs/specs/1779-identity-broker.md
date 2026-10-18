@@ -205,19 +205,23 @@ omits `client_secret` when `ClientSecret` is unset. A confidential upstream
 client can use the optional direct setting supplied by the operator.
 The deployment retains signing/encryption material and the protected key ring
 across restart. The HTTPS listener uses a separate operator-approved TLS
-certificate. The repository contains no certificate, password, OAuth secret,
-issuer domain, tenant, client ID, or PostgreSQL role value.
+certificate. The repository contains no certificate, password, or OAuth
+secret. P0 public client identifiers, issuers, tenant IDs, and PostgreSQL role
+names are non-secret runtime configuration.
 Certificate rotation requires overlap with previous verification and decryption keys through a separate reviewed procedure.
 Replacing the sole certificate immediately invalidates previous encrypted tokens and cookies.
 
-The Kubernetes base references the required `identity-broker-runtime-config`
+The Kubernetes base references the required
+`identity-broker-runtime-config-v2`
 ConfigMap, `identity-broker-signing` and `identity-broker-tls` Secrets, and the
 durable `identity-broker-key-ring` PVC. It also references
 `identity-broker-client-secrets` when a confidential upstream or OAuth client
 is configured. It does not create any of these objects. The runtime ConfigMap
 contains non-secret settings and must register the exact issuer, upstream OIDC
 authority/client, and every accepted client, redirect, scope, and resource
-audience. Confidential client secrets use Secret keys, not ConfigMap values.
+audience. The P0 v2 snapshot keeps its run-owned acceptance client and adds the
+`agentweaver-web` public client with the Portal `/auth/callback` redirect.
+Confidential client secrets use Secret keys, not ConfigMap values.
 
 The `identity-broker` runtime ServiceAccount is federated to its own UAMI.
 That identity uses the same explicit workload-identity settings for native

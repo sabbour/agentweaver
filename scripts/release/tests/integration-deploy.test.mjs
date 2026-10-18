@@ -147,7 +147,7 @@ function runBinding({ caBundle = testCaBundle, leafPem = testServerLeafPem } = {
 
 function runBindingConfigMaps(binding) {
   return {
-    'identity-broker-runtime-config': {
+    'identity-broker-runtime-config-v2': {
       ConnectionStrings__IdentityBroker: 'Host=database;Password=test-only-value',
       IdentityBroker__SecretRedemption__Audience: 'https://identity.agentweaver.io/api',
       IdentityBroker__Clients__0__Resources__0: 'https://identity.agentweaver.io/api',
@@ -617,7 +617,7 @@ test('Broker run-binding audience must differ from the existing Projects Config 
 test('Broker run-binding audience must differ from every Identity Broker client resource', () => {
   const binding = runBinding();
   const configMaps = runBindingConfigMaps(binding);
-  configMaps['identity-broker-runtime-config'].IdentityBroker__Clients__0__Resources__1 =
+  configMaps['identity-broker-runtime-config-v2'].IdentityBroker__Clients__0__Resources__1 =
     binding.projectsAudience;
   const mocks = brokerRunBindingMocks(binding, { configMaps });
   assert.throws(() => verifyBrokerRunBindingConfiguration(binding, target, mocks),
@@ -628,7 +628,7 @@ test('Broker run-binding audience must differ from every Identity Broker client 
 test('Broker run-binding audience must differ from URI-equivalent Identity Broker client resources', () => {
   const binding = runBinding();
   const configMaps = runBindingConfigMaps(binding);
-  configMaps['identity-broker-runtime-config'].IdentityBroker__Clients__0__Resources__1 =
+  configMaps['identity-broker-runtime-config-v2'].IdentityBroker__Clients__0__Resources__1 =
     'https://PROJECTS.agentweaver.io:443/run-binding';
   const mocks = brokerRunBindingMocks(binding, { configMaps });
   assert.throws(() => verifyBrokerRunBindingConfiguration(binding, target, mocks),
@@ -639,7 +639,7 @@ test('Broker run-binding audience must differ from URI-equivalent Identity Broke
 test('Broker run-binding audience must differ from the Identity Broker SecretRedemption audience', () => {
   const binding = runBinding();
   const configMaps = runBindingConfigMaps(binding);
-  configMaps['identity-broker-runtime-config'].IdentityBroker__SecretRedemption__Audience =
+  configMaps['identity-broker-runtime-config-v2'].IdentityBroker__SecretRedemption__Audience =
     binding.projectsAudience;
   const mocks = brokerRunBindingMocks(binding, { configMaps });
   assert.throws(() => verifyBrokerRunBindingConfiguration(binding, target, mocks),
@@ -651,7 +651,7 @@ test('Broker run-binding audience uses its canonical URI for the exact SecretRed
   const binding = runBinding();
   binding.projectsAudience = 'https://projects.agentweaver.io';
   const configMaps = runBindingConfigMaps(binding);
-  configMaps['identity-broker-runtime-config'].IdentityBroker__SecretRedemption__Audience =
+  configMaps['identity-broker-runtime-config-v2'].IdentityBroker__SecretRedemption__Audience =
     'https://projects.agentweaver.io/';
   const mocks = brokerRunBindingMocks(binding, { configMaps });
   assert.throws(() => verifyBrokerRunBindingConfiguration(binding, target, mocks),
@@ -677,9 +677,9 @@ test('Broker run-binding accepts distinct but URI-similar public audiences', () 
   const configMaps = runBindingConfigMaps(binding);
   configMaps['projects-config-runtime-config'].ProjectsConfig__Authentication__Audience =
     'https://projects.agentweaver.io/run-binding';
-  configMaps['identity-broker-runtime-config'].IdentityBroker__Clients__0__Resources__0 =
+  configMaps['identity-broker-runtime-config-v2'].IdentityBroker__Clients__0__Resources__0 =
     'https://PROJECTS.agentweaver.io:443/other';
-  configMaps['identity-broker-runtime-config'].IdentityBroker__SecretRedemption__Audience =
+  configMaps['identity-broker-runtime-config-v2'].IdentityBroker__SecretRedemption__Audience =
     'https://PROJECTS.agentweaver.io:443/other';
   const mocks = brokerRunBindingMocks(binding, { configMaps });
   const evidence = verifyBrokerRunBindingConfiguration(binding, target, mocks);

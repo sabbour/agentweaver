@@ -69,6 +69,13 @@ absent.
 | `OAUTH_REDIRECT_URI` | `VITE_OAUTH_REDIRECT_URI` | Current browser origin plus `/auth/callback`. It must match client registration. |
 | `OAUTH_SCOPES` | `VITE_OAUTH_SCOPES` | Required whitespace-separated registered scopes. |
 
+The P0 runtime snapshot uses the public Broker client `agentweaver-web` and the
+scopes `openid profile email api.read offline_access projects.admin
+projects.orchestrator`. Its `/auth/callback` redirect is registered on that
+Identity Broker client. The upstream Entra application remains the Broker's
+server-side provider and keeps its `/signin-oidc` callback; the Web callback is
+not added to that Entra application.
+
 The static host serves public settings at `GET /env-config.js` with
 `Cache-Control: no-store`. It base64-encodes values as data, not executable text.
 `HEAD` returns headers only; other methods return `405`. The build injects this

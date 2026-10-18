@@ -57,7 +57,8 @@ spec:
                   optional: false
           envFrom:
             - configMapRef:
-                name: identity-broker-runtime-config
+                # The v2 name change rolls the pod instead of mutating an immutable ConfigMap.
+                name: identity-broker-runtime-config-v2
                 optional: false
             - secretRef:
                 name: identity-broker-client-secrets

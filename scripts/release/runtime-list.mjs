@@ -227,7 +227,10 @@ function createWorkload(name, image, namespace, providerCatalog, agentHost, brok
     .filter(({ workload }) => workload === name)
     .map(({ name: envName, value }) => ({ name: envName, value })));
   const envFrom = [{
-    configMapRef: { name: `${name}-runtime-config`, optional: false },
+    configMapRef: {
+      name: identity ? 'identity-broker-runtime-config-v2' : `${name}-runtime-config`,
+      optional: false,
+    },
   }];
 
   if (!web) {
