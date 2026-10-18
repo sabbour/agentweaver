@@ -105,6 +105,17 @@ const PROJECTS_CONFIG_HOSTNAME = 'projects-config.agentweaver-v1-p0.svc.cluster.
 const SERVER_AUTH_EKU = '1.3.6.1.5.5.7.3.1';
 const BACKEND_TLS_CA_CONFIGMAP = 'service-backend-ca';
 const BOOTSTRAP_RELEASE_TAG = 'v1.0.0';
+const BOOTSTRAP_RELEASES = Object.freeze({
+  [BOOTSTRAP_RELEASE_TAG]: Object.freeze({
+    sourceSha: PARTIAL_PUBLICATION.sourceSha,
+    continuation: true,
+  }),
+  'v1.0.1': Object.freeze({
+    sourceSha: '56cf5a8f841dc22f69cd087d45f4e2882702dfb4',
+    continuation: false,
+    allowLightweightTag: true,
+  }),
+});
 /** Maps services to the expected Kubernetes network-policy names. */
 export const SERVICE_NETWORK_POLICY_NAMES = Object.freeze({
   'identity-broker': 'identity-broker-egress',
@@ -222,8 +233,9 @@ export function parseArgs(argv = []) {
   if (help) return { help: true, preAcceptance };
   if (execute && dryRun) fail('--execute and --dry-run are mutually exclusive');
   if (!RELEASE_TAG.test(releaseTag ?? '')) fail('an exact v1.x.y GitHub release tag is required');
-  if (preAcceptance && releaseTag !== BOOTSTRAP_RELEASE_TAG) {
-    fail(`--pre-acceptance is limited to the exact ${BOOTSTRAP_RELEASE_TAG} publication`);
+  const bootstrapRelease = BOOTSTRAP_RELEASES[releaseTag];
+  if (preAcceptance && !bootstrapRelease) {
+    fail(`--pre-acceptance is limited to the exact ${Object.keys(BOOTSTRAP_RELEASES).join(' and ')} publications`);
   }
   if (resume && restart) fail('--resume and --restart are mutually exclusive');
   if ((resume || restart) && !execute) fail('--resume and --restart require explicit --execute');
@@ -234,7 +246,11 @@ export function parseArgs(argv = []) {
   const optionNames = new Map([...options].map(([option, key]) => [key, option]));
   for (const key of required) requiredString(values[key], optionNames.get(key));
   if (preAcceptance) {
-    requiredString(values.completionPath, '--completion');
+    if (bootstrapRelease.continuation) {
+      requiredString(values.completionPath, '--completion');
+    } else if (values.completionPath !== undefined) {
+      fail(`--completion is not accepted for the ${releaseTag} normal publication`);
+    }
     if (values.runtimeManifestPath) {
       fail('--pre-acceptance must generate the runtime List from the verified receipt');
     }
@@ -325,14 +341,15 @@ export function validatePublishedManifest(manifest, { root, sourceSha }) {
 }
 
 /**
- * Validates the tracked v1.0.0 draft and adds only its source-bound published image digests.
+ * Validates the tracked bootstrap draft and adds only source-bound published image digests.
  * The draft itself remains unchanged and carries no deployment or persona acceptance claim.
  */
 export function validateBootstrapManifest(manifest, publication, {
-  root, sourceSha, manifestPath, run,
+  root, sourceSha, releaseTag, manifestPath, run,
 }) {
-  if (sourceSha !== PARTIAL_PUBLICATION.sourceSha) {
-    fail('pre-acceptance bootstrap is bound to the exact v1.0.0 source commit');
+  const bootstrapRelease = BOOTSTRAP_RELEASES[releaseTag];
+  if (!bootstrapRelease || sourceSha !== bootstrapRelease.sourceSha) {
+    fail(`pre-acceptance bootstrap is bound to the exact ${releaseTag} source commit`);
   }
   const canonicalManifestPath = path.resolve(root, 'releases', 'foundation.json');
   if (path.resolve(root, manifestPath ?? '') !== canonicalManifestPath) {
@@ -342,15 +359,23 @@ export function validateBootstrapManifest(manifest, publication, {
     'ls-tree', '-r', '--full-tree', '--name-only', sourceSha, '--', 'releases/foundation.json',
   ], { cwd: root });
   if (trackedPath !== 'releases/foundation.json') {
-    fail('the v1.0.0 draft manifest is not tracked at the exact published source commit');
+    fail(`the ${releaseTag} draft manifest is not tracked at the exact published source commit`);
   }
   const sourceManifest = parseJson(run('git', [
     'show', `${sourceSha}:releases/foundation.json`,
-  ], { cwd: root }), 'source-bound v1.0.0 draft manifest');
+  ], { cwd: root }), `source-bound ${releaseTag} draft manifest`);
   if (!isDeepStrictEqual(manifest, sourceManifest)) {
     fail('the supplied draft manifest differs from releases/foundation.json at the published source commit');
   }
-  validateManifest(manifest, { root });
+  const readSourceProject = (file) => {
+    const relativePath = path.relative(root, file);
+    if (relativePath === '..' || relativePath.startsWith(`..${path.sep}`) || path.isAbsolute(relativePath)) {
+      fail('a bootstrap manifest project path escapes the published source tree');
+    }
+    const sourcePath = relativePath.split(path.sep).join('/');
+    return run('git', ['show', `${sourceSha}:${sourcePath}`], { cwd: root });
+  };
+  validateManifest(manifest, { root, readProject: readSourceProject });
   if (manifest.stage !== 'draft' || manifest.evidence !== undefined) {
     fail('pre-acceptance bootstrap requires the tracked draft without release evidence');
   }
@@ -361,11 +386,13 @@ export function validateBootstrapManifest(manifest, publication, {
   const expectedIds = [...PRODUCT_COMPONENTS].sort();
   if (ids.length !== expectedIds.length ||
       ids.some((id, index) => id !== expectedIds[index])) {
-    fail('the tracked draft must contain exactly the 23 v1.0.0 product components');
+    fail(`the tracked draft must contain exactly the 23 ${releaseTag} product components`);
   }
-  for (const component of product) {
-    if (component.version !== '1.0.0') {
-      fail(`${component.id} must remain pinned at the approved product version 1.0.0`);
+  if (releaseTag === BOOTSTRAP_RELEASE_TAG) {
+    for (const component of product) {
+      if (component.version !== '1.0.0') {
+        fail(`${component.id} must remain pinned at the approved product version 1.0.0`);
+      }
     }
   }
 
@@ -385,13 +412,27 @@ export function validateBootstrapManifest(manifest, publication, {
   return deploymentManifest;
 }
 
-/** Rejects any bootstrap input outside the one published v1.0.0 continuation. */
+/** Rejects bootstrap receipts that do not match the exact release's publication mode and source. */
 function validateBootstrapPublication(tag, publication) {
-  if (tag !== BOOTSTRAP_RELEASE_TAG ||
-      publication?.sourceSha !== PARTIAL_PUBLICATION.sourceSha ||
-      publication.status !== 'published' || !publication.continuation ||
-      typeof publication.continuation !== 'object' || Array.isArray(publication.continuation)) {
-    fail('pre-acceptance bootstrap requires the exact source-bound v1.0.0 published continuation receipt');
+  const bootstrapRelease = BOOTSTRAP_RELEASES[tag];
+  const hasContinuation = publication !== null && typeof publication === 'object' &&
+    Object.hasOwn(publication, 'continuation');
+  if (!bootstrapRelease) {
+    fail(`pre-acceptance bootstrap requires the exact source-bound ${tag} published receipt`);
+  }
+  if (bootstrapRelease.continuation) {
+    if (publication?.sourceSha !== bootstrapRelease.sourceSha || publication.status !== 'published' ||
+        !publication.continuation || typeof publication.continuation !== 'object' ||
+        Array.isArray(publication.continuation)) {
+      fail('pre-acceptance bootstrap requires the exact source-bound v1.0.0 published continuation receipt');
+    }
+  } else {
+    if (publication?.sourceSha !== bootstrapRelease.sourceSha || publication.status !== 'published') {
+      fail('pre-acceptance bootstrap requires the exact source-bound v1.0.1 published receipt');
+    }
+    if (hasContinuation) {
+      fail('v1.0.1 pre-acceptance bootstrap rejects continuation publication receipts');
+    }
   }
 }
 
@@ -1126,9 +1167,9 @@ function verifyCleanCheckout(root, run, checkoutName = 'release source') {
   return current;
 }
 
-/** Confirms the public Release, annotated source tag, and immutable receipt for one source SHA. */
+/** Confirms the public Release, exact source tag, and immutable receipt for one source SHA. */
 async function verifyPublishedSource(tag, publication, sourceSha, {
-  root, run, sourceCommitDescription,
+  root, run, sourceCommitDescription, allowLightweightTag = false,
 }) {
   const release = parseJson(run('gh', ['api', `repos/${REPOSITORY}/releases/tags/${tag}`], { cwd: root }), 'GitHub Release');
   if (release.tag_name !== tag || release.draft !== false || release.prerelease !== false) {
@@ -1136,13 +1177,19 @@ async function verifyPublishedSource(tag, publication, sourceSha, {
   }
   const tagRefPath = `repos/${REPOSITORY}/git/ref/tags/${encodeURIComponent(tag)}`;
   const tagRef = parseJson(run('gh', ['api', tagRefPath], { cwd: root }), 'GitHub release tag ref');
-  if (tagRef.object?.type !== 'tag' || !SHA.test(tagRef.object.sha ?? '')) {
+  if (allowLightweightTag && tagRef.object?.type === 'commit' &&
+      SHA.test(tagRef.object.sha ?? '')) {
+    if (tagRef.object.sha !== sourceSha) {
+      fail(`${tag} must resolve to the exact ${sourceCommitDescription} commit ${sourceSha}`);
+    }
+  } else if (tagRef.object?.type === 'tag' && SHA.test(tagRef.object.sha ?? '')) {
+    const tagObject = parseJson(run('gh', ['api', `repos/${REPOSITORY}/git/tags/${tagRef.object.sha}`], { cwd: root }), 'GitHub annotated tag');
+    if (tagObject.tag !== tag || tagObject.object?.type !== 'commit' ||
+        !SHA.test(tagObject.object.sha ?? '') || tagObject.object.sha !== sourceSha) {
+      fail(`${tag} must resolve to the exact ${sourceCommitDescription} commit ${sourceSha}`);
+    }
+  } else {
     fail(`${tag} must be an annotated Git tag`);
-  }
-  const tagObject = parseJson(run('gh', ['api', `repos/${REPOSITORY}/git/tags/${tagRef.object.sha}`], { cwd: root }), 'GitHub annotated tag');
-  if (tagObject.tag !== tag || tagObject.object?.type !== 'commit' ||
-      !SHA.test(tagObject.object.sha ?? '') || tagObject.object.sha !== sourceSha) {
-    fail(`${tag} must resolve to the exact ${sourceCommitDescription} commit ${sourceSha}`);
   }
 
   const resultRefName = publication?.continuation !== undefined
@@ -1174,14 +1221,17 @@ async function verifyRelease(tag, publication, { root, run }) {
 }
 
 /**
- * Verifies the one-use v1.0.0 publication while allowing a clean, newer helper checkout.
- * The image source remains bound to the published annotated tag, not the helper commit.
+ * Verifies a supported bootstrap publication while allowing a clean, newer helper checkout.
+ * The image source remains bound to the published release tag, not the helper commit.
  */
 export async function verifyBootstrapRelease(tag, publication, { root, run }) {
   verifyCleanCheckout(root, run, 'deployment helper');
   validateBootstrapPublication(tag, publication);
-  return verifyPublishedSource(tag, publication, PARTIAL_PUBLICATION.sourceSha, {
-    root, run, sourceCommitDescription: 'published source',
+  return verifyPublishedSource(tag, publication, BOOTSTRAP_RELEASES[tag].sourceSha, {
+    root,
+    run,
+    sourceCommitDescription: 'published source',
+    allowLightweightTag: BOOTSTRAP_RELEASES[tag].allowLightweightTag,
   });
 }
 
@@ -1680,14 +1730,16 @@ and the exact merged helper PR. No environment approval history is required.
 
 /** Shows the source-bound bootstrap contract without implying release acceptance. */
 function bootstrapHelpText() {
-  return `release:deploy-bootstrap -- verify or deploy the published v1.0.0 before live acceptance
+  return `release:deploy-bootstrap -- verify or deploy a published v1 release before live acceptance
 
 Usage:
   npm run release:deploy-bootstrap -- v1.0.0 --manifest releases/foundation.json --publication <publication.json> --completion <continuation.json> --subscription-id <id> --tenant-id <id> --resource-group aw-v1-p0 --cluster aw-v1-p0-aks --namespace agentweaver-v1-p0 --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
+  npm run release:deploy-bootstrap -- v1.0.1 --manifest releases/foundation.json --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group aw-v1-p0 --cluster aw-v1-p0-aks --namespace agentweaver-v1-p0 --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
 
-The default is a read-only pre-acceptance dry-run. This mode accepts only the
-source-bound v1.0.0 published receipt, its immutable continuation result, and
-the tracked draft manifest. It never creates release acceptance evidence.
+The default is a read-only pre-acceptance dry-run. v1.0.0 requires its immutable
+continuation proof; v1.0.1 accepts only its exact source-bound normal publication
+receipt and rejects --completion. Both require the tracked draft manifest and
+never create release acceptance evidence.
 `;
 }
 
@@ -1706,6 +1758,14 @@ export async function deployRelease(options = {}, dependencies = {}) {
   }
   if (parsed.preAcceptance && (parsed.runtimeManifestPath || options.runtimeManifest)) {
     fail('--pre-acceptance must generate the runtime List from the verified receipt');
+  }
+  const bootstrapRelease = parsed.preAcceptance ? BOOTSTRAP_RELEASES[parsed.releaseTag] : undefined;
+  if (parsed.preAcceptance && !bootstrapRelease) {
+    fail(`--pre-acceptance is limited to the exact ${Object.keys(BOOTSTRAP_RELEASES).join(' and ')} publications`);
+  }
+  if (bootstrapRelease && !bootstrapRelease.continuation &&
+      (parsed.completionPath !== undefined || Object.hasOwn(options, 'completion'))) {
+    fail(`--completion is not accepted for the ${parsed.releaseTag} normal publication`);
   }
   if (!parsed.target) fail('explicit P0 target is required');
   validateTarget(parsed.target);
@@ -1742,7 +1802,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
         parsed.releaseTag, publication, { root, run })
       : await (dependencies.verifyRelease ?? verifyRelease)(
         parsed.releaseTag, publication, { root, run });
-    if (parsed.preAcceptance) {
+    if (bootstrapRelease?.continuation) {
       if (!completion) fail('pre-acceptance bootstrap requires its exact continuation completion proof');
       await verifyCompletion(completion, publication, source);
     } else if (completion || publication.continuation !== undefined) {
@@ -1754,7 +1814,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
   const sourceSha = await verifySource();
   const deploymentManifest = parsed.preAcceptance
     ? validateBootstrapManifest(manifest, publication, {
-      root, sourceSha, manifestPath: parsed.manifestPath, run,
+      root, sourceSha, releaseTag: parsed.releaseTag, manifestPath: parsed.manifestPath, run,
     })
     : validatePublishedManifest(manifest, { root, sourceSha });
   const images = validatePublicationReceipt(publication, deploymentManifest, sourceSha);
