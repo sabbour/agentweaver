@@ -235,8 +235,8 @@ export async function observeP1ServiceDeployments({
   now = () => new Date().toISOString(),
 }) {
   requireTarget(context, namespace);
-  if (namespace !== 'agentweaver-v1-p0') {
-    throw new Error('The source-bound P1 runtime list is restricted to agentweaver-v1-p0.');
+  if (namespace !== 'agentweaver') {
+    throw new Error('The source-bound P1 runtime list is restricted to agentweaver.');
   }
   if (!SHA.test(sourceSha ?? '') || !SHA.test(sourceTree ?? '')) {
     throw new Error('The reviewed full source commit and Git tree are required.');

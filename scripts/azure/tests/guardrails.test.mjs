@@ -34,12 +34,11 @@ function guardPopulatedTarget(evidence = postDeploymentAzure, config = {}, calls
 }
 
 test('assertDedicatedTarget accepts the dedicated naming convention', () => {
-  assert.equal(assertDedicatedTarget('aw-v1-p0'), 'aw-v1-p0');
-  assert.equal(assertDedicatedTarget('aw-v1-p0-integration'), 'aw-v1-p0-integration');
+  assert.equal(assertDedicatedTarget('agentweaver'), 'agentweaver');
 });
 
 test('assertDedicatedTarget rejects anything outside the convention', () => {
-  for (const name of ['agentweaver-prod', 'aw-v1-p0_bad', 'AW-V1-P0', '', undefined, 'shared-rg']) {
+  for (const name of ['agentweaver-prod', 'agentweaver-integration', 'agentweaver_bad', 'agentweaver-legacy', '', undefined, 'shared-rg']) {
     assert.throws(() => assertDedicatedTarget(name), /dedicated v1 P0 naming convention/);
   }
 });
@@ -80,11 +79,11 @@ test('assertTenant accepts an exact match', () => {
 });
 
 test('null tags mean untagged existing resource, not safe creation', () => {
-  assert.throws(() => assertDedicatedResourceGroupOwnership('aw-v1-p0', null));
+  assert.throws(() => assertDedicatedResourceGroupOwnership('agentweaver', null));
 });
 
 test('assertDedicatedResourceGroupOwnership allows an existing resource group tagged as v1-p0', () => {
-  assert.doesNotThrow(() => assertDedicatedResourceGroupOwnership('aw-v1-p0', tags));
+  assert.doesNotThrow(() => assertDedicatedResourceGroupOwnership('agentweaver', tags));
 });
 
 test('shared guard rejects disabled account, missing IDs, bad JSON and mismatched actual group', () => {
@@ -93,25 +92,25 @@ test('shared guard rejects disabled account, missing IDs, bad JSON and mismatche
     { accountResult: { status: 1, stderr: 'AccessDenied', stdout: '' } },
     { resourceResult: { status: 0, stdout: 'null', stderr: '' } },
     { resourceResult: { status: 0, stdout: '{}', stderr: '' } },
-    { group: { id: '/subscriptions/wrong/resourceGroups/aw-v1-p0' } },
+    { group: { id: '/subscriptions/wrong/resourceGroups/agentweaver' } },
     { group: { name: 'other' } },
     { resources: [{ id: `${fixture.groupId}/providers/Microsoft.Storage/storageAccounts/old`,
       type: 'Microsoft.Storage/storageAccounts', name: 'old', tags }] },
-    { resources: [{ id: `${fixture.groupId}/providers/Microsoft.Compute/virtualMachines/aw-v1-p0-vm`,
-      type: 'Microsoft.Compute/virtualMachines', name: 'aw-v1-p0-vm', tags }] },
+    { resources: [{ id: `${fixture.groupId}/providers/Microsoft.Compute/virtualMachines/agentweaver-vm`,
+      type: 'Microsoft.Compute/virtualMachines', name: 'agentweaver-vm', tags }] },
   ]) assert.throws(() => guardAzureTarget(fixture, fakeAzure(overrides)));
 });
 
 test('assertDedicatedResourceGroupOwnership rejects an existing resource group with no matching tag', () => {
   assert.throws(
-    () => assertDedicatedResourceGroupOwnership('aw-v1-p0', { owner: 'someone-else' }),
+    () => assertDedicatedResourceGroupOwnership('agentweaver', { owner: 'someone-else' }),
     /not tagged/,
   );
 });
 
 test('assertDedicatedResourceGroupOwnership rejects an existing resource group tagged for a different environment', () => {
   assert.throws(
-    () => assertDedicatedResourceGroupOwnership('aw-v1-p0', { 'agentweaver:environment': 'v1-p1' }),
+    () => assertDedicatedResourceGroupOwnership('agentweaver', { 'agentweaver:environment': 'v1-p1' }),
     /not tagged/,
   );
 });
@@ -137,13 +136,12 @@ test('the same populated layout reaches plan, redeploy and configuration accepta
     scope: 'aks-only',
     template: 'infra/bicep/aks-redeploy.bicep',
     parametersFile: 'infra/bicep/parameters/p0-aks-redeploy.approved.json',
-    operatorObjectId: fixture.operatorObjectId,
     postgresEntraAdminObjectId: undefined,
   };
   const aksOnlyAzure = {
     ...postDeploymentAzure,
     create: { status: 0, stderr: '', stdout: JSON.stringify({
-      id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/aw-v1-p0-aks-${source.sha.slice(0, 12)}`,
+      id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/agentweaver-aks-${source.sha.slice(0, 12)}`,
       properties: { provisioningState: 'Succeeded', outputs: {
         sourceSha: deploymentOutputs.sourceSha,
         sourceTree: deploymentOutputs.sourceTree,
@@ -151,7 +149,6 @@ test('the same populated layout reaches plan, redeploy and configuration accepta
         clusterId: deploymentOutputs.clusterId,
         clusterName: deploymentOutputs.clusterName,
         controlPlanePrincipalId: deploymentOutputs.controlPlanePrincipalId,
-        operatorRoleAssignmentId: deploymentOutputs.operatorRoleAssignmentId,
         oidcIssuerUrl: deploymentOutputs.oidcIssuerUrl,
       } },
     }) },
@@ -160,14 +157,13 @@ test('the same populated layout reaches plan, redeploy and configuration accepta
     ...fixture,
     template: aksSource.template,
     parametersFile: aksSource.parametersFile,
-    operatorObjectId: aksSource.operatorObjectId,
     execute: true,
   }, {
     sourceResolver: () => aksSource,
     execAz: fakeAzure(aksOnlyAzure),
     bootstrapNamespace() {},
   })).executed, true);
-  const report = runAcceptance({ ...fixture, deploymentName: `aw-v1-p0-${source.sha.slice(0, 12)}` }, dependencies());
+  const report = runAcceptance({ ...fixture, deploymentName: `agentweaver-${source.sha.slice(0, 12)}` }, dependencies());
   assert.ok(!report.checks.some(check => check.name === 'target-and-source'));
   assert.equal(report.checks.find(check => check.name === 'target-inventory').status, 'passed');
   assert.equal(report.checks.find(check => check.name === 'target-inventory').evidence.privateDnsZones.vnetLinkCount, 7);
@@ -183,7 +179,7 @@ test('missing DNS tags and inherited resource audit metadata do not block exact-
   const auditResources = evidence.resources.filter(item =>
     item.type === 'Microsoft.Network/networkSecurityGroups' ||
     item.type === 'Microsoft.AlertsManagement/smartDetectorAlertRules' ||
-    item.name === `aw-v1-p0-${source.sha.slice(0, 12)}`);
+    item.name === `agentweaver-${source.sha.slice(0, 12)}`);
   evidence.resources = evidence.resources.filter(item => !auditResources.includes(item));
   evidence.policyStates = undefined;
   evidence.activityEvents = undefined;
@@ -228,12 +224,12 @@ test('inventory rejects wrong root IDs, root ownership, arbitrary children and u
   const child = postDeploymentInventory.find(resource => resource.type.endsWith('/containers'));
   const admin = postDeploymentInventory.find(resource => resource.type.endsWith('/administrators'));
   for (const resource of [
-    { ...root, id: root.id.replace('aw-v1-p0-vnet', 'other-vnet') },
+    { ...root, id: root.id.replace('agentweaver-vnet', 'other-vnet') },
     { ...root, tags: null },
     { ...root, tags: { ...tags, 'agentweaver:owner': 'other' } },
-    { ...child, id: child.id.replace('platform-artifacts', 'unreviewed'), name: 'awv1p0blob/default/unreviewed' },
+    { ...child, id: child.id.replace('platform-artifacts', 'unreviewed'), name: 'agentweaverblob/default/unreviewed' },
     { ...admin, id: admin.id.replace(source.postgresEntraAdminObjectId, fixture.tenantId),
-      name: `aw-v1-p0-pg/${fixture.tenantId}` },
+      name: `agentweaver-pg/${fixture.tenantId}` },
     { ...child, type: 'Microsoft.Storage/storageAccounts/fileServices/shares' },
   ]) assert.throws(() => guardAzureTarget({ ...fixture, ...source }, fakeAzure({ resources: [resource] })));
   assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources: [admin] })), /unexpected/);
@@ -268,13 +264,13 @@ test('generated NIC admission requires reciprocal approved endpoint and exact su
 });
 
 test('module names remain exact while old source-derived deployment history is non-blocking', () => {
-  const outer = postDeploymentInventory.find(resource => resource.name === `aw-v1-p0-${source.sha.slice(0, 12)}`);
+  const outer = postDeploymentInventory.find(resource => resource.name === `agentweaver-${source.sha.slice(0, 12)}`);
   const scopedOuter = {
-    id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/aw-v1-p0-aks-${source.sha.slice(0, 12)}`,
+    id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/agentweaver-aks-${source.sha.slice(0, 12)}`,
     type: 'Microsoft.Resources/deployments',
-    name: `aw-v1-p0-aks-${source.sha.slice(0, 12)}`,
+    name: `agentweaver-aks-${source.sha.slice(0, 12)}`,
   };
-  const module = postDeploymentInventory.find(resource => resource.name === 'aw-v1-p0-network');
+  const module = postDeploymentInventory.find(resource => resource.name === 'agentweaver-network');
   assert.throws(() => guardAzureTarget(fixture, fakeAzure({
     resources: [{ ...module, name: 'arbitrary', id: module.id.replace(module.name, 'arbitrary') }],
   })), /unexpected/);
@@ -295,14 +291,14 @@ test('AKS-only admission requires all three existing workload-identity bindings 
     { 'identity-broker-workload-identity': {
       status: 0, stdout: JSON.stringify({
         issuer: 'https://old.example.invalid/issuer/',
-        subject: 'system:serviceaccount:agentweaver-v1-p0:wrong',
+        subject: 'system:serviceaccount:agentweaver:wrong',
         audiences: ['api://AzureADTokenExchange'],
       }), stderr: '',
     } },
     { 'identity-broker-workload-identity': {
       status: 0, stdout: JSON.stringify({
         issuer: 'https://old.example.invalid/issuer/',
-        subject: 'system:serviceaccount:agentweaver-v1-p0:identity-broker',
+        subject: 'system:serviceaccount:agentweaver:identity-broker',
         audiences: ['api://AzureADTokenExchange', 'extra'],
       }), stderr: '',
     } },
@@ -319,8 +315,14 @@ test('role assignments must have the exact reviewed parent scope and ARM GUID', 
       { ...role, id: role.id.replace(role.name, fixture.tenantId), name: fixture.tenantId },
     ]) assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources: [resource] })), /unexpected|outside/);
   }
-  const vaultId = `${fixture.groupId}/providers/Microsoft.KeyVault/vaults/aw-v1-p0-kv`;
-  const clusterId = `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/aw-v1-p0-aks`;
+  const vaultId = `${fixture.groupId}/providers/Microsoft.KeyVault/vaults/agentweaver-kv`;
+  const clusterId = `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/agentweaver-aks`;
+  const clusterRoleName = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  assert.throws(() => guardAzureTarget(fixture, fakeAzure({ resources: [{
+    id: `${clusterId}/providers/Microsoft.Authorization/roleAssignments/${clusterRoleName}`,
+    type: 'Microsoft.Authorization/roleAssignments',
+    name: clusterRoleName,
+  }] })), /unexpected/);
   const roleId = 'db79e9a7-68ee-4b58-9aeb-b90e7c24fcba';
   const name = expectedArmGuid(vaultId, clusterId, roleId);
   const routingRole = {
@@ -333,9 +335,9 @@ test('role assignments must have the exact reviewed parent scope and ARM GUID', 
   })), /unexpected/);
 
   const runtimeIdentityId =
-    `${fixture.groupId}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aw-v1-p0-id-identity-broker`;
+    `${fixture.groupId}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/agentweaver-id-identity-broker`;
   const migrationIdentityId =
-    `${fixture.groupId}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aw-v1-p0-id-identity-broker-migration`;
+    `${fixture.groupId}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/agentweaver-id-identity-broker-migration`;
   const secretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6';
   const runtimeRoleName = expectedArmGuid(vaultId, runtimeIdentityId, secretsUserRoleId);
   const runtimeVaultRole = {
@@ -356,7 +358,7 @@ test('custom App Routing DNS inventory admits only exact scoped roles and module
     `${fixture.groupId}/providers/Microsoft.Network/dnsZones/apps.example.com`,
     `${fixture.groupId}/providers/Microsoft.Network/privateDnsZones/apps.internal.example`,
   ];
-  const clusterId = `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/aw-v1-p0-aks`;
+  const clusterId = `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/agentweaver-aks`;
   const resources = zoneIds.flatMap((zoneId, index) => {
     const zoneIsPrivate = zoneId.includes('/privateDnsZones/');
     const zoneName = zoneId.slice(zoneId.lastIndexOf('/') + 1);
@@ -364,7 +366,7 @@ test('custom App Routing DNS inventory admits only exact scoped roles and module
       ? 'b12aa53e-6015-4669-85d0-8515ebb3ae7f'
       : 'befefa01-2a29-4197-83a8-272ff33ce314';
     const roleName = expectedArmGuid(zoneId, clusterId, roleId);
-    const deploymentName = `aw-v1-p0-app-routing-dns-${index}`;
+    const deploymentName = `agentweaver-app-routing-dns-${index}`;
     return [
       { id: zoneId, type: zoneIsPrivate ? 'Microsoft.Network/privateDnsZones' : 'Microsoft.Network/dnsZones',
         name: zoneName },

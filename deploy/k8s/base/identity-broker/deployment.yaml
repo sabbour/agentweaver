@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: identity-broker
-  namespace: agentweaver-v1-p0
+  namespace: agentweaver
   labels:
     app.kubernetes.io/name: identity-broker
     agentweaver.io/service: identity-broker

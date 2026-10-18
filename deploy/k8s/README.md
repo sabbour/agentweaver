@@ -88,7 +88,7 @@ is derived from the `v1.0.0` release source commit
 `c24d0000fe5fc6163e4f38594c39dff782d3a46d`. Its rendered, immutable
 ConfigMap manifest is
 `deploy/k8s/provider-catalogs/projects-config-provider-catalog.json`. It is
-named `projects-config-provider-catalog` in `agentweaver-v1-p0`; its
+named `projects-config-provider-catalog` in `agentweaver`; its
 `agentweaver.io/provider-catalog-product-source` annotation identifies the
 published source used to derive the registrations and defaults. The root
 Kustomize composition includes this catalog with the workloads, runtime
@@ -104,7 +104,7 @@ and Cilium, plus the foundational native Messaging provider. Cilium's
 in Environment 1.0.0. Its `OptionsRevision` is the selected bounded
 label `p1-v1.0.0`, and the L3/L4 layer selects Cilium.
 
-The namespace `agentweaver-v1-p0` and endpoint selectors are derived from
+The namespace `agentweaver` and endpoint selectors are derived from
 `base/environment-agenthost-network.yaml`,
 `base/service-owner-network.yaml`, and `base/identity-broker/egress.yaml`.
 Each selector pins `k8s:io.kubernetes.pod.namespace` to that namespace and
@@ -184,11 +184,11 @@ and an exact existing AgentHost TLS Secret name are available.
 | `environment-runtime-config.json` | Database host, name, role, and tenant come from P0 handoff §7. The client ID is the live user-assigned identity matched to the handoff principal ID. The projected token path follows the checked-in runtime input profile. Broker authority/audience come from the existing non-secret `identity-broker-runtime-config-v2`. Service addresses and ports come from the checked-in Kustomize Service definitions. Namespace, StorageClass, and RuntimeClass are the approved P0 AKS values. Approved sizing: 1 CPU and 2 GiB per Sandbox, 600-second reconciliation and provisioning timeouts, 250-ms polls, startup budgets 30/90/30/30/30/180 seconds, and a 100-GiB Azure Files cap. These values pass the Agent Sandbox and Azure Files validators; the checked-in namespace LimitRange permits the 2-GiB container limit. Provider IDs, schema versions, image receipt inputs, and options revisions come from the catalog and Kustomize workloads. | No additional snapshot values are awaiting a source. Live preflight and database readiness remain separate acceptance gates. |
 | `profiles/agenthost/runtime-config.example.yaml` | Broker, Orchestrator, Environment, and Events addresses match the Kustomize Services; the authority comes from the non-secret Broker issuer. Model bindings/revision match Events. Image digest, `linux/amd64` platform, and compressed bytes match the receipt-pinned Kustomize image and Environment's existing deployment inputs. | Incomplete: `AgentHost.ConfigureEndpoint` and `Authentication.Audience` require the exact per-Sandbox HTTPS service endpoint; `AgentHost.MaximumPendingTurns` has no approved P0 value; `Environment__Sandbox__AgentSandbox__AgentHost__TlsSecretName` has no approved existing Secret name. The Environment AgentHost profile remains unset. |
 | `orchestrator-runtime-config.json` | Database and workload identity follow the same P0 handoff and live identity lookup. Schema is `orchestrator` from handoff §7. Issuer/audiences come from the existing non-secret Broker ConfigMap. Owner addresses match checked-in Kustomize Services. The approved AGT Policy resource is `agt-policy:p1-v1.0.0`, generation `1`, revision `p1-v1.0.0`. The platform document defaults to deny and has one exact `action_id ==` allow rule for each ID in `RuntimeActionContract.ActionIds`: `model.turn`, `tool.read`, `tool.write`, `exec.shell`, `exec.read`, `exec.write`, and `exec.stop`. The provider test validates and evaluates this document. The `grant_id != '' and fence != ''` expression did not allow a request with the runtime's numeric fence, so the policy uses the explicit catalog-action fallback. `ExecutableActionGuard` checks the current grant and fence before policy evaluation. | No additional snapshot values are awaiting a source. Live preflight and database readiness remain separate acceptance gates. |
-| `events-and-sessions-runtime-config.json` | Database, role, tenant, and schema follow handoff §7 and the live identity lookup. Issuer/audiences come from the Broker ConfigMap; owner addresses match checked-in Kustomize Services. Provider and Copilot Cost resource IDs are coordinator-approved opaque labels, not Azure resource IDs; both generations are `1`. Sessions and Messaging revisions, schema, polling, retention, claim lease, and message lifetime use release-source defaults. Copilot Cost schema `2`, adapter options revision `p1-v1.0.0`, meter `copilot.nano_aiu`, unit `AIC`, and the nano-AIU conversion follow the adapter contract. Its versioned JSON rate card is runtime ConfigMap data, not compiled model pricing. Card ID `github-copilot-published`, version `2026-10-17`, source URL, retrieval date, 33 published model entries, and content hash identify the GitHub snapshot. The shared model map preserves the `reasoning` and `coding` aliases and adds exact `gpt-6.1-sol` and `gpt-6-luna` keys as `HostedCopilot` at revision `p1-v1.0.1`; the per-Sandbox AgentHost settings use the same map. The approved Session Material URI is `https://awv1p0blob.blob.core.windows.net/session-material`. | No additional snapshot values are awaiting a source. The container's private access and workload-identity request remain live acceptance checks. |
-| `gateway-runtime-config.json` | Issuer and audience come from the existing non-secret Broker ConfigMap. Five HTTPS owner addresses match checked-in Kustomize Services. `Gateway__WebOrigin` is `https://portal.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io`, the Portal listener hostname under the AKS App Routing managed domain. The root Kustomization includes the matching Web HTTPRoute. | The live Gateway currently has only its `https` listener; apply the reviewed Gateway source with the `portal` listener and verify App Routing DNS/TLS before claiming live Portal readiness. |
+| `events-and-sessions-runtime-config.json` | Database, role, tenant, and schema follow handoff §7 and the live identity lookup. Issuer/audiences come from the Broker ConfigMap; owner addresses match checked-in Kustomize Services. Provider and Copilot Cost resource IDs are coordinator-approved opaque labels, not Azure resource IDs; both generations are `1`. Sessions and Messaging revisions, schema, polling, retention, claim lease, and message lifetime use release-source defaults. Copilot Cost schema `2`, adapter options revision `p1-v1.0.0`, meter `copilot.nano_aiu`, unit `AIC`, and the nano-AIU conversion follow the adapter contract. Its versioned JSON rate card is runtime ConfigMap data, not compiled model pricing. Card ID `github-copilot-published`, version `2026-10-17`, source URL, retrieval date, 33 published model entries, and content hash identify the GitHub snapshot. The shared model map preserves the `reasoning` and `coding` aliases and adds exact `gpt-6.1-sol` and `gpt-6-luna` keys as `HostedCopilot` at revision `p1-v1.0.1`; the per-Sandbox AgentHost settings use the same map. The approved Session Material URI is `https://agentweaverblob.blob.core.windows.net/session-material`. | No additional snapshot values are awaiting a source. The container's private access and workload-identity request remain live acceptance checks. |
+| `gateway-runtime-config.json` | Issuer and audience come from the existing non-secret Broker ConfigMap. Five HTTPS owner addresses match checked-in Kustomize Services. `Gateway__WebOrigin` is `https://CHANGEME-PORTAL-HOST`, the Portal listener hostname under the AKS App Routing managed domain. The root Kustomization includes the matching Web HTTPRoute. | The live Gateway currently has only its `https` listener; apply the reviewed Gateway source with the `portal` listener and verify App Routing DNS/TLS before claiming live Portal readiness. |
 | `mcp-runtime-config.json` | Issuer and audience come from the existing non-secret Broker ConfigMap. The HTTPS Gateway address matches the checked-in Kustomize Service. | No additional snapshot values are awaiting a source. Live preflight and Gateway readiness remain separate acceptance gates. |
 | `web-runtime-config.json` | Gateway path and Broker URL/issuer follow the Web host and browser runtime defaults plus the existing non-secret Broker ConfigMap. Client ID is `agentweaver-web`; the configured scopes are `openid profile email api.read offline_access projects.admin projects.orchestrator`, with `projects.admin` omitted from run-bound requests. The browser derives `/auth/callback` from the Portal origin, and that exact redirect belongs to the Broker public client, not the upstream Entra app. | The Web route is source-managed, but the live Gateway still needs its `portal` listener and live DNS/TLS verification. |
-| `knowledge-runtime-config.json` | Broker issuer/audience come from the existing non-secret Broker ConfigMap. Projects and Events addresses match checked-in Kustomize Services. The Knowledge client ID maps by read-only Azure lookup to `aw-v1-p0-id-knowledge`; tenant and token path follow the checked-in profile. PostgreSQL username follows the existing workload-identity role naming convention. Provider resource ID is `agentweaver.knowledge`; generation `1` is the first instance. | Verify that PostgreSQL role `aw-v1-p0-id-knowledge` exists and has the required grants before deployment; the read-only role query was unavailable. Do not change the resource ID for this store; increment generation only when it is replaced. |
+| `knowledge-runtime-config.json` | Broker issuer/audience come from the existing non-secret Broker ConfigMap. Projects and Events addresses match checked-in Kustomize Services. The Knowledge client ID maps by read-only Azure lookup to `agentweaver-id-knowledge`; tenant and token path follow the checked-in profile. PostgreSQL username follows the existing workload-identity role naming convention. Provider resource ID is `agentweaver.knowledge`; generation `1` is the first instance. | Verify that PostgreSQL role `agentweaver-id-knowledge` exists and has the required grants before deployment; the read-only role query was unavailable. Do not change the resource ID for this store; increment generation only when it is replaced. |
 | `projects-config-runtime-config.json` | Database and workload identity values follow the approved Projects runtime mapping. Authentication authority and audience come from the existing non-secret Broker ConfigMap. The product Deployment uses the existing catalog reference; Broker run-binding is not enabled, so Identity Broker ingress remains for its direct Copilot connection and Remote MCP Projects API calls. | No additional snapshot values are awaiting a source. Live preflight and database readiness remain separate acceptance gates. |
 | `environment-cilium-config.json` | Namespace and endpoint selectors follow the checked-in P0 Cilium policies. Options schema `1` follows the release-source adapter contract. Adapter version is `1.0.0` by coordinator decision; options revision `p1-v1.0.0` is set in the Environment Deployment. | None for the Cilium options in this file. Environment runtime values are source-backed; live readiness is checked separately. |
 
@@ -251,8 +251,8 @@ root Kustomize path as every other product change:
 ```powershell
 kubectl kustomize deploy\k8s
 kubectl apply -k deploy\k8s
-kubectl rollout restart deployment/events-and-sessions -n agentweaver-v1-p0
-kubectl rollout status deployment/events-and-sessions -n agentweaver-v1-p0
+kubectl rollout restart deployment/events-and-sessions -n agentweaver
+kubectl rollout status deployment/events-and-sessions -n agentweaver
 ```
 
 Kubernetes does not restart a process when data in a referenced ConfigMap
@@ -333,11 +333,11 @@ requires. AKS rejects security-context overrides through its Gateway
 customization ConfigMap.
 Gateway acceptance remains blocked until an approved compatible placement exists.
 No namespace policy downgrade or direct managed-Deployment patch is authorized.
-`CHANGEME-GATEWAY-NAMESPACE` and `CHANGEME-GATEWAY-POLICY` require explicit approved inputs.
-The guarded installer supports only the dedicated `agentweaver-v1-gateway`
+`agentweaver-gateway` and `CHANGEME-GATEWAY-POLICY` require explicit approved inputs.
+The guarded installer supports only the dedicated `agentweaver-gateway`
 namespace with an explicitly selected `restricted` or `baseline` enforcement policy.
 Neither policy is a default. Existing ownership and policy must match.
-The Gateway listener admits routes only from `agentweaver-v1-p0`.
+The Gateway listener admits routes only from `agentweaver`.
 The Broker ingress rule admits HTTPS on port 8443 only from that namespace's
 pods with the exact generated Gateway label.
 The base workload policy remains unchanged.
@@ -359,12 +359,12 @@ The ordinary base references, but does not create, these objects:
 | Reference | Required contents |
 | --- | --- |
 | `identity-broker-runtime-config-v2` ConfigMap | `ConnectionStrings__IdentityBroker`, public HTTPS issuer, external OIDC authority and client ID, exact `IdentityBroker__Clients__...` registrations, redemption audience and Key Vault URI, runtime workload-identity tenant/client/token-file settings, and `IdentityBroker__DataProtectionKeyPath`. It preserves acceptance client 0 and adds the public `agentweaver-web` client. |
-| Portal Web route and existing App Routing Gateway | The root bundle contains the P0 `web-application` HTTPRoute for `portal.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io`; the Gateway placement remains operator-owned in `agentweaver-v1-gateway`. Its `portal` listener uses the existing `DefaultDomainCertificate` managed-domain certificate. The live Gateway currently has no `portal` listener, so apply the reviewed Gateway source and verify DNS/TLS before acceptance. |
-| `aw-v1-p0-id-knowledge` PostgreSQL role | Knowledge uses this Entra workload-identity role with resource ID `agentweaver.knowledge` and generation `1`. Verify the role and its grants before deployment; the role name is source-backed but live existence has not been established. |
+| Portal Web route and existing App Routing Gateway | The root bundle contains the P0 `web-application` HTTPRoute for `CHANGEME-PORTAL-HOST`; the Gateway placement remains operator-owned in `agentweaver-gateway`. Its `portal` listener uses the existing `DefaultDomainCertificate` managed-domain certificate. The live Gateway currently has no `portal` listener, so apply the reviewed Gateway source and verify DNS/TLS before acceptance. |
+| `agentweaver-id-knowledge` PostgreSQL role | Knowledge uses this Entra workload-identity role with resource ID `agentweaver.knowledge` and generation `1`. Verify the role and its grants before deployment; the role name is source-backed but live existence has not been established. |
 | `identity-broker-signing` Secret | `signing.pfx` and its `password`; the PFX signs/encrypts tokens and protects the durable data-protection key ring. |
 | `identity-broker-client-secrets` Secret | Optional `IdentityBroker__ExternalProvider__ClientSecret` for a confidential upstream client and `IdentityBroker__Clients__<index>__ClientSecret` keys for configured confidential clients. Public clients omit their secrets. |
 | `identity-broker-tls` Secret | Approved `tls.crt` and `tls.key` for Kestrel HTTPS. No certificate is created here. |
-| `gateway-tls` and `mcp-tls` Secrets; `service-backend-ca` ConfigMap | Operator-owned Kestrel certificates for Gateway and MCP, plus the public `ca.crt` that signs both leaf certificates. The leaves must include `gateway.agentweaver-v1-p0.svc.cluster.local` and `mcp.agentweaver-v1-p0.svc.cluster.local` as their respective SANs. Release preflight verifies the CA and leaf validity, hostnames, and direct signature. |
+| `gateway-tls` and `mcp-tls` Secrets; `service-backend-ca` ConfigMap | Operator-owned Kestrel certificates for Gateway and MCP, plus the public `ca.crt` that signs both leaf certificates. The leaves must include `gateway.agentweaver.svc.cluster.local` and `mcp.agentweaver.svc.cluster.local` as their respective SANs. Release preflight verifies the CA and leaf validity, hostnames, and direct signature. |
 | `identity-broker-key-ring` PVC | Durable writable storage mounted for the protected ASP.NET data-protection key ring. The host runs one replica with a recreate strategy. |
 | `identity-broker-migration-config` ConfigMap | `ConnectionStrings__IdentityBrokerMigration` and the separate migration workload-identity tenant, client, and absolute projected-token-file settings. |
 
@@ -454,7 +454,7 @@ Schema initialization and runtime database grants require separate approval.
 The Bicep identity module defines three separate UAMIs:
 `foundation-probe`, `identity-broker`, and `identity-broker-migration`.
 Each federated subject must match its exact ServiceAccount in
-`agentweaver-v1-p0`. The Identity runtime alone receives Key Vault Secrets User
+`agentweaver`. The Identity runtime alone receives Key Vault Secrets User
 on the existing vault. The migration identity has no Azure resource role.
 PostgreSQL access comes from the separately approved SQL principals and grants,
 not Azure RBAC.
@@ -511,8 +511,8 @@ layers. The Environment settings pin that digest, platform, and byte total.
 
 Pass the target explicitly each time: subscription
 `90ab3701-83f0-4ba1-a90a-f2e68683adab`, tenant
-`72f988bf-86f1-41af-91ab-2d7cd011db47`, resource group `aw-v1-p0`, cluster
-`aw-v1-p0-aks`, namespace `agentweaver-v1-p0`, and node bounds 2–3. The helper
+`72f988bf-86f1-41af-91ab-2d7cd011db47`, resource group `agentweaver`, cluster
+`agentweaver-aks`, namespace `agentweaver`, and node bounds 2–3. The helper
 uses existing Azure CLI and kubectl contexts only after verifying them against
 those values. It does not login, fetch AKS credentials, switch contexts, or
 consult any 0.x target.

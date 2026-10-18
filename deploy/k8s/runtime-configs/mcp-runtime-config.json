@@ -3,12 +3,16 @@
   "kind": "ConfigMap",
   "metadata": {
     "name": "mcp-runtime-config",
-    "namespace": "agentweaver-v1-p0"
+    "namespace": "agentweaver",
+    "annotations": {
+      "agentweaver.io/runtime-config-status": "incomplete",
+      "agentweaver.io/runtime-config-incomplete-reason": "Awaiting the newly provisioned AKS managed domain and workload identity client IDs."
+    }
   },
   "immutable": true,
   "data": {
-    "Identity__Issuer": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
-    "Identity__Audience": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
-    "Gateway__BaseAddress": "https://gateway.agentweaver-v1-p0.svc.cluster.local:8443/"
+    "Identity__Issuer": "https://CHANGEME-MANAGED-HOST/",
+    "Identity__Audience": "https://CHANGEME-MANAGED-HOST/",
+    "Gateway__BaseAddress": "https://gateway.agentweaver.svc.cluster.local:8443/"
   }
 }

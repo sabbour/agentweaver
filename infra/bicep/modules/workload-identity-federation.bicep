@@ -10,17 +10,17 @@ param oidcIssuerUrl string
 param services array = [
   {
     name: 'foundation-probe'
-    namespace: 'agentweaver-v1-p0'
+    namespace: 'agentweaver'
     serviceAccountName: 'foundation-probe'
   }
   {
     name: 'identity-broker'
-    namespace: 'agentweaver-v1-p0'
+    namespace: 'agentweaver'
     serviceAccountName: 'identity-broker'
   }
   {
     name: 'identity-broker-migration'
-    namespace: 'agentweaver-v1-p0'
+    namespace: 'agentweaver'
     serviceAccountName: 'identity-broker-migration'
   }
 ]

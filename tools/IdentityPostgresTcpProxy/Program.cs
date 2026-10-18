@@ -3,7 +3,7 @@ using System.Net.Sockets;
 
 // Opens a narrow TCP relay for the approved PostgreSQL host, or the single explicit Key Vault endpoint.
 const int postgresPort = 5432;
-const string vaultHost = "aw-v1-p0-kv.vault.azure.net";
+const string vaultHost = "agentweaver-kv.vault.azure.net";
 var keyVault = args.Length == 2 && args[0] == "--key-vault" && args[1] == vaultHost;
 if (!keyVault && (args.Length != 1 ||
     Uri.CheckHostName(args[0]) != UriHostNameType.Dns ||

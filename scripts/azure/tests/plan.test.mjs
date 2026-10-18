@@ -26,5 +26,5 @@ test('plan fails closed for unauthorized, missing or untagged target', () => {
 
 test('what-if rejects caller template without source receipt', () => {
   assert.throws(() => buildWhatIfArgs({ resourceGroup: 'shared', template: 'anything' }));
-  assert.throws(() => buildWhatIfArgs({ resourceGroup: 'aw-v1-p0', template: 'anything' }));
+  assert.throws(() => buildWhatIfArgs({ resourceGroup: 'agentweaver', template: 'anything' }));
 });

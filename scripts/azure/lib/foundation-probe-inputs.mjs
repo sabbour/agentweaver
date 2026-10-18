@@ -9,7 +9,7 @@ import { run, runAz, redact } from './exec.mjs';
 import { withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 import { foundationProbeEgress } from './foundation-probe-egress.mjs';
 
-const NAMESPACE = 'agentweaver-v1-p0';
+const NAMESPACE = 'agentweaver';
 const OPTIONS = { check: false, timeout: 35_000 };
 const GUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const hash = value => createHash('sha256').update(value).digest('hex');
@@ -22,7 +22,7 @@ export function bootstrapFoundationProbeInputs(config, {
   execAz = runAz, execKubectl = (args, options) => run('kubectl', args, options),
   withKubeconfig = withP0UserKubeconfig,
 } = {}) {
-  if (config.resourceGroup !== 'aw-v1-p0' || config.clusterName !== 'aw-v1-p0-aks' ||
+  if (config.resourceGroup !== 'agentweaver' || config.clusterName !== 'agentweaver-aks' ||
       !GUID.test(config.subscriptionId ?? '') || !GUID.test(config.tenantId ?? '')) {
     throw new Error('Probe inputs require the explicit dedicated P0 target.');
   }
@@ -36,7 +36,7 @@ export function bootstrapFoundationProbeInputs(config, {
   if (account.id !== config.subscriptionId || account.tenantId !== config.tenantId || account.state !== 'Enabled') {
     throw new Error('Probe inputs account differs from the approved subscription and tenant.');
   }
-  const identityName = 'aw-v1-p0-id-foundation-probe';
+  const identityName = 'agentweaver-id-foundation-probe';
   const identity = azure(['identity', 'show', '--resource-group', config.resourceGroup, '--name', identityName,
     '--subscription', config.subscriptionId, '-o', 'json'],
   value => ({ id: value.id, clientId: value.clientId, principalId: value.principalId }));
@@ -57,13 +57,13 @@ export function bootstrapFoundationProbeInputs(config, {
     throw new Error('Probe inputs require the existing exact native federation; no credential or role was created.');
   }
   let connectionString;
-  const component = azure(['monitor', 'app-insights', 'component', 'show', '--app', 'aw-v1-p0-appi',
+  const component = azure(['monitor', 'app-insights', 'component', 'show', '--app', 'agentweaver-appi',
     '--resource-group', config.resourceGroup, '--subscription', config.subscriptionId, '-o', 'json'], value => {
     // Retain the service-owned installation value only in this closure; surfaced output is metadata.
     connectionString = value.connectionString;
     return { id: value.id, configured: typeof connectionString === 'string' && connectionString.length > 0 };
   });
-  if (component.id?.toLowerCase() !== `${prefix}Microsoft.Insights/components/aw-v1-p0-appi`.toLowerCase() ||
+  if (component.id?.toLowerCase() !== `${prefix}Microsoft.Insights/components/agentweaver-appi`.toLowerCase() ||
       !component.configured || !/InstrumentationKey=[0-9a-f-]{36}(?:;|$)/i.test(connectionString)) {
     throw new Error('Probe Monitor component does not provide the exact native installation configuration.');
   }
@@ -75,10 +75,10 @@ export function bootstrapFoundationProbeInputs(config, {
     throw new Error('Probe ingestion endpoint must use ordinary HTTPS without overrides.');
   }
   const endpoint = azure(['network', 'private-endpoint', 'show', '--resource-group', config.resourceGroup,
-    '--name', 'aw-v1-p0-ampls-pe', '--subscription', config.subscriptionId, '-o', 'json'], value => value);
+    '--name', 'agentweaver-ampls-pe', '--subscription', config.subscriptionId, '-o', 'json'], value => value);
   const nicId = endpoint.networkInterfaces?.[0]?.id;
   if (typeof nicId !== 'string' ||
-      !nicId.toLowerCase().startsWith(`${prefix}Microsoft.Network/networkInterfaces/aw-v1-p0-ampls-pe.nic.`.toLowerCase())) {
+      !nicId.toLowerCase().startsWith(`${prefix}Microsoft.Network/networkInterfaces/agentweaver-ampls-pe.nic.`.toLowerCase())) {
     throw new Error('Probe AMPLS NIC is outside the exact dedicated endpoint.');
   }
   const nic = azure(['network', 'nic', 'show', '--ids', nicId, '--subscription', config.subscriptionId, '-o', 'json'],

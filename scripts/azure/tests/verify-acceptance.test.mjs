@@ -82,7 +82,7 @@ test('AKS network preflight fails closed for missing target, failed/malformed GE
 });
 
 test('AKS resource IDs compare case-insensitively without widening target scope', () => {
-  const id = observedCluster.id.replace('aw-v1-p0-aks', 'AW-V1-P0-AKS');
+  const id = observedCluster.id.replace('agentweaver-aks', 'AGENTWEAVER-AKS');
   const resource = { ...observedCluster, id: id.toUpperCase() };
   const result = checkAksNetworkSecurity({ ...fixture, clusterId: id },
     () => ({ status: 0, stdout: JSON.stringify(resource), stderr: '' }));
@@ -126,8 +126,7 @@ test('acceptance rejects an AKS-only source-bound deployment receipt as a full-f
       sourceTree: { value: source.sourceTree },
       sourceHash: { value: source.sourceHash },
       clusterId: { value: observedCluster.id },
-      clusterName: { value: 'aw-v1-p0-aks' },
-      operatorRoleAssignmentId: { value: `${observedCluster.id}/providers/Microsoft.Authorization/roleAssignments/abc` },
+      clusterName: { value: 'agentweaver-aks' },
       oidcIssuerUrl: { value: 'https://issuer.example/' },
     } } };
   const result = checkDeployedSha({ ...fixture, ...source }, fakeAzure({
@@ -151,11 +150,11 @@ test('acceptance binds the actual AKS-only receipt and original full-foundation 
     scope: 'infrastructure-only',
     appRoutingDnsZoneResourceIds: [],
   };
-  const aksName = `aw-v1-p0-aks-${aksSource.sha.slice(0, 12)}`;
-  const foundationName = `aw-v1-p0-${foundationSource.sha.slice(0, 12)}`;
+  const aksName = `agentweaver-aks-${aksSource.sha.slice(0, 12)}`;
+  const foundationName = `agentweaver-${foundationSource.sha.slice(0, 12)}`;
   const issuer = 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/new-cluster/';
   const oldFoundationIssuer = 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/old-cluster/';
-  const aksClusterId = `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/aw-v1-p0-aks`;
+  const aksClusterId = `${fixture.groupId}/providers/Microsoft.ContainerService/managedClusters/agentweaver-aks`;
   const makeReceipts = ({ selected = {}, foundation = {} } = {}) => ({
     [aksName]: {
       id: `${fixture.groupId}/providers/Microsoft.Resources/deployments/${aksName}`,
@@ -163,11 +162,8 @@ test('acceptance binds the actual AKS-only receipt and original full-foundation 
         sourceSha: { value: aksSource.sha },
         sourceTree: { value: aksSource.sourceTree },
         sourceHash: { value: aksSource.sourceHash },
-        clusterName: { value: 'aw-v1-p0-aks' },
+        clusterName: { value: 'agentweaver-aks' },
         clusterId: { value: aksClusterId },
-        operatorRoleAssignmentId: {
-          value: `${aksClusterId}/providers/Microsoft.Authorization/roleAssignments/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa`,
-        },
         oidcIssuerUrl: { value: issuer },
         ...selected,
       } },
@@ -231,7 +227,7 @@ test('acceptance binds the actual AKS-only receipt and original full-foundation 
   assert.equal(checkDeployedSha({ ...config, scope: 'name-only' }, run(makeReceipts())).status, 'blocked');
   assert.equal(checkDeployedSha({
     ...config,
-    deploymentName: `aw-v1-p0-${aksSource.sha.slice(0, 12)}`,
+    deploymentName: `agentweaver-${aksSource.sha.slice(0, 12)}`,
   }, run(makeReceipts())).status, 'blocked');
   assert.equal(checkDeployedSha({ ...config, foundationSource: undefined }, run(makeReceipts())).status, 'blocked');
 
@@ -245,7 +241,7 @@ test('acceptance binds the actual AKS-only receipt and original full-foundation 
       issuerResult: { status: 0, stdout: observedIssuer, stderr: '' },
       federationResult: { status: 0, stdout: JSON.stringify({
         issuer: federationIssuer,
-        subject: 'system:serviceaccount:agentweaver-v1-p0:foundation-probe',
+        subject: 'system:serviceaccount:agentweaver:foundation-probe',
         audiences: ['api://AzureADTokenExchange'],
       }), stderr: '' },
       clusterResult: { status: 0, stdout: JSON.stringify(cluster), stderr: '' },
@@ -298,9 +294,9 @@ test('acceptance binds the actual AKS-only receipt and original full-foundation 
 });
 
 test('issuer and exact subject/issuer/audience configuration never imply verified token exchange', () => {
-  const check = { ...fixture, clusterName: 'aw-v1-p0-aks', identityChecks: [{
-    identityName: 'aw-v1-p0-id-foundation-probe', federatedCredentialName: 'foundation-probe-workload-identity',
-    expectedSubject: 'system:serviceaccount:agentweaver-v1-p0:foundation-probe',
+  const check = { ...fixture, clusterName: 'agentweaver-aks', identityChecks: [{
+    identityName: 'agentweaver-id-foundation-probe', federatedCredentialName: 'foundation-probe-workload-identity',
+    expectedSubject: 'system:serviceaccount:agentweaver:foundation-probe',
   }] };
   const execAz = args => args[0] === 'aks' ? { status: 0, stdout: 'https://issuer.example/' } :
     { status: 0, stdout: JSON.stringify({ issuer: 'https://issuer.example/',
@@ -401,7 +397,7 @@ function blobFake({ upload = 'ok', cleanup = 'ok', generation = nonce } = {}, ca
       return { status: upload === 'fail' ? 1 : 0, stdout: '', stderr: 'primary upload error' };
     }
     if (args[2] === 'download') {
-      writeFileSync(args[args.indexOf('--file') + 1], `agentweaver-v1-p0:${nonce}`);
+      writeFileSync(args[args.indexOf('--file') + 1], `agentweaver:${nonce}`);
       return { status: 0 };
     }
     if (args[2] === 'show') return { status: 0, stdout: JSON.stringify({
@@ -449,7 +445,7 @@ test('Blob default performs no write effects', () => {
 test('FULL REPORT regression: original false full success remains BLOCKED, even with plausible caller evidence', () => {
   const calls = [];
   const azure = fakeAzure(postDeploymentAzure, calls);
-  const config = { ...fixture, clusterName: 'aw-v1-p0-aks',
+  const config = { ...fixture, clusterName: 'agentweaver-aks',
     secretVersion: undefined, services: { broker: `sha256:${'a'.repeat(64)}` }, executeProbes: true,
     query: 'AppTraces | take 1', monitorQuery: 'AppTraces | take 1',
     runtimeEvidence: { verified: true, status: 'passed', sourceSha: source.sha } };
@@ -474,7 +470,7 @@ test('FULL REPORT regression: original false full success remains BLOCKED, even 
 
 test('full report overrides caller federation checks with exact bound foundation-probe configuration', () => {
   const valid = { issuer: 'https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/cluster-id/',
-    subject: 'system:serviceaccount:agentweaver-v1-p0:foundation-probe', audiences: ['api://AzureADTokenExchange'] };
+    subject: 'system:serviceaccount:agentweaver:foundation-probe', audiences: ['api://AzureADTokenExchange'] };
   const json = value => ({ status: 0, stdout: JSON.stringify(value), stderr: '' });
   for (const overrides of [
     {},
@@ -507,7 +503,7 @@ test('full report overrides caller federation checks with exact bound foundation
       assert.equal(queries.length, 1);
       const args = queries[0];
       assert.deepEqual(args.slice(0, 3), ['identity', 'federated-credential', 'show']);
-      for (const [flag, value] of [['--identity-name', 'aw-v1-p0-id-foundation-probe'],
+      for (const [flag, value] of [['--identity-name', 'agentweaver-id-foundation-probe'],
         ['--name', 'foundation-probe-workload-identity'], ['--resource-group', fixture.resourceGroup],
         ['--subscription', ids.subscriptionId]]) assert.equal(args[args.indexOf(flag) + 1], value);
     }

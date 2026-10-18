@@ -5,7 +5,7 @@
 import { run } from './exec.mjs';
 import { verifyPublishedFoundationProbeImage } from '../build-foundation-probe-image.mjs';
 
-const namespace = 'agentweaver-v1-p0';
+const namespace = 'agentweaver';
 const jobName = 'foundation-probe';
 const configMapName = 'foundation-probe-target';
 const imageName = 'foundation-probe';
@@ -209,7 +209,7 @@ function validateTarget(target, imageSource, deployment) {
     ? `${target.resourceGroup}-aks` : `${target.resourceGroup}`;
   if (!fullSha.test(target.sourceSha ?? '') || !fullSha.test(target.sourceTree ?? '') ||
       !fullHash.test(target.sourceHash ?? '') || !guid.test(target.subscriptionId ?? '') ||
-      !guid.test(target.tenantId ?? '') || target.resourceGroup !== 'aw-v1-p0' ||
+      !guid.test(target.tenantId ?? '') || target.resourceGroup !== 'agentweaver' ||
       !['aks-only', 'infrastructure-only'].includes(infrastructure.scope) ||
       !fullSha.test(infrastructure.sourceSha ?? '') || !fullSha.test(infrastructure.sourceTree ?? '') ||
       !fullHash.test(infrastructure.sourceHash ?? '') ||

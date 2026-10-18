@@ -2,7 +2,7 @@ apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
   name: identity-broker-egress
-  namespace: agentweaver-v1-p0
+  namespace: agentweaver
   labels:
     agentweaver.io/service: identity-broker
 spec:
@@ -18,7 +18,7 @@ spec:
               protocol: TCP
     - fromEndpoints:
         - matchLabels:
-            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/identity-client: "true"
       toPorts:
         - ports:
@@ -27,7 +27,7 @@ spec:
     # Environment uses the Broker owner API for runtime bootstrap delivery.
     - fromEndpoints:
         - matchLabels:
-            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/workload: environment
       toPorts:
         - ports:

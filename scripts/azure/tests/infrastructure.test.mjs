@@ -21,7 +21,7 @@ test('limited P1 identity setup creates only five isolated identities and exact 
   const template = JSON.parse(compiled.stdout);
   const names = ['projects-config', 'environment', 'knowledge', 'events-and-sessions', 'orchestrator'];
   assert.deepEqual(template.variables.serviceNames, names);
-  assert.deepEqual(template.parameters.namePrefix.allowedValues, ['aw-v1-p0']);
+  assert.deepEqual(template.parameters.namePrefix.allowedValues, ['agentweaver']);
   const identities = template.resources.find(resource =>
     resource.type === 'Microsoft.ManagedIdentity/userAssignedIdentities');
   assert.equal(identities.copy.count, "[length(variables('services'))]");
@@ -42,7 +42,7 @@ test('limited P1 identity setup creates only five isolated identities and exact 
     'Microsoft.Resources/deployments',
   ].includes(resource.type)));
   assert.doesNotMatch(JSON.stringify(resources), /Microsoft\.Authorization\/roleAssignments/);
-  assert.equal(template.variables.namespace, 'agentweaver-v1-p0');
+  assert.equal(template.variables.namespace, 'agentweaver');
 });
 
 test('Broker container restores and copies the complete SourceControl project graph', () => {
@@ -71,8 +71,6 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.equal(template.parameters.sourceTree.type, 'string');
   assert.equal(template.parameters.sourceHash.type, 'string');
   assert.equal(template.parameters.monitorLocation.type, 'string');
-  assert.equal(template.parameters.operatorObjectId.type, 'string');
-  assert.equal(template.parameters.operatorRoleAssignmentName.type, 'string');
   assert.deepEqual(template.parameters.postgresEntraAdminPrincipalType.allowedValues, [
     'User', 'Group', 'ServicePrincipal',
   ]);
@@ -148,7 +146,9 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
     managed: true, enableAzureRBAC: true, tenantID: "[parameters('tenantId')]",
   });
   assert.equal(aksDeployment.properties.parameters.tenantId.value, "[parameters('tenantId')]");
-  const assignment = aks.resources.find(resource => resource.type === 'Microsoft.Authorization/roleAssignments');
+  const assignments = aks.resources.filter(resource => resource.type === 'Microsoft.Authorization/roleAssignments');
+  assert.equal(assignments.length, 1);
+  const assignment = assignments[0];
   const principal = "[reference(resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), '2026-07-02-preview', 'full').identity.principalId]";
   assert.equal(aks.outputs.controlPlanePrincipalId.value, principal);
   assert.equal(assignment.properties.principalId, principal);
@@ -164,17 +164,6 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.ok(!aksDeployment.dependsOn.some(dependency => dependency.includes("{0}-identity")));
   assert.equal(assignment.name,
     "[guid(parameters('nodeSubnetId'), resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName')), variables('networkContributorRoleId'))]");
-  const operatorRole = aks.resources.find(resource =>
-    resource.name === "[parameters('operatorRoleAssignmentName')]");
-  assert.ok(operatorRole);
-  assert.equal(operatorRole.scope,
-    "[resourceId('Microsoft.ContainerService/managedClusters', variables('clusterName'))]");
-  assert.equal(operatorRole.properties.principalId, "[parameters('operatorObjectId')]");
-  assert.equal(operatorRole.properties.principalType, 'User');
-  assert.equal(operatorRole.properties.roleDefinitionId,
-    "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('aksRbacClusterAdminRoleId'))]");
-  assert.equal(aks.variables.aksRbacClusterAdminRoleId, 'b1ff04bb-8a4e-4dc4-8eb5-8693973ce19b');
-  assert.match(aks.outputs.operatorRoleAssignmentId.value, /operatorRoleAssignmentName/);
   const identityDeployment = template.resources.find(resource =>
     resource.name === "[format('{0}-identity', parameters('namePrefix'))]");
   const identities = identityDeployment.properties.template;
@@ -262,15 +251,13 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   for (const field of [
     'appRoutingIdentity', 'appRoutingDomain', 'foundationProbeIdentity',
     'identityBrokerRuntimeIdentity', 'identityBrokerMigrationIdentity', 'foundationResources', 'sourceTree',
-    'operatorRoleAssignmentId',
   ]) {
     assert.ok(template.outputs[field]);
   }
+  assert.equal(template.outputs.operatorRoleAssignmentId, undefined);
   const aksOnly = JSON.parse(runAz([
     'bicep', 'build', '--file', 'infra/bicep/aks-redeploy.bicep', '--stdout',
   ]).stdout);
-  assert.equal(aksOnly.parameters.operatorObjectId.type, 'string');
-  assert.equal(aksOnly.parameters.operatorRoleAssignmentName.type, 'string');
   assert.deepEqual(aksOnly.parameters.nodePoolMinCount.allowedValues, [2]);
   assert.deepEqual(aksOnly.parameters.nodePoolMaxCount.allowedValues, [3]);
   assert.deepEqual(aksOnly.parameters.nodePoolCount.allowedValues, [2, 3]);
@@ -280,7 +267,7 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
     assert.equal(aksOnlyModule.properties.parameters[name].value, `[parameters('${name}')]`);
     assert.equal(aksDeployment.properties.parameters[name].value, `[parameters('${name}')]`);
   }
-  assert.ok(aksOnly.outputs.operatorRoleAssignmentId);
+  assert.equal(aksOnly.outputs.operatorRoleAssignmentId, undefined);
   assert.ok(aksOnly.outputs.oidcIssuerUrl);
   assert.deepEqual(aksOnly.resources.map(resource => resource.name), [
     "[format('{0}-aks', parameters('namePrefix'))]",
@@ -388,7 +375,7 @@ test('separate routing candidate preserves native managed certificates and HTTPS
   const rendered = run('kubectl', ['kustomize', 'deploy/k8s/routing/identity-broker']).stdout;
   const documents = rendered.split('---').filter(document => document.trim());
   assert.equal(documents.length, 15);
-  function document(kind, namespace = 'agentweaver-v1-p0', name = 'identity-broker') {
+  function document(kind, namespace = 'agentweaver', name = 'identity-broker') {
     const value = documents.find(item => item.includes(`kind: ${kind}\n`) &&
       item.includes(`namespace: ${namespace}\n`) && item.includes(`\n  name: ${name}\n`));
     assert.ok(value, `Missing ${kind}`);
@@ -397,9 +384,9 @@ test('separate routing candidate preserves native managed certificates and HTTPS
   const certificate = document('DefaultDomainCertificate');
   assert.match(certificate, /apiVersion: approuting\.kubernetes\.azure\.com\/v1alpha1/);
   assert.match(certificate, /target:\s+secret: identity-broker-tls/);
-  const gatewayCertificate = document('DefaultDomainCertificate', 'CHANGEME-GATEWAY-NAMESPACE');
+  const gatewayCertificate = document('DefaultDomainCertificate', 'agentweaver-gateway');
   assert.match(gatewayCertificate, /target:\s+secret: identity-broker-tls/);
-  const gateway = document('Gateway', 'CHANGEME-GATEWAY-NAMESPACE');
+  const gateway = document('Gateway', 'agentweaver-gateway');
   assert.match(gateway, /gatewayClassName: approuting-istio/);
   assert.match(gateway, /hostname: CHANGEME-MANAGED-HOST/);
   assert.match(gateway, /hostname: CHANGEME-PORTAL-HOST\s+name: portal\s+port: 443\s+protocol: HTTPS/);
@@ -409,9 +396,9 @@ test('separate routing candidate preserves native managed certificates and HTTPS
   assert.match(gateway, /certificateRefs:\s+- kind: Secret\s+name: identity-broker-tls/);
   assert.match(gateway, /mode: Terminate/);
   assert.match(gateway, /namespaces:\s+from: Selector/);
-  assert.match(gateway, /kubernetes\.io\/metadata\.name: agentweaver-v1-p0/);
+  assert.match(gateway, /kubernetes\.io\/metadata\.name: agentweaver/);
   const route = document('HTTPRoute');
-  assert.match(route, /parentRefs:\s+- name: identity-broker\s+namespace: CHANGEME-GATEWAY-NAMESPACE\s+sectionName: https/);
+  assert.match(route, /parentRefs:\s+- name: identity-broker\s+namespace: agentweaver-gateway\s+sectionName: https/);
   assert.match(route, /hostnames:\s+- CHANGEME-MANAGED-HOST/);
   assert.match(route, /backendRefs:\s+- name: identity-broker\s+port: 443/);
   const webRoute = documents.find(item => item.includes('name: web-application\n'));
@@ -433,7 +420,7 @@ test('separate routing candidate preserves native managed certificates and HTTPS
   const apiBackend = documents.find(item => item.includes('name: gateway-api\n') &&
     item.includes('kind: BackendTLSPolicy\n'));
   assert.ok(apiBackend);
-  assert.match(apiBackend, /hostname: gateway\.agentweaver-v1-p0\.svc\.cluster\.local/);
+  assert.match(apiBackend, /hostname: gateway\.agentweaver\.svc\.cluster\.local/);
   assert.match(apiBackend, /caCertificateRefs:\s+- group: ""\s+kind: ConfigMap\s+name: service-backend-ca/);
   const mcpRoute = documents.find(item => item.includes('name: mcp\n') &&
     item.includes('kind: HTTPRoute\n'));
@@ -444,22 +431,22 @@ test('separate routing candidate preserves native managed certificates and HTTPS
   const mcpBackend = documents.find(item => item.includes('name: mcp\n') &&
     item.includes('kind: BackendTLSPolicy\n'));
   assert.ok(mcpBackend);
-  assert.match(mcpBackend, /hostname: mcp\.agentweaver-v1-p0\.svc\.cluster\.local/);
+  assert.match(mcpBackend, /hostname: mcp\.agentweaver\.svc\.cluster\.local/);
   assert.match(mcpBackend, /caCertificateRefs:\s+- group: ""\s+kind: ConfigMap\s+name: service-backend-ca/);
   const backend = document('BackendTLSPolicy');
   assert.match(backend, /apiVersion: gateway\.networking\.k8s\.io\/v1/);
   assert.match(backend, /kind: Service\s+name: identity-broker\s+sectionName: https/);
   assert.match(backend, /hostname: CHANGEME-MANAGED-HOST/);
   assert.match(backend, /wellKnownCACertificates: System/);
-  const ingress = document('CiliumNetworkPolicy', 'agentweaver-v1-p0', 'identity-broker-gateway-ingress');
-  assert.match(ingress, /k8s:io\.kubernetes\.pod\.namespace: CHANGEME-GATEWAY-NAMESPACE/);
+  const ingress = document('CiliumNetworkPolicy', 'agentweaver', 'identity-broker-gateway-ingress');
+  assert.match(ingress, /k8s:io\.kubernetes\.pod\.namespace: agentweaver-gateway/);
   assert.match(ingress, /k8s:gateway\.networking\.k8s\.io\/gateway-name: identity-broker/);
   assert.match(ingress, /port: "8443"/);
   const webIngress = documents.find(item => item.includes('name: web-gateway-ingress\n'));
   assert.ok(webIngress);
   assert.match(webIngress, /agentweaver\.io\/service: web/);
   assert.match(webIngress, /agentweaver\.io\/workload: web/);
-  assert.match(webIngress, /k8s:io\.kubernetes\.pod\.namespace: CHANGEME-GATEWAY-NAMESPACE/);
+  assert.match(webIngress, /k8s:io\.kubernetes\.pod\.namespace: agentweaver-gateway/);
   assert.match(webIngress, /k8s:gateway\.networking\.k8s\.io\/gateway-name: identity-broker/);
   assert.match(webIngress, /fromEntities:\s+- host/);
   assert.match(webIngress, /port: "8080"/);
@@ -467,12 +454,12 @@ test('separate routing candidate preserves native managed certificates and HTTPS
   const gatewayIngress = documents.find(item => item.includes('name: gateway-api-ingress\n'));
   assert.ok(gatewayIngress);
   assert.match(gatewayIngress, /agentweaver\.io\/workload: gateway/);
-  assert.match(gatewayIngress, /k8s:io\.kubernetes\.pod\.namespace: CHANGEME-GATEWAY-NAMESPACE/);
+  assert.match(gatewayIngress, /k8s:io\.kubernetes\.pod\.namespace: agentweaver-gateway/);
   assert.match(gatewayIngress, /port: "8443"/);
   const mcpIngress = documents.find(item => item.includes('name: mcp-gateway-ingress\n'));
   assert.ok(mcpIngress);
   assert.match(mcpIngress, /agentweaver\.io\/workload: mcp/);
-  assert.match(mcpIngress, /k8s:io\.kubernetes\.pod\.namespace: CHANGEME-GATEWAY-NAMESPACE/);
+  assert.match(mcpIngress, /k8s:io\.kubernetes\.pod\.namespace: agentweaver-gateway/);
   assert.match(mcpIngress, /port: "8443"/);
   assert.match(rendered, /pod-security\.kubernetes\.io\/enforce: CHANGEME-GATEWAY-POLICY/);
   assert.doesNotMatch(ingress, /fromEntities:|0\.0\.0\.0\/0/);

@@ -145,8 +145,8 @@ internal sealed record ProbeSource(string Sha, string Tree, string Infrastructur
 /// <summary>Validates that deployment evidence, resource IDs, and runtime targets match the reviewed probe source.</summary>
 internal static class ProbeTargetValidator
 {
-    private const string ExpectedResourceGroup = "aw-v1-p0";
-    private const string ExpectedNamespace = "agentweaver-v1-p0";
+    private const string ExpectedResourceGroup = "agentweaver";
+    private const string ExpectedNamespace = "agentweaver";
     private const string ExpectedServiceAccount = "foundation-probe";
     private const string ExpectedSchema = "foundation_probe";
     private const string ExpectedRole = "foundation_probe_runtime";

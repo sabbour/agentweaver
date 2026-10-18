@@ -45,7 +45,7 @@ test('redact is a no-op on plain text', () => {
 });
 
 test('run redacts JWT stdout while preserving managed Broker hostnames', () => {
-  const hostname = 'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
+  const hostname = 'agentweaver.0123456789abcdef.eastus2euap.aksapp.io';
   const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
   const jwt = `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ sub: 'synthetic-user-123' })}.${'s'.repeat(32)}`;
   const arbitraryHostname = 'aaaaaaaaaa.bbbbbbbbbb.cccccccccc.aksapp.io';
@@ -60,7 +60,7 @@ test('run redacts JWT stdout while preserving managed Broker hostnames', () => {
 });
 
 test('preserving non-secret projected identifiers is explicit and cannot expose omitted credentials', () => {
-  const hostname = 'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
+  const hostname = 'agentweaver.0123456789abcdef.eastus2euap.aksapp.io';
   const value = { hostname, password: SENSITIVE_FIXTURE_VALUE };
   const result = run(process.execPath, ['-e', `process.stdout.write(${JSON.stringify(JSON.stringify(value))})`], {
     projectJson: input => ({ hostname: input.hostname }), preserveProjectedJson: true,

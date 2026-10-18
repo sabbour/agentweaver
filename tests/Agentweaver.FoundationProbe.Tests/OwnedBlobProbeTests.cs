@@ -109,7 +109,7 @@ public sealed class OwnedBlobProbeTests
         var options = new BlobClientOptions { Transport = new HttpClientTransport(transport) };
         options.Retry.MaxRetries = 0;
         var container = new BlobContainerClient(
-            new Uri("https://awv1p0blob.blob.core.windows.net/platform-artifacts"), options);
+            new Uri("https://agentweaverblob.blob.core.windows.net/platform-artifacts"), options);
         return (new OwnedBlobProbe(container, new AzureBlobObjectStore(container), cleanupTimeout), transport);
     }
 

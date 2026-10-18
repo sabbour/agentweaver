@@ -2,7 +2,7 @@ apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
   name: web-gateway-ingress
-  namespace: agentweaver-v1-p0
+  namespace: agentweaver
   labels:
     agentweaver.io/service: web
 spec:
@@ -18,7 +18,7 @@ spec:
               protocol: TCP
     - fromEndpoints:
         - matchLabels:
-            k8s:io.kubernetes.pod.namespace: CHANGEME-GATEWAY-NAMESPACE
+            k8s:io.kubernetes.pod.namespace: agentweaver-gateway
             k8s:gateway.networking.k8s.io/gateway-name: identity-broker
       toPorts:
         - ports:

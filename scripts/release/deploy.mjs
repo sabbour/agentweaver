@@ -77,13 +77,13 @@ const PRODUCT_COMPONENTS = Object.freeze([
 const TARGET = Object.freeze({
   subscriptionId: '90ab3701-83f0-4ba1-a90a-f2e68683adab',
   tenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47',
-  resourceGroup: 'aw-v1-p0',
-  clusterName: 'aw-v1-p0-aks',
-  namespace: 'agentweaver-v1-p0',
+  resourceGroup: 'agentweaver',
+  clusterName: 'agentweaver-aks',
+  namespace: 'agentweaver',
   nodeMin: 2,
   nodeMax: 3,
 });
-const GATEWAY_NAMESPACE = 'agentweaver-v1-gateway';
+const GATEWAY_NAMESPACE = 'agentweaver-gateway';
 /** Maps manifest component IDs to Kubernetes deployment names used by release verification. */
 export const SERVICE_NAMES = Object.freeze({
   'Agentweaver.AgentHost': 'agenthost',
@@ -105,6 +105,29 @@ const SERVICE_RUNTIME_CONFIG_MAP_NAMES = Object.freeze(DEPLOYED_SERVICES
   .map((id) => id === 'Agentweaver.Identity.Broker'
     ? 'identity-broker-runtime-config-v2'
     : `${SERVICE_NAMES[id]}-runtime-config`));
+// Only marked pre-provisioning maps may carry approved placeholders; execution rejects them until Azure values are sourced.
+const INCOMPLETE_RUNTIME_CONFIG_MAPS = new Set([
+  'environment-runtime-config',
+  'events-and-sessions-runtime-config',
+  'gateway-runtime-config',
+  'identity-broker-runtime-config-v2',
+  'knowledge-runtime-config',
+  'mcp-runtime-config',
+  'orchestrator-runtime-config',
+  'projects-config-runtime-config',
+  'web-runtime-config',
+]);
+const INCOMPLETE_CONFIG_MAPS = new Set([...INCOMPLETE_RUNTIME_CONFIG_MAPS, 'agenthost-runtime-v1']);
+const PREPROVISIONING_RUNTIME_MARKERS = new Set([
+  'CHANGEME-MANAGED-HOST',
+  'CHANGEME-PORTAL-HOST',
+  'CHANGEME-identity-broker-client-id',
+  'CHANGEME-environment-client-id',
+  'CHANGEME-events-and-sessions-client-id',
+  'CHANGEME-knowledge-client-id',
+  'CHANGEME-orchestrator-client-id',
+  'CHANGEME-projects-config-client-id',
+]);
 const REQUIRED_INSTALL_CONFIG_MAPS = new Set([
   ...SERVICE_RUNTIME_CONFIG_MAP_NAMES,
   'environment-cilium-config',
@@ -146,10 +169,10 @@ const WORKLOAD_IDENTITY_CONFIG = Object.freeze({
 const P0_PROVIDER_CATALOG_CONFIG_MAP = 'projects-config-provider-catalog';
 const KUSTOMIZE_INSTALL_PATH = path.join('deploy', 'k8s');
 const BACKEND_TLS_HOSTNAMES = Object.freeze({
-  gateway: 'gateway.agentweaver-v1-p0.svc.cluster.local',
-  mcp: 'mcp.agentweaver-v1-p0.svc.cluster.local',
+  gateway: 'gateway.agentweaver.svc.cluster.local',
+  mcp: 'mcp.agentweaver.svc.cluster.local',
 });
-const PROJECTS_CONFIG_HOSTNAME = 'projects-config.agentweaver-v1-p0.svc.cluster.local';
+const PROJECTS_CONFIG_HOSTNAME = 'projects-config.agentweaver.svc.cluster.local';
 const SERVER_AUTH_EKU = '1.3.6.1.5.5.7.3.1';
 const BACKEND_TLS_CA_CONFIGMAP = 'service-backend-ca';
 const BOOTSTRAP_RELEASE_TAG = 'v1.0.0';
@@ -954,6 +977,12 @@ export function validateKustomizeInstall(document, images, namespace, providerCa
   ]);
   const keyedResources = new Map();
   const namesByKind = new Map();
+  const configMaps = new Map(items.filter(({ kind }) => kind === 'ConfigMap')
+    .map((resource) => [resource.metadata.name, resource]));
+  const incompleteRuntimeConfigMaps = new Set([...configMaps]
+    .filter(([, resource]) =>
+      resource.metadata.annotations?.['agentweaver.io/runtime-config-status'] === 'incomplete')
+    .map(([name]) => name));
   for (const item of items) {
     if (!item || typeof item !== 'object' || Array.isArray(item) ||
         !allowedKinds.has(item.kind) || typeof item.metadata?.name !== 'string') {
@@ -973,13 +1002,6 @@ export function validateKustomizeInstall(document, images, namespace, providerCa
     } else if (item.metadata.namespace !== namespace) {
       fail(`${item.kind}/${name} must use the exact v1 P0 namespace`);
     }
-    const unresolved = [...JSON.stringify(item).matchAll(/CHANGEME-[A-Z0-9-]+/g)]
-      .map(([marker]) => marker);
-    if (unresolved.some((marker) => marker !== 'CHANGEME-GATEWAY-NAMESPACE' ||
-        item.kind !== 'CiliumNetworkPolicy' ||
-        !['gateway-api-ingress', 'mcp-gateway-ingress', 'web-gateway-ingress'].includes(name))) {
-      fail(`${item.kind}/${name} contains an unresolved non-Gateway runtime input`);
-    }
     if (item.kind === 'ConfigMap') {
       if (!item.data || typeof item.data !== 'object' || Array.isArray(item.data) ||
           Object.values(item.data).some((value) => typeof value !== 'string')) {
@@ -987,14 +1009,56 @@ export function validateKustomizeInstall(document, images, namespace, providerCa
       }
       const status = item.metadata.annotations?.['agentweaver.io/runtime-config-status'];
       if (status === 'incomplete' &&
-          !['agenthost-runtime-v1', 'gateway-runtime-config', 'web-runtime-config',
-            'knowledge-runtime-config'].includes(name)) {
+          !INCOMPLETE_CONFIG_MAPS.has(name)) {
         fail(`ConfigMap/${name} is unexpectedly marked incomplete`);
       }
       if (status === 'incomplete' &&
-          typeof item.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'] !== 'string') {
-        fail(`ConfigMap/${name} must explain its incomplete inputs`);
+          (typeof item.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'] !== 'string' ||
+            INCOMPLETE_RUNTIME_CONFIG_MAPS.has(name) &&
+              !/newly provisioned AKS managed domain and workload identity client IDs/i
+                .test(item.metadata.annotations['agentweaver.io/runtime-config-incomplete-reason']))) {
+        fail(`ConfigMap/${name} must explain its incomplete pre-provisioning inputs`);
       }
+      if (status === 'incomplete') incompleteRuntimeConfigMaps.add(name);
+      for (const [key, value] of Object.entries(item.data)) {
+        const markers = [...value.matchAll(/CHANGEME-[A-Z0-9-]+/gi)].map(([marker]) => marker);
+        if (markers.some((marker) => !PREPROVISIONING_RUNTIME_MARKERS.has(marker) ||
+            status !== 'incomplete' || !INCOMPLETE_CONFIG_MAPS.has(name))) {
+          fail(`ConfigMap/${name} contains an unresolved runtime input at ${key}`);
+        }
+      }
+    }
+    const unresolved = [...JSON.stringify(item).matchAll(/CHANGEME-[A-Z0-9-]+/gi)]
+      .map(([marker]) => marker);
+    const unresolvedAllowed = unresolved.every((marker) => {
+      if (item.kind === 'ConfigMap') {
+        return PREPROVISIONING_RUNTIME_MARKERS.has(marker) &&
+          incompleteRuntimeConfigMaps.has(name) && INCOMPLETE_CONFIG_MAPS.has(name);
+      }
+      if (item.kind === 'ServiceAccount') {
+        return /^CHANGEME-[a-z0-9-]+-client-id$/i.test(marker) &&
+          Object.entries(WORKLOAD_IDENTITY_CONFIG).some(([service, identity]) =>
+            service === name && incompleteRuntimeConfigMaps.has(identity.configMap) &&
+            configMaps.get(identity.configMap)?.data?.[identity.clientId] === marker) ||
+          marker === 'CHANGEME-identity-broker-client-id' && name === 'identity-broker' &&
+            incompleteRuntimeConfigMaps.has('identity-broker-runtime-config-v2') &&
+            configMaps.get('identity-broker-runtime-config-v2')?.data
+              ?.IdentityBroker__SecretRedemption__WorkloadIdentityClientId === marker;
+      }
+      if (item.kind === 'CiliumNetworkPolicy') {
+        return marker === 'CHANGEME-MANAGED-HOST' &&
+          ['broker-issuer-egress', 'events-and-sessions-network', 'projects-config-network'].includes(name) &&
+          incompleteRuntimeConfigMaps.size > 0;
+      }
+      if (item.kind === 'HTTPRoute') {
+        return marker === 'CHANGEME-PORTAL-HOST' && name === 'web-application' &&
+          (incompleteRuntimeConfigMaps.has('gateway-runtime-config') ||
+            incompleteRuntimeConfigMaps.has('web-runtime-config'));
+      }
+      return false;
+    });
+    if (!unresolvedAllowed) {
+      fail(`${item.kind}/${name} contains an unresolved non-approved runtime input`);
     }
   }
 
@@ -1017,8 +1081,6 @@ export function validateKustomizeInstall(document, images, namespace, providerCa
     .flatMap((names) => Array.isArray(names) ? names : [names]));
   expectNames('CiliumNetworkPolicy', requiredCiliumPolicies, 'service Cilium policies');
 
-  const configMaps = new Map(items.filter(({ kind }) => kind === 'ConfigMap')
-    .map((resource) => [resource.metadata.name, resource]));
   // Keep the installed Portal route bound to the same origin configured for Gateway.
   const webOrigin = configMaps.get('gateway-runtime-config')?.data?.Gateway__WebOrigin;
   const webRoute = keyedResources.get(`HTTPRoute/${namespace}/web-application`);
@@ -1031,7 +1093,7 @@ export function validateKustomizeInstall(document, images, namespace, providerCa
   if (webOriginUrl.protocol !== 'https:' || webOriginUrl.pathname !== '/' ||
       webOriginUrl.search || webOriginUrl.hash || webOriginUrl.username || webOriginUrl.password ||
       webRoute?.spec?.hostnames?.length !== 1 ||
-      webRoute.spec.hostnames[0] !== webOriginUrl.hostname ||
+      webRoute.spec.hostnames[0]?.toLowerCase() !== webOriginUrl.hostname.toLowerCase() ||
       webRoute.spec.parentRefs?.length !== 1 ||
       webRoute.spec.parentRefs[0]?.name !== 'identity-broker' ||
       webRoute.spec.parentRefs[0]?.namespace !== GATEWAY_NAMESPACE ||
@@ -1087,7 +1149,11 @@ export function validateKustomizeInstall(document, images, namespace, providerCa
     const clientId = configMap?.data?.[identity.clientId];
     const tenantId = configMap?.data?.[identity.tenantId];
     const annotations = account?.metadata.annotations ?? {};
-    if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(clientId ?? '') ||
+    const incompleteClientId = incompleteRuntimeConfigMaps.has(identity.configMap) &&
+      clientId === configMaps.get(identity.configMap)?.data?.[identity.clientId] &&
+      /^CHANGEME-[a-z0-9-]+-client-id$/i.test(clientId ?? '');
+    if ((!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(clientId ?? '') &&
+        !incompleteClientId) ||
         !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(tenantId ?? '') ||
         annotations['azure.workload.identity/client-id'] !== clientId ||
         annotations['azure.workload.identity/tenant-id'] !== tenantId ||
@@ -1112,6 +1178,9 @@ export function validateKustomizeInstall(document, images, namespace, providerCa
   return {
     installationManifest: { apiVersion: 'v1', kind: 'List', items },
     runtimeManifest,
+    incompleteRuntimeConfigMaps: [...incompleteRuntimeConfigMaps]
+      .filter((name) => INCOMPLETE_RUNTIME_CONFIG_MAPS.has(name))
+      .sort(),
   };
 }
 
@@ -1583,16 +1652,7 @@ export function verifyRuntimePrerequisites(
       fail(`${reference.name} is marked incomplete; resolve its runtime inputs before deployment`);
     }
   }
-  if (managedResources) {
-    const unresolvedGatewayPolicy = managedResources.items.some((resource) =>
-      resource.kind === 'CiliumNetworkPolicy' &&
-      ['gateway-api-ingress', 'mcp-gateway-ingress', 'web-gateway-ingress']
-        .includes(resource.metadata?.name) &&
-      JSON.stringify(resource).includes('CHANGEME-GATEWAY-NAMESPACE'));
-    if (unresolvedGatewayPolicy) {
-      fail('Gateway ingress policies require the approved Gateway namespace and its namespace policy mode (restricted or baseline)');
-    }
-  } else {
+  if (!managedResources) {
     const defaultPolicies = parseJson(run('kubectl', ['get', 'networkpolicies.networking.k8s.io',
       '--namespace', target.namespace, '--output', 'json'], { cwd: root }), 'namespace network policies');
     const defaultPolicyNames = new Set((defaultPolicies.items ?? []).map((entry) => entry.metadata?.name));
@@ -2190,8 +2250,8 @@ function bootstrapHelpText() {
   return `release:deploy-bootstrap -- verify or deploy a published v1 release before live acceptance
 
 Usage:
-  npm run release:deploy-bootstrap -- v1.0.0 --manifest releases/foundation.json --publication <publication.json> --completion <continuation.json> --subscription-id <id> --tenant-id <id> --resource-group aw-v1-p0 --cluster aw-v1-p0-aks --namespace agentweaver-v1-p0 --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
-  npm run release:deploy-bootstrap -- v1.0.1 --manifest releases/foundation.json --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group aw-v1-p0 --cluster aw-v1-p0-aks --namespace agentweaver-v1-p0 --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
+  npm run release:deploy-bootstrap -- v1.0.0 --manifest releases/foundation.json --publication <publication.json> --completion <continuation.json> --subscription-id <id> --tenant-id <id> --resource-group agentweaver --cluster agentweaver-aks --namespace agentweaver --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
+  npm run release:deploy-bootstrap -- v1.0.1 --manifest releases/foundation.json --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group agentweaver --cluster agentweaver-aks --namespace agentweaver --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
 
 The default is a read-only pre-acceptance dry-run. v1.0.0 requires its immutable
 continuation proof; v1.0.1 accepts only its exact source-bound normal publication
@@ -2297,8 +2357,12 @@ export async function deployRelease(options = {}, dependencies = {}) {
     const renderedText = run('kubectl', ['kustomize', kustomizeSource.path], { cwd: root });
     const installation = validateKustomizeInstall(
       parseKustomizeResources(renderedText), images, parsed.target.namespace, providerCatalog);
-    const { installationManifest, runtimeManifest } = installation;
+    const { installationManifest, runtimeManifest, incompleteRuntimeConfigMaps } = installation;
     verifyImageIds(runtimeManifest, images);
+    // Keep pre-provisioning source review possible, but never apply workloads with unsourced identities or hosts.
+    if (parsed.execute && incompleteRuntimeConfigMaps.length > 0) {
+      fail(`workload deployment is blocked until the incomplete runtime ConfigMaps are sourced: ${incompleteRuntimeConfigMaps.join(', ')}`);
+    }
     const targetInfo = await (dependencies.verifyTarget ?? verifyAzureTarget)(parsed.target, { root, run });
     (dependencies.verifyPrerequisites ?? verifyRuntimePrerequisites)(
       runtimeManifest, parsed.target, { root, run, managedResources: installationManifest });

@@ -13,7 +13,7 @@ const sourceSha = 'a'.repeat(40);
 const sourceTree = 'b'.repeat(40);
 const providerSource = 'c'.repeat(40);
 const context = 'approved-aks-context';
-const namespace = 'agentweaver-v1-p0';
+const namespace = 'agentweaver';
 const sourceAnnotation = 'agentweaver.io/provider-catalog-source';
 const providerCatalog = { configMapName: 'provider-catalog-v1', sourceCommit: providerSource };
 const serviceNames = [
@@ -815,7 +815,7 @@ test('blocks stale, incomplete, foreign, or unverifiable deployment evidence', a
     fetchImpl: createRegistryFetch(data.registryBodies),
     ...overrides,
   });
-  await assert.rejects(observe({ namespace: 'default' }), /restricted to agentweaver-v1-p0/);
+  await assert.rejects(observe({ namespace: 'default' }), /restricted to agentweaver/);
   await assert.rejects(observe({ sourceSha: 'short' }), /source commit and Git tree/);
   await assert.rejects(observe({ providerCatalog: { ...providerCatalog, sourceCommit: 'bad' } }), /provider catalog/);
   await assert.rejects(observe({ images: data.images.slice(1) }), /all nine services/);

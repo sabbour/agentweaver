@@ -32,7 +32,7 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
 
         var options = IdentityBrokerPostgresBootstrapCommand.ReadOptions(configuration);
 
-        Assert.Equal("aw-v1-p0-pg.postgres.database.azure.com", options.PostgresHost);
+        Assert.Equal("agentweaver-pg.postgres.database.azure.com", options.PostgresHost);
         Assert.Equal("agentweaver", options.DatabaseName);
         Assert.Equal(runtimePrincipal.ToString(), options.RuntimePrincipalObjectId);
         Assert.Equal(migrationPrincipal.ToString(), options.MigrationPrincipalObjectId);
@@ -69,7 +69,7 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
             Configuration(passwordConnection.ConnectionString),
             Configuration("Host=127.0.0.1;Port=15432;Database=postgres;SSL Mode=Require"),
             Configuration("Host=127.0.0.1;Port=15433;Database=postgres;SSL Mode=VerifyFull"),
-            Configuration("Host=aw-v1-p0-pg.postgres.database.azure.com;Port=5432;Database=postgres;SSL Mode=VerifyFull"),
+            Configuration("Host=agentweaver-pg.postgres.database.azure.com;Port=5432;Database=postgres;SSL Mode=VerifyFull"),
             Configuration("Host=localhost;Port=15432;Database=postgres;SSL Mode=VerifyFull"),
             Configuration("Host=127.0.0.1;Port=15432;Database=postgres;SSL Mode=VerifyFull",
                 Guid.Empty, Guid.Empty),
@@ -282,12 +282,12 @@ public sealed class IdentityBrokerPostgresBootstrapCommandTests(PostgresContaine
         var values = new Dictionary<string, string?>
         {
             ["ConnectionStrings:IdentityBrokerBootstrap"] = connectionString,
-            ["IdentityBroker:Bootstrap:PostgresHost"] = "aw-v1-p0-pg.postgres.database.azure.com",
+            ["IdentityBroker:Bootstrap:PostgresHost"] = "agentweaver-pg.postgres.database.azure.com",
             ["IdentityBroker:Bootstrap:AdminUsername"] = "admin@example.test",
             ["IdentityBroker:Bootstrap:DatabaseName"] = "agentweaver",
-            ["IdentityBroker:Bootstrap:RuntimeRole"] = "aw-v1-p0-id-identity-broker",
+            ["IdentityBroker:Bootstrap:RuntimeRole"] = "agentweaver-id-identity-broker",
             ["IdentityBroker:Bootstrap:RuntimePrincipalObjectId"] = (runtimePrincipal ?? Guid.NewGuid()).ToString(),
-            ["IdentityBroker:Bootstrap:MigrationRole"] = "aw-v1-p0-id-identity-broker-migration",
+            ["IdentityBroker:Bootstrap:MigrationRole"] = "agentweaver-id-identity-broker-migration",
             ["IdentityBroker:Bootstrap:MigrationPrincipalObjectId"] = (migrationPrincipal ?? Guid.NewGuid()).ToString(),
         };
         return new ConfigurationBuilder().AddInMemoryCollection(values).Build();

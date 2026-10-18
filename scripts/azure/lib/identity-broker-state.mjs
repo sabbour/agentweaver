@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { run, redact } from './exec.mjs';
 import { withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 
-const NAMESPACE = 'agentweaver-v1-p0';
+const NAMESPACE = 'agentweaver';
 const SIGNING = 'identity-broker-signing';
 const KEY_RING = 'identity-broker-key-ring';
 const OPTIONS = { check: false, timeout: 35_000 };

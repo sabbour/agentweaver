@@ -6,7 +6,7 @@ import { run, runAz, redact } from './exec.mjs';
 import { withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 import { observeExistingP0BrokerRouting, projectIdentityRoutingReadback } from './identity-broker-routing.mjs';
 
-const NAMESPACE = 'agentweaver-v1-p0';
+const NAMESPACE = 'agentweaver';
 const CONFIG = 'identity-broker-runtime-config-v2';
 const GUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const OPTIONS = { check: false, timeout: 35_000 };
@@ -16,7 +16,7 @@ const WEB_SCOPES = [...SCOPES, 'projects.admin', 'projects.orchestrator'];
 
 /** Checks the required broker runtime source and target inputs before resource generation. */
 export function assertBrokerRuntimeInputs(config) {
-  if (config.resourceGroup !== 'aw-v1-p0' || config.clusterName !== 'aw-v1-p0-aks' ||
+  if (config.resourceGroup !== 'agentweaver' || config.clusterName !== 'agentweaver-aks' ||
       !GUID.test(config.subscriptionId ?? '') || !GUID.test(config.tenantId ?? '') ||
       !GUID.test(config.upstreamClientId ?? '') || !GUID.test(config.acceptanceRunId ?? '') ||
       !/^ghcr\.io\/sabbour\/agentweaver\.identity\.broker@sha256:[0-9a-f]{64}$/.test(config.brokerImage ?? '')) {
@@ -189,7 +189,7 @@ export function bootstrapIdentityBrokerRuntime(config, {
     const mcpRoute = read('httproutes', 'mcp', projectIdentityRoutingReadback);
     const mcpBackendPolicy = read('backendtlspolicies', 'mcp', projectIdentityRoutingReadback);
     const gatewayNamespace = route?.spec?.parentRefs?.[0]?.namespace;
-    if (gatewayNamespace !== 'agentweaver-v1-gateway') {
+    if (gatewayNamespace !== 'agentweaver-gateway') {
       throw new Error('Broker runtime route does not identify the exact approved Gateway namespace.');
     }
     const routing = observeExistingP0BrokerRouting({

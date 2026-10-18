@@ -4,7 +4,7 @@ import { X509Certificate } from 'node:crypto';
 import { createSecureContext } from 'node:tls';
 import { bootstrapIdentityBrokerState, generateBrokerSigning, projectBrokerState } from '../lib/identity-broker-state.mjs';
 
-const namespace = 'agentweaver-v1-p0';
+const namespace = 'agentweaver';
 const labels = { 'agentweaver.io/service': 'identity-broker', 'agentweaver.io/managed-by': 'installer' };
 const signing = { kind: 'Secret', type: 'Opaque', metadata: {
   name: 'identity-broker-signing', namespace, uid: 'signing-uid', labels,

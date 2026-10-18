@@ -29,7 +29,7 @@ test('independent Job, pod, target, identity, registry, and native probe receipt
     jobUid: '11111111-1111-1111-1111-111111111111',
     podUid: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
     ownerJobUid: '11111111-1111-1111-1111-111111111111',
-    namespace: 'agentweaver-v1-p0',
+    namespace: 'agentweaver',
     serviceAccountName: 'foundation-probe',
     startedAt,
     completedAt,
@@ -49,7 +49,7 @@ test('independent Job, pod, target, identity, registry, and native probe receipt
   assert.equal(check(result, 'foundation-probe-workload-identity').scope, 'configuration');
   assert.equal(check(result, 'foundation-probe-workload-identity-exchange').scope, 'integration');
   assert.ok(runtime.calls.every(({ args }) => args[0] === 'config' || args[0] === 'get' || args[0] === 'logs'));
-  assert.ok(runtime.calls.every(({ args }) => args.includes('--context') && args.includes('aw-v1-p0')));
+  assert.ok(runtime.calls.every(({ args }) => args.includes('--context') && args.includes('agentweaver')));
   assert.ok(runtime.calls.every(({ args }) => !args.includes('exec') && !args.includes('apply') &&
     !args.includes('delete') && !args.includes('create')));
 });
@@ -66,8 +66,8 @@ test('published image source remains distinct from the successful AKS-only and o
     sourceSha: 'f989c5c3457af84e2a0ffbbb7ab82f5ea07901ac',
     sourceTree: '20d54d53867e091a62ed25b52681c53e49b0de05',
     sourceHash: imageSource.sourceHash,
-    deploymentName: 'aw-v1-p0-f989c5c3457a',
-    deploymentId: `${runtime.state.deployment.resourceGroupId}/providers/Microsoft.Resources/deployments/aw-v1-p0-f989c5c3457a`,
+    deploymentName: 'agentweaver-f989c5c3457a',
+    deploymentId: `${runtime.state.deployment.resourceGroupId}/providers/Microsoft.Resources/deployments/agentweaver-f989c5c3457a`,
   };
   const infrastructure = {
     scope: 'aks-only',
@@ -78,8 +78,8 @@ test('published image source remains distinct from the successful AKS-only and o
   };
   const deployment = {
     ...infrastructure,
-    deploymentName: 'aw-v1-p0-aks-9b7da6e64dfd',
-    deploymentId: `${runtime.state.deployment.resourceGroupId}/providers/Microsoft.Resources/deployments/aw-v1-p0-aks-9b7da6e64dfd`,
+    deploymentName: 'agentweaver-aks-9b7da6e64dfd',
+    deploymentId: `${runtime.state.deployment.resourceGroupId}/providers/Microsoft.Resources/deployments/agentweaver-aks-9b7da6e64dfd`,
   };
   const target = JSON.parse(runtime.state.configMap.data['target.json']);
   Object.assign(target, {

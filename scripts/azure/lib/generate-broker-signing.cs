@@ -25,7 +25,7 @@ try
         metadata = new
         {
             name = "identity-broker-signing",
-            @namespace = "agentweaver-v1-p0",
+            @namespace = "agentweaver",
             labels = new Dictionary<string, string>
             {
                 ["agentweaver.io/service"] = "identity-broker",

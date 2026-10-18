@@ -8,8 +8,8 @@ import { join } from 'node:path';
 import { run, runAz, redact } from './exec.mjs';
 import { withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 
-const P0_NAMESPACE = 'agentweaver-v1-p0';
-const GATEWAY_NAMESPACE = 'agentweaver-v1-gateway';
+const P0_NAMESPACE = 'agentweaver';
+const GATEWAY_NAMESPACE = 'agentweaver-gateway';
 const CONTROLLER = 'istio.aks.azure.com/gateway-controller';
 const COMMAND_OPTIONS = { check: false, timeout: 35_000 };
 const GUID_PATTERN = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -120,7 +120,7 @@ function projectPublicApplication(value) {
 export function assertIdentityRoutingPlacement({ gatewayNamespace, gatewaySecurityPolicy }) {
   if (gatewayNamespace !== GATEWAY_NAMESPACE ||
       !['restricted', 'baseline'].includes(gatewaySecurityPolicy)) {
-    throw new Error('Identity routing requires explicit agentweaver-v1-gateway placement and an explicit restricted or baseline policy. No placement is selected by default.');
+    throw new Error('Identity routing requires explicit agentweaver-gateway placement and an explicit restricted or baseline policy. No placement is selected by default.');
   }
 }
 
@@ -227,7 +227,7 @@ export function observeExistingP0BrokerRouting({
       ], backend: 'gateway', port: 8443,
     });
     assertManagedBackendTlsPolicy(apiBackendPolicy, 'gateway-api', 'gateway',
-      'gateway.agentweaver-v1-p0.svc.cluster.local', 'service-backend-ca');
+      'gateway.agentweaver.svc.cluster.local', 'service-backend-ca');
     assertManagedRoute(mcpRoute, {
       name: 'mcp', service: 'mcp', hostname: portalHostname, gatewayNamespace,
       sectionName: 'portal', paths: [
@@ -236,7 +236,7 @@ export function observeExistingP0BrokerRouting({
       ], backend: 'mcp', port: 8443,
     });
     assertManagedBackendTlsPolicy(mcpBackendPolicy, 'mcp', 'mcp',
-      'mcp.agentweaver-v1-p0.svc.cluster.local', 'service-backend-ca');
+      'mcp.agentweaver.svc.cluster.local', 'service-backend-ca');
     requireManagedRouteConditions(route, gatewayNamespace, 'https');
     requireManagedRouteConditions(webRoute, gatewayNamespace, 'portal');
     requireManagedRouteConditions(apiRoute, gatewayNamespace, 'portal');
@@ -461,7 +461,7 @@ export function deriveIdentityRouting({
   });
   assertManagedBackendTlsPolicy(backendPolicy, 'identity-broker', 'identity-broker', hostname);
   assertManagedBackendTlsPolicy(apiBackendPolicy, 'gateway-api', 'gateway',
-    'gateway.agentweaver-v1-p0.svc.cluster.local', 'service-backend-ca');
+    'gateway.agentweaver.svc.cluster.local', 'service-backend-ca');
   assertManagedRoute(mcpRoute, {
     name: 'mcp', service: 'mcp', hostname: portalHostname, gatewayNamespace: GATEWAY_NAMESPACE,
     sectionName: 'portal', paths: [
@@ -470,7 +470,7 @@ export function deriveIdentityRouting({
     ], backend: 'mcp', port: 8443,
   });
   assertManagedBackendTlsPolicy(mcpBackendPolicy, 'mcp', 'mcp',
-    'mcp.agentweaver-v1-p0.svc.cluster.local', 'service-backend-ca');
+    'mcp.agentweaver.svc.cluster.local', 'service-backend-ca');
   for (const [managedRoute, section] of [
     [route, 'https'], [webRoute, 'portal'], [apiRoute, 'portal'], [mcpRoute, 'portal'],
   ]) requireManagedRouteConditions(managedRoute, GATEWAY_NAMESPACE, section);
@@ -625,7 +625,6 @@ export function bootstrapIdentityRouting(config, {
       const text = readFileSync(join(config.repoRoot ?? process.cwd(), 'deploy', 'k8s', 'routing',
         'identity-broker', filename), 'utf8');
       const rendered = Object.entries({
-        'CHANGEME-GATEWAY-NAMESPACE': config.gatewayNamespace,
         'CHANGEME-GATEWAY-POLICY': config.gatewaySecurityPolicy, ...replacements,
       }).reduce((value, [placeholder, replacement]) => value.replaceAll(placeholder, replacement), text);
       if (rendered.includes('CHANGEME-')) throw new Error('Identity routing manifest has unresolved operator inputs.');

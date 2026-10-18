@@ -25,11 +25,11 @@ The only real Azure CLI test reads local CLI version information.
 ## Limited P1 runtime identities
 
 `infra/bicep/p1-runtime-identities.bicep` is separate from the full foundation deployment.
-It uses the existing resource group location and the `aw-v1-p0-aks` OIDC issuer.
+It uses the existing resource group location and the `agentweaver-aks` OIDC issuer.
 Before applying it, verify that the resource group and cluster locations match.
 It creates only the Projects & Config, Environment, Knowledge, Events & Sessions,
 and Orchestrator runtime identities and their exact ServiceAccount federations.
-Every federation names its service in `agentweaver-v1-p0` and accepts only
+Every federation names its service in `agentweaver` and accepts only
 `api://AzureADTokenExchange`.
 Supply the existing resource group tags and the exact reviewed source SHA.
 
@@ -89,6 +89,9 @@ The source catalog requires Core versions 1 through 16 and 18 through 21.
 These are 20 registered versions; version 17 remains excluded.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
 The plan retains 94 tables and eight exact row-lock columns.
+The five runtime principal IDs must be read from the current target identity
+deployment outputs before initialization; unresolved markers are rejected
+before credential requests.
 The Environment runtime bootstrap profile replacement store requires a separate
 `SELECT, INSERT` grant on `environment.runtime_bootstrap_profile_replacements`.
 That grant has not been executed; it adds no `UPDATE`, `DELETE`, or default privilege.
@@ -280,7 +283,7 @@ Deployments. A different namespace requires separate approval and scoped
 route attachment, certificate references, and network rules.
 
 The installer has a separate default-off `--bootstrap-identity-routing` option.
-It requires explicit `--identity-gateway-namespace agentweaver-v1-gateway`,
+It requires explicit `--identity-gateway-namespace agentweaver-gateway`,
 `--identity-gateway-security-policy <approved-policy>`, and
 `--identity-upstream-client-id <public-client-guid>` inputs.
 The policy must be `restricted` or `baseline`. Neither value is a default.
@@ -517,17 +520,13 @@ source. The report keeps `candidate.verifierSha` separate from the deployed
 `candidate.sourceSha`, so a docs-only verifier advance does not rewrite the
 provenance of an already deployed artifact.
 
-Both deployment modes require `--operator-object-id` with the approved
-operator's Entra object ID. The tooling resolves a deterministic assignment
-name and creates or reuses only that principal's built-in Azure Kubernetes
-Service RBAC Cluster Admin assignment at the exact AKS resource scope. This
-permanent grant is not removed or broadened to resource-group or subscription
-scope. The existing subnet Network Contributor assignment is retained by
-default. If its exact deterministic binding is proven to reference a deleted
-cluster principal, deployment stops without deleting it. Only after separate
-operator approval, pass `--allow-stale-aks-subnet-role-cleanup` to authorize
-deletion of that exact assignment; the flag alone cannot bypass the stale
-principal proof.
+The guarded deployment does not grant human AKS access or accept an operator
+object ID. Service-identity permissions and the existing subnet Network
+Contributor assignment remain scoped to their required resources. If the exact
+subnet assignment is proven to reference a deleted cluster principal,
+deployment stops without deleting it. Only after separate operator approval,
+pass `--allow-stale-aks-subnet-role-cleanup` to authorize deletion of that exact
+assignment; the flag alone cannot bypass the stale-principal proof.
 
 The AKS-only template reads the issuer URL from the deployed cluster and
 updates exactly the three existing P0 workload-identity federated credentials.
@@ -540,7 +539,7 @@ full-foundation receipt for the Foundation Probe acceptance collector.
 After separate approval, the operator command shape is:
 
 ```powershell
-node scripts\azure\deploy.mjs --resource-group aw-v1-p0 --parameters infra\bicep\parameters\approved.json --subscription <id> --allowed-subscription <id> --tenant <id> --allowed-tenant <id> --operator-object-id <operator-user-object-guid>
+node scripts\azure\deploy.mjs --resource-group agentweaver --parameters infra\bicep\parameters\approved.json --subscription <id> --allowed-subscription <id> --tenant <id> --allowed-tenant <id>
 ```
 
 The default template is `infra\bicep\main.bicep`; it is for an approved initial
@@ -548,7 +547,7 @@ deployment into an empty managed-resource target. To update an existing P0
 foundation, select the dedicated template and parameter file explicitly:
 
 ```powershell
-node scripts\azure\deploy.mjs --resource-group aw-v1-p0 --template infra\bicep\aks-redeploy.bicep --parameters infra\bicep\parameters\p0-aks-redeploy.approved.json --subscription <id> --allowed-subscription <id> --tenant <id> --allowed-tenant <id> --operator-object-id <operator-user-object-guid>
+node scripts\azure\deploy.mjs --resource-group agentweaver --template infra\bicep\aks-redeploy.bicep --parameters infra\bicep\parameters\p0-aks-redeploy.approved.json --subscription <id> --allowed-subscription <id> --tenant <id> --allowed-tenant <id>
 ```
 
 Without `--execute`, this command produces an offline infrastructure summary.
@@ -561,16 +560,11 @@ accept a caller-selected `--expected-sha`.
 Bicep source parameters and outputs bind the receipt to exact reviewed inputs.
 No unsupported deployment tags occur.
 
-After a successful full-foundation or AKS-only deployment, the command also
-bootstraps only `deploy\k8s\base\namespace.yaml`. It uses the signed-in user's
-`az aks get-credentials` context without `--admin`. It converts the temporary
-kubeconfig to `--login azurecli` and waits a bounded time for
-create/get/patch authorization. Then it applies the namespace manifest and
-verifies the P0 namespace and required labels. It removes the temporary
-kubeconfig on success or failure.
-A bootstrap failure is reported even if the infrastructure deployment already
-succeeded; the command never falls back to an admin kubeconfig or applies other
-manifests.
+The guarded infrastructure deployment does not create Kubernetes namespaces or
+grant human AKS permissions. Namespace preparation is a separate, explicitly
+invoked operation and requires authorization already provided outside this
+deployment flow. The infrastructure deployer never falls back to an admin
+kubeconfig or applies Kubernetes manifests.
 
 Initial Identity PostgreSQL setup has a separate default-off
 `--bootstrap-identity-postgres` option. It is available after either an
@@ -593,7 +587,7 @@ Ordinary `--execute` does not run this initializer. A failed bootstrap or
 transport cleanup is reported and is not converted into a successful receipt.
 
 The existing TCP proxy also accepts the explicit
-`--key-vault aw-v1-p0-kv.vault.azure.net` mode for an approved private route check.
+`--key-vault agentweaver-kv.vault.azure.net` mode for an approved private route check.
 It relays TCP from port 8443 to that fixed vault on port 443.
 The loopback forward requires port 15443 and the P0 namespace.
 The PostgreSQL argument and port 5432 remain unchanged.
@@ -630,7 +624,7 @@ The optional Foundation Probe evidence collector can be run with the explicit
 read-only collection option:
 
 ```powershell
-node scripts\azure\verify-acceptance.mjs --resource-group aw-v1-p0 --parameters infra\bicep\parameters\approved.json --subscription <id> --allowed-subscription <id> --tenant <id> --allowed-tenant <id> --expected-sha <40-hex-sha> --deployment-name aw-v1-p0-<first-12-sha> --collect-runtime-evidence --kube-context <approved-context> --image-reference <registry>/<repository>:<tag> [--image-receipt artifacts\images\foundation-probe.json]
+node scripts\azure\verify-acceptance.mjs --resource-group agentweaver --parameters infra\bicep\parameters\approved.json --subscription <id> --allowed-subscription <id> --tenant <id> --allowed-tenant <id> --expected-sha <40-hex-sha> --deployment-name agentweaver-<first-12-sha> --collect-runtime-evidence --kube-context <approved-context> --image-reference <registry>/<repository>:<tag> [--image-receipt artifacts\images\foundation-probe.json]
 ```
 
 The image reference is a tag, not a digest. The receipt defaults to the

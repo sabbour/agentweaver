@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { run, runAz, redact } from './exec.mjs';
 
-const NAMESPACE = 'agentweaver-v1-p0';
+const NAMESPACE = 'agentweaver';
 const MAX_ATTEMPTS = 12;
 const RETRY_DELAY_MS = 5_000;
 const COMMAND_TIMEOUT_MS = 15_000;

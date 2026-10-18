@@ -10,15 +10,15 @@ import {
 } from '../lib/identity-broker-routing.mjs';
 import { run } from '../lib/exec.mjs';
 
-const p0 = 'agentweaver-v1-p0';
-const gatewayNamespace = 'agentweaver-v1-gateway';
+const p0 = 'agentweaver';
+const gatewayNamespace = 'agentweaver-gateway';
 const hostname = 'agentweaver.test.eastus2.aksapp.io';
 const portalHostname = 'portal.test.eastus2.aksapp.io';
 const controller = 'istio.aks.azure.com/gateway-controller';
 const clientId = '11111111-1111-1111-1111-111111111111';
 const applicationObjectId = '22222222-2222-2222-2222-222222222222';
 const config = {
-  resourceGroup: 'aw-v1-p0', clusterName: 'aw-v1-p0-aks', subscriptionId: clientId, tenantId: clientId,
+  resourceGroup: 'agentweaver', clusterName: 'agentweaver-aks', subscriptionId: clientId, tenantId: clientId,
   repoRoot: process.cwd(), gatewayNamespace, gatewaySecurityPolicy: 'baseline', upstreamClientId: clientId,
 };
 const ok = stdout => ({ status: 0, stdout: stdout ?? '', stderr: '' });
@@ -94,7 +94,7 @@ function snapshot() {
     apiBackendPolicy: object('BackendTLSPolicy', p0, {
       targetRefs: [{ group: '', kind: 'Service', name: 'gateway', sectionName: 'https' }],
       validation: {
-        hostname: 'gateway.agentweaver-v1-p0.svc.cluster.local',
+        hostname: 'gateway.agentweaver.svc.cluster.local',
         caCertificateRefs: [{ group: '', kind: 'ConfigMap', name: 'service-backend-ca' }],
       },
     }, { ancestors: [{ controllerName: controller,
@@ -114,7 +114,7 @@ function snapshot() {
     mcpBackendPolicy: object('BackendTLSPolicy', p0, {
       targetRefs: [{ group: '', kind: 'Service', name: 'mcp', sectionName: 'https' }],
       validation: {
-        hostname: 'mcp.agentweaver-v1-p0.svc.cluster.local',
+        hostname: 'mcp.agentweaver.svc.cluster.local',
         caCertificateRefs: [{ group: '', kind: 'ConfigMap', name: 'service-backend-ca' }],
       },
     }, { ancestors: [{ controllerName: controller,
@@ -356,7 +356,7 @@ test('readiness proves ordinary DNS, trusted HTTPS, and both health paths at the
 
 test('production JSON projections preserve the native long DNS hostname and existing public redirect URIs', () => {
   const native = snapshot();
-  const observedDomain = '*.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
+  const observedDomain = '*.0123456789abcdef.eastus2euap.aksapp.io';
   const observedHost = `agentweaver.${observedDomain.slice(2)}`;
   native.gatewayCertificate.status.domain = observedDomain;
   native.brokerCertificate.status.domain = observedDomain;
@@ -534,7 +534,7 @@ test('guarded bootstrap uses normal user kubeconfig, managed certificates in bot
   assert.match(mcpRoute, /backendRefs:\s+- name: mcp\s+port: 8443/);
   const mcpBackendPolicy = applies.find(text => text.includes('kind: BackendTLSPolicy') && text.includes('name: mcp'));
   assert.ok(mcpBackendPolicy);
-  assert.match(mcpBackendPolicy, /hostname: mcp\.agentweaver-v1-p0\.svc\.cluster\.local/);
+  assert.match(mcpBackendPolicy, /hostname: mcp\.agentweaver\.svc\.cluster\.local/);
   assert.match(mcpBackendPolicy, /caCertificateRefs:\s+- group: ""\s+kind: ConfigMap\s+name: service-backend-ca/);
   assert.ok(applies.some(text => text.includes('name: mcp-gateway-ingress') &&
     text.includes(`k8s:io.kubernetes.pod.namespace: ${gatewayNamespace}`) &&

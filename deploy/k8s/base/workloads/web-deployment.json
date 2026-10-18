@@ -3,7 +3,7 @@
   "kind": "Deployment",
   "metadata": {
     "name": "web",
-    "namespace": "agentweaver-v1-p0",
+    "namespace": "agentweaver",
     "labels": {
       "app.kubernetes.io/name": "web",
       "agentweaver.io/service": "web"

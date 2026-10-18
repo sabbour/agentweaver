@@ -14,7 +14,7 @@ if (args.Length != 1 || args[0] != "--execute")
 var host = Environment.GetEnvironmentVariable("IdentityBroker__Bootstrap__PostgresHost");
 var admin = Environment.GetEnvironmentVariable("IdentityBroker__Bootstrap__AdminUsername");
 var principal = Environment.GetEnvironmentVariable("FoundationProbe__Bootstrap__PrincipalObjectId");
-if (host != "aw-v1-p0-pg.postgres.database.azure.com" || string.IsNullOrWhiteSpace(admin) ||
+if (host != "agentweaver-pg.postgres.database.azure.com" || string.IsNullOrWhiteSpace(admin) ||
     !Guid.TryParse(principal, out var principalId))
     throw new ArgumentException("Probe PostgreSQL bootstrap requires the exact approved host, administrator, and Probe principal.");
 

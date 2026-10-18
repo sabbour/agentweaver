@@ -10,9 +10,9 @@ import { pathToFileURL } from 'node:url';
 export const P1_POSTGRES_TARGET = Object.freeze({
   subscriptionId: '90ab3701-83f0-4ba1-a90a-f2e68683adab',
   tenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47',
-  resourceGroup: 'aw-v1-p0',
-  clusterName: 'aw-v1-p0-aks',
-  postgresHost: 'aw-v1-p0-pg.postgres.database.azure.com',
+  resourceGroup: 'agentweaver',
+  clusterName: 'agentweaver-aks',
+  postgresHost: 'agentweaver-pg.postgres.database.azure.com',
   database: 'agentweaver',
   operatorName: 'asabbour@microsoft.com',
   operatorObjectId: 'c4279823-a7c7-477e-982e-f4145bb0a83d',
@@ -21,12 +21,13 @@ export const P1_POSTGRES_TARGET = Object.freeze({
   sslMode: 'VerifyFull',
 });
 
+// Source these principal IDs from the current target's Bicep outputs before initialization.
 const SERVICES = [
-  ['projects-config', 'projects_config', '3ef9deea-61e5-4ad7-8789-5fd161d3c8fe'],
-  ['environment', 'environment', '31d0fb6a-708e-4248-8445-998fcef828d1'],
-  ['knowledge', 'knowledge', '21854284-5fb8-42d5-849f-cb95fe46fa37'],
-  ['events-and-sessions', 'events_sessions', 'cc41b395-2199-47af-8403-eb4a9a8c6250'],
-  ['orchestrator', 'orchestrator', 'd4083aac-3f0d-4c68-b462-ddef1e8f8043'],
+  ['projects-config', 'projects_config', 'CHANGEME-PRINCIPAL-OBJECT-ID-projects-config'],
+  ['environment', 'environment', 'CHANGEME-PRINCIPAL-OBJECT-ID-environment'],
+  ['knowledge', 'knowledge', 'CHANGEME-PRINCIPAL-OBJECT-ID-knowledge'],
+  ['events-and-sessions', 'events_sessions', 'CHANGEME-PRINCIPAL-OBJECT-ID-events-and-sessions'],
+  ['orchestrator', 'orchestrator', 'CHANGEME-PRINCIPAL-OBJECT-ID-orchestrator'],
 ];
 
 const GROUPS = {
@@ -158,7 +159,7 @@ export function buildP1PostgresPlan() {
   const services = SERVICES.map(([service, schema, principalObjectId]) => ({
     service,
     schema,
-    role: `aw-v1-p0-id-${service}`,
+    role: `agentweaver-id-${service}`,
     principalObjectId,
     ownerOnlyTables: OWNER_ONLY_OBJECTS[schema]?.tables ?? [],
     ownerOnlySequences: OWNER_ONLY_OBJECTS[schema]?.sequences ?? [],
@@ -192,6 +193,7 @@ export function buildP1PostgresPlan() {
       'Exact reviewed source and actual Core merge are present in the current base.',
       'A separate approval permits the five SQL login mappings, schema initialization, and exact grants.',
       'The Environment bootstrap profile replacement store requires SELECT,INSERT on environment.runtime_bootstrap_profile_replacements; this separate grant has not been executed.',
+      'Every principal object ID must come from the current target identity deployment; unresolved markers block initialization before credential requests.',
       'The exact installed row-lock mutation-denial triggers are read back before grants; restricted-role PostgreSQL tests prove row locks, mutation denial, and the two bounded DELETE paths.',
       'The already approved private connection is ready; this command does not create a tunnel or cloud resources.',
     ],

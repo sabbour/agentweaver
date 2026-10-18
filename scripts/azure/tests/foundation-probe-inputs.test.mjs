@@ -5,21 +5,21 @@ import { foundationProbeEgress } from '../lib/foundation-probe-egress.mjs';
 
 const id = '11111111-1111-1111-1111-111111111111';
 const principal = '22222222-2222-2222-2222-222222222222';
-const config = { resourceGroup: 'aw-v1-p0', clusterName: 'aw-v1-p0-aks',
+const config = { resourceGroup: 'agentweaver', clusterName: 'agentweaver-aks',
   subscriptionId: id, tenantId: id, repoRoot: process.cwd() };
-const prefix = `/subscriptions/${id}/resourceGroups/aw-v1-p0/providers/`;
+const prefix = `/subscriptions/${id}/resourceGroups/agentweaver/providers/`;
 const issuer = `https://eastus2euap.oic.prod-aks.azure.com/${id}/cluster/`;
 const connectionString = `InstrumentationKey=${principal};IngestionEndpoint=https://eastus-1.in.applicationinsights.azure.com/`;
 const ok = stdout => ({ status: 0, stdout: stdout ?? '', stderr: '' });
-const endpointId = `${prefix}Microsoft.Network/privateEndpoints/aw-v1-p0-ampls-pe`;
-const nicId = `${prefix}Microsoft.Network/networkInterfaces/aw-v1-p0-ampls-pe.nic.owned`;
+const endpointId = `${prefix}Microsoft.Network/privateEndpoints/agentweaver-ampls-pe`;
+const nicId = `${prefix}Microsoft.Network/networkInterfaces/agentweaver-ampls-pe.nic.owned`;
 const route = () => ({
   endpoint: { id: endpointId, networkInterfaces: [{ id: nicId }],
-    privateLinkServiceConnections: [{ privateLinkServiceId: `${prefix}Microsoft.Insights/privateLinkScopes/aw-v1-p0-ampls`,
+    privateLinkServiceConnections: [{ privateLinkServiceId: `${prefix}Microsoft.Insights/privateLinkScopes/agentweaver-ampls`,
       groupIds: ['azuremonitor'], privateLinkServiceConnectionState: { status: 'Approved' } }] },
   nic: { id: nicId, privateEndpoint: { id: endpointId }, ipConfigurations: [{
     privateIPAddress: '10.90.33.11',
-    subnet: { id: `${prefix}Microsoft.Network/virtualNetworks/aw-v1-p0-vnet/subnets/private-endpoints` },
+    subnet: { id: `${prefix}Microsoft.Network/virtualNetworks/agentweaver-vnet/subnets/private-endpoints` },
     privateLinkConnectionProperties: { requiredMemberName: 'api', groupId: 'azuremonitor', fqdns: ['api.monitor.azure.com'] },
   }] },
   record: { id: `${prefix}Microsoft.Network/privateDnsZones/privatelink.monitor.azure.com/A/api`,
@@ -38,15 +38,15 @@ function dependencies({ failWrite = false, wrongFic = false, failPolicyWrite = f
       if (args[0] === 'account') value = { id, tenantId: id, state: 'Enabled' };
       if (args[0] === 'aks') value = { oidcIssuerProfile: { issuerUrl: issuer } };
       if (args[0] === 'identity' && args[1] === 'show') value = {
-        id: `${prefix}Microsoft.ManagedIdentity/userAssignedIdentities/aw-v1-p0-id-foundation-probe`,
+        id: `${prefix}Microsoft.ManagedIdentity/userAssignedIdentities/agentweaver-id-foundation-probe`,
         clientId: id, principalId: principal,
       };
       if (args[0] === 'identity' && args[1] === 'federated-credential') value = {
-        issuer, subject: `system:serviceaccount:agentweaver-v1-p0:${wrongFic ? 'foreign' : 'foundation-probe'}`,
+        issuer, subject: `system:serviceaccount:agentweaver:${wrongFic ? 'foreign' : 'foundation-probe'}`,
         audiences: ['api://AzureADTokenExchange'],
       };
       if (args[0] === 'monitor') value = {
-        id: `${prefix}Microsoft.Insights/components/aw-v1-p0-appi`, connectionString,
+        id: `${prefix}Microsoft.Insights/components/agentweaver-appi`, connectionString,
       };
       if (args[0] === 'network') value = args[1] === 'private-endpoint' ? route().endpoint :
         args[1] === 'nic' ? route().nic : route().record;
@@ -79,7 +79,7 @@ function dependencies({ failWrite = false, wrongFic = false, failPolicyWrite = f
       } else {
         assert.ok(!options.input.includes('CHANGEME-'));
         objects.set('foundation-probe', { kind: 'ServiceAccount', metadata: {
-          name: 'foundation-probe', namespace: 'agentweaver-v1-p0', uid: 'sa-uid',
+          name: 'foundation-probe', namespace: 'agentweaver', uid: 'sa-uid',
           annotations: { 'azure.workload.identity/client-id': id, 'azure.workload.identity/tenant-id': id },
         } });
       }
@@ -132,7 +132,7 @@ test('Probe Logs route rejects wrong host, public IP and foreign or inconsistent
 test('Probe installer replaces only exact baseline policy with resource-version guard and preserves identity', () => {
   const deps = dependencies();
   deps.objects.set('foundation-probe-egress', { apiVersion: 'cilium.io/v2', kind: 'CiliumNetworkPolicy',
-    metadata: { name: 'foundation-probe-egress', namespace: 'agentweaver-v1-p0',
+    metadata: { name: 'foundation-probe-egress', namespace: 'agentweaver',
       uid: 'existing-policy', resourceVersion: '1' }, spec: foundationProbeEgress(config, route()).baseline });
   const receipt = bootstrapFoundationProbeInputs(config, deps);
   assert.equal(receipt.egress.changed, true);

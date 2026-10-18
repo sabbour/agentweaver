@@ -3,7 +3,7 @@
   "kind": "Deployment",
   "metadata": {
     "name": "projects-config",
-    "namespace": "agentweaver-v1-p0",
+    "namespace": "agentweaver",
     "labels": {
       "app.kubernetes.io/name": "projects-config",
       "agentweaver.io/service": "projects-config"

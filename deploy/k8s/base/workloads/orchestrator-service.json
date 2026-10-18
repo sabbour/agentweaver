@@ -3,7 +3,7 @@
   "kind": "Service",
   "metadata": {
     "name": "orchestrator",
-    "namespace": "agentweaver-v1-p0",
+    "namespace": "agentweaver",
     "labels": {
       "app.kubernetes.io/name": "orchestrator",
       "agentweaver.io/service": "orchestrator"

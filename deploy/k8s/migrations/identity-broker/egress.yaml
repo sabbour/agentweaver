@@ -2,7 +2,7 @@ apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
   name: identity-broker-migration-egress
-  namespace: agentweaver-v1-p0
+  namespace: agentweaver
 spec:
   endpointSelector:
     matchLabels:

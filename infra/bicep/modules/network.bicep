@@ -4,7 +4,7 @@
 @description('Azure region for all resources in this module.')
 param location string
 
-@description('Dedicated naming prefix, e.g. aw-v1-p0. Must not collide with any 0.x resource name.')
+@description('Dedicated naming prefix, e.g. agentweaver. Must not collide with any 0.x resource name.')
 param namePrefix string
 
 @description('Resource tags applied to every resource in this module.')

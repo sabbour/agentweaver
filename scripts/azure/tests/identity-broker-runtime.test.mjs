@@ -4,16 +4,16 @@ import { alignExistingP0BrokerHostname, observeExistingP0BrokerRouting } from '.
 import { assertBrokerRuntimeInputs, bootstrapIdentityBrokerRuntime, brokerAcceptanceConfiguration,
   brokerObjectHash, projectBrokerRuntimeResource } from '../lib/identity-broker-runtime.mjs';
 
-const namespace = 'agentweaver-v1-p0';
+const namespace = 'agentweaver';
 const clientId = '11111111-1111-1111-1111-111111111111';
 const principalId = '22222222-2222-2222-2222-222222222222';
 const config = {
-  resourceGroup: 'aw-v1-p0', clusterName: 'aw-v1-p0-aks', subscriptionId: clientId, tenantId: clientId,
+  resourceGroup: 'agentweaver', clusterName: 'agentweaver-aks', subscriptionId: clientId, tenantId: clientId,
   upstreamClientId: clientId, acceptanceRunId: principalId, acceptanceRedirectUri: 'http://127.0.0.1:18641/callback',
   brokerImage: 'ghcr.io/sabbour/agentweaver.identity.broker@sha256:' + 'a'.repeat(64),
   repoRoot: process.cwd(),
 };
-const zone = '6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
+const zone = '0123456789abcdef.eastus2euap.aksapp.io';
 const hostname = `agentweaver.${zone}`;
 const portalHostname = `portal.${zone}`;
 const legacyHostname = `identity-broker.${zone}`;
@@ -95,7 +95,7 @@ function routing(host = legacyHostname, includeApplicationRoutes = false) {
     state.apiBackendPolicy = object('BackendTLSPolicy', { targetRefs: [{
       name: 'gateway', kind: 'Service', group: '', sectionName: 'https',
     }], validation: {
-      hostname: 'gateway.agentweaver-v1-p0.svc.cluster.local',
+      hostname: 'gateway.agentweaver.svc.cluster.local',
       caCertificateRefs: [{ group: '', kind: 'ConfigMap', name: 'service-backend-ca' }],
     } }, { ancestors: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
       ancestorRef: { name: 'identity-broker' },
@@ -116,7 +116,7 @@ function routing(host = legacyHostname, includeApplicationRoutes = false) {
     state.mcpBackendPolicy = object('BackendTLSPolicy', { targetRefs: [{
       name: 'mcp', kind: 'Service', group: '', sectionName: 'https',
     }], validation: {
-      hostname: 'mcp.agentweaver-v1-p0.svc.cluster.local',
+      hostname: 'mcp.agentweaver.svc.cluster.local',
       caCertificateRefs: [{ group: '', kind: 'ConfigMap', name: 'service-backend-ca' }],
     } }, { ancestors: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
       ancestorRef: { name: 'identity-broker' },
@@ -156,25 +156,25 @@ test('Deployment hashing normalizes only an equal explicit deprecated ServiceAcc
 
 function gatewayRouting(host = hostname, includeApplicationRoutes = false) {
   const state = routing(host, includeApplicationRoutes);
-  state.gateway.metadata.namespace = 'agentweaver-v1-gateway';
+  state.gateway.metadata.namespace = 'agentweaver-gateway';
   for (const listener of state.gateway.spec.listeners) {
     listener.allowedRoutes = { namespaces: {
       from: 'Selector', selector: { matchLabels: { 'kubernetes.io/metadata.name': namespace } },
     } };
   }
-  state.route.spec.parentRefs[0].namespace = 'agentweaver-v1-gateway';
+  state.route.spec.parentRefs[0].namespace = 'agentweaver-gateway';
   if (state.route.status?.parents?.[0]) {
-    state.route.status.parents[0].parentRef.namespace = 'agentweaver-v1-gateway';
+    state.route.status.parents[0].parentRef.namespace = 'agentweaver-gateway';
   }
   if (state.backendPolicy.status?.ancestors?.[0]) {
-    state.backendPolicy.status.ancestors[0].ancestorRef.namespace = 'agentweaver-v1-gateway';
+    state.backendPolicy.status.ancestors[0].ancestorRef.namespace = 'agentweaver-gateway';
   }
   for (const route of [state.webRoute, state.apiRoute, state.mcpRoute].filter(Boolean)) {
-    route.spec.parentRefs[0].namespace = 'agentweaver-v1-gateway';
-    route.status.parents[0].parentRef.namespace = 'agentweaver-v1-gateway';
+    route.spec.parentRefs[0].namespace = 'agentweaver-gateway';
+    route.status.parents[0].parentRef.namespace = 'agentweaver-gateway';
   }
   for (const policy of [state.apiBackendPolicy, state.mcpBackendPolicy].filter(Boolean)) {
-    policy.status.ancestors[0].ancestorRef.namespace = 'agentweaver-v1-gateway';
+    policy.status.ancestors[0].ancestorRef.namespace = 'agentweaver-gateway';
   }
   return state;
 }
@@ -189,13 +189,13 @@ test('post-placement alignment reads the exact Gateway namespace and leaves alig
       assert.ok(!args.includes('patch'));
       const resource = args[args.indexOf('get') + 1];
       const name = args[args.indexOf('get') + 2];
-      const expectedNamespace = resource === 'gateway' ? 'agentweaver-v1-gateway' : namespace;
+      const expectedNamespace = resource === 'gateway' ? 'agentweaver-gateway' : namespace;
       assert.equal(args[args.indexOf('--namespace') + 1], expectedNamespace);
       return ok(JSON.stringify(options.projectJson(state[resourceKey(resource, name)])));
     },
   });
   assert.equal(result.changed, false);
-  assert.equal(result.gatewayNamespace, 'agentweaver-v1-gateway');
+  assert.equal(result.gatewayNamespace, 'agentweaver-gateway');
   assert.equal(result.configurationOnly, true);
   assert.equal(result.applicationRoutesConfigured, false);
   assert.ok(calls.length > 0);
@@ -336,7 +336,7 @@ test('runtime setup creates absent native objects once and never overwrites conf
       if (args[0] === 'account') value = { id: clientId, tenantId: clientId, state: 'Enabled' };
       if (args[0] === 'aks') value = { oidcIssuerProfile: { issuerUrl: issuer } };
       if (args[0] === 'identity' && args[1] === 'show') value = { id:
-        `/subscriptions/${clientId}/resourceGroups/aw-v1-p0/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aw-v1-p0-id-identity-broker`,
+        `/subscriptions/${clientId}/resourceGroups/agentweaver/providers/Microsoft.ManagedIdentity/userAssignedIdentities/agentweaver-id-identity-broker`,
       clientId, principalId };
       if (args[0] === 'identity' && args[1] === 'federated-credential') value = {
         issuer, subject: `system:serviceaccount:${namespace}:identity-broker`, audiences: ['api://AzureADTokenExchange'],

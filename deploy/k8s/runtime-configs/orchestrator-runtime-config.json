@@ -3,23 +3,27 @@
   "kind": "ConfigMap",
   "metadata": {
     "name": "orchestrator-runtime-config",
-    "namespace": "agentweaver-v1-p0"
+    "namespace": "agentweaver",
+    "annotations": {
+      "agentweaver.io/runtime-config-status": "incomplete",
+      "agentweaver.io/runtime-config-incomplete-reason": "Awaiting the newly provisioned AKS managed domain and workload identity client IDs."
+    }
   },
   "immutable": true,
   "data": {
-    "ConnectionStrings__Orchestrator": "Host=aw-v1-p0-pg.postgres.database.azure.com;Port=5432;Database=agentweaver;Username=aw-v1-p0-id-orchestrator;SSL Mode=VerifyFull",
+    "ConnectionStrings__Orchestrator": "Host=agentweaver-pg.postgres.database.azure.com;Port=5432;Database=agentweaver;Username=agentweaver-id-orchestrator;SSL Mode=VerifyFull",
     "Orchestrator__Database__WorkloadIdentity__TenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47",
-    "Orchestrator__Database__WorkloadIdentity__ClientId": "b9cfb747-b0f0-42c9-b0a8-31ec3c335a9a",
+    "Orchestrator__Database__WorkloadIdentity__ClientId": "CHANGEME-orchestrator-client-id",
     "Orchestrator__Database__WorkloadIdentity__TokenFilePath": "/var/run/secrets/azure/tokens/azure-identity-token",
     "Orchestrator__Schema": "orchestrator",
-    "Identity__Issuer": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
-    "Identity__Audience": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
-    "ProjectsConfig__AuthorizationContext__OwnerBaseAddress": "https://projects-config.agentweaver-v1-p0.svc.cluster.local:8443/",
-    "ProjectsConfig__AuthorizationContext__Audience": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
-    "EventsAndSessions__Authorization__OwnerBaseAddress": "https://events-and-sessions.agentweaver-v1-p0.svc.cluster.local:8443/",
-    "EventsAndSessions__Authorization__Audience": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
-    "Identity__SecretRedemption__OwnerBaseAddress": "https://identity-broker.agentweaver-v1-p0.svc.cluster.local:443/",
-    "Identity__SecretRedemption__Audience": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
+    "Identity__Issuer": "https://CHANGEME-MANAGED-HOST/",
+    "Identity__Audience": "https://CHANGEME-MANAGED-HOST/",
+    "ProjectsConfig__AuthorizationContext__OwnerBaseAddress": "https://projects-config.agentweaver.svc.cluster.local:8443/",
+    "ProjectsConfig__AuthorizationContext__Audience": "https://CHANGEME-MANAGED-HOST/",
+    "EventsAndSessions__Authorization__OwnerBaseAddress": "https://events-and-sessions.agentweaver.svc.cluster.local:8443/",
+    "EventsAndSessions__Authorization__Audience": "https://CHANGEME-MANAGED-HOST/",
+    "Identity__SecretRedemption__OwnerBaseAddress": "https://identity-broker.agentweaver.svc.cluster.local:443/",
+    "Identity__SecretRedemption__Audience": "https://CHANGEME-MANAGED-HOST/",
     "AgentGovernance__Policy__ResourceId": "agt-policy:p1-v1.0.0",
     "AgentGovernance__Policy__ResourceGeneration": "1",
     "AgentGovernance__Policy__OptionsRevision": "p1-v1.0.0",

@@ -3,7 +3,7 @@
   "kind": "Service",
   "metadata": {
     "name": "gateway",
-    "namespace": "agentweaver-v1-p0",
+    "namespace": "agentweaver",
     "labels": {
       "app.kubernetes.io/name": "gateway",
       "agentweaver.io/service": "gateway"

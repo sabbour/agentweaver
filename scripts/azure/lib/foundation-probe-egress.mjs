@@ -10,13 +10,13 @@ const sameId = (actual, expected) => typeof actual === 'string' && actual.toLowe
  * Returns structured evidence when they match the fixed P0 topology; mismatches throw.
  */
 export function foundationProbeEgress(config, { endpoint, nic, record, ingestionHost }) {
-  const prefix = `/subscriptions/${config.subscriptionId}/resourceGroups/aw-v1-p0/providers/`;
-  const endpointId = `${prefix}Microsoft.Network/privateEndpoints/aw-v1-p0-ampls-pe`;
-  const subnetId = `${prefix}Microsoft.Network/virtualNetworks/aw-v1-p0-vnet/subnets/private-endpoints`;
+  const prefix = `/subscriptions/${config.subscriptionId}/resourceGroups/agentweaver/providers/`;
+  const endpointId = `${prefix}Microsoft.Network/privateEndpoints/agentweaver-ampls-pe`;
+  const subnetId = `${prefix}Microsoft.Network/virtualNetworks/agentweaver-vnet/subnets/private-endpoints`;
   const connections = endpoint?.privateLinkServiceConnections;
-  if (config.resourceGroup !== 'aw-v1-p0' || config.clusterName !== 'aw-v1-p0-aks' ||
+  if (config.resourceGroup !== 'agentweaver' || config.clusterName !== 'agentweaver-aks' ||
       !sameId(endpoint?.id, endpointId) || connections?.length !== 1 ||
-      !sameId(connections[0].privateLinkServiceId, `${prefix}Microsoft.Insights/privateLinkScopes/aw-v1-p0-ampls`) ||
+      !sameId(connections[0].privateLinkServiceId, `${prefix}Microsoft.Insights/privateLinkScopes/agentweaver-ampls`) ||
       connections[0].privateLinkServiceConnectionState?.status !== 'Approved' ||
       connections[0].groupIds?.length !== 1 || connections[0].groupIds[0] !== 'azuremonitor' ||
       endpoint.networkInterfaces?.length !== 1 ||
@@ -41,8 +41,8 @@ export function foundationProbeEgress(config, { endpoint, nic, record, ingestion
       !/^[a-z0-9]+(?:-[a-z0-9]+)*\.in\.applicationinsights\.azure\.com$/.test(ingestionHost ?? '')) {
     throw new Error('Probe Logs egress requires an exact private API member, matching DNS record and ingestion host.');
   }
-  const baseDns = ['login.microsoftonline.com', 'aw-v1-p0-kv.vault.azure.net',
-    'awv1p0blob.blob.core.windows.net', ingestionHost, 'aw-v1-p0-pg.postgres.database.azure.com'];
+  const baseDns = ['login.microsoftonline.com', 'agentweaver-kv.vault.azure.net',
+    'agentweaverblob.blob.core.windows.net', ingestionHost, 'agentweaver-pg.postgres.database.azure.com'];
   const ports = port => [{ ports: [{ port, protocol: 'TCP' }] }];
   const baseline = {
     endpointSelector: { matchLabels: { 'agentweaver.io/probe': 'foundation-probe' } },
@@ -50,11 +50,11 @@ export function foundationProbeEgress(config, { endpoint, nic, record, ingestion
       { toEndpoints: [{ matchLabels: { 'k8s:io.kubernetes.pod.namespace': 'kube-system', 'k8s:k8s-app': 'kube-dns' } }],
         toPorts: [{ ports: [{ port: '53', protocol: 'UDP' }, { port: '53', protocol: 'TCP' }],
           rules: { dns: baseDns.map(matchName => ({ matchName })) } }] },
-      { toFQDNs: ['login.microsoftonline.com', 'aw-v1-p0-kv.vault.azure.net'].map(matchName => ({ matchName })),
+      { toFQDNs: ['login.microsoftonline.com', 'agentweaver-kv.vault.azure.net'].map(matchName => ({ matchName })),
         toPorts: ports('443') },
-      { toFQDNs: ['awv1p0blob.blob.core.windows.net', ingestionHost].map(matchName => ({ matchName })),
+      { toFQDNs: ['agentweaverblob.blob.core.windows.net', ingestionHost].map(matchName => ({ matchName })),
         toPorts: ports('443') },
-      { toFQDNs: [{ matchName: 'aw-v1-p0-pg.postgres.database.azure.com' }], toPorts: ports('5432') },
+      { toFQDNs: [{ matchName: 'agentweaver-pg.postgres.database.azure.com' }], toPorts: ports('5432') },
     ],
   };
   const spec = structuredClone(baseline);
