@@ -44,16 +44,19 @@ test('redact is a no-op on plain text', () => {
   assert.equal(redact('plain status message'), 'plain status message');
 });
 
-test('redact preserves managed Broker hostnames but masks JWTs elsewhere', () => {
+test('run redacts JWT stdout while preserving managed Broker hostnames', () => {
   const hostname = 'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
   const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
   const jwt = `${encode({ alg: 'HS256', typ: 'JWT' })}.${encode({ sub: 'synthetic-user-123' })}.${'s'.repeat(32)}`;
   const arbitraryHostname = 'aaaaaaaaaa.bbbbbbbbbb.cccccccccc.aksapp.io';
+  const output = `hostname: ${hostname}\ntoken: ${jwt}`;
 
   assert.equal(redact(`hostname: ${hostname}`), `hostname: ${hostname}`);
   assert.equal(redact(`token: ${jwt}`), 'token: [redacted]');
   assert.equal(redact(`hostname: ${arbitraryHostname}`), 'hostname: [redacted].aksapp.io');
   assert.equal(redact(`token: ${jwt}.aksapp.io`), 'token: [redacted].aksapp.io');
+  const result = run(process.execPath, ['-e', `process.stdout.write(${JSON.stringify(output)})`]);
+  assert.equal(result.stdout, `hostname: ${hostname}\ntoken: [redacted]`);
 });
 
 test('preserving non-secret projected identifiers is explicit and cannot expose omitted credentials', () => {
