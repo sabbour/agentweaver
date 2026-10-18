@@ -437,9 +437,9 @@ npm run release:deploy-integration -- `
   --publication artifacts/release/integration/integration-publication.json `
   --subscription-id 90ab3701-83f0-4ba1-a90a-f2e68683adab `
   --tenant-id 72f988bf-86f1-41af-91ab-2d7cd011db47 `
-  --resource-group aw-v1-p0 `
-  --cluster aw-v1-p0-aks `
-  --namespace agentweaver-v1-p0 `
+  --resource-group agentweaver `
+  --cluster agentweaver-aks `
+  --namespace agentweaver `
   --node-min 2 `
   --node-max 3 `
   --provider-catalog-configmap <existing-configmap-name> `
@@ -647,9 +647,9 @@ node "$Helper\scripts\release\deploy.mjs" v1.0.0 `
   --completion $Receipt `
   --subscription-id 90ab3701-83f0-4ba1-a90a-f2e68683adab `
   --tenant-id 72f988bf-86f1-41af-91ab-2d7cd011db47 `
-  --resource-group aw-v1-p0 `
-  --cluster aw-v1-p0-aks `
-  --namespace agentweaver-v1-p0 `
+  --resource-group agentweaver `
+  --cluster agentweaver-aks `
+  --namespace agentweaver `
   --node-min 2 `
   --node-max 3 `
   --provider-catalog-configmap <existing-configmap-name> `
@@ -718,9 +718,9 @@ npm run release:deploy-bootstrap -- v1.0.0 `
   --completion <v1.0.0-continuation.json> `
   --subscription-id 90ab3701-83f0-4ba1-a90a-f2e68683adab `
   --tenant-id 72f988bf-86f1-41af-91ab-2d7cd011db47 `
-  --resource-group aw-v1-p0 `
-  --cluster aw-v1-p0-aks `
-  --namespace agentweaver-v1-p0 `
+  --resource-group agentweaver `
+  --cluster agentweaver-aks `
+  --namespace agentweaver `
   --node-min 2 `
   --node-max 3 `
   --provider-catalog-configmap <reviewed-configmap-name> `
@@ -750,9 +750,9 @@ npm run release:deploy-bootstrap -- v1.0.1 `
   --publication <v1.0.1-publication.json> `
   --subscription-id 90ab3701-83f0-4ba1-a90a-f2e68683adab `
   --tenant-id 72f988bf-86f1-41af-91ab-2d7cd011db47 `
-  --resource-group aw-v1-p0 `
-  --cluster aw-v1-p0-aks `
-  --namespace agentweaver-v1-p0 `
+  --resource-group agentweaver `
+  --cluster agentweaver-aks `
+  --namespace agentweaver `
   --node-min 2 `
   --node-max 3 `
   --provider-catalog-configmap <reviewed-configmap-name> `
@@ -776,8 +776,8 @@ it does not build or publish artifacts.
 The command requires explicit subscription, tenant, resource group, AKS,
 namespace, and node-bound arguments. These must match the approved P0 target:
 subscription `90ab3701-83f0-4ba1-a90a-f2e68683adab`, tenant
-`72f988bf-86f1-41af-91ab-2d7cd011db47`, resource group `aw-v1-p0`, cluster
-`aw-v1-p0-aks`, namespace `agentweaver-v1-p0`, and node bounds 2–3. It does not
+`72f988bf-86f1-41af-91ab-2d7cd011db47`, resource group `agentweaver`, cluster
+`agentweaver-aks`, namespace `agentweaver`, and node bounds 2–3. It does not
 select a default Azure account, change kubectl context, or request credentials.
 The local checkout must be clean at the exact annotated release tag commit.
 The checked-in runtime List source supplies the nine shared Deployment/Service
@@ -792,9 +792,9 @@ npm run release:deploy -- v1.0.0 `
   --publication <publication.json> `
   --subscription-id 90ab3701-83f0-4ba1-a90a-f2e68683adab `
   --tenant-id 72f988bf-86f1-41af-91ab-2d7cd011db47 `
-  --resource-group aw-v1-p0 `
-  --cluster aw-v1-p0-aks `
-  --namespace agentweaver-v1-p0 `
+  --resource-group agentweaver `
+  --cluster agentweaver-aks `
+  --namespace agentweaver `
   --node-min 2 `
   --node-max 3 `
   --provider-catalog-configmap <existing-configmap-name> `

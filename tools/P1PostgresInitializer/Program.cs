@@ -85,6 +85,7 @@ var plan = JsonSerializer.Deserialize<PostgresPlan>(planJson, new JsonSerializer
 {
     PropertyNameCaseInsensitive = true,
 }) ?? throw new InvalidOperationException("The exact source plan is missing.");
+InitializerChecks.AssertPrincipalObjectIds(plan.Services);
 InitializerChecks.AssertMutationDenialPlan(plan.Services);
 InitializerChecks.AssertOwnerOnlyObjectPlan(plan.Services);
 

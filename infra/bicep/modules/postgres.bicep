@@ -5,7 +5,7 @@
 @description('Azure region for the server.')
 param location string
 
-@description('Dedicated naming prefix, e.g. aw-v1-p0.')
+@description('Dedicated naming prefix, e.g. agentweaver.')
 param namePrefix string
 
 @description('Resource tags applied to the server.')

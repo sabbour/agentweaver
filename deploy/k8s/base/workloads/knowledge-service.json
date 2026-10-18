@@ -3,7 +3,7 @@
   "kind": "Service",
   "metadata": {
     "name": "knowledge",
-    "namespace": "agentweaver-v1-p0",
+    "namespace": "agentweaver",
     "labels": {
       "app.kubernetes.io/name": "knowledge",
       "agentweaver.io/service": "knowledge"

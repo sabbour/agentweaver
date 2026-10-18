@@ -9,11 +9,18 @@ const example = JSON.parse(readFileSync(exampleUrl, 'utf8'));
 const runtimeConfigUrl = new URL('../../../deploy/k8s/runtime-configs/events-and-sessions-runtime-config.json', import.meta.url);
 const sourceConfiguration = JSON.parse(readFileSync(runtimeConfigUrl, 'utf8')).data;
 const rateCardKey = 'EventsAndSessions__Cost__Copilot__RateCard__Json';
+const testManagedHost = 'agentweaver.0123456789abcdef.eastus2euap.aksapp.io';
 
 function fixture() {
+  const configuration = Object.fromEntries(Object.entries(example.configuration)
+    .map(([key, value]) => [key, value ?? sourceConfiguration[key]]));
+  for (const [key, value] of Object.entries(configuration)) {
+    if (typeof value === 'string') {
+      configuration[key] = value.replaceAll('CHANGEME-MANAGED-HOST', testManagedHost);
+    }
+  }
   return {
-    configuration: Object.fromEntries(Object.entries(example.configuration)
-      .map(([key, value]) => [key, value ?? sourceConfiguration[key]])),
+    configuration,
   };
 }
 
@@ -34,7 +41,7 @@ test('validator returns runtime data only and applies the checked-in rate-card d
   assert.equal(result.apiVersion, undefined);
   assert.equal(result.kind, undefined);
   assert.equal(result.data.EventsAndSessions__SessionMaterial__ContainerUri,
-    'https://awv1p0blob.blob.core.windows.net/session-material');
+    'https://agentweaverblob.blob.core.windows.net/session-material');
   assert.equal(result.data.AgentHost__ModelBindings__reasoning__ModelId, 'gpt-6.1-sol');
   assert.equal(result.data.AgentHost__ModelBindings__coding__ModelId, 'gpt-6-luna');
 });
@@ -66,10 +73,10 @@ test('database role, identity, schema and approved resource IDs remain exact', (
     input.configuration[key] = 'foreign';
     assert.throws(() => renderEventsProfile(input), /admitted Events runtime mapping/, key);
   }
-  for (const role of ['foundation_probe_runtime', 'aw-v1-p0-id-identity-broker', 'postgres', 'events_migration']) {
+  for (const role of ['foundation_probe_runtime', 'agentweaver-id-identity-broker', 'postgres', 'events_migration']) {
     const input = fixture();
     input.configuration.ConnectionStrings__EventsAndSessions =
-      input.configuration.ConnectionStrings__EventsAndSessions.replace('aw-v1-p0-id-events-and-sessions', role);
+      input.configuration.ConnectionStrings__EventsAndSessions.replace('agentweaver-id-events-and-sessions', role);
     assert.throws(() => renderEventsProfile(input), /runtime mapping/);
   }
   for (const [key, values] of [
@@ -129,13 +136,13 @@ test('managed issuer, exact private owner services and Blob container inputs are
   }
   const mismatchedProjects = fixture();
   mismatchedProjects.configuration.ProjectsConfig__AuthorizationContext__OwnerBaseAddress =
-    'https://projects-config.agentweaver-v1-p0.svc.cluster.local:9443/';
+    'https://projects-config.agentweaver.svc.cluster.local:9443/';
   assert.throws(() => renderEventsProfile(mismatchedProjects), /same exact Projects owner/);
   for (const uri of [
-    'http://awv1p0blob.blob.core.windows.net/session-material',
+    'http://agentweaverblob.blob.core.windows.net/session-material',
     'https://foreign.blob.core.windows.net/session-material',
-    'https://awv1p0blob.blob.core.windows.net/session-material?sig=secret',
-    'https://awv1p0blob.blob.core.windows.net/session-material/extra',
+    'https://agentweaverblob.blob.core.windows.net/session-material?sig=secret',
+    'https://agentweaverblob.blob.core.windows.net/session-material/extra',
   ]) {
     const input = fixture();
     input.configuration.EventsAndSessions__SessionMaterial__ContainerUri = uri;

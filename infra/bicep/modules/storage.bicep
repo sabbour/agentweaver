@@ -7,7 +7,7 @@
 @description('Azure region for the storage account.')
 param location string
 
-@description('Dedicated naming prefix, e.g. aw-v1-p0. Storage account names strip hyphens and lowercase automatically.')
+@description('Dedicated naming prefix, e.g. agentweaver. Storage account names strip hyphens and lowercase automatically.')
 param namePrefix string
 
 @description('Resource tags applied to the storage account.')

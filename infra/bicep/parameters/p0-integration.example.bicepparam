@@ -7,7 +7,7 @@ using '../main.bicep'
 // without an explicit, non-placeholder namePrefix and target resource group.
 param location = 'eastus2euap'
 param monitorLocation = 'eastus2'
-param namePrefix = 'aw-v1-p0'
+param namePrefix = 'agentweaver'
 param tenantId = '00000000-0000-0000-0000-000000000000'
 param postgresEntraAdminObjectId = '00000000-0000-0000-0000-000000000000'
 param postgresEntraAdminPrincipalName = 'CHANGEME-ENTRA-ADMIN-PRINCIPAL-NAME'

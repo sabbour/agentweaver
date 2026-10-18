@@ -3,7 +3,7 @@
   "kind": "ConfigMap",
   "metadata": {
     "name": "projects-config-provider-catalog",
-    "namespace": "agentweaver-v1-p0",
+    "namespace": "agentweaver",
     "annotations": {
       "agentweaver.io/provider-catalog-product-source": "c24d0000fe5fc6163e4f38594c39dff782d3a46d"
     }

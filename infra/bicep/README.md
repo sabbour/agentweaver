@@ -59,12 +59,11 @@ full `main.bicep` composition only for an approved initial deployment into an
 empty managed-resource target.
 It injects exact `sourceSha` and `sourceHash` parameters and reads matching outputs.
 
-Both deployment paths require the approved operator's Entra object ID as an
-explicit CLI input; it is not committed in a parameter file. AKS receives the
-built-in Azure Kubernetes Service RBAC Cluster Admin role at the exact cluster
-resource scope. The role assignment is permanent and is reused only when the
-principal, role, and scope match exactly. The update path gets the issuer URL
-from the created AKS resource and updates only the existing probe, broker, and
+Neither deployment path grants a human AKS role or accepts an operator object
+ID. The AKS control-plane identity retains Network Contributor only on the
+dedicated AKS subnet. Infrastructure deployment does not create Kubernetes
+namespaces or apply workload manifests. The update path gets the issuer URL
+from the AKS resource and updates only the existing probe, broker, and
 migration federated credentials. Their ServiceAccount subjects and
 `api://AzureADTokenExchange` audience remain unchanged. The guard verifies all
 three existing records before deployment and blocks if one is missing or has

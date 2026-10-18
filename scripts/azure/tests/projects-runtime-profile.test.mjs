@@ -58,14 +58,14 @@ test('database, workload identity, role and token path stay on the admitted P0 m
   }
   for (const role of [
     'foundation_probe_runtime',
-    'aw-v1-p0-id-events-and-sessions',
-    'aw-v1-p0-id-identity-broker',
+    'agentweaver-id-events-and-sessions',
+    'agentweaver-id-identity-broker',
     'postgres',
     'projects_migration',
   ]) {
     const input = fixture();
     input.configuration.ConnectionStrings__ProjectsConfig =
-      input.configuration.ConnectionStrings__ProjectsConfig.replace('aw-v1-p0-id-projects-config', role);
+      input.configuration.ConnectionStrings__ProjectsConfig.replace('agentweaver-id-projects-config', role);
     assert.throws(() => renderProjectsProfile(input), /runtime mapping/, role);
   }
   assert.equal(

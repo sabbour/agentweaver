@@ -35,7 +35,7 @@ internal sealed class ProbeRunner(
         ArgumentNullException.ThrowIfNull(identity);
         ProbeTargetValidator.Validate(target, source);
         if (identity.Issuer != target.AksOidcIssuerUrl ||
-            identity.Subject != "system:serviceaccount:agentweaver-v1-p0:foundation-probe" ||
+            identity.Subject != "system:serviceaccount:agentweaver:foundation-probe" ||
             identity.Audience != "api://AzureADTokenExchange")
             throw new ProbeException("workload_identity_claim_mismatch");
         if (!ProbeMonitorConfiguration.IsValidFor(monitorConfiguration, target))

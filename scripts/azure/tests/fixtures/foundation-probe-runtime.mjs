@@ -1,7 +1,7 @@
 import { buildImageReceipt, verifyPublishedImageReceipt } from '../../build-foundation-probe-image.mjs';
 import { deploymentOutputs, fixture as deploymentFixture, source } from './target.mjs';
 
-export const namespace = 'agentweaver-v1-p0';
+export const namespace = 'agentweaver';
 export const imageReference = `registry.example/agentweaver/foundation-probe:source-${source.sha}`;
 export const manifestDigest = `sha256:${'d'.repeat(64)}`;
 export const expectedImage = `registry.example/agentweaver/foundation-probe@${manifestDigest}`;
@@ -339,7 +339,7 @@ export const observedCluster = {
 };
 
 export const kubeConfig = {
-  clusters: [{ name: 'aw-v1-p0-aks', cluster: { server: 'https://api.example.azmk8s.io:443/' } }],
+  clusters: [{ name: 'agentweaver-aks', cluster: { server: 'https://api.example.azmk8s.io:443/' } }],
 };
 
 export function makeRuntimeFixture() {
@@ -347,7 +347,7 @@ export function makeRuntimeFixture() {
     source: structuredClone(source),
     deployment: structuredClone(deployment),
     observedCluster: structuredClone(observedCluster),
-    kubeContext: 'aw-v1-p0',
+    kubeContext: 'agentweaver',
     imageReference,
     imageReceiptPath: 'artifacts/images/foundation-probe.json',
     repoRoot: 'repo',

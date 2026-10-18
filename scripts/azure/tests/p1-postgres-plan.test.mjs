@@ -3,7 +3,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import test from 'node:test';
 import { buildP1PostgresPlan, p1PostgresPlanHash } from '../lib/p1-postgres-plan.mjs';
 
-test('P1 plan binds the five existing runtime objects and operator-only target', () => {
+test('P1 plan binds five service roles and leaves new principal IDs unresolved until provisioned', () => {
   const plan = buildP1PostgresPlan();
   assert.equal(plan.target.database, 'agentweaver');
   assert.equal(plan.target.operatorName, 'asabbour@microsoft.com');
@@ -12,6 +12,8 @@ test('P1 plan binds the five existing runtime objects and operator-only target',
   assert.equal(plan.target.sslMode, 'VerifyFull');
   assert.equal(plan.services.length, 5);
   assert.equal(new Set(plan.services.map(item => item.principalObjectId)).size, 5);
+  assert.ok(plan.services.every(item =>
+    item.principalObjectId === `CHANGEME-PRINCIPAL-OBJECT-ID-${item.service}`));
   assert.equal(new Set(plan.services.map(item => item.role)).size, 5);
   assert.deepEqual(plan.services.map(item => item.schema),
     ['projects_config', 'environment', 'knowledge', 'events_sessions', 'orchestrator']);
@@ -23,6 +25,8 @@ test('P1 plan binds the five existing runtime objects and operator-only target',
     [[], []],
   ]);
   assert.ok(plan.services.every(item => !item.role.includes('migration')));
+  assert.ok(plan.executionRequirements.some(item =>
+    item.includes('current target identity deployment')));
   assert.ok(!JSON.stringify(plan).includes('password'));
 });
 
@@ -88,7 +92,7 @@ test('Core plan includes all 20 registered versions but never 017; source approv
   const plan = buildP1PostgresPlan();
   assert.deepEqual(plan.coreVersions,
     [...Array.from({ length: 16 }, (_, index) => index + 1), 18, 19, 20, 21]);
-  assert.equal(plan.executionRequirements.length, 5);
+  assert.equal(plan.executionRequirements.length, 6);
   assert.ok(plan.executionRequirements.some(item => item.includes('separate approval')));
   assert.ok(plan.executionRequirements.some(item =>
     item.includes('SELECT,INSERT on environment.runtime_bootstrap_profile_replacements')));

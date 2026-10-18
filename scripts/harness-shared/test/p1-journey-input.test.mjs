@@ -37,7 +37,7 @@ function input() {
     },
     pins: {
       context: 'p1-control',
-      namespace: 'agentweaver-v1-p0',
+      namespace: 'agentweaver',
       providerReceipt: {
         configMapName: 'provider-catalog-v1',
         sourceCommit: PROVIDER_SOURCE,

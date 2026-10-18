@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { run, runAz, redact } from './exec.mjs';
 
 const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
-const NAMESPACE = 'agentweaver-v1-p0';
+const NAMESPACE = 'agentweaver';
 const OWNER_LABEL = 'agentweaver.io/task-owner';
 const RUN_LABEL = 'agentweaver.io/task-run';
 const OWNER = 'identity-postgres-bootstrap';

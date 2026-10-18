@@ -7,7 +7,6 @@ import { parseArgs } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { runAz } from './lib/exec.mjs';
 import { resolveSource } from './lib/git.mjs';
-import { bootstrapP0Namespace } from './lib/namespace-bootstrap.mjs';
 import { bootstrapIdentityPostgres } from './lib/identity-postgres-bootstrap.mjs';
 import { alignExistingP0BrokerHostname, assertIdentityRoutingPlacement, bootstrapIdentityRouting } from './lib/identity-broker-routing.mjs';
 import { bootstrapIdentityBrokerState } from './lib/identity-broker-state.mjs';
@@ -15,8 +14,6 @@ import { assertBrokerRuntimeInputs, bootstrapIdentityBrokerRuntime } from './lib
 import { bootstrapFoundationProbeInputs } from './lib/foundation-probe-inputs.mjs';
 import { readSystemNodePool } from './lib/aks-autoscaling.mjs';
 import {
-  AKS_RBAC_CLUSTER_ADMIN_ROLE_ID,
-  armGuid,
   assertDedicatedTarget,
   assertSubscription,
   assertTenant,
@@ -24,8 +21,6 @@ import {
   guardAzureTarget,
   readFoundationOutputs,
   readExistingIdentityPostgresMetadata,
-  resolveClusterAdminRoleAssignmentName,
-  verifyClusterAdminRoleAssignment,
 } from './lib/guardrails.mjs';
 
 const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
@@ -33,18 +28,15 @@ const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 /** Builds the literal Azure CLI argument list for a source-bound infrastructure deployment. */
 export function buildDeployArgs({
   resourceGroup, template, parametersFile, deploymentName, subscription, sourceSha, sourceTree, sourceHash,
-  operatorObjectId, operatorRoleAssignmentName,
   nodePoolCount = 2,
 }) {
   assertDedicatedTarget(resourceGroup);
   if (!subscription || !/^[0-9a-f]{40}$/.test(sourceSha ?? '') || !/^[0-9a-f]{40}$/.test(sourceTree ?? '') ||
-      !/^[0-9a-f]{64}$/.test(sourceHash ?? '') || !GUID_PATTERN.test(operatorObjectId ?? '') ||
-      !GUID_PATTERN.test(operatorRoleAssignmentName ?? '') || ![2, 3].includes(nodePoolCount)) {
-    throw new Error('Exact source receipt, operator, role-assignment name and explicit subscription are required.');
+      !/^[0-9a-f]{64}$/.test(sourceHash ?? '') || ![2, 3].includes(nodePoolCount)) {
+    throw new Error('Exact source receipt and explicit subscription are required.');
   }
   return ['deployment', 'group', 'create', '--resource-group', resourceGroup, '--template-file', template,
     '--parameters', `@${parametersFile}`, `sourceSha=${sourceSha}`, `sourceTree=${sourceTree}`, `sourceHash=${sourceHash}`,
-    `operatorObjectId=${operatorObjectId}`, `operatorRoleAssignmentName=${operatorRoleAssignmentName}`,
     `nodePoolCount=${nodePoolCount}`,
     '--mode', 'Incremental', '--name', deploymentName, '--subscription', subscription, '-o', 'json'];
 }
@@ -54,7 +46,7 @@ export function buildDeployArgs({
  * Azure or bootstrap errors are propagated; mutating work is gated by the explicit execute setting.
  */
 export async function deploy(config, {
-  execAz = runAz, sourceResolver = resolveSource, bootstrapNamespace = bootstrapP0Namespace,
+  execAz = runAz, sourceResolver = resolveSource,
   initializeIdentityPostgres = bootstrapIdentityPostgres,
   initializeIdentityRouting = bootstrapIdentityRouting,
   initializeIdentityBrokerState = bootstrapIdentityBrokerState,
@@ -92,8 +84,7 @@ export async function deploy(config, {
   }
   const deploymentName = `${config.resourceGroup}-${source.scope === 'aks-only' ? 'aks-' : ''}${source.sha.slice(0, 12)}`;
   const clusterId = `/subscriptions/${config.subscriptionId}/resourceGroups/${config.resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${config.resourceGroup}-aks`;
-  let operatorRoleAssignmentName = armGuid(clusterId, source.operatorObjectId, AKS_RBAC_CLUSTER_ADMIN_ROLE_ID);
-  let args = buildDeployArgs({ resourceGroup: config.resourceGroup, ...source, operatorRoleAssignmentName,
+  let args = buildDeployArgs({ resourceGroup: config.resourceGroup, ...source,
     subscription: config.subscriptionId, sourceSha: source.sha, deploymentName });
   const summary = { ...source, resourceGroup: config.resourceGroup, deploymentName, args, executed: false,
     bootstrapIdentityPostgres: Boolean(config.bootstrapIdentityPostgres),
@@ -123,18 +114,16 @@ export async function deploy(config, {
     config.bootstrapIdentityBrokerRuntime) && source.scope === 'aks-only'
     ? readExistingIdentityPostgresMetadata({ ...config, ...source }, boundAz)
     : undefined;
-  operatorRoleAssignmentName = resolveClusterAdminRoleAssignmentName({ ...config, ...source }, boundAz);
   const autoscalerTarget = { ...config, ...source };
   const poolBefore = source.scope === 'aks-only' ? readSystemNodePool(autoscalerTarget, boundAz) : undefined;
   const nodePoolCount = poolBefore?.count ?? source.nodePoolMinCount;
-  args = buildDeployArgs({ resourceGroup: config.resourceGroup, ...source, operatorRoleAssignmentName,
+  args = buildDeployArgs({ resourceGroup: config.resourceGroup, ...source,
     subscription: config.subscriptionId, sourceSha: source.sha, deploymentName, nodePoolCount });
   summary.args = args;
   // A guarded what-if precedes create. Failure never admits a mutation.
   const whatIfArgs = ['deployment', 'group', 'what-if', '--resource-group', config.resourceGroup,
     '--template-file', source.template, '--parameters', `@${source.parametersFile}`, `sourceSha=${source.sha}`,
     `sourceTree=${source.sourceTree}`, `sourceHash=${source.sourceHash}`,
-    `operatorObjectId=${source.operatorObjectId}`, `operatorRoleAssignmentName=${operatorRoleAssignmentName}`,
     `nodePoolCount=${nodePoolCount}`,
     '--no-pretty-print'];
   function runWhatIf() {
@@ -146,7 +135,6 @@ export async function deploy(config, {
     if (confirmed.sha !== source.sha || confirmed.sourceTree !== source.sourceTree ||
         confirmed.sourceHash !== source.sourceHash || confirmed.template !== source.template ||
         confirmed.parametersFile !== source.parametersFile ||
-        confirmed.operatorObjectId !== source.operatorObjectId ||
         confirmed.nodePoolMinCount !== source.nodePoolMinCount ||
         confirmed.nodePoolMaxCount !== source.nodePoolMaxCount) {
       throw new Error('Source inputs changed after what-if; refusing deployment.');
@@ -181,13 +169,9 @@ export async function deploy(config, {
   if (deployment.properties?.provisioningState !== 'Succeeded' ||
       deployment.id?.toLowerCase() !== deploymentId.toLowerCase() ||
       outputs?.sourceSha?.value !== source.sha || outputs?.sourceTree?.value !== source.sourceTree ||
-      outputs?.sourceHash?.value !== source.sourceHash ||
-      outputs?.operatorRoleAssignmentId?.value?.toLowerCase() !==
-        `${clusterId}/providers/Microsoft.Authorization/roleAssignments/${operatorRoleAssignmentName}`.toLowerCase()) {
+      outputs?.sourceHash?.value !== source.sourceHash) {
     throw new Error('Deployment did not return a successful source-bound infrastructure receipt.');
   }
-  const verifiedOperatorRoleAssignmentId =
-    verifyClusterAdminRoleAssignment({ ...config, ...source }, operatorRoleAssignmentName, boundAz);
   const poolAfter = readSystemNodePool(autoscalerTarget, boundAz, { requireAutoscaling: true });
   const autoscaling = { poolName: poolAfter.name, vmSize: poolAfter.vmSize,
     enabled: poolAfter.enableAutoScaling, minCount: poolAfter.minCount, maxCount: poolAfter.maxCount,
@@ -208,25 +192,12 @@ export async function deploy(config, {
       clusterName: outputs.clusterName.value,
       controlPlanePrincipalId: outputs.controlPlanePrincipalId.value,
       oidcIssuerUrl: issuer,
-      operatorRoleAssignmentId: verifiedOperatorRoleAssignmentId,
       appRoutingDomain: outputs.appRoutingDomain?.value,
     };
   } else {
     deploymentReceipt = {
       ...readFoundationOutputs(outputs, { ...config, ...source }),
-      operatorRoleAssignmentId: verifiedOperatorRoleAssignmentId,
     };
-  }
-  try {
-    assertSourceUnchanged();
-    await bootstrapNamespace({
-      resourceGroup: config.resourceGroup,
-      subscriptionId: config.subscriptionId,
-      repoRoot: config.repoRoot,
-      clusterName: `${config.resourceGroup}-aks`,
-    });
-  } catch (error) {
-    throw new Error(`Infrastructure deployment succeeded, but namespace-only bootstrap failed: ${error.message}`);
   }
   let identityPostgresBootstrap;
   if (config.bootstrapIdentityPostgres) {
@@ -388,7 +359,6 @@ export function cliConfig(values) {
   return { resourceGroup: values['resource-group'], template: values.template, parametersFile: values.parameters,
     repoRoot: process.cwd(), execute: values.execute, subscriptionId: values.subscription,
     allowedSubscriptionId: values['allowed-subscription'], tenantId: values.tenant, allowedTenantId: values['allowed-tenant'],
-    operatorObjectId: values['operator-object-id'],
     allowStaleAksSubnetRoleCleanup: values['allow-stale-aks-subnet-role-cleanup'],
     bootstrapIdentityPostgres: values['bootstrap-identity-postgres'] ?? false,
     bootstrapIdentityRouting: values['bootstrap-identity-routing'] ?? false,
@@ -413,7 +383,6 @@ export const cliOptions = {
   'resource-group': { type: 'string' }, template: { type: 'string', default: 'infra/bicep/main.bicep' },
   parameters: { type: 'string' }, subscription: { type: 'string' }, 'allowed-subscription': { type: 'string' },
   tenant: { type: 'string' }, 'allowed-tenant': { type: 'string' },
-  'operator-object-id': { type: 'string' },
   'allow-stale-aks-subnet-role-cleanup': { type: 'boolean', default: false },
   'bootstrap-identity-postgres': { type: 'boolean', default: false },
   'bootstrap-identity-routing': { type: 'boolean', default: false },

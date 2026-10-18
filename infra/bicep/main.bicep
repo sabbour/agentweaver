@@ -20,7 +20,7 @@ param monitorLocation string
 
 @minLength(6)
 @maxLength(12)
-@description('Dedicated naming prefix for this environment, e.g. aw-v1-p0. Must be unique per environment and never reused from a 0.x deployment.')
+@description('Dedicated naming prefix for this environment, e.g. agentweaver. Must be unique per environment and never reused from a 0.x deployment.')
 param namePrefix string
 
 @description('Microsoft Entra tenant ID that owns Key Vault and the PostgreSQL administrator.')
@@ -45,12 +45,6 @@ param owner string
 
 @description('Cost center or budget code, recorded as a tag.')
 param costCenter string
-
-@description('Microsoft Entra object ID of the approved Kubernetes cluster administrator.')
-param operatorObjectId string
-
-@description('Exact role-assignment name resolved by guarded tooling for the approved operator.')
-param operatorRoleAssignmentName string
 
 @minLength(40)
 @maxLength(40)
@@ -105,8 +99,6 @@ module aks 'modules/aks.bicep' = {
     tags: tags
     nodeSubnetId: network.outputs.aksSubnetId
     tenantId: tenantId
-    operatorObjectId: operatorObjectId
-    operatorRoleAssignmentName: operatorRoleAssignmentName
     appRoutingDnsZoneResourceIds: appRoutingDnsZoneResourceIds
     nodePoolCount: nodePoolCount
     nodePoolMinCount: nodePoolMinCount
@@ -333,7 +325,6 @@ module appRoutingDnsRoles 'modules/app-routing-dns.bicep' = [for (zoneId, i) in 
 
 output aksClusterName string = aks.outputs.clusterName
 output aksControlPlanePrincipalId string = aks.outputs.controlPlanePrincipalId
-output operatorRoleAssignmentId string = aks.outputs.operatorRoleAssignmentId
 output aksOidcIssuerUrl string = aks.outputs.oidcIssuerUrl
 output appRoutingIdentity object = aks.outputs.appRoutingIdentity
 output appRoutingDomain object = aks.outputs.appRoutingDomain

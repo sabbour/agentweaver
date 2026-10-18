@@ -2,16 +2,16 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: web-application
-  namespace: agentweaver-v1-p0
+  namespace: agentweaver
   labels:
     agentweaver.io/service: web
 spec:
   parentRefs:
     - name: identity-broker
-      namespace: agentweaver-v1-gateway
+      namespace: agentweaver-gateway
       sectionName: portal
   hostnames:
-    - portal.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io
+    - CHANGEME-PORTAL-HOST
   rules:
     - matches:
         - path:

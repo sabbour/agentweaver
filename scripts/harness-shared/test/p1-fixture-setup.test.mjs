@@ -277,7 +277,7 @@ function plan(journey) {
     },
     pins: {
       context: 'p1-control',
-      namespace: 'agentweaver-v1-p0',
+      namespace: 'agentweaver',
       providerReceipt: {
         configMapName: 'provider-catalog-v1',
         sourceCommit: 'd'.repeat(40),
@@ -547,7 +547,7 @@ test('privileged Projects Config input is sent only after the exact source-attes
   const token = 'controlled-secret-token';
   const result = await executePrivilegedProjectSetup({
     context: 'p1-control',
-    namespace: 'agentweaver-v1-p0',
+    namespace: 'agentweaver',
     sourceEvidence: evidence,
     sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
     accessToken: token,
@@ -586,7 +586,7 @@ test('a changed Projects Config Pod blocks before privileged stdin is sent', asy
   let calls = 0;
   await assert.rejects(executePrivilegedProjectSetup({
     context: 'p1-control',
-    namespace: 'agentweaver-v1-p0',
+    namespace: 'agentweaver',
     sourceEvidence: evidence,
     sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
     accessToken: 'controlled-secret-token',
@@ -615,7 +615,7 @@ test('same-invocation fixture creation uses owner readbacks and retains accepted
     sourceEvidence: sourceEvidence(),
     sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
     setupContext: 'p1-control',
-    namespace: 'agentweaver-v1-p0',
+    namespace: 'agentweaver',
     runPrivilegedSetup: async request => {
       events.push(`setup:${request.request.operationKind}`);
       return setupResult(request.request.invocationId, request.request.operationKind);
@@ -768,7 +768,7 @@ test('same-invocation gate retry verifies and reuses the owner gate after losing
     sourceEvidence: sourceEvidence(),
     sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
     setupContext: 'p1-control',
-    namespace: 'agentweaver-v1-p0',
+    namespace: 'agentweaver',
     runPrivilegedSetup: async request =>
       setupResult(request.request.invocationId, request.request.operationKind),
     createId: purpose => ({
@@ -900,7 +900,7 @@ test('setup failures without a verified receipt report indeterminate only after 
       sourceEvidence: sourceEvidence(),
       sourceReceipt: plan('journal').pins.sourceReceipt,
       setupContext: 'p1-control',
-      namespace: 'agentweaver-v1-p0',
+      namespace: 'agentweaver',
       runPrivilegedSetup: async () => {
         attempts += 1;
         throw indeterminate;
@@ -926,7 +926,7 @@ test('setup failures without a verified receipt report indeterminate only after 
       sourceEvidence: sourceEvidence(),
       sourceReceipt: plan('journal').pins.sourceReceipt,
       setupContext: 'p1-control',
-      namespace: 'agentweaver-v1-p0',
+      namespace: 'agentweaver',
       runPrivilegedSetup: async () => {
         throw new Error('Privileged setup must not be called.');
       },
@@ -956,7 +956,7 @@ test('setup cleanup verifies archive and revocation when selection was not accep
       sourceEvidence: sourceEvidence(),
       sourceReceipt: plan('journal').pins.sourceReceipt,
       setupContext: 'p1-control',
-      namespace: 'agentweaver-v1-p0',
+      namespace: 'agentweaver',
       runPrivilegedSetup: async request => {
         operations.push(request.request.operationKind);
         return setupResult(request.request.invocationId, request.request.operationKind, 'cleaned');

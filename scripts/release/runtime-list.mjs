@@ -54,7 +54,7 @@ export const PROVIDER_ADAPTER_VERSION_RUNTIME_INPUTS = Object.freeze([
   }),
 ]);
 
-const TARGET_NAMESPACE = 'agentweaver-v1-p0';
+const TARGET_NAMESPACE = 'agentweaver';
 const TLS_MODE = 0o440;
 const BACKEND_TLS_CA_CONFIGMAP = 'service-backend-ca';
 const ENVIRONMENT_CILIUM_CONFIGMAP = 'environment-cilium-config';

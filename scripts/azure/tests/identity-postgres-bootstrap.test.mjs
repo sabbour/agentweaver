@@ -11,17 +11,17 @@ import {
 
 const options = {
   repoRoot: 'C:\\agentweaver',
-  resourceGroup: 'aw-v1-p0',
+  resourceGroup: 'agentweaver',
   subscriptionId: '11111111-1111-4111-8111-111111111111',
   tenantId: '22222222-2222-4222-8222-222222222222',
-  clusterName: 'aw-v1-p0-aks',
-  postgresHost: 'aw-v1-p0-pg.postgres.database.azure.com',
+  clusterName: 'agentweaver-aks',
+  postgresHost: 'agentweaver-pg.postgres.database.azure.com',
   adminUsername: 'admin@example.test',
   runtimePrincipalObjectId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   migrationPrincipalObjectId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
 };
 const privilegeReadback =
-  'IDENTITY_POSTGRES_PRIVILEGES database=agentweaver schemaOwner=aw-v1-p0-id-identity-broker-migration';
+  'IDENTITY_POSTGRES_PRIVILEGES database=agentweaver schemaOwner=agentweaver-id-identity-broker-migration';
 const ok = stdout => ({ status: 0, stdout: stdout ?? '', stderr: '' });
 
 test('Probe principal registration and validation use postgres before the transactional agentweaver fixture', () => {
@@ -40,7 +40,7 @@ test('Probe principal registration and validation use postgres before the transa
 test('TCP proxy preserves PostgreSQL defaults and admits only the explicit fixed Key Vault target', () => {
   const source = readFileSync('tools/IdentityPostgresTcpProxy/Program.cs', 'utf8');
   assert.match(source, /const int postgresPort = 5432/);
-  assert.match(source, /const string vaultHost = "aw-v1-p0-kv\.vault\.azure\.net"/);
+  assert.match(source, /const string vaultHost = "agentweaver-kv\.vault\.azure\.net"/);
   assert.match(source, /args\.Length == 2 && args\[0\] == "--key-vault" && args\[1\] == vaultHost/);
   assert.match(source, /EndsWith\("\.postgres\.database\.azure\.com"/);
   assert.match(source, /targetPort = keyVault \? 443 : postgresPort/);
@@ -50,7 +50,7 @@ test('TCP proxy preserves PostgreSQL defaults and admits only the explicit fixed
 
 test('Key Vault loopback forwarding rejects wrong ports, namespaces, and implicit modes before spawning', () => {
   const options = { kubeconfig: 'owned', podName: 'owned', localPort: 15443,
-    namespace: 'agentweaver-v1-p0', keyVault: true };
+    namespace: 'agentweaver', keyVault: true };
   const deps = { spawnProcess() { assert.fail('Invalid route must not spawn.'); } };
   for (const invalid of [
     { localPort: 15432 }, { localPort: '15443' }, { namespace: 'foreign' },
@@ -69,7 +69,7 @@ test('Key Vault loopback forwarding uses only 15443:8443 and stops its owned pro
   let invocation;
   const pending = startIdentityPostgresPortForward({
     kubeconfig: 'owned', podName: 'owned-kv', localPort: 15443,
-    namespace: 'agentweaver-v1-p0', keyVault: true,
+    namespace: 'agentweaver', keyVault: true,
   }, { spawnProcess: (_command, args) => { invocation = args; return child; } });
   child.stderr.write('Forwarding from 127.0.0.1:15443 -> 8443\n');
   const forward = await pending;
@@ -183,7 +183,7 @@ test('bootstraps through the owned pod and loopback tunnel with the Entra token 
   assert.deepEqual(fakes.resources, new Map());
   assert.equal(fakes.portForwardStopped, true);
   assert.equal(fakes.portForwardOptions.localPort, 15432);
-  assert.equal(fakes.portForwardOptions.namespace, 'agentweaver-v1-p0');
+  assert.equal(fakes.portForwardOptions.namespace, 'agentweaver');
 
   const getCredentials = fakes.calls.find(call => call.kind === 'az' && call.args[0] === 'aks').args;
   assert.ok(!getCredentials.includes('--admin'));
@@ -375,7 +375,7 @@ test('port-forward binds only the local loopback interface and exact PostgreSQL 
     kubeconfig: 'C:\\temp\\kubeconfig',
     podName: 'identity-pg-123456789abc-proxy',
     localPort: 15432,
-    namespace: 'agentweaver-v1-p0',
+    namespace: 'agentweaver',
   }, {
     spawnProcess: (command, args, settings) => {
       calls.push({ command, args, settings });

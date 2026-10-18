@@ -5,10 +5,10 @@
     "nodePoolMinCount": { "value": 2 },
     "nodePoolMaxCount": { "value": 3 },
     "location": { "value": "eastus2euap" },
-    "namePrefix": { "value": "aw-v1-p0" },
+    "namePrefix": { "value": "agentweaver" },
     "tenantId": { "value": "72f988bf-86f1-41af-91ab-2d7cd011db47" },
     "owner": { "value": "sabbour" },
-    "costCenter": { "value": "agentweaver-v1-p0" },
+    "costCenter": { "value": "agentweaver" },
     "appRoutingDnsZoneResourceIds": { "value": [] }
   }
 }

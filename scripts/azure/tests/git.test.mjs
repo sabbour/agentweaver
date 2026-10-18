@@ -21,10 +21,10 @@ function sourceFixture(overrides = {}) {
     ? 'infra/bicep/parameters/p0-aks-redeploy.approved.json'
     : 'infra/bicep/parameters/approved.json');
   const parameterValues = aksOnly
-    ? { namePrefix: { value: 'aw-v1-p0' }, tenantId: { value: ids.tenantId },
+    ? { namePrefix: { value: 'agentweaver' }, tenantId: { value: ids.tenantId },
       owner: { value: 'team' }, costCenter: { value: 'p0' }, location: { value: source.location },
       appRoutingDnsZoneResourceIds: { value: [] } }
-    : { namePrefix: { value: 'aw-v1-p0' },
+    : { namePrefix: { value: 'agentweaver' },
       tenantId: { value: ids.tenantId }, owner: { value: 'team' }, costCenter: { value: 'p0' },
       location: { value: source.location }, monitorLocation: { value: source.monitorLocation },
       postgresEntraAdminObjectId: { value: source.postgresEntraAdminObjectId },
@@ -40,7 +40,7 @@ function sourceFixture(overrides = {}) {
     files['infra/bicep/parameters/p0-integration.approved.json'] = JSON.stringify({
       parameters: {
         nodePoolMinCount: { value: 2 }, nodePoolMaxCount: { value: 3 },
-        namePrefix: { value: 'aw-v1-p0' },
+        namePrefix: { value: 'agentweaver' },
         tenantId: { value: ids.tenantId },
         owner: { value: 'team' },
         costCenter: { value: 'p0' },
@@ -99,7 +99,7 @@ test('exact source hashes tracked reviewed inputs and binds JSON parameters to t
   assert.equal(receipt.postgresEntraAdminObjectId, source.postgresEntraAdminObjectId);
   assert.equal(receipt.postgresEntraAdminPrincipalName, source.postgresEntraAdminPrincipalName);
   assert.equal(receipt.postgresEntraAdminPrincipalType, 'User');
-  assert.equal(receipt.operatorObjectId, fixture.operatorObjectId);
+  assert.equal(Object.hasOwn(receipt, 'operatorObjectId'), false);
   assert.deepEqual(receipt.appRoutingDnsZoneResourceIds, []);
   assert.equal(receipt.nodePoolMinCount, 2);
   assert.equal(receipt.nodePoolMaxCount, 3);
@@ -126,12 +126,9 @@ test('AKS-only source accepts only its reviewed template and parameter file', ()
   assert.equal(receipt.scope, 'aks-only');
   assert.equal(receipt.template.endsWith('aks-redeploy.bicep'), true);
   assert.equal(receipt.parametersFile.endsWith('p0-aks-redeploy.approved.json'), true);
-  assert.equal(receipt.operatorObjectId, fixture.operatorObjectId);
 
   for (const overrides of [
     { config: { template: 'infra/bicep/aks-redeploy.bicep', parametersFile: 'infra/bicep/parameters/approved.json' } },
-    { config: { operatorObjectId: undefined } },
-    { config: { operatorObjectId: 'not-a-guid' } },
   ]) {
     const invalid = sourceFixture({ config: { template: 'infra/bicep/aks-redeploy.bicep', ...overrides.config } });
     assert.throws(() => resolveSource(invalid.config, invalid.deps));

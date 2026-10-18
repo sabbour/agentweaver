@@ -2,7 +2,7 @@
 # Operator-owned credentials, certificates, and approved Gateway placement remain external.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-namespace: agentweaver-v1-p0
+namespace: agentweaver
 resources:
   - base
   - provider-catalogs/projects-config-provider-catalog.json
@@ -65,10 +65,10 @@ patches:
     patch: |-
       - op: replace
         path: /spec/egress/0/toPorts/0/rules/dns/1/matchName
-        value: aw-v1-p0-kv.vault.azure.net
+        value: agentweaver-kv.vault.azure.net
       - op: replace
         path: /spec/egress/0/toPorts/0/rules/dns/2/matchName
-        value: aw-v1-p0-pg.postgres.database.azure.com
+        value: agentweaver-pg.postgres.database.azure.com
       - op: replace
         path: /spec/egress/0/toPorts/0/rules/dns/3/matchName
         value: login.microsoftonline.com
@@ -77,7 +77,7 @@ patches:
         value: login.microsoftonline.com
       - op: replace
         path: /spec/egress/2/toFQDNs/0/matchName
-        value: aw-v1-p0-kv.vault.azure.net
+        value: agentweaver-kv.vault.azure.net
       - op: replace
         path: /spec/egress/2/toFQDNs/1/matchName
         value: login.microsoftonline.com
@@ -86,7 +86,7 @@ patches:
         value: login.microsoftonline.com
       - op: replace
         path: /spec/egress/3/toFQDNs/0/matchName
-        value: aw-v1-p0-pg.postgres.database.azure.com
+        value: agentweaver-pg.postgres.database.azure.com
       - op: remove
         path: /spec/egress/0/toPorts/0/rules/dns/4
       - op: remove

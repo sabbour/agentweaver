@@ -2,7 +2,7 @@ apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
   name: agenthost-environment-ingress
-  namespace: agentweaver-v1-p0
+  namespace: agentweaver
   labels:
     agentweaver.io/service: agenthost
 spec:
@@ -18,7 +18,7 @@ spec:
               protocol: TCP
     - fromEndpoints:
         - matchLabels:
-            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/workload: environment
       toPorts:
         - ports:
@@ -29,7 +29,7 @@ apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
   name: environment-agenthost-egress
-  namespace: agentweaver-v1-p0
+  namespace: agentweaver
   labels:
     agentweaver.io/service: environment
 spec:
@@ -40,19 +40,19 @@ spec:
     # These owner APIs are configured by Environment for provisioning and runtime delivery.
     - toEndpoints:
         - matchLabels:
-            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/workload: agenthost
         - matchLabels:
-            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/workload: projects-config
         - matchLabels:
-            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/workload: orchestrator
         - matchLabels:
-            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/workload: identity-broker
         - matchLabels:
-            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/workload: events-and-sessions
       toPorts:
         - ports:
@@ -70,7 +70,7 @@ apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
   name: environment-agenthost-ingress
-  namespace: agentweaver-v1-p0
+  namespace: agentweaver
   labels:
     agentweaver.io/service: environment
 spec:
@@ -80,10 +80,10 @@ spec:
   ingress:
     - fromEndpoints:
         - matchLabels:
-            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/workload: agenthost
         - matchLabels:
-            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/workload: orchestrator
       toPorts:
         - ports:
@@ -94,7 +94,7 @@ apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
   name: agenthost-egress
-  namespace: agentweaver-v1-p0
+  namespace: agentweaver
   labels:
     agentweaver.io/service: agenthost
 spec:
@@ -105,16 +105,16 @@ spec:
   egress:
     - toEndpoints:
         - matchLabels:
-            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/workload: identity-broker
         - matchLabels:
-            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/workload: orchestrator
         - matchLabels:
-            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/workload: environment
         - matchLabels:
-            k8s:io.kubernetes.pod.namespace: agentweaver-v1-p0
+            k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/workload: events-and-sessions
       toPorts:
         - ports:

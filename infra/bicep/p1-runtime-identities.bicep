@@ -4,9 +4,9 @@ targetScope = 'resourceGroup'
 
 @description('The existing approved 1.x resource group naming prefix.')
 @allowed([
-  'aw-v1-p0'
+  'agentweaver'
 ])
-param namePrefix string = 'aw-v1-p0'
+param namePrefix string = 'agentweaver'
 
 @description('Existing resource group ownership and cost tags.')
 param tags object
@@ -22,7 +22,7 @@ resource aks 'Microsoft.ContainerService/managedClusters@2026-07-02-preview' exi
 
 // Keep service identity names and subjects aligned so federation remains
 // scoped to the exact namespace and workload ServiceAccount.
-var namespace = 'agentweaver-v1-p0'
+var namespace = 'agentweaver'
 var serviceNames = [
   'projects-config'
   'environment'

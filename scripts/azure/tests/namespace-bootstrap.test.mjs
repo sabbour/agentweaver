@@ -5,14 +5,14 @@ import { dirname, isAbsolute, join } from 'node:path';
 import { bootstrapP0Namespace } from '../lib/namespace-bootstrap.mjs';
 
 const target = {
-  resourceGroup: 'aw-v1-p0',
+  resourceGroup: 'agentweaver',
   subscriptionId: '11111111-1111-1111-1111-111111111111',
   repoRoot: process.cwd(),
-  clusterName: 'aw-v1-p0-aks',
+  clusterName: 'agentweaver-aks',
 };
 const namespace = {
   metadata: {
-    name: 'agentweaver-v1-p0',
+    name: 'agentweaver',
     labels: {
       'agentweaver.io/environment': 'v1-p0',
       'agentweaver.io/managed-by': 'kustomize',
@@ -34,7 +34,7 @@ function fakeKubelogin(calls = []) {
 
 function fakeKubernetes({
   authorization = () => ok('yes\n'),
-  apply = () => ok('namespace/agentweaver-v1-p0 configured'),
+  apply = () => ok('namespace/agentweaver configured'),
   readback = () => ok(JSON.stringify(namespace)),
 } = {}) {
   const calls = [];
@@ -70,7 +70,7 @@ test('AKS bootstrap uses normal user credentials and applies then reads back onl
     readback: (() => {
       let count = 0;
       return () => (++count === 1
-        ? denied('(NotFound) namespaces "agentweaver-v1-p0" not found')
+        ? denied('(NotFound) namespaces "agentweaver" not found')
         : ok(JSON.stringify(namespace)));
     })(),
   });
@@ -84,7 +84,7 @@ test('AKS bootstrap uses normal user credentials and applies then reads back onl
     pause: milliseconds => waits.push(milliseconds),
   });
 
-  assert.deepEqual(result, { namespace: 'agentweaver-v1-p0', clusterName: target.clusterName });
+  assert.deepEqual(result, { namespace: 'agentweaver', clusterName: target.clusterName });
   assert.deepEqual(azureCalls[0].args.slice(0, 2), ['aks', 'get-credentials']);
   assert.ok(!azureCalls[0].args.includes('--admin'));
   assert.equal(azureCalls[0].args[azureCalls[0].args.indexOf('--resource-group') + 1], target.resourceGroup);
@@ -138,7 +138,7 @@ test('namespace bootstrap stops before apply when scoped namespace permissions r
     execKubelogin: fakeKubelogin(),
     execKubectl,
     pause: milliseconds => waits.push(milliseconds),
-  }), /permissions did not become available within 12 attempts \(patch namespace\/agentweaver-v1-p0/);
+  }), /permissions did not become available within 12 attempts \(patch namespace\/agentweaver/);
   assert.equal(calls.filter(({ args }) => args.includes('apply')).length, 0);
   assert.equal(waits.length, 11);
   assert.equal(existsSync(dirname(kubeconfigPath(calls))), false);

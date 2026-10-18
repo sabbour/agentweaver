@@ -6,7 +6,7 @@ namespace Agentweaver.FoundationProbe;
 /// <summary>Reads only the projected token claims needed to verify workload identity target binding.</summary>
 internal static class WorkloadIdentityEvidence
 {
-    private const string ExpectedSubject = "system:serviceaccount:agentweaver-v1-p0:foundation-probe";
+    private const string ExpectedSubject = "system:serviceaccount:agentweaver:foundation-probe";
     private const string ExpectedAudience = "api://AzureADTokenExchange";
 
     /// <summary>Validates environment identity settings and the projected token's issuer, subject, and sole audience.</summary>

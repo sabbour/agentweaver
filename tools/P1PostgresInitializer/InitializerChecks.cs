@@ -72,6 +72,17 @@ internal static class InitializerChecks
 
     internal const string AadPrincipalFunction = "pg_catalog.pgaadauth_list_principals";
 
+    /// <summary>Rejects unresolved or repeated principal IDs before the initializer requests credentials.</summary>
+    internal static void AssertPrincipalObjectIds(ServicePlan[] services)
+    {
+        if (services.Length != 5 ||
+            services.Any(service => !Guid.TryParseExact(service.PrincipalObjectId, "D", out _)) ||
+            services.Select(service => service.PrincipalObjectId)
+                .Distinct(StringComparer.OrdinalIgnoreCase).Count() != services.Length)
+            throw new InvalidOperationException(
+                "The five runtime principal object IDs must be distinct Entra GUIDs from the current target deployment.");
+    }
+
     /// <summary>Builds a readback of planned runtime principals and their membership flags.</summary>
     internal static string PrincipalReadbackQuery(string principalFunction = AadPrincipalFunction) => $"""
         SELECT coalesce(jsonb_agg(jsonb_build_object(

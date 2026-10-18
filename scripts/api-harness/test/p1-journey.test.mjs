@@ -380,7 +380,7 @@ function input(baseUrl, journey = 'journal') {
     },
     pins: {
       context: 'p1-control',
-      namespace: 'agentweaver-v1-p0',
+      namespace: 'agentweaver',
       providerReceipt: {
         configMapName: 'provider-catalog-v1',
         sourceCommit: PROVIDER_SOURCE,
@@ -414,7 +414,7 @@ const SOURCE_EVIDENCE = {
     publicationSha256: 'b'.repeat(64),
     readbackSha256: 'c'.repeat(64),
     completedAt: '2026-10-13T00:00:00.000Z',
-    target: { clusterName: 'controlled-cluster', namespace: 'agentweaver-v1-p0' },
+    target: { clusterName: 'controlled-cluster', namespace: 'agentweaver' },
   },
   providerCatalog: {
     name: 'provider-catalog-v1',
@@ -428,7 +428,7 @@ const SOURCE_EVIDENCE = {
     sourceSha: SOURCE_SHA,
     sourceTree: SOURCE_TREE,
     context: 'p1-control',
-    namespace: 'agentweaver-v1-p0',
+    namespace: 'agentweaver',
     providerCatalog: {
       name: 'provider-catalog-v1',
       sourceCommit: PROVIDER_SOURCE,

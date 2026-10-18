@@ -119,6 +119,21 @@ public sealed class P1PostgresInitializerTests
     }
 
     [Fact]
+    public void RuntimePrincipalObjectIdsMustBeDistinctEntraGuids()
+    {
+        var services = Services();
+        InitializerChecks.AssertPrincipalObjectIds(services);
+
+        var unresolved = services.ToArray();
+        unresolved[0] = unresolved[0] with { PrincipalObjectId = "CHANGEME-PRINCIPAL-OBJECT-ID-projects-config" };
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertPrincipalObjectIds(unresolved));
+
+        var duplicate = services.ToArray();
+        duplicate[0] = duplicate[0] with { PrincipalObjectId = duplicate[1].PrincipalObjectId };
+        Assert.Throws<InvalidOperationException>(() => InitializerChecks.AssertPrincipalObjectIds(duplicate));
+    }
+
+    [Fact]
     public void OwnerOnlyProjectsRelationsAreExactAndCannotEnterRuntimePlan()
     {
         var services = OwnerOnlyServices();

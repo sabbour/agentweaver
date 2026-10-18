@@ -3,12 +3,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** Validate Events runtime data; Kustomize remains the only source of Kubernetes resources. */
-const namespace = 'agentweaver-v1-p0';
+const namespace = 'agentweaver';
 const tenantId = '72f988bf-86f1-41af-91ab-2d7cd011db47';
-const clientId = '3ab39eda-7389-4b5e-b5b6-232d7671e012';
-const postgresHost = 'aw-v1-p0-pg.postgres.database.azure.com';
-const blobHost = 'awv1p0blob.blob.core.windows.net';
-const connection = `Host=${postgresHost};Port=5432;Database=agentweaver;Username=aw-v1-p0-id-events-and-sessions;SSL Mode=VerifyFull`;
+const clientId = 'CHANGEME-events-and-sessions-client-id';
+const postgresHost = 'agentweaver-pg.postgres.database.azure.com';
+const blobHost = 'agentweaverblob.blob.core.windows.net';
+const connection = `Host=${postgresHost};Port=5432;Database=agentweaver;Username=agentweaver-id-events-and-sessions;SSL Mode=VerifyFull`;
 const rateCardKey = 'EventsAndSessions__Cost__Copilot__RateCard__Json';
 const runtimeConfigPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)),
   '..', '..', 'runtime-configs', 'events-and-sessions-runtime-config.json');

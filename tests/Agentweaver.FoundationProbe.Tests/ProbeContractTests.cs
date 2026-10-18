@@ -72,7 +72,7 @@ public sealed class ProbeContractTests
         Assert.Equal("source_mismatch", Assert.Throws<ProbeException>(
             () => ProbeTargetValidator.Validate(target with { SourceTree = new string('f', 40) }, ProbeFixtures.Source)).Code);
         Assert.Equal("target_mismatch", Assert.Throws<ProbeException>(
-            () => ProbeTargetValidator.Validate(target with { ResourceGroupId = "/subscriptions/other/resourceGroups/aw-v1-p0" },
+            () => ProbeTargetValidator.Validate(target with { ResourceGroupId = "/subscriptions/other/resourceGroups/agentweaver" },
                 ProbeFixtures.Source)).Code);
         Assert.Equal("resource_mismatch", Assert.Throws<ProbeException>(
             () => ProbeTargetValidator.Validate(target with
@@ -111,7 +111,7 @@ public sealed class ProbeContractTests
         Assert.Equal("target_mismatch", Assert.Throws<ProbeException>(
             () => ProbeTargetValidator.Validate(target with
             {
-                DeploymentName = "aw-v1-p0-9b7da6e64dfd",
+                DeploymentName = "agentweaver-9b7da6e64dfd",
             }, ProbeFixtures.Source)).Code);
         Assert.Equal("target_mismatch", Assert.Throws<ProbeException>(
             () => ProbeTargetValidator.Validate(target with
@@ -133,7 +133,7 @@ public sealed class ProbeContractTests
                 {
                     Foundation = target.Infrastructure.Foundation with
                     {
-                        DeploymentName = "aw-v1-p0-aks-f989c5c3457a",
+                        DeploymentName = "agentweaver-aks-f989c5c3457a",
                     },
                 },
             }, ProbeFixtures.Source)).Code);
@@ -181,7 +181,7 @@ public sealed class ProbeContractTests
             var evidence = await WorkloadIdentityEvidence.ReadAndValidateAsync(
                 target, path, target.FoundationProbeIdentity.ClientId, target.TenantId, CancellationToken.None);
             Assert.Equal(target.AksOidcIssuerUrl, evidence.Issuer);
-            Assert.Equal("system:serviceaccount:agentweaver-v1-p0:foundation-probe", evidence.Subject);
+            Assert.Equal("system:serviceaccount:agentweaver:foundation-probe", evidence.Subject);
             Assert.Equal("api://AzureADTokenExchange", evidence.Audience);
 
             var mismatch = await Assert.ThrowsAsync<ProbeException>(() =>
@@ -196,9 +196,9 @@ public sealed class ProbeContractTests
     }
 
     [Theory]
-    [InlineData("wrong-issuer", "system:serviceaccount:agentweaver-v1-p0:foundation-probe", "api://AzureADTokenExchange")]
+    [InlineData("wrong-issuer", "system:serviceaccount:agentweaver:foundation-probe", "api://AzureADTokenExchange")]
     [InlineData(null, "system:serviceaccount:other:probe", "api://AzureADTokenExchange")]
-    [InlineData(null, "system:serviceaccount:agentweaver-v1-p0:foundation-probe", "wrong-audience")]
+    [InlineData(null, "system:serviceaccount:agentweaver:foundation-probe", "wrong-audience")]
     public async Task RejectsProjectedTokenClaimMismatch(string? issuer, string subject, string audience)
     {
         var target = ProbeFixtures.Target();

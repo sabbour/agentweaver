@@ -22,9 +22,9 @@ const sourceTree = 'b'.repeat(40);
 const target = {
   subscriptionId: '90ab3701-83f0-4ba1-a90a-f2e68683adab',
   tenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47',
-  resourceGroup: 'aw-v1-p0',
-  clusterName: 'aw-v1-p0-aks',
-  namespace: 'agentweaver-v1-p0',
+  resourceGroup: 'agentweaver',
+  clusterName: 'agentweaver-aks',
+  namespace: 'agentweaver',
   nodeMin: 2,
   nodeMax: 3,
 };
@@ -47,90 +47,93 @@ const powershellVersion = spawnSync('pwsh', [
 ], { encoding: 'utf8', windowsHide: true });
 const hasPowerShell7 = powershellVersion.status === 0 && Number(powershellVersion.stdout.trim()) >= 7;
 const testRootPem = `-----BEGIN CERTIFICATE-----
-MIIDCDCCAfCgAwIBAgIJAJu/cTE3IcFJMA0GCSqGSIb3DQEBCwUAMCAxHjAcBgNV
-BAMTFUFnZW50d2VhdmVyIFRlc3QgUm9vdDAeFw0yMDAxMDEwMDAwMDBaFw00NTAx
-MDEwMDAwMDBaMCAxHjAcBgNVBAMTFUFnZW50d2VhdmVyIFRlc3QgUm9vdDCCASIw
-DQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBANEtxS7A7hVbLPt4odOgrDqWY2wW
-IxH37EW4jsFfSDHmcscRbwk78Z+APhkW6eYHkrzOPOxBpoF6V0DDBiC67j8EvgLB
-q2y1kcYwjOwYunfXN15RPIxGzwXSA0BLKjVyzndlWHAto6ujxWz1fzHTAoe2usZD
-khnf4Zt9IhGqkS5xb9ZOHG4I79yS8NKHYEFvSQRKHMKHvUje4heq6VU6kqYPlxVB
-8mjDw9vdbTtgwCV6DRS3/NvduTyKvdlpVnP1cwgBLfC1f8xvt7SoR2dd3Fptz739
-ehdaTxaczeGRMM23UBifup0coGedmlzNN7+bK8pG+y/0Dv6Su69DB2KccHkCAwEA
-AaNFMEMwEgYDVR0TAQH/BAgwBgEB/wIBATAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0O
-BBYEFO2ruiU5Lh2RXKFSU3V8g9Zj9sgwMA0GCSqGSIb3DQEBCwUAA4IBAQAjMXji
-6bZ540KjozNzAdi9zuOCxPuuV/YL/nKWKAgBmJR1WCuKNQm43QCcuafo4KF4vP1K
-3VEVO2UC0zuanDz3Uw4d81WD1xWqsmD7I5kylhlcx7qwCp+pEqXZClrzB8JHXP7h
-Avv08daph9oWz+olXvHvvdJ+aa9ozzP007LIidxAd2fK+3iEtilCAz6wPtJsQYL/
-P/Wq/AhsTiec+/DWo/fke5Rkr2cwas1KmKBxjcnTStubNL1F7ntyCjcsurHRmjy5
-8KkpDOE/hkcKRWOR+uOfTLSS7EMi7xXu7rp/Xcw3fZeln8wyeuT9WMjM0wj8NSxo
-4PL40wBo10CJDzkO
+MIIDNDCCAhygAwIBAgIUW43laS12EoDi4cERD82LYIyLQCcwDQYJKoZIhvcNAQEL
+BQAwIDEeMBwGA1UEAwwVQWdlbnR3ZWF2ZXIgVGVzdCBSb290MB4XDTI2MTAxODA3
+MDQxMloXDTQ1MTIxNzA3MDQxMlowIDEeMBwGA1UEAwwVQWdlbnR3ZWF2ZXIgVGVz
+dCBSb290MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA1QP6YcIovFyF
+kyClAh9YxWX/qyC2l3orDT4sk0S+G5495YBE1k5wFUJPRLR80mFcxH0udgRgXGrh
+G4AqywkJoD6X06cEX84defTebU2GFT8krbOxfZSykM2klZ6NGASr7c8bCyii9gJB
+XJfiG1aNJvgl8BhK0BTqwnCuNOsY9MNTj3WClA+VMRyu1N0LqTQ2fwjvf+NSZ8Ty
+emz0WRaZ6R0DwLfbXjx3bUFbltr6AgUOHy4Blu5dh8Vk0zD3yoIKDIbLzR4Y+TB3
+S1S9uJkZqW+0jkuC8z3jmt9GY7GOaP9JbCiR5wOh5AZqDXvwxX4ZBninjGWXcf/9
+gbexKLEEBwIDAQABo2YwZDAdBgNVHQ4EFgQUYR9iB07elTRfqDBjzk3gQSaLuEYw
+HwYDVR0jBBgwFoAUYR9iB07elTRfqDBjzk3gQSaLuEYwEgYDVR0TAQH/BAgwBgEB
+/wIBAjAOBgNVHQ8BAf8EBAMCAQYwDQYJKoZIhvcNAQELBQADggEBAFJ5DWjPaIca
+EeWoxNgie7FrLnxHwrjgm5ebXeqVHDpBkxIXpGlYyZrFuYHbgTQiCUnBEQmPw9WN
+don0K9WPx/2dbrG2CdZ2AyhdlVMyEbjLlo/cPPbDREcuy7YIt7TWu8SMfPTnWNCR
+KKOR/gMp3DHN1zSrkriwLYMAjgTaPJ22v75MTDbnljJIcRKTr+6R2t7cggFG5yfC
+y2dPEeJwDm9BiZLtRoP5Z0VjHnDfrEBsP3urAguOH4UHd4haBzkbncXwRS4xaZhr
+5pierLOLoSFCzhyR1KHOCIFi8hIKKwOF7+Um6gTw6Pf9WiwegCu8sJ9Tndtovihd
+9FsMIEXbnWY=
 -----END CERTIFICATE-----
 `;
 const testIntermediatePem = `-----BEGIN CERTIFICATE-----
-MIIDDzCCAfegAwIBAgIIHyAhIiMkJSYwDQYJKoZIhvcNAQELBQAwIDEeMBwGA1UE
-AxMVQWdlbnR3ZWF2ZXIgVGVzdCBSb290MB4XDTIwMDEwMTAwMDAwMFoXDTQ1MDEw
-MTAwMDAwMFowKDEmMCQGA1UEAxMdQWdlbnR3ZWF2ZXIgVGVzdCBJbnRlcm1lZGlh
-dGUwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCfHb6gLl8eo+lgLuXU
-/mDbPkMnzgh2Asmi1fRtoCh6h7zUJhC3M40qKLc4yzrLB6sw2t+d/8cs5rR5FF6J
-slErQtCociC3R2/rRZMwmpq3BrwuJjAY+/381eCbRZEgZl8GtkZUVkrIGBAbUrxj
-0PN4aPbBhYDVMvQeIdnvqHC0+KLgAOEEpy/MydBkOycTbCjJJ9FR10qg5LJY/Y6E
-JeyiVB/G+XWcfz2Ky8NHj0mpSaluTsATMGsHaFQeDI8zX+EEWCW8vf8Thj89zTBW
-uq/3XD8h24BRuyxeUc/40hIqcswHlo/ZphMOkmzjzAuBe2BEolPQXkjY52ycXnkY
-FfkVAgMBAAGjRTBDMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYDVR0PAQH/BAQDAgEG
-MB0GA1UdDgQWBBRqsGK5Lrbzfzg+sUjDcQICo4gyEjANBgkqhkiG9w0BAQsFAAOC
-AQEAbQVsff+gq5TfgMwDFiJR5xhjxoLo/Ocdi5XE3m6V67sJL2I8AkS3agnKBAmv
-r6citf/Ok/Mlwzw/x/K22jhlQhH2W3tkIbHURFbJJeOGCd17BaXsnZocplcxWc7F
-FhOj6Kn2LAX4OFFXRPwCymdXU83V5mplDKgCw3ok/Cz0Z6iLQ1bSvudCYGoswwTC
-CnEcOd1fJpmi4HzEzfN179PsMWSqUHZ/T0Lpl3qoCRUeDrPP/wD4nAwbza6EM9Zk
-vl+wRQg17sCWu/mJVxg6/IicYgLMIvPAS4g4DyYEaP2wijctdbFLa/x59l0xVUsS
-8CztiMbqS8mM86Z4jeDGiFsyiw==
+MIIDPDCCAiSgAwIBAgIUXjaG/QqbPEp4EPjy3RJlXSJX1kYwDQYJKoZIhvcNAQEL
+BQAwIDEeMBwGA1UEAwwVQWdlbnR3ZWF2ZXIgVGVzdCBSb290MB4XDTI2MTAxODA3
+MDQxM1oXDTQ1MTIxNzA3MDQxM1owKDEmMCQGA1UEAwwdQWdlbnR3ZWF2ZXIgVGVz
+dCBJbnRlcm1lZGlhdGUwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCe
+ybTGrz9abpSncndazdzOy5Hx54c7OCnOjC0d0eGPzlKaJSn+WvkmpK8+3ppRSl90
+PXbmcXSGgtGSgFcQVqtYO07JfJtSJYTmqqKrtXjPYL/GAgKMaT7c50CBBVSkGKoC
+yGF8DyKlFrDQ5cEn/gFx1W3wiReLMLsGc5+lcTDVn3yxFELaZO/jerZhfnVEW1si
+YVKeIg4S4l7n1amjvPzhFouFJlbwLYcPKqe7wkIBUUYdFNVfA+UrmwZjBjvAmVtJ
+lqnTqngPW9f4kJ5Z45ke5NxsEPKh+iGk44mH6dE521+Opg6VKO+XBAEQ1AYEN/VW
+UrNUDUigMsOFG9W1R43XAgMBAAGjZjBkMBIGA1UdEwEB/wQIMAYBAf8CAQEwDgYD
+VR0PAQH/BAQDAgEGMB0GA1UdDgQWBBT/FpJakXdZ4tpPTVGg5XiyvMb1iDAfBgNV
+HSMEGDAWgBRhH2IHTt6VNF+oMGPOTeBBJou4RjANBgkqhkiG9w0BAQsFAAOCAQEA
+snl627BAqgb85wKM5LqpIcvGttDOT/kl8X4JS6Z4zIPuGGDSEcxBz+zSD8Mua3Uk
+iaQZFH5bUIqZTD+KHqWSCuKwcBbyvo1/gy6YiL94frnxVdw8MRPYexNFZHhCIVpk
+jwg+KFaNNwye+KPljgAqh8c4UOd6lWDSNavaVWz4ATKO3HvC1b7ULIoumKEpFKw8
+FBodrmDDes4ePOmWAlqdusZIydvlWwTJJzmpbdMwtQeZgQFipK1iia7cH3Nbzj2R
+sEM82k9//xCuG8fXspvt7UkNhqVVs5//uf7ZBwgqfNyXXuwkNKd2qYAZkUhzAIYi
+0rfkqyKtNRaYUkBk39yugg==
 -----END CERTIFICATE-----
 `;
 const testServerLeafPem = `-----BEGIN CERTIFICATE-----
-MIIDYDCCAkigAwIBAgIIKSorLC0uLzAwDQYJKoZIhvcNAQELBQAwKDEmMCQGA1UE
-AxMdQWdlbnR3ZWF2ZXIgVGVzdCBJbnRlcm1lZGlhdGUwHhcNMjAwMTAxMDAwMDAw
-WhcNNDUwMTAxMDAwMDAwWjA+MTwwOgYDVQQDEzNwcm9qZWN0cy1jb25maWcuYWdl
-bnR3ZWF2ZXItdjEtcDAuc3ZjLmNsdXN0ZXIubG9jYWwwggEiMA0GCSqGSIb3DQEB
-AQUAA4IBDwAwggEKAoIBAQCuIuEXVMF2YU4JNDhWTrLNcaZJMPG/2f2sI+XsrzO1
-P4yIPDnwMFKm+Dqwh8pP+ABQjXqfU/hUs1y5xMHj5UEufts8r4a+ZaZL5UMsocgQ
-+2FCavYvptG3bvJZa8u2bQAVfLa6VPCBWRipzR4H7FwsGXbtwJ/CKDXSwO9ul0X8
-fj1uQ0NI2DRiB+UWIwH+It3hqwAkgKcVz6lt+SGrW1WSoBWO0USmEnKP02JydXb6
-NtoN7NsVDHAmDm1TtydDdIXvjxM42SLGuzbfvdiNuSpPqtWDaug9ILH4BUJltRts
-TQeW4R8yF8BVmjeosETiySmjp16MblEjDF21Co0hB5x1AgMBAAGjeDB2MAwGA1Ud
-EwEB/wQCMAAwDgYDVR0PAQH/BAQDAgWgMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMB
-MD4GA1UdEQQ3MDWCM3Byb2plY3RzLWNvbmZpZy5hZ2VudHdlYXZlci12MS1wMC5z
-dmMuY2x1c3Rlci5sb2NhbDANBgkqhkiG9w0BAQsFAAOCAQEAKf3g8JY586H87v/r
-nSFN439gKH42zR0swJGoOnqmyTDAg0t7nlC7tY4K853e+YZwS3flpG8EQ2R70yeC
-3hEh/KtCK8XZj1H3oiYQRUlONEHVL8bh5zXIrMv91Jek2ALgN8h5EFmbS33FqYbn
-f2eTB+Hz+k8jhH1eDMuyKhRWFBr7kgYvX9mMEQl8O/Tzams45Xjf6cg83/flZgxS
-Kf+l8wee4C2T6kBzfhKHD+IubGcMttNUwmfNH3bXYavaHWWqjHpjJ2MzTf+Q+mk9
-8nVMjwYJ90em/28VH40Tb0Kco/z9oTU9OKDNKyaoqHvY+L38qWvt7FBM1qlm45E9
-hF5eqw==
+MIIDnzCCAoegAwIBAgIUZzQUQJW1dqDmipRF23bbnHkEweQwDQYJKoZIhvcNAQEL
+BQAwKDEmMCQGA1UEAwwdQWdlbnR3ZWF2ZXIgVGVzdCBJbnRlcm1lZGlhdGUwHhcN
+MjYxMDE4MDcwNDE0WhcNNDUxMjE3MDcwNDE0WjA4MTYwNAYDVQQDDC1wcm9qZWN0
+cy1jb25maWcuYWdlbnR3ZWF2ZXIuc3ZjLmNsdXN0ZXIubG9jYWwwggEiMA0GCSqG
+SIb3DQEBAQUAA4IBDwAwggEKAoIBAQCs/AlnK0DbzJAdiVQ0Mn/pgCHA+yd6/CeD
+o+fZGzneLW7QwVvr2QADDLn3QvaFn9VpFWYArzg/vYhfdprm77mg1d8a5bYk7MOn
+VLOWTcjSHXLpcYGt5b0KAWRS78K3iIcRxdV9POnKv91D8RJdwa6vyualPfPZakpV
+TqzsYzT4q2iGEceHLZnT7WpnkD7KJGvXpGWFGduwTNfgAQDn0W89d0AUUlQL1cOX
+kAqMQSQo0s0Cxw6CZiSVHZmlZkiQGK5emUSCPrnPxHt4o1oGVQ5CPSXyk7RaR1PQ
+ag+ki6qy+W2FYOgMpCq0PUJPkgds77OjCzrXakMH4fPDBagmh1clAgMBAAGjgbAw
+ga0wDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCBaAwEwYDVR0lBAwwCgYIKwYB
+BQUHAwEwOAYDVR0RBDEwL4ItcHJvamVjdHMtY29uZmlnLmFnZW50d2VhdmVyLnN2
+Yy5jbHVzdGVyLmxvY2FsMB0GA1UdDgQWBBRrMjKZeC+wKCBqGwIPCRR77BnKGDAf
+BgNVHSMEGDAWgBT/FpJakXdZ4tpPTVGg5XiyvMb1iDANBgkqhkiG9w0BAQsFAAOC
+AQEARXObApuhE2rsBCM8hhrFnsoNC1OgGBkRz4/FCygivCLt8ozS97jf3EKzCYTF
+W1jytnZU9oBPzbE8KzIL74d8cUTBIs9+Vkn0TtpsuzPJfnjjLTps5g9dOReWIye+
+3/JoJpWMPUcrJrouRZI7KmQV3QF7AIN/n89p28aLnsjg+WIOWLQKttO7WAp7kjLT
+AqeAIjPDmb2HbzsWPyH2uF+84o3OBMTuf73O0a2PIlXN5KsXcUdN8lNfvNbxRVzL
+8gAM2rqEu92wbwRKrhLtPhb7tpqZsP4d8zC4B4r3fTXk6hxwdW3AEV/cNCZ5MeK1
+HLB3pRIOvd0ig9oHgRhj5bH8Nw==
 -----END CERTIFICATE-----
 `;
 const testClientAuthLeafPem = `-----BEGIN CERTIFICATE-----
-MIIDYDCCAkigAwIBAgIIKiorLC0uLzAwDQYJKoZIhvcNAQELBQAwKDEmMCQGA1UE
-AxMdQWdlbnR3ZWF2ZXIgVGVzdCBJbnRlcm1lZGlhdGUwHhcNMjAwMTAxMDAwMDAw
-WhcNNDUwMTAxMDAwMDAwWjA+MTwwOgYDVQQDEzNwcm9qZWN0cy1jb25maWcuYWdl
-bnR3ZWF2ZXItdjEtcDAuc3ZjLmNsdXN0ZXIubG9jYWwwggEiMA0GCSqGSIb3DQEB
-AQUAA4IBDwAwggEKAoIBAQDHtHFGTTafq3Pgn3UwfDtasl7JCsSj6sBk5IpcV0n2
-k/WeRxue2Tdcea6uOkh/7mwEW+lTYjTPaUMXL8w24KQBK5cn/lf6/MPzxLGt+eP9
-9QLvMIEcVI6xZAfpUCB1pozJHhtkjYPWP/ov9vY6VkI814qyipEXHIHNMKK7sCB6
-nt+9tt0vPSe1+tcmTQ8Mx2Hs19RH+NhTN+RN5J5N+t3IjtnyoDVOoInHmnkKZU8m
-i8CC23HqayymLwgvkug59pygfPylIljw583AF5tqNjtMB2Wi3IfPyV+KSgRFWtaV
-kb+o+JJIQ8FHynYTjm6Tcy1mSjqiuYyUxFLAwvYtbBoxAgMBAAGjeDB2MAwGA1Ud
-EwEB/wQCMAAwDgYDVR0PAQH/BAQDAgWgMBYGA1UdJQEB/wQMMAoGCCsGAQUFBwMC
-MD4GA1UdEQQ3MDWCM3Byb2plY3RzLWNvbmZpZy5hZ2VudHdlYXZlci12MS1wMC5z
-dmMuY2x1c3Rlci5sb2NhbDANBgkqhkiG9w0BAQsFAAOCAQEAMZqTT2bM1FbJ6u1e
-NVCeSEoC7UQLVjpzC5BjFqhMRB0s0Hikq+0u5bEhmHg2zy8ShDqVF2xr45NXUqtt
-2J9cTMoG812sgwbNDeaokg0Htz6M3t8Fz3Ka25pCS9QPMcI/tNnpcVOpGdXD18Mr
-XCcfxArMfkTFTqgTqZitL2X4KwTLE3AdYpGF+OjJ6ZOLe9JOsEnFYrPw1wNcCJH1
-FFRf3yIo60I0g2+lPikYPvrgKf01UBs+r8CzBcG5+F8AiWY2gsrWFuSPbknpNQss
-LEv9q25CsanSx6+2VO+M6l1JmpFstnybIl/j6y6yOWU6+otyFMwIK0Qrx1I2FnrQ
-/DoGjw==
+MIIDnzCCAoegAwIBAgIUZzQUQJW1dqDmipRF23bbnHkEweUwDQYJKoZIhvcNAQEL
+BQAwKDEmMCQGA1UEAwwdQWdlbnR3ZWF2ZXIgVGVzdCBJbnRlcm1lZGlhdGUwHhcN
+MjYxMDE4MDcwNDE0WhcNNDUxMjE3MDcwNDE0WjA4MTYwNAYDVQQDDC1wcm9qZWN0
+cy1jb25maWcuYWdlbnR3ZWF2ZXIuc3ZjLmNsdXN0ZXIubG9jYWwwggEiMA0GCSqG
+SIb3DQEBAQUAA4IBDwAwggEKAoIBAQC/eJEJTq5JN5h7XfVZvwyefbX7qhZLE2oX
+BYR+xwYSfaIEQCbtr7sLcjZ7JqgDyx28Qlr2EenAI4VT/G5S0wNFj8iMXp0ezLP0
+AZLojSuKj7pfsIW+AEGzuR1Uemir7c3AYrcnqcM50kA8u/abfvVd4xNzFIvtOpAK
+D3Hp0csDaseP16EQBrFJeghOVUjo26dLMyvh294RoxS1C10ixrI3BEywQ2l4wE1H
+jf1s/5Jh6mbSs0Z5ERROTjiDZ5sut5OhL+Qx37gRG4RZxGz4kbRFcmE1CpJKr3tv
++AuVqOashJvoo+H9kjKeealsWxQfPrRHVp5P4S7M7viR4V53KlLJAgMBAAGjgbAw
+ga0wDAYDVR0TAQH/BAIwADAOBgNVHQ8BAf8EBAMCBaAwEwYDVR0lBAwwCgYIKwYB
+BQUHAwIwOAYDVR0RBDEwL4ItcHJvamVjdHMtY29uZmlnLmFnZW50d2VhdmVyLnN2
+Yy5jbHVzdGVyLmxvY2FsMB0GA1UdDgQWBBQwiHaxGdWjNIbFzU+4nvy+A118ejAf
+BgNVHSMEGDAWgBT/FpJakXdZ4tpPTVGg5XiyvMb1iDANBgkqhkiG9w0BAQsFAAOC
+AQEAUsOGifzMoCsnyOL0QTN1bI8SiMhwC6GTDx+MD8klG/yuV7xEDL0j9kg2XaEP
+dT/l4d05mtiUPnKFl8iKytw44ParbUtEjpvgResLtAUTVaOUpOvKCgtwbw6PmzT0
+dD8Bv0Ldc62+eFZoWL9+UO8xrauT3uCKf6lTZC/4MB1jv3r10rC7njm/n9aAGYNR
+Osoi+2LbGplVmZQnGDxzeFSJTErNVfMl+qWY9XlUOmkUT0CtzaZMEzVbvWEiNV8e
+JGGVls0Cf4lj0wQkuoq3Mi0GT6zmOJq6LSpIjNOSFPGmkqzHH+AmrZ7LdtOfAybd
+i7C50tds+/ek9Jqh33SGBrJJ2Q==
 -----END CERTIFICATE-----
-`;
-const testCaBundle = testRootPem;
+`;const testCaBundle = testRootPem;
 const testIntermediateTrustBundle = `${testIntermediatePem}${testRootPem}`;
 const testLeafBase64 = Buffer.from(`${testServerLeafPem}${testIntermediatePem}`).toString('base64');
 const testClientAuthLeafBase64 = Buffer.from(`${testClientAuthLeafPem}${testIntermediatePem}`).toString('base64');
@@ -138,7 +141,7 @@ const testLeafSha256 = sha256(new X509Certificate(testServerLeafPem).raw);
 
 function runBinding({ caBundle = testCaBundle, leafPem = testServerLeafPem } = {}) {
   return {
-    projectsOwnerAddress: 'https://projects-config.agentweaver-v1-p0.svc.cluster.local:8443/',
+    projectsOwnerAddress: 'https://projects-config.agentweaver.svc.cluster.local:8443/',
     projectsAudience: 'https://projects.agentweaver.io/run-binding',
     projectsServerCertificateSha256: sha256(new X509Certificate(leafPem).raw),
     projectsTrustBundleSha256: sha256(caBundle),
@@ -282,7 +285,7 @@ if ($mode -eq 'path-length') {
   $leafSigner = $childRequest.Key
   $chain += $child
 }
-$leafRequest = New-Request 'CN=projects-config.agentweaver-v1-p0.svc.cluster.local'
+$leafRequest = New-Request 'CN=projects-config.agentweaver.svc.cluster.local'
 $leafRequest.Request.CertificateExtensions.Add(
   [System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($false, $false, 0, $true))
 $leafRequest.Request.CertificateExtensions.Add(
@@ -294,7 +297,7 @@ $null = $leafEku.Add([System.Security.Cryptography.Oid]::new('1.3.6.1.5.5.7.3.1'
 $leafRequest.Request.CertificateExtensions.Add(
   [System.Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($leafEku, $true))
 $san = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
-$san.AddDnsName('projects-config.agentweaver-v1-p0.svc.cluster.local')
+$san.AddDnsName('projects-config.agentweaver.svc.cluster.local')
 $leafRequest.Request.CertificateExtensions.Add($san.Build())
 $leafSignatureGenerator = [System.Security.Cryptography.X509Certificates.X509SignatureGenerator]::CreateForRSA(
   $leafSigner, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)

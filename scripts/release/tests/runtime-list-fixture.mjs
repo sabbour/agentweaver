@@ -14,7 +14,7 @@ export function runtimeListFixture() {
       compressedPullBytes: 123456,
     } : {}),
   }));
-  return createRuntimeList(images, 'agentweaver-v1-p0', {
+  return createRuntimeList(images, 'agentweaver', {
     configMapName: 'projects-config-reviewed-catalog',
     sourceCommit: 'b'.repeat(40),
   });

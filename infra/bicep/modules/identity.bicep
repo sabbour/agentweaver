@@ -4,7 +4,7 @@
 @description('Azure region for the identities.')
 param location string
 
-@description('Dedicated naming prefix, e.g. aw-v1-p0.')
+@description('Dedicated naming prefix, e.g. agentweaver.')
 param namePrefix string
 
 @description('Resource tags applied to every identity.')
@@ -41,7 +41,7 @@ no Azure resource role.
 param services array = [
   {
     name: 'foundation-probe'
-    namespace: 'agentweaver-v1-p0'
+    namespace: 'agentweaver'
     serviceAccountName: 'foundation-probe'
     needsKeyVault: true
     needsBlob: true
@@ -49,7 +49,7 @@ param services array = [
   }
   {
     name: 'identity-broker'
-    namespace: 'agentweaver-v1-p0'
+    namespace: 'agentweaver'
     serviceAccountName: 'identity-broker'
     needsKeyVault: true
     needsBlob: false
@@ -57,7 +57,7 @@ param services array = [
   }
   {
     name: 'identity-broker-migration'
-    namespace: 'agentweaver-v1-p0'
+    namespace: 'agentweaver'
     serviceAccountName: 'identity-broker-migration'
     needsKeyVault: false
     needsBlob: false

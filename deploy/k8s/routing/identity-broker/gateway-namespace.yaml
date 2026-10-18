@@ -1,7 +1,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: CHANGEME-GATEWAY-NAMESPACE
+  name: agentweaver-gateway
   labels:
     agentweaver.io/environment: v1-p0
     agentweaver.io/managed-by: kustomize

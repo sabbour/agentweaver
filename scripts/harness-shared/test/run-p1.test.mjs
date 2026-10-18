@@ -29,7 +29,7 @@ function validInput() {
     },
     pins: {
       context: 'p1-control',
-      namespace: 'agentweaver-v1-p0',
+      namespace: 'agentweaver',
       providerReceipt: {
         configMapName: 'provider-catalog-v1',
         sourceCommit: 'd'.repeat(40),
@@ -155,7 +155,7 @@ test('P1 CLI parses the UI page module and prepares exact deployment evidence be
     assert.equal(prepared, 1, output.at(-1));
     assert.equal(preparation.expectedSourceSha, 'a'.repeat(40));
     assert.equal(preparation.context, 'p1-control');
-    assert.equal(preparation.namespace, 'agentweaver-v1-p0');
+    assert.equal(preparation.namespace, 'agentweaver');
     assert.equal(preparation.providerCatalog.configMapName, 'provider-catalog-v1');
     assert.equal(path.basename(preparation.publicationPath), 'publication.json');
     assert.equal(path.basename(preparation.manifestPath), 'foundation.json');

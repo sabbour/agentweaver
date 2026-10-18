@@ -1,4 +1,4 @@
-export const nrmsNsgName = 'NRMS-gxlttooqhupscaw-v1-p0-vnet';
+export const nrmsNsgName = 'NRMS-gxlttooqhupscagentweaver-vnet';
 
 const sharedRuleFields = {
   direction: 'Inbound',
@@ -54,7 +54,7 @@ export const policyManagementGroupId =
   '/providers/Microsoft.Management/managementGroups/48fed3a1-0814-4847-88ce-b766155f2792';
 
 export const smartDetectorEvidence = {
-  name: 'Failure Anomalies - aw-v1-p0-appi',
+  name: 'Failure Anomalies - agentweaver-appi',
   type: 'Microsoft.AlertsManagement/smartDetectorAlertRules',
   state: 'Enabled',
   severity: 'Sev3',

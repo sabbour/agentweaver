@@ -3,17 +3,21 @@
   "kind": "ConfigMap",
   "metadata": {
     "name": "gateway-runtime-config",
-    "namespace": "agentweaver-v1-p0"
+    "namespace": "agentweaver",
+    "annotations": {
+      "agentweaver.io/runtime-config-status": "incomplete",
+      "agentweaver.io/runtime-config-incomplete-reason": "Awaiting the newly provisioned AKS managed domain and workload identity client IDs."
+    }
   },
   "immutable": true,
   "data": {
-    "Identity__Issuer": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
-    "Identity__Audience": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
-    "Gateway__Owners__Projects": "https://projects-config.agentweaver-v1-p0.svc.cluster.local:8443/",
-    "Gateway__Owners__Orchestrator": "https://orchestrator.agentweaver-v1-p0.svc.cluster.local:8443/",
-    "Gateway__Owners__Knowledge": "https://knowledge.agentweaver-v1-p0.svc.cluster.local:8443/",
-    "Gateway__Owners__Events": "https://events-and-sessions.agentweaver-v1-p0.svc.cluster.local:8443/",
-    "Gateway__Owners__IdentityBrokerAddress": "https://identity-broker.agentweaver-v1-p0.svc.cluster.local:443/",
-    "Gateway__WebOrigin": "https://portal.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io"
+    "Identity__Issuer": "https://CHANGEME-MANAGED-HOST/",
+    "Identity__Audience": "https://CHANGEME-MANAGED-HOST/",
+    "Gateway__Owners__Projects": "https://projects-config.agentweaver.svc.cluster.local:8443/",
+    "Gateway__Owners__Orchestrator": "https://orchestrator.agentweaver.svc.cluster.local:8443/",
+    "Gateway__Owners__Knowledge": "https://knowledge.agentweaver.svc.cluster.local:8443/",
+    "Gateway__Owners__Events": "https://events-and-sessions.agentweaver.svc.cluster.local:8443/",
+    "Gateway__Owners__IdentityBrokerAddress": "https://identity-broker.agentweaver.svc.cluster.local:443/",
+    "Gateway__WebOrigin": "https://CHANGEME-PORTAL-HOST"
   }
 }

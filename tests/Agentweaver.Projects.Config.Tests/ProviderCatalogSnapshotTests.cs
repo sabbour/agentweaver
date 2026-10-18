@@ -28,7 +28,7 @@ public sealed class ProviderCatalogSnapshotTests
         Assert.True(configMap.GetProperty("immutable").GetBoolean());
         var metadata = configMap.GetProperty("metadata");
         Assert.Equal("projects-config-provider-catalog", metadata.GetProperty("name").GetString());
-        Assert.Equal("agentweaver-v1-p0", metadata.GetProperty("namespace").GetString());
+        Assert.Equal("agentweaver", metadata.GetProperty("namespace").GetString());
         Assert.Equal(SourceCommit, metadata.GetProperty("annotations")
             .GetProperty("agentweaver.io/provider-catalog-product-source").GetString());
 

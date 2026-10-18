@@ -16,11 +16,11 @@ internal static class ProbeFixtures
         SourceHash = Source.InfrastructureHash,
         SubscriptionId = "11111111-1111-1111-1111-111111111111",
         TenantId = "22222222-2222-2222-2222-222222222222",
-        ResourceGroup = "aw-v1-p0",
-        ResourceGroupId = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/aw-v1-p0",
-        DeploymentName = "aw-v1-p0-aks-9b7da6e64dfd",
+        ResourceGroup = "agentweaver",
+        ResourceGroupId = "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/agentweaver",
+        DeploymentName = "agentweaver-aks-9b7da6e64dfd",
         DeploymentId =
-            "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/aw-v1-p0/providers/Microsoft.Resources/deployments/aw-v1-p0-aks-9b7da6e64dfd",
+            "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/agentweaver/providers/Microsoft.Resources/deployments/agentweaver-aks-9b7da6e64dfd",
         Infrastructure = new ProbeInfrastructure
         {
             Scope = "aks-only",
@@ -33,9 +33,9 @@ internal static class ProbeFixtures
                 SourceSha = "f989c5c3457af84e2a0ffbbb7ab82f5ea07901ac",
                 SourceTree = "20d54d53867e091a62ed25b52681c53e49b0de05",
                 SourceHash = "993178aa83383d3ec32367c31db7211b43114e8d5ae3e757b37711b93637f1b2",
-                DeploymentName = "aw-v1-p0-f989c5c3457a",
+                DeploymentName = "agentweaver-f989c5c3457a",
                 DeploymentId =
-                    "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/aw-v1-p0/providers/Microsoft.Resources/deployments/aw-v1-p0-f989c5c3457a",
+                    "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/agentweaver/providers/Microsoft.Resources/deployments/agentweaver-f989c5c3457a",
             },
         },
         AksOidcIssuerUrl = "https://eastus.oic.prod-aks.azure.com/22222222-2222-2222-2222-222222222222/cluster-id/",
@@ -43,32 +43,32 @@ internal static class ProbeFixtures
         {
             Name = "foundation-probe",
             ResourceId =
-                "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/aw-v1-p0/providers/Microsoft.ManagedIdentity/userAssignedIdentities/aw-v1-p0-id-foundation-probe",
+                "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/agentweaver/providers/Microsoft.ManagedIdentity/userAssignedIdentities/agentweaver-id-foundation-probe",
             ClientId = "33333333-3333-3333-3333-333333333333",
             PrincipalObjectId = "44444444-4444-4444-4444-444444444444",
-            Namespace = "agentweaver-v1-p0",
+            Namespace = "agentweaver",
             ServiceAccount = "foundation-probe",
         },
         FoundationResources = new ProbeResources
         {
             ClusterId =
-                "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/aw-v1-p0/providers/Microsoft.ContainerService/managedClusters/aw-v1-p0-aks",
+                "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/agentweaver/providers/Microsoft.ContainerService/managedClusters/agentweaver-aks",
             KeyVaultId =
-                "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/aw-v1-p0/providers/Microsoft.KeyVault/vaults/aw-v1-p0-kv",
-            VaultUri = "https://aw-v1-p0-kv.vault.azure.net/",
+                "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/agentweaver/providers/Microsoft.KeyVault/vaults/agentweaver-kv",
+            VaultUri = "https://agentweaver-kv.vault.azure.net/",
             StorageAccountId =
-                "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/aw-v1-p0/providers/Microsoft.Storage/storageAccounts/awv1p0blob",
+                "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/agentweaver/providers/Microsoft.Storage/storageAccounts/agentweaverblob",
             BlobContainerId =
-                "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/aw-v1-p0/providers/Microsoft.Storage/storageAccounts/awv1p0blob/blobServices/default/containers/platform-artifacts",
-            BlobContainerUri = "https://awv1p0blob.blob.core.windows.net/platform-artifacts",
+                "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/agentweaver/providers/Microsoft.Storage/storageAccounts/agentweaverblob/blobServices/default/containers/platform-artifacts",
+            BlobContainerUri = "https://agentweaverblob.blob.core.windows.net/platform-artifacts",
             PostgresServerId =
-                "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/aw-v1-p0/providers/Microsoft.DBforPostgreSQL/flexibleServers/aw-v1-p0-pg",
-            PostgresHost = "aw-v1-p0-pg.postgres.database.azure.com",
+                "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/agentweaver/providers/Microsoft.DBforPostgreSQL/flexibleServers/agentweaver-pg",
+            PostgresHost = "agentweaver-pg.postgres.database.azure.com",
             MonitorWorkspaceResourceId =
-                "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/aw-v1-p0/providers/Microsoft.OperationalInsights/workspaces/aw-v1-p0-law",
+                "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/agentweaver/providers/Microsoft.OperationalInsights/workspaces/agentweaver-law",
             MonitorWorkspaceId = "55555555-5555-5555-5555-555555555555",
             AppInsightsResourceId =
-                "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/aw-v1-p0/providers/Microsoft.Insights/components/aw-v1-p0-appi",
+                "/subscriptions/11111111-1111-1111-1111-111111111111/resourceGroups/agentweaver/providers/Microsoft.Insights/components/agentweaver-appi",
         },
         Runtime = new ProbeRuntime
         {
@@ -82,7 +82,7 @@ internal static class ProbeFixtures
 
     public static ProbeIdentityEvidence Identity(ProbeTarget target) => new(
         target.AksOidcIssuerUrl,
-        "system:serviceaccount:agentweaver-v1-p0:foundation-probe",
+        "system:serviceaccount:agentweaver:foundation-probe",
         "api://AzureADTokenExchange");
 
     public static MonitorConfigurationEvidence MonitorConfiguration(ProbeTarget target) =>
@@ -99,7 +99,7 @@ internal static class ProbeFixtures
         var payload = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new
         {
             iss = issuer ?? Target().AksOidcIssuerUrl,
-            sub = subject ?? "system:serviceaccount:agentweaver-v1-p0:foundation-probe",
+            sub = subject ?? "system:serviceaccount:agentweaver:foundation-probe",
             aud = audience,
         });
         return $"eyJhbGciOiJub25lIn0.{Base64Url(payload)}.signature";

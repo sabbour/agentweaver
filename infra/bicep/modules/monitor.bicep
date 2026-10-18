@@ -14,7 +14,7 @@ param location string
 @description('Azure region for the Log Analytics workspace and Application Insights.')
 param monitorLocation string
 
-@description('Dedicated naming prefix, e.g. aw-v1-p0.')
+@description('Dedicated naming prefix, e.g. agentweaver.')
 param namePrefix string
 
 @description('Resource tags applied to the workspace and app insights resource.')

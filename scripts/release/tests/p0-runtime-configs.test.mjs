@@ -10,12 +10,24 @@ import { parseKustomizeResources } from '../kustomize-runtime.mjs';
 import { parse, parseAllDocuments } from 'yaml';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const namespace = 'agentweaver-v1-p0';
+const namespace = 'agentweaver';
 const tenant = '72f988bf-86f1-41af-91ab-2d7cd011db47';
-const broker = 'https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/';
-const portalOrigin = 'https://portal.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
+const brokerHost = 'CHANGEME-MANAGED-HOST';
+const broker = `https://${brokerHost}/`;
+const portalOrigin = 'https://CHANGEME-PORTAL-HOST';
+const incompleteRuntimeConfigs = new Set([
+  'environment-runtime-config', 'events-and-sessions-runtime-config', 'gateway-runtime-config',
+  'identity-broker-runtime-config-v2', 'knowledge-runtime-config', 'mcp-runtime-config',
+  'orchestrator-runtime-config', 'projects-config-runtime-config', 'web-runtime-config',
+]);
+const runtimeInputMarkers = new Set([
+  'CHANGEME-MANAGED-HOST', 'CHANGEME-PORTAL-HOST',
+  'CHANGEME-identity-broker-client-id', 'CHANGEME-environment-client-id',
+  'CHANGEME-events-and-sessions-client-id', 'CHANGEME-knowledge-client-id',
+  'CHANGEME-orchestrator-client-id', 'CHANGEME-projects-config-client-id',
+]);
 const tokenFile = '/var/run/secrets/azure/tokens/azure-identity-token';
-const host = 'aw-v1-p0-pg.postgres.database.azure.com';
+const host = 'agentweaver-pg.postgres.database.azure.com';
 const database = 'agentweaver';
 const runtimeActionIds = [
   'model.turn',
@@ -71,13 +83,25 @@ test('P0 runtime ConfigMaps use immutable snapshots except for the operator-upda
     assert.equal(resource.kind, 'ConfigMap');
     assert.equal(resource.metadata.name, name);
     assert.equal(resource.metadata.namespace, namespace);
-    assert.equal(resource.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
+    const incomplete = incompleteRuntimeConfigs.has(name);
+    assert.equal(resource.metadata.annotations?.['agentweaver.io/runtime-config-status'],
+      incomplete ? 'incomplete' : undefined);
+    if (incomplete) {
+      assert.match(resource.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'] ?? '',
+        /newly provisioned AKS managed domain and workload identity client IDs/);
+    } else {
+      assert.equal(resource.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'], undefined);
+    }
     assert.equal(resource.immutable, name !== 'events-and-sessions-runtime-config');
     assert.ok(Object.keys(resource.data).length > 0);
     for (const [key, value] of Object.entries(resource.data)) {
       assert.equal(typeof value, 'string', `${name}: ${key}`);
       assert.ok(value.trim(), `${name}: ${key} must not be blank`);
-      assert.doesNotMatch(value, /CHANGEME|TODO|PLACEHOLDER|DUMMY|<[^>]+>/i, `${name}: ${key}`);
+      if (/CHANGEME|TODO|PLACEHOLDER|DUMMY|<[^>]+>/i.test(value)) {
+        const markers = [...value.matchAll(/CHANGEME-[A-Z0-9-]+/gi)].map(([marker]) => marker);
+        assert.ok(incomplete && markers.length > 0 && markers.every(marker => runtimeInputMarkers.has(marker)),
+          `${name}: ${key} contains only approved pre-provisioning markers`);
+      }
       assert.doesNotMatch(key, /(?:^|__)(?:Password|ClientSecret|CredentialValue|SecretKey)(?:__|$)/i,
         `${name}: ${key}`);
       assert.doesNotMatch(value, /(?:^|;)Password\s*=|sig=|SharedAccessSignature=/i, `${name}: ${key}`);
@@ -85,7 +109,7 @@ test('P0 runtime ConfigMaps use immutable snapshots except for the operator-upda
   }
   for (const resource of [environment, orchestrator, events])
     assert.ok(Object.keys(resource.data).every(key => /^[A-Za-z][A-Za-z0-9_.-]*$/.test(key)));
-  assert.equal(events.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'], undefined);
+  assert.equal(cilium.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
 });
 
 test('Identity Broker snapshot keeps the acceptance client and adds the versioned public Web client', () => {
@@ -149,12 +173,12 @@ test('Identity Broker snapshot keeps the acceptance client and adds the versione
     identityBroker.data.IdentityBroker__Clients__0__ClientId);
 });
 
-test('P0 PostgreSQL roles, projected identities, and issuer use the exact approved inputs', () => {
+test('P0 PostgreSQL roles, projected identity keys, and issuer use the exact pre-provisioning inputs', () => {
   for (const [resource, owner, role, clientId] of [
-    [environment, 'Environment', 'aw-v1-p0-id-environment', '21a97456-bb10-4833-bb75-a14cabaad4c1'],
-    [orchestrator, 'Orchestrator', 'aw-v1-p0-id-orchestrator', 'b9cfb747-b0f0-42c9-b0a8-31ec3c335a9a'],
-    [events, 'EventsAndSessions', 'aw-v1-p0-id-events-and-sessions', '3ab39eda-7389-4b5e-b5b6-232d7671e012'],
-    [knowledge, 'Knowledge', 'aw-v1-p0-id-knowledge', 'c9188440-b79e-46c2-ad02-4b0218868648'],
+    [environment, 'Environment', 'agentweaver-id-environment', 'CHANGEME-environment-client-id'],
+    [orchestrator, 'Orchestrator', 'agentweaver-id-orchestrator', 'CHANGEME-orchestrator-client-id'],
+    [events, 'EventsAndSessions', 'agentweaver-id-events-and-sessions', 'CHANGEME-events-and-sessions-client-id'],
+    [knowledge, 'Knowledge', 'agentweaver-id-knowledge', 'CHANGEME-knowledge-client-id'],
   ]) {
     const identity = `${owner}__Database__WorkloadIdentity__`;
     assert.equal(resource.data[`ConnectionStrings__${owner}`],
@@ -181,11 +205,11 @@ test('Portal route, Gateway listener, and Web origin use the same managed-domain
   const portalHostname = new URL(portalOrigin).hostname;
   assert.ok(rootKustomization.resources.includes('routing/identity-broker/web-application-p0.yaml'));
   assert.deepEqual(route.spec.parentRefs, [{
-    name: 'identity-broker', namespace: 'agentweaver-v1-gateway', sectionName: 'portal',
+    name: 'identity-broker', namespace: 'agentweaver-gateway', sectionName: 'portal',
   }]);
-  assert.deepEqual(route.spec.hostnames, [portalHostname]);
+  assert.deepEqual(route.spec.hostnames, [portalHostname.toUpperCase()]);
   assert.deepEqual(route.spec.rules[0].backendRefs, [{ name: 'web', port: 8080 }]);
-  assert.equal(gatewaySource.metadata.namespace, 'CHANGEME-GATEWAY-NAMESPACE');
+  assert.equal(gatewaySource.metadata.namespace, 'agentweaver-gateway');
   assert.equal(gatewaySource.spec.listeners.find(({ name }) => name === 'https').hostname,
     'CHANGEME-MANAGED-HOST');
   assert.equal(gatewaySource.spec.listeners.find(({ name }) => name === 'portal').hostname, 'CHANGEME-PORTAL-HOST');
@@ -273,7 +297,7 @@ test('P0 service addresses and source-backed provider defaults are exact', () =>
   assert.equal(evt.EventsAndSessions__OrchestratorOwner__OwnerBaseAddress, serviceAddress('orchestrator'));
   assert.equal(evt.EventsAndSessions__OrchestratorOwner__Audience, broker);
   assert.equal(evt.EventsAndSessions__SessionMaterial__ContainerUri,
-    'https://awv1p0blob.blob.core.windows.net/session-material');
+    'https://agentweaverblob.blob.core.windows.net/session-material');
 
   const modelBindings = {
     reasoning: 'gpt-6.1-sol',
@@ -370,11 +394,11 @@ test('P0 values use approved labels and omit unknown resource identities', () =>
   assert.equal(events.data['AgentHost__ModelBindings__gpt-6.1-sol__ModelId'], 'gpt-6.1-sol');
   assert.equal(events.data['AgentHost__ModelBindings__gpt-6-luna__ModelId'], 'gpt-6-luna');
   assert.ok(!Object.values(events.data).includes(
-    '/subscriptions/90ab3701-83f0-4ba1-a90a-f2e68683adab/resourceGroups/aw-v1-p0/providers/Microsoft.DBforPostgreSQL/flexibleServers/aw-v1-p0-pg'));
+    '/subscriptions/90ab3701-83f0-4ba1-a90a-f2e68683adab/resourceGroups/agentweaver/providers/Microsoft.DBforPostgreSQL/flexibleServers/agentweaver-pg'));
 });
 
 // Runtime maps must match their service contracts and reserve incomplete markers for unsourced values.
-test('Gateway, Web, and Knowledge ConfigMaps contain their sourced P0 values', () => {
+test('Gateway, Web, and Knowledge ConfigMaps contain their approved incomplete P0 inputs', () => {
   const newMaps = [
     ['gateway-runtime-config', gateway],
     ['mcp-runtime-config', mcp],
@@ -391,7 +415,11 @@ test('Gateway, Web, and Knowledge ConfigMaps contain their sourced P0 values', (
     assert.ok(Object.keys(resource.data).length > 0);
     for (const [key, value] of Object.entries(resource.data)) {
       assert.equal(typeof value, 'string', `${name}: ${key}`);
-      assert.doesNotMatch(value, /CHANGEME|TODO|PLACEHOLDER|DUMMY|<[^>]+>/i, `${name}: ${key}`);
+      if (/CHANGEME|TODO|PLACEHOLDER|DUMMY|<[^>]+>/i.test(value)) {
+        const markers = [...value.matchAll(/CHANGEME-[A-Z0-9-]+/gi)].map(([marker]) => marker);
+        assert.ok(incompleteRuntimeConfigs.has(name) && markers.length > 0 &&
+          markers.every(marker => runtimeInputMarkers.has(marker)), `${name}: ${key} incomplete input`);
+      }
       assert.doesNotMatch(key, /(?:^|__)(?:Password|ClientSecret|CredentialValue|SecretKey)(?:__|$)/i,
         `${name}: ${key}`);
       assert.doesNotMatch(value, /(?:^|;)Password\s*=|sig=|SharedAccessSignature=/i, `${name}: ${key}`);
@@ -417,8 +445,9 @@ test('Gateway, Web, and Knowledge ConfigMaps contain their sourced P0 values', (
   assert.equal(gateway.data.Gateway__Owners__IdentityBrokerAddress,
     serviceAddress('identity-broker', 443));
   assert.equal(gateway.data.Gateway__WebOrigin, portalOrigin);
-  assert.equal(gateway.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
-  assert.equal(gateway.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'], undefined);
+  assert.equal(gateway.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
+  assert.match(gateway.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'] ?? '',
+    /newly provisioned AKS managed domain and workload identity client IDs/);
 
   assert.deepEqual(Object.keys(mcp.data).sort(), [
     'Gateway__BaseAddress', 'Identity__Audience', 'Identity__Issuer',
@@ -428,7 +457,9 @@ test('Gateway, Web, and Knowledge ConfigMaps contain their sourced P0 values', (
     Identity__Audience: broker,
     Gateway__BaseAddress: serviceAddress('gateway'),
   });
-  assert.equal(mcp.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
+  assert.equal(mcp.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
+  assert.match(mcp.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'] ?? '',
+    /newly provisioned AKS managed domain and workload identity client IDs/);
 
   assert.deepEqual(Object.keys(web.data).sort(), [
     'VITE_GATEWAY_URL', 'VITE_IDENTITY_BROKER_ISSUER', 'VITE_IDENTITY_BROKER_URL',
@@ -441,8 +472,9 @@ test('Gateway, Web, and Knowledge ConfigMaps contain their sourced P0 values', (
   assert.equal(web.data.VITE_OAUTH_SCOPES,
     'openid profile email api.read offline_access projects.admin projects.orchestrator');
   assert.equal(web.data.VITE_OAUTH_REDIRECT_URI, undefined);
-  assert.equal(web.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
-  assert.equal(web.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'], undefined);
+  assert.equal(web.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
+  assert.match(web.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'] ?? '',
+    /newly provisioned AKS managed domain and workload identity client IDs/);
 
   assert.deepEqual(Object.keys(knowledge.data).sort(), [
     'ConnectionStrings__Knowledge',
@@ -462,10 +494,10 @@ test('Gateway, Web, and Knowledge ConfigMaps contain their sourced P0 values', (
     'ProjectsConfig__BaseAddress',
   ].sort());
   assert.equal(knowledge.data.ConnectionStrings__Knowledge,
-    `Host=${host};Port=5432;Database=${database};Username=aw-v1-p0-id-knowledge;SSL Mode=VerifyFull`);
+    `Host=${host};Port=5432;Database=${database};Username=agentweaver-id-knowledge;SSL Mode=VerifyFull`);
   assert.equal(knowledge.data.Knowledge__Database__WorkloadIdentity__TenantId, tenant);
   assert.equal(knowledge.data.Knowledge__Database__WorkloadIdentity__ClientId,
-    'c9188440-b79e-46c2-ad02-4b0218868648');
+    'CHANGEME-knowledge-client-id');
   assert.equal(knowledge.data.Knowledge__Database__WorkloadIdentity__TokenFilePath, tokenFile);
   assert.equal(knowledge.data.Identity__Issuer, broker);
   assert.equal(knowledge.data.Identity__Audience, broker);
@@ -478,19 +510,22 @@ test('Gateway, Web, and Knowledge ConfigMaps contain their sourced P0 values', (
   assert.equal(knowledge.data.Knowledge__Provider__Schema, 'knowledge');
   assert.equal(knowledge.data.Knowledge__Provider__OptionsRevision, 'native-postgres-memory-v1');
   assert.equal(knowledge.data.Knowledge__Provider__OptionsSchemaVersion, '1');
-  assert.equal(knowledge.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
-  assert.equal(knowledge.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'], undefined);
+  assert.equal(knowledge.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
+  assert.match(knowledge.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'] ?? '',
+    /newly provisioned AKS managed domain and workload identity client IDs/);
 
   assert.deepEqual(projects.data, {
     ConnectionStrings__ProjectsConfig:
-      `Host=${host};Port=5432;Database=${database};Username=aw-v1-p0-id-projects-config;SSL Mode=VerifyFull`,
+      `Host=${host};Port=5432;Database=${database};Username=agentweaver-id-projects-config;SSL Mode=VerifyFull`,
     ProjectsConfig__Database__WorkloadIdentity__TenantId: tenant,
-    ProjectsConfig__Database__WorkloadIdentity__ClientId: '4ca461a5-f347-4ed8-9923-a6e135145aaa',
+    ProjectsConfig__Database__WorkloadIdentity__ClientId: 'CHANGEME-projects-config-client-id',
     ProjectsConfig__Database__WorkloadIdentity__TokenFilePath: tokenFile,
     ProjectsConfig__Authentication__Authority: broker,
     ProjectsConfig__Authentication__Audience: broker,
   });
-  assert.equal(projects.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
+  assert.equal(projects.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
+  assert.match(projects.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'] ?? '',
+    /newly provisioned AKS managed domain and workload identity client IDs/);
   assert.equal(Object.keys(projects.data).some(key => key.includes('BrokerRunBinding')), false);
 });
 
@@ -505,26 +540,26 @@ test('new Events and Projects Cilium policies admit only source-backed callers a
       callers: ['agenthost', 'orchestrator', 'gateway', 'knowledge', 'environment'],
       owners: ['knowledge', 'projects-config', 'orchestrator'],
       fqdns: [
-        'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io',
+        brokerHost,
         'login.microsoftonline.com',
-        'awv1p0blob.blob.core.windows.net',
-        'awv1p0blob.privatelink.blob.core.windows.net',
-        'aw-v1-p0-pg.postgres.database.azure.com',
-        'aw-v1-p0-pg.privatelink.postgres.database.azure.com',
-        'knowledge.agentweaver-v1-p0.svc.cluster.local',
-        'projects-config.agentweaver-v1-p0.svc.cluster.local',
-        'orchestrator.agentweaver-v1-p0.svc.cluster.local',
+        'agentweaverblob.blob.core.windows.net',
+        'agentweaverblob.privatelink.blob.core.windows.net',
+        'agentweaver-pg.postgres.database.azure.com',
+        'agentweaver-pg.privatelink.postgres.database.azure.com',
+        'knowledge.agentweaver.svc.cluster.local',
+        'projects-config.agentweaver.svc.cluster.local',
+        'orchestrator.agentweaver.svc.cluster.local',
       ],
       fqdnRules: [
         {
           hosts: [
-            'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io',
+            brokerHost,
             'login.microsoftonline.com',
-            'awv1p0blob.blob.core.windows.net',
+            'agentweaverblob.blob.core.windows.net',
           ],
           port: '443',
         },
-        { hosts: ['aw-v1-p0-pg.postgres.database.azure.com'], port: '5432' },
+        { hosts: ['agentweaver-pg.postgres.database.azure.com'], port: '5432' },
       ],
     },
     {
@@ -533,24 +568,24 @@ test('new Events and Projects Cilium policies admit only source-backed callers a
         'knowledge', 'environment'],
       owners: [],
       fqdns: [
-        'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io',
+        brokerHost,
         'login.microsoftonline.com',
         'api.github.com',
         'raw.githubusercontent.com',
-        'aw-v1-p0-pg.postgres.database.azure.com',
-        'aw-v1-p0-pg.privatelink.postgres.database.azure.com',
+        'agentweaver-pg.postgres.database.azure.com',
+        'agentweaver-pg.privatelink.postgres.database.azure.com',
       ],
       fqdnRules: [
         {
           hosts: [
-            'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io',
+            brokerHost,
             'login.microsoftonline.com',
             'api.github.com',
             'raw.githubusercontent.com',
           ],
           port: '443',
         },
-        { hosts: ['aw-v1-p0-pg.postgres.database.azure.com'], port: '5432' },
+        { hosts: ['agentweaver-pg.postgres.database.azure.com'], port: '5432' },
       ],
     },
   ];
@@ -566,19 +601,19 @@ test('new Events and Projects Cilium policies admit only source-backed callers a
     const callers = [...ingress.matchAll(/agentweaver\.io\/workload:\s*([a-z0-9-]+)/g)]
       .map(match => match[1]);
     assert.deepEqual(callers.sort(), [...contract.callers].sort(), `${contract.name} ingress callers`);
-    assert.equal((ingress.match(/k8s:io\.kubernetes\.pod\.namespace: agentweaver-v1-p0/g) ?? []).length,
+    assert.equal((ingress.match(/k8s:io\.kubernetes\.pod\.namespace: agentweaver/g) ?? []).length,
       contract.callers.length);
     const owners = [...egress.matchAll(/agentweaver\.io\/workload:\s*([a-z0-9-]+)/g)]
       .map(match => match[1]);
     assert.deepEqual(owners.sort(), [...contract.owners].sort(), `${contract.name} egress owners`);
-    const fqdns = [...new Set([...policy.matchAll(/matchName:\s*([a-z0-9.-]+)/g)]
+    const fqdns = [...new Set([...policy.matchAll(/matchName:\s*([A-Za-z0-9.-]+)/g)]
       .map(match => match[1]))].sort();
     assert.deepEqual(fqdns, [...contract.fqdns].sort(), `${contract.name} permitted DNS names`);
     assert.deepEqual([...new Set([...policy.matchAll(/port:\s*"(\d+)"/g)]
       .map(match => match[1]))].sort(), ['443', '53', '5432', '8443']);
     const fqdnRules = egress.split(/\n    - /).filter(rule => rule.startsWith('toFQDNs:\n'))
       .map(rule => ({
-        hosts: [...rule.matchAll(/matchName:\s*([a-z0-9.-]+)/g)].map(match => match[1]),
+        hosts: [...rule.matchAll(/matchName:\s*([A-Za-z0-9.-]+)/g)].map(match => match[1]),
         port: rule.match(/port:\s*"(\d+)"/)?.[1],
       }));
     assert.deepEqual(fqdnRules, contract.fqdnRules, `${contract.name} FQDN ports`);
@@ -608,7 +643,6 @@ test('runtime owner policies allow only configured issuer, database, and Kuberne
     endpoint.matchLabels['agentweaver.io/workload']).sort();
   const ports = rule => rule.toPorts.flatMap(group => group.ports)
     .map(({ port, protocol }) => ({ port, protocol }));
-  const brokerHost = 'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
   const issuer = getPolicy('broker-issuer-egress');
   assert.deepEqual([...workloads(issuer)].sort(),
     ['agenthost', 'environment', 'gateway', 'knowledge', 'mcp', 'orchestrator']);
@@ -621,15 +655,15 @@ test('runtime owner policies allow only configured issuer, database, and Kuberne
   assert.deepEqual([...workloads(database)].sort(), ['environment', 'knowledge', 'orchestrator']);
   assert.deepEqual(database.spec.egress[0].toPorts[0].rules.dns
     .map(({ matchName }) => matchName).sort(), [
-    'aw-v1-p0-pg.postgres.database.azure.com',
-    'aw-v1-p0-pg.privatelink.postgres.database.azure.com',
+    'agentweaver-pg.postgres.database.azure.com',
+    'agentweaver-pg.privatelink.postgres.database.azure.com',
     'login.microsoftonline.com',
   ]);
   assert.deepEqual(database.spec.egress.slice(1).map(rule => ({
     host: rule.toFQDNs[0].matchName,
     port: rule.toPorts[0].ports[0].port,
   })).sort((left, right) => left.host.localeCompare(right.host)), [
-    { host: 'aw-v1-p0-pg.postgres.database.azure.com', port: '5432' },
+    { host: 'agentweaver-pg.postgres.database.azure.com', port: '5432' },
     { host: 'login.microsoftonline.com', port: '443' },
   ]);
 
@@ -708,12 +742,12 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
   assert.deepEqual([...new Set([...JSON.stringify(brokerPolicy).matchAll(/matchName["\s:]+([a-z0-9.-]+)/g)]
     .map(match => match[1]))], [
     'login.microsoftonline.com',
-    'aw-v1-p0-kv.vault.azure.net',
-    'aw-v1-p0-pg.postgres.database.azure.com',
+    'agentweaver-kv.vault.azure.net',
+    'agentweaver-pg.postgres.database.azure.com',
   ]);
-  const unresolvedInputs = [...new Set([...JSON.stringify(installation).matchAll(/CHANGEME-[A-Z0-9-]+/g)]
-    .map(match => match[0]))];
-  assert.deepEqual(unresolvedInputs, ['CHANGEME-GATEWAY-NAMESPACE']);
+  const unresolvedInputs = [...new Set([...JSON.stringify(installation).matchAll(/CHANGEME-[A-Za-z0-9-]+/g)]
+    .map(match => match[0]))].sort();
+  assert.deepEqual(unresolvedInputs, [...runtimeInputMarkers].sort());
 
   const kustomization = parse(readFileSync(path.join(root, 'deploy', 'k8s', 'kustomization.yaml'), 'utf8'));
   const expectedPins = [

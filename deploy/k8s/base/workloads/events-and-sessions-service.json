@@ -3,7 +3,7 @@
   "kind": "Service",
   "metadata": {
     "name": "events-and-sessions",
-    "namespace": "agentweaver-v1-p0",
+    "namespace": "agentweaver",
     "labels": {
       "app.kubernetes.io/name": "events-and-sessions",
       "agentweaver.io/service": "events-and-sessions"

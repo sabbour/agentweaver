@@ -52,8 +52,7 @@ export function resolveCleanHead(cwd, { execGit = runGit } = {}) {
  * Validates the deployment inputs against an exact source commit and returns its ownership metadata.
  * It checks ancestry and committed file bytes; invalid paths, parameters, or source evidence throw.
  */
-export function resolveSource({ repoRoot, template, parametersFile, resourceGroup, subscriptionId, tenantId, expectedSha,
-  operatorObjectId: rawOperatorObjectId },
+export function resolveSource({ repoRoot, template, parametersFile, resourceGroup, subscriptionId, tenantId, expectedSha },
   { execGit = runGit, compareGitShow = gitShowMatches, readFile = readFileSync,
     realpath = realpathSync, validateRelease = validateFile } = {}) {
   const { sha: headSha, branch } = resolveCleanHead(repoRoot, { execGit });
@@ -112,10 +111,6 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   const document = JSON.parse(readFile(parameters.absolute, 'utf8'));
   const values = document.parameters;
   const { minCount: nodePoolMinCount, maxCount: nodePoolMaxCount } = assertAutoscalerBounds(values);
-  if (!GUID_PATTERN.test(rawOperatorObjectId ?? '')) {
-    throw new Error('An explicit Kubernetes operator object ID is required.');
-  }
-  const operatorObjectId = rawOperatorObjectId.toLowerCase();
   const location = values?.location?.value;
   const namePrefix = values?.namePrefix?.value;
   const parameterTenantId = values?.tenantId?.value;
@@ -171,7 +166,7 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   );
   validateRelease(resolve(root, 'releases/foundation.json'), { root });
   return { sha, verifierSha: headSha, branch, sourceTree, sourceHash: hash.digest('hex'), template: inputTemplate.absolute,
-    parametersFile: parameters.absolute, owner, costCenter, operatorObjectId,
+    parametersFile: parameters.absolute, owner, costCenter,
     location, monitorLocation, postgresEntraAdminObjectId, postgresEntraAdminPrincipalName,
     nodePoolMinCount, nodePoolMaxCount,
     postgresEntraAdminPrincipalType,

@@ -2,7 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: agenthost-runtime-v1
-  namespace: agentweaver-v1-p0
+  namespace: agentweaver
   annotations:
     agentweaver.io/runtime-config-status: incomplete
     agentweaver.io/runtime-config-incomplete-reason: >-
@@ -15,17 +15,17 @@ data:
     {
       "AgentHost": {
         "ConfigureEndpoint": "",
-        "BrokerAddress": "https://identity-broker.agentweaver-v1-p0.svc.cluster.local:443/",
-        "OrchestratorAddress": "https://orchestrator.agentweaver-v1-p0.svc.cluster.local:8443/",
-        "EnvironmentAddress": "https://environment.agentweaver-v1-p0.svc.cluster.local:8443/",
-        "EventsAddress": "https://events-and-sessions.agentweaver-v1-p0.svc.cluster.local:8443/",
+        "BrokerAddress": "https://identity-broker.agentweaver.svc.cluster.local:443/",
+        "OrchestratorAddress": "https://orchestrator.agentweaver.svc.cluster.local:8443/",
+        "EnvironmentAddress": "https://environment.agentweaver.svc.cluster.local:8443/",
+        "EventsAddress": "https://events-and-sessions.agentweaver.svc.cluster.local:8443/",
         "Image": {
           "Digest": "sha256:17c3da40ab275da28b92a5cf0e23741ae63d34a0877cebf798870a7f51563eb5",
           "Platform": "linux/amd64",
           "CompressedPullBytes": 321483300
         },
         "Authentication": {
-          "Authority": "https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/",
+          "Authority": "https://CHANGEME-MANAGED-HOST/",
           "Audience": ""
         },
         "ModelBindingsRevision": "p1-v1.0.1",

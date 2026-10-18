@@ -2,7 +2,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: identity-broker-key-ring
-  namespace: agentweaver-v1-p0
+  namespace: agentweaver
   labels:
     agentweaver.io/service: identity-broker
     agentweaver.io/managed-by: installer

@@ -166,14 +166,10 @@ export function checkDeployedSha({
       const expectedClusterId = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}` +
         `/providers/Microsoft.ContainerService/managedClusters/${resourceGroup}-aks`;
       selectedIssuer = selected.outputs?.oidcIssuerUrl?.value;
-      const assignmentId = selected.outputs?.operatorRoleAssignmentId?.value;
-      const assignmentPrefix = `${expectedClusterId}/providers/Microsoft.Authorization/roleAssignments/`;
       if (selected.outputs?.clusterName?.value !== `${resourceGroup}-aks` ||
           selected.outputs?.clusterId?.value?.toLowerCase() !== expectedClusterId.toLowerCase() ||
-          typeof selectedIssuer !== 'string' || !validIssuer(selectedIssuer) ||
-          typeof assignmentId !== 'string' || !assignmentId.toLowerCase().startsWith(assignmentPrefix.toLowerCase()) ||
-          !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(assignmentId.slice(assignmentPrefix.length))) {
-        return blocked(name, 'AKS-only deployment outputs do not bind the exact cluster, issuer and operator assignment.');
+          typeof selectedIssuer !== 'string' || !validIssuer(selectedIssuer)) {
+        return blocked(name, 'AKS-only deployment outputs do not bind the exact cluster and issuer.');
       }
       const foundationDeploymentName = `${resourceGroup}-${foundationSource.sha.slice(0, 12)}`;
       const full = readDeployment(foundationDeploymentName);
@@ -235,7 +231,7 @@ export function checkWorkloadIdentity({ clusterName, resourceGroup, identityChec
   if (issuer.status !== 0 || !issuerUrl.startsWith('https://')) return blocked(name, 'AKS issuer is missing.');
   const identities = [];
   for (const { identityName, federatedCredentialName, expectedSubject } of identityChecks) {
-    if (expectedSubject !== 'system:serviceaccount:agentweaver-v1-p0:foundation-probe') {
+    if (expectedSubject !== 'system:serviceaccount:agentweaver:foundation-probe') {
       return blocked(name, 'This layout reserves only the foundation-probe principal.');
     }
     const result = execAz(['identity', 'federated-credential', 'show', '--name', federatedCredentialName,
@@ -278,7 +274,7 @@ export function checkBlobRoundtrip({ accountName, container, executeProbes = fal
   const directory = resolve(repoRoot, 'artifacts', 'azure', generation);
   const input = resolve(directory, 'input.txt');
   const output = resolve(directory, 'output.txt');
-  const content = `agentweaver-v1-p0:${generation}`;
+  const content = `agentweaver:${generation}`;
   const common = ['--account-name', accountName, '--container-name', container, '--name', blobName, '--auth-mode', 'login'];
   let primaryFailure;
   let cleanupFailure;
@@ -504,7 +500,7 @@ export function runAcceptance(config, {
       const federation = checkWorkloadIdentity({ ...config, clusterName, identityChecks: [{
         identityName: `${config.resourceGroup}-id-foundation-probe`,
         federatedCredentialName: 'foundation-probe-workload-identity',
-        expectedSubject: 'system:serviceaccount:agentweaver-v1-p0:foundation-probe',
+        expectedSubject: 'system:serviceaccount:agentweaver:foundation-probe',
       }] }, boundAz);
       return federation.status === 'passed' &&
           federation.evidence.issuerUrl !== deploymentEvidence?.aksOidcIssuerUrl

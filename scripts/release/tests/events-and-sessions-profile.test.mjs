@@ -11,9 +11,20 @@ const readJson = relativePath => JSON.parse(readFileSync(path.join(root, relativ
 const runtimeConfig = readJson('deploy/k8s/runtime-configs/events-and-sessions-runtime-config.json');
 const inputExample = readJson('deploy/k8s/profiles/events-and-sessions/runtime-inputs.example.json');
 
-test('Events runtime values preserve validated model additions and the default rate card', () => {
+/** Complete only the unknown provisioning values with synthetic test data. */
+function eventsRuntimeConfiguration() {
   const configuration = Object.fromEntries(Object.entries(inputExample.configuration)
     .map(([key, value]) => [key, value ?? runtimeConfig.data[key]]));
+  const managedHost = 'agentweaver.events-profile.test.aksapp.io';
+  configuration.Identity__Issuer = `https://${managedHost}/`;
+  configuration.Identity__Audience = `https://${managedHost}/`;
+  configuration.ProjectsConfig__AuthorizationContext__Audience = 'https://projects.agentweaver.io/run-binding';
+  configuration.EventsAndSessions__OrchestratorOwner__Audience = 'https://orchestrator.agentweaver.io/run-binding';
+  return configuration;
+}
+
+test('Events runtime values preserve validated model additions and the default rate card', () => {
+  const configuration = eventsRuntimeConfiguration();
   configuration.AgentHost__ModelBindingsRevision = 'runtime-models-2026-10-17';
   configuration.AgentHost__ModelBindings__reasoning__ModelId = 'gpt-5-mini';
   configuration.AgentHost__ModelBindings__analyst__ModelId = 'gpt-5.4-mini';
@@ -29,8 +40,7 @@ test('Events runtime values preserve validated model additions and the default r
 });
 
 test('Events runtime profile input cannot generate a Deployment, Service, or policy', () => {
-  const configuration = Object.fromEntries(Object.entries(inputExample.configuration)
-    .map(([key, value]) => [key, value ?? runtimeConfig.data[key]]));
+  const configuration = eventsRuntimeConfiguration();
 
   assert.throws(() => renderEventsProfile({
     configuration,

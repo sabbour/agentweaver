@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,7 +58,43 @@ function sourceFixtureRoot(sourceSha, manifest, prefix) {
     writeFileSync(destination, contents);
   }
   cpSync(path.join(root, 'deploy', 'k8s'), path.join(fixtureRoot, 'deploy', 'k8s'), { recursive: true });
+  completePreprovisioningRuntimeInputs(path.join(fixtureRoot, 'deploy', 'k8s'));
   return fixtureRoot;
+}
+function completePreprovisioningRuntimeInputs(kubernetesRoot) {
+  // Deployment-flow tests use synthetic finalized values only in their disposable source copy.
+  const managedHost = 'agentweaver.0123456789abcdef.eastus2euap.aksapp.io';
+  const replacements = new Map([
+    ['CHANGEME-MANAGED-HOST', managedHost],
+    ['CHANGEME-PORTAL-HOST', `portal.${managedHost}`],
+    ['CHANGEME-identity-broker-client-id', '00000000-0000-4000-8000-000000000001'],
+    ['CHANGEME-environment-client-id', '00000000-0000-4000-8000-000000000002'],
+    ['CHANGEME-events-and-sessions-client-id', '00000000-0000-4000-8000-000000000003'],
+    ['CHANGEME-knowledge-client-id', '00000000-0000-4000-8000-000000000004'],
+    ['CHANGEME-orchestrator-client-id', '00000000-0000-4000-8000-000000000005'],
+    ['CHANGEME-projects-config-client-id', '00000000-0000-4000-8000-000000000006'],
+  ]);
+  const visit = directory => {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(file);
+      } else if (/\.(?:json|yaml|yml)$/.test(entry.name)) {
+        let contents = readFileSync(file, 'utf8');
+        for (const [placeholder, value] of replacements) contents = contents.replaceAll(placeholder, value);
+        if (file.includes(`${path.sep}runtime-configs${path.sep}`)) {
+          const resource = JSON.parse(contents);
+          if (resource.metadata?.annotations) {
+            delete resource.metadata.annotations['agentweaver.io/runtime-config-status'];
+            delete resource.metadata.annotations['agentweaver.io/runtime-config-incomplete-reason'];
+          }
+          contents = `${JSON.stringify(resource, null, 2)}\n`;
+        }
+        writeFileSync(file, contents, 'utf8');
+      }
+    }
+  };
+  visit(kubernetesRoot);
 }
 const p0Root = sourceFixtureRoot(p0SourceSha, p0Manifest, 'agentweaver-v1-0-0-release-tests-');
 const v101Root = sourceFixtureRoot(v101SourceSha, v101Manifest, 'agentweaver-v1-0-1-release-tests-');
@@ -68,9 +106,9 @@ const sourceSha = 'a'.repeat(40);
 const target = {
   subscriptionId: '90ab3701-83f0-4ba1-a90a-f2e68683adab',
   tenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47',
-  resourceGroup: 'aw-v1-p0',
-  clusterName: 'aw-v1-p0-aks',
-  namespace: 'agentweaver-v1-p0',
+  resourceGroup: 'agentweaver',
+  clusterName: 'agentweaver-aks',
+  namespace: 'agentweaver',
   nodeMin: 2,
   nodeMax: 3,
 };
@@ -570,6 +608,36 @@ test('pre-acceptance execute and resume retain a separately labeled checkpoint',
   assert.equal(clears, 2);
 });
 
+test('explicit workload deployment stops on incomplete runtime inputs before target checks or apply', async () => {
+  const fixture = bootstrapFixture();
+  const fixtureRoot = sourceFixtureRoot(p0SourceSha, p0Manifest, 'agentweaver-incomplete-runtime-test-');
+  try {
+    const runtimePath = path.join(fixtureRoot, 'deploy', 'k8s', 'runtime-configs',
+      'environment-runtime-config.json');
+    const runtime = JSON.parse(readFileSync(runtimePath, 'utf8'));
+    runtime.metadata.annotations = {
+      ...runtime.metadata.annotations,
+      'agentweaver.io/runtime-config-status': 'incomplete',
+      'agentweaver.io/runtime-config-incomplete-reason':
+        'Awaiting the newly provisioned AKS managed domain and workload identity client IDs.',
+    };
+    runtime.data.Environment__Authentication__Authority = 'https://CHANGEME-MANAGED-HOST/';
+    writeFileSync(runtimePath, `${JSON.stringify(runtime, null, 2)}\n`, 'utf8');
+
+    const dependencies = bootstrapDependencies(fixture, { root: fixtureRoot });
+    let targetChecks = 0;
+    dependencies.verifyTarget = async () => { targetChecks++; return { exact: true }; };
+    await assert.rejects(
+      deployRelease({ argv: [...bootstrapArgsFor(), '--execute'] }, dependencies),
+      /workload deployment is blocked until the incomplete runtime ConfigMaps are sourced: environment-runtime-config/,
+    );
+    assert.equal(targetChecks, 0);
+    assert.equal(dependencies.commands.length, 0);
+  } finally {
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
 test('pre-acceptance rejects a receipt bound to another source before verification', async () => {
   const fixture = bootstrapFixture();
   fixture.publication.sourceSha = 'b'.repeat(40);
@@ -616,7 +684,7 @@ test('v1.0.1 pre-acceptance dry-run uses the mixed source-bound draft and normal
 });
 
 test('release helper parses Kustomize output containing the managed Broker hostname', () => {
-  const hostname = 'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
+  const hostname = 'agentweaver.0123456789abcdef.eastus2euap.aksapp.io';
   const output = [
     'apiVersion: v1',
     'kind: Ingress',
@@ -1216,7 +1284,7 @@ test('Broker run binding is explicit, pins both Pod templates, and adds two narr
   const manifest = releaseManifest();
   const images = validatePublicationReceipt(publicationReceipt(manifest), manifest, sourceSha);
   const binding = {
-    projectsOwnerAddress: 'https://projects-config.agentweaver-v1-p0.svc.cluster.local:8443/',
+    projectsOwnerAddress: 'https://projects-config.agentweaver.svc.cluster.local:8443/',
     projectsAudience: 'https://projects.agentweaver.io/run-binding',
     projectsServerCertificateSha256: 'a'.repeat(64),
     projectsTrustBundleSha256: 'b'.repeat(64),
@@ -1329,7 +1397,7 @@ test('preflight requires source-owned Cilium policy names for all product worklo
     'web-gateway-ingress.yaml'), 'utf8');
   assert.match(policy, /name: web-gateway-ingress/);
   assert.match(policy, /agentweaver\.io\/workload: web/);
-  assert.match(policy, /k8s:io\.kubernetes\.pod\.namespace: CHANGEME-GATEWAY-NAMESPACE/);
+  assert.match(policy, /k8s:io\.kubernetes\.pod\.namespace: agentweaver-gateway/);
   assert.match(policy, /k8s:gateway\.networking\.k8s\.io\/gateway-name: identity-broker/);
   assert.match(policy, /port: "8080"/);
   assert.doesNotMatch(policy, /fromEntities:\s*-\s*world|0\.0\.0\.0\/0/);
@@ -1337,14 +1405,14 @@ test('preflight requires source-owned Cilium policy names for all product worklo
     'gateway-api-ingress.yaml'), 'utf8');
   assert.match(gatewayPolicy, /name: gateway-api-ingress/);
   assert.match(gatewayPolicy, /agentweaver\.io\/workload: gateway/);
-  assert.match(gatewayPolicy, /k8s:io\.kubernetes\.pod\.namespace: CHANGEME-GATEWAY-NAMESPACE/);
+  assert.match(gatewayPolicy, /k8s:io\.kubernetes\.pod\.namespace: agentweaver-gateway/);
   assert.match(gatewayPolicy, /k8s:gateway\.networking\.k8s\.io\/gateway-name: identity-broker/);
   assert.match(gatewayPolicy, /port: "8443"/);
   const mcpPolicy = readFileSync(path.join(root, 'deploy', 'k8s', 'routing', 'identity-broker',
     'mcp-gateway-ingress.yaml'), 'utf8');
   assert.match(mcpPolicy, /name: mcp-gateway-ingress/);
   assert.match(mcpPolicy, /agentweaver\.io\/workload: mcp/);
-  assert.match(mcpPolicy, /k8s:io\.kubernetes\.pod\.namespace: CHANGEME-GATEWAY-NAMESPACE/);
+  assert.match(mcpPolicy, /k8s:io\.kubernetes\.pod\.namespace: agentweaver-gateway/);
   assert.match(mcpPolicy, /k8s:gateway\.networking\.k8s\.io\/gateway-name: identity-broker/);
   assert.match(mcpPolicy, /port: "8443"/);
   const environmentPolicy = readFileSync(path.join(root, 'deploy', 'k8s', 'base',
@@ -1365,7 +1433,7 @@ test('deployment preflight reads exact managed Gateway and application routing r
     args[1], args[args.indexOf('--field-selector') + 1], args[args.indexOf('--namespace') + 1],
   ]), [
     ['defaultdomaincertificates', 'metadata.name=identity-broker', target.namespace],
-    ['gateways', 'metadata.name=identity-broker', 'agentweaver-v1-gateway'],
+    ['gateways', 'metadata.name=identity-broker', 'agentweaver-gateway'],
     ['httproutes', 'metadata.name=identity-broker', target.namespace],
     ['backendtlspolicies', 'metadata.name=identity-broker', target.namespace],
     ['httproutes', 'metadata.name=web-application', target.namespace],
@@ -1379,8 +1447,8 @@ test('deployment preflight reads exact managed Gateway and application routing r
 });
 
 test('routing readbacks project actual portal hostnames before output redaction', () => {
-  const gatewayNamespace = 'agentweaver-v1-gateway';
-  const hostnameDomain = '*.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
+  const gatewayNamespace = 'agentweaver-gateway';
+  const hostnameDomain = '*.0123456789abcdef.eastus2euap.aksapp.io';
   const brokerHostname = `agentweaver.${hostnameDomain.slice(2)}`;
   const portalHostname = `portal.${hostnameDomain.slice(2)}`;
   const controller = 'istio.aks.azure.com/gateway-controller';
@@ -1455,8 +1523,8 @@ test('routing readbacks project actual portal hostnames before output redaction'
     },
     backendtlspolicies: {
       'identity-broker': backendPolicy('identity-broker', 'identity-broker', brokerHostname),
-      'gateway-api': backendPolicy('gateway-api', 'gateway', 'gateway.agentweaver-v1-p0.svc.cluster.local'),
-      mcp: backendPolicy('mcp', 'mcp', 'mcp.agentweaver-v1-p0.svc.cluster.local'),
+      'gateway-api': backendPolicy('gateway-api', 'gateway', 'gateway.agentweaver.svc.cluster.local'),
+      mcp: backendPolicy('mcp', 'mcp', 'mcp.agentweaver.svc.cluster.local'),
     },
   };
   const calls = [];
@@ -1486,9 +1554,9 @@ test('routing readbacks project actual portal hostnames before output redaction'
 });
 
 test('Azure target readbacks preserve exact hostnames without exposing kubeconfig credentials', () => {
-  const fqdn = 'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
-  const privateFqdn = 'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.privatelink.azmk8s.io';
-  const apiPrivateFqdn = 'agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.azmk8s.io';
+  const fqdn = 'agentweaver.0123456789abcdef.eastus2euap.aksapp.io';
+  const privateFqdn = 'agentweaver.0123456789abcdef.eastus2euap.privatelink.azmk8s.io';
+  const apiPrivateFqdn = 'agentweaver.0123456789abcdef.eastus2euap.azmk8s.io';
   const expectedResourceId = `/subscriptions/${target.subscriptionId}/resourceGroups/${target.resourceGroup}/providers/Microsoft.ContainerService/managedClusters/${target.clusterName}`;
   const fixtures = {
     account: { id: target.subscriptionId, tenantId: target.tenantId },
@@ -1501,9 +1569,9 @@ test('Azure target readbacks preserve exact hostnames without exposing kubeconfi
       properties: { adminUsername: 'sensitive-aks-property' },
     },
     kubeconfig: {
-      'current-context': 'aw-v1-p0',
-      contexts: [{ name: 'aw-v1-p0', context: { cluster: 'aw-v1-p0', user: 'admin' } }],
-      clusters: [{ name: 'aw-v1-p0', cluster: { server: `https://${apiPrivateFqdn}:443` } }],
+      'current-context': 'agentweaver',
+      contexts: [{ name: 'agentweaver', context: { cluster: 'agentweaver', user: 'admin' } }],
+      clusters: [{ name: 'agentweaver', cluster: { server: `https://${apiPrivateFqdn}:443` } }],
       users: [{ name: 'admin', user: { token: 'sensitive-kubeconfig-token' } }],
     },
     namespace: {
@@ -1527,7 +1595,7 @@ test('Azure target readbacks preserve exact hostnames without exposing kubeconfi
   assert.equal(result.cluster.fqdn, fqdn);
   assert.equal(result.cluster.privateFqdn, privateFqdn);
   assert.equal(result.cluster.apiserverAccessProfile.privateFqdn, apiPrivateFqdn);
-  assert.equal(result.contextName, 'aw-v1-p0');
+  assert.equal(result.contextName, 'agentweaver');
   assert.equal(result.server, `https://${apiPrivateFqdn}:443`);
   assert.deepEqual(JSON.parse(calls[1].output), {
     id: expectedResourceId,
@@ -1537,9 +1605,9 @@ test('Azure target readbacks preserve exact hostnames without exposing kubeconfi
     agentPoolProfiles: [{ enableAutoScaling: true, minCount: 2, maxCount: 3, count: 2 }],
   });
   assert.deepEqual(JSON.parse(calls[2].output), {
-    'current-context': 'aw-v1-p0',
-    contexts: [{ name: 'aw-v1-p0', context: { cluster: 'aw-v1-p0' } }],
-    clusters: [{ name: 'aw-v1-p0', cluster: { server: `https://${apiPrivateFqdn}:443` } }],
+    'current-context': 'agentweaver',
+    contexts: [{ name: 'agentweaver', context: { cluster: 'agentweaver' } }],
+    clusters: [{ name: 'agentweaver', cluster: { server: `https://${apiPrivateFqdn}:443` } }],
   });
   assert.ok(calls[1].options.preserveProjectedJson);
   assert.ok(calls[2].options.preserveProjectedJson);

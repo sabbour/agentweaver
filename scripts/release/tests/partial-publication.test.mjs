@@ -576,7 +576,7 @@ test('helper deploy CLI uses a product cwd with the Kustomize bundle and accepts
   const target = {
     subscriptionId: '90ab3701-83f0-4ba1-a90a-f2e68683adab',
     tenantId: '72f988bf-86f1-41af-91ab-2d7cd011db47',
-    resourceGroup: 'aw-v1-p0', clusterName: 'aw-v1-p0-aks', namespace: 'agentweaver-v1-p0',
+    resourceGroup: 'agentweaver', clusterName: 'agentweaver-aks', namespace: 'agentweaver',
     nodeMin: 2, nodeMax: 3,
   };
   const argv = ['v1.0.0', '--manifest', manifestPath, '--publication', publicationPath,
