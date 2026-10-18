@@ -1,8 +1,14 @@
-# Dedicated Azure environment
+# Azure foundation resources
 
-`infra/bicep/main.bicep` defines a dedicated v1 network and AKS cluster. It includes Entra-only PostgreSQL, Key Vault, Blob Storage, and Azure Monitor.
+Use this reference to review the v1 Azure foundation defined in
+`infra/bicep/main.bicep`. Bicep is Azure's declarative infrastructure language;
+AKS means Azure Kubernetes Service. The template defines a dedicated network
+and cluster, Entra-only PostgreSQL, and Key Vault, Blob Storage, and Azure
+Monitor resources. PostgreSQL, Key Vault, and Blob use private networking;
+Azure Monitor uses a private query path and an explicit ingestion path.
 
-PostgreSQL, Key Vault, and Blob use private networking. Azure Monitor uses a private workspace path for queries and an explicit ingestion path. The definitions do not prove private DNS resolution or live access.
+These definitions do not show that anyone deployed the resources, that private
+DNS resolves, or that a service has live access.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">
@@ -22,7 +28,7 @@ The following sequence shows the verifier's time-ordered, read-only checks after
 </figure>
 <p class="aw-diagram-links"><a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.png'">Open full-size PNG</a> · <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-acceptance.drawio'">Open editable draw.io source</a></p>
 
-## P0 region placement
+## Region placement
 
 The intended v1 P0 placement is:
 
@@ -96,14 +102,14 @@ The routing identity is separate from the Foundation Probe identity.
 
 The template configures the Key Vault CSI provider and secret rotation with `enableSecretRotation: 'true'` and `rotationPollInterval: '2m'`. These values are template settings; the addon is not active in Azure.
 
-## Limited P1 runtime identity setup
+## Limited runtime identity setup
 
 `infra/bicep/p1-runtime-identities.bicep` is separate from the P0 foundation topology.
 It uses the existing resource group location and the existing AKS OIDC issuer.
 The resource group and cluster locations must match before deployment.
 Its fixed service list is Projects & Config, Environment, Knowledge,
 Events & Sessions, and Orchestrator.
-Each identity trusts only its named ServiceAccount in `agentweaver-v1-p0`.
+Each identity trusts only its named ServiceAccount in `agentweaver`.
 
 The template creates no Azure resource role assignment, database grant,
 migration identity, certificate, storage account, server, cluster, or node pool.

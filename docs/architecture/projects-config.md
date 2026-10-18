@@ -1,6 +1,12 @@
-# Projects & Config service candidate
+# Projects & Config service
 
-`Agentweaver.Projects.Config` is an unpublished .NET 10 service candidate. It owns project lifecycle, typed configuration revisions, platform runtime defaults, and immutable run-selection snapshots in the `projects_config` PostgreSQL schema. Source presence is not evidence of deployment or release.
+Use this reference to understand how the unpublished .NET 10
+`Agentweaver.Projects.Config` source owns project lifecycle, versioned
+configuration, platform runtime defaults, and immutable run selections in the
+`projects_config` PostgreSQL schema. A run selection is the accepted snapshot
+of settings and provider candidates for one project run; it is not proof that a
+provider resource exists. Source presence is not evidence of deployment or
+release.
 
 ```mermaid
 sequenceDiagram
@@ -24,6 +30,9 @@ sequenceDiagram
 ```
 
 ## Selected runtime profile
+
+For runtime settings, see the planned
+[runtime configuration reference](../reference/runtime-configuration.md).
 
 The separate source renderer under `deploy/k8s/profiles/projects-config/`
 targets only the existing 1.x environment. The ordinary Broker and Probe
@@ -279,7 +288,10 @@ and consumers fail closed if a selected candidate differs from the supplied cata
 Database migrations run through the separate `--migrate` operation; normal startup
 verifies that migrations have already been applied.
 
-### Checked-in P1 provider catalog
+### Checked-in provider catalog
+
+For provider selection and catalog configuration, see the planned
+[provider configuration guide](../guide/configure-providers.md).
 
 The reviewed snapshot is
 [`deploy/k8s/provider-catalogs/projects-config-provider-catalog.snapshot.json`](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/provider-catalogs/projects-config-provider-catalog.snapshot.json),
@@ -301,11 +313,11 @@ in Environment 1.0.0. Its `OptionsRevision` uses the operator-selected
 bounded label `p1-v1.0.0` (the selected-label rule). The L3/L4 layer selection
 uses the Cilium provider.
 
-The Cilium namespace is `agentweaver-v1-p0`, the namespace used by the P0
+The Cilium namespace is `agentweaver`, the namespace used by the P0
 deployment policies. The checked-in `environment-agenthost-network.yaml`,
 `service-owner-network.yaml`, and `identity-broker/egress.yaml` policies define
 the endpoint selectors as the exact pair
-`k8s:io.kubernetes.pod.namespace=agentweaver-v1-p0` and
+`k8s:io.kubernetes.pod.namespace=agentweaver` and
 `agentweaver.io/workload=<workload>`. The workload values are the names
 selected by those policies: `agenthost`, `environment`, `projects-config`,
 `gateway`, `mcp`, `orchestrator`, `knowledge`, `events-and-sessions`, and

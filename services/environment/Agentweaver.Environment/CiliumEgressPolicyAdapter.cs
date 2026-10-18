@@ -19,6 +19,11 @@ public static class CiliumEgressCapabilities
 }
 
 /// <summary>Versioned Cilium provider settings, including the Kubernetes namespace and exact service selectors.</summary>
+/// <param name="Namespace">Kubernetes namespace that owns the managed egress policies.</param>
+/// <param name="AdapterVersion">Adapter version advertised in the NetworkPolicy provider registration.</param>
+/// <param name="OptionsSchemaVersion">Provider options contract version; must equal version 1.</param>
+/// <param name="OptionsRevision">Revision used to match the configured provider with its registration.</param>
+/// <param name="EndpointSelectors">Exact namespace/service selectors; every selector must pin the target namespace with a non-wildcard label.</param>
 public sealed record CiliumEgressProviderOptions(
     string Namespace,
     Version AdapterVersion,
@@ -26,7 +31,11 @@ public sealed record CiliumEgressProviderOptions(
     string OptionsRevision,
     ImmutableDictionary<string, ImmutableDictionary<string, string>> EndpointSelectors)
 {
-    /// <summary>Validates the namespace, option revision, and pinned Kubernetes service label selectors.</summary>
+    /// <summary>
+    /// Requires a valid namespace and adapter version, schema version 1, a nonempty revision,
+    /// and service selectors in <c>namespace/name</c> form with exact labels that pin the
+    /// selected namespace.
+    /// </summary>
     public CiliumEgressProviderOptions Validate()
     {
         if (!IsDnsLabel(Namespace) || AdapterVersion is null ||

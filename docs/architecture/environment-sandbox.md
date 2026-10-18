@@ -1,9 +1,14 @@
 # Environment Sandbox leases
 
-This page documents the unpublished v1 Environment source candidate for issue
-[#1852](https://github.com/sabbour/agentweaver/issues/1852). It is not a deployment
-record and does not claim that a live Kubernetes cluster or AgentHost runtime was
-tested.
+Use this reference to understand how the unpublished v1 Environment source
+candidate reserves and checks Sandbox leases. A lease is the durable owner
+record that binds one Sandbox operation to its Environment and provider
+resource. A generation fence is a version check that prevents stale operations
+from changing newer owner state. Environment checks the Workspace attachment
+and network policy before it reports dispatch readiness. This page describes
+source behavior; it is not a deployment record or evidence that a live
+Kubernetes cluster or AgentHost runtime was tested. See issue
+[#1852](https://github.com/sabbour/agentweaver/issues/1852) for the source work.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-environment-sandbox-lifecycle.png'">
@@ -648,6 +653,10 @@ supersede evidence must be added by its owning contract before automatic
 run-status reclamation is enabled.
 
 ## Configuration
+
+For Sandbox provider selection and Environment settings, see the planned
+[provider configuration guide](../guide/configure-providers.md) and
+[runtime configuration reference](../reference/runtime-configuration.md).
 
 The Environment service requires the `Environment:Sandbox:AgentSandbox`
 configuration section. ASP.NET environment variables use the corresponding

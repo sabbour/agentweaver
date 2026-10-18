@@ -1,19 +1,18 @@
 # Foundation architecture
 
-The v1 source builds independent .NET components, including unpublished Knowledge
-and Events & Sessions service candidates, Environment and Orchestrator candidates,
-and the Orchestrator Core AGT YAML Policy adapter. Environment owns lifecycle,
-egress intent, workspace-volume orchestration, and Sandbox leases; its Azure Files
-CSI adapter provisions or releases generation-pinned claims, while the selected
-Sandbox provider mounts the exact attached PVC. These components are source
-candidates, not deployed services. The native journal includes typed, redacted
-PolicyEvaluation evidence but rejects generic writes without trusted Core-writer
-provenance. The event and policy adapter are not action grants. Orchestrator Core's action guard
-checks current grants and awaits a durable receipt acknowledgment; Events admits
-PolicyEvaluation only from immutable Orchestrator receipts after current owner
-validation. Downstream protected-effect call-site wiring is not claimed. Provider,
-journal, addressed-message, and Storage contracts stay separate from the Azure,
-PostgreSQL, Kubernetes, and AGT adapters and services.
+Use this concept to map the main Agentweaver v1 source components and the
+boundaries between contracts, adapters, and service candidates. A provider
+contract describes a capability; an adapter implements that contract for a
+technology; a service owns the data and authorization for its domain. Several services
+described here are unpublished source candidates, not deployed services.
+Environment owns lifecycle, egress intent, workspace-volume orchestration, and
+Sandbox leases. Its Azure Files CSI adapter provisions or releases
+generation-pinned claims, while the selected Sandbox provider mounts the exact
+attached volume. The native journal can store typed, redacted
+`PolicyEvaluation` evidence, but it rejects generic writes without trusted
+Orchestrator Core provenance. Evidence is not an action grant. The action guard
+checks current grants and waits for a durable receipt before a protected effect;
+downstream effect-call-site wiring is not claimed.
 
 The Identity Broker is the host for caller authentication and secret-redemption authorization. It constructs the Key Vault backend and the authorization wrapper; it is a service host in source, not a claim that a service is deployed.
 
@@ -42,7 +41,7 @@ The optional server profile pins capability, images, executable allow list, reso
 Core retains MAF checkpoint and run-state ownership.
 Source checks do not prove live provider effects or complete native accounting.
 
-## Canonical component overview
+## Component overview
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-foundation-dependencies.png'">

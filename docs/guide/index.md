@@ -1,38 +1,50 @@
-# Guides
+# How-to guides and tutorials
 
-Agentweaver v1 separates the browser and Gateway from services that own project,
-run, identity, and journal state. These guides cover building the source and
-validating those boundaries.
+Use these guides and tutorials to build, configure, deploy, and validate Agentweaver 1.x.
+Each guide names the source boundary and required target access. Building or
+rendering the source does not deploy a platform.
 
-## Reading order
+## Get started
 
-1. [Build and use](./build-and-use.md): requirements, locked restore, build, and
-   foundation libraries.
-2. [Experience overview](../experience/00-overview.md): the implemented user
-   journeys and current browser navigation.
-3. [Web client](./web-client.md): Broker authentication, Gateway integration, and
-   frontend validation.
-4. [Gateway](./gateway.md): finite API routing, current authorization, browser
-   connection flows, MCP, and event streaming.
-5. [Testing](./testing.md): existing test commands, owner-contract coverage, and
-   documentation checks.
-6. [Environment Sandbox testing](./environment-sandbox-testing.md): controlled
-   provider, Workspace, AgentHost, and recovery checks.
-7. [Azure acceptance](./azure-acceptance.md): deployment prerequisites and
-   separately authorized environment checks.
+1. Follow [Quickstart: build the source](./quickstart.md) to restore the
+   solution and run local checks.
+2. Read [What Agentweaver 1.x can do](../experience/00-overview.md) before
+   choosing a workflow or service.
+3. Review [Foundation architecture](../architecture/overview.md) to find the
+   service that owns each operation.
 
-Building the source does not deploy a platform. Follow the acceptance guide
-only when you have authorization for the target environment.
+## Tutorial
 
-## Find details
+- [Deploy Agentweaver to Azure](./deploy-to-azure.md): provision an approved
+  target, bootstrap its database and identities, apply Kustomize, and verify
+  the workloads.
 
-- [Experience guide](../experience/README.md): what users see and do.
-- [HTTP API](../reference/api.md): route inventory by owning service.
-- [Events](../reference/events.md): journal and outbox contracts.
-- [Web reference](../reference/web.md): active source files and configuration.
-- [MCP tools](../reference/mcp-tools.md): Gateway-derived tool surface.
-- [Contracts and configuration](../reference/contracts.md): shared types,
-  configuration, and endpoint semantics.
-- [Architecture overview](../architecture/overview.md): component ownership.
-- [Component releases](../reference/releases.md): validation and publication.
-- [Diagram authoring](../diagrams/README.md): diagram source and validation.
+## Configure and deploy
+
+- [Configure providers](./configure-providers.md): review the providers that
+  are registered in the current catalog and their limits.
+- [Configure Knowledge memory](./configure-knowledge.md): configure native
+  PostgreSQL Memory and preserve its store identity.
+- [Gateway and BFF](./gateway.md): discover fixed routes and understand
+  authentication and forwarding.
+- [Web client](./web-client.md): configure the browser client and sign-in.
+
+## Test and accept
+
+- [Testing](./testing.md): run tests and interpret exactly what they prove.
+- [Environment Sandbox testing](./environment-sandbox-testing.md): run
+  controlled lifecycle and provider tests.
+- [Azure acceptance](./azure-acceptance.md): verify the deployed foundation
+  with approved, bounded checks.
+- [Troubleshoot Agentweaver 1.x](./troubleshooting.md): diagnose safe,
+  source-grounded configuration and rollout failures.
+
+## Find reference information
+
+- [Runtime configuration](../reference/runtime-configuration.md)
+- [HTTP API](../reference/api.md)
+- [Events](../reference/events.md)
+- [MCP tools](../reference/mcp-tools.md)
+- [Contracts and endpoints](../reference/contracts.md)
+- [Component releases](../reference/releases.md)
+- [Diagram authoring](../diagrams/README.md)

@@ -1,8 +1,10 @@
 # Events & Sessions journal
 
-The v1 source contains an unpublished `Agentweaver.EventsAndSessions` service
-candidate. It implements the native Sessions journal and a separate project-scoped
-accepted-effect fact stream; it is not a deployed platform service.
+Use this reference to understand the v1 Events & Sessions source candidate.
+An event journal stores ordered records of run activity; a project fact is a
+separate project-scoped record of an accepted effect. The unpublished
+`Agentweaver.EventsAndSessions` service implements both source boundaries, but
+it is not a deployed platform service.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-sessions-journal.png'">
@@ -531,6 +533,10 @@ publish an image.
 
 Use these separate settings:
 
+For provider selection and runtime setting guidance, see the planned
+[provider configuration guide](../guide/configure-providers.md) and
+[runtime configuration reference](../reference/runtime-configuration.md).
+
 | Configuration | Purpose |
 | --- | --- |
 | `ConnectionStrings:EventsAndSessions` | Runtime PostgreSQL endpoint, database, and least-privilege Entra role. |
@@ -555,7 +561,7 @@ runtime values before they are written to the checked-in
 `events-and-sessions-runtime-config.json`. It requires the admitted P0 database
 and workload identity, Sessions resource identity and generation, Broker
 issuer/audiences, private Knowledge/Projects/Orchestrator owner addresses, a
-Blob container in `awv1p0blob`, and valid model-binding and rate-card values.
+Blob container in `agentweaverblob`, and valid model-binding and rate-card values.
 Database access remains password-free with `VerifyFull`; credentials, SAS
 tokens, extra Blob paths, and encoded paths are rejected. This validator emits
 configuration data only. It does not produce a Kubernetes List, image,
@@ -567,8 +573,8 @@ it through Kustomize:
 ```powershell
 kubectl kustomize deploy\k8s
 kubectl apply -k deploy\k8s
-kubectl rollout restart deployment/events-and-sessions -n agentweaver-v1-p0
-kubectl rollout status deployment/events-and-sessions -n agentweaver-v1-p0
+kubectl rollout restart deployment/events-and-sessions -n agentweaver
+kubectl rollout status deployment/events-and-sessions -n agentweaver
 ```
 
 Kubernetes does not restart a process when data in a referenced ConfigMap

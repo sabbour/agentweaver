@@ -1,11 +1,14 @@
 # Web app reference
 
-The active v1 app is a React and TypeScript SPA built with Vite. It uses Fluent
-UI for controls and React Flow for session topology. A .NET static-file host
-serves the production build.
+Use this reference to find the routes, configuration, and source boundaries for
+the active v1 Web client. The client is a React and TypeScript single-page
+application (SPA) built with Vite. It uses Fluent UI for controls and React Flow
+for session topology. A .NET static-file host serves the production build.
 
-For user steps, see the [experience guide](../experience/README.md). For setup
-commands and owner constraints, see the [web client guide](../guide/web-client.md).
+For user tasks, see the [experience guide](../experience/README.md). For
+development setup and client constraints, see the
+[Web client guide](../guide/web-client.md). For deployment-specific settings,
+see [Runtime configuration](./runtime-configuration.md).
 
 ## Source structure
 
@@ -19,7 +22,7 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/AuthContext.tsx` | In-memory session, exact-run authorization, refresh, and current tenant context. |
 | `src/v1/authProtocol.ts` | PKCE, state and callback validation, consent, and Broker token requests. |
 | `src/v1/config.ts` | Runtime and build-time configuration. |
-| `src/v1/api.ts` | Gateway HTTP client, structured errors, header forwarding, and SSE parsing. |
+| `src/v1/api.ts` | Gateway HTTP client, structured errors, header forwarding, and server-sent events (SSE) parsing. |
 | `src/v1/contracts.ts` | Browser DTOs and authority-response validation. |
 | `src/v1/useRunJournal.ts` | Replay, live reconnect, event deduplication, and scope checks. |
 | `src/v1/repoApp.ts` | Direct cookie-authenticated Broker Repo App client and callback messages. |
@@ -54,6 +57,11 @@ The production host serves `index.html` for client routes. Missing `/assets`
 files return `404`, not the SPA fallback.
 
 ## Configuration
+
+The host can inject public browser settings at runtime; build-time Vite values
+provide the fallback. Use the runtime configuration reference for deployment
+procedures and setting sources. The table below documents the values the v1
+client reads.
 
 `src/v1/config.ts` reads decoded
 `window.__AGENTWEAVER_CONFIG_BASE64__` values first, then Vite build-time values,

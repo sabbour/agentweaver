@@ -1,412 +1,53 @@
-# Agentweaver 1.0
+# Agentweaver 1.x
 
-This branch (`v1`) contains the Agentweaver 1.0 rebuild. It starts from an empty
-history by design. Version 1.0 rebuilds the product; it doesn't refactor 0.x.
+Agentweaver 1.x is a rebuild of the Agentweaver platform on the `v1` branch.
+It defines provider contracts and service boundaries for agent projects,
+identity, Knowledge, run events, orchestration, environments, and user-facing
+surfaces.
 
-- **0.x continues to ship** on [`dev`](https://github.com/sabbour/agentweaver/tree/dev).
-  It remains the behavior reference and a source of compatible, reviewed code for
-  selective reuse.
-- **1.0 preserves behavior behind new contracts.** The parity map tracks each 0.x
-  capability. Teams can selectively reuse compatible, reviewed code.
-- **Retain the existing UI.** Future P1 frontend work keeps most of the existing
-  Agentweaver UI and adapts its API wiring to the new services. Redesign requires
-  an explicit user request; no UI work is included in P0.
-- **Status:** P0 foundations are accepted. The source also contains an unpublished
-  Projects & Config service candidate. The architecture remains Proposed, and the
-  repository does not yet represent a deployed platform. [Phase progress](docs/architecture/decisions/0001-platform-architecture.md#phases)
-  distinguishes accepted foundations, in-progress candidates, and remaining work.
+The repository contains implemented foundations and service candidates. A
+component in source is not necessarily selectable, published, or deployed.
+Follow the documentation's status notes before treating a route, provider, or
+Azure resource as available.
 
-## Start here
+## Learn Agentweaver
 
-| Document | What it covers |
-| --- | --- |
-| [ADR 0001: Agentweaver 1.0 platform architecture](docs/architecture/decisions/0001-platform-architecture.md) | Overview: goals, decisions, architecture at a glance, delivery strategy, roadmap alignment, phases, risk register |
-| [Provider seams](docs/architecture/design/provider-seams.md) | Provider model, the 16 planned seams, per-seam designs, conformance |
-| [Sessions and coordination](docs/architecture/design/sessions-and-coordination.md) | Run journal, suspend/resume, session tree, messages, knowledge records |
-| [Orchestration](docs/architecture/design/orchestration.md) | Thin coordinator, workflow step catalogs, typed decision tools, rules in code |
-| [Applications and surfaces](docs/architecture/design/applications-and-surfaces.md) | One application model (`live` → `preview` → `published`), Application Hosting, the surface panel |
-| [Services and release](docs/architecture/design/services-and-release.md) | Service decomposition, data plane, per-service versioning and release |
-| [Component releases](releases/README.md) | v1 manifest/provenance contracts, package preparation, publication, and guarded local image deployment |
-| [P0 Kubernetes source](deploy/k8s/README.md) | Existing runtime profiles, operator-owned prerequisites, and the v1 rollout boundary |
-| [Projects & Config service](docs/architecture/projects-config.md) | Implemented candidate API, revisioned records, and immutable run-selection semantics |
-| [Skill marketplace sources](docs/architecture/skill-marketplace.md) | Revisioned project sources, bounded commit-pinned browsing, and the import ownership boundary |
-| [AgentHost source candidate](docs/architecture/agenthost.md) | Authenticated native SDK execution, guarded effects, durable turns, startup evidence, and pinned image |
-| [Credential-less sandbox proposal](docs/architecture/identity-secrets.md#credential-less-sandbox-proposal) | Keep upstream credentials outside untrusted guests; proposed gateway flow, provider admission, SDK/protocol limits, and acceptance cases |
+Start with the [1.x documentation](docs/index.md). The site is organized as:
 
-## What 1.0 changes
+- **Get started:** [build the source](docs/guide/quickstart.md) and understand
+  the reusable foundation libraries.
+- **Concepts:** review [what Agentweaver can do](docs/experience/00-overview.md),
+  [the architecture](docs/architecture/overview.md), and
+  [providers and models](docs/architecture/providers-models.md).
+- **How-to:** [configure providers](docs/guide/configure-providers.md),
+  [configure Knowledge memory](docs/guide/configure-knowledge.md), and
+  [deploy to Azure](docs/guide/deploy-to-azure.md).
+- **Reference:** find every
+  [runtime configuration setting](docs/reference/runtime-configuration.md),
+  API route, event, and release contract.
+- **Troubleshooting:** diagnose source-grounded configuration and rollout
+  failures in the [troubleshooting guide](docs/guide/troubleshooting.md).
 
-- Backends plug in through **provider seams** instead of being wired into one monolith.
-- The platform splits into independently versioned **control-plane and data-plane
-  services**.
-- Agent memory, decisions, and inbox move from repository files into the **session tree
-  and messages**.
-- The coordinator prompt stays **thin**. Workflow rules live in code.
-- Previews and published applications become **one application model**, shown in
-  Agentweaver's own UI next to a **surface panel**.
-- 1.0 runs **in the cloud only** (AKS and Azure first). The product doesn't include a local runtime mode.
+## Build and validate the source
 
-## Implemented foundations
-
-The initial P0 delivery contains provider descriptor and binding contracts, a pure
-catalog/resolver, conformance-focused tests, and build/release validation. The v1 source
-also includes unpublished Events & Sessions and Orchestrator service candidates.
-The Orchestrator source covers typed coordinator decisions and gates, durable MAF
-checkpoints, immutable accepted-run Sandbox binding metadata, and owner-issued
-grant/receipt records. Non-empty or fixed-work plans require a server-registered
-Sandbox resource adapter. Without one, the host fails closed with `503`. This source
-does not include a production Sandbox provisioner or the full dispatch engine.
-The positive Events receipt consumer remains separate work. These services can be
-built and tested, but are not deployed or published. The repository also contains
-the versioned Gateway/BFF and v1 browser client source. Neither is deployed. The
-unpublished [AgentHost candidate](docs/architecture/agenthost.md) adds authenticated
-runtime execution, not automatic scheduling or a deployed platform. The source does
-not provision Azure resources or include the AgentHost scheduler or product MCP server.
-
-The separate [Environment BuildTest path](docs/architecture/environment-sandbox.md#buildtest-command-and-output-collection)
-resolves Core's immutable accepted checkpoint and persists its stable operation in existing owner-effects state.
-It uses gated offline command Pods and a separate pinned, read-only collector for required files.
-Core retains MAF checkpoint and run-state ownership.
-Authenticated dispatch can now prepare version 2 repository input through the existing Source Control owner.
-It keeps the confirmed command unchanged and saves verified source metadata and seed bytes in the original checkpoint.
-Provider preparation helpers and complete output export remain separate work.
-Configuration, contract, and collector-entry checks are not live provider or complete native accounting evidence.
-
-See the [Events & Sessions journal](docs/architecture/events-sessions.md) for its
-implemented contract, PostgreSQL ownership, provider pin, and current limits.
-
-Provider selection covers exclusive and platform-singleton seams, ordered Guardrails/
-Telemetry sets, layered Network Policy (required L3/L4, optional L7), and meter-keyed
-Cost selection. The source also connects authenticated native SDK observations
-to immutable Orchestrator receipts and reference-only Events accounting.
-The local harness covers current owner authority and exact Copilot AI-credit pricing.
-It does not prove deployment, paid model execution, or automatic AgentHost scheduling.
-Separate [P1 API/UI/MCP harness candidates](docs/guide/testing.md#p1-retained-surface-harness-candidates)
-retain current owner contracts and redacted evidence.
-Their controlled local tests are not deployed cross-surface acceptance.
-Application Hosting per-app selection remains subsequent work; callers
-receive an explicit error for unsupported single-provider resolution rather than a
-fallback. Resolving a descriptor produces a candidate, not a provisioned resource.
-A run binding pins negotiated capabilities only after provisioning; layered pinning
-also requires the confirmed applied egress-intent generation.
-
-The P1 Orchestrator Core library adds pure, deterministic workflow-catalog and
-step-bound WorkPlan validation. It validates pinned run selections, output bounds,
-joins, snapshots, and scope diffs; it does not dispatch children or persist run state.
-It now also includes a migration-free, project-scoped backlog dependency graph and
-readiness evaluator. These pure contracts reject stale graph/task revisions, invalid
-or cyclic edges, and owner-projected prerequisite snapshots that are missing,
-incomplete, stale, or lack required verified output evidence. `Merged` is reserved
-for a validated Merge gate; a fully evidenced non-merge workflow uses a distinct
-`Completed` state, with captured outputs still verified and no-output completion
-backed by an explicit owner seal. They do not persist tasks,
-authorize callers, or produce/verify Source Control evidence. An Orchestrator owner
-candidate adds persisted task/dependency operations, a run-scoped atomic claim, and
-wired MAF owner-evidence reader/routes. At claim time it locks the current owner
-binding, enumerates and rereads all admitted captures for that root and selection,
-and rebuilds the witness from that inventory. Non-empty output requires exactly one
-capture matching the witness ID; no-output evidence includes actual captures so a
-late non-empty manifest blocks readiness. Migration 016 remains unregistered. The
-bounded C3/MAF source composition is admitted, but whole-producer runtime acceptance
-remains pending. The MAF 015 schema is packaged as an embedded resource and registered
-with the explicit migrator. This source change does not apply it to a shared or live
-database. This candidate is not deployable and does not authorize dispatch or verified
-outputs.
-
-The unpublished Source Control candidate adds an exclusive GitHub provider adapter,
-typed project repository and SecretRef settings, immutable accepted-run provider pins,
-approved merge intents, and authenticated run-bound webhook relay admission. The
-Orchestrator host keeps the default audience strict, redeems exact-version secrets
-through Identity.Broker, and serializes repository merges with PostgreSQL. Direct
-unauthenticated GitHub webhook delivery is intentionally unavailable; no trusted
-deployed relay or published Source Control service is included.
-
-The release manifest describes independently versioned libraries (including Orchestrator Core) and unpublished service candidates such as Identity Broker and Projects & Config.
-It is a draft composition, not evidence of deployment or a released platform.
-
-The [P0 Azure infrastructure story](docs/specs/1777-azure-p0-infrastructure.md)
-defines a dedicated-environment layout. Native Bicep modules in `infra/bicep/`
-define a public AKS API with OIDC/workload identity, Entra-only PostgreSQL,
-RBAC-only Key Vault, Blob storage, Azure Monitor, and least-privilege per-service
-identities. The story also adds a Kustomize base under `deploy/k8s/base/`.
-Dependency-free Node CLI tools under `scripts/azure/` support a read-only plan,
-confirmed exact-SHA deployment, and optional acceptance evidence collection.
-The full foundation template supports an approved initial deployment. An AKS-only
-path updates an existing cluster and its workload-identity federation without
-redeploying external P0 resources.
-Source definitions are not deployment or runtime proof; the approved target's
-deployment and smoke acceptance are tracked separately in
-[#1812](https://github.com/sabbour/agentweaver/issues/1812) and
-[#1814](https://github.com/sabbour/agentweaver/issues/1814). See
-[Azure infrastructure tooling](scripts/azure/README.md) for the guardrails.
-
-The [Azure installer](scripts/azure/README.md) offers guarded PostgreSQL setup
-through the separate, default-off `--bootstrap-identity-postgres` option.
-Ordinary `--execute` does not run this setup. The Identity broker supports
-upstream authorization-code login with PKCE and no required client secret.
-An upstream client secret is optional for explicitly configured confidential clients.
-
-Native AKS-managed Gateway routing has a separate default-off
-`--bootstrap-identity-routing` option.
-It requires explicit approved Gateway placement, security policy, and public-client inputs.
-It derives the issuer and `/signin-oidc` callback from the admitted native route.
-The separate portal listener sends `/` to Web and `/api/v1` plus exact
-`/openapi/v1.json` to Gateway; these source routes are not deployment evidence.
-The callback operation defaults to a read-only append/no-op plan.
-An append requires separate explicit registration and exact-URI confirmation options.
-An existing URI remains a no-op.
-The P0 namespace remains restricted.
-Routing configuration is not runtime acceptance.
-The optional readiness check requires ordinary DNS and trusted HTTPS for both
-Broker health endpoints.
-
-The [P0 Foundation Probe story](docs/specs/1784-foundation-probe.md) adds an
-acceptance-only .NET workload Job, source-bound image receipt, and ownership-safe
-Key Vault, Blob, PostgreSQL, and Azure Monitor checks. Its default CLI plan is
-non-mutating; no cloud resource, secret fixture, or image is created or published
-by CI.
-
-The provider-neutral Secrets foundation defines opaque, versioned references and
-purpose/run-bound requests for trusted Identity redemption. Short-lived credential
-values remain outside descriptors, bindings and durable state. This is a contract
-and an Azure Key Vault adapter library: the adapter resolves exact versions through
-an injected Azure SDK client or credential, or through explicit AKS workload-identity
-host composition. It does not authorize callers, provision a vault or deploy a
-service. See the [workload-identity story](docs/specs/1766-aks-workload-identity.md)
-for this slice's boundaries.
-
-The [OpenTelemetry foundation](packages/Agentweaver.Telemetry/README.md) supplies
-native in-process trace, metric, and log composition with service resource
-identity. The dependent
-[Azure Monitor integration](packages/Agentweaver.Telemetry.AzureMonitor/README.md)
-adds an opt-in exporter for all three signals; neither library starts a service,
-provisions an Azure resource, or proves cloud delivery.
-
-The [Identity authorization library](packages/Agentweaver.Identity/README.md)
-is an **implemented CANDIDATE** for #1776: it wraps trusted secret redemption with
-server-owned, exact run grants. It compares grant identity, revision, expiry and
-bindings after asynchronous acquisition, narrows lifetime metadata on the original
-credential without reading its value, and invalidates acquired credentials on
-every subsequent error or cancellation. It does not provide a grant store,
-authenticate network callers, or deploy an Identity service.
-
-The [Identity broker candidate](docs/specs/1779-identity-broker.md) adds a native
-.NET 10/OpenIddict service with owned PostgreSQL stores, external OIDC login,
-authenticated consent, S256 PKCE, resource audiences, and refresh replay rejection.
-It requires explicit host credentials and has no ambient user-secrets or development-certificate fallback.
-Its P0 redemption composition (#1783) validates bearer issuer, signature, lifetime,
-and configured audience before trusting token subject/project/run claims; append-only
-grant revisions are changed with PostgreSQL compare-and-swap and durable idempotency.
-The broker issues project/run claims only after matching authorize selectors to
-an active Identity-owned grant for the authenticated subject, and rechecks that
-binding at token exchange.
-The endpoint composes `AuthorizedSecretRedemption` with the existing exact-version
-Key Vault adapter and explicit workload identity. The draft service entry has no
-image digest because it remains unpublished. Azure publication/proof (#1790) is
-still separate.
-
-The [Projects & Config service candidate](docs/architecture/projects-config.md)
-adds revisioned project and platform runtime settings, provider/model selection
-inputs, and immutable per-run snapshots backed by an owned PostgreSQL schema.
-Provider registrations remain owned by the provider catalog; model selection
-fails closed when the requested reference is unavailable. The service source is
-not a published image or deployment.
-
-The Postgres P0 slice adds `Agentweaver.Persistence.Postgres`: service-schema migration,
-transaction-coupled outbox enqueue, per-stream sequencing, leased claims, and fenced
-acknowledgment. Consumer-scoped inbox receipts admit a stable message identity in the
-same caller-owned transaction as domain changes and optional outbox enqueue, returning
-an explicit duplicate outcome. Real PostgreSQL tests cover atomicity, duplicate handling,
-concurrency, and recovery. Delivery remains at least once; this is a persistence
-library, not a running relay or consumer service. A bounded, caller-driven
-`OutboxRelay` publishes through an injected transport before fenced acknowledgment;
-it does not start a daemon or guarantee exactly-once delivery.
-
-The Blob Object Store foundation adds provider-neutral opaque-object operations
-and an injected Azure SDK adapter for platform artifacts. It does not expose
-agent workspace storage or provision an Azure account; see the
-[Object Store guide](packages/Agentweaver.ObjectStore.AzureBlob/README.md).
-
-The Identity broker now composes the admitted authorization boundary with an
-Identity-owned PostgreSQL run-grant authority and the exact-version Key Vault
-workload-identity adapter. Its source now also defines a dedicated HTTPS
-ClusterIP runtime, separate runtime and migration workload identities, and an
-opt-in schema migration Job. Runtime PostgreSQL authentication uses an async
-Entra token callback per new physical connection; normal startup verifies the
-schema and never applies migrations. The source is still unpublished and
-undeployed: approved image, certificate, Secret, ConfigMap, PVC, database
-principal/bootstrap, and egress inputs remain operator responsibilities. No
-Azure, PostgreSQL, or Kubernetes write occurred.
-
-## Build and check the foundation
-
-Use the .NET 10 SDK selected by `global.json`, Node.js 24, and a running
-Docker-compatible engine. PostgreSQL tests start and dispose their own Testcontainers
-database; they do not use a shared database or start local product services.
-Run these commands from the repository root:
+Use .NET 10 and Node.js 24 from the repository root:
 
 ```powershell
+npm ci
 dotnet restore Agentweaver.slnx --locked-mode
 dotnet build Agentweaver.slnx --no-restore --configuration Release
-dotnet test tests\Agentweaver.Orchestrator.Core.Tests\Agentweaver.Orchestrator.Core.Tests.csproj --no-build --no-restore --configuration Release
-dotnet test tests\Agentweaver.Providers.Tests\Agentweaver.Providers.Tests.csproj --no-build --no-restore --configuration Release
-dotnet test tests\Agentweaver.Secrets.AzureKeyVault.Tests\Agentweaver.Secrets.AzureKeyVault.Tests.csproj --no-build --no-restore --configuration Release
-dotnet test tests\Agentweaver.Identity.Tests\Agentweaver.Identity.Tests.csproj --no-build --no-restore --configuration Release
-dotnet test tests\Agentweaver.Identity.Broker.Tests\Agentweaver.Identity.Broker.Tests.csproj --no-build --no-restore --configuration Release
-dotnet test tests\Agentweaver.Persistence.Postgres.Tests\Agentweaver.Persistence.Postgres.Tests.csproj --no-build --no-restore --configuration Release
-dotnet test tests\Agentweaver.Telemetry.Tests\Agentweaver.Telemetry.Tests.csproj --no-build --no-restore --configuration Release
-dotnet test tests\Agentweaver.Telemetry.AzureMonitor.Tests\Agentweaver.Telemetry.AzureMonitor.Tests.csproj --no-build --no-restore --configuration Release
-dotnet test tests\Agentweaver.ObjectStore.AzureBlob.Tests\Agentweaver.ObjectStore.AzureBlob.Tests.csproj --no-build --no-restore --configuration Release
-dotnet test tests\Agentweaver.FoundationProbe.Tests\Agentweaver.FoundationProbe.Tests.csproj --no-build --no-restore --configuration Release
 npm run release:validate
-npm run test:release
-npm run test:azure
-az bicep build --file infra\bicep\main.bicep --stdout
-kubectl kustomize deploy\k8s\base
-kubectl kustomize deploy\k8s\acceptance\foundation-probe
-```
-The Node tooling has no external dependencies; no npm installation is required.
-`npm run release:plan`, `npm run release:apply`, and `npm run release:pack`
-compute deterministic version bumps, apply them to the manifest and checked-in
-project mirrors, and prepare locked package and service-image artifacts with
-source-bound provenance. None of these commands publishes or deploys artifacts.
-Pass `--packages-only` to `release:pack` to prepare only the manifest's NuGet
-packages without rebuilding service images.
-The manual publication workflow requires a separate explicit choice.
-See [release planning and package preparation](releases/README.md#release-planning-and-package-preparation)
-for the full command contract and failure-mode guarantees.
-
-## Project issue-to-merge workflow
-
-Agentweaver project sessions discover the executable Copilot SDK extension in
-`.github/extensions/agentweaver-issue-to-merge/extension.mjs`. Reload extensions
-after checking out a branch containing it. This is a project extension, not a
-GitHub Actions workflow or a global user installation. Discovery only registers
-the workflow; it does not automatically start it. [Project routing instructions](.github/copilot-instructions.md)
-identify when an agent can offer it.
-
-With explicit user workflow authorization (or a matching skill/slash command),
-invoke `run_dynamic_workflow` by name with arguments such as:
-
-```json
-{
-  "name": "agentweaver-issue-to-merge",
-  "args": {
-    "task": "Implement the linked issue with focused tests and documentation",
-    "issueNumber": 1742,
-    "milestone": "Squad",
-    "labels": ["type:chore", "area:workflows"],
-    "baseBranch": "v1"
-  }
-}
 ```
 
-The default `mode: "rehearse"` traverses eight phases with zero agents and no
-mutations. Add `"mode": "deliver"` only for authorized work in a clean isolated
-feature worktree. Optional `repository` defaults to `sabbour/agentweaver`;
-`baseBranch` defaults to `v1`. Type and area labels and a milestone are required.
-Do not guess workflow resource limits; native approval precedes invocation.
-Inspect the run's durable status and resume its run ID when appropriate. Journals
-are scoped to the initiating session even though the extension is project-wide.
+These commands validate and build source. They do not provision Azure,
+publish a release, or deploy Kubernetes workloads. See the
+[quickstart](docs/guide/quickstart.md) for local checks and the
+[deployment guide](docs/guide/deploy-to-azure.md) for the separately approved
+Azure workflow.
 
-Delivery stages implementation, targeted validation, one parallel local review
-pair, surgical corrections, exact-head PR and review evidence, fresh CI and
-serialized admission, then a scoped cleanup handoff. Admission blocks if
-exclusive ownership or exact candidate evidence cannot be verified; it does not
-provide a global lock. The running session cannot archive itself or delete its
-checked-out branch. This process-only extension has a version-neutral changeset;
-product changes require fresh component changesets on v1 even without an npm
-Changesets CLI. The extension does not release or deploy
-the product and does not change branch protection. Its rehearsal does not prove
-live CI or merge behavior.
+## Version boundary
 
-If the coordinator denies admission after publication, ordinary delivery and
-rehearsal remain unchanged. An explicitly selected `mode: "correct"` in the
-**originating session** adopts fully staged, surgical corrections on the same
-source branch and PR. Pass the original issue's task, labels and milestone, plus
-a `source` object with `runId`, original published `headSha` and `treeSha`,
-`branch`, `prNumber`, `publicationCommentId`, `denialCommentId`, and selected
-`paths` equal to the actual staged correction paths. If a path is absent from
-the old PR diff, include `scopeCommentId`. It identifies an exact-tree
-coordinator scope confirmation on the same PR after the denial. The confirmation
-names the native run, PR, issue, old head/tree, denial comment, and staged tree.
-It lists every staged path on a separate ``- `relative/path` `` line. It is
-**not** admission authorization. Set
-`reviewedTreeSha` only if the original pair reviewed a different tree and a
-native correction stage produced the published tree. The route reads the
-originating session's **terminal native run snapshot and run detail** to verify
-the actual review pair, any corrective transition, publication, and issue
-scope. A GitHub timeline claim by itself is never sufficient; missing or
-ambiguous native evidence blocks. The owning workflow verifies this SDK
-receipt before delegating affected validation; a subagent's separate session
-cannot independently read the originating run. The workflow forwards the same
-owner-verified source receipt to the corrected publisher. The publisher must
-still check live Git and GitHub state before committing or pushing. A child-session
-SDK lookup failure does not invalidate the owner's native proof.
-
-If a corrected publication stops **after** publishing (for example, a
-publication-receipt format check rejects a valid comment), do not alter the
-native journal. Do not edit its timeline comment. Do not reuse the original
-source arguments for a different staged tree. In the same originating session,
-`mode: "correct"` also accepts `sourceChain` **instead of** `source`. The object
-contains only `runId` (the stopped corrective run), `parentRunId` (its original
-normal delivery run), and `denialCommentId` (a fresh coordinator denial of the
-corrective run's exact published head/tree). The owning workflow derives the
-PR, head, tree, comment, and allowed paths from both runs' terminal SDK
-receipts, their typed agents, Git, and live GitHub. It accepts only one normal
-parent followed by one failed post-publication correction, not an arbitrary
-chain. The corrected publication must directly follow the original
-published commit; an already-rebased correction blocks rather than claiming
-unverified lineage. An additional `scopeCommentId` is required if newly staged
-paths extend beyond the prior owned correction and PR diff. The old review
-pair remains historical findings, never approval of the revision. Publication
-reuses the same PR and still requires fresh CI and a new exclusive exact-head
-coordinator grant before admission.
-
-The original remote PR/head/tree and denial remain bound to that stopped run.
-If `v1` advanced, the route commits only the staged owned corrections. It
-rebases the owned branch without stashing or discarding changes. Before
-validating the current-base tree, it verifies the original feature and
-correction deltas with zero-context verbatim patch IDs. This permits unrelated
-upstream context changes without accepting changes to the owned patches.
-A conflict leaves work in place and blocks for resolution.
-Otherwise it validates the staged tree directly. Historical pair results are
-old-tree evidence, **not approval of the new tree**. Failed validation cannot
-publish; successful validation pins the corrected tree. Publication reuses the
-same owned PR with a fresh head/tree comment. New CI, an unchanged current
-target tip, and an explicit exclusive coordinator grant for that new head
-remain mandatory for admission. A withdrawn old grant is a denial, never a
-fresh approval. A changed source, unrelated/unstaged files, material scope
-changes, or stale base/head evidence block rather than authorize merge.
-On replay the live PR must still link the source issue, and the fresh publication
-comment must be on that PR by the source receipt's author. A failed pre-publication
-validation can be retried with a newly staged owned tree; successful validation
-pins the candidate, and publication cannot be silently replaced. If the target
-tip advances after the coordinator grant, admission blocks and requires a fresh
-grant on retry.
-The admission owner can use a live, coordinator-authored top-level comment on
-the same PR as the coordinator response when a child-session reply is
-unavailable. Its comment ID/URL is the stable response ID, not a fabricated
-message ID. Approval must be explicit on the first line, nonwithdrawn, and
-bound to the coordinator session and decision ID, exact PR/head/tree/current
-target base, and sole admission slot. A quoted or self-authored grant cannot
-authorize admission; the separate merge executor still rechecks head, base,
-CI and withdrawal before merging.
-
-Run focused native tests with
-`node --test .github/extensions/agentweaver-issue-to-merge/workflow.test.mjs`.
-The [repository workflow canvas](.github/extensions/agentweaver-workflow-canvas/README.md)
-offers a read-only view of native dynamic workflow runs published cooperatively
-by sessions that load its project extension; it does not discover runs
-from unobserved sessions.
-The `v1 foundation CI` workflow runs the same suites with coverage for PRs targeting
-`v1` and pushes to `v1`. After restore and build, use `npm run coverage:dotnet`
-and `npm run coverage:node` instead of the test commands in the preceding code block to reproduce its
-coverage reports. CI publishes a readable summary and downloadable reports with
-the tested source and PR head SHAs; no coverage percentage threshold is imposed.
-See [coverage commands and scope](docs/guide/testing.md#code-coverage).
-See [Azure Key Vault adapter](packages/Agentweaver.Secrets.AzureKeyVault/README.md)
-for trusted-host composition and transport-test scope.
-See [provider foundation](packages/Agentweaver.Providers/README.md)
-for supported resolution behavior and [release composition](releases/README.md)
-for manifest constraints. [Testing and Azure acceptance](docs/guide/testing.md)
-distinguishes current integration coverage from future deployed E2E tests.
+Agentweaver 0.x remains a separate product line on `dev`. Read the
+[0.x documentation](https://sabbour.github.io/agentweaver/) for that product.
+The v1 branch is a separate rebuild; it does not silently upgrade or replace
+the 0.x deployment.

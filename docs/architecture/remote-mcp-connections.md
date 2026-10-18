@@ -1,5 +1,11 @@
 # Remote MCP connections
 
+Use this reference to understand the Environment-owned source contract for
+remote MCP (Model Context Protocol) connections. A connection stores an
+endpoint and its approved configuration; it does not by itself authorize or
+perform a remote tool call. The Environment source candidate is unpublished
+and not deployed.
+
 ## Source boundary
 
 `Agentweaver.Environment` owns remote MCP connection configuration and catalog pin records. This source candidate is not published or deployed.
@@ -31,7 +37,11 @@ Connection mutation bodies do not accept OAuth codes, access tokens, or client s
 
 Mutation bodies include an idempotency key. Update and state mutations also include the expected row revision. The Identity-binding request uses `operationId` as its durable idempotency key and includes the expected configuration revision and SHA-256. A successful bind returns `RemoteMcpIdentityBindingReceipt` with `projectId`, `connectionId`, `operationId`, `finalConfigurationRevision`, `finalConfigurationSha256`, and `identityBindingReference`. Success and replay return 200; malformed references return 400; current authorization failures return 401 or 403; missing connections return 404; stale pins, mode conflicts, or idempotency conflicts return 409. Connection handlers set `Cache-Control: no-store` on responses that they handle.
 
-## Configuration and Identity
+## Configuration and identity
+
+For Network Policy provider selection and runtime settings, see the planned
+[provider configuration guide](../guide/configure-providers.md) and
+[runtime configuration reference](../reference/runtime-configuration.md).
 
 `RemoteMcpConnectionConfiguration` contains the project and connection IDs, configuration revision, display name, canonical endpoint and optional resource URI, authentication mode, transport profile, optional exact Registry pin, optional Identity correlation handle, and `ConfigurationSha256`.
 

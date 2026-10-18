@@ -1,70 +1,117 @@
 # Projects and configuration
 
-## The mental model
+Use this page to understand how Projects & Config manages project authority,
+revisioned settings, and the immutable configuration snapshot for a run. A
+project is not a repository checkout: Environment and Source Control own the
+resources used to execute its accepted configuration.
 
-A project is the durable boundary for configuration and authorization. It is not a repository checkout. Projects & Config stores the project's identity, lifecycle, team, skills, model selection, and provider choices. Environment and Source Control own the resources used to execute that configuration.
+## Understand project authority and revisions
 
-The service separates editable configuration from accepted run selection. Editing a project changes a revision head. Accepting a run freezes the exact inputs used by that run. Later edits do not rewrite that snapshot.
+Projects & Config stores project identity, lifecycle, team, skills, model
+selection, and provider choices. It separates editable configuration from an
+accepted run selection. Editing advances a revision; accepting a run freezes
+the exact inputs for that run. Later edits do not rewrite the snapshot.
 
-## Where this lives
+| Source | Responsibility |
+| --- | --- |
+| `ProjectAuthorization.cs` | Current membership, roles, scopes, and effective permissions |
+| `ProjectConfiguration.cs` | Typed settings, validation, limits, and egress narrowing |
+| `ProjectsConfigService.cs` | Project lifecycle, revision writes, and run selection |
+| `ProjectsConfigDbContext.cs` and `ProjectConfigRecords.cs` | Service-owned persistence |
+| `ProjectsConfigCastingService.cs` and `ProjectsConfigCastingTransferService.cs` | Reviewed team proposals and transfers |
+| `ProjectSkillContentService.cs` and `ProjectMarketplaceSourceService.cs` | Imported skill content and source ownership |
+| `ProjectsConfigMigrator.cs` | Explicit migration and runtime permission checks |
 
-All service paths below are under `services/projects-config/Agentweaver.Projects.Config/`.
+All paths in this table are under
+`services/projects-config/Agentweaver.Projects.Config/`.
 
-- `Program.cs` and `ProjectConfigEndpoints.cs` — host composition and HTTP routes.
-- `ProjectAuthorization.cs` — current membership, roles, scopes, and effective permissions.
-- `ProjectConfiguration.cs` — typed settings, validation, limits, and egress narrowing.
-- `ProjectsConfigService.cs` — project lifecycle, revision writes, and run selection.
-- `ProjectsConfigDbContext.cs` and `ProjectConfigRecords.cs` — service-owned persistence.
-- `ProjectsConfigCastingService.cs` and `ProjectsConfigCastingTransferService.cs` — reviewed team proposals and transfers.
-- `ProjectSkillContentService.cs` and `ProjectMarketplaceSourceService.cs` — imported skill content and source ownership.
-- `PrivilegedProjectSetupCommand.cs` and `ProjectsConfigPrivilegedAuthorityStore.cs` — separate privileged setup.
-- `ProjectsConfigMigrator.cs` — explicit migration and runtime permission checks.
+The service owns issuer-and-subject tenant memberships and resource-role
+assignments in the `projects_config` schema. OAuth scopes are necessary route
+permissions, not a substitute for those assignments.
 
-## Core concepts and invariants
+- Project reads require a current project role or tenant administrator.
+- Writes require Owner or tenant administrator authority.
+- Project creation requires an existing tenant administrator; it does not
+  automatically assign an Owner.
+- Platform defaults require platform administrator authority.
+- Run selection requires the project Orchestrator role and its scopes.
 
-### Authorization stays current
+`GET /api/authorization/context` returns a versioned, no-store projection of
+effective permissions. A signed project/run binding limits its target; headers
+and token role claims cannot create authority.
 
-The service owns issuer-and-subject tenant memberships and resource-role assignments in `projects_config`. OAuth scopes are necessary route permissions, not a substitute for those assignments.
+The runtime database principal reads authority records but cannot mutate them.
+Setup and revocation use a separate privileged path. Ordinary service requests
+do not bootstrap membership.
 
-Project reads require a current project role or tenant administrator. Writes require Owner or tenant administrator authority. Project creation requires an existing tenant administrator and does not automatically assign an Owner. Platform defaults require platform administrator authority. Run selection requires the project Orchestrator role and its scopes.
+## Edit configuration safely
 
-`GET /api/authorization/context` projects these effective permissions for other services. It returns a versioned, no-store response. A signed project/run binding restricts the target; headers and token role claims cannot create authority.
+Project metadata, project configuration, and platform runtime defaults have
+separate revision histories. Configuration contains typed model references,
+provider overrides, charters, casting, workflow references, skill pins, egress
+narrowing, run limits, and optional Source Control settings.
 
-The runtime database principal reads authority records but cannot mutate them. Setup and revocation use the separate privileged source path. Ordinary service requests do not bootstrap their own membership.
+When you update a revision, supply the expected current revision. The service
+appends a new revision and advances the head. If another writer wins first,
+your update conflicts instead of overwriting its change.
 
-### Each revision has one purpose
+## Accept a run selection
 
-Project metadata has its own revision. Project configuration and platform runtime defaults have separate revision histories. Configuration contains typed model references, provider overrides, charters, casting, workflow references, skill pins, egress narrowing, run limits, and optional Source Control settings.
+Before acceptance, you need an active project, current Orchestrator authority,
+configured platform defaults, and the current configuration revisions. The
+selection request is made by Orchestrator with a run ID and revisioned selection
+context.
 
-Updates supply the expected current revision. The service appends a new revision and advances the head. A competing update produces a conflict instead of overwriting the other writer.
+1. The service starts a serializable transaction and locks current authority,
+   project and platform heads, and the run ID.
+2. It rechecks the Orchestrator role. A new run requires an active project and
+   configured platform defaults.
+3. It selects the project model or platform default and checks that the
+   reference is available in the supplied context.
+4. `ProviderResolver` resolves candidates from the enabled platform catalog.
+   Project choices cannot bypass catalog override permissions.
+5. Egress requirements must fit the platform baseline and project narrowing.
+   Project run limits cannot widen platform limits.
+6. The service writes the immutable effective selection and request fingerprint,
+   then rechecks authority before commit.
 
-## From configuration to an accepted run
+An exact retry returns the saved snapshot without reopening mutable settings. A
+different request for the same run ID conflicts. Archiving blocks new
+acceptance; it does not erase an accepted snapshot.
 
-1. The Orchestrator supplies a run ID, expected project-configuration and platform-default revisions, and a revisioned selection context.
-2. The service starts a serializable transaction and locks current authority, the project and platform heads, and the run ID.
-3. It rechecks the Orchestrator role. A new run requires an active project and configured platform defaults.
-4. It selects the project model or platform default and checks that the reference is available in the supplied context.
-5. `ProviderResolver` resolves candidates from the enabled platform catalog. Project choices cannot bypass catalog override permissions.
-6. Egress requirements must fit the platform baseline and project narrowing. Project run limits cannot widen platform limits.
-7. The service writes the immutable effective selection and its request fingerprint, then rechecks authority before commit.
+The result contains provider candidates, not provisioned resource pins. Each
+resource owner negotiates its actual backend and persists the consumer binding.
+See [Providers and models](./providers-models.md).
 
-An exact retry returns the stored snapshot without reopening mutable configuration inputs. A different request for the same run ID conflicts. Archiving blocks new acceptance; it does not erase an already accepted snapshot.
+For supported setting names and project setup, see the
+[runtime configuration reference](../reference/runtime-configuration.md) and
+[provider configuration guide](../guide/configure-providers.md).
 
-The result contains provider candidates, not provisioned resource pins. Each resource owner negotiates its actual backend and persists the consumer binding. See [Providers and models](./providers-models.md).
+## Review team and skill changes
 
-## Reviewed team and skill changes
+Casting proposals stage a complete configuration draft for review. Scenario
+templates and manual role selections produce version-bound proposals.
+Confirmation appends a configuration revision only while the proposal and
+configuration remain current. Rejection leaves configuration unchanged.
 
-Casting proposals stage a complete configuration draft for review. Scenario templates and manual role selections produce version-bound proposals. Confirmation appends a configuration revision only while the proposal and configuration remain current. Rejection leaves configuration unchanged.
+Skills use imported content revisions and digests, with assignments to project
+agents. Configuration validation checks these pins. An accepted run reads its
+assigned imported revisions, not later content from a marketplace source.
+Marketplace browsing and imported project content have different owners and
+lifetimes.
 
-Skills use imported content revisions and digests, with assignments to project agents. Configuration validation checks these pins. An accepted run reads its assigned imported revisions, not whatever content a marketplace source returns later. Marketplace browsing and imported project content have different owners and lifetimes.
+## Recover from configuration errors
 
-## Failure and recovery
+Stale revisions, unavailable model references, invalid skill pins, and
+incompatible provider selections stop acceptance. The service does not replace
+them with a different default. Revoked authority blocks privileged operations
+even when a token has not expired.
 
-Stale revisions, unavailable model references, invalid skill pins, and incompatible provider selections stop acceptance. The service does not replace them with a different default. Revoked authority blocks privileged operations even when the token has not expired.
+Ordinary startup verifies applied migrations and runtime database privileges;
+it does not apply migrations. Retained revisions and idempotent selection replay
+provide recovery without rewriting accepted history.
 
-Ordinary startup verifies applied migrations and runtime database privileges. It does not apply migrations. Retained revisions and idempotent selection replay provide recovery without rewriting accepted history.
-
-## Related pages
+## Related content
 
 - [Projects & Config contract](../architecture/projects-config.md)
 - [Skill marketplace sources](../architecture/skill-marketplace.md)

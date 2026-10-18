@@ -1,76 +1,101 @@
 # Account connections
 
-Project settings separate GitHub repository access from GitHub Copilot model
-access. Connecting one does not connect the other.
+Use this page to connect GitHub Repo App for repository access or GitHub
+Copilot for project-scoped model access. These are separate connections:
+connecting one does not connect the other.
 
-## Connect the GitHub Repo App
+## Prerequisites
+
+- Sign in through the Identity Broker and open project settings.
+- Allow the browser to open a tracked popup for GitHub authorization.
+- For GitHub Copilot, open the app over HTTPS and use a Gateway on the same
+  origin as the web app.
+
+## Connect GitHub Repo App
 
 1. Open `/projects/:projectId/settings`.
-2. Use the GitHub Repo App connection panel.
+2. In **GitHub Repo App**, select **Connect GitHub Repo App** or
+   **Reauthorize GitHub Repo App**.
 3. Complete GitHub authorization in the tracked popup.
-4. Let the panel reload status from the Identity Broker.
-5. Select the connection in project configuration with
-   `sourceControl.authMode: "githubApp"` and `sourceControl.appConnectionId`.
+4. Wait for the app to reload connection status from the Identity Broker.
+5. In the project configuration document, set
+   `sourceControl.authMode` to `"githubApp"` and
+   `sourceControl.appConnectionId` to the matching Identity connection ID.
 
-The connection ID is an opaque Identity reference. Direct Broker repository
-responses include installation and repository IDs as metadata. They do not
-include provider tokens.
+**Expected result:** The Broker reports the connection state. The app does not
+treat a popup callback by itself as proof of a connected account. Select
+**Browse repositories** to load repository metadata. The response contains
+installation and repository IDs as metadata, not provider tokens.
 
-The panel uses direct, cookie-authenticated Broker requests. JSON mutations
-obtain `/auth/github/repo-app/csrf` and send `X-CSRF-TOKEN`. Connect and install
-use native form posts with `__RequestVerificationToken`, not fetch requests that
-follow OAuth redirects.
+The Repo App panel sends cookie-authenticated requests directly to the
+Identity Broker. JSON mutations first request `/auth/github/repo-app/csrf` and
+send `X-CSRF-TOKEN`. Connect and install use native form posts with
+`__RequestVerificationToken`; they do not use fetch requests that follow
+OAuth redirects. If `sourceControl.authMode` is omitted, the project remains
+in legacy secret mode.
 
 ## Connect GitHub Copilot
 
-1. In project settings, use **GitHub Copilot connection**.
-2. Start authorization and complete the tracked popup.
+1. In project settings, select **Connect GitHub Copilot**.
+2. Complete authorization in the tracked popup.
 3. Wait for the completion request and refreshed owner status.
 
-The callback is `/auth/github/copilot-app/callback`. This flow requires the
-Gateway on the same origin as the web app for its link cookie. Status and
-revision checks bind the returned connection to the selected project.
+The callback route is `/auth/github/copilot-app/callback`. The flow uses a
+same-origin link cookie, so the Gateway must share the web app's origin. The
+app checks the returned project scope and connection ID before it accepts the
+completion and status responses.
 
-## Pin a repository for an existing run
+**Expected result:** The panel displays the status returned by the owner.
+Authorization callback completion alone does not establish the final
+connection state.
+
+## Pin a repository to an existing run
+
+**Prerequisites:** Open an existing run whose accepted configuration uses
+`githubApp` and names the Repo App connection you connected.
 
 1. Open the run's **Selection** tab.
-2. If its accepted configuration uses `githubApp`, open the repository setup
-   controls.
-3. Complete App installation or authorization when required.
-4. Refresh repository choices and select the intended repository.
-5. Submit the pin for the root session.
+2. If the connection matches, select **Load repositories**.
+3. Complete GitHub App installation or authorization if the panel requests it.
+4. Select the repository returned by the Identity Broker.
+5. Select **Pin repository to this run**.
 
-The browser exchanges the repository name for a short-lived selection code.
-Orchestrator validates that code against the accepted repository and stores the
-pin. Changing today's project configuration does not rewrite a run's accepted
-connection.
+The browser exchanges the selected installation and repository IDs for a
+short-lived selection code. The Orchestrator validates that code against the
+accepted repository selection and returns the pin result for the root session.
+Changing today's project configuration does not rewrite a run's accepted
+connection. A `202` response means the owner accepted the pin request; it does
+not prove that a runtime loaded or used the repository.
 
-## States and errors
+## Understand connection states and errors
 
-- A popup callback is a notification, not connection proof. The panel reloads
-  status from the owner.
+- A popup callback is a notification. The app reloads status from the owner.
 - A blocked or closed popup, expired transaction, mismatched state, or failed
   owner response leaves an error or unverified state.
-- Leaving settings or clearing the browser session cancels the panel's pending
-  work and closes its tracked Repo App popup.
-- Owner-reported connection status and revisions determine what the panel shows.
-- A run pin response of `202` reports acceptance. Read the returned owner state
-  before treating the repository as pinned.
+- Leaving project settings or clearing the browser session cancels pending
+  Repo App work and closes its tracked popup.
+- The owner-reported connection state and revision determine what the panel
+  displays.
+- A project configured for a different App connection cannot use the displayed
+  connection until you update `sourceControl.appConnectionId`.
 
 ## Requests
 
-| Step | Surface and request |
+| Operation | Surface and request |
 | --- | --- |
-| Repo App status | Broker `GET /auth/github/repo-app/status` |
-| Get antiforgery token | Broker `GET /auth/github/repo-app/csrf` |
-| Authorize or install | Broker `POST /auth/github/repo-app/connect` or `POST /auth/github/repo-app/install` |
-| List repositories | Broker `GET /auth/github/repo-app/repositories` |
-| Select repository | Broker `POST /auth/github/repo-app/selection` |
-| Disconnect Repo App | Broker `POST /auth/github/repo-app/disconnect` |
-| Start or complete Copilot authorization | Gateway `POST /api/connections/copilot-user/v1/begin` or `POST /api/connections/copilot-user/v1/complete` |
-| Read Copilot status | Gateway `GET /api/connections/copilot-user/v1/{connectionId:guid}` |
+| Read Repo App status | Identity Broker `GET /auth/github/repo-app/status` |
+| Get Repo App antiforgery token | Identity Broker `GET /auth/github/repo-app/csrf` |
+| Authorize or install Repo App | Identity Broker `POST /auth/github/repo-app/connect` or `POST /auth/github/repo-app/install` |
+| List repositories | Identity Broker `GET /auth/github/repo-app/repositories` |
+| Select a repository | Identity Broker `POST /auth/github/repo-app/selection` |
+| Disconnect Repo App | Identity Broker `POST /auth/github/repo-app/disconnect` |
+| Begin or complete Copilot authorization | Gateway root `POST /api/connections/copilot-user/v1/begin` or `POST /api/connections/copilot-user/v1/complete` |
+| Read Copilot status | Gateway root `GET /api/connections/copilot-user/v1/{connectionId:guid}` |
 | Pin selected repository | Gateway `POST /api/v1/projects/{projectId}/runs/{runId}/source-control/sessions/{sessionId}/pin` |
 
-The Gateway also exposes connection APIs for non-UI callers. See
+The browser uses the Repo App status, repository, and selection routes directly
+on the Broker. The Gateway also exposes connection APIs for non-UI callers.
+These route names describe source contracts, not service availability; the
+Identity Broker and Orchestrator sources are candidates. See
 [HTTP API](../reference/api.md), [Identity and secrets](../architecture/identity-secrets.md),
 and [web callback handling](../reference/web.md#authentication-flow).

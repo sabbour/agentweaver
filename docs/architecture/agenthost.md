@@ -1,12 +1,18 @@
-# AgentHost source candidate
+# AgentHost runtime architecture
 
-The unpublished AgentHost executable runs the sole model harness inside the selected Sandbox.
-It uses `GitHub.Copilot.SDK` 1.0.18 and the compatible native runtime 1.0.97.
-Microsoft Agent Framework remains an Orchestrator dependency, not an AgentHost runtime.
-This source does not provide an automatic scheduler, deployment, live OAuth acceptance, or paid model evidence.
+Use this reference to understand how the v1 AgentHost source runs model turns in
+the Sandbox selected by Environment, and what its readiness and accounting checks
+prove. A Sandbox is the selected execution environment for an agent. This
+AgentHost executable is an unpublished source candidate, not a deployed service:
+it has no automatic scheduler, live OAuth acceptance, or paid model evidence.
+The source pins `GitHub.Copilot.SDK` 1.0.18 to native runtime 1.0.97.
+Microsoft Agent Framework remains an Orchestrator dependency, not an AgentHost
+runtime. For host settings, see the planned
+[runtime configuration reference](../reference/runtime-configuration.md).
 
-The current native SDK path consumes a real hosted access token or BYOK key inside
-the selected Sandbox. This is legacy credential delivery, **not credential-less
+The current native SDK path consumes either a hosted access token or a
+bring-your-own-key (BYOK) credential inside the selected Sandbox. This is
+legacy credential delivery, **not credential-less
 guest execution**, even when subprocess environment variables contain no secrets.
 The [credential-less sandbox proposal](identity-secrets.md#credential-less-sandbox-proposal)
 requires trusted-side request authentication or a supported model-runtime adapter

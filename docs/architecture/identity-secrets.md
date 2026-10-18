@@ -1,6 +1,11 @@
-# Identity and secrets
+# Identity and secret management
 
-`Agentweaver.Identity.Broker` is a .NET 10 service candidate. It uses OpenIddict and owns the `identity_broker` PostgreSQL schema. The service has no published image or deployment.
+Use this reference to understand how the Identity Broker validates sign-in,
+issues Agentweaver tokens, checks secret grants, and keeps credentials behind
+owner-controlled boundaries. OpenID Connect (OIDC) adds identity claims to the OAuth authorization
+framework. The .NET 10 `Agentweaver.Identity.Broker` source uses
+OpenIddict and owns the `identity_broker` PostgreSQL schema. It remains a
+service candidate with no published image or deployment.
 
 The broker accepts an external OIDC provider. It validates the upstream issuer, signature, audience, expiry, and nonce before it creates a local user.
 
@@ -68,7 +73,12 @@ The Key Vault adapter uses an injected credential or explicit `WorkloadIdentityC
 
 The adapter requests the exact Key Vault version. A returned credential expires within five minutes or at the earlier vault expiry. The grant store keeps references and binding snapshots, not secret values.
 
-No secret-redemption grant-management HTTP endpoint exists. Read [contracts and endpoints](../reference/contracts) for the implemented route list and [configuration](../reference/contracts#identity-host-configuration) for host keys.
+No secret-redemption grant-management HTTP endpoint exists. Read
+[contracts and endpoints](../reference/contracts) for the implemented route
+list and [Identity host configuration](../reference/contracts#identity-host-configuration)
+for host keys. See the planned
+[runtime configuration reference](../reference/runtime-configuration.md) for
+runtime setting guidance.
 
 ## Remote MCP OAuth source boundary
 
@@ -385,7 +395,7 @@ Authority loss during source transaction waits denies the observation without ac
 This evidence does not prove cloud deployment or paid model execution. See the
 [runtime credential source contract](../reference/contracts#runtime-credential-source-candidate).
 
-## Credential-less sandbox proposal
+## Credential-less Sandbox proposal
 
 **Status: proposed design, not implemented or deployed.** Credential-less means
 that untrusted sandbox code cannot obtain real upstream credentials. Examples

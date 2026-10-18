@@ -1,10 +1,11 @@
 # Skill marketplace sources
 
-Projects & Config owns each project's configured skill sources and the bounded
-catalog browse API. A source stores a GitHub repository, requested ref, optional
-repository subpath, display name, lifecycle state, and optimistic revision. A
-source revision identifies the configuration the caller selected; it is not a
-content revision and does not grant permission to read or run a skill.
+Use this reference to understand how Projects & Config stores and browses
+project skill sources. A source points to a public GitHub repository, a
+requested Git ref such as a branch or tag, and an optional subpath. Its revision
+tracks source settings, not skill content, and does not authorize you to read
+or run a skill. Browse resolves the ref to an exact commit before it reads
+manifests.
 
 Source URLs must identify a public GitHub repository over HTTPS. Marketplace
 reads are anonymous: this API does not use a caller's GitHub token and does not

@@ -1,6 +1,12 @@
-# PostgreSQL and Blob
+# PostgreSQL and Blob Storage
 
-`Agentweaver.Persistence.Postgres` stores outbox events and consumer inbox receipts in a service-owned schema. It does not create domain tables or a relay service.
+Use this reference to understand how Agentweaver separates durable event
+delivery from large-object storage. `Agentweaver.Persistence.Postgres` stores
+outbox events and consumer inbox receipts in a service-owned schema. An outbox
+records work with the producer's database change; an inbox records a consumer's
+admission of that work. The library does not create domain tables or start a
+relay service. For provider selection, see the planned
+[provider configuration guide](../guide/configure-providers.md).
 
 The separate `Agentweaver.EventsAndSessions` service owns its `events_sessions` schema
 by default, including the journal, session/provider bindings, and object-reference

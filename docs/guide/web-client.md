@@ -1,10 +1,22 @@
-# v1 web client
+# Use the v1 web client
 
-The v1 web client is a React application over the Identity Broker and the
-versioned Gateway/BFF. The browser performs OAuth authorization and consent
-with PKCE through the Broker, keeps access and refresh tokens in memory, and
-sends product API and event-stream requests to the Gateway. The GitHub Repo App
-account lifecycle uses cookie-authenticated Identity Broker endpoints directly.
+The v1 Web client is a React application that uses the Identity Broker for
+sign-in and the versioned Gateway for product API and event-stream requests.
+It keeps access and refresh tokens in memory. GitHub Repo App account
+authorization, repository discovery, and disconnect use cookie-authenticated
+Identity Broker endpoints directly.
+
+This article describes the checked-in v1 client and its contracts. The source
+and route manifests do not prove that the Web image, Gateway, Broker, or owner
+services are deployed or available.
+
+## Understand how the client connects
+
+The browser sends product API requests to the Gateway. The Gateway validates
+the Broker token and forwards the original bearer to the owning service.
+Owners check current membership, roles, bindings, and operation permissions.
+The browser does not provide project, run, or session identity as a substitute
+for authorization.
 
 ```mermaid
 flowchart LR
@@ -42,222 +54,201 @@ flowchart LR
   Gateway --> Knowledge
 ```
 
-The client does not send project, run, or session identity as a substitute for
-authorization. The Broker issues tokens for the requested scope, and the
-Gateway and owner services validate access on each request. Run-bound pages
-require a token for that exact project and run. Structured Gateway error codes
-and owner rejection responses remain visible instead of being treated as
-success.
+The client uses these routes:
 
-Gateway and Broker browser CORS are separate boundaries. Configure
-`Gateway:WebOrigin` with the Web application's exact HTTPS origin. Gateway
-policies are route-specific and non-credentialed except for the Copilot
-connection BFF, which narrowly allows credentials for its callback cookie.
-Direct Repo App browser requests use the Broker's independent credentialed
-endpoint allow list; the Gateway origin setting does not configure Broker CORS.
-
-The optional managed portal routes send `/` to Web on port 8080, the `/api/v1`
-prefix plus exact `/openapi/v1.json` to Gateway, and exact `/mcp` plus the
-exact `/.well-known/oauth-protected-resource/mcp` metadata path to MCP on port
-8443. The OpenAPI document is not sent to the Web fallback route. These source
-manifests do not prove that the managed Gateway is accepting traffic;
-acceptance remains blocked by the Gateway pod's missing seccomp profile under
-the current P0 namespace policy.
-
-The Web host provides `/health/live` and `/health/ready` without sign-in.
-Readiness returns `503` when the built `wwwroot/index.html` file is missing.
-These checks cover the host and its built page, not Broker access or live API behavior.
-
-## Routes and behavior
-
-| Route | Behavior |
+| Route | Purpose |
 | --- | --- |
-| `/projects` | List projects visible to the signed-in identity and create a project. Creation does not assign an Owner. |
+| `/projects` | List visible projects and create a project. Creating a project does not assign an Owner. |
 | `/projects/:projectId` | Read project state and open an existing run by its exact ID. |
-| `/projects/:projectId/settings` | Read and append a revisioned project-configuration document; manage public marketplace sources; browse pinned source revisions; validate and import local skill files; assign imported skills to current cast agents; connect the GitHub Repo App and user-level GitHub Copilot accounts. Owners validate each operation. |
-| `/projects/:projectId/knowledge` | Search paginated Knowledge records for an exact project, run, and agent; correct or archive supported Memory and SessionContext records, inspect and restore revisions, approve eligible Decisions, and import or export exact-scope transfer bundles. The owner remains authoritative for record state and trust. |
-| `/projects/:projectId/runs/:runId` | Read run/session snapshots and journal events; view topology, chat, outcomes and approvals, activity, accepted selection, and usage; manage run-bound GitHub App repository setup/pinning; send addressed messages or request supported tree actions. The `view` query selects a run tab (for example, `?view=chat`); unsupported values open Topology. |
+| `/projects/:projectId/settings` | Read and update revisioned project configuration, manage Skill sources and assignments, and connect user accounts. |
+| `/projects/:projectId/knowledge` | Search and manage supported Knowledge records and transfer bundles for an exact project, run, and agent. |
+| `/projects/:projectId/runs/:runId` | Read run and session snapshots, journal events, topology, chat, outcomes, approvals, activity, accepted selection, and usage. The `view` query selects a run tab, such as `?view=chat`. |
 
-The client requests fresh tenant and effective-permission context from
-`GET /api/v1/authorization/context`. It does not infer a tenant from project,
-run, token, or usage data. A tenant selector is attached only to routes included
-in the allow list: Projects/configuration, run Coordination, Knowledge, run
-Selection/Usage, and finite journal replay calls that consume it. The live event SSE connection,
-GitHub Repo App account calls, PKCE/session calls, and unrelated APIs remain
-selector-free. Repo App status, repository discovery, selection, and disconnect
-go directly to the Identity Broker with cookie credentials; JSON mutations
-first obtain an antiforgery token and send it as `X-CSRF-TOKEN`. Connect and
-user authorization uses a native form post with the token field
-`__RequestVerificationToken` targeted at the tracked popup, never fetch through
-an OAuth redirect. Run-bound GitHub App installation remains a Gateway call
-with the exact project, run, and tenant binding. The GitHub Copilot
-user-connection BFF is also on the allow list. Its lifecycle calls forward the
-optional explicit selector to the Broker, which remains authoritative. Gateway validates the context response against the
-authenticated actor, signed project/run binding, and explicitly selected tenant.
-Owners revalidate the selector and current authority for every operation;
-context is not cached as permission. The client clears it when the bearer
-identity or session changes and does not guess among ambiguous memberships.
+The run page polls owner snapshots and replays journal pages before it opens
+the live event stream. It merges overlapping replay and live events by event
+ID and journal position. A pending action requires the exact request ID and
+decision version from the latest owner snapshot. Owner acceptance is not shown
+as delivery, completion, or a state transition; the refreshed snapshot shows
+the resulting state.
 
-The shell's Run chat control opens Chat only for the exact project/run binding
-held by the current Broker session. Without that binding, the control remains
-disabled. Changing a run tab updates `view` while retaining unrelated query
-parameters.
+## Configure browser origins
 
-The run view polls authoritative owner snapshots and replays all journal pages
-before opening the live event stream. It merges replay/live overlap by event ID
-and journal position. Pending input, plan, outcome, and approval actions require
-the exact request ID and decision version from the current owner snapshot.
-Owner acceptance is not represented as delivery, completion, or a state
-transition; the refreshed snapshot supplies the resulting state.
-Knowledge search exposes owner-reported result pages rather than hiding records
-after the first page. The Knowledge page shows immutable revision history and
-includes controls to restore a historical revision as a new Active+Pending
-revision, explicitly approve an Active Pending or Legacy Decision, and supersede
-an Active Decision with another Active Decision from the exact project/agent
-results. Correction and
-archive controls are limited to Memory and SessionContext records supported by
-the current owner. Decision approval and supersession use the selected record's
-current revision; the owner validates the replacement link and refreshed owner
-state remains authoritative. Decision supersession requires a Knowledge owner
-that supports the versioned update contract.
+Gateway and Broker CORS are separate. Set `Gateway:WebOrigin` to the Web
+application's exact HTTPS origin. Gateway CORS policies are route-specific;
+they do not allow credentials except for the Copilot connection BFF's
+callback cookie. Direct Repo App browser requests use a separate credentialed
+allow list in the Identity Broker.
 
-Version 1 Knowledge transfer exports only the exact project and agent's Memory
-and Decision records with their complete revision chains. Import requires that
-same project and agent, rejects collisions rather than merging records, and
-creates Active+Pending records; a Decision must be approved separately. Bundles
-are limited to 25 records, 500 revisions, and 1 MiB.
+The client requests current tenant and authority context from
+`GET /api/v1/authorization/context`. It does not infer a tenant from a project,
+run, token, or usage data. The client supplies `X-Agentweaver-Tenant` only for
+routes included in the Gateway allow list, including project configuration,
+run coordination, Knowledge, run selection and usage, and finite journal
+replay. Live event SSE, Repo App account calls, PKCE/session calls, and
+unrelated APIs do not receive the selector. Owners recheck current authority
+for every protected operation. The context response is not a permission grant
+or a cached authorization decision.
 
-Project settings include the GitHub Repo App account control. The Identity
-Broker status supplies a stable opaque `connectionId` and revision; the project
-configuration selects it with `sourceControl.authMode: "githubApp"` and
-`sourceControl.appConnectionId`. Existing configurations without `authMode`
-remain legacy secret mode. Provider tokens, numeric installation/repository IDs,
-and permission grants remain owner-held. OAuth uses a popup, an antiforgery
-cookie and native form post, and the exact host-only transaction cookie. Its
-callback is `/settings/source-control?repoApp=connected`; the HTML bootstrap
-captures only that exact notification and removes the query before loading
-assets. The callback message is accepted only from the tracked popup, same
-origin, and current request generation. It never proves connection success:
-the opener refreshes status from the Broker, and a standalone callback clearly
-reports that connection status is unverified. Leaving project settings or
-clearing the browser session closes only that panel's tracked popup and cancels
-its pending CSRF request; late responses and callbacks cannot submit or update a
-newly opened panel.
+## Manage Skills in project settings
 
-Project settings also connect the signed-in user's GitHub Copilot account to
-the selected project through the Gateway's user-connection lifecycle BFF. The
-popup returns only a bounded, state-matched callback message; callback code and
-state are held in memory for that exchange and are not persisted. Configure the
-Host `CallbackUri` as the public HTTPS Web origin plus
-`/auth/github/copilot-app/callback`. The production ASP.NET Core 10 static-file
-host serves that exact callback path with `Cache-Control: no-store`,
-`Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, and
-`X-Frame-Options: DENY`; access logging is disabled. The host also serves
-runtime configuration from container environment variables without shell
-interpolation. The first inline script removes the callback query before
-loading any assets. Configure the public ingress to redact callback query
-strings from its own access logs as well, since the Web server cannot control
-ingress logging. The owner response, not the popup, determines the connection
-status.
+Project settings can manage public marketplace sources, browse pinned source
+revisions, preview and import Skills, and assign imported revisions to agents
+in the current project cast.
 
-The Skills and marketplace section uses the same Gateway client and explicit
-tenant selector as project configuration. It manages source settings and browses
-only the selected, owner-reported source revision and commit. A candidate can be
-previewed and imported through the selected-source owner routes, pinned to that
-source revision, resolved commit, and candidate path. The browser sends
-metadata and the preview digest, not source file bytes; the owner reads and
-validates the pinned content. Import uses one idempotency key for retries and
-requires an explicit user action after preview. Local upload remains separate:
-the browser submits the selected `SKILL.md` and text resources to Skills
-preview, then imports only after the owner returns a matching digest.
+For a marketplace Skill, the client sends source revision, resolved commit,
+selected path, and (for import) the preview digest and idempotency key. The
+owner reads and validates the selected files; the browser does not upload
+those files through the Gateway. For a local Skill, the browser submits the
+selected `SKILL.md` and text resources for owner preview, then imports only
+after the owner returns a matching digest.
 
-Assignment uses the imported revision, digest, current project configuration
-revision, and selected agents from the project's current cast. A returned
-configuration revision is checked before it replaces the editor's current
-revision; assignment is disabled while the editor has unsaved changes. The UI
-reports the saved assignment but does not claim that a runtime loaded it.
-The read-only imported skill inventory calls the owner-backed
-`GET /projects/:projectId/skills` route with the current tenant selector and
-opaque continuation cursors. It displays owner-reported assignments, stored
-revision metadata, source provenance, and revocation state; permission errors
-remain visible. Inventory metadata does not prove that a runtime loaded a
-skill. Runtime-loaded status is unavailable from the current public API. The
-selected-source and Gateway routes are present in v1. Their deployment and
-live availability are not established by this client.
+Assignment uses the imported revision and digest, the current configuration
+revision, and selected agents from the current cast. The client checks the
+returned configuration revision before it replaces the editor's revision and
+disables assignment while there are unsaved changes. The UI reports the
+saved assignment; it does not claim that a runtime loaded the Skill.
 
-When the accepted run configuration selects GitHub App mode and its owner
-routes are admitted and configured, the run Selection view reads safe
-repository metadata from the Broker. It creates a short-lived selection code
-there. Run-bound App installation and repository pin remain Gateway operations
-bound to the exact project, run, and tenant; the code is sent only with that
-run-bound `/pin` request. The accepted run owner validates the selected
-repository and current authority; bodyless legacy secret-mode pinning is
-unchanged. User account authorization and repository discovery are direct
-Broker browser calls, not MCP tools; run-bound repository operations remain in
-the first-party MCP catalog. Status and discovery failures remain unavailable
-rather than appearing disconnected or empty, and run-bound setup/pinning stay
-disabled until the exact tenant selector is available. Source mappings do not
-claim owner or deployment availability.
+The read-only Skill inventory displays owner-reported assignments, revision
+metadata, source provenance, and revocation state. It uses bounded opaque
+cursors and keeps permission errors visible. Inventory metadata does not
+prove runtime loading; the current public API does not expose
+runtime-loaded status.
 
-## Configuration and commands
+## Manage Knowledge records
 
-Configuration is provided through Vite environment variables. Start from
+The Knowledge page searches owner-reported result pages for the exact project,
+run, and agent. It displays immutable revision history and supports the
+owner-authorized operations implemented for the record type:
+
+- Correct or archive supported Memory and SessionContext records.
+- Restore a historical revision as a new Active+Pending revision.
+- Approve an eligible Active Pending or Legacy Decision.
+- Supersede an Active Decision with another Active Decision from the exact
+  project and agent results.
+
+The owner validates the selected current revision, replacement link, and
+resulting state. Decision supersession requires an owner that supports the
+versioned update contract.
+
+Knowledge transfer exports only the exact project's and agent's Memory and
+Decision records with their revision chains. Import targets that same project
+and agent, rejects collisions instead of merging records, and creates
+Active+Pending records. You must approve a Decision separately. A bundle can
+contain at most 25 records and 500 revisions, and its size is limited to
+1 MiB.
+
+## Connect GitHub and Copilot accounts
+
+The Repo App account control uses Identity Broker status and an opaque
+`connectionId`. Project configuration selects the connection with
+`sourceControl.authMode: "githubApp"` and
+`sourceControl.appConnectionId`. Configurations without `authMode` retain
+legacy secret mode. Provider tokens, numeric installation and repository IDs,
+and permission grants remain owner-held.
+
+Repo App authorization uses a popup, an antiforgery cookie, a native form
+post, and a host-only transaction cookie. The callback
+`/settings/source-control?repoApp=connected` is only a notification. The
+bootstrap captures that exact callback and removes the query before loading
+assets. The opener accepts a message only from the tracked popup, the same
+origin, and the current request generation, then refreshes connection status
+from the Broker. A callback does not prove that the connection succeeded.
+Leaving settings or clearing the browser session closes only the panel's
+tracked popup and cancels its pending antiforgery request.
+
+Repository discovery and account disconnect call the Broker directly with
+cookie credentials. JSON mutations first request an antiforgery token and
+send it as `X-CSRF-TOKEN`. User authorization uses a native form post to the
+tracked popup; it does not send an OAuth redirect through `fetch`.
+
+Project settings can also connect the signed-in user's GitHub Copilot account
+through the Gateway's connection lifecycle BFF. The callback uses the public
+Web origin plus `/auth/github/copilot-app/callback` as its `CallbackUri`.
+The callback page is not cached, removes callback query values before it loads
+assets, and does not store the callback code or state. Configure the ingress
+to redact callback query strings from its own access logs. The owner response,
+not the popup message, determines connection status.
+
+When the accepted run configuration selects GitHub App mode and the owner
+routes are available, the run Selection view reads safe repository metadata
+from the Broker and creates a short-lived selection code. Installation and
+repository pinning remain run-bound Gateway operations with the exact project,
+run, and tenant. The owner checks the accepted run configuration and current
+authority. Status or discovery failures remain visible; the UI does not
+present them as an empty repository list or a disconnected account.
+
+## Configure the client
+
+The Web client reads Vite environment variables. Start with
 `apps/web/.env.example`:
 
-| Variable | Default | Purpose |
+| Variable | Default or requirement | Purpose |
 | --- | --- | --- |
 | `VITE_GATEWAY_URL` | `/api/v1` | Versioned Gateway base URL. |
-| `VITE_IDENTITY_BROKER_URL` | unset | Identity Broker base URL. |
-| `VITE_IDENTITY_BROKER_ISSUER` | Full HTTPS Broker URL path | Exact HTTPS issuer identifier expected in Broker authorization callbacks; set it when it differs from the Broker base URL. |
-| `VITE_OAUTH_CLIENT_ID` | unset | Registered OAuth client ID. |
-| `VITE_OAUTH_REDIRECT_URI` | current origin plus `/auth/callback` | Registered callback URI. |
-| `VITE_OAUTH_SCOPES` | unset | Space-separated registered OAuth scopes. |
+| `VITE_IDENTITY_BROKER_URL` | Required for sign-in | Identity Broker base URL. |
+| `VITE_IDENTITY_BROKER_ISSUER` | Optional when it matches the Broker base URL | Exact HTTPS issuer expected in authorization callbacks. |
+| `VITE_OAUTH_CLIENT_ID` | Registered client ID | OAuth client identifier. |
+| `VITE_OAUTH_REDIRECT_URI` | Current origin plus `/auth/callback` | Registered OAuth callback URI. |
+| `VITE_OAUTH_SCOPES` | Registered scopes | Space-separated OAuth scopes. |
 
-When an authorization callback includes `iss`, the client accepts it only when
-one HTTPS issuer exactly matches `VITE_IDENTITY_BROKER_ISSUER`. The callback
-also retains its state, PKCE, popup-source, and callback-origin checks. A
-callback without `iss` remains supported for the existing Broker profile. An
-invalid popup callback is rejected and closed so the sign-in window can show a
-visible error instead of retrying the callback.
+When a callback includes `iss`, the client accepts it only if the value
+matches the configured HTTPS issuer. It also checks state, PKCE, popup source,
+and callback origin. A callback without `iss` remains supported for the
+existing Broker profile. An invalid popup callback is rejected and closed so
+the sign-in window can show an error.
 
-Run from the repository root:
+## Run and build the client
 
-```powershell
-npm --prefix apps/web ci
-npm --prefix apps/web run dev
-npm --prefix apps/web run typecheck
-npm --prefix apps/web test
-npm --prefix apps/web run coverage
-npm --prefix apps/web run lint
-npm --prefix apps/web run build
-```
+Run these commands from the repository root:
 
-## Contract limits
+1. Install the locked Web dependencies:
 
-The Gateway exposes owner routes for accepting a supplied run-root identity,
-proposing typed outcome/workflow/work-plan decisions, asking a coordinator
-question, requesting approval, and registering, spawning, or forking child
-sessions. These owner-authoritative operations update state; root or spawn
-acceptance is not proof that a model run was scheduled or completed. The browser
-client currently opens existing run IDs and does not expose root-acceptance,
-proposal, or child registration/spawn/fork controls. It can message existing
-sessions and request supported detach/archive actions. The Gateway does not
-expose journal object-content reads, so the client shows opaque references
-without inventing transcript content.
+   ```powershell
+   npm --prefix apps/web ci
+   ```
 
-Run-produced-file browsing remains explicitly unavailable in this v1 UI.
-P2 #1917 owns the durable run-bound artifact manifest, diff, and object-version
-producer needed to browse produced files after workspaces or branches change.
-The browser will map that owner contract after admission; it does not proxy a
-host filesystem or claim parity from the older monolithic file endpoints.
+2. Start the development server:
 
-The accepted selection contains provider candidates and a model-selection
-reference, not a provisioned provider pin or runtime SDK model ID. Usage is
-returned as run totals without per-event model-binding details. The UI reports
-those runtime identities as unavailable rather than inferring them from
-configuration or usage. Usage totals distinguish priced and unpriced events
-and do not replace missing measurements with zero.
+   ```powershell
+   npm --prefix apps/web run dev
+   ```
 
-This documentation describes the v1 source client only. The source and Gateway
-routes are present in v1; their presence does not establish that the web image, Gateway,
-Broker, or owner services are deployed or live.
+3. Validate types, tests, coverage, lint, and the production build:
+
+   ```powershell
+   npm --prefix apps/web run typecheck
+   npm --prefix apps/web test
+   npm --prefix apps/web run coverage
+   npm --prefix apps/web run lint
+   npm --prefix apps/web run build
+   ```
+
+The production host provides unauthenticated `/health/live` and
+`/health/ready` checks. Readiness returns `503` if the built
+`wwwroot/index.html` is missing. These checks report host and page availability;
+they do not verify Broker access or live API behavior.
+
+## Understand client limitations
+
+The optional managed portal routes `/` to Web on port 8080, `/api/v1` and the
+exact `/openapi/v1.json` path to Gateway, and exact `/mcp` and protected
+resource metadata paths to MCP on port 8443. These source manifests describe
+the intended route mapping; they do not establish a running portal or backend.
+
+The client opens existing run IDs. It does not expose run-root acceptance,
+typed outcome/workflow/work-plan proposals, or child-session
+registration/spawn/fork controls, even where owner routes exist. The client
+can message existing sessions and request supported detach/archive actions.
+The Gateway does not expose journal object-content reads, so the UI displays
+opaque references rather than inventing transcript text.
+
+Run-produced-file browsing is unavailable. The run-bound artifact manifest,
+diff, and object-version producer needed to browse files after workspace
+changes has not been admitted. The Web client does not proxy a host filesystem
+or claim parity with older file endpoints.
+
+The accepted run selection contains provider candidates and a model-selection
+reference, not a provisioned provider pin or runtime SDK model ID. Usage
+reports run totals without per-event model-binding details. The UI does not
+infer those identities from configuration or usage, and it does not replace
+missing measurements with zero.

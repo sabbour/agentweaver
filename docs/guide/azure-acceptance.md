@@ -1,95 +1,162 @@
-# Azure acceptance
+# Validate the Azure environment
 
-The v1 Bicep and Kubernetes sources define the dedicated P0 environment. They
-do not prove deployment or runtime behavior. Deployment and practical smoke
-acceptance are tracked separately in [#1812](https://github.com/sabbour/agentweaver/issues/1812)
-and [#1814](https://github.com/sabbour/agentweaver/issues/1814).
+Use this article to distinguish local source checks from checks against an
+approved Azure deployment. Bicep compilation and Kubernetes rendering validate
+the checked-in configuration; neither proves that Azure resources or services
+are deployed. Deployment and smoke acceptance are tracked separately in
+[issue #1812](https://github.com/sabbour/agentweaver/issues/1812) and
+[issue #1814](https://github.com/sabbour/agentweaver/issues/1814).
 
-## Offline checks
+## Prerequisites
+
+Before you run a live check, obtain approval for the target subscription,
+tenant, source revision, and any resource changes. Install Azure CLI, Bicep,
+`kubectl`, and Node.js 24. Use the guarded
+exact-source procedure in the
+[Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md);
+do not replace its receipt and target checks with an ad hoc deployment command.
+
+The examples in this article use the requested environment identifiers.
+`agentweaver-aks` is the Azure Kubernetes Service (AKS) cluster name:
+
+| Resource | Example identifier |
+| --- | --- |
+| Resource group | `agentweaver` |
+| AKS cluster | `agentweaver-aks` |
+| Product namespace | `agentweaver` |
+| Gateway namespace | `agentweaver-gateway` |
+| Knowledge Memory resource ID | `agentweaver.knowledge` |
+| Public portal host | `portal.<managed-domain>` |
+
+These names identify the intended target for the examples. Confirm the
+subscription and source-bound deployment receipt before using them.
+
+## Run the offline source checks
 
 Run these commands from the repository root:
 
-```powershell
-npm run test:azure
-az bicep build --file infra\bicep\main.bicep --stdout
-kubectl kustomize deploy\k8s\base
-kubectl kustomize deploy\k8s\acceptance\foundation-probe
-```
+1. Test the Azure deployment tooling:
 
-They validate source and local rendering only; they do not contact Azure or
-prove a running service.
+   ```powershell
+   npm run test:azure
+   ```
 
-Identity runtime-table permission checks use disposable PostgreSQL principals.
-The canonical definition permits head CAS updates and append-only audit writes
-through the existing runtime role. It does not create new Azure identities or
-execute the operator bootstrap. Those local compatibility checks are separate
-from Foundation Probe evidence and full current-authority SDK accounting
-acceptance.
+2. Compile the Bicep entry point:
 
-## Deployment
+   ```powershell
+   az bicep build --file infra\bicep\main.bicep --stdout
+   ```
 
-Use the guarded exact-source command in the [Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md).
-It binds the approved subscription, tenant, resource group, and source
-SHA/tree/input hash. A public API endpoint is required:
-`apiServerAccessProfile.enablePrivateCluster` must be `false`. A publicly
-resolvable FQDN on a private cluster does not satisfy this requirement.
+3. Render the product and acceptance Kubernetes configurations:
 
-For an existing P0 foundation, use the guarded AKS-only update path. It updates
-the cluster and three existing workload-identity federation records without
-redeploying PostgreSQL, Key Vault, Blob, VNet, private DNS, or Monitor. Supply
-the approved operator's Entra object ID explicitly. The deployment creates or
-reuses a permanent Azure Kubernetes Service RBAC Cluster Admin assignment at
-the exact AKS resource scope; it does not grant broader Azure scope or remove
-that assignment. Its scoped receipt is not a full-foundation receipt and
-requires a separate verified full-foundation resource receipt for Probe acceptance.
-The Probe image source and the native infrastructure source remain separate.
-Neither receipt can substitute for the other.
+   ```powershell
+   kubectl kustomize deploy\k8s\base
+   kubectl kustomize deploy\k8s\acceptance\foundation-probe
+   ```
 
-The system pool uses autoscaling with a minimum of two and a maximum of three
-`Standard_D2s_v5` nodes. Both deployment paths declare the same bounds.
-The AKS-only installer preserves the observed count within those bounds.
-It stops if the count changes after what-if, instead of resetting three nodes to two.
-The receipt reports the observed bounds and counts, not proof of scale-up.
-Available vCPU quota does not prove regional VM capacity.
+The commands must complete without validation errors. They do not contact
+Azure, apply SQL, create identities, execute an operator bootstrap, or prove a
+running service.
 
-The AKS API uses managed Entra authentication and Azure RBAC, with local
-accounts disabled. PostgreSQL, Key Vault, Blob, VNet/private endpoints, and
-Monitor retain their approved target and region placement.
+The Identity runtime-table compatibility tests use disposable PostgreSQL
+principals. They check the source-defined grants for compare-and-swap updates
+and append-only audit writes. They do not create Azure identities or apply
+those grants to a deployed database. Passing these tests is not Foundation
+Probe evidence or live SDK accounting acceptance.
 
-## Required P0 smoke checks
+## Deploy or update the approved target
 
-Use standard Azure CLI/SDK and `kubectl` observations for a short runtime
-check:
+Use the guarded exact-source command from the operator guide. The installer
+binds the approved subscription, tenant, resource group, source SHA, source
+tree, and input hash. The AKS API must be public:
+`apiServerAccessProfile.enablePrivateCluster` must be `false`. A public DNS
+name does not make a private AKS API public.
 
-1. Read the actual AKS properties and confirm public API, managed Entra, Azure
-   RBAC, and disabled local accounts.
-2. Confirm normal workload rollout, service health, and deployed image/version.
-3. Exercise one real authorized Identity secret-redemption request and one
-   denied request. Do not log credentials or returned secret values.
-4. Use one small generated fixture for exact-version Key Vault read, Blob
-   round trip, and PostgreSQL behavior; confirm cleanup removes only data
-   owned by that fixture.
-5. Confirm relevant telemetry where the service integration requires it.
+For an existing environment, use the guarded AKS-only update path when the
+approved change is limited to AKS. That path updates the cluster and its three
+existing workload-identity federation records. It does not redeploy PostgreSQL,
+Key Vault, Blob Storage, the VNet, private DNS, or Monitor. Supply the approved
+operator's Microsoft Entra ID object ID.
 
-Record only concise, sanitized results and identify the actual source/image
-versions. Preserve the external P0 data services and all resources outside the
-approved fixture. Do not treat unrun checks as passed.
+The installer creates or reuses a permanent Azure Kubernetes Service RBAC
+Cluster Admin assignment at the AKS resource scope. It does not grant a
+broader Azure role or remove that assignment. An AKS-only receipt is scoped to
+that update; it does not replace the verified full-foundation resource
+receipt required for Foundation Probe acceptance. The Probe image and
+infrastructure deployment have separate source receipts.
 
-## Optional Foundation Probe evidence
+The system node pool scales automatically between two and three
+`Standard_D2s_v5` nodes. The AKS-only installer preserves the observed node
+count within those bounds and stops if the count changes after the what-if
+operation. Its receipt reports the observed bounds and count; it does not prove
+that the pool scaled. Available vCPU quota also does not prove that the region
+has VM capacity.
 
-The `foundation-probe` Job and `verify-acceptance.mjs --collect-runtime-evidence`
-remain available as supplemental evidence collection. The verifier observes
-the Job, pod, image, workload identity, native receipt, and correlated
-Azure Monitor records; it does not run the Identity broker grant-redemption
-smoke test. This extended collector is not an additional P0 shipping gate.
-The verifier compares the image with its exact build source.
-It compares native deployment receipts with their own source, input hash,
-resource IDs, and deployment scope.
-An AKS-only receipt never becomes a full-foundation receipt.
-The corrected initial Probe `0.0.0` requires this explicit separation in its
-target and native receipt. The previous image and publication evidence remain
-available by digest. Only the existing tag receives an explicitly approved one-time replacement.
-Legacy tag-count, inherited NRMS policy-origin, provider-generated resource
-inventory, and historical receipt audits are not required acceptance steps.
+The AKS API uses managed Microsoft Entra ID authentication and Azure RBAC,
+with local accounts disabled. The deployment keeps PostgreSQL, Key Vault,
+Blob Storage, VNet/private endpoints, and Monitor in their approved target
+and region.
 
-See [Testing](./testing) for what source tests can and cannot prove.
+## Check the deployed environment
+
+Run live checks only after confirming the current Azure subscription and
+Kubernetes context:
+
+1. Confirm the Azure subscription and cluster context. Read the actual AKS
+   properties and verify that the API is public, managed Entra and Azure RBAC
+   are enabled, and local accounts are disabled.
+
+   ```powershell
+   az account show --query "{subscription:name, tenant:tenantId}" --output table
+   kubectl config current-context
+   az aks show --resource-group agentweaver --name agentweaver-aks
+   ```
+
+   Expected result: the active subscription and Kubernetes context identify
+   the approved target. The AKS properties show a public API, managed Entra
+   authentication, Azure RBAC, and disabled local accounts.
+2. Check workload rollout and health in both namespaces:
+
+   ```powershell
+   kubectl get deployments,services,pods -n agentweaver
+   kubectl get deployments,services,pods -n agentweaver-gateway
+   ```
+
+   Confirm that the expected workloads are ready and that their image
+   references match the approved deployment receipt. These observations
+   confirm only the resources you queried.
+3. Exercise one authorized Identity secret-redemption request and one denied
+   request. Confirm that the authorized request follows the owner's success
+   contract and the denied request is rejected. Do not log credentials or
+   returned secret values.
+4. Use a small generated fixture to test an exact-version Key Vault read, a
+   Blob Storage round trip, and PostgreSQL behavior. Confirm that cleanup
+   removes only data created by that fixture, and compare each response with
+   the fixture's expected value.
+5. Confirm the relevant telemetry when the deployed service integration
+   requires it.
+
+Record concise, sanitized results and the observed source and image versions.
+Preserve the external data services and all resources outside the approved
+fixture. Mark checks that you did not run as not run; do not infer a pass from
+source tests or rendered manifests.
+
+## Collect optional Foundation Probe evidence
+
+The `foundation-probe` Job and
+`verify-acceptance.mjs --collect-runtime-evidence` command provide supplemental
+evidence. The verifier observes the Job, pod, image, workload identity,
+native deployment receipt, and correlated Azure Monitor records. It does not
+perform the Identity Broker grant-redemption smoke check and is not a separate
+shipping gate.
+
+The verifier compares the Probe image with its exact build source. It also
+compares each native deployment receipt with its source, input hash, resource
+IDs, and deployment scope. An AKS-only receipt cannot stand in for the
+full-foundation receipt, and neither image evidence nor infrastructure
+evidence replaces the other. Legacy tag-count, inherited policy-origin,
+provider-generated resource inventory, and historical receipt audits are not
+acceptance steps.
+
+See [Test Agentweaver](./testing) for the limits of source and integration
+tests.

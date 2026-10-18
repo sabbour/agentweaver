@@ -1,14 +1,16 @@
-# Environment egress intent candidate
+# Environment egress policies
 
-The `Agentweaver.Environment` source adds an unpublished Environment-manager
-candidate for compiling and reconciling Cilium egress intent. It is not a
-deployed service, does not label or provision AgentHost pods, and does not prove
-that the Cilium datapath enforces a policy.
+Use this reference to understand how the Environment source candidate compiles
+and verifies outbound network access (egress) for a run. Cilium is the
+Kubernetes network-policy API used to apply and read policy objects. A verified
+object does not prove that the Cilium datapath enforced its rules. This source
+candidate is not deployed, does not label or provision AgentHost Pods, and
+does not yet connect to the existing run/environment registration producer.
 
-The same Environment service candidate also owns workspace-volume lifecycle routes
-and registers the Azure Files CSI Storage provider. This page covers only egress;
-the [foundation overview](./overview.md#workspace-volume-lifecycle) summarizes the
-volume lifecycle, pinned release binding, and Replace cleanup guarantees.
+The same Environment candidate owns workspace-volume lifecycle routes and
+registers the Azure Files CSI Storage provider. This article covers only
+egress; the [foundation overview](./overview.md#workspace-volume-lifecycle)
+summarizes volume lifecycle, pinned provider bindings, and Replace cleanup.
 Neither candidate is deployed by this source change.
 
 The same owner schema now contains the current Sandbox lease source primitive.
@@ -20,6 +22,10 @@ Public placement/profile reads keep the existing `WriteProjects` gate. The separ
 run-bound read-only lookup is integration work, not an egress mutation permission.
 
 ## Ownership and operation
+
+For provider selection and Environment settings, see the planned
+[provider configuration guide](../guide/configure-providers.md) and
+[runtime configuration reference](../reference/runtime-configuration.md).
 
 `EnvironmentEgressManager` is the operation entry point. Each apply, verify, revoke, or reconciliation reads the current caller from Projects & Config at
 `GET /api/authorization/context`; authorization and run-selection responses
@@ -198,7 +204,7 @@ sequenceDiagram
 
 ## Integration and evidence boundary
 
-### Runtime bootstrap profile candidate
+### Runtime bootstrap profiles
 
 The separate runtime bootstrap profile registry belongs to Environment. A
 profile identifies fixed HTTPS configure and observation endpoints for an exact

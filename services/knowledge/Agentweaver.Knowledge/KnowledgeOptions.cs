@@ -7,6 +7,12 @@ using Npgsql;
 namespace Agentweaver.Knowledge;
 
 /// <summary>Native PostgreSQL resource identity and schema version selected for Memory.</summary>
+/// <param name="ResourceId">Stable label stored with Memory data; it must never change.</param>
+/// <param name="DatabaseName">PostgreSQL database name, checked against the live connection during negotiation.</param>
+/// <param name="ResourceGeneration">Positive resource generation; change it only after the store is wiped or replaced.</param>
+/// <param name="Schema">PostgreSQL schema name; defaults to <c>knowledge</c> and cannot be a reserved schema.</param>
+/// <param name="OptionsRevision">Provider configuration revision; defaults to <c>native-postgres-memory-v1</c>.</param>
+/// <param name="OptionsSchemaVersion">Provider options contract version; defaults to and must equal version 1.</param>
 public sealed record NativePostgresMemoryOptions(
     string ResourceId,
     string DatabaseName,
@@ -17,7 +23,10 @@ public sealed record NativePostgresMemoryOptions(
 {
     public const int CurrentOptionsSchemaVersion = 1;
 
-    /// <summary>Reads the required native Memory settings, applying only the documented schema defaults.</summary>
+    /// <summary>
+    /// Reads the required native Memory settings. Defaults are schema <c>knowledge</c>,
+    /// revision <c>native-postgres-memory-v1</c>, and options schema version 1.
+    /// </summary>
     public static NativePostgresMemoryOptions Read(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
@@ -33,7 +42,11 @@ public sealed record NativePostgresMemoryOptions(
         return options;
     }
 
-    /// <summary>Rejects invalid identifiers, reserved schemas, and unsupported option versions.</summary>
+    /// <summary>
+    /// Requires resource and database tokens of at most 256 characters, a positive generation,
+    /// a lowercase schema name of at most 63 characters that is not reserved, and a supported
+    /// revision and options schema version.
+    /// </summary>
     public void Validate()
     {
         if (!IsToken(ResourceId) ||
@@ -65,6 +78,15 @@ public sealed record NativePostgresMemoryOptions(
 }
 
 /// <summary>Validated endpoints, audiences, storage settings, and context limits for the Knowledge service.</summary>
+/// <param name="IdentityAuthority">HTTPS issuer URI used to validate service identity tokens.</param>
+/// <param name="Audience">Nonempty audience expected on service identity tokens.</param>
+/// <param name="ProjectsConfigBaseAddress">HTTPS base URI for the Projects Config service, without user info, query, or fragment.</param>
+/// <param name="EventsBaseAddress">HTTPS base URI for the Events service, without user info, query, or fragment.</param>
+/// <param name="EventsAudience">Nonempty audience sent when calling the Events service.</param>
+/// <param name="MemoryProvider">Validated native PostgreSQL Memory resource and provider settings.</param>
+/// <param name="MaximumContextCandidates">Maximum candidate records examined; defaults to 1000 and must be 1 through 10,000.</param>
+/// <param name="DefaultContextItems">Default context item limit; defaults to 20 and must be 1 through 100.</param>
+/// <param name="DefaultContextTokens">Default context token limit; defaults to 4000 and must be 1 through 16,000.</param>
 public sealed record KnowledgeRuntimeOptions(
     Uri IdentityAuthority,
     string Audience,
@@ -104,7 +126,10 @@ public sealed record KnowledgeRuntimeOptions(
         return result;
     }
 
-    /// <summary>Checks HTTPS endpoints, nonempty audiences, bounded context limits, and provider options.</summary>
+    /// <summary>
+    /// Requires HTTPS endpoints, nonempty control-free audiences, context limits within
+    /// their documented ranges, and valid native Memory provider options.
+    /// </summary>
     public void Validate()
     {
         if (!IdentityAuthority.IsAbsoluteUri || IdentityAuthority.Scheme != Uri.UriSchemeHttps ||
@@ -176,7 +201,14 @@ internal static class KnowledgePostgresDataSource
                 TokenFilePath = connection.TokenFilePath,
             });
 
-    /// <summary>Builds a full-verification TLS data source and disables synchronous token acquisition.</summary>
+    /// <summary>
+    /// Builds a full-verification TLS data source and disables synchronous token acquisition.
+    /// The connection-string username must be the PostgreSQL Entra role whose name matches
+    /// the Knowledge managed identity; password authentication is not accepted.
+    /// </summary>
+    /// <param name="connectionString">PostgreSQL connection string with the matching Entra role as its username and no password.</param>
+    /// <param name="credential">Workload-identity credential used to acquire PostgreSQL audience tokens.</param>
+    /// <param name="timeProvider">Optional clock used to check token expiry.</param>
     public static NpgsqlDataSource Create(
         string connectionString,
         TokenCredential credential,

@@ -1,12 +1,29 @@
-# Contracts, endpoints, and configuration
+# Contracts, endpoints, and configuration reference
+
+Use this reference to look up v1 service contracts, selected owner endpoints,
+and their implementation boundaries. A route described here may be source-only
+or conditionally mapped; read each section's status before treating a contract
+as deployed.
+
+For the public Gateway route inventory, see the [HTTP API reference](./api.md).
+To configure a provider, follow [Configure providers](../guide/configure-providers.md).
+For runtime settings and deployment configuration, see
+[Runtime configuration](./runtime-configuration.md).
 
 ## Provider contract
 
-`ProviderDescriptor` contains a `ProviderSeam`, provider ID, adapter version, options-schema version, hosting pattern, and advertised capabilities.
+`ProviderDescriptor` identifies a provider seam and records the provider ID,
+adapter version, options-schema version, hosting pattern, and advertised
+capabilities.
 
-`ProviderRegistration` adds the enabled state, options revision, and selected schema version. A `PinnedProviderBinding` records the run, resource generation, and negotiated capabilities.
+`ProviderRegistration` adds the enabled state, options revision, and selected
+schema version. A `PinnedProviderBinding` records the run, resource generation,
+and negotiated capabilities.
 
-These records contain no credentials or option values. See [providers and models](../architecture/providers-models) for resolver limits.
+These records contain no credentials or option values. Follow
+[Configure providers](../guide/configure-providers.md) to select and configure
+a provider. See [Providers and models](../architecture/providers-models) for
+resolver limits.
 
 `ProviderMeterSourceSelection` maps an explicit source to one enabled Cost provider.
 `CostProviderResolutionRequest` requires an exact adapter version, options schema
@@ -44,21 +61,23 @@ model pin before using this adapter for receipts. Until that source contract is
 admitted, BYOK receipt accounting remains `Unpriced`; provisioned-throughput
 usage also remains unpriced without trusted usage-share evidence.
 
-## Gateway REST and SSE entry
+## Gateway API and server-sent events
 
-The unpublished `Agentweaver.Gateway` service exposes a finite versioned client API
-at `/api/v1`. `GET /openapi/v1.json` is the served route catalog and names each
-owning service. Protected routes validate an Identity Broker bearer token for the
-configured HTTPS issuer and Gateway audience, then forward that same token and the
-optional `X-Agentweaver-Tenant` selector to the owner. The Gateway does not infer
-identity or roles from request data, accept arbitrary upstream URLs, or replace
-owner-side current authorization.
+The `Agentweaver.Gateway` source exposes a finite, versioned client API at
+`/api/v1`. The service is a source candidate; these mappings do not confirm a
+deployment. `GET /openapi/v1.json` returns the route catalog and identifies each
+owning service. Protected routes validate the Identity Broker access token for
+the configured HTTPS issuer and Gateway audience, then forward that token and
+the optional `X-Agentweaver-Tenant` selector to the owner. The Gateway does not
+infer identity or roles from request data, accept arbitrary upstream URLs, or
+replace the owner's current authorization checks.
 
 Owner response statuses and bodies are preserved, including `409` conflicts and
 `202 Accepted`. A `202` is an owner acceptance only; it does not prove that work
 completed. Unavailable, redirected, or contract-invalid owner calls produce a
 Gateway `502`; the finite owner timeout produces `504`. The live OpenAPI document
-describes the SSE response as `text/event-stream`; an invalid cursor is `400`.
+describes server-sent events (SSE) as `text/event-stream`; an invalid cursor
+returns `400`.
 
 | Method and path | Contract |
 | --- | --- |
@@ -83,11 +102,13 @@ GitHub Repo App and ordinary Identity Broker browser
 calls remain selector-free; Copilot user-connection BFF lifecycle calls forward
 only the optional explicit tenant selector to their owning Broker.
 
-The Gateway requires HTTPS `Identity:Issuer`, `Identity:Audience`, and HTTPS service
-root addresses for `Gateway:Owners:Projects`, `Gateway:Owners:Orchestrator`,
-`Gateway:Owners:Knowledge`, `Gateway:Owners:Events`, and
-`Gateway:Owners:IdentityBrokerAddress`. The optional finite
-`Gateway:OwnerRequestTimeoutSeconds` is 1–120 seconds and defaults to 15.
+The Gateway requires HTTPS `Identity:Issuer`, `Identity:Audience`, and HTTPS
+service-root addresses for `Gateway:Owners:Projects`,
+`Gateway:Owners:Orchestrator`, `Gateway:Owners:Knowledge`,
+`Gateway:Owners:Events`, and `Gateway:Owners:IdentityBrokerAddress`. The
+optional `Gateway:OwnerRequestTimeoutSeconds` ranges from 1 to 120 seconds and
+defaults to 15. See [Runtime configuration](./runtime-configuration.md) for
+deployment configuration guidance.
 
 ### GitHub Repo App and Copilot connection BFF
 
@@ -149,7 +170,8 @@ proxy is part of this contract.
 
 ## First-party MCP client
 
-`Agentweaver.Mcp` provides a native MCP Streamable HTTP endpoint at `POST /mcp`.
+`Agentweaver.Mcp` provides a Model Context Protocol (MCP) Streamable HTTP
+endpoint at `POST /mcp`.
 `tools/list` reflects only compatible operations and schemas from the served
 Gateway OpenAPI catalog; `tools/call` maps to those fixed `/api/v1` Gateway routes.
 It does not accept an owner URL, identity, role, or authorization decision from
@@ -174,8 +196,9 @@ Tool arguments are checked against the same resolved OpenAPI schemas returned by
 is propagated, and timeout or Gateway unavailability is surfaced as an MCP error.
 
 The MCP host requires HTTPS `Identity:Issuer`, `Identity:Audience`, and
-`Gateway:BaseAddress` service-root settings. Its tool catalog is fetched from the
-configured Gateway; callers cannot override this address.
+`Gateway:BaseAddress` service-root settings. Its tool catalog is fetched from
+the configured Gateway; callers cannot override this address. See
+[Runtime configuration](./runtime-configuration.md) for deployment settings.
 
 ## Environment remote MCP connections
 
@@ -184,6 +207,7 @@ configuration and immutable catalog pins. Its routes use current Projects &
 Config authority and no-store responses. The exact route list, revision fields,
 Identity correlation boundary, parser limits, and missing discovery/transport
 proof are described in [Remote MCP connections](../architecture/remote-mcp-connections.md).
+See [Runtime configuration](./runtime-configuration.md) for runtime settings.
 
 `UsageSubmission` contains an event ID, occurrence time, attribution, model
 metadata, and nullable measurements. `IUsageLedger.AppendAsync` validates and
@@ -417,6 +441,9 @@ support a retained UI without making a UI part of this contract.
 | `GET /api/projects/{projectId}/runs/{runId}/coordination/policy-evaluations/{receiptId}` | Events-only read of the immutable Orchestrator-owned PolicyEvaluation receipt. |
 | `GET /api/projects/{projectId}/runs/{runId}/coordination/policy-evaluations/{receiptId}/admission` | Events-only current admission check for that exact owner receipt. Every outcome requires current Core write authority and accepted selection, plus the matching actor/tenant and active owner session/run writer/fence. The owner rechecks authority after SQL row-lock waits, including duplicate receipt paths. Allow also requires the exact unexpired grant/fence; Deny/Error can reference an issued inactive grant but remain non-authorizing immutable facts. Returns no-store. |
 
+For complete runtime-setting guidance, see
+[Runtime configuration](./runtime-configuration.md).
+
 Configuration:
 
 | Key | Requirement |
@@ -432,6 +459,9 @@ Configuration:
 | `EventsAndSessions:Authorization:OwnerBaseAddress` / `Audience` | Trusted HTTPS Events & Sessions owner and required audience for session registration and message delivery. |
 | `Orchestrator:RuntimeRegistration:EnvironmentOwnerAddress` | Optional fixed HTTPS root for current Environment lease/profile lookup. Without this key, runtime registration routes are not mapped. |
 | `Orchestrator:RuntimeUsage:BrokerOwnerAddress` | Optional fixed HTTPS Broker root for current observe-grant validation. Requires runtime registration configuration. |
+
+For complete runtime-setting guidance, see
+[Runtime configuration](./runtime-configuration.md).
 
 Runtime PostgreSQL access uses the PostgreSQL Entra token scope and TLS
 `VerifyFull`; the connection string must include the Entra role and omit a password.
@@ -948,6 +978,9 @@ Contract version 1 contains the caller and selected tenant, current membership r
 
 ## Projects & Config host configuration
 
+For complete deployment-setting guidance, see
+[Runtime configuration](./runtime-configuration.md).
+
 | Key | Requirement |
 | --- | --- |
 | `ProjectsConfig:Authentication:BrokerRunBindingAudience` | Optional, distinct HTTPS audience for the private Broker proof route. When configured, the route requires its TLS certificate, private key, and server-certificate digest. |
@@ -1009,6 +1042,9 @@ Knowledge-owned outbox intent in one transaction. Events fetches the receipt and
 appends a separate project fact; this is not a native Sessions journal event. Failed
 delivery remains `PENDING` until a fresh authorized caller retries.
 
+For complete runtime-setting guidance, see
+[Runtime configuration](./runtime-configuration.md).
+
 Configuration:
 
 | Key | Requirement |
@@ -1036,6 +1072,9 @@ Run the executable with only `--migrate` to use the separate privileged identity
 current event-delivery boundaries.
 
 ## Identity host configuration
+
+For complete deployment-setting guidance, see
+[Runtime configuration](./runtime-configuration.md).
 
 | Key | Requirement |
 | --- | --- |

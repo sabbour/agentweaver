@@ -35,7 +35,7 @@ Its top-level fields are:
 | `sourceTree` | Exact 40-lowercase-hex image-build Git tree SHA. It is not `sourceHash`. |
 | `sourceHash` | Exact 64-lowercase-hex SHA-256 of infrastructure inputs at the image-build commit. |
 | `subscriptionId`, `tenantId` | GUIDs for the dedicated deployment. |
-| `resourceGroup`, `resourceGroupId` | Exact `aw-v1-p0` name and matching subscription-scoped ID. |
+| `resourceGroup`, `resourceGroupId` | Exact `agentweaver` name and matching subscription-scoped ID. |
 | `deploymentName`, `deploymentId` | The selected successful infrastructure deployment and its exact ARM ID. |
 | `infrastructure` | Independent deployment scope, source SHA, Git tree, input hash, and original foundation binding. |
 | `aksOidcIssuerUrl` | HTTPS issuer from the deployment output. |
@@ -62,7 +62,7 @@ AKS-only collection requires `--foundation-expected-sha` for the original founda
 
 The projected token file, `AZURE_CLIENT_ID`, and `AZURE_TENANT_ID` must match
 the target. The JWT claims must have the exact target issuer,
-`system:serviceaccount:agentweaver-v1-p0:foundation-probe` subject, and sole
+`system:serviceaccount:agentweaver:foundation-probe` subject, and sole
 `api://AzureADTokenExchange` audience. The Azure SDK operations then use the
 explicit `WorkloadIdentityCredential`; no alternate credential is attempted.
 

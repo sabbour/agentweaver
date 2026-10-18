@@ -22,11 +22,12 @@ export default defineConfig({
     aside: false,
     outline: false,
     nav: [
-      { text: 'Guide', link: '/guide/' },
-      { text: 'Experience', link: '/experience/README' },
-      { text: 'Architecture', link: '/architecture/overview' },
-      { text: 'Deep dives', link: '/deep-dive/README' },
-      { text: 'Reference', link: '/reference/api' },
+      { text: 'Get started', link: '/guide/' },
+      { text: 'Tutorials', link: '/guide/deploy-to-azure' },
+      { text: 'Concepts', link: '/experience/00-overview' },
+      { text: 'How-to', link: '/guide/configure-providers' },
+      { text: 'Reference', link: '/reference/runtime-configuration' },
+      { text: 'Troubleshooting', link: '/guide/troubleshooting' },
       {
         text: '0.x documentation',
         link: 'https://sabbour.github.io/agentweaver/',
@@ -35,20 +36,35 @@ export default defineConfig({
     sidebar: {
       '/guide/': [
         {
-          text: 'Start',
+          text: 'Get started',
           items: [
-            { text: 'Guide overview', link: '/guide/' },
+            { text: 'Guides and tutorials', link: '/guide/' },
+            { text: 'Quickstart: build the source', link: '/guide/quickstart' },
             { text: 'Build and use', link: '/guide/build-and-use' },
-            { text: 'Web client', link: '/guide/web-client' },
-            { text: 'Gateway/BFF', link: '/guide/gateway' },
-            { text: 'Testing', link: '/guide/testing' },
           ],
         },
         {
-          text: 'Use',
+          text: 'Tutorial',
           items: [
+            { text: 'Deploy Agentweaver to Azure', link: '/guide/deploy-to-azure' },
+          ],
+        },
+        {
+          text: 'Configure and deploy',
+          items: [
+            { text: 'Configure providers', link: '/guide/configure-providers' },
+            { text: 'Configure Knowledge memory', link: '/guide/configure-knowledge' },
+            { text: 'Web client', link: '/guide/web-client' },
+            { text: 'Gateway/BFF', link: '/guide/gateway' },
+          ],
+        },
+        {
+          text: 'Test and troubleshoot',
+          items: [
+            { text: 'Testing', link: '/guide/testing' },
             { text: 'Environment Sandbox testing', link: '/guide/environment-sandbox-testing' },
             { text: 'Azure acceptance', link: '/guide/azure-acceptance' },
+            { text: 'Troubleshooting', link: '/guide/troubleshooting' },
             { text: 'Diagram authoring', link: '/diagrams/README' },
           ],
         },
@@ -116,6 +132,7 @@ export default defineConfig({
         {
           text: 'Reference',
           items: [
+            { text: 'Runtime configuration', link: '/reference/runtime-configuration' },
             { text: 'HTTP API', link: '/reference/api' },
             { text: 'Events', link: '/reference/events' },
             { text: 'Web client', link: '/reference/web' },

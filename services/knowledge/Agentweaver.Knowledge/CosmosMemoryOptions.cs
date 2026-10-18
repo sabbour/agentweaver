@@ -3,6 +3,13 @@ using Microsoft.Extensions.Configuration;
 namespace Agentweaver.Knowledge;
 
 /// <summary>Validated identity and version information for the configured Cosmos Memory container.</summary>
+/// <param name="Endpoint">Root HTTPS endpoint of the Cosmos account, without user info, query, or fragment.</param>
+/// <param name="DatabaseId">Cosmos database name using letters, digits, hyphens, or underscores.</param>
+/// <param name="ContainerId">Cosmos container name; the provider also checks its partition key, index, and retention policy.</param>
+/// <param name="ResourceId">Stable label for this Memory store; it must never change.</param>
+/// <param name="ResourceGeneration">Positive resource generation; change it only after the store is wiped or replaced.</param>
+/// <param name="OptionsRevision">Provider configuration revision used to match the catalog entry.</param>
+/// <param name="OptionsSchemaVersion">Options contract version; defaults to and must equal version 1.</param>
 public sealed record CosmosMemoryOptions(
     Uri Endpoint,
     string DatabaseId,
@@ -12,7 +19,9 @@ public sealed record CosmosMemoryOptions(
     string OptionsRevision,
     int OptionsSchemaVersion)
 {
+    /// <summary>The only options contract version supported by this adapter.</summary>
     public const int CurrentOptionsSchemaVersion = 1;
+    /// <summary>Required container partition key for project-scoped Memory documents.</summary>
     public const string PartitionKeyPath = "/projectId";
 
     /// <summary>Reads the optional Cosmos provider section and validates it when present.</summary>
@@ -42,7 +51,11 @@ public sealed record CosmosMemoryOptions(
         return options;
     }
 
-    /// <summary>Rejects unsupported resource identities, endpoint forms, and option revisions.</summary>
+    /// <summary>
+    /// Requires a root HTTPS endpoint, database and container names of at most 255 characters,
+    /// a resource token of at most 256 characters, a positive generation, a revision of at most
+    /// 128 characters, and the supported options schema version.
+    /// </summary>
     /// <exception cref="ArgumentException">Any configured value violates the provider contract.</exception>
     public void Validate()
     {

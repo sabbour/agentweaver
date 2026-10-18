@@ -1,24 +1,28 @@
 # HTTP API reference
 
-This inventory separates the public Gateway from native owner APIs. A native
-route is not a public Gateway route unless the table says so. The inventory
-describes source mappings, not deployed addresses.
+Use this reference to find v1 HTTP routes, their owning services, and their
+authorization requirements. An **owner service** handles an operation's
+authoritative state and authorization. A **native route** is mapped by an owner
+service; it is not public through the Gateway unless the table lists a Gateway
+path. These tables describe source mappings, not deployed addresses.
 
-For DTOs, configuration, and detailed operation semantics, see
-[contracts](./contracts.md). The Gateway's `GET /openapi/v1.json` supplies the
-versioned public request and response schemas. [MCP tools](./mcp-tools.md) derive
-from that catalog.
+For request and response contracts, see [service contracts](./contracts.md).
+For provider setup, see [Configure providers](../guide/configure-providers.md).
+For runtime settings, see [Runtime configuration](./runtime-configuration.md).
+The Gateway's `GET /openapi/v1.json` returns the versioned public schemas, which
+the [MCP tools](./mcp-tools.md) reference uses.
 
-## Read the tables
+## How to read this reference
 
-Tables with a **prefix** list the exact `MapGroup` prefix and exact mapped
-suffixes. Append the suffix to that prefix. Route constraints such as `:guid`
-and `:long` describe accepted path values; they are not part of a request value.
-An empty suffix adds no slash.
+Some tables list a route prefix and its suffixes. Append a suffix to the prefix
+to form the full path. A route constraint such as `:guid` or `:long` describes
+the accepted value; it is not part of the value you send. An empty suffix adds
+no slash.
 
-The **Gateway** column means the same suffix under the stated versioned prefix.
-`No` means native-only. The Gateway catalog omits the final `/` on native
-collection routes where the table explicitly calls this out.
+The **Gateway** column shows whether the Gateway exposes the same suffix under
+the versioned prefix. `No` means the route is native-only. Where a table notes
+that the Gateway omits a trailing slash, use the path shown in the Gateway
+column.
 
 ### Authorization key
 
@@ -55,9 +59,10 @@ Source: `services/gateway/Agentweaver.Gateway/GatewayEndpoints.cs` and
 | GET | `/health/live` | Public | Process liveness. |
 | GET | `/health/ready` | Public | Gateway host readiness. |
 
-The finite public routes owned by Projects, Orchestrator, Knowledge, and Events
-are listed with those services below. Unmapped `/api/v1/{**path}` requests return
-`404 route_not_found`; there is no generic upstream proxy.
+The public Gateway surface is an explicit route catalog. The tables below list
+the routes owned by Projects & Config, Orchestrator, Knowledge, and Events.
+Unmapped `/api/v1/{**path}` requests return `404 route_not_found`; the Gateway
+does not provide a generic upstream proxy.
 
 The Gateway preserves owner statuses and response bodies. `202` reports
 acceptance, not completion. Unavailable or invalid owner responses return `502`;
@@ -123,6 +128,10 @@ They are distinct from the direct Broker browser Repo App surface below.
 Source: `services/projects-config/Agentweaver.Projects.Config/`.
 Native project prefix: `/api/projects`.
 Gateway project prefix: `/api/v1/projects`.
+
+Use [Configure providers](../guide/configure-providers.md) to set up providers
+before you accept a run selection. The routes below show where the Gateway
+exposes project configuration and run-selection operations.
 
 | Method | Native suffix | Auth | Purpose | Gateway |
 | --- | --- | --- | --- | --- |

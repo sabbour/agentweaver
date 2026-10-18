@@ -1,35 +1,71 @@
-# Build and use
+# Build and use the foundation libraries
 
-## Requirements
+Agentweaver's .NET solution contains contracts and adapters for identity, providers,
+persistence, objects, and telemetry. Building these libraries does not start a
+deployed Agentweaver platform. The Identity Broker is a source-level service
+candidate, and Foundation Probe is an acceptance executable rather than a product
+service.
 
-Use the .NET 10 SDK selected by `global.json`, Node.js 24, and a Docker-compatible engine.
+## Prerequisites
 
-PostgreSQL integration tests start a disposable Testcontainers database. They require permission to pull its test image.
+Install the .NET 10 SDK version selected by `global.json` and Node.js 24. You need
+a Docker-compatible container engine only when you run PostgreSQL integration
+tests. Those tests use Testcontainers and must be able to pull the test database
+image.
 
-## Restore and build
+## Restore and build the solution
 
-Run these commands from the repository root:
+Run the commands from the repository root:
 
-```powershell
-dotnet restore Agentweaver.slnx --locked-mode
-dotnet build Agentweaver.slnx --no-restore --configuration Release
-npm run release:validate
-```
+1. Restore the locked .NET dependencies:
 
-The release validator uses Node.js built-in modules. It does not install packages.
+   ```powershell
+   dotnet restore Agentweaver.slnx --locked-mode
+   ```
+
+   The command restores the dependencies recorded in the lock files.
+
+2. Build the solution in Release mode:
+
+   ```powershell
+   dotnet build Agentweaver.slnx --no-restore --configuration Release
+   ```
+
+   The build compiles the solution without changing the restored dependency set.
+
+3. Validate release metadata:
+
+   ```powershell
+   npm run release:validate
+   ```
+
+   This command uses Node.js built-in modules. It does not install packages or
+   publish artifacts.
 
 ## Use the foundation libraries
 
-The provider packages define contracts and resolution. `ProviderCatalog.Create` builds an immutable catalog. `ProviderResolver` resolves and pins selections after resource negotiation.
+Use the provider libraries to describe and resolve available implementations.
+`ProviderCatalog.Create` builds an immutable catalog. `ProviderResolver` resolves
+and pins a selection after resource negotiation; it does not provision the
+selected resource.
 
-The Identity library checks server-owned grants before and after secret acquisition. The Azure Key Vault adapter reads the exact `SecretRef` version with an injected credential or explicit AKS workload identity.
+Use the Identity library to check server-owned grants before and after secret
+acquisition. The Azure Key Vault adapter reads the exact `SecretRef` version
+using an injected credential or an explicitly configured AKS workload identity.
+The adapter does not grant access by itself.
 
-The PostgreSQL library provides transactional outbox and inbox operations. Call `EnqueueAsync` in the same transaction as domain state. Call `AdmitAsync` in the same transaction as consumer effects.
+Use the PostgreSQL library for transactional outbox and inbox operations. Call
+`EnqueueAsync` in the same transaction as the domain change. Call `AdmitAsync`
+in the same transaction as the consumer effect so the state change and message
+admission remain atomic.
 
-`AzureBlobObjectStore` implements `IObjectStore` for opaque platform objects. The container and caller authorization already exist before adapter use.
+Use `AzureBlobObjectStore` to implement `IObjectStore` for opaque platform
+objects. The container and caller authorization must already exist before the
+adapter is used.
 
-Register telemetry with `AddAgentweaverTelemetry`. Add `AddAgentweaverAzureMonitorTelemetry` when the host supplies trusted exporter configuration.
+Register telemetry with `AddAgentweaverTelemetry`. Add
+`AddAgentweaverAzureMonitorTelemetry` only when the host provides trusted
+exporter configuration.
 
-These libraries do not start a product platform. The Identity broker is an unpublished service candidate. The Foundation Probe is an acceptance executable, not a product service.
-
-Read [contracts and endpoints](../reference/contracts) for exact signatures and [component releases](../reference/releases) for package preparation.
+For exact API signatures, see [contracts and endpoints](../reference/contracts).
+For package preparation, see [component releases](../reference/releases).

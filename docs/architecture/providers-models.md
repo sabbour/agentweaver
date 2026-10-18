@@ -1,6 +1,13 @@
 # Providers and models
 
-`Agentweaver.Abstractions` names 15 provider seams. A seam defines a contract boundary. It does not prove that an adapter or running service exists.
+Use this reference to understand how Agentweaver models provider choices and
+binds them to runtime resources. A provider seam is a contract boundary for
+one capability, such as Memory or Storage. An adapter implements that
+contract for a technology. The `Agentweaver.Abstractions` source currently
+defines 15 seams; a seam does not prove that its adapter or service is running.
+For configuration steps, see the planned
+[provider configuration guide](../guide/configure-providers.md) and
+[runtime configuration reference](../reference/runtime-configuration.md).
 
 The [platform design](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/decisions/0001-platform-architecture.md#provider-seams)
 now plans 16 seams. Canvas is new P2 work, not a current enum member or implemented

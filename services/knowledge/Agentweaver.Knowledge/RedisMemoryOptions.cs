@@ -3,6 +3,15 @@ using StackExchange.Redis;
 namespace Agentweaver.Knowledge;
 
 /// <summary>Validated connection and immutable resource identity for the Redis Memory namespace.</summary>
+/// <param name="Endpoint">TLS Redis URI using <c>rediss</c> with an explicit port and no path, credentials, query, or fragment.</param>
+/// <param name="ResourceId">Stable label for this Memory store; it must never change.</param>
+/// <param name="ResourceGeneration">Positive resource generation; change it only after the store is wiped or replaced.</param>
+/// <param name="OptionsRevision">Provider configuration revision used to match the catalog entry.</param>
+/// <param name="OptionsSchemaVersion">Options contract version; defaults to and must equal version 1.</param>
+/// <param name="Database">Redis logical database index, from 0 through 15; defaults to 0.</param>
+/// <param name="KeyPrefix">Key namespace prefix, at most 128 allowed characters; defaults to <c>agentweaver:knowledge</c>.</param>
+/// <param name="UserName">Optional Redis ACL username; it must be supplied together with a password.</param>
+/// <param name="Password">Optional Redis ACL password; it must be supplied together with a username and is omitted from diagnostics.</param>
 public sealed record RedisMemoryOptions(
     Uri Endpoint,
     string ResourceId,
@@ -14,6 +23,7 @@ public sealed record RedisMemoryOptions(
     string? UserName,
     string? Password)
 {
+    /// <summary>The only options contract version supported by this adapter.</summary>
     public const int CurrentOptionsSchemaVersion = 1;
 
     /// <summary>Reads the optional Redis provider section and validates it when present.</summary>
@@ -44,7 +54,10 @@ public sealed record RedisMemoryOptions(
         return options;
     }
 
-    /// <summary>Builds the TLS connection settings used by the Redis command client.</summary>
+    /// <summary>
+    /// Builds TLS connection settings with administrative commands enabled for provider
+    /// compatibility checks and bounded connect and command timeouts.
+    /// </summary>
     /// <exception cref="ArgumentException">The options do not satisfy the Redis provider contract.</exception>
     public ConfigurationOptions CreateConnectionOptions()
     {
@@ -66,7 +79,11 @@ public sealed record RedisMemoryOptions(
         return connection;
     }
 
-    /// <summary>Checks endpoint, identity, namespace, database, and paired credential values.</summary>
+    /// <summary>
+    /// Requires a TLS URI with an explicit port, a positive generation, the supported options
+    /// schema, a database from 0 through 15, a valid key prefix, and either both ACL credentials
+    /// or neither. User names and passwords are bounded and cannot contain control characters.
+    /// </summary>
     public void Validate()
     {
         if (!Endpoint.IsAbsoluteUri ||

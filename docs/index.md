@@ -1,72 +1,63 @@
 # Agentweaver 1.x documentation
 
-Agentweaver 1.x is a rebuild on the `v1` branch. The source includes provider
-contracts, foundation libraries, and service candidates for Identity Broker,
-Projects & Config, Knowledge, Events & Sessions, and Gateway. It also includes
-Azure infrastructure definitions.
+Learn how to build, configure, and validate the Agentweaver 1.x source. These
+articles describe the current `v1` branch. They distinguish implemented
+contracts from source candidates and do not claim that a service, provider, or
+Azure environment is deployed.
 
-The source includes accepted P0 foundations and unpublished service candidates.
-It does not provide a deployed product platform or publish packages or images.
-It does not prove that operators provisioned the dedicated Azure environment.
+## Get started
 
-This site documents code and procedures that exist in the `v1` source. Proposed architecture records stay in the repository and do not describe implemented capabilities.
-
-## Start
-
-| Page | Use |
+| Article | Use it to |
 | --- | --- |
-| [Build and use](./guide/build-and-use) | Restore, build, test, and compose foundation libraries. |
-| [Testing](./guide/testing) | Run current tests and read their limits. |
-| [Gateway/BFF](./guide/gateway) | Use the versioned REST/SSE entry and discover its live OpenAPI contract. |
-| [Web client](./guide/web-client) | Configure and use the Broker/Gateway-backed v1 application and its explicit contract limits. |
-| [Azure acceptance](./guide/azure-acceptance) | Compile infrastructure and prepare an approved acceptance run. |
+| [Quickstart: build the source](./guide/quickstart.md) | Restore and build the v1 solution and run local checks. |
+| [Build and use the foundation libraries](./guide/build-and-use.md) | Understand and compose the reusable foundation libraries. |
 
-## Architecture
+## Tutorials
 
-| Page | Covers |
+| Article | Use it to |
 | --- | --- |
-| [Foundation overview](./architecture/overview) | Compiled components and their dependencies. |
-| [Events & Sessions journal](./architecture/events-sessions) | Current journal API, durable PostgreSQL behavior, provider pinning, and implementation limits. |
-| [Knowledge and Memory](./architecture/knowledge-memory) | Project memory, immutable revisions, authorized context composition, and provider binding. |
-| [Providers and models](./architecture/providers-models) | Provider resolution, pinning, and model support. |
-| [Projects & Config](./architecture/projects-config) | Project APIs, revisioned settings, and immutable run-selection snapshots. |
-| [Skill marketplace sources](./architecture/skill-marketplace) | Revisioned project source management, bounded commit-pinned browse, and the import boundary. |
-| [Environment egress](./architecture/environment-egress) | The unpublished, generation-fenced Cilium egress-intent candidate and its enforcement limits. |
-| [Identity and secrets](./architecture/identity-secrets) | OAuth, run grants, Key Vault, and workload identity. |
-| [PostgreSQL and Blob](./architecture/persistence-objects) | Outbox, inbox, relay, and object storage. |
-| [Telemetry](./architecture/telemetry) | OpenTelemetry and Azure Monitor adapters. |
-| [Dedicated Azure environment](./architecture/azure) | Bicep, AKS, private dependencies, and the Foundation Probe. |
+| [Tutorial: deploy Agentweaver to Azure](./guide/deploy-to-azure.md) | Provision an approved target, bootstrap its database and identities, install the Kubernetes bundle, and verify the workloads. |
+
+## Concepts
+
+| Article | Learn about |
+| --- | --- |
+| [What Agentweaver 1.x can do](./experience/00-overview.md) | Current product capabilities and source boundaries. |
+| [Foundation architecture](./architecture/overview.md) | Component ownership and dependencies. |
+| [Providers and models](./architecture/providers-models.md) | Provider registration, resolution, model bindings, and limits. |
+| [Knowledge and Memory](./architecture/knowledge-memory.md) | Project memory, decisions, revisions, and provider binding. |
+| [Identity and secrets](./architecture/identity-secrets.md) | Broker identity, workload identity, grants, and Key Vault. |
+
+## How-to guides
+
+| Article | Use it to |
+| --- | --- |
+| [Configure providers](./guide/configure-providers.md) | Choose from the providers registered in the current catalog. |
+| [Configure Knowledge memory](./guide/configure-knowledge.md) | Configure native PostgreSQL Memory and understand store identity. |
+| [Gateway and BFF](./guide/gateway.md) | Discover and call the finite Gateway API. |
+| [Web client](./guide/web-client.md) | Configure the browser client and its authentication flow. |
+| [Testing](./guide/testing.md) | Run the relevant test suites and interpret their limits. |
+| [Azure acceptance](./guide/azure-acceptance.md) | Prepare and verify approved Azure acceptance checks. |
 
 ## Reference
 
-| Page | Covers |
+| Article | Use it to |
 | --- | --- |
-| [Contracts and endpoints](./reference/contracts) | Provider and secret contracts, Identity routes, and host configuration. |
-| [Component releases](./reference/releases) | Draft manifest, changesets, and release commands. |
-| [Diagram authoring](./diagrams/README) | Editable sources, rendered figures, and validation commands. |
+| [Runtime configuration](./reference/runtime-configuration.md) | Find runtime keys, defaults, validation rules, and value sources. |
+| [Contracts and endpoints](./reference/contracts.md) | Read shared contracts and service endpoint behavior. |
+| [HTTP API](./reference/api.md) | Find the versioned API routes and owners. |
+| [Events](./reference/events.md) | Read journal event and outbox contracts. |
+| [MCP tools](./reference/mcp-tools.md) | Discover the Gateway-derived MCP tool surface. |
+| [Component releases](./reference/releases.md) | Understand component versioning, publication, and deployment. |
 
-## Proposed extensions
+## Troubleshooting
 
-The [installed agent application specification](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/agent-application-bundles.md)
-defines portable bundles and installation through existing owners.
-The [canonical plan](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/decisions/0001-platform-architecture.md#installed-agent-applications---planned-post-core-extension)
-places this extension after its applicable core prerequisites.
-These source-only designs do not describe an implemented installer or deployed capability.
-They do not change P1 completion.
+Use [Troubleshoot Agentweaver 1.x](./guide/troubleshooting.md) to diagnose
+provider resolution, authentication, configuration, and rollout failures.
 
-The [Canvas contract and delivery plan](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/applications-and-surfaces.md#canvas-provider-contract-and-adapters)
-preserves the separate planned Canvas seam, A2UI, bounded GitHub compatibility,
-MCP Apps protocol integration, and bundle declarations.
-[#1878](https://github.com/sabbour/agentweaver/issues/1878) tracks the B1-B5/C1-C5 criteria in `v1.0.0` P2.
-Documentation admission does not implement those criteria.
+## Understand the version boundary
 
-The [Container Apps Sandboxes P3 evaluation](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/container-apps-sandboxes-evaluation.md)
-compares the managed microVM service with Sandbox, Storage, Network, and AgentHost requirements.
-It rejects current enablement and incompatible PVC/Cilium pairings.
-No adapter, cloud trial, or P1/P2 dependency is included.
-
-## Version boundary
-
-Agentweaver 0.x remains an active product line on `dev`. Read the [0.x documentation](https://sabbour.github.io/agentweaver/) for that product.
-
-The v1 source describes a separate foundation. The [proposed architecture record](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/decisions/0001-platform-architecture.md) is not an implementation status report.
+Agentweaver 0.x remains a separate product line on `dev`. Read the
+[0.x documentation](https://sabbour.github.io/agentweaver/) for that product.
+The v1 source is a separate rebuild. Proposed architecture and source-only
+service candidates do not imply a released or deployed capability.

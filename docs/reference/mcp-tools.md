@@ -1,18 +1,25 @@
 # MCP tools reference
 
-The v1 MCP host exposes Gateway operations as tools. It does not use the 0.x
-handwritten tool catalog.
+Use this reference to discover the tools that the Agentweaver Model Context
+Protocol (MCP) host exposes from the Gateway. The host reads
+`GET /openapi/v1.json` from its configured Gateway and caches the admitted
+operations. Each tool name is `agentweaver_` followed by the OpenAPI
+`operationId`. The Gateway document defines each tool's path, parameters,
+request body, and summary.
 
-`GatewayToolCatalog` reads `GET /openapi/v1.json` from the configured Gateway and
-caches the admitted operations. A tool name is `agentweaver_` plus the exact
-OpenAPI `operationId`. Paths, parameters, request bodies, and summaries come from
-that document.
+For route authorization and native-only operations, see the
+[HTTP API reference](./api.md). For provider setup, see
+[Configure providers](../guide/configure-providers.md). For host settings, see
+[Runtime configuration](./runtime-configuration.md).
 
 ## Connect and authenticate
 
-The host maps `/mcp` with the MCP SDK's stateless Streamable HTTP transport.
-Tool calls use the current validated Broker bearer. MCP forwards that same token
-to the fixed Gateway; it does not issue another identity or grant.
+Before you connect, configure the absolute HTTPS Broker issuer, protected
+resource audience, and Gateway service root listed below. Obtain a valid Broker
+access token for the MCP audience. The host maps `/mcp` with the MCP SDK's
+stateless Streamable HTTP transport. It validates the token and forwards the
+same token to the configured Gateway; the MCP host does not issue another
+identity or grant.
 
 | Host configuration | Requirement |
 | --- | --- |
@@ -20,11 +27,17 @@ to the fixed Gateway; it does not issue another identity or grant.
 | `Identity:Audience` | Absolute HTTPS protected-resource audience. |
 | `Gateway:BaseAddress` | Absolute HTTPS Gateway service root, without a path. |
 
+To discover and call tools:
+
+1. Send an authenticated MCP initialize request to `/mcp`.
+2. Call `tools/list` to retrieve the exact schemas from the configured Gateway.
+3. Call a listed tool with `tools/call` and arguments that match its schema.
+
 The host derives the protected-resource metadata path from the audience path.
-For an audience ending in `/mcp`, discovery is
+For an audience ending in `/mcp`, discovery uses
 `/.well-known/oauth-protected-resource/mcp`. The metadata returns `resource` and
-`authorization_servers`. A `401` on `/mcp` points to this metadata through
-`WWW-Authenticate`.
+`authorization_servers`. If `/mcp` returns `401`, use the metadata URI in the
+`WWW-Authenticate` challenge to identify the protected resource.
 
 `GET /health/live` and `GET /health/ready` are anonymous process checks. They do
 not validate a Gateway tool call.
@@ -43,9 +56,9 @@ The input schema rejects unknown properties. Body fields are not flattened into
 top-level tool arguments. Operations whose idempotency key belongs inside the
 owner request body retain that field inside `body`.
 
-Use `tools/list` to get the exact schema from the configured Gateway. See
-[HTTP API](./api.md) for endpoint paths, owner authorization, and native-only
-operations.
+Use `tools/list` to get the exact schema from the configured Gateway. The
+operation list on this page is an index; the live schema is authoritative for
+the configured Gateway.
 
 ## Tool index
 

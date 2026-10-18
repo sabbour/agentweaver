@@ -6,11 +6,19 @@ namespace Agentweaver.EventsAndSessions.Cost;
 /// <summary>Selects the Azure pricing shape; provisioned-throughput work stays unpriced without usage-share evidence.</summary>
 public enum AzureCostPricingModel
 {
+    /// <summary>Prices each model's input and output tokens using explicit per-million-token rates.</summary>
     StandardTokens,
+    /// <summary>Does not price by token; usage-share evidence is required to attribute provisioned throughput.</summary>
     ProvisionedThroughput
 }
 
 /// <summary>Configures a versioned Azure rate card and the resource identity bound to a run.</summary>
+/// <param name="ResourceId">Stable identifier for the Azure cost resource used in provider bindings.</param>
+/// <param name="ResourceGeneration">Positive resource generation recorded with the provider binding.</param>
+/// <param name="OptionsRevision">Provider configuration revision used to match the catalog entry.</param>
+/// <param name="OptionsSchemaVersion">Options contract version; must equal the adapter's current version.</param>
+/// <param name="PricingModel">Whether usage is priced per token or provisioned throughput is left unpriced.</param>
+/// <param name="RateCard">Versioned rate card with a currency unit and model-scoped rates required by the selected pricing model.</param>
 public sealed record AzureCostProviderOptions(
     string ResourceId,
     long ResourceGeneration,
@@ -57,7 +65,11 @@ public sealed record AzureCostProviderOptions(
         return options;
     }
 
-    /// <summary>Checks resource identity, rate-card denomination, and model-scoped input/output rates.</summary>
+    /// <summary>
+    /// Requires a positive resource generation and supported options schema. Token pricing needs
+    /// positive input and output rates for every model, denominated per million tokens; provisioned
+    /// throughput must not contain token multipliers.
+    /// </summary>
     public void Validate()
     {
         if (!IsToken(ResourceId, 256) || ResourceGeneration < 1 ||

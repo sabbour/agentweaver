@@ -7,6 +7,13 @@ namespace Agentweaver.Providers.Storage.AzureFiles;
 /// Validated configuration for the Azure Files CSI workspace-volume provider.
 /// The provider uses this revision to constrain the Kubernetes namespace, StorageClass, and resource limits.
 /// </summary>
+/// <param name="OptionsSchemaVersion">Options contract version; the adapter supports version 1.</param>
+/// <param name="OptionsRevision">Opaque revision used to match this configuration with its provider registration.</param>
+/// <param name="Namespace">Kubernetes DNS label in which workspace volume claims are created.</param>
+/// <param name="StorageClassName">Kubernetes StorageClass DNS label required for workspace claims.</param>
+/// <param name="MaximumCapacityGiB">Positive maximum workspace volume capacity in GiB; no upper bound is imposed here.</param>
+/// <param name="ProvisioningTimeoutSeconds">Provisioning deadline, from 1 through 900 seconds.</param>
+/// <param name="PollIntervalMilliseconds">Provisioning status poll interval, from 1 through 5000 milliseconds.</param>
 public sealed record AzureFilesCsiOptions(
     int OptionsSchemaVersion,
     string OptionsRevision,
@@ -19,7 +26,11 @@ public sealed record AzureFilesCsiOptions(
     /// <summary>The options contract version supported by this adapter.</summary>
     public const int CurrentOptionsSchemaVersion = 1;
 
-    /// <summary>Validates the schema version, Kubernetes names, and configured capacity and timing limits.</summary>
+    /// <summary>
+    /// Requires schema version 1, a valid opaque revision, Kubernetes DNS labels,
+    /// positive capacity, a provisioning timeout of 1 through 900 seconds, and a
+    /// polling interval of 1 through 5000 milliseconds.
+    /// </summary>
     /// <returns>This options instance when valid.</returns>
     /// <exception cref="ArgumentException">The schema version or a configured name is invalid.</exception>
     /// <exception cref="ArgumentOutOfRangeException">A capacity or timeout is outside its supported range.</exception>
