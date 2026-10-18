@@ -105,6 +105,11 @@ human AKS permissions. It also does not apply product manifests, create the
 Broker's application state, run database migrations, install Gateway routes,
 or create operator-owned Secrets.
 
+Azure Network Manager generates the NSG name. For a populated target, the
+guard accepts it only when the exact `aks`, `postgres`, and `private-endpoints`
+subnets reference the same NSG, it has no network-interface associations, and
+its eight reviewed inbound rules match.
+
 The reviewed parameter file supplies the Key Vault name through `keyVaultName`.
 Key Vault is the Identity Broker's secrets backend; its name and
 `IdentityBroker__SecretRedemption__VaultUri` are deployment configuration.

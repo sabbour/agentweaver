@@ -1,4 +1,4 @@
-export const nrmsNsgName = 'NRMS-gxlttooqhupscagentweaver-vnet';
+export const nrmsNsgName = 'NRMS-5laalxivhkqhwagentweaver-vnet';
 
 const sharedRuleFields = {
   direction: 'Inbound',
