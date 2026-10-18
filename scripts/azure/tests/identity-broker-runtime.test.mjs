@@ -283,13 +283,25 @@ test('old same-name P0 Gateway parents are rejected before any hostname patch', 
   }
 });
 
-test('public acceptance client is explicit run-owned configuration, not production registration or availability', () => {
-  const data = brokerAcceptanceConfiguration(config, { issuer: `https://${hostname}/`, identity: { clientId, principalId } });
+test('runtime configuration retains the run-owned acceptance client and seeds the Portal Web client', () => {
+  const data = brokerAcceptanceConfiguration(config, {
+    issuer: `https://${hostname}/`, identity: { clientId, principalId }, portalHostname,
+  });
   assert.equal(data.IdentityBroker__Clients__0__Type, 'Public');
   assert.equal(data.IdentityBroker__Clients__0__ClientId, `identity-acceptance-${principalId}`);
   assert.equal(data.IdentityBroker__Clients__0__RedirectUris__0, config.acceptanceRedirectUri);
+  assert.equal(data.IdentityBroker__Clients__1__ClientId, 'agentweaver-web');
+  assert.equal(data.IdentityBroker__Clients__1__DisplayName, 'Agentweaver Web');
+  assert.equal(data.IdentityBroker__Clients__1__Type, 'Public');
+  assert.equal(data.IdentityBroker__Clients__1__RedirectUris__0, `https://${portalHostname}/auth/callback`);
+  assert.deepEqual(Array.from({ length: 7 }, (_, index) =>
+    data[`IdentityBroker__Clients__1__Scopes__${index}`]),
+  ['openid', 'profile', 'email', 'api.read', 'offline_access', 'projects.admin', 'projects.orchestrator']);
   assert.ok(!Object.keys(data).some(key => key.includes('ClientSecret')));
   assert.ok(data.ConnectionStrings__IdentityBroker.endsWith('SSL Mode=VerifyFull'));
+  assert.throws(() => brokerAcceptanceConfiguration(config, {
+    issuer: `https://${hostname}/`, identity: { clientId, principalId }, portalHostname: 'wrong.example.com',
+  }), /aligned managed issuer and Portal host/);
   for (const redirect of ['http://public.example:80/callback', 'https://127.0.0.1:123/callback',
     'http://127.0.0.1:123/callback?secret=value']) {
     assert.throws(() => assertBrokerRuntimeInputs({ ...config, acceptanceRedirectUri: redirect }), /loopback callback/);
@@ -357,6 +369,7 @@ test('runtime setup creates absent native objects once and never overwrites conf
   };
   const receipt = bootstrapIdentityBrokerRuntime(config, deps);
   assert.equal(receipt.configMapCreated, true);
+  assert.equal(receipt.configMap, 'identity-broker-runtime-config-v2');
   assert.equal(receipt.routingBlocked, true);
   assert.equal(receipt.runtimeVerified, false);
   assert.equal(calls.filter(args => args.includes('--dry-run=client')).length, 4);

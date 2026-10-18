@@ -7,11 +7,12 @@ import { withP0UserKubeconfig } from './namespace-bootstrap.mjs';
 import { observeExistingP0BrokerRouting, projectIdentityRoutingReadback } from './identity-broker-routing.mjs';
 
 const NAMESPACE = 'agentweaver-v1-p0';
-const CONFIG = 'identity-broker-runtime-config';
+const CONFIG = 'identity-broker-runtime-config-v2';
 const GUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 const OPTIONS = { check: false, timeout: 35_000 };
 const SENTINEL = 'ghcr.io/sabbour/agentweaver.identity.broker:receipt-pinned';
 const SCOPES = ['openid', 'profile', 'email', 'api.read', 'offline_access'];
+const WEB_SCOPES = [...SCOPES, 'projects.admin', 'projects.orchestrator'];
 
 /** Checks the required broker runtime source and target inputs before resource generation. */
 export function assertBrokerRuntimeInputs(config) {
@@ -32,12 +33,14 @@ export function assertBrokerRuntimeInputs(config) {
   }
 }
 
-/** Builds the broker acceptance configuration from validated cluster issuer and identity values. */
-export function brokerAcceptanceConfiguration(config, { issuer, identity }) {
+/** Builds the run-owned acceptance client and stable Web client from validated routing and identity values. */
+export function brokerAcceptanceConfiguration(config, { issuer, identity, portalHostname }) {
   assertBrokerRuntimeInputs(config);
   if (!/^https:\/\/agentweaver\.[a-z0-9.-]+\.aksapp\.io\/$/.test(issuer) ||
-      !GUID.test(identity?.clientId ?? '') || !GUID.test(identity?.principalId ?? '')) {
-    throw new Error('Broker runtime configuration requires the aligned native managed issuer and exact runtime identity.');
+      !GUID.test(identity?.clientId ?? '') || !GUID.test(identity?.principalId ?? '') ||
+      !/^portal\.[a-z0-9.-]+\.aksapp\.io$/.test(portalHostname ?? '') ||
+      portalHostname !== `portal.${new URL(issuer).hostname.replace(/^agentweaver\./, '')}`) {
+    throw new Error('Broker runtime configuration requires aligned managed issuer and Portal host values plus the exact runtime identity.');
   }
   const data = {
     ConnectionStrings__IdentityBroker: `Host=${config.resourceGroup}-pg.postgres.database.azure.com;Database=agentweaver;Username=${config.resourceGroup}-id-identity-broker;SSL Mode=VerifyFull`,
@@ -55,8 +58,14 @@ export function brokerAcceptanceConfiguration(config, { issuer, identity }) {
     IdentityBroker__Clients__0__Type: 'Public',
     IdentityBroker__Clients__0__RedirectUris__0: config.acceptanceRedirectUri,
     IdentityBroker__Clients__0__Resources__0: issuer,
+    IdentityBroker__Clients__1__ClientId: 'agentweaver-web',
+    IdentityBroker__Clients__1__DisplayName: 'Agentweaver Web',
+    IdentityBroker__Clients__1__Type: 'Public',
+    IdentityBroker__Clients__1__RedirectUris__0: `https://${portalHostname}/auth/callback`,
+    IdentityBroker__Clients__1__Resources__0: issuer,
   };
   SCOPES.forEach((scope, index) => { data[`IdentityBroker__Clients__0__Scopes__${index}`] = scope; });
+  WEB_SCOPES.forEach((scope, index) => { data[`IdentityBroker__Clients__1__Scopes__${index}`] = scope; });
   return data;
 }
 
@@ -198,7 +207,9 @@ export function bootstrapIdentityBrokerRuntime(config, {
         !application.redirectUris?.includes(`${routing.issuer}signin-oidc`)) {
       throw new Error('The exact upstream public application does not contain the native Broker callback; no app mutation was attempted.');
     }
-    const data = brokerAcceptanceConfiguration(config, { issuer: routing.issuer, identity });
+    const data = brokerAcceptanceConfiguration(config, {
+      issuer: routing.issuer, identity, portalHostname: routing.portalHostname,
+    });
     const existing = read('configmaps', CONFIG);
     if (existing && (existing.metadata.name !== CONFIG || existing.metadata.namespace !== NAMESPACE ||
         existing.metadata.owner !== 'installer' || existing.metadata.service !== 'identity-broker' ||

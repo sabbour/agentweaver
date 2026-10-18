@@ -197,17 +197,30 @@ and then performs live rollout and image checks. The helper no longer generates
 Deployments or Services from a JavaScript List. The bootstrap is pre-acceptance
 only and does not record release acceptance.
 
-Gateway, Web, and Knowledge remain marked incomplete until their documented
-inputs are resolved: the approved Portal origin, production Web client ID and
-scopes, and Knowledge database role, provider resource ID, and generation.
-Bootstrap rejects each incomplete map. The three existing Gateway ingress
-policies remain in the bundle without changing Gateway placement; they require
-an approved Gateway namespace and namespace policy mode (`restricted` or
-`baseline`). The source also includes an incomplete `agenthost-runtime-v1`
-ConfigMap, but it is not a deployment prerequisite while Environment's optional
-AgentHost profile remains unset. Enabling that profile requires the exact
-per-Sandbox configure endpoint and matching audience, an approved
-`MaximumPendingTurns`, and the name of an existing operator-supplied TLS Secret.
+Gateway, Web, and Knowledge now have source-backed runtime values. Gateway uses
+`https://portal.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io`; the root
+Kustomization includes its Web HTTPRoute, while the external Gateway source adds
+the matching `portal` listener under the existing App Routing managed domain.
+Web uses the Identity Broker public client `agentweaver-web` with
+`openid profile email api.read offline_access projects.admin
+projects.orchestrator`; its `/auth/callback` is not added to the upstream Entra
+application, whose `/signin-oidc` callback remains unchanged. The immutable
+Broker ConfigMap is versioned as `identity-broker-runtime-config-v2`, and the
+Deployment reference change rolls the Broker Pod. Knowledge uses PostgreSQL
+role `aw-v1-p0-id-knowledge`, resource ID `agentweaver.knowledge`, and
+generation `1`.
+
+The existing cluster Gateway currently lacks the `portal` listener, so update
+the reviewed Gateway source and verify managed DNS/TLS before claiming Portal
+readiness. PostgreSQL role existence and grants for Knowledge also remain to be
+verified before deployment. The three Gateway ingress policies remain in the
+bundle without changing Gateway placement; they require an approved Gateway
+namespace and namespace policy mode (`restricted` or `baseline`). The source
+also includes an incomplete `agenthost-runtime-v1` ConfigMap, but it is not a
+deployment prerequisite while Environment's optional AgentHost profile remains
+unset. Enabling that profile requires the exact per-Sandbox configure endpoint
+and matching audience, an approved `MaximumPendingTurns`, and the name of an
+existing operator-supplied TLS Secret.
 The
 [P0 Kubernetes input inventory](https://github.com/sabbour/agentweaver/blob/v1/deploy/k8s/README.md#p0-runtime-configmap-snapshots)
 records value provenance, remaining inputs, and the install command. Pass the

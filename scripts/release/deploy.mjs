@@ -102,7 +102,9 @@ const WORKLOAD_IDENTITY_SERVICES = new Set([
 ]);
 const IDENTITY_CLIENT_SERVICES = new Set(['gateway', 'orchestrator']);
 const SERVICE_RUNTIME_CONFIG_MAP_NAMES = Object.freeze(DEPLOYED_SERVICES
-  .map((id) => `${SERVICE_NAMES[id]}-runtime-config`));
+  .map((id) => id === 'Agentweaver.Identity.Broker'
+    ? 'identity-broker-runtime-config-v2'
+    : `${SERVICE_NAMES[id]}-runtime-config`));
 const REQUIRED_INSTALL_CONFIG_MAPS = new Set([
   ...SERVICE_RUNTIME_CONFIG_MAP_NAMES,
   'environment-cilium-config',
@@ -111,7 +113,7 @@ const REQUIRED_INSTALL_CONFIG_MAPS = new Set([
 ]);
 const WORKLOAD_IDENTITY_CONFIG = Object.freeze({
   'identity-broker': {
-    configMap: 'identity-broker-runtime-config',
+    configMap: 'identity-broker-runtime-config-v2',
     clientId: 'IdentityBroker__SecretRedemption__WorkloadIdentityClientId',
     tenantId: 'IdentityBroker__SecretRedemption__WorkloadIdentityTenantId',
   },
@@ -948,7 +950,7 @@ export function validateKustomizeInstall(document, images, namespace, providerCa
   if (!Array.isArray(items) || items.length === 0) fail('Kustomize install must render Kubernetes resources');
   const allowedKinds = new Set([
     'Namespace', 'ResourceQuota', 'LimitRange', 'ServiceAccount', 'ConfigMap',
-    'Service', 'Deployment', 'NetworkPolicy', 'CiliumNetworkPolicy',
+    'Service', 'Deployment', 'NetworkPolicy', 'CiliumNetworkPolicy', 'HTTPRoute',
   ]);
   const keyedResources = new Map();
   const namesByKind = new Map();
@@ -1008,6 +1010,7 @@ export function validateKustomizeInstall(document, images, namespace, providerCa
   expectNames('ServiceAccount', new Set(DEPLOYED_SERVICES.map((id) => SERVICE_NAMES[id])),
     'nine product ServiceAccounts');
   expectNames('ConfigMap', REQUIRED_INSTALL_CONFIG_MAPS, 'runtime ConfigMaps and provider catalog');
+  expectNames('HTTPRoute', new Set(['web-application']), 'managed-domain Web HTTPRoute');
   expectNames('NetworkPolicy', new Set(['allow-dns-egress', 'default-deny-all']),
     'default-deny and DNS NetworkPolicies');
   const requiredCiliumPolicies = new Set(Object.values(SERVICE_NETWORK_POLICY_NAMES)
@@ -1016,6 +1019,32 @@ export function validateKustomizeInstall(document, images, namespace, providerCa
 
   const configMaps = new Map(items.filter(({ kind }) => kind === 'ConfigMap')
     .map((resource) => [resource.metadata.name, resource]));
+  // Keep the installed Portal route bound to the same origin configured for Gateway.
+  const webOrigin = configMaps.get('gateway-runtime-config')?.data?.Gateway__WebOrigin;
+  const webRoute = keyedResources.get(`HTTPRoute/${namespace}/web-application`);
+  let webOriginUrl;
+  try {
+    webOriginUrl = new URL(webOrigin);
+  } catch {
+    fail('gateway-runtime-config must contain the absolute Portal Web origin');
+  }
+  if (webOriginUrl.protocol !== 'https:' || webOriginUrl.pathname !== '/' ||
+      webOriginUrl.search || webOriginUrl.hash || webOriginUrl.username || webOriginUrl.password ||
+      webRoute?.spec?.hostnames?.length !== 1 ||
+      webRoute.spec.hostnames[0] !== webOriginUrl.hostname ||
+      webRoute.spec.parentRefs?.length !== 1 ||
+      webRoute.spec.parentRefs[0]?.name !== 'identity-broker' ||
+      webRoute.spec.parentRefs[0]?.namespace !== GATEWAY_NAMESPACE ||
+      webRoute.spec.parentRefs[0]?.sectionName !== 'portal' ||
+      webRoute.spec.rules?.length !== 1 ||
+      webRoute.spec.rules[0]?.matches?.length !== 1 ||
+      webRoute.spec.rules[0].matches[0]?.path?.type !== 'PathPrefix' ||
+      webRoute.spec.rules[0].matches[0].path.value !== '/' ||
+      webRoute.spec.rules[0].backendRefs?.length !== 1 ||
+      webRoute.spec.rules[0].backendRefs[0]?.name !== 'web' ||
+      webRoute.spec.rules[0].backendRefs[0]?.port !== 8080) {
+    fail('web-application HTTPRoute must serve the configured Portal origin through the managed Gateway listener');
+  }
   for (const name of SERVICE_RUNTIME_CONFIG_MAP_NAMES) {
     if (!configMaps.has(name)) fail(`Kustomize install is missing ${name}`);
   }
@@ -1745,7 +1774,7 @@ function readBrokerClientSecretKeys(target, { root, run }) {
 /** Verifies the broker run-binding configuration and its paired Kubernetes ingress/egress controls. */
 export function verifyBrokerRunBindingConfiguration(binding, target, { root, run, runRaw = run }) {
   const descriptor = validateBrokerRunBinding(binding);
-  const brokerConfig = readRuntimeConfigMap('identity-broker-runtime-config', target, { root, run });
+  const brokerConfig = readRuntimeConfigMap('identity-broker-runtime-config-v2', target, { root, run });
   const projectsConfig = readRuntimeConfigMap('projects-config-runtime-config', target, { root, run });
   const brokerSettings = {
     'IdentityBroker__RunBinding__ProjectsOwnerAddress': descriptor.projectsOwnerAddress,
@@ -1761,7 +1790,7 @@ export function verifyBrokerRunBindingConfiguration(binding, target, { root, run
   };
   assertNoUnexpectedRunBindingSettings(Object.fromEntries(
     Object.keys(brokerConfig).map((key) => [canonicalConfigKey(key), brokerConfig[key]])),
-  'identitybroker:runbinding:', Object.keys(brokerSettings), 'identity-broker-runtime-config');
+  'identitybroker:runbinding:', Object.keys(brokerSettings), 'identity-broker-runtime-config-v2');
   assertNoUnexpectedRunBindingSettings(Object.fromEntries(
     Object.keys(projectsConfig).map((key) => [canonicalConfigKey(key), projectsConfig[key]])),
   'projectsconfig:tls:', Object.keys(projectsSettings).slice(0, 3), 'projects-config-runtime-config');
@@ -1794,7 +1823,7 @@ export function verifyBrokerRunBindingConfiguration(binding, target, { root, run
     fail('Projects Config run-binding audience must be distinct from its existing authentication audience');
   }
   for (const [key, value] of Object.entries(brokerSettings)) {
-    requireRuntimeConfigValue(brokerConfig, key, value, 'identity-broker-runtime-config');
+    requireRuntimeConfigValue(brokerConfig, key, value, 'identity-broker-runtime-config-v2');
   }
   for (const [key, value] of Object.entries(projectsSettings)) {
     requireRuntimeConfigValue(projectsConfig, key, value, 'projects-config-runtime-config');
@@ -1843,7 +1872,7 @@ export function verifyBrokerRunBindingConfiguration(binding, target, { root, run
   return {
     configMaps: [
       {
-        name: 'identity-broker-runtime-config',
+        name: 'identity-broker-runtime-config-v2',
         sha256: hashRuntimeSettings(brokerConfig, Object.keys(brokerSettings)),
       },
       {

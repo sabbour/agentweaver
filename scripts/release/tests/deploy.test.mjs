@@ -522,7 +522,7 @@ test('pre-acceptance dry-run accepts only the tracked draft and returns a non-re
   assert.equal(result.resultType, 'pre-acceptance');
   assert.equal(result.sourceSha, PARTIAL_PUBLICATION.sourceSha);
   assert.equal(result.dryRun, true);
-  assert.equal(result.renderedResources, 60);
+  assert.equal(result.renderedResources, 61);
   assert.equal('acceptedRelease' in result, false);
   assert.doesNotMatch(JSON.stringify(result), /"stage":"release"/);
   assert.equal(dependencies.commands.length, 1);
@@ -596,7 +596,7 @@ test('v1.0.1 pre-acceptance dry-run uses the mixed source-bound draft and normal
   assert.equal(result.resultType, 'pre-acceptance');
   assert.equal(result.sourceSha, v101SourceSha);
   assert.equal(result.dryRun, true);
-  assert.equal(result.renderedResources, 60);
+  assert.equal(result.renderedResources, 61);
   assert.equal(completionChecks, 0);
   assert.deepEqual(
     result.services.map(({ id, image }) => [id, image]),
@@ -940,7 +940,7 @@ test('runtime manifest requires nine shared workloads and pins AgentHost through
     acceptedIdentityInjection);
   assert.equal(acceptedIdentityInjection, 'true');
   assert.ok(identity.envFrom.some(({ configMapRef }) =>
-    configMapRef?.name === 'identity-broker-runtime-config' && configMapRef.optional === false));
+    configMapRef?.name === 'identity-broker-runtime-config-v2' && configMapRef.optional === false));
   assert.ok(item('Deployment', 'identity-broker').spec.template.spec.volumes
     .some(({ persistentVolumeClaim }) =>
     persistentVolumeClaim?.claimName === 'identity-broker-key-ring'));
@@ -1636,7 +1636,7 @@ test('default dry-run validates and renders without issuing any external write',
   assert.equal(result.dryRun, true);
   assert.equal(result.services.length, deployedServices.length);
   assert.equal(result.perSandboxAgentHost, imagesExpectedHost(manifest));
-  assert.equal(result.renderedResources, 60);
+  assert.equal(result.renderedResources, 61);
   assert.equal(imagesVerified, 1);
   assert.equal(targetVerified, 1);
   assert.equal(prerequisitesVerified, 1);

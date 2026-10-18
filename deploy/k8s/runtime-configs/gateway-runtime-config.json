@@ -3,11 +3,7 @@
   "kind": "ConfigMap",
   "metadata": {
     "name": "gateway-runtime-config",
-    "namespace": "agentweaver-v1-p0",
-    "annotations": {
-      "agentweaver.io/runtime-config-status": "incomplete",
-      "agentweaver.io/runtime-config-incomplete-reason": "Gateway__WebOrigin requires the approved Portal origin."
-    }
+    "namespace": "agentweaver-v1-p0"
   },
   "immutable": true,
   "data": {
@@ -18,6 +14,6 @@
     "Gateway__Owners__Knowledge": "https://knowledge.agentweaver-v1-p0.svc.cluster.local:8443/",
     "Gateway__Owners__Events": "https://events-and-sessions.agentweaver-v1-p0.svc.cluster.local:8443/",
     "Gateway__Owners__IdentityBrokerAddress": "https://identity-broker.agentweaver-v1-p0.svc.cluster.local:443/",
-    "Gateway__WebOrigin": ""
+    "Gateway__WebOrigin": "https://portal.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io"
   }
 }

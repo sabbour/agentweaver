@@ -20,6 +20,8 @@ resources:
   - routing/identity-broker/gateway-api-ingress.yaml
   - routing/identity-broker/mcp-gateway-ingress.yaml
   - routing/identity-broker/web-gateway-ingress.yaml
+  # Bind the P0 Web origin to its dedicated AKS-managed Gateway listener.
+  - routing/identity-broker/web-application-p0.yaml
 configurations:
   - kustomizeconfig/image-env.yaml
 images:
@@ -96,7 +98,7 @@ patches:
 replacements:
   - source:
       kind: ConfigMap
-      name: identity-broker-runtime-config
+      name: identity-broker-runtime-config-v2
       fieldPath: data.IdentityBroker__SecretRedemption__WorkloadIdentityClientId
     targets:
       - select:
@@ -106,7 +108,7 @@ replacements:
           - metadata.annotations.[azure.workload.identity/client-id]
   - source:
       kind: ConfigMap
-      name: identity-broker-runtime-config
+      name: identity-broker-runtime-config-v2
       fieldPath: data.IdentityBroker__SecretRedemption__WorkloadIdentityTenantId
     targets:
       - select:

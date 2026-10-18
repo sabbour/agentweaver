@@ -13,6 +13,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const namespace = 'agentweaver-v1-p0';
 const tenant = '72f988bf-86f1-41af-91ab-2d7cd011db47';
 const broker = 'https://agentweaver.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io/';
+const portalOrigin = 'https://portal.6ac31fa7dd86cf00014876f0.eastus2euap.aksapp.io';
 const tokenFile = '/var/run/secrets/azure/tokens/azure-identity-token';
 const host = 'aw-v1-p0-pg.postgres.database.azure.com';
 const database = 'agentweaver';
@@ -63,7 +64,7 @@ test('P0 runtime ConfigMaps use immutable snapshots except for the operator-upda
     ['environment-runtime-config', environment],
     ['orchestrator-runtime-config', orchestrator],
     ['events-and-sessions-runtime-config', events],
-    ['identity-broker-runtime-config', identityBroker],
+    ['identity-broker-runtime-config-v2', identityBroker],
     ['environment-cilium-config', cilium],
   ]) {
     assert.equal(resource.apiVersion, 'v1');
@@ -87,7 +88,7 @@ test('P0 runtime ConfigMaps use immutable snapshots except for the operator-upda
   assert.equal(events.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'], undefined);
 });
 
-test('Identity Broker snapshot preserves only the live non-secret P0 runtime configuration', () => {
+test('Identity Broker snapshot keeps the acceptance client and adds the versioned public Web client', () => {
   assert.deepEqual(Object.keys(identityBroker.data).sort(), [
     'ConnectionStrings__IdentityBroker',
     'IdentityBroker__Clients__0__ClientId',
@@ -100,6 +101,18 @@ test('Identity Broker snapshot preserves only the live non-secret P0 runtime con
     'IdentityBroker__Clients__0__Scopes__3',
     'IdentityBroker__Clients__0__Scopes__4',
     'IdentityBroker__Clients__0__Type',
+    'IdentityBroker__Clients__1__ClientId',
+    'IdentityBroker__Clients__1__DisplayName',
+    'IdentityBroker__Clients__1__RedirectUris__0',
+    'IdentityBroker__Clients__1__Resources__0',
+    'IdentityBroker__Clients__1__Scopes__0',
+    'IdentityBroker__Clients__1__Scopes__1',
+    'IdentityBroker__Clients__1__Scopes__2',
+    'IdentityBroker__Clients__1__Scopes__3',
+    'IdentityBroker__Clients__1__Scopes__4',
+    'IdentityBroker__Clients__1__Scopes__5',
+    'IdentityBroker__Clients__1__Scopes__6',
+    'IdentityBroker__Clients__1__Type',
     'IdentityBroker__DataProtectionKeyPath',
     'IdentityBroker__ExternalProvider__Authority',
     'IdentityBroker__ExternalProvider__ClientId',
@@ -110,6 +123,7 @@ test('Identity Broker snapshot preserves only the live non-secret P0 runtime con
     'IdentityBroker__SecretRedemption__WorkloadIdentityTenantId',
     'IdentityBroker__SecretRedemption__WorkloadIdentityTokenFilePath',
   ].sort());
+  assert.equal(identityBroker.metadata.name, 'identity-broker-runtime-config-v2');
   assert.equal(identityBroker.immutable, true);
   assert.equal(identityBroker.metadata.labels?.['agentweaver.io/acceptance-run'], undefined);
   assert.equal(identityBroker.data.IdentityBroker__Clients__0__Type, 'Public');
@@ -117,7 +131,18 @@ test('Identity Broker snapshot preserves only the live non-secret P0 runtime con
     'http://127.0.0.1:49187/callback');
   assert.equal(identityBroker.data.IdentityBroker__Clients__0__Scopes__3, 'api.read');
   assert.equal(identityBroker.data.IdentityBroker__Clients__0__Scopes__4, 'offline_access');
-  assert.equal(web.data.VITE_OAUTH_CLIENT_ID, '');
+  assert.equal(identityBroker.data.IdentityBroker__Clients__1__ClientId, 'agentweaver-web');
+  assert.equal(identityBroker.data.IdentityBroker__Clients__1__DisplayName, 'Agentweaver Web');
+  assert.equal(identityBroker.data.IdentityBroker__Clients__1__Type, 'Public');
+  assert.equal(identityBroker.data.IdentityBroker__Clients__1__RedirectUris__0,
+    `${portalOrigin}/auth/callback`);
+  assert.equal(identityBroker.data.IdentityBroker__Clients__1__Resources__0, broker);
+  assert.deepEqual(Array.from({ length: 7 }, (_, index) =>
+    identityBroker.data[`IdentityBroker__Clients__1__Scopes__${index}`]),
+  ['openid', 'profile', 'email', 'api.read', 'offline_access', 'projects.admin', 'projects.orchestrator']);
+  assert.equal(web.data.VITE_OAUTH_CLIENT_ID, 'agentweaver-web');
+  assert.equal(web.data.VITE_OAUTH_SCOPES,
+    'openid profile email api.read offline_access projects.admin projects.orchestrator');
   assert.notEqual(web.data.VITE_OAUTH_CLIENT_ID,
     identityBroker.data.IdentityBroker__Clients__0__ClientId);
 });
@@ -127,6 +152,7 @@ test('P0 PostgreSQL roles, projected identities, and issuer use the exact approv
     [environment, 'Environment', 'aw-v1-p0-id-environment', '21a97456-bb10-4833-bb75-a14cabaad4c1'],
     [orchestrator, 'Orchestrator', 'aw-v1-p0-id-orchestrator', 'b9cfb747-b0f0-42c9-b0a8-31ec3c335a9a'],
     [events, 'EventsAndSessions', 'aw-v1-p0-id-events-and-sessions', '3ab39eda-7389-4b5e-b5b6-232d7671e012'],
+    [knowledge, 'Knowledge', 'aw-v1-p0-id-knowledge', 'c9188440-b79e-46c2-ad02-4b0218868648'],
   ]) {
     const identity = `${owner}__Database__WorkloadIdentity__`;
     assert.equal(resource.data[`ConnectionStrings__${owner}`],
@@ -142,6 +168,25 @@ test('P0 PostgreSQL roles, projected identities, and issuer use the exact approv
     assert.equal(resource.data.Identity__Audience, broker);
   }
   assert.equal(orchestrator.data.Identity__SecretRedemption__Audience, broker);
+});
+
+test('Portal route, Gateway listener, and Web origin use the same managed-domain hostname', () => {
+  const rootKustomization = parse(readFileSync(path.join(root, 'deploy', 'k8s', 'kustomization.yaml'), 'utf8'));
+  const route = parse(readFileSync(path.join(root, 'deploy', 'k8s', 'routing', 'identity-broker',
+    'web-application-p0.yaml'), 'utf8'));
+  const gatewaySource = parse(readFileSync(path.join(root, 'deploy', 'k8s', 'routing', 'identity-broker',
+    'gateway.yaml'), 'utf8'));
+  const portalHostname = new URL(portalOrigin).hostname;
+  assert.ok(rootKustomization.resources.includes('routing/identity-broker/web-application-p0.yaml'));
+  assert.deepEqual(route.spec.parentRefs, [{
+    name: 'identity-broker', namespace: 'agentweaver-v1-gateway', sectionName: 'portal',
+  }]);
+  assert.deepEqual(route.spec.hostnames, [portalHostname]);
+  assert.deepEqual(route.spec.rules[0].backendRefs, [{ name: 'web', port: 8080 }]);
+  assert.equal(gatewaySource.metadata.namespace, 'CHANGEME-GATEWAY-NAMESPACE');
+  assert.equal(gatewaySource.spec.listeners.find(({ name }) => name === 'https').hostname,
+    'CHANGEME-MANAGED-HOST');
+  assert.equal(gatewaySource.spec.listeners.find(({ name }) => name === 'portal').hostname, 'CHANGEME-PORTAL-HOST');
 });
 
 test('P0 service addresses and source-backed provider defaults are exact', () => {
@@ -327,7 +372,7 @@ test('P0 values use approved labels and omit unknown resource identities', () =>
 });
 
 // Runtime maps must match their service contracts and reserve incomplete markers for unsourced values.
-test('additional service ConfigMaps use exact runtime keys and expose only unresolved inputs as incomplete', () => {
+test('Gateway, Web, and Knowledge ConfigMaps contain their sourced P0 values', () => {
   const newMaps = [
     ['gateway-runtime-config', gateway],
     ['mcp-runtime-config', mcp],
@@ -369,10 +414,9 @@ test('additional service ConfigMaps use exact runtime keys and expose only unres
   assert.equal(gateway.data.Gateway__Owners__Events, serviceAddress('events-and-sessions'));
   assert.equal(gateway.data.Gateway__Owners__IdentityBrokerAddress,
     serviceAddress('identity-broker', 443));
-  assert.equal(gateway.data.Gateway__WebOrigin, '');
-  assert.equal(gateway.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
-  assert.equal(gateway.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
-    'Gateway__WebOrigin requires the approved Portal origin.');
+  assert.equal(gateway.data.Gateway__WebOrigin, portalOrigin);
+  assert.equal(gateway.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
+  assert.equal(gateway.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'], undefined);
 
   assert.deepEqual(Object.keys(mcp.data).sort(), [
     'Gateway__BaseAddress', 'Identity__Audience', 'Identity__Issuer',
@@ -391,12 +435,12 @@ test('additional service ConfigMaps use exact runtime keys and expose only unres
   assert.equal(web.data.VITE_GATEWAY_URL, '/api/v1');
   assert.equal(web.data.VITE_IDENTITY_BROKER_URL, broker);
   assert.equal(web.data.VITE_IDENTITY_BROKER_ISSUER, broker);
-  assert.equal(web.data.VITE_OAUTH_CLIENT_ID, '');
-  assert.equal(web.data.VITE_OAUTH_SCOPES, '');
+  assert.equal(web.data.VITE_OAUTH_CLIENT_ID, 'agentweaver-web');
+  assert.equal(web.data.VITE_OAUTH_SCOPES,
+    'openid profile email api.read offline_access projects.admin projects.orchestrator');
   assert.equal(web.data.VITE_OAUTH_REDIRECT_URI, undefined);
-  assert.equal(web.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
-  assert.equal(web.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
-    'VITE_OAUTH_CLIENT_ID and VITE_OAUTH_SCOPES require the approved production Web client registration.');
+  assert.equal(web.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
+  assert.equal(web.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'], undefined);
 
   assert.deepEqual(Object.keys(knowledge.data).sort(), [
     'ConnectionStrings__Knowledge',
@@ -416,7 +460,7 @@ test('additional service ConfigMaps use exact runtime keys and expose only unres
     'ProjectsConfig__BaseAddress',
   ].sort());
   assert.equal(knowledge.data.ConnectionStrings__Knowledge,
-    `Host=${host};Port=5432;Database=${database};Username=;SSL Mode=VerifyFull`);
+    `Host=${host};Port=5432;Database=${database};Username=aw-v1-p0-id-knowledge;SSL Mode=VerifyFull`);
   assert.equal(knowledge.data.Knowledge__Database__WorkloadIdentity__TenantId, tenant);
   assert.equal(knowledge.data.Knowledge__Database__WorkloadIdentity__ClientId,
     'c9188440-b79e-46c2-ad02-4b0218868648');
@@ -426,15 +470,14 @@ test('additional service ConfigMaps use exact runtime keys and expose only unres
   assert.equal(knowledge.data.ProjectsConfig__BaseAddress, serviceAddress('projects-config'));
   assert.equal(knowledge.data.Knowledge__Events__BaseAddress, serviceAddress('events-and-sessions'));
   assert.equal(knowledge.data.Knowledge__Events__Audience, broker);
-  assert.equal(knowledge.data.Knowledge__Provider__ResourceId, '');
+  assert.equal(knowledge.data.Knowledge__Provider__ResourceId, 'agentweaver.knowledge');
   assert.equal(knowledge.data.Knowledge__Provider__DatabaseName, database);
-  assert.equal(knowledge.data.Knowledge__Provider__ResourceGeneration, '');
+  assert.equal(knowledge.data.Knowledge__Provider__ResourceGeneration, '1');
   assert.equal(knowledge.data.Knowledge__Provider__Schema, 'knowledge');
   assert.equal(knowledge.data.Knowledge__Provider__OptionsRevision, 'native-postgres-memory-v1');
   assert.equal(knowledge.data.Knowledge__Provider__OptionsSchemaVersion, '1');
-  assert.equal(knowledge.metadata.annotations?.['agentweaver.io/runtime-config-status'], 'incomplete');
-  assert.equal(knowledge.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
-    'ConnectionStrings__Knowledge username, Knowledge__Provider__ResourceId, and Knowledge__Provider__ResourceGeneration require authoritative P0 inputs.');
+  assert.equal(knowledge.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
+  assert.equal(knowledge.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'], undefined);
 
   assert.deepEqual(projects.data, {
     ConnectionStrings__ProjectsConfig:
@@ -629,9 +672,11 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
   const namesFor = kind => new Set(resources.filter(resource => resource.kind === kind)
     .map(resource => resource.metadata.name));
   const configMapNames = namesFor('ConfigMap');
-  const requiredServiceConfigMaps = Object.values(SERVICE_NAMES)
-    .filter(name => name !== 'agenthost')
-    .map(name => `${name}-runtime-config`);
+  const requiredServiceConfigMaps = Object.entries(SERVICE_NAMES)
+    .filter(([id]) => id !== 'Agentweaver.AgentHost')
+    .map(([id, name]) => id === 'Agentweaver.Identity.Broker'
+      ? 'identity-broker-runtime-config-v2'
+      : `${name}-runtime-config`);
   for (const name of [...requiredServiceConfigMaps, 'environment-cilium-config',
     'agenthost-runtime-v1', 'projects-config-provider-catalog']) {
     assert.ok(configMapNames.has(name), `${name} must be rendered by the P0 prerequisite overlay`);
@@ -649,7 +694,7 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
   assert.deepEqual([...namesFor('ServiceAccount')].sort(), sharedServices);
 
   const disallowedKinds = new Set([
-    'Secret', 'Gateway', 'HTTPRoute', 'BackendTLSPolicy', 'Job',
+    'Secret', 'Gateway', 'BackendTLSPolicy', 'Job',
   ]);
   assert.deepEqual(resources.filter(resource => disallowedKinds.has(resource.kind))
     .map(resource => `${resource.kind}/${resource.metadata.name}`), []);
