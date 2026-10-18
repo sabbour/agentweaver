@@ -1,15 +1,19 @@
 # Events reference
 
-The v1 journal uses typed session envelopes. It does not use the 0.x
-`runId`/`sequence`/`type` event shape.
+Use this reference to read v1 session-journal events. It describes the envelope,
+payload kinds, replay routes, live delivery, and transactional outbox. An
+**envelope** is the owner-written record that identifies an event and contains
+its typed payload.
 
-This page indexes event kinds and wire fields. See
-[Events & Sessions architecture](../architecture/events-sessions.md) for
-provider binding, receipt admission, storage, and recovery.
+For provider setup, see [Configure providers](../guide/configure-providers.md).
+For runtime settings, see
+[Runtime configuration](./runtime-configuration.md). For provider binding,
+receipt admission, storage, and recovery, see
+[Events & Sessions architecture](../architecture/events-sessions.md).
 
 ## Journal envelope
 
-`SessionEventEnvelope` is defined in
+The `SessionEventEnvelope` contract is defined in
 [`SessionsContracts.cs`](https://github.com/sabbour/agentweaver/blob/v1/packages/Agentweaver.Abstractions/SessionsContracts.cs).
 
 | JSON field | Meaning |
@@ -26,7 +30,7 @@ provider binding, receipt admission, storage, and recovery.
 
 The HTTP serializer uses camel-case enum names. For example, envelope `kind`
 is `toolCall`, while `payload.kind` is `tool_call`. Outbox event-type strings
-use the C# enum spelling shown below, not the HTTP enum spelling.
+use the C# enum spelling shown below, not the HTTP spelling.
 
 ## Event kinds
 
@@ -46,7 +50,7 @@ Object-reference fields hold metadata, not inline object bytes.
 | `ProducedRunCapture` | `produced_run_capture` | `capture`, `package`: Source Control output proof and exact package reference. |
 | `RuntimeConfiguration` | `runtime_configuration` | `configuration`: private accepted configuration reference; public projection returns `null`. |
 
-Version `1` supports the kinds above except `PolicyEvaluation`,
+Event version `1` supports the kinds above except `PolicyEvaluation`,
 `ProducedRunCapture`, and `RuntimeConfiguration`. Version `2` supports all ten.
 An unsupported schema or event version returns `422 unsupported_contract_version`.
 
@@ -96,9 +100,10 @@ Replay accepts `cursor` and `limit`. The default limit is 100; the journal
 accepts 1 through 200. Cursors are opaque and scope-bound. Do not construct or
 reuse a cursor for another session or run.
 
-Gateway SSE uses the journal cursor as its `id` and `session-event` as the event
-name. Reconnect with `Last-Event-ID` or `cursor`. The Gateway reads committed
-owner replay pages and rechecks current access before delivery.
+Gateway server-sent events (SSE) use the journal cursor as the `id` and
+`session-event` as the event name. Reconnect with `Last-Event-ID` or `cursor`.
+The Gateway reads committed owner replay pages and rechecks current access
+before delivery.
 
 Native live routes accept `cursor`, `maximumEvents`, and
 `maximumDurationSeconds`. Defaults are 1,000 events and 300 seconds; maximums

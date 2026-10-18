@@ -1,11 +1,13 @@
-# Knowledge and Memory
+# Knowledge and memory
 
-`Agentweaver.Knowledge` is an unpublished .NET 10 service candidate. It owns the
-project memory API, context compiler, and immutable run-provider bindings in its
-PostgreSQL `knowledge` schema. Memory records, revisions, idempotency, and accepted-effect
-delivery state belong to the selected Memory provider. Source presence doesn't establish
-deployment or delivery of a caller's accepted outcome to the native Events project-fact
-stream. Project facts are separate from the Sessions run journal.
+Use this concept to understand how the unpublished .NET 10
+`Agentweaver.Knowledge` service candidate stores project memory and builds
+context for a run. Knowledge owns the memory API, context compiler, and
+immutable run-provider bindings in its PostgreSQL `knowledge` schema. The
+selected Memory provider stores records,
+revisions, idempotency receipts, and accepted-effect delivery state. Source
+presence does not prove deployment or delivery of an accepted outcome to
+Events. Project facts remain separate from the Sessions run journal.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-knowledge-memory.png'">
@@ -74,6 +76,10 @@ binding and Knowledge service schema remain in PostgreSQL. Knowledge does not re
 write another service's schema.
 
 ## Memory provider and run binding
+
+For provider selection and Knowledge settings, see the planned
+[provider configuration guide](../guide/configure-providers.md) and
+[runtime configuration reference](../reference/runtime-configuration.md).
 
 `Agentweaver.Abstractions` defines the provider-neutral `IMemoryProvider` contract and
 the read, write, search, revision, proposal-promotion, context-composition, and

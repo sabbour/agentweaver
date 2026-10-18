@@ -1,74 +1,134 @@
 # Identity and secrets
 
-## The mental model
+Use this page to understand how Agentweaver separates caller identity from
+permission to use a particular credential. An authenticated user does not
+automatically have access to every project or secret.
 
-Identity answers two different questions: who is calling, and which credential can that caller use for this operation? An authenticated identity does not grant access to every project or secret.
+## Distinguish identity from credential access
 
-Identity Broker signs Agentweaver tokens after upstream OpenID Connect (OIDC) sign-in. Projects & Config owns current project membership and roles. A separate secret grant binds one actor, project, run, purpose, secret ID, and exact secret version. The Key Vault adapter retrieves bytes only after the Identity authorization layer approves that binding.
+Identity Broker is the service that signs Agentweaver tokens after upstream
+OpenID Connect (OIDC) sign-in. Projects & Config owns current project
+membership and roles. A secret grant binds one actor, project, run, purpose,
+secret ID, and exact secret version. The Key Vault adapter retrieves secret
+bytes only after Identity approves that binding.
 
-## Where this lives
+| Source | Responsibility |
+| --- | --- |
+| `IdentityBrokerEndpoints.cs` | Authorization, consent, and token exchange |
+| `RefreshTokenHandlers.cs` | Atomic refresh redemption and replay handling |
+| `IdentityGrantAuthority.cs` | Revisioned secret grants |
+| `SecretRedemptionEndpoints.cs` | Authenticated secret redemption |
+| `RuntimeGrantAuthority.cs` | Runtime bootstrap, source, and model-session grants |
+| `AuthorizedSecretRedemption.cs` | Exact grant checks |
+| `AzureKeyVaultSecretRedemption.cs` | Exact-version Key Vault reads |
+| `AzureKeyVaultSecretVersionWriter.cs` | Protected secret-version writes |
+| `Program.cs` | Authentication and trusted dependency composition |
 
-- `services/identity/Agentweaver.Identity.Broker/Program.cs` — authentication and trusted dependency composition.
-- `services/identity/Agentweaver.Identity.Broker/IdentityBrokerEndpoints.cs` — authorization, consent, and token exchange.
-- `services/identity/Agentweaver.Identity.Broker/RefreshTokenHandlers.cs` — atomic refresh redemption and replay handling.
-- `services/identity/Agentweaver.Identity.Broker/IdentityGrantAuthority.cs` — revisioned secret grants.
-- `services/identity/Agentweaver.Identity.Broker/SecretRedemptionEndpoints.cs` — authenticated secret redemption.
-- `services/identity/Agentweaver.Identity.Broker/RuntimeGrantAuthority.cs` — runtime bootstrap, source, and model-session grants.
-- `packages/Agentweaver.Identity/AuthorizedSecretRedemption.cs` and `GrantContracts.cs` — exact grant checks.
-- `packages/Agentweaver.Secrets.AzureKeyVault/AzureKeyVaultSecretRedemption.cs` — exact-version backend access.
-- `packages/Agentweaver.Secrets.AzureKeyVault/AzureKeyVaultSecretVersionWriter.cs` — protected secret-version writes.
+These files are under `services/identity/Agentweaver.Identity.Broker/` or
+`packages/Agentweaver.Identity/` and
+`packages/Agentweaver.Secrets.AzureKeyVault/`.
 
-## Core concepts and invariants
+## Understand token authority
 
-### Tokens identify callers; owners authorize operations
+The Broker creates a local subject after validating upstream identity. It
+issues registered scopes and resource audiences, not upstream application
+roles. Resource services validate the token and obtain current effective
+permissions from Projects & Config. A tenant selector can select an existing
+membership; it cannot create one.
 
-The broker creates a local subject after upstream identity validation. It issues registered scopes and resource audiences, not upstream application roles. Resource services validate the token and obtain current effective permissions from Projects & Config. A tenant selector selects an existing membership; it cannot create one.
+Project/run-bound tokens use one of two paths:
 
-Project/run-bound tokens use one of two paths. Secret operations require an active secret-grant binding. Projects-owned operations require a private Projects receipt for current membership, the Orchestrator assignment, and the accepted run selection. The broker repeats the relevant check during exchange and refresh. A signed binding restricts the token to that project and run; it is not a project role.
+- Secret operations require an active secret-grant binding.
+- Projects-owned operations require a private Projects receipt for current
+  membership, Orchestrator assignment, and accepted run selection.
 
-### A reference is not a credential
+The Broker repeats the relevant check during exchange and refresh. A signed
+binding restricts a token to that project and run; it is not a project role.
 
-`SecretRef` identifies a secret and version. Grant records persist that reference and authorization metadata, not the secret value. `SecretCredential` is the short-lived, invalidatable in-memory result.
+A `SecretRef` identifies a secret and version. Grant records persist the
+reference and authorization metadata, not the secret value. A
+`SecretCredential` is the short-lived, invalidatable in-memory result.
 
-`IdentityGrantAuthority` appends grant revisions with an expected revision and an idempotency key. An exact retry returns its committed result. Reusing the key for different metadata conflicts. Revocation appends a revoked revision rather than replacing history.
+`IdentityGrantAuthority` appends grant revisions with an expected revision and
+idempotency key. An exact retry returns its committed result. Reusing a key for
+different metadata conflicts. Revocation appends a revoked revision and
+preserves history.
 
-## Sign-in and token lifecycle
+## Follow the sign-in flow
 
-1. The authorization endpoint validates the requested client, scopes, redirect URI, and optional run binding.
-2. Upstream OIDC authentication creates or finds the local broker user.
-3. Consent uses the local cookie, an antiforgery token, and a single-use pending authorization handle.
-4. Authorization-code exchange requires S256 PKCE. OpenIddict signs the resulting Agentweaver token for the registered resources.
-5. Refresh rechecks the local account and run authority. Atomic redemption prevents two requests from consuming the same refresh token.
+You need a registered client and a valid upstream OIDC sign-in to obtain an
+Agentweaver token.
 
-Reusing a redeemed or revoked refresh token revokes its authorization and token family. A lost concurrent redemption also rejects the exchange and revokes the family.
+1. The authorization endpoint validates the client, scopes, redirect URI, and
+   optional run binding.
+2. Upstream OIDC authentication creates or finds the local Broker user.
+3. Consent uses the local cookie, an antiforgery token, and a single-use
+   pending authorization handle.
+4. Authorization-code exchange uses proof key for code exchange (PKCE) with
+   the S256 code challenge method. OpenIddict signs the Agentweaver token for
+   registered resources.
+5. Refresh rechecks the local account and run authority. Atomic redemption
+   prevents two requests from consuming the same refresh token.
 
-## Secret redemption flow
+Reusing a redeemed or revoked refresh token revokes its authorization and token
+family. A losing concurrent redemption also rejects the exchange and revokes
+the family.
 
-`POST /secrets/redeem` accepts `secretId`, `secretVersion`, `purpose`, and `runId`. The validated bearer supplies the actor, project, and run claims. The caller cannot supply those identity claims in the body.
+## Redeem a secret
 
-`AuthorizedSecretRedemption` then:
+Before redemption, obtain a valid bearer for the bound actor, project, and run,
+and ensure an active grant covers the intended purpose and exact secret
+version.
 
-1. Finds exactly one active, unexpired grant for the complete binding.
-2. Calls the secret backend.
-3. Reads the grant again after the asynchronous acquisition.
-4. Compares its identity, revision, state, expiry, and every binding field.
-5. Limits the credential lifetime to the grant expiry.
+`POST /secrets/redeem` accepts `secretId`, `secretVersion`, `purpose`, and
+`runId`. The bearer supplies the actor, project, and run claims; the caller
+cannot provide those identity claims in the body.
 
-The Key Vault adapter requests the exact version. Its credential lifetime is at most five minutes and ends earlier when the vault secret expires. The broker invalidates the credential after writing the response. A failed post-acquisition check invalidates it before returning an error.
+1. `AuthorizedSecretRedemption` finds exactly one active, unexpired grant for
+   the complete binding.
+2. It asks the secret backend for the credential.
+3. It reads the grant again after the asynchronous acquisition.
+4. It compares the grant identity, revision, state, expiry, and every binding
+   field.
+5. It limits credential lifetime to the grant expiry.
 
-The AKS composition uses explicit workload identity settings. It has no `DefaultAzureCredential` fallback. The adapter handles retrieval; the authorization wrapper handles run and purpose checks.
+The Key Vault adapter requests the exact version. Credential lifetime is at
+most five minutes and ends earlier if the vault secret expires. The Broker
+invalidates the credential after writing the response, and it invalidates a
+credential before returning an error if the post-acquisition check fails.
 
-## Runtime and connection credentials
+The Azure Kubernetes Service (AKS) composition uses explicit workload identity
+settings and has no `DefaultAzureCredential` fallback. The adapter retrieves the secret; the
+authorization wrapper enforces run and purpose checks.
 
-Runtime credentials have their own registration and purpose checks. A bootstrap verifier is single-use and tied to the runtime configuration. Source grants support observation, rotation, and revocation. Model-session grants bind the current runtime registration to the accepted model and credential reference.
+For the supported configuration keys, see the
+[runtime configuration reference](../reference/runtime-configuration.md).
 
-GitHub Copilot, GitHub Repo App, and remote MCP OAuth connections remain separate integrations. None grants a platform or project role. The credential-less sandbox gateway flow described in the architecture is a proposal, not a replacement for these implemented redemption paths.
+## Understand runtime and connection credentials
 
-## Failure behavior
+Runtime credentials have separate registration and purpose checks. A bootstrap
+verifier is single-use and tied to runtime configuration. Source grants support
+observation, rotation, and revocation. Model-session grants bind the current
+runtime registration to the accepted model and credential reference.
 
-Missing or ambiguous identity claims return `401`. Invalid redemption input returns `400`. A missing, changed, revoked, or expired grant returns `403`. Backend failures return a redacted `502` response. Redemption responses use `Cache-Control: no-store`; backend diagnostics and secret bytes do not enter the error response.
+GitHub Copilot, GitHub Repo App, and remote MCP OAuth connections are separate
+integrations. None grants a platform or project role. The credential-less
+sandbox gateway flow described in the architecture is a proposal, not a
+replacement for the implemented redemption paths.
 
-## Related pages
+## Diagnose failures
+
+| Condition | Result |
+| --- | --- |
+| Missing or ambiguous identity claims | `401` |
+| Invalid redemption input | `400` |
+| Missing, changed, revoked, or expired grant | `403` |
+| Secret backend failure | Redacted `502` |
+
+Redemption responses use `Cache-Control: no-store`. Error responses do not
+include backend diagnostics or secret bytes.
+
+## Related content
 
 - [Identity contracts and configuration](../architecture/identity-secrets.md)
 - [Contracts and endpoints](../reference/contracts.md)

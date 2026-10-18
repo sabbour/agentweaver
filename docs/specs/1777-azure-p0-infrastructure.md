@@ -27,7 +27,7 @@ and each owned write effect.
 
 ## Dedicated target
 
-The `aw-v1-p0` naming convention is necessary, but does not prove isolation.
+The `agentweaver` naming convention is necessary, but does not prove isolation.
 Every live tooling route queries the selected account with `--subscription`.
 The actual enabled account and tenant must match the selected target.
 Every subsequent Azure command also includes the explicit subscription.

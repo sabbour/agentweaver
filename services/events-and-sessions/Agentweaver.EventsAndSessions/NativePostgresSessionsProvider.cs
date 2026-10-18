@@ -27,6 +27,15 @@ public static class SessionsCapabilities
             ToolCalls, PolicyEvaluations, AcceptedDecisions, AcceptedEffects, Fork);
 }
 
+/// <summary>Configures the PostgreSQL resource, schema, and polling limits for the Sessions adapter.</summary>
+/// <param name="ResourceId">Stable identity for the PostgreSQL Sessions resource used in provider bindings.</param>
+/// <param name="ExpectedDatabaseName">Database name that the live PostgreSQL connection must report.</param>
+/// <param name="ResourceGeneration">Positive generation recorded when the provider resource is pinned.</param>
+/// <param name="Schema">PostgreSQL schema containing the Sessions tables.</param>
+/// <param name="OptionsRevision">Provider configuration revision used to match the catalog entry.</param>
+/// <param name="OptionsSchemaVersion">Options contract version; defaults to and must equal version 1.</param>
+/// <param name="PollIntervalMilliseconds">Event subscription polling interval; defaults to 250 and must be 50 through 30,000.</param>
+/// <param name="ReferenceRetentionDays">Object-reference retention period; defaults to 365 and must be 1 through 3650 days.</param>
 public sealed record PostgresSessionsProviderOptions(
     string ResourceId,
     string ExpectedDatabaseName,
@@ -37,7 +46,11 @@ public sealed record PostgresSessionsProviderOptions(
     int PollIntervalMilliseconds = 250,
     int ReferenceRetentionDays = 365)
 {
-    /// <summary>Rejects unsupported schema names, resource identities, polling bounds, or retention periods.</summary>
+    /// <summary>
+    /// Requires token-shaped resource and database names, a positive generation, a non-reserved
+    /// lowercase schema name, the supported options version, a polling interval of 50 through
+    /// 30,000 milliseconds, and reference retention of 1 through 3650 days.
+    /// </summary>
     public void Validate()
     {
         if (!IsToken(ResourceId) || !IsToken(ExpectedDatabaseName) ||

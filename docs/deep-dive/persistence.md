@@ -1,76 +1,124 @@
 # Persistence
 
-## The mental model
+Use this page to understand where Agentweaver stores authoritative state and
+how services deliver changes without a cross-service transaction. PostgreSQL,
+the run journal, Blob objects, and workspace volumes serve different purposes.
 
-PostgreSQL stores authoritative service state. The shared persistence package supplies local outbox and inbox primitives; each service owns its domain schema and transaction boundaries.
+## Understand the storage boundaries
 
-An outbox connects a committed local change to eventual delivery. An inbox connects message admission to committed consumer effects. Neither creates a transaction across services.
+PostgreSQL stores service-owned state. The shared persistence package provides
+local outbox and inbox primitives; each service owns its domain schema and
+transaction boundaries.
 
-The run journal is a separate Events & Sessions domain store. Blob objects hold large bytes. Workspace volumes hold agent-visible files. These stores solve different problems.
+An **outbox** records delivery intent in the same transaction as a local
+change. An **inbox** records that a consumer admitted a message with its local
+effects. These mechanisms support reliable retries, but they do not create a
+transaction across services.
 
-## Where this lives
+| Data | Owner |
+| --- | --- |
+| Service domain records | The owning service's PostgreSQL schema |
+| Ordered run journal and session references | Events & Sessions |
+| Large content bytes | Object Store |
+| Agent-visible repository files | Environment workspace volume |
+| Microsoft Agent Framework (MAF) execution checkpoints | Orchestrator |
+| Knowledge records | The selected Memory provider |
 
-- `packages/Agentweaver.Persistence.Postgres/PostgresOutbox.cs` — schema initialization, enqueue, claim, inbox admission, and acknowledgment.
-- `packages/Agentweaver.Persistence.Postgres/OutboxContracts.cs` — event, delivery, and publisher contracts.
-- `packages/Agentweaver.Persistence.Postgres/OutboxRelay.cs` — one caller-driven publication batch.
-- `packages/Agentweaver.Persistence.Postgres/InboxAdmission.cs` — admitted/duplicate result.
-- `packages/Agentweaver.Persistence.Postgres/Migrations/` — embedded shared schema changes.
-- `services/events-and-sessions/Agentweaver.EventsAndSessions/SessionsJournal.cs` — ordered run journal.
-- `services/events-and-sessions/Agentweaver.EventsAndSessions/EventsAndSessionsMigrator.cs` — owner migration and startup verification.
-- `services/projects-config/Agentweaver.Projects.Config/ProjectsConfigMigrator.cs` — EF migration and runtime-role boundary.
-- `services/knowledge/Agentweaver.Knowledge/KnowledgeMigrator.cs` — embedded SQL owner migrations.
+Telemetry does not reconstruct these records.
 
-## Core concepts and invariants
+## Find the implementation
 
-### Local state and delivery intent commit together
+- `packages/Agentweaver.Persistence.Postgres/` contains `PostgresOutbox.cs`,
+  outbox contracts, relay logic, inbox admission, and shared migrations.
+- `services/events-and-sessions/Agentweaver.EventsAndSessions/SessionsJournal.cs`
+  owns journal ordering; `EventsAndSessionsMigrator.cs` verifies its schema.
+- `services/projects-config/Agentweaver.Projects.Config/ProjectsConfigMigrator.cs`
+  owns EF migrations and runtime database-role checks.
+- `services/knowledge/Agentweaver.Knowledge/KnowledgeMigrator.cs` applies its
+  embedded SQL migrations.
 
-`EnqueueAsync` accepts the caller's open connection and transaction. The caller writes domain state and the outbox event in that same transaction. Rolling back also removes the delivery intent.
+## Follow an outbox message
 
-The outbox assigns sequence numbers under the stream-row lock. Repeating an identical event returns its stored identity and sequence. Reusing an event ID or idempotency key for different data throws `OutboxConflictException`. Duplicate retry does not consume a committed stream position.
+To use the shared relay, the producer must have a local transaction and the
+host must invoke the relay with an `IOutboxPublisher`. The library does not
+start a background service.
 
-### Delivery is at least once
-
-Publication can complete before the publisher receives confirmation. A process can also stop after publishing but before acknowledging its lease. Both cases permit redelivery.
-
-The inbox prevents duplicate committed local effects only when the consumer applies effects for `InboxAdmission.Admitted` and commits them with the receipt. Effects outside that transaction do not gain exactly-once behavior.
-
-## Producer, relay, and consumer flow
-
-1. The producer commits its domain write and `EnqueueAsync`.
+1. The producer writes domain state and calls `EnqueueAsync` on the same open
+   connection and transaction. A rollback removes both.
 2. The host calls `OutboxRelay.RelayOnceAsync`.
-3. `ClaimAsync` leases the earliest undelivered event from each eligible stream. PostgreSQL row locks and `SKIP LOCKED` let workers claim disjoint work.
-4. The relay calls the injected `IOutboxPublisher`.
-5. A confirmed publication is acknowledged using the current, unexpired lease token.
-6. The consumer starts its own transaction and calls `AdmitAsync` for the consumer/message identity.
-7. It applies effects only for a new admission, commits, then acknowledges transport delivery.
+3. `ClaimAsync` leases the earliest undelivered event from each eligible stream.
+   PostgreSQL row locks and `SKIP LOCKED` let workers claim different work.
+4. The relay calls the injected publisher.
+5. After confirmed publication, the relay acknowledges the event with the
+   current, unexpired lease token.
+6. The consumer starts its own transaction and calls `AdmitAsync` for the
+   consumer/message identity.
+7. The consumer applies effects only for a new admission, commits them with the
+   inbox receipt, and then acknowledges transport delivery.
 
-`ClaimOneAsync` provides the same stream-head rule for one selected event. It returns no lease when that event is absent, already delivered, leased, or behind another undelivered event. The Orchestrator uses this targeted path for synchronous owner-message admission.
+`ClaimOneAsync` applies the same stream-head rule to one selected event. It
+returns no lease if the event is absent, delivered, leased, or behind another
+undelivered event. Orchestrator uses this path for synchronous owner-message
+admission.
 
-The library starts no daemon or background loop. Hosts choose when to call the relay and supply the actual transport.
+## Understand delivery guarantees
 
-## Journal and object boundaries
+Delivery is **at least once**. Publication may complete before the publisher
+receives confirmation, or a process may stop after publishing but before it
+acknowledges its lease. Either case can cause redelivery.
 
-Events & Sessions owns journal ordering, session identity, provider bindings, and object-reference retention. Its `events_sessions` schema composes the shared outbox/inbox tables with domain tables. The persistence package itself defines no session journal.
+The inbox prevents duplicate committed local effects only when the consumer
+applies those effects for `InboxAdmission.Admitted` and commits them with the
+receipt. Effects outside that transaction do not gain exactly-once behavior.
 
-Large content can be represented by typed opaque object references. A PostgreSQL reference commit and a Blob upload are separate operations; they do not share an atomic transaction. A stored object without a committed reference is not a committed journal event.
+The outbox assigns sequence numbers under the stream-row lock. Repeating an
+identical event returns its saved identity and sequence. Reusing an event ID or
+idempotency key for different data raises `OutboxConflictException`. An exact
+duplicate does not consume a new committed stream position.
 
-MAF checkpoints remain Orchestrator state. Knowledge records belong to the selected Memory provider. Azure Files workspace data belongs to the Environment volume lifecycle. None is reconstructed from telemetry.
+## Store journal content and objects
 
-## Migration approach
+Events & Sessions owns journal order, session identity, provider bindings, and
+object-reference retention. Its `events_sessions` schema combines shared
+outbox/inbox tables with Events domain tables; the persistence package does not
+define a session journal.
 
-`PostgresOutbox.InitializeAsync` validates a non-system schema name, takes a schema-scoped advisory lock, applies embedded migrations in order, and records versions in a transaction. Unknown or inconsistent shared versions stop initialization.
+Large content can use typed opaque object references. The PostgreSQL reference
+commit and Blob upload are separate operations; they do not share an atomic
+transaction. The object bytes are written before a specialized material
+writer commits their reference. An unreferenced object is not a committed
+journal event.
 
-Owners extend this boundary rather than sharing domain tables. Events & Sessions and Knowledge apply embedded SQL under their own migration locks. Projects & Config uses EF migrations with its own history table and advisory-lock coordination.
+## Run migrations explicitly
 
-Migration execution is an explicit maintenance operation. Ordinary service startup verifies the required schema, migration inventory, and owner-specific runtime privileges. Runtime identity does not receive migration authority merely because the service needs to read its tables.
+Before migrating, use the owner's explicit maintenance path and database
+identity. Ordinary service startup verifies the schema but does not have
+migration authority.
 
-## Failure and recovery
+`PostgresOutbox.InitializeAsync` validates the schema name, takes a
+schema-scoped advisory lock, applies embedded migrations in order, and records
+versions in a transaction. Unknown or inconsistent shared versions stop
+initialization.
 
-A failed publication remains unacknowledged and can be reclaimed after lease expiry. Failure in one claimed stream does not stop another stream in the batch. Cancellation stops the relay before acknowledgment, including when publication is still finishing externally.
+Owners add their own domain tables and migration locks. Events & Sessions and
+Knowledge use embedded SQL; Projects & Config uses EF migrations and its own
+history table. Run migration as an explicit maintenance operation. Ordinary
+service startup verifies the schema, migration inventory, and owner-specific
+runtime privileges. A runtime identity does not receive migration authority
+just because its service reads the tables.
 
-Acknowledgment checks expiry after acquiring the row lock. A stale or expired token cannot settle the event. An inbox transaction that rolls back leaves the message eligible for a fresh admission.
+## Recover from delivery failures
 
-## Related pages
+A failed publication stays unacknowledged and can be reclaimed after its lease
+expires. Failure in one claimed stream does not stop other streams in the
+batch. Cancellation stops the relay before acknowledgment, even if publication
+is still completing externally.
+
+Acknowledgment checks lease expiry after acquiring the row lock. A stale or
+expired token cannot settle an event. If an inbox transaction rolls back, the
+message remains eligible for a fresh admission.
+
+## Related content
 
 - [PostgreSQL and object contracts](../architecture/persistence-objects.md)
 - [Events and sessions](./events-sessions.md)

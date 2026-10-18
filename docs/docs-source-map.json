@@ -1,6 +1,11 @@
 {
   "pages": [
     "docs/index.md",
+    "docs/guide/quickstart.md",
+    "docs/guide/configure-providers.md",
+    "docs/guide/configure-knowledge.md",
+    "docs/guide/deploy-to-azure.md",
+    "docs/guide/troubleshooting.md",
     "docs/guide/build-and-use.md",
     "docs/guide/testing.md",
     "docs/guide/gateway.md",
@@ -19,6 +24,7 @@
     "docs/architecture/design/provider-seams.md",
     "docs/architecture/azure.md",
     "docs/reference/contracts.md",
+    "docs/reference/runtime-configuration.md",
     "docs/reference/releases.md",
     "docs/guide/index.md",
     "docs/deep-dive/README.md",

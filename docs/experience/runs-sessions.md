@@ -1,81 +1,108 @@
 # Runs and sessions
 
-Open `/projects/:projectId/runs/:runId` for an existing run, then select
-**Sign in for this project and run**. The page requires an exact Broker binding.
-It does not create or schedule runs.
+Use this page to inspect an existing run, respond to owner-reported requests,
+and read committed activity and usage. A **session** is a node in the run's
+owner-reported tree. The browser does not create or schedule runs.
 
-## Inspect a run
+## Prerequisites
 
-The **Authoritative run snapshot** shows owner state. The app refreshes snapshots
-five seconds after each polling pass. Select **Refresh owner snapshots** for an
-immediate read.
+- Know the exact project ID and existing run ID.
+- Sign in with a Broker token bound to that exact project and run.
 
-| Tab | What you see and do |
+Open `/projects/:projectId/runs/:runId`, then select
+**Sign in for this project and run** if the page requests it.
+
+## Inspect an existing run
+
+The **Authoritative run snapshot** shows the Orchestrator's current owner
+state. The page refreshes owner snapshots every five seconds after each
+polling pass. Select **Refresh owner snapshots** for an immediate read.
+
+| Tab | What you can read or do |
 | --- | --- |
-| **Topology** | Inspect the root and children in an interactive graph. Select a node to read activity, lifecycle, blockers, and detach state. |
+| **Topology** | Inspect the root and child sessions in an interactive graph. Select a node to read activity, lifecycle, blockers, and detach state. |
 | **Chat** | Read journal summaries and send an addressed message between two existing active sessions. |
 | **Outcomes & approvals** | Answer questions and approve or reject exact pending outcome, plan, or approval gates. |
-| **Activity** | Follow committed events, execution state, lifecycle, and blockers. |
-| **Selection** | Read accepted configuration and provider selections. Manage the [run repository pin](./connections.md#pin-a-repository-for-an-existing-run) for GitHub App mode. |
+| **Activity** | Read committed events, execution state, lifecycle, and blockers. |
+| **Selection** | Read the accepted configuration and provider selection. Manage the [run repository pin](./connections.md#pin-a-repository-to-an-existing-run) when the run uses GitHub App mode. |
 | **Usage** | Read owner usage and accounting totals. Missing or unpriced usage is not a zero-cost measurement. |
 
-The `view` query selects `topology`, `chat`, `approvals`, `activity`, `selection`,
-or `usage`. Invalid values normalize to `topology`.
+The `view` query selects `topology`, `chat`, `approvals`, `activity`,
+`selection`, or `usage`. An invalid value normalizes to `topology`.
+
+The Selection tab shows the immutable accepted selection and advertised
+provider candidates. It does not report a runtime model ID or a provisioned
+provider pin. A candidate is metadata, not proof of a provisioned resource or
+provider binding. Some service candidates in the repository are source-only or
+unpublished; see the [provider and model reference](../architecture/providers-models.md).
 
 ## Send a message
+
+**Prerequisites:** The session tree contains at least two active sessions.
 
 1. Open **Chat**.
 2. Choose different **From session** and **To session** values.
 3. Enter a message.
 4. Select **Send immediately**.
 
-At least two active sessions are required. The owner returns a message ID and
-status. The displayed text is a browser-local echo, not a restored transcript.
-The journal contains typed events and opaque object references; this page has
-no object-content reader.
+**Expected result:** The owner returns a message ID and status. The app shows
+the message text as a browser-local echo after it receives the receipt. The
+receipt does not prove delivery or completion, and the page does not restore a
+transcript. The journal contains typed events and opaque object references; the
+page has no object-content reader.
 
 ## Answer a gate
 
 1. Open **Outcomes & approvals**.
-2. Read the blocker prompt and request ID.
-3. Choose an advertised answer, or enter freeform text when allowed.
+2. Read the blocker prompt and exact request ID.
+3. Select an advertised answer, or enter freeform text when the blocker allows it.
 4. Submit the answer, approval, or rejection.
 5. Read the refreshed owner snapshot.
 
-The blocker and decision snapshot must contain the same pending request ID.
-Actions include that ID and the expected decision-state version. A missing match
-disables the action. A `409` reloads owner state without assuming the decision
-was applied.
+The blocker and decision snapshot must report the same pending request ID. The
+action includes that ID and the expected decision-state version. The app
+disables an action when the snapshots do not match. A `409` response causes
+the app to reload owner state without assuming that the decision was applied.
 
-## Detach or archive a child
+**Expected result:** The owner reports whether it accepted the request. A
+refreshed snapshot, not the receipt, shows the resulting gate state.
+
+## Detach or archive a child session
 
 In **Topology**, select an attached child:
 
 - **Detach child** appears for an active child.
-- **Archive completed child** appears when both its lifecycle and run execution
-  are completed.
+- **Archive completed child** appears when both the child lifecycle and run
+  execution are completed.
 
-The owner validates the current execution fence. The app reloads state after the
-request. These controls do not stop a pod or infer AgentHost health.
+The owner validates the current execution fence. After the request, the app
+reloads state. The refreshed snapshot shows the resulting lifecycle when the
+owner reports it. These controls do not stop a pod or infer AgentHost health.
 
-## States and errors
+## Read activity and usage
 
-- Snapshot failures appear by surface, such as run, selection, usage, or session.
-  A failed topology read does not fabricate a tree.
-- An empty tree or empty pending-request list reflects the owner response.
-- Activity shows loading, live, or reconnecting journal state.
-- Replay loads all available pages before live streaming. Events are deduplicated
-  by event ID and sorted by owner position.
-- A live stream reconnects from its cursor after retryable failures. Scope
-  mismatches and nonretryable client errors stop it.
-- Requests for another project, run, or session are rejected by the client.
+The app replays available journal pages before following the live event stream.
+It deduplicates events by event ID and orders them by owner position. The stream
+reconnects from its cursor after retryable failures. Scope mismatches and
+nonretryable client errors stop the stream.
+
+The **Usage** tab preserves missing measurements as **not reported**. A
+partially priced usage summary does not mean that unpriced usage cost zero.
+
+## Understand errors
+
+- Snapshot errors appear on the affected surface, such as run, selection, usage,
+  or session. A failed topology read does not fabricate a tree.
+- An empty tree or pending-request list reflects the owner response.
+- Activity displays loading, live, or reconnecting journal state.
+- The app rejects responses for a different project, run, or session.
 
 ## Requests
 
-All paths use the Gateway. In this table, the common prefix is
+All versioned routes use the Gateway. The common prefix is
 `/api/v1/projects/{projectId}/runs/{runId}`.
 
-| Step | Method and path after the prefix | Owner |
+| Operation | Method and path after the prefix | Owner in source |
 | --- | --- | --- |
 | Run snapshot | `GET /coordination/status` | Orchestrator |
 | Session tree | `GET /coordination/sessions/{sessionId}/tree` | Orchestrator |
@@ -85,12 +112,14 @@ All paths use the Gateway. In this table, the common prefix is
 | Answer question | `POST /coordination/sessions/{sessionId}/decisions/gates/{requestId}/answer` | Orchestrator |
 | Approve or reject | `POST /coordination/sessions/{sessionId}/decisions/gates/{requestId}/approve` or `/reject` | Orchestrator |
 | Detach | `POST /coordination/sessions/{sessionId}/detach` | Orchestrator |
-| Archive | `POST /coordination/sessions/{parentSessionId}/children/{childSessionId}/archive` | Orchestrator |
-| Accepted selection | `GET /selection` | Projects & Config |
-| Usage | `GET /usage` | Events & Sessions |
-| Replay | `GET /events?cursor=...&limit=100` | Events & Sessions |
-| Follow live | `GET /events/live?cursor=...` | Gateway SSE over Events replay |
+| Archive child | `POST /coordination/sessions/{parentSessionId}/children/{childSessionId}/archive` | Orchestrator |
+| Read accepted selection | `GET /selection` | Projects & Config |
+| Read usage | `GET /usage` | Events & Sessions |
+| Replay events | `GET /events?cursor=...&limit=100` | Events & Sessions |
+| Follow live events | `GET /events/live?cursor=...` | Gateway SSE over Events replay |
 
-See [Events reference](../reference/events.md) for ordering and replay, and
-[Events & Sessions architecture](../architecture/events-sessions.md) for owner
-and runtime boundaries.
+The Orchestrator, Events & Sessions, and Projects & Config entries identify
+owners in checked-in source. These include source-only or unpublished service
+candidates, not confirmed deployments. See the [Events reference](../reference/events.md)
+for ordering and replay, and [Events & Sessions architecture](../architecture/events-sessions.md)
+for owner and runtime boundaries.

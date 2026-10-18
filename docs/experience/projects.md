@@ -1,61 +1,81 @@
 # Projects
 
-Projects group configuration and accepted run selections. Open `/projects` to
-see projects visible to your current identity and tenant context.
+Use this page to list projects visible to your current identity, create a
+project, or open an existing run. Project access and configuration are owned
+by Projects & Config; the app does not grant access or create runs.
 
 ## Choose a project
 
-1. Sign in through the Broker.
+**Prerequisites:** Sign in through the Identity Broker. Your current identity
+and role assignments determine which projects are visible.
+
+1. Open `/projects`.
 2. Read the **Visible projects** list.
 3. Select a project name.
 
-Each row shows the stable project ID, project revision, configuration revision,
-and lifecycle state. **Refresh** reloads the list.
-
-The overview shows the project's current state and links to
+Each project row shows its stable project ID, project revision, configuration
+revision, and lifecycle state. Select **Refresh** to reload the list. The
+overview shows the current project state and links to
 [Configuration](./configuration.md) and [Knowledge](./knowledge.md).
+
+**Expected result:** The selected project's overview displays the lifecycle,
+record revision, and configuration revision returned by the owner.
 
 ## Create a project
 
-1. Enter a **Project name**. The form accepts up to 120 characters.
-2. Select **Create project**.
-3. Read the returned project ID and refresh result.
+**Prerequisites:** Sign in with an identity allowed to create a project in the
+current tenant.
 
-Creation does not assign an Owner. If the new project is not visible, a tenant
-administrator must grant current project access. The browser does not include
-role-management controls.
+1. On `/projects`, enter a name in **Project name**. The field accepts up to
+   120 characters.
+2. Select **Create project**.
+3. Read the returned project ID and refresh the visible project list.
+
+**Expected result:** The owner returns a project summary and the app displays
+the new project ID. Project creation does not assign an Owner. If the project
+is not visible afterward, a tenant administrator must grant current access.
+The browser does not provide role-management controls.
 
 ## Open an existing run
 
-1. On the overview, enter the **Exact run ID**.
+**Prerequisites:** Open the project overview and obtain the exact ID of an
+existing run.
+
+1. Enter the run ID in **Exact run ID**.
 2. Select **Open run**.
-3. Complete [run-bound sign-in](./onboarding-auth.md#open-a-run).
+3. Complete [run-bound sign-in](./onboarding-auth.md#open-an-existing-run).
 
-The opener navigates to `/projects/:projectId/runs/:runId`; it does not create a
-run or enumerate run history. See [Runs and sessions](./runs-sessions.md).
+The app navigates to `/projects/:projectId/runs/:runId`. This action does not
+create a run or enumerate run history. See [Runs and sessions](./runs-sessions.md)
+for the data the run page reads.
 
-## States and errors
+## Understand project states and errors
 
-- A spinner appears while the Gateway list or project request is pending.
-- An empty list means no projects were returned for the current identity and
-  role assignments.
+- A loading indicator appears while a project request is pending.
+- An empty list means the owner returned no projects for the current identity
+  and role assignments.
 - Failed requests show the HTTP status and structured error code when present.
-- A project response for a different route is rejected.
+- The app rejects a project response that does not match the route's project ID.
 - Project access and configuration access are separate owner checks. Listing a
   project does not grant permission to change it.
 
-There are no v1 browser controls for project deletion, a kanban board, repository
+The v1 browser has no controls for project deletion, a kanban board, repository
 cloning, or automatic project setup.
 
 ## Requests
 
-| Step | Gateway request | Owning service |
-| --- | --- | --- |
-| List or refresh | `GET /api/v1/projects` | Projects & Config |
-| Create | `POST /api/v1/projects` with `{ "name": "..." }` | Projects & Config |
-| Open overview | `GET /api/v1/projects/{projectId}` | Projects & Config |
-| Open a run | Browser navigation only; the run page then loads its own APIs | Orchestrator, Events & Sessions, Projects & Config |
+The following versioned Gateway routes are owned by Projects & Config in the
+checked-in source. This service is a source candidate; the route list does not
+confirm deployment.
 
-Project requests forward the confirmed tenant selector. See the
+| Operation | Gateway request | Result |
+| --- | --- | --- |
+| List or refresh | `GET /api/v1/projects` | Returns projects visible to the current caller. |
+| Create | `POST /api/v1/projects` with `{ "name": "..." }` | Creates a project in the selected tenant; it does not grant project roles. |
+| Read overview | `GET /api/v1/projects/{projectId}` | Returns the project summary. |
+| Open run | Browser navigation only | The run page then reads its own APIs. |
+
+The app includes the tenant selector only when its current authorization
+context confirms one. See the
 [API reference](../reference/api.md) and
 [Projects & Config architecture](../architecture/projects-config.md).

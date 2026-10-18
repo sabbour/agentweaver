@@ -1,176 +1,140 @@
 # System overview
 
-## The mental model
+Use this page to trace a request through Agentweaver v1 and find which service
+owns each decision and piece of state. It describes the checked-in request-driven
+implementation, not a deployment topology or an automatic scheduler.
 
-Agentweaver separates intent, control, and execution. You describe work through
-the web app or a Model Context Protocol (MCP) client. Control-plane services
-authorize requests and commit decisions. AgentHost runs the GitHub Copilot SDK
-inside a selected Sandbox.
+## The system at a glance
 
-The model proposes work. The Orchestrator decides whether that work matches the
-confirmed outcome, selected workflow, current permissions, and accepted run
-selection. A model reply does not approve a gate or change a provider binding.
+You describe work in the web app or through a Model Context Protocol (MCP)
+client. Control-plane services authorize requests and commit decisions.
+AgentHost runs the GitHub Copilot SDK in a selected Sandbox.
 
-Read this as a map of the checked-in implementation, not a deployment topology.
-The source contains request-driven workflow dispatch and runtime hosts. Dispatch
-does not schedule itself.
+The model can propose work, but the Orchestrator decides whether that work
+matches the confirmed outcome, selected workflow, current permissions, and
+accepted run selection. A model reply does not approve a gate or change a
+provider binding.
 
-## Where this lives
+## Find the implementation
 
-- `services/gateway/Agentweaver.Gateway/` — Public HTTP routes and owner clients.
-- `services/identity/Agentweaver.Identity.Broker/` — Authentication and credential
-  authority.
-- `services/projects-config/Agentweaver.Projects.Config/` — Project configuration,
-  permissions, skills, and accepted run selections.
-- `services/orchestrator/Agentweaver.Orchestrator/` — Durable coordination,
-  execution checkpoints, runtime registration, and Source Control ownership.
-- `services/orchestrator/Agentweaver.Orchestrator.Core/` — Workflow, decision,
-  WorkPlan, policy, and backlog rules.
-- `services/events-and-sessions/Agentweaver.EventsAndSessions/` — Journal,
-  messages, material references, and accounting.
-- `services/environment/Agentweaver.Environment/` — Resource lifecycle and runtime
-  placement.
-- `services/knowledge/Agentweaver.Knowledge/` — Knowledge records and context.
-- `services/agenthost/Agentweaver.AgentHost/` — Runtime executable and collector
-  entry points.
-- `services/mcp/Agentweaver.Mcp/` — First-party MCP tools over Gateway.
-- `packages/` — Shared contracts, adapters, and runtime libraries.
-- `apps/web/src/v1/` — Current browser application, authentication, API client,
-  and journal consumption.
-- `apps/web/src/App.tsx` — Stable entry point that exports the v1 application.
+| Area | Main source location |
+| --- | --- |
+| Public HTTP API and owner routing | `services/gateway/Agentweaver.Gateway/` |
+| Authentication and credentials | `services/identity/Agentweaver.Identity.Broker/` |
+| Project settings and accepted run selections | `services/projects-config/Agentweaver.Projects.Config/` |
+| Coordination, checkpoints, and Source Control ownership | `services/orchestrator/Agentweaver.Orchestrator/` |
+| Workflow and decision rules | `services/orchestrator/Agentweaver.Orchestrator.Core/` |
+| Journal, messages, material references, and accounting | `services/events-and-sessions/Agentweaver.EventsAndSessions/` |
+| Resource lifecycle and runtime placement | `services/environment/Agentweaver.Environment/` |
+| Knowledge records and context | `services/knowledge/Agentweaver.Knowledge/` |
+| Runtime executable and collectors | `services/agenthost/Agentweaver.AgentHost/` |
+| First-party MCP tools | `services/mcp/Agentweaver.Mcp/` |
+| Shared contracts and adapters | `packages/` |
+| Current browser application | `apps/web/src/v1/`; stable entry point: `apps/web/src/App.tsx` |
 
-## Core concepts and invariants
+## Keep service ownership clear
 
-### Each service owns its state
+The Gateway does not own a workflow database. It forwards requests to the
+service that owns each operation. Projects & Config checks current project
+authority. Orchestrator owns session relationships and execution state. Events &
+Sessions owns ordered history and addressed-message delivery.
 
-The Gateway does not own a workflow database. It forwards requests to the service
-that owns the operation. Projects & Config checks current project authority.
-Orchestrator owns session relationships and execution state. Events & Sessions
-owns the ordered history and addressed-message delivery.
+Source Control owner endpoints and records currently live in Orchestrator.
+GitHub and workspace implementations live in `Agentweaver.SourceControl`; there
+is no separate Source Control service directory.
 
-These boundaries also apply to Source Control. Its current owner endpoints and
-records live in the Orchestrator service. The GitHub and workspace implementations
-live in `Agentweaver.SourceControl`; there is no separate Source Control service
-directory.
+An accepted run selection records configuration, agent and model choices,
+limits, and provider candidates. It is not a provisioned resource or a lasting
+permission. Resource owners negotiate and pin actual resource identities
+separately, and they check current authority whenever they act. Revoked
+permission does not remain valid because an earlier snapshot exists. Execution
+fences reject work from an older attempt.
 
-### An accepted selection is not a resource or a permission
+## Distinguish history, execution, and files
 
-Projects & Config records the accepted configuration, agent and model choices,
-limits, and provider candidates for a run. Resource owners negotiate capabilities
-and pin actual resource identities separately.
-
-Services still check current authority when they use an accepted selection.
-Revoked permission does not remain valid because an earlier snapshot exists.
-Execution fences reject work from an older execution attempt.
-
-### History, execution state, and caches serve different purposes
-
-- The Events journal records what was committed.
-- Orchestrator decisions and Microsoft Agent Framework (MAF) checkpoints record
-  workflow position and pending execution intents.
-- SDK cache bytes help restore a compatible native conversation.
-- Workspace storage holds repository files and generated output.
+| Data | What it tells you |
+| --- | --- |
+| Events journal | What an owner committed as history |
+| Orchestrator decisions and Microsoft Agent Framework (MAF) checkpoints | Workflow position and pending execution intents |
+| SDK cache bytes | How to restore a compatible native conversation |
+| Workspace storage | Repository files and generated output |
 
 Reading history does not replay tools. Restoring a cache does not approve a new
 model turn.
 
-## Shared packages
+Shared libraries do not become separate services just because multiple hosts
+use them. Each host's `Program.cs` composes its dependencies. Important shared
+packages include `Agentweaver.Abstractions` for versioned contracts,
+`Agentweaver.Providers` for catalog and binding checks,
+`Agentweaver.AgentRuntime` for runtime bootstrap and guarded turns,
+`Agentweaver.Persistence.Postgres` for outbox/inbox primitives,
+`Agentweaver.SourceControl` for GitHub and isolated workspaces,
+`Agentweaver.Telemetry` for OpenTelemetry signals, and provider adapters for
+Sandbox, Azure Files, Blob Storage, and Key Vault.
 
-| Package | Role in the flow |
-| --- | --- |
-| `Agentweaver.Abstractions` | Versioned provider, session, storage, environment, usage, and source-control contracts. |
-| `Agentweaver.Providers` | Provider catalog validation, selection, and resource-binding checks. |
-| `Agentweaver.Identity` | Grant and runtime contracts, authorized redemption, and fixed owner HTTP clients. |
-| `Agentweaver.AgentRuntime` | Bootstrap, native SDK sessions, guarded turns, and recovery. |
-| `Agentweaver.Persistence.Postgres` | Transactional outbox, consumer inbox, and relay primitives. |
-| `Agentweaver.SourceControl` | GitHub operations and isolated Git workspace handling. |
-| `Agentweaver.Providers.Sandbox.AgentSandbox` | Kubernetes-backed Sandbox and BuildTest operations. |
-| `Agentweaver.Providers.Storage.AzureFiles` | Generation-bound Azure Files CSI workspace-volume operations. |
-| `Agentweaver.ObjectStore.AzureBlob` | Opaque object reads and writes through Azure Blob Storage. |
-| `Agentweaver.Secrets.AzureKeyVault` | Exact-version secret reads and secret-version writes. |
-| `Agentweaver.Telemetry` | Shared OpenTelemetry traces, metrics, and logs. |
-| `Agentweaver.Telemetry.AzureMonitor` | Azure Monitor exporter composition. |
+## Follow a request
 
-These libraries do not become separate services just because several hosts use
-them. Each host's `Program.cs` selects and constructs its dependencies.
+To follow this example, you need an authenticated caller and an accepted run
+selection. Each operation still checks current authority at its owner.
 
-## How a request travels
+1. **Enter through the browser or MCP.** The browser obtains a Broker token
+   through its authorization flow. The v1 `AuthProvider` keeps the bearer in
+   memory, and `AgentweaverGatewayClient` sends authenticated requests with
+   `cache: 'no-store'`. An MCP client calls `/mcp`; the MCP service forwards the
+   same validated caller bearer to Gateway.
+2. **Route to the owner.** Gateway validates the Broker token and maps a finite
+   `/api/v1` route to a fixed owner address. Configuration goes to Projects &
+   Config, Knowledge requests go to Knowledge, and coordination requests go to
+   Orchestrator. Not every request passes through Orchestrator.
+3. **Commit decisions before dispatch.** Accepting a run selection first reaches
+   Projects & Config. Orchestrator then accepts the run root and typed outcome,
+   workflow, and WorkPlan decisions. It validates the plan, persists decision
+   versions, confirmation gates, and execution state. Dispatch is explicit:
+   before contacting a child AgentHost, it commits the child association,
+   pending intent, and checkpoint.
+4. **Execute and record the result.** AgentHost checks current owner authority
+   before turns and native tool calls. Events stores turn content and SDK cache
+   material. Orchestrator records immutable SDK usage source receipts, and Events
+   consumes receipt references into its usage ledger.
+5. **Read committed results.** Gateway serves journal pages and builds
+   server-sent events (SSE) from those pages. It does not turn a live model
+   callback directly into durable history. Read owner status to distinguish
+   accepted work, pending work, failure, and completion.
 
-### Enter through the browser or MCP
+Environment and Identity supply placement and credential authority. A dispatch
+request does not replace those checks.
 
-The browser obtains a Broker token through its authorization flow. The v1
-`AuthProvider` keeps its bearer session in memory. `AgentweaverGatewayClient`
-sends authenticated requests to Gateway with fetch `cache: 'no-store'`.
-
-MCP clients call the authenticated `/mcp` endpoint instead. The MCP service
-converts a discovered tool call into a request to Gateway. It forwards the same
-validated caller bearer.
-
-### Route to the owner
-
-Gateway validates the Broker token and maps a finite `/api/v1` route to a fixed
-owner address. A configuration request goes to Projects & Config. A Knowledge
-request goes to Knowledge. A coordination request goes to Orchestrator.
-Not every request passes through Orchestrator.
-
-For example, accepting a run selection reaches Projects & Config first. Accepting
-the run root and submitting typed outcome, workflow, and WorkPlan decisions then
-reach Orchestrator. Each owner enforces its own current permission and revision
-checks.
-
-### Commit decisions before dispatch
-
-Orchestrator validates the selected workflow and proposed plan through Core. It
-persists decision versions, confirmation gates, and execution state. An explicit
-dispatch request reads the confirmed plan and computes ready work.
-
-Before contacting a child AgentHost, dispatch commits the child association,
-pending intent, and checkpoint. It then verifies current runtime registration and
-readiness and sends the bound message. Environment and Identity supply placement
-and credential authority; the dispatch request does not replace those checks.
-
-### Execute and record the result
-
-AgentHost authorizes the turn and native tool requests against current owners.
-Events stores turn content and SDK cache material. Orchestrator records immutable
-SDK usage source receipts, and Events consumes receipt references into its usage
-ledger.
-
-Gateway serves committed journal pages and constructs server-sent events (SSE)
-from those pages. It does not turn a live model callback directly into durable
-history. A client reads owner status to distinguish accepted work, pending work,
-failure, and completion.
-
-## Where state lives
+## Locate state
 
 | State | Owner and storage |
 | --- | --- |
-| OAuth records, connections, and grants | Identity Broker's PostgreSQL schema; secret material uses Identity's configured secret backend. |
-| Membership, roles, configuration, and accepted selections | Projects & Config's PostgreSQL schema; imported skill content also uses Object Store. |
-| Session tree, gates, decisions, fences, dispatch intents, and MAF checkpoints | Orchestrator's PostgreSQL schema. |
-| Ordered events, provider pins, message delivery, reference metadata, and usage ledger | Events & Sessions' PostgreSQL schema. |
-| Turn content, SDK caches, and produced-output packages | Object Store bytes with owner-committed references. |
-| Environment state, leases, volume generations, and resource effects | Environment's PostgreSQL schema and selected resource providers. |
-| Knowledge records | The selected Memory provider; native PostgreSQL is the default implementation. |
-| Repository and generated files | The selected workspace volume and isolated Source Control workspaces. |
-| Pending native turns and active credentials | AgentHost process state; not a substitute for owner records or journal history. |
+| OAuth records, connections, and grants | Identity Broker PostgreSQL; secret material uses its configured secret backend |
+| Membership, roles, configuration, and accepted selections | Projects & Config PostgreSQL; imported skill content also uses Object Store |
+| Session tree, gates, decisions, fences, dispatch intents, and MAF checkpoints | Orchestrator PostgreSQL |
+| Ordered events, provider pins, message delivery, reference metadata, and usage ledger | Events & Sessions PostgreSQL |
+| Turn content, SDK caches, and produced-output packages | Object Store bytes with owner-committed references |
+| Environment state, leases, volume generations, and resource effects | Environment PostgreSQL and selected resource providers |
+| Knowledge records | Selected Memory provider; native PostgreSQL is the default implementation |
+| Repository and generated files | Selected workspace volume and isolated Source Control workspaces |
+| Pending native turns and active credentials | AgentHost process state; not a replacement for owner records or journal history |
 
-## Failure behavior
+## Understand failures
 
 A successful HTTP response has the meaning defined by its owner. `202 Accepted`
-does not establish downstream completion. An unavailable owner, stale fence,
-changed registration, or missing resource binding stops the affected operation.
+means the owner accepted an operation; it does not establish downstream
+completion. An unavailable owner, stale fence, changed registration, or missing
+resource binding stops the affected operation.
 
 Retries reuse stored identities and compare the original content. A changed
-request does not become an exact replay. After uncertain execution, recovery uses
-owner state and evidence rather than assuming that a model or tool effect ran.
+request is not an exact replay. After uncertain execution, recovery uses owner
+state and evidence rather than assuming a model or tool effect ran.
 
-## Continue reading
+## Related content
 
 - [Gateway](./gateway.md), [orchestration](./orchestration.md), and
   [agent runtime](./agent-runtime.md) follow the request path.
-- [Events and sessions](./events-sessions.md) explains the durable history.
+- [Events and sessions](./events-sessions.md) explains durable history.
 - [Persistence](./persistence.md) explains cross-service consistency.
 - [Foundation architecture](../architecture/overview.md) and
-  [contracts and endpoints](../reference/contracts.md) describe the component and
+  [contracts and endpoints](../reference/contracts.md) describe component and
   API boundaries.

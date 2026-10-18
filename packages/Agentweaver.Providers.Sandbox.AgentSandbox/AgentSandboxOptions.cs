@@ -9,6 +9,20 @@ namespace Agentweaver.Providers.Sandbox.AgentSandbox;
 /// Validated configuration for the Kubernetes-backed Agent Sandbox adapter.
 /// It pins the runtime image and Kubernetes resources used by provision and recovery calls.
 /// </summary>
+/// <param name="OptionsSchemaVersion">Options contract version; the adapter supports version 2.</param>
+/// <param name="OptionsRevision">Opaque revision used to match this configuration with its provider registration.</param>
+/// <param name="Namespace">Kubernetes namespace used to create the Sandbox resources.</param>
+/// <param name="WorkspaceStorageProviderId">Storage provider identifier used for persistent workspace volumes.</param>
+/// <param name="ContainerImage">OCI image reference pinned to a SHA-256 digest.</param>
+/// <param name="ContainerImagePlatform">Image platform; this adapter requires <c>linux/amd64</c>.</param>
+/// <param name="ContainerImageCompressedPullBytes">Positive compressed image size used when evaluating startup progress.</param>
+/// <param name="RuntimeClassName">Kubernetes RuntimeClass required for the Sandbox.</param>
+/// <param name="ExpectedRuntimeHandler">Runtime handler expected from the selected RuntimeClass.</param>
+/// <param name="CpuRequest">Kubernetes CPU request in the accepted integer, decimal, or millicore form.</param>
+/// <param name="MemoryRequest">Kubernetes memory request in a positive Ki, Mi, Gi, or Ti quantity.</param>
+/// <param name="ReconciliationTimeoutSeconds">Provisioning and recovery reconciliation timeout, from 1 through 900 seconds.</param>
+/// <param name="PollIntervalMilliseconds">Reconciliation poll interval, from 1 through 5000 milliseconds.</param>
+/// <param name="StartupBudgets">Positive per-phase and total startup deadlines.</param>
 public sealed record AgentSandboxOptions(
     int OptionsSchemaVersion,
     string OptionsRevision,
@@ -47,7 +61,9 @@ public sealed record AgentSandboxOptions(
         RegexOptions.CultureInvariant | RegexOptions.Compiled);
 
     /// <summary>
-    /// Checks that all configured Kubernetes names, resource limits, image pins, and nested profiles are supported.
+    /// Requires schema version 2, valid Kubernetes names, a digest-pinned linux/amd64 image,
+    /// supported CPU and memory quantity forms, bounded reconciliation timings, and valid
+    /// startup and optional nested profiles.
     /// </summary>
     /// <returns>This options instance when valid.</returns>
     /// <exception cref="ArgumentException">A schema version, identifier, image, or quantity is invalid.</exception>
@@ -138,6 +154,12 @@ public sealed record AgentSandboxOptions(
 /// <summary>
 /// Per-phase and total startup deadlines used when evaluating Sandbox startup progress.
 /// </summary>
+/// <param name="ScheduledSeconds">Deadline for scheduling the Sandbox workload.</param>
+/// <param name="ImageReadySeconds">Deadline for the pinned container image to become ready.</param>
+/// <param name="StartedSeconds">Deadline for the workload to start.</param>
+/// <param name="ConfiguredSeconds">Deadline for runtime configuration to complete.</param>
+/// <param name="ReadySeconds">Deadline for the Sandbox to become ready.</param>
+/// <param name="TotalSeconds">Overall startup deadline used in addition to the phase deadlines.</param>
 public sealed record AgentSandboxStartupBudgets(
     int ScheduledSeconds,
     int ImageReadySeconds,
@@ -146,7 +168,7 @@ public sealed record AgentSandboxStartupBudgets(
     int ReadySeconds,
     int TotalSeconds)
 {
-    /// <summary>Rejects missing or non-positive phase deadlines.</summary>
+    /// <summary>Requires every phase deadline and the total deadline to be positive.</summary>
     /// <returns>This budget set when every deadline is positive.</returns>
     /// <exception cref="ArgumentOutOfRangeException">Any phase or total deadline is not positive.</exception>
     public AgentSandboxStartupBudgets Validate()

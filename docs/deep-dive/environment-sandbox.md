@@ -1,72 +1,134 @@
 # Environments, sandboxes, and volumes
 
-## The mental model
+Use this page to understand how Agentweaver manages execution resources,
+isolated runtime placement, and workspace files. An Environment is the durable
+owner of resources for a tenant, project, and run. A Sandbox lease is one
+placement of that execution. A workspace volume holds files independently of
+the placement.
 
-An Environment is the durable owner of execution resources for a tenant, project, and run. A Sandbox lease is one placement of that execution. A workspace volume holds files independently of that placement.
+Releasing a Sandbox does not delete the Environment or its workspace data. A
+ready Pod alone does not make an Environment ready for dispatch.
 
-This separation makes retirement and recovery explicit. Releasing a Sandbox does not delete the Environment or its workspace data. A ready Pod alone does not make an Environment ready for dispatch.
+## Find the implementation
 
-## Where this lives
+| Source | Responsibility |
+| --- | --- |
+| `EnvironmentLifecycleManager.cs` and `EnvironmentLifecycleStore.cs` | Owner identity and lifecycle fences |
+| `EnvironmentSandboxManager.cs` and `EnvironmentSandboxLeaseStore.cs` | Lease admission, provider attempts, and reconciliation |
+| `EgressIntentCompiler.cs`, `EnvironmentEgressManager.cs`, and `CiliumEgressPolicyAdapter.cs` | Egress compilation and generation readback |
+| `EnvironmentWorkspaceVolumeManager.cs` and `WorkspaceVolumeService.cs` | Volume transitions and cleanup |
+| `EnvironmentRuntimeWorkspaceResumeManager.cs` | Retained-workspace resume |
+| `EnvironmentSandboxBuildTestCommandManager.cs` | Accepted BuildTest operations |
+| `AgentSandboxProvider.cs` and `KubernetesAgentSandboxClient.cs` | Kubernetes Sandbox lifecycle |
+| `AzureFilesCsiWorkspaceVolumeProvider.cs` and `KubernetesAzureFilesCsiClient.cs` | Azure Files provisioning, flush, and release |
 
-- `services/environment/Agentweaver.Environment/EnvironmentLifecycleManager.cs` and `EnvironmentLifecycleStore.cs` — owner identity and lifecycle fences.
-- `services/environment/Agentweaver.Environment/EnvironmentSandboxManager.cs` and `EnvironmentSandboxLeaseStore.cs` — lease admission, provider attempts, and reconciliation.
-- `services/environment/Agentweaver.Environment/EgressIntentCompiler.cs`, `EnvironmentEgressManager.cs`, and `CiliumEgressPolicyAdapter.cs` — compiled egress and generation readback.
-- `services/environment/Agentweaver.Environment/EnvironmentWorkspaceVolumeManager.cs` and `WorkspaceVolumeService.cs` — volume transitions and cleanup.
-- `services/environment/Agentweaver.Environment/EnvironmentRuntimeWorkspaceResumeManager.cs` — retained-workspace resume.
-- `services/environment/Agentweaver.Environment/EnvironmentSandboxBuildTestCommandManager.cs` — accepted BuildTest operations.
-- `packages/Agentweaver.Providers.Sandbox.AgentSandbox/AgentSandboxProvider.cs` and `KubernetesAgentSandboxClient.cs` — Kubernetes resource lifecycle.
-- `packages/Agentweaver.Providers.Storage.AzureFiles/AzureFilesCsiWorkspaceVolumeProvider.cs` and `KubernetesAzureFilesCsiClient.cs` — PVC/PV provisioning, flush, and release.
+The service files are under `services/environment/Agentweaver.Environment/`.
+Provider files are under `packages/Agentweaver.Providers.Sandbox.AgentSandbox/`
+and `packages/Agentweaver.Providers.Storage.AzureFiles/`.
 
-## Core concepts and invariants
+## Understand lifecycle fences
 
-### Generations protect different boundaries
+Different generations protect different boundaries:
 
-The Environment lifecycle generation protects owner transitions. Sandbox resource and fencing generations protect placement. Storage resource/data generations protect volume state. Cilium policy generations protect applied network intent. These values are not interchangeable.
+- Environment lifecycle generation protects owner transitions.
+- Sandbox resource and fencing generations protect placement.
+- Storage resource and data generations protect volume state.
+- Cilium policy generations protect applied network intent.
 
-Registration derives a stable Environment ID from the trusted tenant, project, run, and idempotency key. Mutation paths obtain fresh Projects authority and the accepted selection, then recheck them before accepting asynchronous results. Sandbox mutation also requires separate run-selection permission.
+Do not use these values interchangeably. Registration derives a stable
+Environment ID from trusted tenant, project, run, and idempotency values.
+Mutation paths obtain fresh Projects authority and the accepted selection,
+then recheck them before accepting asynchronous results. Sandbox mutation also
+requires separate run-selection permission.
 
-### Provider effects have durable attempts
+The lease store reserves one current Sandbox lease per Environment before
+calling a provider. It saves the provider/options snapshot, request identity,
+and recovery intent. Each external effect has a durable attempt before the
+call and a recorded outcome before owner completion. An unresolved call blocks
+release and lifecycle advancement. Timeout, cancellation, an empty provider
+list, or a terminal lease does not prove that an external effect stopped.
 
-The lease store reserves one current Sandbox lease per Environment before dispatching a provider call. It saves the provider/options snapshot, request identity, and recovery intent. Each external effect has a durable attempt written before the call and an outcome recorded before owner completion.
+## Provision a Sandbox
 
-An unresolved call blocks release and lifecycle advancement. Timeout, cancellation, an empty provider list, or a terminal lease does not prove that an external effect stopped.
+Before provisioning, you need current owner authority, the accepted Sandbox
+candidate, a bound workspace, and applied network-policy evidence.
 
-## Provisioning and readiness
-
-1. Environment validates the current owner fence and the exact accepted Sandbox candidate.
+1. Environment validates the current owner fence and exact accepted candidate.
 2. It verifies the bound workspace and applied network-policy generation.
-3. It reserves the lease and workspace attachment, then records the provider attempt.
-4. `AgentSandboxProvider` verifies the RuntimeClass and exact PVC identity. It creates a fenced `SandboxTemplate`, a zero-replica `SandboxWarmPool`, and a `SandboxClaim`.
-5. Observation checks the controller-owned Sandbox and Pod, workspace mount, image, isolation settings, and startup evidence.
-6. Environment rechecks authority and network evidence before reporting `ReadyForDispatch`.
+3. It reserves the lease and workspace attachment, then records the provider
+   attempt.
+4. `AgentSandboxProvider` verifies the RuntimeClass and exact PVC identity. It
+   creates a fenced `SandboxTemplate`, a zero-replica `SandboxWarmPool`, and a
+   `SandboxClaim`.
+5. Observation checks the controller-owned Sandbox and Pod, workspace mount,
+   image, isolation settings, and startup evidence.
+6. Environment rechecks authority and network evidence before reporting
+   `ReadyForDispatch`.
 
-The adapter disables automatic service-account token mounting and validates the restricted Pod profile. The optional AgentHost launch profile supplies its pinned image, configuration, private state, and HTTPS endpoint. The zero-replica warm pool does not prestart a spare worker.
+The adapter disables automatic service-account token mounting and validates
+the restricted Pod profile. The optional AgentHost launch profile supplies its
+pinned image, configuration, private state, and HTTPS endpoint. A zero-replica
+warm pool does not prestart a spare worker.
 
-## Egress compilation
+## Compile network egress
 
-`EgressIntentCompiler` intersects the platform baseline, project narrowing, and admitted run needs. It preserves destination, port, protocol, and purpose. It rejects project widening and needs outside the effective allowlist.
+`EgressIntentCompiler` intersects the platform baseline, project narrowing, and
+admitted run needs. It preserves destination, port, protocol, and purpose. It
+rejects project widening and needs outside the effective allowlist.
 
-FQDN rules require admitted TCP and UDP DNS access to the cluster resolver. Direct Key Vault and Entra destinations are rejected. Requirements for L7 mediation remain distinct from Cilium's L3/L4 rule set.
+Fully qualified domain name (FQDN) rules require admitted TCP and UDP DNS
+access to the cluster resolver.
+Direct Key Vault and Entra destinations are rejected. L7 mediation needs remain
+separate from Cilium's layer 3 (IP) and layer 4 (transport) rule set; L7 means
+the application layer.
 
-The Cilium adapter writes owner-specific policy and verifies the exact generation and intent hash. Empty or revoked intent uses explicit deny-all rules. Readback proves the stored policy matches; it does not prove packet-level datapath enforcement.
+The Cilium adapter writes owner-specific policy and verifies the exact
+generation and intent hash. Empty or revoked intent uses explicit deny-all
+rules. Readback proves the stored policy matches; it does not prove packet-level
+datapath enforcement.
 
-## Workspace lifecycle
+## Manage workspace data
 
-The Azure Files adapter requires the configured StorageClass, Azure Files CSI driver, approved mount options, supported consistency, capacity, and access mode. Provisioning waits for a bound PVC, verifies the matching PV and claim UID, and confirms the effective reclaim policy.
+The Azure Files adapter requires the configured StorageClass, Azure Files
+Container Storage Interface (CSI) driver, approved mount options, supported
+consistency, capacity, and access mode. Provisioning waits for a bound
+persistent volume claim (PVC), verifies the matching persistent volume (PV)
+and claim UID, and confirms the effective reclaim policy.
 
-The owner binds and attaches that resource before Sandbox use. Trusted suspend flush verifies the exact mounted volume and returns evidence for the next data generation. Resume checks retained data, the new mount, current Host evidence, and the new network generation.
+The owner binds and attaches that resource before Sandbox use. Trusted suspend
+flush verifies the exact mounted volume and returns evidence for the next data
+generation. Resume checks retained data, the new mount, current Host evidence,
+and the new network generation.
 
-Replace commits the new resource generation before cleaning up the old one. Cleanup failure leaves durable work for retry; it does not roll back the replacement. Release uses the saved provider binding and exact UID preconditions to retain or delete the intended resource. An attached or bound volume cannot be released as if it were unused.
+Replace commits the new resource generation before cleaning up the old one.
+Cleanup failure leaves durable work for retry; it does not roll back the
+replacement. Release uses the saved provider binding and exact UID
+preconditions to retain or delete the intended resource. An attached or bound
+volume cannot be released as if unused.
 
-BuildTest commands use a separate stable operation tied to Core's accepted checkpoint. Version 2 prepares the saved repository seed and uses a separate read-only collector. Native output remains retained until the verified Events acknowledgment permits cleanup. Environment owns execution evidence; Core owns workflow completion.
+BuildTest commands use a separate stable operation tied to Core's accepted
+checkpoint. Version 2 prepares the saved repository seed and uses a separate
+read-only collector. Native output remains retained until the verified Events
+acknowledgment permits cleanup. Environment owns execution evidence; Core owns
+workflow completion.
 
-## Reconciliation and failure behavior
+## Reconcile uncertain operations
 
-Reconciliation resumes the recorded operation rather than provisioning a replacement. A late resource gets separate cleanup state without changing the original terminal lease. The current owner fence authorizes cleanup; the saved source fence identifies the old resource. Cleanup from an older lifecycle generation does not mutate the current workspace.
+Reconciliation resumes the recorded operation rather than provisioning a
+replacement. A late resource gets separate cleanup state without changing the
+original terminal lease. The current owner fence authorizes cleanup; the saved
+source fence identifies the old resource. Cleanup from an older lifecycle
+generation does not mutate the current workspace.
 
-Provider or authority mismatches stop readiness. Unknown effects stay unresolved until exact observation or release evidence resolves them. No path treats a request to delete as proof that the native resource is absent.
+Provider or authority mismatches stop readiness. Unknown effects stay
+unresolved until exact observation or release evidence resolves them. A delete
+request is not proof that the native resource is absent.
 
-## Related pages
+For supported Environment and workspace settings, see the
+[runtime configuration reference](../reference/runtime-configuration.md) and
+[provider configuration guide](../guide/configure-providers.md).
+
+## Related content
 
 - [Sandbox contracts and lifecycle](../architecture/environment-sandbox.md)
 - [Egress contracts](../architecture/environment-egress.md)

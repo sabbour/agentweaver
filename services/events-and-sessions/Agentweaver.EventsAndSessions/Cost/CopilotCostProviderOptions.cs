@@ -4,6 +4,10 @@ using Agentweaver.Abstractions;
 namespace Agentweaver.EventsAndSessions.Cost;
 
 /// <summary>Configures Copilot cost binding identity and operator-supplied published model rates.</summary>
+/// <param name="ResourceId">Stable identifier for the Copilot cost resource used in provider bindings.</param>
+/// <param name="ResourceGeneration">Positive resource generation recorded with the provider binding.</param>
+/// <param name="OptionsRevision">Provider configuration revision used to match the catalog entry.</param>
+/// <param name="OptionsSchemaVersion">Options contract version; the current contract is version 2.</param>
 public sealed record CopilotCostProviderOptions(
     string ResourceId,
     long ResourceGeneration,
@@ -14,7 +18,7 @@ public sealed record CopilotCostProviderOptions(
     public const int CurrentOptionsSchemaVersion = 2;
     public const decimal NanoAiuPerAiCredit = 1_000_000_000m;
 
-    /// <summary>The validated immutable provider-published rates used by this adapter.</summary>
+    /// <summary>The validated provider-published rate-card snapshot used by this adapter.</summary>
     public CostRateCard RateCard { get; init; } = null!;
 
     /// <summary>Reads cost binding identity and the strict runtime rate-card JSON document.</summary>
@@ -45,7 +49,10 @@ public sealed record CopilotCostProviderOptions(
         return options;
     }
 
-    /// <summary>Checks provider binding identity and the configured official pricing snapshot.</summary>
+    /// <summary>
+    /// Requires a positive resource generation, options schema version 2, and a valid published
+    /// USD rate card with no legacy model multipliers.
+    /// </summary>
     public void Validate()
     {
         if (!IsToken(ResourceId, 256) || ResourceGeneration < 1 ||

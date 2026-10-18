@@ -1,63 +1,92 @@
 # Telemetry
 
-## The mental model
+Use this page to understand how Agentweaver describes service execution with
+OpenTelemetry and how those diagnostic signals differ from committed product
+state. A trace can help you find a failure, but it does not prove that an
+operation committed.
 
-Telemetry describes service execution. It does not decide whether an operation committed.
+## Understand signal ownership
 
-Agentweaver separates signal creation from export. The base package registers OpenTelemetry tracing, metrics, and logging. The Azure Monitor package adds an explicit destination. A host can use the base package without opening a telemetry network connection.
+Agentweaver separates signal creation from export. OpenTelemetry is the
+framework used to create and process traces, metrics, and logs. The base
+package registers those signals; the Azure Monitor package adds an explicit
+destination. A host can use the base package without opening a
+telemetry network connection.
 
-The run journal, usage ledger, owner receipts, and checkpoints remain durable domain state. A trace is useful for diagnosis, not proof that a workflow gate or transaction completed.
+The run journal, usage ledger, owner receipts, and checkpoints remain durable
+domain state. A trace is diagnostic evidence, not proof that a workflow gate
+or transaction completed.
 
-## Where this lives
+| Source | Responsibility |
+| --- | --- |
+| `TelemetrySignals.cs` | Shared `ActivitySource` and `Meter` |
+| `TelemetryServiceCollectionExtensions.cs` | OpenTelemetry registration |
+| `AzureMonitorTelemetryExtensions.cs` | Exporter composition and destination validation |
+| `tests/Agentweaver.Telemetry.Tests/` | Signal registration tests |
+| `tests/Agentweaver.Telemetry.AzureMonitor.Tests/` | Exporter composition and fake-transport tests |
 
-- `packages/Agentweaver.Telemetry/TelemetrySignals.cs` — shared `ActivitySource` and `Meter`.
-- `packages/Agentweaver.Telemetry/TelemetryServiceCollectionExtensions.cs` — native OpenTelemetry registration.
-- `packages/Agentweaver.Telemetry.AzureMonitor/AzureMonitorTelemetryExtensions.cs` — exporter configuration and destination validation.
-- `tests/Agentweaver.Telemetry.Tests/` — signal registration tests.
-- `tests/Agentweaver.Telemetry.AzureMonitor.Tests/` — exporter composition and fake-transport tests.
+## Register and emit signals
 
-## Core concepts and invariants
+`TelemetrySignals.Name` is `Agentweaver`. Hosts subscribe to the stable
+`TelemetrySignals.Activities` tracing source and `TelemetrySignals.Metrics`
+meter instead of scanning service-specific types.
 
-### One source name, explicit service identity
+`AddAgentweaverTelemetry` requires a nonempty service name and attaches it to
+traces, metrics, and logs. It registers the shared source and meter, then
+invokes optional host callbacks for each signal.
 
-`TelemetrySignals.Name` is `Agentweaver`. `TelemetrySignals.Activities` and `TelemetrySignals.Metrics` expose the shared tracing source and meter. Hosts subscribe to this stable source rather than scanning every service-specific type.
+The base registration includes no exporter. It does not automatically
+instrument every HTTP request or propagate context across every transport.
+Hosts configure instrumentation and propagation at their own boundaries.
 
-`AddAgentweaverTelemetry` requires a nonempty service name and attaches it to traces, metrics, and logs. The call registers the shared source and meter, then invokes optional host callbacks for each signal.
+Signal producers control tags, metric dimensions, and log fields. Keep
+credentials, secret values, raw content, and authorization material out of
+them. The base logging registration sets `IncludeFormattedMessage`,
+`IncludeScopes`, and `ParseStateValues` to `false`. Host callbacks can change
+these defaults; they do not redact arbitrary caller content.
 
-The base registration includes no exporter. It does not automatically instrument every HTTP request or propagate context across every transport. Hosts configure instrumentation and propagation at their own boundaries.
+1. Register the base telemetry package with the host's service identity.
+2. Create an activity or record a measurement through the shared instruments.
+3. Let OpenTelemetry process the signal with the registered resource and host
+   configuration.
+4. Export the signal only when the host has registered an exporter.
 
-### Logging defaults keep extra context out
+This work runs alongside request and domain processing. It does not add a
+database commit or journal acknowledgment.
 
-The base logging registration sets `IncludeFormattedMessage`, `IncludeScopes`, and `ParseStateValues` to `false`. Host callbacks can change logging behavior. These defaults do not redact arbitrary content supplied by a caller.
+## Send signals to Azure Monitor
 
-Signal producers still control their tags, metric dimensions, and log fields. Keep credentials, secret values, raw content, and authorization material out of those fields.
+Before adding the Azure Monitor exporter, configure one trusted connection
+string and, when required, supply the host-selected `TokenCredential`.
 
-## Signal lifecycle
+`AddAgentweaverAzureMonitorTelemetry` builds on the base registration and adds
+trace, metric, and log exporters. It rejects an empty connection string,
+malformed fields, duplicate field names, and a missing or invalid GUID
+instrumentation key. The extension applies exporter customization first, then
+sets the selected connection string and credential. The customization callback
+cannot replace those final destination settings.
 
-1. The host registers the base telemetry package with its service identity.
-2. Code creates an activity or records a measurement through the shared instruments.
-3. OpenTelemetry processes the signal with the registered resource and host configuration.
-4. An exporter sends it only when the host has registered one.
+The extension does not create an Azure resource or credential. Bicep owns
+infrastructure provisioning; the host owns credential selection. Exporter
+configuration alone does not prove ingestion. See the
+[runtime configuration reference](../reference/runtime-configuration.md) for
+supported host settings.
 
-This flow runs alongside request and domain processing. It does not add a database commit or journal acknowledgment.
+## Diagnose telemetry separately
 
-## Azure Monitor composition
+Invalid service identity or connection-string configuration fails
+registration. Export failures do not determine domain request success.
+Investigate exporter transport and ingestion separately from owner transaction
+failures.
 
-`AddAgentweaverAzureMonitorTelemetry` builds on the base registration. It adds trace, metric, and log exporters using one trusted connection string and the optional supplied `TokenCredential`.
+When investigating a run, use telemetry to locate a failed boundary, then read
+the durable owner receipt or journal for committed state. Do not infer zero
+usage from a missing metric or completion from a successful span.
 
-The extension rejects an empty connection string, malformed fields, duplicate field names, and a missing or invalid GUID instrumentation key. It applies exporter customization first, then assigns the selected connection string and credential. The customization callback cannot replace those final destination settings.
+Azure Monitor tests use controlled transports and do not contact Azure. Live
+ingestion requires separate source-bound operational evidence.
 
-The extension creates no Azure resource or credential. Infrastructure provisioning belongs to Bicep; credential selection belongs to the host. Exporter configuration alone is not evidence of ingestion.
-
-## Failure behavior and diagnosis
-
-Invalid service identity or connection-string configuration fails registration. Export failures do not determine domain request success. Diagnose export transport and ingestion separately from owner transaction failures.
-
-When investigating a run, use telemetry to locate the failed boundary, then read the durable owner receipt or journal for committed state. Do not infer zero usage from a missing metric or a completed operation from a successful span.
-
-The Azure Monitor tests use controlled transports. They verify exporter behavior without contacting Azure. Live ingestion requires separate source-bound operational evidence.
-
-## Related pages
+## Related content
 
 - [Telemetry architecture](../architecture/telemetry.md)
 - [Persistence](./persistence.md)
