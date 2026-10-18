@@ -36,17 +36,29 @@ const p0SourceSha = PARTIAL_PUBLICATION.sourceSha;
 const p0Manifest = JSON.parse(execFileSync('git', [
   'show', `${p0SourceSha}:releases/foundation.json`,
 ], { cwd: root, encoding: 'utf8' }));
-const p0Root = mkdtempSync(path.join(tmpdir(), 'agentweaver-v1-0-0-release-tests-'));
-for (const file of [...p0Manifest.components.map(component => component.project), 'apps/web/package-lock.json']) {
-  const contents = execFileSync('git', ['show', `${p0SourceSha}:${file}`], {
-    cwd: root, encoding: 'utf8',
-  });
-  const destination = path.join(p0Root, file);
-  mkdirSync(path.dirname(destination), { recursive: true });
-  writeFileSync(destination, contents);
+const v101SourceSha = '56cf5a8f841dc22f69cd087d45f4e2882702dfb4';
+const v101Manifest = JSON.parse(execFileSync('git', [
+  'show', `${v101SourceSha}:releases/foundation.json`,
+], { cwd: root, encoding: 'utf8' }));
+function sourceFixtureRoot(sourceSha, manifest, prefix) {
+  const fixtureRoot = mkdtempSync(path.join(tmpdir(), prefix));
+  for (const file of [...manifest.components.map(component => component.project), 'apps/web/package-lock.json']) {
+    const contents = execFileSync('git', ['show', `${sourceSha}:${file}`], {
+      cwd: root, encoding: 'utf8',
+    });
+    const destination = path.join(fixtureRoot, file);
+    mkdirSync(path.dirname(destination), { recursive: true });
+    writeFileSync(destination, contents);
+  }
+  cpSync(path.join(root, 'deploy', 'k8s'), path.join(fixtureRoot, 'deploy', 'k8s'), { recursive: true });
+  return fixtureRoot;
 }
-cpSync(path.join(root, 'deploy', 'k8s'), path.join(p0Root, 'deploy', 'k8s'), { recursive: true });
-after(() => rmSync(p0Root, { recursive: true, force: true }));
+const p0Root = sourceFixtureRoot(p0SourceSha, p0Manifest, 'agentweaver-v1-0-0-release-tests-');
+const v101Root = sourceFixtureRoot(v101SourceSha, v101Manifest, 'agentweaver-v1-0-1-release-tests-');
+after(() => {
+  rmSync(p0Root, { recursive: true, force: true });
+  rmSync(v101Root, { recursive: true, force: true });
+});
 const sourceSha = 'a'.repeat(40);
 const target = {
   subscriptionId: '90ab3701-83f0-4ba1-a90a-f2e68683adab',
@@ -173,6 +185,21 @@ function bootstrapFixture() {
   const publication = publicationReceipt(publishedManifest, PARTIAL_PUBLICATION.sourceSha);
   publication.continuation = { namespace: PARTIAL_PUBLICATION.namespace };
   return { manifest, publication, completion: structuredClone(publication) };
+}
+
+function normalBootstrapFixture() {
+  const manifest = structuredClone(v101Manifest);
+  const publishedManifest = structuredClone(manifest);
+  for (const component of publishedManifest.components) {
+    if (component.kind === 'service' && component.id !== 'Agentweaver.FoundationProbe') {
+      const nibble = (component.id.charCodeAt(0) % 15 + 1).toString(16);
+      component.imageDigest = `sha256:${nibble.repeat(64)}`;
+    }
+  }
+  return {
+    manifest,
+    publication: publicationReceipt(publishedManifest, v101SourceSha),
+  };
 }
 
 function publishedAgentHostFixture(mutateConfig = () => {}) {
@@ -311,26 +338,51 @@ const bootstrapArgsFor = (overrides = {}) => [
   ...Object.entries(overrides).flatMap(([key, value]) => [`--${key}`, value]),
 ];
 
-function bootstrapDependencies(fixture, overrides = {}) {
+const normalBootstrapArgsFor = (overrides = {}) => [
+  '--pre-acceptance',
+  'v1.0.1',
+  '--manifest', 'releases/foundation.json',
+  '--publication', 'publication.json',
+  '--subscription-id', target.subscriptionId,
+  '--tenant-id', target.tenantId,
+  '--resource-group', target.resourceGroup,
+  '--cluster', target.clusterName,
+  '--namespace', target.namespace,
+  '--node-min', String(target.nodeMin),
+  '--node-max', String(target.nodeMax),
+  '--provider-catalog-configmap', 'projects-config-provider-catalog',
+  '--provider-catalog-source-commit', 'd'.repeat(40),
+  ...Object.entries(overrides).flatMap(([key, value]) => [`--${key}`, value]),
+];
+
+function bootstrapDependencies(fixture, {
+  root: fixtureRoot = p0Root,
+  sourceSha: fixtureSourceSha = p0SourceSha,
+  ...overrides
+} = {}) {
   const commands = [];
   const dependencies = {
-    root: p0Root,
+    root: fixtureRoot,
     readFile: (file, encoding) => {
-      if (path.resolve(file) === path.join(p0Root, 'releases', 'foundation.json')) {
+      if (path.resolve(file) === path.join(fixtureRoot, 'releases', 'foundation.json')) {
         return JSON.stringify(fixture.manifest);
       }
-      if (path.resolve(file) === path.join(p0Root, 'publication.json')) {
+      if (path.resolve(file) === path.join(fixtureRoot, 'publication.json')) {
         return JSON.stringify(fixture.publication);
       }
-      if (path.resolve(file) === path.join(p0Root, 'completion.json')) {
+      if (path.resolve(file) === path.join(fixtureRoot, 'completion.json') && fixture.completion) {
         return JSON.stringify(fixture.completion);
       }
       return readFileSync(file, encoding);
     },
-    verifyBootstrapRelease: async () => PARTIAL_PUBLICATION.sourceSha,
+    verifyBootstrapRelease: async (_tag, publication) => {
+      assert.equal(publication.sourceSha, fixtureSourceSha);
+      return fixtureSourceSha;
+    },
     verifyCompletion: (completion, publication, source) => {
+      assert.ok(fixture.completion);
       assert.deepEqual(completion, publication);
-      assert.equal(source, PARTIAL_PUBLICATION.sourceSha);
+      assert.equal(source, fixtureSourceSha);
     },
     verifyImages: async (images) => new Map(images.map((image) => [
       image.name,
@@ -343,7 +395,13 @@ function bootstrapDependencies(fixture, overrides = {}) {
     verifyPrerequisites: () => undefined,
     run: (file, args, options) => {
       if (file === 'git' && args[0] === 'ls-tree') return 'releases/foundation.json';
-      if (file === 'git' && args[0] === 'show') return JSON.stringify(fixture.manifest);
+      if (file === 'git' && args[0] === 'show') {
+        const sourcePath = args[1].slice(fixtureSourceSha.length + 1);
+        if (args[1] === `${fixtureSourceSha}:releases/foundation.json`) {
+          return JSON.stringify(fixture.manifest);
+        }
+        return readFileSync(path.join(fixtureRoot, sourcePath.replaceAll('/', path.sep)), 'utf8');
+      }
       if (file === 'kubectl' && args[0] === 'apply' && args[1] === '--dry-run=client') {
         commands.push({ file, args, input: options.input });
         return '';
@@ -383,8 +441,20 @@ test('pre-acceptance mode is explicit and requires its exact v1.0.0 inputs', () 
   assert.throws(() => parseArgs([...bootstrapArgsFor(), '--runtime-manifest', 'runtime.json']),
     /must generate the runtime List/);
   const wrongTag = bootstrapArgsFor();
-  wrongTag[wrongTag.indexOf('v1.0.0')] = 'v1.0.1';
-  assert.throws(() => parseArgs(wrongTag), /limited to the exact v1.0.0/);
+  wrongTag[wrongTag.indexOf('v1.0.0')] = 'v1.0.2';
+  assert.throws(() => parseArgs(wrongTag), /limited to the exact v1.0.0 and v1.0.1/);
+});
+
+test('v1.0.1 pre-acceptance requires the normal publication inputs and rejects completion proofs', () => {
+  const parsed = parseArgs(normalBootstrapArgsFor());
+  assert.equal(parsed.preAcceptance, true);
+  assert.equal(parsed.releaseTag, 'v1.0.1');
+  assert.equal(parsed.dryRun, true);
+  assert.equal(parsed.completionPath, undefined);
+  assert.throws(() => parseArgs([...normalBootstrapArgsFor(), '--completion', 'continuation.json']),
+    /not accepted for the v1.0.1 normal publication/);
+  assert.throws(() => parseArgs(normalBootstrapArgsFor({ 'runtime-manifest': 'runtime.json' })),
+    /must generate the runtime List/);
 });
 
 test('pre-acceptance dry-run accepts only the tracked draft and returns a non-release result', async () => {
@@ -449,6 +519,111 @@ test('pre-acceptance rejects a receipt bound to another source before verificati
     /exact source-bound v1.0.0 published continuation receipt/);
 });
 
+test('v1.0.1 pre-acceptance dry-run uses the mixed source-bound draft and normal publication digests', async () => {
+  const fixture = normalBootstrapFixture();
+  const dependencies = bootstrapDependencies(fixture, {
+    root: v101Root,
+    sourceSha: v101SourceSha,
+  });
+  let completionChecks = 0;
+  dependencies.verifyCompletion = () => { completionChecks++; };
+  const result = await deployRelease({ argv: normalBootstrapArgsFor() }, dependencies);
+  const versions = new Set(fixture.manifest.components
+    .filter(({ id }) => id !== 'Agentweaver.FoundationProbe')
+    .map(({ version }) => version));
+  assert.equal(fixture.publication.published.filter(({ kind }) => kind === 'package').length, 13);
+  assert.equal(fixture.publication.published.filter(({ kind }) => kind === 'image').length, 10);
+  assert.ok(versions.size > 1);
+  assert.equal(result.resultType, 'pre-acceptance');
+  assert.equal(result.sourceSha, v101SourceSha);
+  assert.equal(result.dryRun, true);
+  assert.equal(result.renderedResources, 18);
+  assert.equal(completionChecks, 0);
+  assert.deepEqual(
+    result.services.map(({ id, image }) => [id, image]),
+    fixture.publication.published
+      .filter(({ kind, id }) => kind === 'image' && id !== 'Agentweaver.AgentHost')
+      .map(({ id, image }) => [id, image]),
+  );
+  const agentHost = fixture.publication.published.find(({ id }) => id === 'Agentweaver.AgentHost');
+  assert.equal(
+    result.perSandboxAgentHost,
+    `ghcr.io/sabbour/${componentImageRepository('Agentweaver.AgentHost')}@${agentHost.preparedOciMeasurement.image.digest}`,
+  );
+  assert.equal('acceptedRelease' in result, false);
+  assert.equal(dependencies.commands.length, 1);
+  assert.deepEqual(dependencies.commands[0].args,
+    ['apply', '--dry-run=client', '--filename', '-']);
+});
+
+test('v1.0.1 pre-acceptance executes only after verifying the normal publication and keeps its result labeled', async () => {
+  const fixture = normalBootstrapFixture();
+  const dependencies = bootstrapDependencies(fixture, {
+    root: v101Root,
+    sourceSha: v101SourceSha,
+  });
+  const originalRun = dependencies.run;
+  let applies = 0;
+  dependencies.run = (file, args, options) => {
+    if (file === 'kubectl' && args[0] === 'apply' && args[1] === '--filename') {
+      applies++;
+      return '';
+    }
+    return originalRun(file, args, options);
+  };
+  Object.assign(dependencies, {
+    checkpointDirectory: path.join(root, 'v101-bootstrap-checkpoint-fixture'),
+    checkpointMkdir: () => undefined,
+    checkpointWriteFile: () => undefined,
+    checkpointReadFile: () => { throw Object.assign(new Error('not found'), { code: 'ENOENT' }); },
+    checkpointRm: () => undefined,
+    verifyLive: async () => undefined,
+  });
+  const result = await deployRelease({
+    argv: [...normalBootstrapArgsFor(), '--execute'],
+  }, dependencies);
+  assert.equal(result.resultType, 'pre-acceptance');
+  assert.equal(result.sourceSha, v101SourceSha);
+  assert.equal(result.dryRun, false);
+  assert.equal(applies, 1);
+});
+
+test('v1.0.1 rejects continuation receipts, changed source receipts, and altered tracked drafts', async () => {
+  const fixture = normalBootstrapFixture();
+  const dependencies = bootstrapDependencies(fixture, {
+    root: v101Root,
+    sourceSha: v101SourceSha,
+  });
+  fixture.publication.continuation = { namespace: 'unexpected' };
+  await assert.rejects(deployRelease({ argv: normalBootstrapArgsFor() }, dependencies),
+    /rejects continuation publication receipts/);
+
+  delete fixture.publication.continuation;
+  fixture.publication.sourceSha = 'b'.repeat(40);
+  await assert.rejects(deployRelease({ argv: normalBootstrapArgsFor() }, dependencies),
+    /exact source-bound v1.0.1 published receipt/);
+
+  fixture.publication.sourceSha = v101SourceSha;
+  const alteredManifest = structuredClone(fixture.manifest);
+  alteredManifest.components.find(({ id }) => id === 'Agentweaver.Gateway').version = '9.9.9';
+  await assert.rejects(deployRelease({
+    argv: normalBootstrapArgsFor(),
+    manifest: alteredManifest,
+  }, dependencies), /differs from releases\/foundation\.json at the published source commit/);
+});
+
+test('v1.0.1 rejects a completion proof supplied through the deployment API', async () => {
+  const fixture = normalBootstrapFixture();
+  const dependencies = bootstrapDependencies(fixture, {
+    root: v101Root,
+    sourceSha: v101SourceSha,
+  });
+  await assert.rejects(deployRelease({
+    argv: normalBootstrapArgsFor(),
+    completion: {},
+  }, dependencies), /--completion is not accepted for the v1.0.1 normal publication/);
+});
+
 test('pre-acceptance rejects a missing publication receipt file', async () => {
   const fixture = bootstrapFixture();
   const args = bootstrapArgsFor();
@@ -496,6 +671,77 @@ test('pre-acceptance rejects a receipt that differs from the immutable result', 
   };
   await assert.rejects(verifyBootstrapRelease('v1.0.0', fixture.publication, { root, run }),
     /differs from the immutable GitHub publication result/);
+});
+
+test('v1.0.1 verifies the exact normal publication result ref and receipt', async () => {
+  const fixture = normalBootstrapFixture();
+  const resultObjectSha = '2'.repeat(40);
+  const resultRefName = `agentweaver-publication/${v101SourceSha}/result`;
+  let tagCommitSha = v101SourceSha;
+  const calls = [];
+  const run = (file, args) => {
+    if (file === 'git' && args[0] === 'rev-parse') return 'e'.repeat(40);
+    if (file === 'git' && args[0] === 'status') return '';
+    if (file === 'gh' && args[0] === 'api') {
+      const endpoint = args[1];
+      calls.push(endpoint);
+      if (endpoint.endsWith('/releases/tags/v1.0.1')) {
+        return JSON.stringify({ tag_name: 'v1.0.1', draft: false, prerelease: false });
+      }
+      if (endpoint.endsWith(`/git/ref/tags/${encodeURIComponent('v1.0.1')}`)) {
+        return JSON.stringify({ object: { type: 'commit', sha: tagCommitSha } });
+      }
+      if (endpoint.endsWith(`/git/ref/tags/${encodeURIComponent(resultRefName)}`)) {
+        return JSON.stringify({ object: { type: 'tag', sha: resultObjectSha } });
+      }
+      if (endpoint.endsWith(`/git/tags/${resultObjectSha}`)) {
+        return JSON.stringify({
+          tag: resultRefName,
+          object: { type: 'commit', sha: v101SourceSha },
+          message: JSON.stringify(fixture.publication),
+        });
+      }
+    }
+    assert.fail(`unexpected command: ${file} ${args.join(' ')}`);
+  };
+  assert.equal(await verifyBootstrapRelease('v1.0.1', fixture.publication, { root, run }), v101SourceSha);
+  assert.ok(calls.some((endpoint) =>
+    endpoint.endsWith(`/git/ref/tags/${encodeURIComponent(resultRefName)}`)));
+  tagCommitSha = 'f'.repeat(40);
+  await assert.rejects(verifyBootstrapRelease('v1.0.1', fixture.publication, { root, run }),
+    /must resolve to the exact published source commit/);
+  tagCommitSha = v101SourceSha;
+  await assert.rejects(verifyBootstrapRelease('v1.0.1', {
+    ...fixture.publication,
+    provenanceSha256: 'f'.repeat(64),
+  }, { root, run }), /differs from the immutable GitHub publication result/);
+});
+
+test('strict release deployment still rejects a lightweight release tag', async () => {
+  const manifest = releaseManifest();
+  const publication = publicationReceipt(manifest);
+  const run = (file, args) => {
+    if (file === 'git' && args[0] === 'rev-parse') return sourceSha;
+    if (file === 'git' && args[0] === 'status') return '';
+    if (file === 'gh' && args[0] === 'api') {
+      if (args[1].endsWith('/releases/tags/v1.0.0')) {
+        return JSON.stringify({ tag_name: 'v1.0.0', draft: false, prerelease: false });
+      }
+      if (args[1].endsWith(`/git/ref/tags/${encodeURIComponent('v1.0.0')}`)) {
+        return JSON.stringify({ object: { type: 'commit', sha: sourceSha } });
+      }
+    }
+    assert.fail(`unexpected command: ${file} ${args.join(' ')}`);
+  };
+  await assert.rejects(deployRelease({
+    argv: argsFor(),
+    manifest,
+    publication,
+    runtimeManifest: runtimeManifest(manifest),
+  }, {
+    root: p0Root,
+    run,
+  }), /must be an annotated Git tag/);
 });
 
 test('a draft or altered product manifest cannot pass published-release validation', () => {

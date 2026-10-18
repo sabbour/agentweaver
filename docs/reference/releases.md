@@ -168,11 +168,14 @@ runs cannot replace an earlier pending release.
 
 GitHub Actions never deploys to Azure or AKS. Use the local `release:deploy`
 command for deployment and live acceptance.
-For the first v1.0.0 P0 rollout, `release:deploy-bootstrap` accepts only the
-source-bound published receipt, its immutable continuation proof, and the
-tracked draft manifest. Its verified result is pre-acceptance only; it does not
-replace or weaken `release:deploy`, which remains the strict gate after live
-deployment and API, UI, and MCP persona evidence exist. The three checked-in
+For the v1.0.0 P0 bootstrap, `release:deploy-bootstrap` accepts the source-bound
+published receipt, its immutable continuation proof, and the tracked draft.
+For v1.0.1, it accepts only the exact tag-source normal publication receipt and
+tracked draft, rejecting continuation receipts and completion proofs. Both
+bootstrap results are pre-acceptance only; neither replaces or weakens
+`release:deploy`, which remains the strict gate for the v1.0.0 product-version
+composition. Its current version constraints do not accept v1.0.1's
+mixed-version composition, even after persona evidence exists. The three checked-in
 P0 service ConfigMap snapshots now have source-backed runtime values and no
 incomplete markers. Apply them only through the reviewed bootstrap sequence,
 which still checks the applied maps and live Kubernetes prerequisites. The
