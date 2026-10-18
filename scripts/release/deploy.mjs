@@ -29,7 +29,8 @@ import { verifyPartialPublicationCompletion } from './partial-publication.mjs';
 import { PARTIAL_PUBLICATION } from './partial-publication-contract.mjs';
 import { run as runProcess } from '../azure/lib/exec.mjs';
 import {
-  managedBrokerHostname, observeExistingP0BrokerRouting, projectIdentityRoutingReadback,
+  assertExistingP0BundleWebRoute, managedBrokerHostname, observeExistingP0BrokerRouting,
+  projectIdentityRoutingInventory, projectIdentityRoutingReadback,
 } from '../azure/lib/identity-broker-routing.mjs';
 
 export { verifyRegistryImage };
@@ -1267,7 +1268,10 @@ function verifyBackendCertificates(target, { root, run }) {
   }
 }
 
-/** Reads existing broker routing resources and rejects settings outside the approved P0 contract. */
+/**
+ * Accepts only certificate-only, exact bundle-Web-only, or complete P0 routing states.
+ * The Web-only retry state has no Gateway or BackendTLSPolicy and contains no extra route.
+ */
 export function verifyExistingP0BrokerRouting(target, { root, run }) {
   function read(resource, name, namespace = target.namespace) {
     return parseJson(run('kubectl', [
@@ -1276,28 +1280,60 @@ export function verifyExistingP0BrokerRouting(target, { root, run }) {
       cwd: root, projectJson: projectIdentityRoutingReadback, preserveProjectedJson: true,
     }), `${resource} ${name} routing`);
   }
+    // Namespace-wide inventories make unexpected routes and policies fail closed.
+    function readInventory(resource, namespace = target.namespace) {
+    const inventory = parseJson(run('kubectl', [
+      'get', resource, '--namespace', namespace, '--output', 'json',
+    ], {
+      cwd: root, projectJson: projectIdentityRoutingInventory, preserveProjectedJson: true,
+    }), `${resource} routing inventory`);
+    if (!Array.isArray(inventory.items)) fail(`${resource} routing inventory is not a Kubernetes list`);
+    const resources = new Map();
+    for (const object of inventory.items) {
+      const name = object.metadata?.name;
+      if (typeof name !== 'string' || resources.has(name)) {
+        fail(`${resource} routing inventory contains a missing or duplicate name`);
+      }
+      resources.set(name, object);
+    }
+    return resources;
+  }
+  const gatewayInventory = readInventory('gateways', GATEWAY_NAMESPACE);
+  const routeInventory = readInventory('httproutes');
+  const backendPolicyInventory = readInventory('backendtlspolicies');
   const routing = {
     certificate: read('defaultdomaincertificates', 'identity-broker'),
     gatewayCertificate: read('defaultdomaincertificates', 'identity-broker', GATEWAY_NAMESPACE),
-    gateway: read('gateways', 'identity-broker', GATEWAY_NAMESPACE),
-    route: read('httproutes', 'identity-broker'),
-    backendPolicy: read('backendtlspolicies', 'identity-broker'),
-    webRoute: read('httproutes', 'web-application'),
-    apiRoute: read('httproutes', 'gateway-api'),
-    apiBackendPolicy: read('backendtlspolicies', 'gateway-api'),
-    mcpRoute: read('httproutes', 'mcp'),
-    mcpBackendPolicy: read('backendtlspolicies', 'mcp'),
+    gateway: gatewayInventory.get('identity-broker') ?? null,
+    route: routeInventory.get('identity-broker') ?? null,
+    backendPolicy: backendPolicyInventory.get('identity-broker') ?? null,
+    webRoute: routeInventory.get('web-application') ?? null,
+    apiRoute: routeInventory.get('gateway-api') ?? null,
+    apiBackendPolicy: backendPolicyInventory.get('gateway-api') ?? null,
+    mcpRoute: routeInventory.get('mcp') ?? null,
+    mcpBackendPolicy: backendPolicyInventory.get('mcp') ?? null,
   };
-  const routeResources = Object.entries(routing)
-    .filter(([name]) => name !== 'certificate' && name !== 'gatewayCertificate')
-    .map(([, resource]) => resource);
-  // A fresh rollout may have only the pre-staged certificates; any partial route set stays fail-closed.
-  if (routeResources.every(resource => resource === null)) {
+  const noGatewayOrBackendPolicies = gatewayInventory.size === 0 && backendPolicyInventory.size === 0;
+  const bundleWebOnly = routeInventory.size === 1 && routeInventory.has('web-application');
+  const certificatesOnly = routeInventory.size === 0 && noGatewayOrBackendPolicies;
+  if (certificatesOnly || (bundleWebOnly && noGatewayOrBackendPolicies)) {
     const hostname = managedBrokerHostname(routing.certificate, target.namespace);
     const gatewayHostname = managedBrokerHostname(routing.gatewayCertificate, GATEWAY_NAMESPACE);
     if (gatewayHostname !== hostname) fail('Managed Gateway and Broker certificate domains differ.');
-    return { hostname, portalHostname: `portal.${hostname.slice('agentweaver.'.length)}`,
-    certificatesConfigured: true, routingConfigured: false, runtimeVerified: false };
+    const portalHostname = `portal.${hostname.slice('agentweaver.'.length)}`;
+    if (bundleWebOnly) assertExistingP0BundleWebRoute(routing.webRoute, portalHostname);
+    return {
+      hostname, portalHostname, certificatesConfigured: true, routingConfigured: false,
+      bundleWebRouteInstalled: bundleWebOnly, runtimeVerified: false,
+    };
+  }
+  const expectedNames = (inventory, names) =>
+    inventory.size === names.length && names.every(name => inventory.has(name));
+  // Full routing must contain the exact source-owned Gateway, route, and backend-policy names.
+  if (!expectedNames(gatewayInventory, ['identity-broker']) ||
+      !expectedNames(routeInventory, ['identity-broker', 'web-application', 'gateway-api', 'mcp']) ||
+      !expectedNames(backendPolicyInventory, ['identity-broker', 'gateway-api', 'mcp'])) {
+    fail('Existing P0 routing inventory does not match the exact approved Gateway, HTTPRoute, and BackendTLSPolicy sets.');
   }
   return observeExistingP0BrokerRouting(routing);
 }

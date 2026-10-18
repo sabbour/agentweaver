@@ -112,6 +112,12 @@ export function projectIdentityRoutingReadback(value) {
   return projected;
 }
 
+/** Projects a namespace-wide routing inventory without exposing unrelated native fields. */
+export function projectIdentityRoutingInventory(value) {
+  if (!Array.isArray(value?.items)) throw new Error('Routing inventory readback is not a Kubernetes list.');
+  return { items: value.items.map(projectIdentityRoutingReadback) };
+}
+
 function projectPublicApplication(value) {
   return { id: value?.id, appId: value?.appId, publicClient: { redirectUris: value?.publicClient?.redirectUris } };
 }
@@ -373,6 +379,20 @@ function assertManagedRoute(route, {
       (target.kind ?? 'Service') !== 'Service' || (target.group ?? '') !== '' || target.port !== port ||
       (target.weight ?? 1) !== 1 || !exactPaths) {
     throw new Error(`HTTPRoute ${name} does not match its exact source-owned host, path, listener, and backend.`);
+  }
+}
+
+/**
+ * Validates the root bundle's Web route while the separately managed Gateway is absent.
+ * The route must retain the approved parent, managed Portal host, and exact Web backend.
+ */
+export function assertExistingP0BundleWebRoute(webRoute, portalHostname) {
+  assertManagedRoute(webRoute, {
+    name: 'web-application', service: 'web', hostname: portalHostname, gatewayNamespace: GATEWAY_NAMESPACE,
+    sectionName: 'portal', paths: [{ type: 'PathPrefix', value: '/' }], backend: 'web', port: 8080,
+  });
+  if (!webRoute.metadata.resourceVersion) {
+    throw new Error('Existing P0 bundle Web HTTPRoute has no current resource version.');
   }
 }
 

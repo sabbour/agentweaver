@@ -333,6 +333,12 @@ namespaces, waits for them to become Available, and returns their managed
 hostnames. It does not require or read the MCP Service and does not apply a
 Gateway, route, policy, or Cilium ingress rule.
 
+If a release-bootstrap attempt has already applied the root bundle, a retry
+also accepts its single `web-application` HTTPRoute when no Gateway or
+BackendTLSPolicy exists. The route must target Gateway `identity-broker` in
+`agentweaver-gateway` and match the managed Portal host, `/` path, and Web
+Service backend. Extra routes and any other partial routing state fail closed.
+
 ```powershell
 node scripts\azure\deploy.mjs `
   --resource-group agentweaver `
