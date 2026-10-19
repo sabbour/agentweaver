@@ -385,6 +385,22 @@ kubectl wait --for=condition=complete job/identity-broker-migration `
      --execute
    ```
 
+   With `--execute`, the guarded deployment command installs AgentSandbox
+   before applying the product bundle. It uses the upstream v1.0.7 release
+   manifest and verifies its SHA-256
+   (`136c10c9347cb5a6740b351444cae82f404e883c3f520272257ba785f2af0da8`),
+   applies it idempotently, waits for all four CRDs and the controller rollout,
+   and confirms the controller image is
+   `registry.k8s.io/agent-sandbox/agent-sandbox-controller:v1.0.7`. The asset
+   is pinned to source commit `807cc37107bd7c012115afac9fa9c3b77b8365c2`.
+   Before writing, the installer validates the full manifest locally,
+   server-validates cluster-scoped resources, and checks the required
+   get/create/patch permissions for controller resources in
+   `agent-sandbox-system`. This also supports a fresh install where that
+   namespace does not exist yet.
+   This procedure installs the upstream controller directly; it does not
+   enable the AKS AgentSandbox extension, which remains a future option.
+
    For v1.0.3, download `publication.json` from artifact
    `v1-publication-receipt-acfa2732dba0728adfeaf5754c8e9af9118f2482-1`
    produced by release-pack run `39183904644`. Verify its source SHA and use

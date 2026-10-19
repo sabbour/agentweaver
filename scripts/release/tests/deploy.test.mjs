@@ -9,6 +9,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test, { after } from 'node:test';
 import {
+  AGENT_SANDBOX_RELEASE,
   deployRelease,
   parseArgs,
   SERVICE_NETWORK_POLICY_NAMES,
@@ -29,7 +30,9 @@ import { componentImageRepository, componentImageTag } from '../pack.mjs';
 import {
   createKustomizeImageEntries, parseKustomizeResources, validateKustomizeImagePins,
 } from '../kustomize-runtime.mjs';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import {
+  parse as parseYaml, parseAllDocuments as parseAllYamlDocuments, stringify as stringifyYaml,
+} from 'yaml';
 import {
   brokerRunBindingFingerprint, createBrokerRunBindingPolicies, createRuntimeList,
   validateBrokerRunBinding,
@@ -159,6 +162,68 @@ const target = {
   nodeMin: 2,
   nodeMax: 3,
 };
+const agentSandboxTestManifest = Buffer.from([
+  'apiVersion: v1',
+  'kind: Namespace',
+  'metadata:',
+  '  name: agent-sandbox-system',
+  '---',
+  'apiVersion: apiextensions.k8s.io/v1',
+  'kind: CustomResourceDefinition',
+  'metadata:',
+  '  name: sandboxes.agents.x-k8s.io',
+  '---',
+  'apiVersion: rbac.authorization.k8s.io/v1',
+  'kind: ClusterRole',
+  'metadata:',
+  '  name: agent-sandbox-controller',
+  '---',
+  'apiVersion: rbac.authorization.k8s.io/v1',
+  'kind: ClusterRoleBinding',
+  'metadata:',
+  '  name: agent-sandbox-controller',
+  '---',
+  'apiVersion: v1',
+  'kind: ServiceAccount',
+  'metadata:',
+  '  name: agent-sandbox-controller',
+  '  namespace: agent-sandbox-system',
+  '---',
+  'apiVersion: v1',
+  'kind: Service',
+  'metadata:',
+  '  name: agent-sandbox-controller',
+  '  namespace: agent-sandbox-system',
+  '---',
+  'apiVersion: apps/v1',
+  'kind: Deployment',
+  'metadata:',
+  '  name: agent-sandbox-controller',
+  '  namespace: agent-sandbox-system',
+].join('\n'));
+const agentSandboxTestRelease = Object.freeze({
+  ...AGENT_SANDBOX_RELEASE,
+  version: 'v1.0.7-test',
+  sourceCommit: 'a'.repeat(40),
+  manifestUrl: 'https://example.test/agent-sandbox.yaml',
+  manifestSha256: createHash('sha256').update(agentSandboxTestManifest).digest('hex'),
+  controllerImage: 'registry.k8s.io/agent-sandbox/agent-sandbox-controller:v1.0.7-test',
+});
+function agentSandboxTestDependencies() {
+  return {
+    agentSandboxRelease: agentSandboxTestRelease,
+    fetchAgentSandbox: async (url) => {
+      assert.equal(url, agentSandboxTestRelease.manifestUrl);
+      return {
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => agentSandboxTestManifest.buffer.slice(
+          agentSandboxTestManifest.byteOffset,
+          agentSandboxTestManifest.byteOffset + agentSandboxTestManifest.byteLength),
+      };
+    },
+  };
+}
 const productServices = [
   ['Agentweaver.AgentHost', 'agenthost'],
   ['Agentweaver.Identity.Broker', 'identity-broker'],
@@ -475,6 +540,7 @@ function bootstrapDependencies(fixture, {
   const commands = [];
   const dependencies = {
     root: fixtureRoot,
+    ...agentSandboxTestDependencies(),
     readFile: (file, encoding) => {
       if (path.resolve(file) === path.join(fixtureRoot, 'releases', 'foundation.json')) {
         return JSON.stringify(fixture.manifest);
@@ -521,8 +587,23 @@ function bootstrapDependencies(fixture, {
         });
       }
       if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') return '';
+      if (file === 'kubectl' && args[0] === 'get' && args[1] === 'deployment') {
+        return agentSandboxTestRelease.controllerImage;
+      }
+      if (file === 'kubectl' && args[0] === 'auth' && args[1] === 'can-i') return 'yes';
+      if (file === 'kubectl' && (args[0] === 'wait' ||
+          (args[0] === 'rollout' && args[1] === 'status'))) return '';
+      if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=server') &&
+          args.includes('--filename')) {
+        commands.push({ file, args, input: options?.input });
+        return '';
+      }
       if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=client')) {
-        commands.push({ file, args });
+        commands.push({ file, args, input: options?.input });
+        return '';
+      }
+      if (file === 'kubectl' && args[0] === 'apply' && args.includes('--filename')) {
+        commands.push({ file, args, input: options?.input });
         return '';
       }
       if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k')) return '';
@@ -649,11 +730,135 @@ test('pre-acceptance dry-run accepts only the tracked draft and returns a non-re
   assert.equal(result.sourceSha, PARTIAL_PUBLICATION.sourceSha);
   assert.equal(result.dryRun, true);
   assert.equal(result.renderedResources, 61);
+  assert.deepEqual(result.agentSandbox, {
+    version: agentSandboxTestRelease.version,
+    sourceCommit: agentSandboxTestRelease.sourceCommit,
+    manifestSha256: agentSandboxTestRelease.manifestSha256,
+    controllerImage: agentSandboxTestRelease.controllerImage,
+  });
   assert.equal('acceptedRelease' in result, false);
   assert.doesNotMatch(JSON.stringify(result), /"stage":"release"/);
-  assert.equal(dependencies.commands.length, 1);
-  assert.deepEqual(dependencies.commands[0].args,
-    ['apply', '--dry-run=client', '-k', path.join('deploy', 'k8s')]);
+  assert.equal(dependencies.commands.length, 2);
+  assert.deepEqual(dependencies.commands.map(({ args }) => args), [
+    ['apply', '--dry-run=client', '--filename', '-'],
+    ['apply', '--dry-run=client', '-k', path.join('deploy', 'k8s')],
+  ]);
+});
+
+test('AgentSandbox release pin matches the reviewed upstream asset and image', () => {
+  assert.deepEqual(AGENT_SANDBOX_RELEASE, {
+    version: 'v1.0.7',
+    sourceCommit: '807cc37107bd7c012115afac9fa9c3b77b8365c2',
+    manifestUrl: 'https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.7/sandbox-with-extensions.yaml',
+    manifestSha256: '136c10c9347cb5a6740b351444cae82f404e883c3f520272257ba785f2af0da8',
+    controllerImage: 'registry.k8s.io/agent-sandbox/agent-sandbox-controller:v1.0.7',
+  });
+});
+
+test('AgentSandbox manifest checksum mismatch stops before cluster reads or writes', async () => {
+  const fixture = bootstrapFixture();
+  const dependencies = bootstrapDependencies(fixture);
+  let targetVerified = false;
+  dependencies.verifyTarget = async () => { targetVerified = true; };
+  dependencies.fetchAgentSandbox = async () => ({
+    ok: true,
+    status: 200,
+    arrayBuffer: async () => Buffer.from('unverified manifest'),
+  });
+
+  await assert.rejects(
+    deployRelease({ argv: bootstrapArgsFor() }, dependencies),
+    /AgentSandbox v1\.0\.7-test manifest SHA-256/,
+  );
+  assert.equal(targetVerified, false);
+  assert.deepEqual(dependencies.commands, []);
+});
+
+test('fresh AgentSandbox install preflights without requiring the controller namespace', async () => {
+  const fixture = bootstrapFixture();
+  const dependencies = bootstrapDependencies(fixture);
+  const originalRun = dependencies.run;
+  const permissions = [];
+  const writes = [];
+  let controllerPreflightKinds;
+  dependencies.run = (file, args, options = {}) => {
+    if (file === 'kubectl' && args[0] === 'auth' && args[1] === 'can-i') {
+      permissions.push(args.slice(2));
+      return 'yes';
+    }
+    if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=server') &&
+        args.includes('--filename')) {
+      controllerPreflightKinds = parseAllYamlDocuments(options.input)
+        .map((document) => document.toJSON()?.kind);
+      assert.equal(permissions.length, 9, 'check every controller namespace permission before server preflight');
+      return '';
+    }
+    if (file === 'kubectl' && args[0] === 'apply' && args.includes('--filename') &&
+        !args.some((arg) => arg.startsWith('--dry-run='))) {
+      assert.ok(controllerPreflightKinds, 'finish preflight before applying the controller manifest');
+      writes.push('agent-sandbox');
+      return '';
+    }
+    if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
+        !args.some((arg) => arg.startsWith('--dry-run='))) {
+      assert.ok(controllerPreflightKinds, 'finish preflight before applying product workloads');
+      writes.push('product');
+      return '';
+    }
+    return originalRun(file, args, options);
+  };
+  Object.assign(dependencies, {
+    checkpointDirectory: path.join(root, 'fresh-agent-sandbox-checkpoint-fixture'),
+    checkpointMkdir: () => undefined,
+    checkpointWriteFile: () => undefined,
+    checkpointReadFile: () => { throw Object.assign(new Error('not found'), { code: 'ENOENT' }); },
+    checkpointRm: () => undefined,
+    verifyLive: async () => undefined,
+  });
+
+  const result = await deployRelease({ argv: [...bootstrapArgsFor(), '--execute'] }, dependencies);
+
+  assert.equal(result.dryRun, false);
+  assert.deepEqual(controllerPreflightKinds, [
+    'Namespace', 'CustomResourceDefinition', 'ClusterRole', 'ClusterRoleBinding',
+  ]);
+  assert.deepEqual(permissions, [
+    ['get', 'serviceaccounts/agent-sandbox-controller', '--namespace', 'agent-sandbox-system'],
+    ['create', 'serviceaccounts', '--namespace', 'agent-sandbox-system'],
+    ['patch', 'serviceaccounts/agent-sandbox-controller', '--namespace', 'agent-sandbox-system'],
+    ['get', 'services/agent-sandbox-controller', '--namespace', 'agent-sandbox-system'],
+    ['create', 'services', '--namespace', 'agent-sandbox-system'],
+    ['patch', 'services/agent-sandbox-controller', '--namespace', 'agent-sandbox-system'],
+    ['get', 'deployments/agent-sandbox-controller', '--namespace', 'agent-sandbox-system'],
+    ['create', 'deployments', '--namespace', 'agent-sandbox-system'],
+    ['patch', 'deployments/agent-sandbox-controller', '--namespace', 'agent-sandbox-system'],
+  ]);
+  assert.deepEqual(writes, ['agent-sandbox', 'product']);
+});
+
+test('AgentSandbox namespace permission denial stops before controller or product writes', async () => {
+  const fixture = bootstrapFixture();
+  const dependencies = bootstrapDependencies(fixture);
+  const writes = [];
+  const originalRun = dependencies.run;
+  dependencies.run = (file, args, options = {}) => {
+    if (file === 'kubectl' && args[0] === 'auth' && args[1] === 'can-i') {
+      return args[2] === 'create' && args[3] === 'deployments' ? 'no' : 'yes';
+    }
+    if (file === 'kubectl' && args[0] === 'apply' &&
+        !args.some((arg) => arg.startsWith('--dry-run='))) {
+      writes.push(args);
+    }
+    return originalRun(file, args, options);
+  };
+
+  await assert.rejects(
+    deployRelease({ argv: [...bootstrapArgsFor(), '--execute'] }, dependencies),
+    /authorization must allow create deployments in namespace agent-sandbox-system/,
+  );
+  assert.deepEqual(writes, []);
+  assert.equal(dependencies.commands.some(({ args }) =>
+    args[0] === 'apply' && args.includes('--dry-run=server')), false);
 });
 
 test('pre-acceptance dry-run reports a changed owned immutable runtime ConfigMap without writing', async () => {
@@ -674,7 +879,7 @@ test('pre-acceptance dry-run reports a changed owned immutable runtime ConfigMap
   const reads = [];
   const originalRun = dependencies.run;
   dependencies.run = (file, args, options = {}) => {
-    if (file === 'kubectl' && args[0] === 'get') {
+    if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
       assert.equal(targetVerified, true, 'verify the approved target before reading a live ConfigMap');
       reads.push({ args, options });
       return args.includes('--output=name')
@@ -698,7 +903,7 @@ test('pre-acceptance dry-run reports a changed owned immutable runtime ConfigMap
   assert.deepEqual(Object.keys(reads[1].options.projectJson(existing)).sort(), [
     'binaryDataDigest', 'dataDigest', 'immutable', 'kind', 'name', 'namespace',
   ]);
-  assert.equal(dependencies.commands.length, 1);
+  assert.equal(dependencies.commands.length, 2);
   assert.ok(dependencies.commands.every(({ args }) =>
     args[0] !== 'replace' && args[0] !== 'delete'));
 });
@@ -754,20 +959,48 @@ test('pre-acceptance execute replaces only changed agenthost-runtime-v1 after se
   const calls = [];
   const originalRun = dependencies.run;
   dependencies.run = (file, args, options = {}) => {
-    if (file === 'kubectl' && args[0] === 'get') {
+    if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
       calls.push({ operation: args.includes('--output=name') ? 'get-name' : 'get-data', args });
       return args.includes('--output=name')
         ? 'configmap/agenthost-runtime-v1'
         : JSON.stringify(options.projectJson(existing));
     }
-    if (file === 'kubectl' && args[0] === 'auth' && args[1] === 'can-i') {
-      calls.push({ operation: `can-i-${args[2]}`, args });
-      return 'yes';
+    if (file === 'kubectl' && args[0] === 'wait') {
+      calls.push({ operation: 'crds-ready', args });
+      return '';
+    }
+    if (file === 'kubectl' && args[0] === 'rollout' && args[1] === 'status') {
+      calls.push({ operation: 'controller-ready', args });
+      return '';
+    }
+    if (file === 'kubectl' && args[0] === 'get' && args[1] === 'deployment') {
+      calls.push({ operation: 'controller-image', args });
+      return originalRun(file, args, options);
     }
     if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=server') &&
         args.includes('--filename')) {
-      calls.push({ operation: 'server-preflight', args, input: options.input });
+      const isAgentSandbox = parseAllYamlDocuments(options.input).some((document) => {
+        const resource = document.toJSON();
+        return resource?.kind === 'Namespace' &&
+          resource.metadata?.name === 'agent-sandbox-system';
+      });
+      calls.push({
+        operation: isAgentSandbox
+          ? 'agent-sandbox-server-preflight'
+          : 'server-preflight',
+        args,
+        input: options.input,
+      });
       return '';
+    }
+    if (file === 'kubectl' && args[0] === 'apply' && args.includes('--filename') &&
+        !args.some((arg) => arg.startsWith('--dry-run='))) {
+      calls.push({ operation: 'agent-sandbox-apply', args, input: options.input });
+      return '';
+    }
+    if (file === 'kubectl' && args[0] === 'auth' && args[1] === 'can-i') {
+      calls.push({ operation: `can-i-${args[2]}`, args });
+      return 'yes';
     }
     if (file === 'kubectl' && args[0] === 'replace') {
       calls.push({ operation: 'replace', args, input: options.input });
@@ -794,9 +1027,27 @@ test('pre-acceptance execute replaces only changed agenthost-runtime-v1 after se
 
   assert.deepEqual(result.immutableRuntimeConfigMapReplacements, ['agenthost-runtime-v1']);
   assert.deepEqual(calls.map(({ operation }) => operation), [
-    'get-name', 'get-data', 'can-i-create', 'can-i-delete', 'server-preflight', 'replace', 'apply',
+    'get-name', 'get-data', 'can-i-create', 'can-i-delete',
+    'can-i-get', 'can-i-create', 'can-i-patch',
+    'can-i-get', 'can-i-create', 'can-i-patch',
+    'can-i-get', 'can-i-create', 'can-i-patch',
+    'agent-sandbox-server-preflight', 'server-preflight', 'agent-sandbox-apply',
+    'crds-ready', 'controller-ready', 'controller-image', 'replace', 'apply',
   ]);
-  const serverPreflight = calls[4];
+  const sandboxPermissionChecks = calls.filter(({ operation }) =>
+    operation.startsWith('can-i-')).slice(2);
+  assert.deepEqual(sandboxPermissionChecks.map(({ args }) => args), [
+    ['auth', 'can-i', 'get', 'serviceaccounts/agent-sandbox-controller', '--namespace', 'agent-sandbox-system'],
+    ['auth', 'can-i', 'create', 'serviceaccounts', '--namespace', 'agent-sandbox-system'],
+    ['auth', 'can-i', 'patch', 'serviceaccounts/agent-sandbox-controller', '--namespace', 'agent-sandbox-system'],
+    ['auth', 'can-i', 'get', 'services/agent-sandbox-controller', '--namespace', 'agent-sandbox-system'],
+    ['auth', 'can-i', 'create', 'services', '--namespace', 'agent-sandbox-system'],
+    ['auth', 'can-i', 'patch', 'services/agent-sandbox-controller', '--namespace', 'agent-sandbox-system'],
+    ['auth', 'can-i', 'get', 'deployments/agent-sandbox-controller', '--namespace', 'agent-sandbox-system'],
+    ['auth', 'can-i', 'create', 'deployments', '--namespace', 'agent-sandbox-system'],
+    ['auth', 'can-i', 'patch', 'deployments/agent-sandbox-controller', '--namespace', 'agent-sandbox-system'],
+  ]);
+  const serverPreflight = calls.find(({ operation }) => operation === 'server-preflight');
   assert.deepEqual(serverPreflight.args, [
     'apply', '--dry-run=server', '--request-timeout=30s', '--filename', '-',
   ]);
@@ -805,7 +1056,19 @@ test('pre-acceptance execute replaces only changed agenthost-runtime-v1 after se
     resource.kind === 'ConfigMap' && resource.metadata.name === 'agenthost-runtime-v1'), false);
   assert.equal(preflightResources.items.some((resource) =>
     resource.kind === 'ConfigMap' && resource.metadata.name === 'environment-cilium-config'), true);
-  const replacement = calls[5];
+  assert.deepEqual(calls.find(({ operation }) => operation === 'crds-ready').args, [
+    'wait', '--for=condition=Established',
+    'crd/sandboxclaims.extensions.agents.x-k8s.io',
+    'crd/sandboxes.agents.x-k8s.io',
+    'crd/sandboxtemplates.extensions.agents.x-k8s.io',
+    'crd/sandboxwarmpools.extensions.agents.x-k8s.io',
+    '--timeout=180s',
+  ]);
+  assert.deepEqual(calls.find(({ operation }) => operation === 'controller-ready').args, [
+    'rollout', 'status', 'deployment/agent-sandbox-controller',
+    '--namespace', 'agent-sandbox-system', '--timeout=5m',
+  ]);
+  const replacement = calls.find(({ operation }) => operation === 'replace');
   assert.deepEqual(replacement.args, [
     'replace', '--force', '--filename', '-', '--namespace', target.namespace,
   ]);
@@ -826,7 +1089,7 @@ test('pre-acceptance execute refuses replacement without create and delete permi
     const writes = [];
     const originalRun = dependencies.run;
     dependencies.run = (file, args, options = {}) => {
-      if (file === 'kubectl' && args[0] === 'get') {
+      if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
         return args.includes('--output=name')
           ? 'configmap/agenthost-runtime-v1'
           : JSON.stringify(options.projectJson(existing));
@@ -860,14 +1123,17 @@ test('pre-acceptance execute keeps ordinary apply when the owned immutable runti
   const calls = [];
   const originalRun = dependencies.run;
   dependencies.run = (file, args, options = {}) => {
-    if (file === 'kubectl' && args[0] === 'get') {
+    if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
       calls.push({ operation: args.includes('--output=name') ? 'get-name' : 'get-data' });
       return args.includes('--output=name')
         ? 'configmap/agenthost-runtime-v1'
         : JSON.stringify(options.projectJson(desired));
     }
     if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=server')) {
-      calls.push({ operation: 'server-preflight', args });
+      calls.push({
+        operation: args.includes('-k') ? 'product-server-preflight' : 'agent-sandbox-server-preflight',
+        args,
+      });
       return '';
     }
     if (file === 'kubectl' && args[0] === 'replace') {
@@ -895,9 +1161,9 @@ test('pre-acceptance execute keeps ordinary apply when the owned immutable runti
 
   assert.deepEqual(result.immutableRuntimeConfigMapReplacements, []);
   assert.deepEqual(calls.map(({ operation }) => operation), [
-    'get-name', 'get-data', 'server-preflight', 'apply',
+    'get-name', 'get-data', 'agent-sandbox-server-preflight', 'product-server-preflight', 'apply',
   ]);
-  assert.deepEqual(calls[2].args, [
+  assert.deepEqual(calls.find(({ operation }) => operation === 'product-server-preflight').args, [
     'apply', '--dry-run=server', '--request-timeout=30s', '-k', path.join('deploy', 'k8s'),
   ]);
 });
@@ -910,7 +1176,7 @@ test('pre-acceptance resume reapplies a completed bundle when the owned immutabl
   const calls = [];
   const originalRun = dependencies.run;
   dependencies.run = (file, args, options = {}) => {
-    if (file === 'kubectl' && args[0] === 'get') {
+    if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
       return args.includes('--output=name')
         ? 'configmap/agenthost-runtime-v1'
         : JSON.stringify(options.projectJson(existing));
@@ -951,7 +1217,7 @@ test('pre-acceptance resume reapplies a completed bundle when the owned immutabl
 
   await deployRelease({ argv: [...bootstrapArgsFor(), '--execute', '--resume'] }, dependencies);
 
-  assert.deepEqual(calls, ['server-preflight', 'replace', 'apply']);
+  assert.deepEqual(calls, ['server-preflight', 'server-preflight', 'replace', 'apply']);
   assert.deepEqual(existing, desired);
 });
 
@@ -960,16 +1226,26 @@ test('release execute stops with access guidance when server-side manifest prefl
   const dependencies = bootstrapDependencies(fixture);
   const originalRun = dependencies.run;
   let applies = 0;
+  let serverPreflights = 0;
+  const clusterWrites = [];
   dependencies.run = (file, args, options) => {
     if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=server')) {
-      throw new Error('Kubernetes API returned Forbidden');
+      serverPreflights++;
+      if (serverPreflights === 2) throw new Error('Kubernetes API returned Forbidden');
+      return originalRun(file, args, options);
+    }
+    if (file === 'kubectl' && (args[0] === 'replace' ||
+        (args[0] === 'apply' && !args.some((arg) => arg.startsWith('--dry-run='))))) {
+      clusterWrites.push(args);
     }
     if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
         !args.includes('--dry-run=client') && !args.includes('--dry-run=server')) applies++;
     return originalRun(file, args, options);
   };
   await assert.rejects(deployRelease({ argv: [...bootstrapArgsFor(), '--execute'] }, dependencies),
-    /server-side preflight failed before any workload write.*outside this tooling.*Kubernetes API returned Forbidden/);
+    /server-side preflight failed before any cluster write.*outside this tooling.*Kubernetes API returned Forbidden/);
+  assert.equal(serverPreflights, 2);
+  assert.deepEqual(clusterWrites, []);
   assert.equal(applies, 0);
 });
 
@@ -1043,9 +1319,11 @@ test('v1.0.1 pre-acceptance dry-run uses the mixed source-bound draft and normal
     `ghcr.io/sabbour/${componentImageRepository('Agentweaver.AgentHost')}@${agentHost.preparedOciMeasurement.image.digest}`,
   );
   assert.equal('acceptedRelease' in result, false);
-  assert.equal(dependencies.commands.length, 1);
-  assert.deepEqual(dependencies.commands[0].args,
-    ['apply', '--dry-run=client', '-k', path.join('deploy', 'k8s')]);
+  assert.equal(dependencies.commands.length, 2);
+  assert.deepEqual(dependencies.commands.map(({ args }) => args), [
+    ['apply', '--dry-run=client', '--filename', '-'],
+    ['apply', '--dry-run=client', '-k', path.join('deploy', 'k8s')],
+  ]);
 });
 
 test('v1.0.2 pre-acceptance rejects its receipt when checked-in pins target a newer publication', async () => {
@@ -2471,6 +2749,7 @@ test('default dry-run validates and renders without issuing any external write',
     providerCatalogSourceCommit: sourceSha,
     dryRun: true,
   }, {
+    ...agentSandboxTestDependencies(),
     root: p0Root,
     verifyRelease: async () => sourceSha,
     verifyImages: async () => { imagesVerified++; return verifiedImageDigests(manifest); },
@@ -2484,7 +2763,7 @@ test('default dry-run validates and renders without issuing any external write',
       assert.equal(file, 'kubectl');
       assert.equal(args[0], 'apply');
       assert.ok(args.includes('--dry-run=client'));
-      assert.ok(args.includes('-k'));
+      assert.ok(args.includes('-k') || args.includes('--filename'));
       return '';
     },
   });
@@ -2495,7 +2774,7 @@ test('default dry-run validates and renders without issuing any external write',
   assert.equal(imagesVerified, 1);
   assert.equal(targetVerified, 1);
   assert.equal(prerequisitesVerified, 1);
-  assert.equal(commands.length, 1);
+  assert.equal(commands.length, 2);
 });
 
 test('dry-run refuses a GHCR receipt that omits the measured AgentHost platform manifest', async () => {
@@ -2525,6 +2804,7 @@ test('resume rechecks publication, GHCR, target and live deployment health befor
   const directory = path.join(root, 'scripts', 'release', 'tests', 'owned-checkpoint-fixture');
   let checkpoint;
   const dependencies = {
+    ...agentSandboxTestDependencies(),
     root: p0Root,
     checkpointDirectory: directory,
     checkpointMkdir: () => undefined,
@@ -2543,6 +2823,10 @@ test('resume rechecks publication, GHCR, target and live deployment health befor
     run: (file, args) => {
       if (file === 'kubectl' && args[0] === 'kustomize') {
         return execFileSync(file, args, { cwd: p0Root, encoding: 'utf8' });
+      }
+      if (file === 'kubectl' && args[0] === 'auth' && args[1] === 'can-i') return 'yes';
+      if (file === 'kubectl' && args[0] === 'get' && args[1] === 'deployment') {
+        return agentSandboxTestRelease.controllerImage;
       }
       if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=server')) {
         verification.applyPreflight++;
@@ -2586,7 +2870,7 @@ test('resume rechecks publication, GHCR, target and live deployment health befor
     live: 2,
     clear: 2,
     apply: 1,
-    applyPreflight: 2,
+    applyPreflight: 4,
   });
 });
 
@@ -2604,6 +2888,7 @@ test('checkpoint read and write failures are surfaced as deployment failures', a
     dryRun: false,
   };
   const baseDependencies = {
+    ...agentSandboxTestDependencies(),
     root: p0Root,
     verifyRelease: async () => sourceSha,
     verifyImages: async () => verifiedImageDigests(manifest),
@@ -2612,6 +2897,10 @@ test('checkpoint read and write failures are surfaced as deployment failures', a
     run: (file, args) => {
       if (file === 'kubectl' && args[0] === 'kustomize') {
         return execFileSync(file, args, { cwd: p0Root, encoding: 'utf8' });
+      }
+      if (file === 'kubectl' && args[0] === 'auth' && args[1] === 'can-i') return 'yes';
+      if (file === 'kubectl' && args[0] === 'get' && args[1] === 'deployment') {
+        return agentSandboxTestRelease.controllerImage;
       }
       if (file === 'kubectl' && args[0] === 'kustomize') {
         return execFileSync(file, args, { cwd: p0Root, encoding: 'utf8' });
@@ -2637,6 +2926,10 @@ test('checkpoint read and write failures are surfaced as deployment failures', a
     run: (file, args) => {
       if (file === 'kubectl' && args[0] === 'kustomize') {
         return execFileSync(file, args, { cwd: p0Root, encoding: 'utf8' });
+      }
+      if (file === 'kubectl' && args[0] === 'auth' && args[1] === 'can-i') return 'yes';
+      if (file === 'kubectl' && args[0] === 'get' && args[1] === 'deployment') {
+        return agentSandboxTestRelease.controllerImage;
       }
       if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
           !args.includes('--dry-run=client') && !args.includes('--dry-run=server')) applyCount++;
@@ -2711,6 +3004,7 @@ test('default dry-run uses the verified published AgentHost platform child and i
     providerCatalogSourceCommit: sourceSha,
     dryRun: true,
   }, {
+    ...agentSandboxTestDependencies(),
     root: p0Root,
     verifyRelease: async () => sourceSha,
     verifyTarget: async () => undefined,
@@ -2723,7 +3017,9 @@ test('default dry-run uses the verified published AgentHost platform child and i
         return output;
       }
       assert.equal(file, 'kubectl');
-      assert.deepEqual(args.slice(0, 3), ['apply', '--dry-run=client', '-k']);
+      assert.equal(args[0], 'apply');
+      assert.equal(args[1], '--dry-run=client');
+      assert.ok(args.includes('-k') || args.includes('--filename'));
       return '';
     },
   });
