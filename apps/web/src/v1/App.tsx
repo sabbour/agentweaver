@@ -35,6 +35,7 @@ import {
 import type { FormEvent, ReactNode } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AuthProvider, useAuth } from './AuthContext';
+import { ConsentScreen } from './ConsentScreen';
 import {
   parseAuthorizationCallbackParameters,
 } from './authProtocol';
@@ -129,35 +130,6 @@ function ErrorNotice({ children, code }: { children: ReactNode; code?: string })
 /** Shared loading indicator for route content awaiting Gateway data. */
 function Loading({ label = 'Loading from the Gateway…' }: { label?: string }) {
   return <div className="v1-loading"><Spinner label={label} /></div>;
-}
-
-/** Shows the Broker's requested scopes and submits the signed-in user's consent choice. */
-function ConsentScreen() {
-  const { consent, busy, error, decideConsent } = useAuth();
-  if (!consent) return null;
-  return (
-    <main className="v1-auth-page">
-      <section className="v1-auth-card">
-        <div className="v1-brand"><img src="/agentweaver.png" alt="" />Agentweaver</div>
-        <h1>Review access</h1>
-        <p>The Identity Broker is asking you to authorize this registered client.</p>
-        <dl className="v1-detail-list">
-          <div><dt>Client</dt><dd>{consent.client_id}</dd></div>
-          <div><dt>Requested permissions</dt><dd>{consent.requested_scopes.join(', ')}</dd></div>
-        </dl>
-        <p className="v1-muted">For a run-bound request, the Broker checks the active project/run grant before issuing a token.</p>
-        {error && <ErrorNotice>{error}</ErrorNotice>}
-        <div className="v1-actions">
-          <Button appearance="primary" disabled={busy} onClick={() => void decideConsent(true)}>
-            {busy ? 'Processing…' : 'Approve'}
-          </Button>
-          <Button appearance="secondary" disabled={busy} onClick={() => void decideConsent(false)}>
-            Decline
-          </Button>
-        </div>
-      </section>
-    </main>
-  );
 }
 
 /** Starts Broker authorization and explains that access tokens are not persisted in the browser. */

@@ -87,7 +87,8 @@ does not permit with its run-bound `projects.orchestrator` authority. The
 `/auth/callback` redirect is registered on the Identity Broker client. The
 upstream Entra application remains the Broker's server-side provider and keeps
 its `/signin-oidc` callback; the Web callback is not added to that Entra
-application.
+application. See the [Identity Broker scope reference](../guide/identity-scopes.md)
+for the permission descriptions shown during consent.
 
 The static host serves public settings at `GET /env-config.js` with
 `Cache-Control: no-store`. It base64-encodes values as data, not executable text.
