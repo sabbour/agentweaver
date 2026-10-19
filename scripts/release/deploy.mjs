@@ -10,7 +10,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { fileURLToPath } from 'node:url';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import {
+  parse as parseYaml, parseAllDocuments as parseAllYamlDocuments, stringify as stringifyYaml,
+} from 'yaml';
 import { componentImageRepository, componentImageTag } from './pack.mjs';
 import {
   BROKER_RUN_BINDING_ANNOTATION,
@@ -121,6 +123,35 @@ const INCOMPLETE_RUNTIME_CONFIG_MAPS = new Set([
 const INCOMPLETE_CONFIG_MAPS = new Set([...INCOMPLETE_RUNTIME_CONFIG_MAPS, 'agenthost-runtime-v1']);
 // Only this source-owned immutable runtime profile is eligible for replacement.
 const REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS = new Set(['agenthost-runtime-v1']);
+/** Upstream AgentSandbox release asset pinned to its source commit and content digest. */
+export const AGENT_SANDBOX_RELEASE = Object.freeze({
+  version: 'v1.0.7',
+  sourceCommit: '807cc37107bd7c012115afac9fa9c3b77b8365c2',
+  manifestUrl: 'https://github.com/kubernetes-sigs/agent-sandbox/releases/download/v1.0.7/sandbox-with-extensions.yaml',
+  manifestSha256: '136c10c9347cb5a6740b351444cae82f404e883c3f520272257ba785f2af0da8',
+  controllerImage: 'registry.k8s.io/agent-sandbox/agent-sandbox-controller:v1.0.7',
+});
+const AGENT_SANDBOX_CRD_NAMES = Object.freeze([
+  'sandboxclaims.extensions.agents.x-k8s.io',
+  'sandboxes.agents.x-k8s.io',
+  'sandboxtemplates.extensions.agents.x-k8s.io',
+  'sandboxwarmpools.extensions.agents.x-k8s.io',
+]);
+const AGENT_SANDBOX_CONTROLLER = Object.freeze({
+  name: 'agent-sandbox-controller',
+  namespace: 'agent-sandbox-system',
+});
+const AGENT_SANDBOX_NAMESPACED_RESOURCES = new Map([
+  ['ServiceAccount', 'serviceaccounts'],
+  ['Service', 'services'],
+  ['Deployment', 'deployments'],
+]);
+const AGENT_SANDBOX_CLUSTER_SCOPED_KINDS = new Set([
+  'Namespace',
+  'CustomResourceDefinition',
+  'ClusterRole',
+  'ClusterRoleBinding',
+]);
 const PREPROVISIONING_RUNTIME_MARKERS = new Set([
   'CHANGEME-KEYVAULT-HOST',
   'CHANGEME-MANAGED-HOST',
@@ -333,6 +364,87 @@ function verifyImmutableRuntimeConfigMapReplacementPermissions(replacements, nam
 
 function serializeKustomizeResources(resources) {
   return resources.items.map((resource) => stringifyYaml(resource)).join('\n---\n');
+}
+
+/** Splits the pinned manifest because fresh clusters cannot dry-run into a namespace that does not exist. */
+function prepareAgentSandboxServerPreflight(manifest) {
+  const clusterResources = [];
+  const namespacedResources = [];
+  for (const document of parseAllYamlDocuments(manifest)) {
+    if (document.errors.length > 0) fail('AgentSandbox manifest contains invalid YAML');
+    const resource = document.toJSON();
+    if (!resource) continue;
+    const plural = AGENT_SANDBOX_NAMESPACED_RESOURCES.get(resource.kind);
+    if (plural) {
+      const namespace = resource.metadata?.namespace;
+      const name = resource.metadata?.name;
+      if (namespace !== AGENT_SANDBOX_CONTROLLER.namespace || typeof name !== 'string') {
+        fail(`AgentSandbox ${resource.kind} must declare its controller namespace and resource name`);
+      }
+      namespacedResources.push({ name, namespace, plural });
+    } else if (AGENT_SANDBOX_CLUSTER_SCOPED_KINDS.has(resource.kind)) {
+      clusterResources.push(resource);
+    } else {
+      fail(`AgentSandbox manifest contains unsupported resource kind ${resource.kind ?? '(unknown)'}`);
+    }
+  }
+  if (clusterResources.length === 0 || namespacedResources.length === 0) {
+    fail('AgentSandbox manifest must include cluster-scoped and controller namespace resources');
+  }
+  return {
+    clusterManifest: clusterResources.map((resource) => stringifyYaml(resource)).join('\n---\n'),
+    namespacedResources,
+  };
+}
+
+/** Checks apply permissions for namespace resources before any cluster write, including fresh installs. */
+function verifyAgentSandboxNamespacePermissions(resources, { root, run }) {
+  for (const { name, namespace, plural } of resources) {
+    for (const verb of ['get', 'create', 'patch']) {
+      const resource = verb === 'create' ? plural : `${plural}/${name}`;
+      const allowed = run('kubectl', [
+        'auth', 'can-i', verb, resource, '--namespace', namespace,
+      ], { cwd: root }).trim().toLowerCase();
+      if (allowed !== 'yes') {
+        fail(`Kubernetes authorization must allow ${verb} ${resource} in namespace ${namespace} before installing AgentSandbox`);
+      }
+    }
+  }
+}
+
+/** Fetches the upstream manifest only when its bytes match the reviewed release digest. */
+async function fetchPinnedAgentSandboxManifest(fetchImpl, release) {
+  const response = await fetchImpl(release.manifestUrl);
+  if (!response.ok) {
+    fail(`AgentSandbox ${release.version} manifest download failed with HTTP ${response.status}`);
+  }
+  const manifest = Buffer.from(await response.arrayBuffer());
+  const digest = createHash('sha256').update(manifest).digest('hex');
+  if (digest !== release.manifestSha256) {
+    fail(`AgentSandbox ${release.version} manifest SHA-256 does not match its pinned release digest`);
+  }
+  return manifest.toString('utf8');
+}
+
+/** Waits for all pinned APIs and confirms the live controller still uses the approved image. */
+function verifyAgentSandboxInstallation(release, { root, run }) {
+  run('kubectl', [
+    'wait', '--for=condition=Established',
+    ...AGENT_SANDBOX_CRD_NAMES.map((name) => `crd/${name}`),
+    '--timeout=180s',
+  ], { cwd: root, timeout: 190_000 });
+  run('kubectl', [
+    'rollout', 'status', `deployment/${AGENT_SANDBOX_CONTROLLER.name}`,
+    '--namespace', AGENT_SANDBOX_CONTROLLER.namespace, '--timeout=5m',
+  ], { cwd: root, timeout: 310_000 });
+  const image = run('kubectl', [
+    'get', 'deployment', AGENT_SANDBOX_CONTROLLER.name,
+    '--namespace', AGENT_SANDBOX_CONTROLLER.namespace,
+    '--output=jsonpath={.spec.template.spec.containers[?(@.name=="agent-sandbox-controller")].image}',
+  ], { cwd: root }).trim();
+  if (image !== release.controllerImage) {
+    fail(`live AgentSandbox controller image must be ${release.controllerImage}`);
+  }
 }
 
 function runCommand(file, args, options = {}) {
@@ -2529,6 +2641,9 @@ export async function deployRelease(options = {}, dependencies = {}) {
   });
   let acceptedDigests = await verifyImages(images);
   verifyMeasuredAgentHostDigest(images, acceptedDigests);
+  const agentSandboxRelease = dependencies.agentSandboxRelease ?? AGENT_SANDBOX_RELEASE;
+  const agentSandboxManifest = await fetchPinnedAgentSandboxManifest(
+    dependencies.fetchAgentSandbox ?? fetchImpl, agentSandboxRelease);
   const providerCatalog = {
     configMapName: parsed.providerCatalogConfigMapName,
     sourceCommit: parsed.providerCatalogSourceCommit,
@@ -2555,8 +2670,25 @@ export async function deployRelease(options = {}, dependencies = {}) {
     if (parsed.execute) {
       verifyImmutableRuntimeConfigMapReplacementPermissions(
         immutableRuntimeConfigMapReplacements, parsed.target.namespace, { root, run });
+    }
+    run('kubectl', ['apply', '--dry-run=client', '--filename', '-'], {
+      cwd: root,
+      input: agentSandboxManifest,
+    });
+    run('kubectl', ['apply', '--dry-run=client', '-k', kustomizeSource.path], { cwd: root });
+    if (parsed.execute) {
       try {
-        // Server-side dry-run validates cluster authorization before the first workload write.
+        const agentSandboxPreflight = prepareAgentSandboxServerPreflight(agentSandboxManifest);
+        verifyAgentSandboxNamespacePermissions(agentSandboxPreflight.namespacedResources, { root, run });
+        // Server-validate cluster-scoped objects; client validation and exact authorization checks cover
+        // namespace-scoped objects until the controller namespace exists on a fresh installation.
+        run('kubectl', [
+          'apply', '--dry-run=server', '--request-timeout=30s', '--filename', '-',
+        ], {
+          cwd: root,
+          timeout: 45_000,
+          input: agentSandboxPreflight.clusterManifest,
+        });
         const replacementNames = new Set(immutableRuntimeConfigMapReplacementNames);
         if (replacementNames.size > 0) {
           const serverPreflight = {
@@ -2578,14 +2710,13 @@ export async function deployRelease(options = {}, dependencies = {}) {
         }
       } catch (error) {
         fail(
-          'Release manifest server-side preflight failed before any workload write. Check the Kubernetes API ' +
+          'Installation manifest server-side preflight failed before any cluster write. Check the Kubernetes API ' +
             'diagnostic and provision required connectivity and permissions outside this tooling. The tooling ' +
             'never grants a person AKS Cluster Admin. ' +
             (error?.message ?? String(error)),
         );
       }
     }
-    run('kubectl', ['apply', '--dry-run=client', '-k', kustomizeSource.path], { cwd: root });
 
     if (parsed.dryRun || !parsed.execute) {
       return {
@@ -2600,6 +2731,12 @@ export async function deployRelease(options = {}, dependencies = {}) {
         services: images.filter((image) => image.id !== 'Agentweaver.AgentHost')
           .map(({ id, image }) => ({ id, image })),
         perSandboxAgentHost: images.find((image) => image.id === 'Agentweaver.AgentHost').sandboxImage,
+        agentSandbox: {
+          version: agentSandboxRelease.version,
+          sourceCommit: agentSandboxRelease.sourceCommit,
+          manifestSha256: agentSandboxRelease.manifestSha256,
+          controllerImage: agentSandboxRelease.controllerImage,
+        },
         renderedResources: installationManifest.items.length,
         targetInfo,
       };
@@ -2613,6 +2750,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
       manifestSha256: createHash('sha256').update(JSON.stringify(manifest)).digest('hex'),
       runtimeManifestSha256: createHash('sha256').update(JSON.stringify(installationManifest)).digest('hex'),
       publicationSha256: createHash('sha256').update(JSON.stringify(publication)).digest('hex'),
+      agentSandboxRelease,
     };
     const key = checkpointKey(parsed.releaseTag, sourceSha, parsed.target, identity);
     let checkpoint;
@@ -2631,6 +2769,14 @@ export async function deployRelease(options = {}, dependencies = {}) {
     }
     const applied = checkpoint.stages.apply?.completed === true &&
       immutableRuntimeConfigMapReplacements.length === 0;
+    if (!applied) {
+      // Install CRDs before product workloads that depend on the Sandbox API.
+      run('kubectl', ['apply', '--filename', '-'], {
+        cwd: root,
+        input: agentSandboxManifest,
+      });
+    }
+    verifyAgentSandboxInstallation(agentSandboxRelease, { root, run });
     if (!applied) {
       for (const configMap of immutableRuntimeConfigMapReplacements) {
         // Force-replace only after all preflights, using the exact source-rendered map.
@@ -2670,6 +2816,12 @@ export async function deployRelease(options = {}, dependencies = {}) {
         : {}),
       services: deployedImages.map(({ id }) => id),
       perSandboxAgentHost: images.find((image) => image.id === 'Agentweaver.AgentHost').sandboxImage,
+      agentSandbox: {
+        version: agentSandboxRelease.version,
+        sourceCommit: agentSandboxRelease.sourceCommit,
+        manifestSha256: agentSandboxRelease.manifestSha256,
+        controllerImage: agentSandboxRelease.controllerImage,
+      },
     };
   } finally {
     kustomizeSource.cleanup();
