@@ -55,6 +55,7 @@ interface AuthContextValue {
   authorizationContextLoading: boolean;
   authorizationContextError: unknown;
   busy: boolean;
+  restoringSession: boolean;
   consent: BrokerConsentPrompt | null;
   error: string | null;
   configurationError: string | null;
@@ -70,6 +71,51 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 const AUTH_TIMEOUT_MS = 10 * 60 * 1000;
+const SILENT_AUTH_TIMEOUT_MS = 15 * 1000;
+const SIGNED_IN_BEFORE_STORAGE_KEY = 'agentweaver.auth.signed-in-before';
+
+function hasSignedInBefore(): boolean {
+  try {
+    return sessionStorage.getItem(SIGNED_IN_BEFORE_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function rememberSignIn(): void {
+  try {
+    sessionStorage.setItem(SIGNED_IN_BEFORE_STORAGE_KEY, '1');
+  } catch {
+    // This optional marker must not prevent an in-memory sign-in.
+  }
+}
+
+function forgetSignIn(): void {
+  try {
+    sessionStorage.removeItem(SIGNED_IN_BEFORE_STORAGE_KEY);
+  } catch {
+    // If session storage is unavailable, reads also fail closed and cannot start silent sign-in.
+  }
+}
+
+function hasIdentityCallback(): boolean {
+  return window.location.pathname === '/auth/callback' ||
+    typeof window.__AGENTWEAVER_IDENTITY_CALLBACK__ === 'string';
+}
+
+function bindingFromCurrentRoute(): RunBinding | null {
+  const match = /^\/projects\/([^/]+)\/(?:runs|orchestrations)\/([^/]+)(?:\/|$)/
+    .exec(window.location.pathname);
+  if (!match) return null;
+  try {
+    return {
+      projectId: decodeURIComponent(match[1]),
+      runId: decodeURIComponent(match[2]),
+    };
+  } catch {
+    return null;
+  }
+}
 
 /** True when two optional authorization requests target the same project and run. */
 function sameBinding(left: RunBinding | null, right: RunBinding | null): boolean {
@@ -107,7 +153,8 @@ function sessionFromToken(token: BrokerTokenResponse, binding: RunBinding | null
 }
 
 /**
- * Owns the v1 Broker session, PKCE sign-in, consent, refresh, and tenant context.
+ * Owns the v1 Broker session, PKCE sign-in, one-time silent restoration, consent,
+ * refresh, and tenant context.
  * Access tokens stay in memory; each Gateway call is fenced to the session's
  * exact project/run binding and may retry once after a 401 using token refresh.
  */
@@ -118,6 +165,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [authorizationContextLoading, setAuthorizationContextLoading] = useState(false);
   const [authorizationContextError, setAuthorizationContextError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
+  const [restoringSession, setRestoringSession] = useState(
+    () => hasSignedInBefore() && !hasIdentityCallback(),
+  );
   const [consent, setConsent] = useState<BrokerConsentPrompt | null>(null);
   const [error, setError] = useState<string | null>(() => {
     const callbackSearch = window.__AGENTWEAVER_IDENTITY_CALLBACK__;
@@ -141,6 +191,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   } | null>(null);
   const transactionRef = useRef<AuthorizationTransaction | null>(null);
   const pollAbortRef = useRef<AbortController | null>(null);
+  const authorizationFrameRef = useRef<HTMLIFrameElement | null>(null);
+  const silentAttemptedRef = useRef(false);
 
   const configurationError = useMemo(() => {
     const missing = missingAuthConfiguration();
@@ -173,6 +225,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     transactionRef.current = null;
     setConsent(null);
     setError(null);
+    rememberSignIn();
     setSession(sessionFromToken(token, transaction.binding));
   }, [setSession]);
 
@@ -224,9 +277,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const authorize = useCallback(async (
     requestedBinding: RunBinding | null = null,
     popupOverride?: Window | null,
+    silent = false,
   ) => {
     if (configurationError) {
       setError(configurationError);
+      if (silent) {
+        forgetSignIn();
+        setRestoringSession(false);
+      }
       return;
     }
     const config = defaultAuthorizationConfig();
@@ -237,27 +295,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     pollAbortRef.current?.abort();
 
     let popup: Window | null = null;
+    let iframe: HTMLIFrameElement | null = null;
+    let callbackWindow: Window | null = null;
     let popupCallbackUrl: string | null = null;
     let popupCallbackError: Error | null = null;
     let popupCallbackReceived = false;
     let popupMessageHandler: ((event: MessageEvent<unknown>) => void) | null = null;
     try {
-      popup = popupOverride === undefined
-        ? window.open('about:blank', 'agentweaver-identity', 'popup,width=560,height=720')
-        : popupOverride;
+      popup = silent
+        ? null
+        : popupOverride === undefined
+          ? window.open('about:blank', 'agentweaver-identity', 'popup,width=560,height=720')
+          : popupOverride;
       const transaction = transactionFor(requestedBinding);
       transactionRef.current = transaction;
       storeAuthorizationTransaction(transaction);
       const challenge = await pkceChallenge(transaction.verifier);
-      const authorizeUrl = buildAuthorizeUrl(config, transaction, challenge);
-      if (popup) popup.location.replace(authorizeUrl);
+      const authorizeUrl = silent
+        ? buildAuthorizeUrl(config, transaction, challenge, 'none')
+        : buildAuthorizeUrl(config, transaction, challenge);
+      if (silent) {
+        iframe = document.createElement('iframe');
+        iframe.title = 'Silent sign-in';
+        iframe.setAttribute('aria-hidden', 'true');
+        iframe.tabIndex = -1;
+        iframe.style.display = 'none';
+        iframe.src = authorizeUrl;
+        document.body.append(iframe);
+        authorizationFrameRef.current = iframe;
+        callbackWindow = iframe.contentWindow;
+        if (!callbackWindow) throw new Error('The browser could not start silent sign-in.');
+      } else if (popup) {
+        popup.location.replace(authorizeUrl);
+        callbackWindow = popup;
+      }
       else {
         window.location.assign(authorizeUrl);
         return;
       }
       const callbackOrigin = new URL(transaction.redirectUri).origin;
       popupMessageHandler = (event) => {
-        if (event.source !== popup ||
+        if (event.source !== callbackWindow ||
             event.origin !== callbackOrigin ||
             transactionRef.current !== transaction ||
             popupCallbackReceived)
@@ -285,17 +363,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         pollAbortRef.current?.abort();
       };
       window.addEventListener('message', popupMessageHandler);
-
       const startedAt = Date.now();
-      while (Date.now() - startedAt < AUTH_TIMEOUT_MS) {
+      while (Date.now() - startedAt < (silent ? SILENT_AUTH_TIMEOUT_MS : AUTH_TIMEOUT_MS)) {
+        if (transactionRef.current !== transaction)
+          throw new Error('Identity Broker sign-in was cancelled.');
         if (popupCallbackError) throw popupCallbackError;
         if (popupCallbackUrl) {
           if (!await consumeAuthorizationResponse(popupCallbackUrl, transaction))
             throw new Error('The Identity Broker returned an invalid sign-in response.');
-          popup.close();
+          popup?.close();
           return;
         }
-        if (popup.closed) throw new Error('Identity Broker sign-in was closed before it completed.');
+        if (!silent && popup?.closed)
+          throw new Error('Identity Broker sign-in was closed before it completed.');
+        if (silent) {
+          await new Promise((resolve) => window.setTimeout(resolve, 50));
+          continue;
+        }
         const abortController = new AbortController();
         pollAbortRef.current = abortController;
         const timeout = window.setTimeout(() => abortController.abort(), 2500);
@@ -326,7 +410,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                   result.requested_scopes.some((scope) => !config.scopes.includes(scope))) {
                 throw new Error('The Broker consent response does not match this registered client and its configured scopes.');
               }
-              popup.close();
+              popup?.close();
               setConsent(result);
               return;
             }
@@ -346,14 +430,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       throw new Error('Identity Broker sign-in timed out. You can try again.');
     } catch (reason) {
       popup?.close();
-      setError(reason instanceof Error ? reason.message : 'Identity Broker sign-in failed.');
+      if (silent) {
+        forgetSignIn();
+        setError(null);
+      } else {
+        setError(reason instanceof Error ? reason.message : 'Identity Broker sign-in failed.');
+      }
       clearAuthorizationTransaction();
       transactionRef.current = null;
     } finally {
       if (popupMessageHandler) window.removeEventListener('message', popupMessageHandler);
+      if (authorizationFrameRef.current === iframe)
+        authorizationFrameRef.current = null;
+      iframe?.remove();
+      if (silent) setRestoringSession(false);
       setBusy(false);
     }
   }, [configurationError, consumeAuthorizationResponse, setSession]);
+
+  useEffect(() => {
+    if (session || !restoringSession || silentAttemptedRef.current) return;
+    silentAttemptedRef.current = true;
+    void authorize(bindingFromCurrentRoute(), null, true);
+  }, [authorize, restoringSession, session]);
 
   const decideConsent = useCallback(async (approve: boolean) => {
     if (!consent) return;
@@ -570,16 +669,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(() => {
     pollAbortRef.current?.abort();
+    authorizationFrameRef.current?.remove();
+    authorizationFrameRef.current = null;
     clearAuthorizationTransaction();
     transactionRef.current = null;
     setSession(null);
     setConsent(null);
     setError(null);
+    forgetSignIn();
+    setRestoringSession(false);
   }, [setSession]);
 
   const value = useMemo<AuthContextValue>(() => ({
     session,
     busy,
+    restoringSession,
     consent,
     error,
     configurationError,
@@ -605,6 +709,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     resolveAuthorizationContext,
     session,
     signOut,
+    restoringSession,
   ]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

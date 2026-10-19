@@ -107,11 +107,13 @@ export function buildAuthorizeUrl(
   config: AuthorizationConfig,
   transaction: AuthorizationTransaction,
   challenge: string,
+  prompt?: 'none',
 ): string {
   const url = new URL('/connect/authorize', config.brokerUrl);
   url.searchParams.set('client_id', config.clientId);
   url.searchParams.set('redirect_uri', transaction.redirectUri);
   url.searchParams.set('response_type', 'code');
+  if (prompt) url.searchParams.set('prompt', prompt);
   // The Broker's run-bound authority rejects projects.admin; keep it only for unbound flows.
   const scopes = transaction.binding
     ? config.scopes.filter((scope) => scope !== 'projects.admin')

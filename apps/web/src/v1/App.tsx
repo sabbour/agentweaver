@@ -132,7 +132,7 @@ function Loading({ label = 'Loading from the Gateway…' }: { label?: string }) 
   return <div className="v1-loading"><Spinner label={label} /></div>;
 }
 
-/** Starts Broker authorization and explains that access tokens are not persisted in the browser. */
+/** Starts Broker authorization and explains how the Web session is restored. */
 function SignInScreen() {
   const { busy, error, configurationError, authorize } = useAuth();
   return (
@@ -151,8 +151,8 @@ function SignInScreen() {
           {busy ? 'Waiting for Identity Broker…' : 'Continue with Identity Broker'}
         </Button>
         <p className="v1-muted">
-          Access tokens stay in memory only. After a reload, continue sign-in again; the Broker
-          recovers its local session and rechecks current grants and project roles.
+          Access and refresh tokens stay in memory only. After a reload, Agentweaver tries one
+          silent sign-in in this tab. If it cannot restore the session, continue sign-in again.
         </p>
       </section>
     </main>
@@ -3017,12 +3017,18 @@ function CallbackPage() {
   );
 }
 
-/** Sends a validated Broker callback from the popup to its same-origin opener. */
+/** Sends a validated Broker callback from a popup or hidden frame to its same-origin parent. */
+function identityCallbackTarget(): { target: Window; closeAfterSend: boolean } | null {
+  const opener = window.opener;
+  if (opener && opener !== window) return { target: opener, closeAfterSend: true };
+  if (window.parent !== window) return { target: window.parent, closeAfterSend: false };
+  return null;
+}
+
 function IdentityPopupCallbackPage() {
   const [callback] = useState(() => {
     const callbackSearch = window.__AGENTWEAVER_IDENTITY_CALLBACK__;
-    const opener = window.opener;
-    if (!opener || opener === window || typeof callbackSearch !== 'string')
+    if (!identityCallbackTarget() || typeof callbackSearch !== 'string')
       return { message: undefined, status: 'Sending the sign-in response to Agentweaver…' };
     const message = parseAuthorizationCallbackParameters(callbackSearch);
     return {
@@ -3036,14 +3042,14 @@ function IdentityPopupCallbackPage() {
   useEffect(() => {
     const callbackSearch = window.__AGENTWEAVER_IDENTITY_CALLBACK__;
     window.__AGENTWEAVER_IDENTITY_CALLBACK__ = undefined;
-    const opener = window.opener;
-    if (!opener || opener === window || typeof callbackSearch !== 'string') return;
+    const callbackTarget = identityCallbackTarget();
+    if (!callbackTarget || typeof callbackSearch !== 'string') return;
 
     if (!callback.message) {
-      window.close();
+      if (callbackTarget.closeAfterSend) window.close();
       return;
     }
-    opener.postMessage(callback.message, window.location.origin);
+    callbackTarget.target.postMessage(callback.message, window.location.origin);
   }, [callback.message]);
 
   return (
@@ -3152,8 +3158,10 @@ function RemoteMcpOAuthCallbackRelay() {
 
 /** Applies consent/sign-in gates before mounting the authenticated project and run routes. */
 function AuthenticatedRoutes() {
-  const { session, consent } = useAuth();
+  const { session, consent, restoringSession } = useAuth();
   if (consent) return <ConsentScreen />;
+  if (!session && restoringSession)
+    return <main className="v1-auth-page"><Loading label="Checking your sign-in session…" /></main>;
   if (!session) return <SignInScreen />;
   return (
     <Routes>
@@ -3181,7 +3189,7 @@ export default function App() {
   const repoAppCallback = window.location.pathname === REPO_APP_CALLBACK_PATH &&
     window.__AGENTWEAVER_REPO_APP_CALLBACK__ === true;
   const identityPopupCallback = window.location.pathname === '/auth/callback' &&
-    window.opener && window.opener !== window;
+    ((window.opener && window.opener !== window) || window.parent !== window);
   return (
     <FluentProvider theme={agentweaverLightTheme}>
       {window.location.pathname === REMOTE_MCP_OAUTH_CALLBACK_PATH

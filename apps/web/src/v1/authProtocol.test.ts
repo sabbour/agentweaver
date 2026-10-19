@@ -52,6 +52,20 @@ describe('Identity Broker authorization', () => {
     expect(url.searchParams.get('run_id')).toBe('run 42');
   });
 
+  it('adds prompt=none only to a silent authorization request', () => {
+    const transaction: AuthorizationTransaction = {
+      state: 'state-value',
+      verifier: 'verifier-value',
+      redirectUri: config.redirectUri,
+      binding: null,
+    };
+
+    const url = new URL(buildAuthorizeUrl(config, transaction, 'challenge', 'none'));
+    expect(url.searchParams.get('prompt')).toBe('none');
+    expect(new URL(buildAuthorizeUrl(config, transaction, 'challenge')).searchParams.has('prompt'))
+      .toBe(false);
+  });
+
   it('omits projects.admin only from run-bound authorization requests', () => {
     const scopedConfig: AuthorizationConfig = {
       ...config,

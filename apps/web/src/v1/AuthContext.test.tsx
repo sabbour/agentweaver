@@ -5,8 +5,12 @@ import { AgentweaverGatewayClient, gatewayClient, GatewayError } from './api';
 import type { AuthorizationCallbackMessage, AuthorizationTransaction } from './authProtocol';
 
 const mocks = vi.hoisted(() => ({
-  buildAuthorizeUrl: vi.fn((_config: unknown, transaction: { state: string }) =>
-    `https://broker.test/authorize?state=${encodeURIComponent(transaction.state)}`),
+  buildAuthorizeUrl: vi.fn((
+    _config: unknown,
+    transaction: { state: string },
+    _challenge: string,
+    prompt?: 'none',
+  ) => `https://broker.test/authorize?state=${encodeURIComponent(transaction.state)}${prompt ? `&prompt=${prompt}` : ''}`),
   exchangeAuthorizationCode: vi.fn(),
   isConsentPrompt: vi.fn(() => false),
   parseAuthorizationCallbackMessage: (value: unknown) => value as AuthorizationCallbackMessage,
@@ -32,6 +36,8 @@ vi.mock('./authProtocol', () => ({
   parseAuthorizationResult: (responseUrl: string, expectedState: string) => {
     const url = new URL(responseUrl);
     if (url.searchParams.get('state') !== expectedState) return null;
+    const error = url.searchParams.get('error');
+    if (error) return { error, description: url.searchParams.get('error_description') ?? undefined };
     const code = url.searchParams.get('code');
     return code ? { code } : null;
   },
@@ -71,6 +77,7 @@ function token(accessToken: string, refreshToken?: string) {
 }
 
 let authPopup: Window;
+const SIGNED_IN_BEFORE_STORAGE_KEY = 'agentweaver.auth.signed-in-before';
 
 async function completePopupSignIn(
   code = 'code-1',
@@ -85,6 +92,24 @@ async function completePopupSignIn(
         type: 'agentweaver.identity.callback',
         code,
         state,
+      },
+    }));
+  });
+}
+
+async function completeSilentSignIn(
+  callback: { code?: string; error?: string },
+): Promise<void> {
+  await waitFor(() => expect(document.querySelector('iframe[title="Silent sign-in"]')).not.toBeNull());
+  const iframe = document.querySelector<HTMLIFrameElement>('iframe[title="Silent sign-in"]')!;
+  await act(async () => {
+    window.dispatchEvent(new MessageEvent('message', {
+      origin: 'https://app.test',
+      source: iframe.contentWindow,
+      data: {
+        type: 'agentweaver.identity.callback',
+        state: 'state-1',
+        ...callback,
       },
     }));
   });
@@ -128,6 +153,7 @@ function Harness() {
       </button>
       <button type="button" onClick={auth.signOut}>Sign out</button>
       <output>{auth.session?.accessToken ?? 'signed-out'}</output>
+      <output>{auth.restoringSession ? 'restoring' : 'not-restoring'}</output>
       <output>{auth.error ?? 'no-auth-error'}</output>
       <output>context:{auth.authorizationContext?.tenantId ?? 'none'}</output>
       <output>context-fields:{Object.keys(auth.authorizationContext ?? {}).sort().join(',')}</output>
@@ -137,9 +163,94 @@ function Harness() {
 }
 
 describe('Broker refresh coordination', () => {
+  it('restores once from a non-secret tab marker in a hidden frame without opening a popup', async () => {
+    window.sessionStorage.setItem(SIGNED_IN_BEFORE_STORAGE_KEY, '1');
+    render(<AuthProvider><Harness /></AuthProvider>);
+
+    expect(await screen.findByText('restoring')).toBeTruthy();
+    await waitFor(() => expect(mocks.buildAuthorizeUrl).toHaveBeenCalledOnce());
+    expect(mocks.buildAuthorizeUrl).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ binding: null }),
+      'challenge',
+      'none',
+    );
+    expect(window.open).not.toHaveBeenCalled();
+    await completeSilentSignIn({ code: 'silent-code' });
+
+    await screen.findByText('access-1');
+    expect(window.sessionStorage.getItem(SIGNED_IN_BEFORE_STORAGE_KEY)).toBe('1');
+    const sessionValues = Array.from(
+      { length: window.sessionStorage.length },
+      (_, index) => window.sessionStorage.getItem(window.sessionStorage.key(index) ?? '') ?? '',
+    );
+    expect(sessionValues).toEqual(['1']);
+    expect(window.localStorage.length).toBe(0);
+    expect(document.cookie).not.toContain('access-1');
+    expect(document.cookie).not.toContain('refresh-1');
+    expect(window.location.search).not.toMatch(/[?&](access_token|refresh_token)=/);
+    expect(fetch).not.toHaveBeenCalled();
+    expect(document.querySelector('iframe[title="Silent sign-in"]')).toBeNull();
+  });
+
+  it('keeps the current project and run binding during silent restoration', async () => {
+    window.history.replaceState({}, '', '/projects/project-1/runs/run-1');
+    window.sessionStorage.setItem(SIGNED_IN_BEFORE_STORAGE_KEY, '1');
+    render(<AuthProvider><Harness /></AuthProvider>);
+
+    await waitFor(() => expect(mocks.buildAuthorizeUrl).toHaveBeenCalledOnce());
+    expect(mocks.buildAuthorizeUrl).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        binding: { projectId: 'project-1', runId: 'run-1' },
+      }),
+      'challenge',
+      'none',
+    );
+    await completeSilentSignIn({ code: 'silent-run-code' });
+    await screen.findByText('access-1');
+  });
+
+  it('returns to the sign-in screen after one silent error and clears the marker', async () => {
+    window.sessionStorage.setItem(SIGNED_IN_BEFORE_STORAGE_KEY, '1');
+    render(<AuthProvider><Harness /></AuthProvider>);
+    await waitFor(() => expect(mocks.buildAuthorizeUrl).toHaveBeenCalledOnce());
+
+    await completeSilentSignIn({ error: 'login_required' });
+
+    await waitFor(() => {
+      expect(window.sessionStorage.getItem(SIGNED_IN_BEFORE_STORAGE_KEY)).toBeNull();
+      expect(document.querySelector('iframe[title="Silent sign-in"]')).toBeNull();
+    });
+    expect(screen.getByText('signed-out')).toBeTruthy();
+    expect(screen.getByText('no-auth-error')).toBeTruthy();
+    expect(mocks.buildAuthorizeUrl).toHaveBeenCalledOnce();
+    expect(window.open).not.toHaveBeenCalled();
+  });
+
+  it('clears the marker on sign-out so a later mount does not restore silently', async () => {
+    const firstMount = render(<AuthProvider><Harness /></AuthProvider>);
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await completePopupSignIn();
+    await screen.findByText('access-1');
+    expect(window.sessionStorage.getItem(SIGNED_IN_BEFORE_STORAGE_KEY)).toBe('1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }));
+    await screen.findByText('signed-out');
+    expect(window.sessionStorage.getItem(SIGNED_IN_BEFORE_STORAGE_KEY)).toBeNull();
+    firstMount.unmount();
+
+    render(<AuthProvider><Harness /></AuthProvider>);
+    await screen.findByText('signed-out');
+    expect(mocks.buildAuthorizeUrl).toHaveBeenCalledOnce();
+    expect(window.open).toHaveBeenCalledOnce();
+    expect(document.querySelector('iframe[title="Silent sign-in"]')).toBeNull();
+  });
+
   beforeEach(() => {
     window.history.replaceState({}, '', '/projects');
     window.__AGENTWEAVER_IDENTITY_CALLBACK__ = undefined;
+    window.sessionStorage.clear();
     vi.clearAllMocks();
     mocks.readAuthorizationTransaction.mockReset().mockReturnValue(null);
     mocks.parseAuthorizationCallbackParameters.mockReset();

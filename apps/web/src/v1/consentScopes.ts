@@ -26,7 +26,7 @@ const SCOPE_DESCRIPTIONS: Readonly<Record<string, ConsentScopeDescription>> = {
   },
   offline_access: {
     summary: 'Lets the app renew your sign-in while the page is open.',
-    tooltip: 'The Web app keeps sign-in tokens in memory. Reloading the page clears them, so you may need to sign in again.',
+    tooltip: 'The Web app keeps tokens in memory. After a reload, it tries one silent sign-in in this tab.',
     documentationUrl: `${AGENTWEAVER_SCOPES_URL}#offline-access`,
   },
   'api.read': {
