@@ -92,23 +92,27 @@ start. Keep existing pods running, apply the bundle promptly, and verify the
 new ConfigMap before restarting the Deployment. Do not use a broad delete or
 remove the `immutable` setting to bypass the replacement process.
 
-### Guarded AgentHost patch upgrades
+### Guarded pre-acceptance ConfigMap patch upgrades
 
 The source-bound `release:deploy-bootstrap` flow has a narrowly scoped
-replacement path for `agenthost-runtime-v1`. Its immutable `appsettings.json`
-includes the receipt-verified AgentHost image digest and measured image size,
-so a patch release can change its data. The command compares the live data with
-the rendered source. When an existing immutable map differs, `--dry-run`
-reports that `agenthost-runtime-v1` would be replaced; `--execute` validates
-the rest of the rendered bundle first, force-replaces only that named map from
-the source-rendered object, and then applies the bundle. Before replacement,
-execution verifies namespace-scoped ConfigMap create and name-scoped delete
-permissions. If the data is unchanged, the normal apply path runs without
-replacing the map.
+replacement path for `agenthost-runtime-v1` and
+`projects-config-runtime-config`. AgentHost's immutable `appsettings.json`
+includes the receipt-verified image digest and measured image size. The
+Projects & Config map contains the approved privileged-setup identity values.
+Both maps can change between patch releases.
 
-This exception is limited to `agenthost-runtime-v1`. It does not delete or
-replace `environment-cilium-config` or any other ConfigMap. Other immutable
-runtime maps still require the reviewed maintenance procedure above.
+The command compares each live map's data with the source-rendered map. When an
+existing immutable map differs, `--dry-run` reports its name. With `--execute`,
+the command validates the rest of the rendered bundle, checks namespace-scoped
+ConfigMap create and name-scoped delete permissions for each changed map,
+force-replaces only those maps from the source-rendered objects, and then
+applies the bundle. Unchanged data follows the normal apply path.
+
+This exception is limited to `agenthost-runtime-v1` and
+`projects-config-runtime-config`. It does not replace
+`environment-cilium-config`, `projects-config-provider-catalog`, or any other
+ConfigMap. Other immutable runtime maps still require the reviewed maintenance
+procedure above.
 
 `events-and-sessions-runtime-config` is mutable in the checked-in profile.
 Apply its reviewed data with the bundle, then restart the Events & Sessions
@@ -307,6 +311,9 @@ The `projects-config-runtime-config.json` map contains:
 | `ProjectsConfig__Database__WorkloadIdentity__TokenFilePath` | Required absolute projected-token path. |
 | `ProjectsConfig__Authentication__Authority` | Required absolute HTTPS Broker authority. |
 | `ProjectsConfig__Authentication__Audience` | Required token audience for Projects & Config. |
+| `ProjectsConfig__PrivilegedSetup__ApprovedIssuer` | Exact issuer approved for the privileged project-setup command: `https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/`. |
+| `ProjectsConfig__PrivilegedSetup__ApprovedTenantId` | Exact approved Entra tenant: `72f988bf-86f1-41af-91ab-2d7cd011db47`. |
+| `ProjectsConfig__PrivilegedSetup__ApprovedSubject` | Exact approved caller subject: `c4279823-a7c7-477e-982e-f4145bb0a83d`. Do not add another subject or role. |
 
 The provider catalog is supplied separately with the
 `ProjectsConfig__ProviderCatalog__` prefix. See

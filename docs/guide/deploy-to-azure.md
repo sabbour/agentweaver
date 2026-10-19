@@ -284,6 +284,10 @@ Kustomize base intentionally does not own:
 3. Resolve all required runtime ConfigMap values before applying the product
    bundle. For an existing installation, use the
    [immutable ConfigMap update procedure](../reference/runtime-configuration.md#update-an-immutable-configmap).
+   The v1.0.4 Projects & Config map includes only the approved privileged-setup
+   issuer, tenant, and subject. Review the exact values in the
+   [runtime configuration reference](../reference/runtime-configuration.md#projects-config-settings);
+   do not add another subject or role.
 4. Set the approved public Web origin and the reviewed Gateway namespace and
    security policy. The product namespace stays `restricted`. The current AKS
    managed Gateway pods cannot set the seccomp profile required by that
@@ -359,20 +363,21 @@ kubectl wait --for=condition=complete job/identity-broker-migration `
    rejects extra or mismatched routing resources. Do not apply the root
    bundle directly with `kubectl`; the release command is the guarded
    workload apply. For patch upgrades, it compares the live immutable
-   `agenthost-runtime-v1` data with the rendered ConfigMap. If they differ, the
-   command preflights the rest of the bundle, replaces only that named
-   ConfigMap after checking namespace-scoped create and name-scoped delete
-   permissions, and then applies the bundle; unchanged data follows the normal
-   apply path. A read-only dry-run reports when that exact replacement would
-   be needed. The replacement path never deletes or replaces
-   `environment-cilium-config` or any other ConfigMap. See
-   [runtime configuration](../reference/runtime-configuration.md#guarded-agenthost-patch-upgrades)
+   `agenthost-runtime-v1` and `projects-config-runtime-config` data with the
+   rendered ConfigMaps. If either differs, the command preflights the rest of
+   the bundle, checks namespace-scoped create and name-scoped delete
+   permissions, replaces only the changed map from the source-rendered object,
+   and then applies the bundle. Unchanged data follows the normal apply path.
+   A read-only dry-run reports which exact replacement is needed. This path
+   never replaces `environment-cilium-config`,
+   `projects-config-provider-catalog`, or any other ConfigMap. See
+   [runtime configuration](../reference/runtime-configuration.md#guarded-pre-acceptance-configmap-patch-upgrades)
    for the scope and behavior.
 
    ```powershell
-   npm run release:deploy-bootstrap -- v1.0.3 `
+   npm run release:deploy-bootstrap -- v1.0.4 `
      --manifest releases/foundation.json `
-     --publication artifacts/release/publish/publication.json `
+    --publication artifacts/release/publish/publication.json `
      --subscription-id <subscription-id> `
      --tenant-id <tenant-id> `
      --resource-group agentweaver `
@@ -380,8 +385,8 @@ kubectl wait --for=condition=complete job/identity-broker-migration `
      --namespace agentweaver `
      --node-min 2 `
      --node-max 3 `
-     --provider-catalog-configmap <reviewed-configmap-name> `
-     --provider-catalog-source-commit <reviewed-40-character-source-sha> `
+     --provider-catalog-configmap projects-config-provider-catalog `
+     --provider-catalog-source-commit b002620bd8cb53a971b6d5b082d6ab43dbf11fb7 `
      --execute
    ```
 
@@ -401,12 +406,18 @@ kubectl wait --for=condition=complete job/identity-broker-migration `
    This procedure installs the upstream controller directly; it does not
    enable the AKS AgentSandbox extension, which remains a future option.
 
-   For v1.0.3, download `publication.json` from artifact
-   `v1-publication-receipt-acfa2732dba0728adfeaf5754c8e9af9118f2482-1`
-   produced by release-pack run `39183904644`. Verify its source SHA and use
-   the exact reviewed provider-catalog values; do not rebuild or substitute
-   image tags. See [local v1 release deployment](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v103-pre-acceptance-bootstrap)
-   for the full admission contract.
+   The [v1.0.4 GitHub Release and tag](https://github.com/sabbour/agentweaver/releases/tag/v1.0.4)
+   are already published. Do not create another release or tag after the
+   bootstrap-pins pull request merges. Use the publication receipt for source
+   `7bb3ceb282c9377e49da2bc7b6d336baa4eb8209` and source tree
+   `61adf823936284285f68df17b890a5b0da70c033`. Verify the publication SHA-256
+   `128f868f2f59d7eadccae84f36808690ee242e4ebcfe5f23d7f5763bacc3496e` and
+   provenance SHA-256
+   `b7a4ef1c71559fe5f8c96d8d7beee2c6c14ed8fad700aea7711a1cc3aa643ea8`.
+   Use the reviewed provider-catalog ConfigMap and source commit shown in the
+   command; do not rebuild or substitute image tags. See
+   [local v1 release deployment](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v104-pre-acceptance-bootstrap)
+   for the image digests and full admission contract.
 
 4. After the release bootstrap succeeds and the product Services exist, run
    the full, default-off `--bootstrap-identity-routing` operation without

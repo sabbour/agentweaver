@@ -839,11 +839,69 @@ npm run release:deploy-bootstrap -- v1.0.3 `
   --provider-catalog-source-commit <reviewed-40-character-source-sha>
 ```
 
+### v1.0.4 pre-acceptance bootstrap
+
+The [v1.0.4 GitHub Release and tag](https://github.com/sabbour/agentweaver/releases/tag/v1.0.4)
+are already published at this source. Do not create another release or tag
+after this bootstrap-pins pull request merges. The v1.0.4 bootstrap uses the
+normal immutable publication for source
+`7bb3ceb282c9377e49da2bc7b6d336baa4eb8209` and Git tree
+`61adf823936284285f68df17b890a5b0da70c033`. Verify the publication receipt
+SHA-256 `128f868f2f59d7eadccae84f36808690ee242e4ebcfe5f23d7f5763bacc3496e`
+and provenance SHA-256
+`b7a4ef1c71559fe5f8c96d8d7beee2c6c14ed8fad700aea7711a1cc3aa643ea8`.
+AgentHost's measured `linux/amd64` compressed pull size is `321483172` bytes.
+The image digests below and the AgentHost measurements in the Kustomize bundle
+must match that receipt.
+
+| Service | Image digest |
+| --- | --- |
+| AgentHost (per Sandbox) | `sha256:f6d22c6170e3a0d5a3d2d071cd546220c4742771abc091c237f691df63c83025` |
+| Identity Broker | `sha256:9452b1bb82803ecf5dfa35fc2228ff9d68b3d0998ada58ec6a8e46269e399585` |
+| Events & Sessions | `sha256:d4c5af4ce384c1e1644dcd6d23e57afd4beba5f661c4fbbd82caeef6c123d458` |
+| Gateway | `sha256:a10f24fd847409ffca6c328e8206898e46c81caeb9b19aed4386157ba7e7f4a6` |
+| MCP | `sha256:734eb02c991adbe81624ea07ae1c5e057292d6789dd64af76e61fddce2187026` |
+| Web | `sha256:c48373e00f43c1c2052507ac1393ca09d5f818cf284f3ab28e7576f0fd6c4d2a` |
+| Orchestrator | `sha256:9cf0fc02d816703ad52a2e70ac310b921385ac5c75230f12a2171c83ecd3a9d1` |
+| Environment | `sha256:5371b561e8e262134aad50d8aa610a3c9b2308ca4d20576902967843c8b87f96` |
+| Knowledge | `sha256:256dd83a1f66b5a3c9a69e3e7db32fb6bffd03dc0cf8c6258fafc50bc8b2f27e` |
+| Projects & Config | `sha256:715eeb38463f8688fee41cdff7b2c81ce78aa14ff1acb04f8ff41a15fa69813b` |
+
+The `projects-config-provider-catalog` ConfigMap records product source
+`c24d0000fe5fc6163e4f38594c39dff782d3a46d`. Pass the reviewed catalog-source
+commit `b002620bd8cb53a971b6d5b082d6ab43dbf11fb7` as
+`--provider-catalog-source-commit`. The immutable Projects & Config runtime map
+also contains exactly the approved privileged-setup issuer, tenant, and subject
+documented in the
+[runtime configuration reference](../docs/reference/runtime-configuration.md#projects-config-settings).
+Do not add another subject or role.
+
+Download the source-matched receipt's `publication.json` to
+`artifacts/release/publish/publication.json`. Continuation receipts and
+`--completion` proofs are rejected; no image is rebuilt or republished. The
+source-bound bootstrap command remains a pre-acceptance operation and does not
+complete the deployment evidence in issue #2097.
+
+```powershell
+npm run release:deploy-bootstrap -- v1.0.4 `
+  --manifest releases/foundation.json `
+  --publication artifacts/release/publish/publication.json `
+  --subscription-id <subscription-id> `
+  --tenant-id <tenant-id> `
+  --resource-group agentweaver `
+  --cluster agentweaver-aks `
+  --namespace agentweaver `
+  --node-min 2 `
+  --node-max 3 `
+  --provider-catalog-configmap projects-config-provider-catalog `
+  --provider-catalog-source-commit b002620bd8cb53a971b6d5b082d6ab43dbf11fb7
+```
+
 After P1 live acceptance checks complete, build a separate `stage: release`
 manifest from the tracked composition, the exact deployed source SHA, and the
 actual HTTPS API, UI, and MCP persona evidence URLs. Only then use the strict
 `release:deploy` gate. The current gate does not accept the mixed-version
-v1.0.1, v1.0.2, or v1.0.3 compositions, and none of the bootstrap modes
+v1.0.1, v1.0.2, v1.0.3, or v1.0.4 compositions, and none of the bootstrap modes
 relaxes the gate.
 
 `npm run release:deploy` is the operator-hosted, image-only Kubernetes rollout

@@ -56,6 +56,10 @@ deployment configuration. Use the same configured vault for
 Before applying:
 
 1. Complete every workload-required runtime ConfigMap value.
+   The v1.0.4 Projects & Config map includes only its approved privileged-setup
+   issuer, tenant, and subject. See the
+   [runtime configuration reference](../../docs/reference/runtime-configuration.md#projects-config-settings)
+   for the exact values; do not add another subject or role.
 2. Create the operator-owned Secrets and backend CA ConfigMap referenced by
    the workloads. AKS creates `identity-broker-tls` from the managed
    `DefaultDomainCertificate` during the guarded certificate-only routing
@@ -145,8 +149,9 @@ separate overlays.
    but stopped before routing setup, rerun the same guarded command; it accepts
    only the exact Web-route-only intermediate state described above. Do not
    replace this command with a direct `kubectl apply -k deploy\k8s`.
-   For v1.0.3, use the normal source-bound receipt artifact and source described
-   in the [release operations guide](../../releases/README.md#v103-pre-acceptance-bootstrap);
+   The v1.0.4 release/tag is already published. Use its normal source-bound
+   receipt artifact and source described in the
+   [release operations guide](../../releases/README.md#v104-pre-acceptance-bootstrap);
    the checked-in image digests and AgentHost/Environment pull-size values are
    pinned to that publication.
 

@@ -137,6 +137,16 @@ Before deployment, provide a clean product checkout, a published release with
 its source-bound manifest and receipt, and an Azure/Kubernetes target with
 required runtime configuration and TLS already present.
 
+The v1.0.4 GitHub Release and tag are already published at source
+`7bb3ceb282c9377e49da2bc7b6d336baa4eb8209`. Do not create another release or
+tag after the bootstrap-pins pull request merges. Its separate
+`release:deploy-bootstrap` pre-acceptance path can replace only changed
+`agenthost-runtime-v1` and `projects-config-runtime-config` ConfigMaps after
+preflighting the rest of the bundle; it never replaces other ConfigMaps and
+does not complete release acceptance. See the
+[v1.0.4 release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v104-pre-acceptance-bootstrap)
+for the source-bound publication receipt and pinned images.
+
 1. Verify the checkout, release source, manifest, and publication identity.
 2. Verify digest-pinned GitHub Container Registry (GHCR) images through the
    registry API, including the measured AgentHost image and compressed pull

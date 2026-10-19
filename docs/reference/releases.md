@@ -164,14 +164,25 @@ changes are approved.
 `release:deploy-bootstrap` is a separate pre-acceptance path. It requires the
 exact draft manifest and source-bound publication evidence for the requested
 version; some partial-publication cases also require their immutable completion
-proof. For patch upgrades, it can report and replace only a changed immutable
-`agenthost-runtime-v1` ConfigMap after preflighting the rest of the bundle;
-unchanged data follows the normal apply path. It never replaces
-`environment-cilium-config` or any other ConfigMap. Its dry run does not create
-release-acceptance evidence. Use
+proof. For patch upgrades, it can report and replace only changed immutable
+`agenthost-runtime-v1` and `projects-config-runtime-config` ConfigMaps after
+preflighting the rest of the bundle; unchanged data follows the normal apply
+path. It never replaces `environment-cilium-config`,
+`projects-config-provider-catalog`, or any other ConfigMap. Its dry run does
+not create release-acceptance evidence. The v1.0.4 bootstrap is bound to source
+`7bb3ceb282c9377e49da2bc7b6d336baa4eb8209`, tree
+`61adf823936284285f68df17b890a5b0da70c033`, publication SHA-256
+`128f868f2f59d7eadccae84f36808690ee242e4ebcfe5f23d7f5763bacc3496e`, and
+provenance SHA-256
+`b7a4ef1c71559fe5f8c96d8d7beee2c6c14ed8fad700aea7711a1cc3aa643ea8`.
+AgentHost's measured compressed pull size is `321483172` bytes. Use
 `release:deploy` for the strict release gate. For the exact v1.0.3 source,
 receipt artifact, and bootstrap invocation, follow the
 [release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v103-pre-acceptance-bootstrap).
+The [v1.0.4 GitHub Release and tag](https://github.com/sabbour/agentweaver/releases/tag/v1.0.4)
+are already published; do not create another release or tag after the
+bootstrap-pins pull request merges. For the v1.0.4 image digests and bootstrap invocation, see the
+[v1.0.4 release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v104-pre-acceptance-bootstrap).
 Neither a Kustomize apply nor a successful rollout alone proves external
 acceptance. The P1 runner can use a published release receipt without an
 integration deployment receipt, but it must verify the exact source tree and

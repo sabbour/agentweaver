@@ -84,6 +84,7 @@ test('P0 runtime ConfigMaps use immutable snapshots except for the operator-upda
     ['orchestrator-runtime-config', orchestrator],
     ['events-and-sessions-runtime-config', events],
     ['identity-broker-runtime-config-v2', identityBroker],
+    ['projects-config-runtime-config', projects],
     ['environment-cilium-config', cilium],
   ]) {
     assert.equal(resource.apiVersion, 'v1');
@@ -177,6 +178,21 @@ test('Identity Broker snapshot keeps the acceptance client and adds the versione
     'openid profile email api.read offline_access projects.admin projects.orchestrator');
   assert.notEqual(web.data.VITE_OAUTH_CLIENT_ID,
     identityBroker.data.IdentityBroker__Clients__0__ClientId);
+});
+
+test('Projects Config privileged setup contains only the approved issuer, tenant, and subject', () => {
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(projects.data)
+        .filter(([key]) => key.startsWith('ProjectsConfig__PrivilegedSetup__'))
+        .sort(([left], [right]) => left.localeCompare(right)),
+    ),
+    {
+      ProjectsConfig__PrivilegedSetup__ApprovedIssuer: broker,
+      ProjectsConfig__PrivilegedSetup__ApprovedSubject: 'c4279823-a7c7-477e-982e-f4145bb0a83d',
+      ProjectsConfig__PrivilegedSetup__ApprovedTenantId: tenant,
+    },
+  );
 });
 
 test('P0 PostgreSQL roles, projected identity keys, and issuer use the exact pre-provisioning inputs', () => {
@@ -525,6 +541,9 @@ test('Gateway, Web, Knowledge, and Projects ConfigMaps contain complete sourced 
     ProjectsConfig__Database__WorkloadIdentity__TokenFilePath: tokenFile,
     ProjectsConfig__Authentication__Authority: broker,
     ProjectsConfig__Authentication__Audience: broker,
+    ProjectsConfig__PrivilegedSetup__ApprovedIssuer: broker,
+    ProjectsConfig__PrivilegedSetup__ApprovedTenantId: tenant,
+    ProjectsConfig__PrivilegedSetup__ApprovedSubject: 'c4279823-a7c7-477e-982e-f4145bb0a83d',
   });
   assert.equal(projects.metadata.annotations?.['agentweaver.io/runtime-config-status'], undefined);
   assert.equal(projects.metadata.annotations?.['agentweaver.io/runtime-config-incomplete-reason'],
@@ -765,18 +784,18 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
   assert.deepEqual(unresolvedInputs, []);
 
   const kustomization = parse(readFileSync(path.join(root, 'deploy', 'k8s', 'kustomization.yaml'), 'utf8'));
-  // Kustomize pins and the linux/amd64 compressed-byte count must match the immutable v1.0.3 publication receipt.
+  // Kustomize pins and the linux/amd64 compressed-byte count must match the immutable v1.0.4 publication receipt.
   const expectedPins = [
-    ['agentweaver-agenthost', '1b551cbb274a820c65a991813e490583b21615b479cd1fc41effe09da34d5972'],
-    ['agentweaver.identity.broker', 'b462827eee091f6e4351681820041a516d0e2f2e7630bfef134c9e13d96fdea4'],
-    ['agentweaver.eventsandsessions', 'd0c38a8519348a478a5c48d9d0a922677e4499a25314f5b72cf7dc1d3329dd0f'],
-    ['agentweaver.gateway', '2df9bc2cccbf762887e4a0ccbb1187ee8e65601e0d76c43f73eb39e068579085'],
-    ['agentweaver.mcp', '7529591ce6c71d4f1e1a0ec7889718b95217c166f93f88906880a4ea7397a779'],
-    ['agentweaver-web', '11a3a57e175a6c5361f1d84fe5be24ac8f7716f9666d25e4e2c19d990e5944e2'],
-    ['agentweaver.orchestrator', 'fad8b3217ccaf680fb9fe5b750ca4e0dc67a8d2f4584b9b05795b35832eef771'],
-    ['agentweaver.environment', '460b98f9970fcd1cf871c0f969e407416457f074f7782cae2919fb881df2230b'],
-    ['agentweaver.knowledge', 'f42829d3f93783f020f2893f439fcd25dfdfed5fa3f6973c783bcc8a752940d5'],
-    ['agentweaver.projects.config', '0775465f17a0cf339694c8090756fce9063d119d0ceac5134f94d700a1f9dc45'],
+    ['agentweaver-agenthost', 'f6d22c6170e3a0d5a3d2d071cd546220c4742771abc091c237f691df63c83025'],
+    ['agentweaver.identity.broker', '9452b1bb82803ecf5dfa35fc2228ff9d68b3d0998ada58ec6a8e46269e399585'],
+    ['agentweaver.eventsandsessions', 'd4c5af4ce384c1e1644dcd6d23e57afd4beba5f661c4fbbd82caeef6c123d458'],
+    ['agentweaver.gateway', 'a10f24fd847409ffca6c328e8206898e46c81caeb9b19aed4386157ba7e7f4a6'],
+    ['agentweaver.mcp', '734eb02c991adbe81624ea07ae1c5e057292d6789dd64af76e61fddce2187026'],
+    ['agentweaver-web', 'c48373e00f43c1c2052507ac1393ca09d5f818cf284f3ab28e7576f0fd6c4d2a'],
+    ['agentweaver.orchestrator', '9cf0fc02d816703ad52a2e70ac310b921385ac5c75230f12a2171c83ecd3a9d1'],
+    ['agentweaver.environment', '5371b561e8e262134aad50d8aa610a3c9b2308ca4d20576902967843c8b87f96'],
+    ['agentweaver.knowledge', '256dd83a1f66b5a3c9a69e3e7db32fb6bffd03dc0cf8c6258fafc50bc8b2f27e'],
+    ['agentweaver.projects.config', '715eeb38463f8688fee41cdff7b2c81ce78aa14ff1acb04f8ff41a15fa69813b'],
   ].map(([repository, digest]) => ({
     name: `ghcr.io/sabbour/${repository}`,
     newName: `ghcr.io/sabbour/${repository}`,
@@ -791,7 +810,7 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
     `${expectedPins[0].newName}@${expectedPins[0].digest}`);
   assert.equal(environmentEnv.get('Environment__Sandbox__AgentSandbox__ContainerImagePlatform'), 'linux/amd64');
   assert.equal(environmentEnv.get('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes'),
-    '321483310');
+    '321483172');
   const agentHostConfigMap = resources.find(resource =>
     resource.kind === 'ConfigMap' && resource.metadata.name === 'agenthost-runtime-v1');
   const agentHost = JSON.parse(agentHostConfigMap.data['appsettings.json']).AgentHost;
