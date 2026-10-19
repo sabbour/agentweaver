@@ -43,6 +43,7 @@ function rejectSecrets(value) {
   }
 }
 
+/** Require a saved integration receipt for images-only input and a release tag for published releases. */
 function validateP1StaticInput(input) {
   if (!isRecord(input) || input.executionIntent !== 'execute') {
     throw new Error('P1 runner input must explicitly set executionIntent to "execute".');
@@ -70,16 +71,32 @@ function validateP1StaticInput(input) {
     }
   }
   const deploymentEvidence = input.deploymentEvidence;
-  requireExactKeys(deploymentEvidence,
-    ['publicationPath', 'manifestPath', 'agentHostArchivePath', 'integrationDeploymentReceiptPath'],
-    'deployment evidence input');
+  const requiredEvidencePaths = ['publicationPath', 'manifestPath', 'agentHostArchivePath'];
+  const allowedEvidencePaths = [
+    ...requiredEvidencePaths,
+    'integrationDeploymentReceiptPath',
+    'releaseTag',
+  ];
+  if (!isRecord(deploymentEvidence)
+    || Object.keys(deploymentEvidence).some(key => !allowedEvidencePaths.includes(key))
+    || requiredEvidencePaths.some(key => !Object.hasOwn(deploymentEvidence, key))) {
+    throw new Error(`The deployment evidence input must contain: ${requiredEvidencePaths.join(', ')} and may include integrationDeploymentReceiptPath or releaseTag.`);
+  }
   for (const name of [
     'publicationPath',
     'manifestPath',
     'agentHostArchivePath',
-    'integrationDeploymentReceiptPath',
   ]) {
     requireString(deploymentEvidence[name], `deployment evidence ${name}`);
+  }
+  if (Object.hasOwn(deploymentEvidence, 'integrationDeploymentReceiptPath')) {
+    requireString(deploymentEvidence.integrationDeploymentReceiptPath, 'deployment evidence integrationDeploymentReceiptPath');
+  }
+  if (Object.hasOwn(deploymentEvidence, 'releaseTag')) {
+    requireString(deploymentEvidence.releaseTag, 'deployment evidence releaseTag');
+    if (!/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(deploymentEvidence.releaseTag)) {
+      throw new Error('The deployment evidence releaseTag must be an exact versioned release tag.');
+    }
   }
   requireExactKeys(pins.providerReceipt,
     ['configMapName', 'sourceCommit', 'uid', 'resourceVersion'], 'provider catalog receipt pin');

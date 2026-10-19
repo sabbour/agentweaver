@@ -127,18 +127,31 @@ test('rejects an invocation, resource, fence, expiry, or allowed-journey mismatc
   }
 });
 
-test('rejects a malformed deployment evidence path or mismatched image receipt pin', () => {
+test('allows a live-readback release path but rejects malformed evidence paths or mismatched image pins', () => {
   const missingPath = input();
   delete missingPath.deploymentEvidence.publicationPath;
   assert.throws(() => validateP1JourneyInput(missingPath, { now }), /deployment evidence input/);
 
   const missingDeploymentReceipt = input();
   delete missingDeploymentReceipt.deploymentEvidence.integrationDeploymentReceiptPath;
-  assert.throws(() => validateP1JourneyInput(missingDeploymentReceipt, { now }), /deployment evidence input/);
+  assert.doesNotThrow(() => validateP1JourneyInput(missingDeploymentReceipt, { now }));
+
+  const unknownReceipt = input();
+  unknownReceipt.deploymentEvidence.releaseDeploymentReceiptPath = 'artifacts/p1/fake-release.json';
+  assert.throws(() => validateP1JourneyInput(unknownReceipt, { now }), /deployment evidence input/);
 
   const mutableImage = input();
   mutableImage.pins.imageReceipt.registryImage = 'ghcr.io/sabbour/agentweaver/agenthost:latest';
   assert.throws(() => validateP1JourneyInput(mutableImage, { now }), /immutable registry/);
+
+  const publishedRelease = input();
+  delete publishedRelease.deploymentEvidence.integrationDeploymentReceiptPath;
+  publishedRelease.deploymentEvidence.releaseTag = 'v1.0.3';
+  assert.doesNotThrow(() => validateP1JourneyInput(publishedRelease, { now }));
+
+  const invalidReleaseTag = structuredClone(publishedRelease);
+  invalidReleaseTag.deploymentEvidence.releaseTag = 'v1.0.3/other';
+  assert.throws(() => validateP1JourneyInput(invalidReleaseTag, { now }), /exact versioned release tag/);
 });
 
 test('accepts an execution plan without caller-created owner receipts', () => {

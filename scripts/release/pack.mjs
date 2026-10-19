@@ -371,15 +371,17 @@ export function packComponents(manifest, {
     fail('git', 'integration source SHA must match the exact clean local HEAD');
   }
   if (manifest.stage === 'release' && manifest.evidence.sourceSha !== sourceSha) fail('manifest.evidence', 'released composition evidence must match preparation HEAD');
-  const integrationSourceTree = integrationImagesOnly ? git('rev-parse', `${sourceSha}^{tree}`) : undefined;
-  if (integrationImagesOnly && !sha.test(integrationSourceTree ?? '')) {
-    fail('git', 'cannot resolve the exact 40-character source tree for integration images');
+  // Shared product images carry the exact commit tree in both release and integration packs.
+  const sourceTree = git('rev-parse', `${sourceSha}^{tree}`);
+  if (!sha.test(sourceTree)) {
+    fail('git', 'cannot resolve the exact 40-character source tree for product images');
   }
-  const integrationLabels = integrationImagesOnly ? (version) => ({
+  const integrationSourceTree = integrationImagesOnly ? sourceTree : undefined;
+  const productImageLabels = (version) => ({
     'org.opencontainers.image.revision': sourceSha,
-    'io.agentweaver.source-tree': integrationSourceTree,
+    'io.agentweaver.source-tree': sourceTree,
     'org.opencontainers.image.version': version,
-  }) : undefined;
+  });
   const probeSource = components.some(component => component.id === 'Agentweaver.FoundationProbe')
     ? resolveProbeImageSource({ repoRoot: root, readFile }) : undefined;
   if (probeSource && probeSource.sourceSha !== sourceSha) fail('git', 'Probe image source changed before preparation');
@@ -454,7 +456,7 @@ export function packComponents(manifest, {
         imageReference,
         platform: 'linux/amd64',
         baseImages,
-        ...(integrationImagesOnly ? { integrationLabels: integrationLabels(component.version) } : {}),
+        ...(integrationImagesOnly ? { integrationLabels: productImageLabels(component.version) } : {}),
       });
       continue;
     }
@@ -476,7 +478,7 @@ export function packComponents(manifest, {
       expectedArtifacts.set(`${component.id}.${component.version}.tar`, {
         componentId: component.id, kind: 'image', repository: componentImageRepository(component.id),
         tag, imageReference: `${componentImageRepository(component.id)}:${tag}`, platform: 'linux/amd64',
-        ...(integrationImagesOnly ? { integrationLabels: integrationLabels(component.version) } : {}),
+        ...(integrationImagesOnly ? { integrationLabels: productImageLabels(component.version) } : {}),
       });
       if (integrationImagesOnly && source.sourceTree !== integrationSourceTree) {
         fail(component.id, 'AgentHost source tree differs from the exact integration source tree');
@@ -495,7 +497,7 @@ export function packComponents(manifest, {
         tag: integrationImagesOnly ? sourceSha : component.version, baseImage,
         ...(integrationImagesOnly ? {
           imageReference: `${componentImageRepository(component.id)}:${sourceSha}`,
-          integrationLabels: integrationLabels(component.version),
+          integrationLabels: productImageLabels(component.version),
         } : {}),
       });
     } else {
@@ -526,6 +528,7 @@ export function packComponents(manifest, {
           mkdirImpl(path.dirname(destination), { recursive: true });
           writeFileImpl(destination, readFile(path.resolve(root, file.path)));
         }
+        // Keep AgentHost's OCI labels aligned with the source pins used for SDK container images.
         runDocker([
           'buildx', 'build', '--pull=false', '--no-cache', '--platform', 'linux/amd64',
           '--file', AGENTHOST_DOCKERFILE, '--tag', artifact.imageReference, '--load',
@@ -625,9 +628,8 @@ export function packComponents(manifest, {
           '--tag', artifact.imageReference,
           '--build-arg', `IMAGE_TAG=${component.version}`,
           '--build-arg', `GIT_SHA=${sourceSha}`,
-          ...(integrationImagesOnly
-            ? Object.entries(integrationLabels(component.version)).flatMap(([name, value]) => ['--label', `${name}=${value}`])
-            : []),
+          ...Object.entries(productImageLabels(component.version))
+            .flatMap(([name, value]) => ['--label', `${name}=${value}`]),
           '--file', 'Dockerfile', '.',
         ], contextDir);
         let imageInfo;
@@ -639,10 +641,9 @@ export function packComponents(manifest, {
         if (!imageInfo || !/^sha256:[a-f0-9]{64}$/.test(imageInfo.Id ?? '') ||
             imageInfo.Os !== 'linux' || imageInfo.Architecture !== 'amd64' ||
             imageInfo.Config?.Labels?.['org.opencontainers.image.revision'] !== sourceSha ||
-            (integrationImagesOnly &&
-              imageInfo.Config?.Labels?.['io.agentweaver.source-tree'] !== integrationSourceTree) ||
+            imageInfo.Config?.Labels?.['io.agentweaver.source-tree'] !== sourceTree ||
             imageInfo.Config?.Labels?.['org.opencontainers.image.version'] !== component.version) {
-          fail('docker', 'built web image is missing its source-SHA or component-version labels');
+          fail('docker', 'built web image is missing its exact source, tree, or component-version labels');
         }
         const artifactName = `${component.id}.${component.version}.tar`;
         const artifactPath = path.join(resolvedOutDir, artifactName);
@@ -661,8 +662,7 @@ export function packComponents(manifest, {
         artifact.imageId = imageInfo.Id;
         artifact.labels = {
           'org.opencontainers.image.revision': imageInfo.Config.Labels['org.opencontainers.image.revision'],
-          ...(integrationImagesOnly
-            ? { 'io.agentweaver.source-tree': imageInfo.Config.Labels['io.agentweaver.source-tree'] } : {}),
+          'io.agentweaver.source-tree': imageInfo.Config.Labels['io.agentweaver.source-tree'],
           'org.opencontainers.image.version': imageInfo.Config.Labels['org.opencontainers.image.version'],
         };
         artifact.buildOutput = buildOutput;
@@ -706,11 +706,12 @@ export function packComponents(manifest, {
       `-p:ProbeSourceTree=${probeSource.sourceTree}`,
       `-p:ProbeInfrastructureHash=${probeSource.sourceHash}`,
     ] : [];
-    const integrationLabelArgs = integrationImagesOnly && component.kind === 'service' ? [
-      '-p:AgentweaverIntegrationImagesOnly=true',
-      `-p:AgentweaverIntegrationSourceSha=${sourceSha}`,
-      `-p:AgentweaverIntegrationSourceTree=${integrationSourceTree}`,
-      `-p:AgentweaverIntegrationVersion=${component.version}`,
+    // Product release and integration images share the exact source and version labels.
+    const sourceLabelArgs = component.kind === 'service'
+      && component.id !== 'Agentweaver.FoundationProbe' ? [
+      `-p:AgentweaverImageSourceSha=${sourceSha}`,
+      `-p:AgentweaverImageSourceTree=${sourceTree}`,
+      `-p:AgentweaverImageVersion=${component.version}`,
     ] : [];
     dotnet(['restore', project, '--locked-mode']);
     dotnet(['build', project, '--configuration', 'Release', '--no-restore',
@@ -721,7 +722,7 @@ export function packComponents(manifest, {
     if (component.kind === 'service') {
       dotnet(['publish', project, '--configuration', 'Release', '--no-restore', '-t:PublishContainer',
         '-p:EnableSdkContainerSupport=true', '-p:ContinuousIntegrationBuild=true', `-p:RepositoryCommit=${sourceSha}`,
-        ...baseImageArgs, ...probeSourceArgs, ...integrationLabelArgs,
+        ...baseImageArgs, ...probeSourceArgs, ...sourceLabelArgs,
         `-p:ContainerRepository=${image.repository}`, `-p:ContainerImageTag=${integrationImagesOnly ? sourceSha : component.version}`,
         `-p:ContainerArchiveOutputPath=${path.join(resolvedOutDir, expectedFile)}`]);
     } else {

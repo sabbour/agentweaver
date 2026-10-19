@@ -267,7 +267,10 @@ test('P1 CLI parses the UI page module and prepares exact deployment evidence be
     },
   });
   try {
-    await writeFile(inputPath, JSON.stringify(validInput()), { encoding: 'utf8' });
+    const input = validInput();
+    delete input.deploymentEvidence.integrationDeploymentReceiptPath;
+    input.deploymentEvidence.releaseTag = 'v1.0.3';
+    await writeFile(inputPath, JSON.stringify(input), { encoding: 'utf8' });
     const code = await runP1Cli([
       '--surface', 'ui',
       '--input', inputPath,
@@ -289,8 +292,9 @@ test('P1 CLI parses the UI page module and prepares exact deployment evidence be
     assert.equal(preparation.providerCatalog.configMapName, 'provider-catalog-v1');
     assert.equal(path.basename(preparation.publicationPath), 'publication.json');
     assert.equal(path.basename(preparation.manifestPath), 'foundation.json');
+    assert.equal(preparation.releaseTag, 'v1.0.3');
     assert.equal(path.basename(preparation.agentHostArchivePath), 'Agentweaver.AgentHost.oci.tar');
-    assert.equal(path.basename(preparation.integrationDeploymentReceiptPath), 'integration-deployment.json');
+    assert.equal(preparation.integrationDeploymentReceiptPath, undefined);
     const result = JSON.parse(output.at(-1));
     assert.match(result.failure.message, /Controlled source-evidence stop/);
     assert.doesNotMatch(result.failure.message, /read credentials/);

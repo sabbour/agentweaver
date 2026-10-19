@@ -1,5 +1,10 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { redact } from './redaction.mjs';
+
+/** Hash a JSON-compatible receipt using the same serialization as the deployment evidence writer. */
+function hashJson(value) {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
 
 /** Error used when the requested surface cannot prove a required P1 precondition. */
 export class P1BlockedError extends Error {
@@ -28,7 +33,7 @@ export function requireP1Http(call, expected, operationId) {
 
 /**
  * Confirm deployment, provider, and image observations match every exact source and artifact pin.
- * Returns only redacted evidence; any missing or mismatched receipt blocks the journey.
+ * Require publication and resource hashes, and preserve whether release evidence came from bootstrap.
  */
 export function summarizeP1SourceEvidence(sourceEvidence, pins) {
   if (!sourceEvidence || sourceEvidence.services?.status !== 'passed'
@@ -37,19 +42,38 @@ export function summarizeP1SourceEvidence(sourceEvidence, pins) {
   }
   const { sourceReceipt, providerReceipt, imageReceipt } = pins;
   const integrationDeployment = sourceEvidence.integrationDeployment;
+  const releaseDeployment = sourceEvidence.releaseDeployment;
+  const deployment = releaseDeployment ?? integrationDeployment;
   const measurement = sourceEvidence.agentHostImageMeasurement;
   const provider = sourceEvidence.providerCatalog;
   if (sourceEvidence.source?.sourceSha !== sourceReceipt.sourceSha
     || sourceEvidence.source?.sourceTree !== sourceReceipt.sourceTree
     || sourceEvidence.services.sourceSha !== sourceReceipt.sourceSha
     || sourceEvidence.services.sourceTree !== sourceReceipt.sourceTree
-    || integrationDeployment?.status !== 'deployed'
-    || integrationDeployment.sourceSha !== sourceReceipt.sourceSha
-    || integrationDeployment.sourceTree !== sourceReceipt.sourceTree
-    || !/^[a-f0-9]{64}$/.test(integrationDeployment.manifestSha256 ?? '')
-    || !/^[a-f0-9]{64}$/.test(integrationDeployment.publicationSha256 ?? '')
-    || !/^[a-f0-9]{64}$/.test(integrationDeployment.readbackSha256 ?? '')
-    || integrationDeployment.target?.namespace !== pins.namespace
+    || Boolean(integrationDeployment) === Boolean(releaseDeployment)
+    || deployment?.status !== 'deployed'
+    || deployment.sourceSha !== sourceReceipt.sourceSha
+    || deployment.sourceTree !== sourceReceipt.sourceTree
+    || !/^[a-f0-9]{64}$/.test(deployment.manifestSha256 ?? '')
+    || releaseDeployment !== undefined
+      && (!['release', 'pre-acceptance'].includes(releaseDeployment.resultType)
+        || !/^[a-f0-9]{64}$/.test(releaseDeployment.deploymentManifestSha256 ?? ''))
+    || !/^[a-f0-9]{64}$/.test(deployment.publicationSha256 ?? '')
+    || !/^[a-f0-9]{64}$/.test(deployment.readbackSha256 ?? '')
+    || deployment.target?.namespace !== pins.namespace
+    || releaseDeployment !== undefined && (
+      releaseDeployment.target?.context !== pins.context
+      || !releaseDeployment.readbacks
+      || hashJson(releaseDeployment.readbacks) !== releaseDeployment.readbackSha256
+      || hashJson({
+        context: sourceEvidence.services.context,
+        namespace: sourceEvidence.services.namespace,
+        sourceSha: sourceEvidence.services.sourceSha,
+        sourceTree: sourceEvidence.services.sourceTree,
+        providerCatalog: sourceEvidence.services.providerCatalog,
+        services: sourceEvidence.services.services,
+      }) !== releaseDeployment.readbackSha256
+    )
     || measurement.sourceSha !== sourceReceipt.sourceSha
     || measurement.sourceTree !== sourceReceipt.sourceTree
     || provider?.name !== providerReceipt.configMapName
@@ -66,7 +90,7 @@ export function summarizeP1SourceEvidence(sourceEvidence, pins) {
   }
   return redact({
     source: sourceEvidence.source,
-    integrationDeployment,
+    ...(releaseDeployment ? { releaseDeployment } : { integrationDeployment }),
     providerCatalog: provider,
     services: sourceEvidence.services,
     agentHostImageMeasurement: measurement,

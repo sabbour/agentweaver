@@ -3,11 +3,14 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 
 import {
+  createP1ReleaseDeploymentEvidence,
   loadValidatedPublicationImages,
   observeP1ServiceDeployments,
+  resolveReviewedSource,
   validateP1IntegrationDeploymentReceipt,
   validateP1PublicationReceipt,
 } from '../p1-deployment-evidence.mjs';
+import { componentImageRepository, componentImageTag } from '../../release/pack.mjs';
 
 const sourceSha = 'a'.repeat(40);
 const sourceTree = 'b'.repeat(40);
@@ -16,6 +19,31 @@ const context = 'approved-aks-context';
 const namespace = 'agentweaver';
 const sourceAnnotation = 'agentweaver.io/provider-catalog-source';
 const providerCatalog = { configMapName: 'provider-catalog-v1', sourceCommit: providerSource };
+
+test('allows a clean newer helper checkout only when the exact historical source objects exist', () => {
+  const helperSha = 'd'.repeat(40);
+  const outputs = new Map([
+    ['rev-parse --verify HEAD', helperSha],
+    [`rev-parse --verify ${sourceSha}^{commit}`, sourceSha],
+    [`rev-parse --verify ${sourceSha}^{tree}`, sourceTree],
+    ['status --porcelain --untracked-files=normal', ''],
+  ]);
+  const spawnSyncImpl = (_executable, args) => ({
+    status: 0,
+    stdout: `${outputs.get(args.join(' ')) ?? ''}\n`,
+  });
+  assert.deepEqual(resolveReviewedSource({
+    repoRoot: 'C:\\repository',
+    expectedSourceSha: sourceSha,
+    requireHeadMatch: false,
+    spawnSyncImpl,
+  }), { sourceSha, sourceTree });
+  assert.throws(() => resolveReviewedSource({
+    repoRoot: 'C:\\repository',
+    expectedSourceSha: sourceSha,
+    spawnSyncImpl,
+  }), /clean repository does not contain/);
+});
 const serviceNames = [
   'identity-broker',
   'events-and-sessions',
@@ -71,7 +99,8 @@ function imageMetadata(name, treeLabel) {
   return { config, configDigest, manifest, manifestDigest: digest(manifest) };
 }
 
-function fixture({ webTreeLabel, gatewayIndex = false, gatewayRuntimeDigest } = {}) {
+/** Build deterministic live objects and registry bytes for exact service-source readback tests. */
+function fixture({ webTreeLabel = sourceTree, omitWebTreeLabel = false, gatewayIndex = false, gatewayRuntimeDigest } = {}) {
   const items = [{
     apiVersion: 'v1',
     kind: 'ConfigMap',
@@ -82,7 +111,8 @@ function fixture({ webTreeLabel, gatewayIndex = false, gatewayRuntimeDigest } = 
   const registryBodies = new Map();
   let gatewayChildDigest = null;
   for (const name of serviceNames) {
-    const metadata = imageMetadata(name, name === 'web' ? webTreeLabel : sourceTree);
+    const metadata = imageMetadata(name,
+      name === 'web' ? (omitWebTreeLabel ? undefined : webTreeLabel) : sourceTree);
     const repository = `sabbour/agentweaver/${name}`;
     let registryManifest = metadata.manifest;
     let registryDigest = metadata.manifestDigest;
@@ -128,6 +158,8 @@ function fixture({ webTreeLabel, gatewayIndex = false, gatewayRuntimeDigest } = 
       metadata: {
         name,
         namespace,
+        uid: `service-${name}-uid`,
+        resourceVersion: '8',
         labels: { 'app.kubernetes.io/name': name, 'agentweaver.io/service': name },
       },
     });
@@ -208,6 +240,7 @@ function createRegistryFetch(registryBodies, calls = [], {
   tokenEndpointStatus = 200,
   missingToken = false,
   tokenRepository = repository => repository,
+  blobRedirectOrigin,
 } = {}) {
   let tokenRepositoryForRead;
   return async (url, options = {}) => {
@@ -229,7 +262,31 @@ function createRegistryFetch(registryBodies, calls = [], {
       });
     }
 
-    assert.equal(options.redirect, 'error');
+    if (requestUrl.origin === 'https://ghcr.io' && blobRedirectOrigin
+      && requestUrl.pathname.includes('/blobs/')) {
+      return new Response(null, {
+        status: 307,
+        headers: { location: `${blobRedirectOrigin}${requestUrl.pathname}` },
+      });
+    }
+    if (requestUrl.origin === 'https://pkg-containers.githubusercontent.com') {
+      assert.equal(options.redirect, 'manual');
+      assert.equal(new Headers(options.headers).has('authorization'), false);
+      const repositoryMatch = /^\/v2\/(.+)\/(?:manifests|blobs)\/[^/]+$/
+        .exec(requestUrl.pathname);
+      assert.ok(repositoryMatch, 'redirected blob must retain the descriptor path');
+      const body = registryBodies.get(`https://ghcr.io${requestUrl.pathname}`);
+      if (!body) return new Response('missing', { status: 404 });
+      const expectedDigest = requestUrl.pathname.split('/').at(-1);
+      return new Response(body, {
+        status: 200,
+        headers: {
+          'content-type': 'application/vnd.oci.image.config.v1+json',
+          'docker-content-digest': expectedDigest,
+        },
+      });
+    }
+    assert.equal(options.redirect, 'manual');
     assert.equal(
       new Headers(options.headers).get('authorization') === `Bearer ${registryToken}`,
       true,
@@ -311,7 +368,7 @@ test('validates the exact P1 published image rows and source-bound AgentHost mea
       version,
       kind: 'image',
       sha256: archiveSha256,
-      destination: `${repository}:${version}`,
+      destination: `${repository}:${sourceSha}`,
     });
     published.push({
       id,
@@ -319,6 +376,12 @@ test('validates the exact P1 published image rows and source-bound AgentHost mea
       kind: 'image',
       archiveSha256,
       image: `${repository}@${digest}`,
+      sourceSha,
+      sourceTree,
+      tag: sourceSha,
+      configDigest: id === 'Agentweaver.AgentHost'
+        ? `sha256:${'c'.repeat(64)}`
+        : `sha256:${String(index + 21).padStart(2, '0').repeat(32)}`,
       ...(id === 'Agentweaver.AgentHost' ? {
         ociArchiveSha256: 'a'.repeat(64),
         imageConfigDigest: `sha256:${'c'.repeat(64)}`,
@@ -337,23 +400,11 @@ test('validates the exact P1 published image rows and source-bound AgentHost mea
       } : {}),
     });
   }
-  planned.push({
-    id: 'Agentweaver.FoundationProbe',
-    version: '0.0.1',
-    kind: 'image',
-    sha256: 'f'.repeat(64),
-    destination: 'ghcr.io/sabbour/agentweaver-foundation-probe:0.0.1',
-  });
-  published.push({
-    id: 'Agentweaver.FoundationProbe',
-    version: '0.0.1',
-    kind: 'image',
-    archiveSha256: 'f'.repeat(64),
-    image: `ghcr.io/sabbour/agentweaver-foundation-probe@sha256:${'e'.repeat(64)}`,
-  });
   const publication = {
     schemaVersion: 1,
+    mode: 'images-only',
     sourceSha,
+    sourceTree,
     provenanceSha256: '9'.repeat(64),
     status: 'published',
     planned,
@@ -372,7 +423,232 @@ test('validates the exact P1 published image rows and source-bound AgentHost mea
   const missingService = structuredClone(publication);
   missingService.published = missingService.published.filter(row => row.id !== 'Agentweaver.Gateway');
   assert.throws(() => validateP1PublicationReceipt(missingService, manifest, sourceSha, sourceTree),
-    /one source-matched image for Agentweaver.Gateway/);
+    /complete result for the exact reviewed source/);
+});
+
+/** Create a source-tagged release receipt whose image digests are pinned by the release manifest. */
+function releasePublicationFixture() {
+  const manifest = {
+    schemaVersion: 1,
+    stage: 'release',
+    evidence: { sourceSha },
+    components: [],
+    compatibility: [],
+  };
+  const planned = [];
+  const published = [];
+  for (const [index, [id, name]] of p1ServiceComponents.entries()) {
+    const version = '1.0.0';
+    const repository = `ghcr.io/sabbour/${componentImageRepository(id)}`;
+    const archiveSha256 = String(index + 1).padStart(2, '0').repeat(32);
+    const imageDigest = `sha256:${String(index + 11).padStart(2, '0').repeat(32)}`;
+    const configDigest = `sha256:${String(index + 21).padStart(2, '0').repeat(32)}`;
+    manifest.components.push({
+      id,
+      kind: 'service',
+      version,
+      project: `services/${id}/${id}.csproj`,
+      imageDigest,
+    });
+    planned.push({
+      id,
+      version,
+      kind: 'image',
+      sha256: archiveSha256,
+      destination: `${repository}:${componentImageTag(version, sourceSha)}`,
+    });
+    published.push({
+      id,
+      version,
+      kind: 'image',
+      archiveSha256,
+      image: `${repository}@${imageDigest}`,
+      ...(id === 'Agentweaver.AgentHost' ? {
+        ociArchiveSha256: 'a'.repeat(64),
+        imageConfigDigest: configDigest,
+        preparedOciMeasurement: {
+          kind: 'agenthost-image',
+          schemaVersion: 1,
+          sourceSha,
+          sourceTree,
+          image: {
+            digest: imageDigest,
+            configDigest,
+            version,
+            platform: 'linux/amd64',
+            compressedPullBytes: 2048,
+          },
+        },
+      } : {}),
+    });
+  }
+  const publication = {
+    schemaVersion: 1,
+    sourceSha,
+    requiredPackageIds: [],
+    provenanceSha256: '9'.repeat(64),
+    status: 'published',
+    planned,
+    published,
+  };
+  return { manifest, publication };
+}
+
+/** Mirror the exact readback fields emitted by the live P1 service observer. */
+function releaseServiceReadbackFixture(images) {
+  return {
+    status: 'passed',
+    observedAt: '2026-10-19T07:24:28.554Z',
+    context,
+    namespace,
+    sourceSha,
+    sourceTree,
+    providerCatalog: {
+      name: providerCatalog.configMapName,
+      uid: 'catalog-uid',
+      resourceVersion: '12',
+      sourceCommit: providerSource,
+      sha256: '1'.repeat(64),
+    },
+    services: images.filter(image => image.id !== 'Agentweaver.AgentHost').map((image, index) => {
+      const manifestDigest = image.image.slice(image.image.lastIndexOf('@') + 1);
+      const configDigest = `sha256:${String(index + 31).padStart(2, '0').repeat(32)}`;
+      return {
+        componentId: image.id,
+        service: {
+          name: image.name,
+          uid: `service-${index}`,
+          resourceVersion: '8',
+          sha256: '2'.repeat(64),
+        },
+        deployment: {
+          name: image.name,
+          uid: `deployment-${index}`,
+          sha256: '3'.repeat(64),
+          generation: 1,
+        },
+        replicaSet: {
+          name: `${image.name}-set`,
+          uid: `replicaset-${index}`,
+          sha256: '4'.repeat(64),
+        },
+        pods: [{
+          name: `${image.name}-pod`,
+          uid: `pod-${index}`,
+          sha256: '5'.repeat(64),
+          ready: true,
+          image: image.image,
+          imageID: image.image,
+          registry: {
+            manifestDigest,
+            platformDigest: manifestDigest,
+            configDigest,
+            sourceSha,
+            sourceTree,
+            platform: 'linux/amd64',
+          },
+        }],
+      };
+    }),
+  };
+}
+
+test('accepts release publication and live readbacks only when exact source tags and digests match', () => {
+  const fixture = releasePublicationFixture();
+  const images = validateP1PublicationReceipt(
+    fixture.publication, fixture.manifest, sourceSha, sourceTree);
+  assert.equal(images.length, p1ServiceComponents.length);
+  assert.equal(images.find(image => image.id === 'Agentweaver.Identity.Broker').result.version, '1.0.0');
+  assert.equal(
+    fixture.publication.planned[0].destination,
+    `ghcr.io/sabbour/${componentImageRepository(fixture.publication.planned[0].id)}:${componentImageTag('1.0.0', sourceSha)}`,
+  );
+  const serviceEvidence = releaseServiceReadbackFixture(images);
+  const deployment = createP1ReleaseDeploymentEvidence({
+    sourceSha,
+    sourceTree,
+    manifest: fixture.manifest,
+    publication: fixture.publication,
+    context,
+    namespace,
+    providerCatalog,
+    images,
+    serviceEvidence,
+  });
+  assert.equal(deployment.status, 'deployed');
+  assert.equal(deployment.resultType, 'release');
+  assert.equal(images.find(image => image.id === 'Agentweaver.AgentHost').ociArchiveSha256, 'a'.repeat(64));
+  assert.equal(deployment.publicationSha256,
+    createHash('sha256').update(JSON.stringify(fixture.publication)).digest('hex'));
+  assert.equal(deployment.readbackSha256,
+    createHash('sha256').update(JSON.stringify(deployment.readbacks)).digest('hex'));
+
+  const wrongTag = structuredClone(fixture.publication);
+  wrongTag.planned[0].destination = `ghcr.io/sabbour/${componentImageRepository(wrongTag.planned[0].id)}:latest`;
+  assert.throws(() => validateP1PublicationReceipt(wrongTag, fixture.manifest, sourceSha, sourceTree),
+    /release manifest disagree/);
+
+  const wrongDigest = structuredClone(fixture.publication);
+  wrongDigest.published[0].image = `ghcr.io/sabbour/${componentImageRepository(wrongDigest.published[0].id)}@sha256:${'f'.repeat(64)}`;
+  assert.throws(() => validateP1PublicationReceipt(wrongDigest, fixture.manifest, sourceSha, sourceTree),
+    /release manifest disagree/);
+
+  const wrongReadback = structuredClone(serviceEvidence);
+  wrongReadback.services[0].pods[0].imageID =
+    `ghcr.io/sabbour/${componentImageRepository(wrongReadback.services[0].componentId)}@sha256:${'f'.repeat(64)}`;
+  assert.throws(() => createP1ReleaseDeploymentEvidence({
+    sourceSha, sourceTree, manifest: fixture.manifest, publication: fixture.publication,
+    context, namespace, providerCatalog, images, serviceEvidence: wrongReadback,
+  }), /image readback.*differs/);
+
+  const missingResourceHash = structuredClone(serviceEvidence);
+  delete missingResourceHash.services[0].service.sha256;
+  assert.throws(() => createP1ReleaseDeploymentEvidence({
+    sourceSha, sourceTree, manifest: fixture.manifest, publication: fixture.publication,
+    context, namespace, providerCatalog, images, serviceEvidence: missingResourceHash,
+  }), /release deployment readback.*incomplete/);
+});
+
+test('accepts a bootstrap draft only with its separately pinned publication manifest', () => {
+  const fixture = releasePublicationFixture();
+  const manifest = structuredClone(fixture.manifest);
+  manifest.stage = 'draft';
+  delete manifest.evidence;
+  // Bootstrap starts from a digest-free tracked draft; the publication supplies only deployment pins.
+  const deploymentManifest = structuredClone(manifest);
+  for (const component of deploymentManifest.components) {
+    component.imageDigest = fixture.publication.published.find(row => row.id === component.id)
+      .image.split('@').at(-1);
+  }
+  const images = validateP1PublicationReceipt(
+    fixture.publication, manifest, sourceSha, sourceTree, deploymentManifest);
+  const deployment = createP1ReleaseDeploymentEvidence({
+    sourceSha,
+    sourceTree,
+    manifest,
+    deploymentManifest,
+    publication: fixture.publication,
+    context,
+    namespace,
+    providerCatalog,
+    images,
+    serviceEvidence: releaseServiceReadbackFixture(images),
+  });
+  assert.equal(deployment.resultType, 'pre-acceptance');
+  assert.equal(deployment.manifestSha256,
+    createHash('sha256').update(JSON.stringify(manifest)).digest('hex'));
+  assert.equal(deployment.deploymentManifestSha256,
+    createHash('sha256').update(JSON.stringify(deploymentManifest)).digest('hex'));
+  assert.equal(images.find(image => image.id === 'Agentweaver.AgentHost').ociArchiveSha256, 'a'.repeat(64));
+
+  const wrongPin = structuredClone(deploymentManifest);
+  wrongPin.components[0].imageDigest = `sha256:${'f'.repeat(64)}`;
+  assert.throws(() => validateP1PublicationReceipt(
+    fixture.publication, manifest, sourceSha, sourceTree, wrongPin),
+  /release manifest disagree/);
+  assert.throws(() => validateP1PublicationReceipt(
+    fixture.publication, manifest, sourceSha, sourceTree),
+  /complete result for the exact reviewed source/);
 });
 
 function integrationReceiptFixture() {
@@ -582,6 +858,9 @@ test('records native service UIDs and verifies pod imageIDs plus registry source
   assert.equal(projects?.pods[0].registry.sourceSha, sourceSha);
   const web = result.services.find(item => item.componentId === 'Agentweaver.web');
   assert.equal(web?.pods[0].registry.sourceTree, sourceTree);
+  const webService = data.items.find(item => item.kind === 'Service' && item.metadata.name === 'web');
+  assert.equal(web?.service.sha256,
+    createHash('sha256').update(JSON.stringify(webService)).digest('hex'));
   assert.equal(result.agentHostRuntime.status, 'blocked');
   const tokenRequests = calls.filter(call => new URL(call.url).pathname === '/token');
   const imageRequests = calls.filter(call => new URL(call.url).pathname.startsWith('/v2/'));
@@ -665,6 +944,58 @@ test('rejects registry manifest bytes that do not match the immutable descriptor
     }),
     /Registry response bytes do not match the immutable image descriptor/,
   );
+});
+
+test('follows only the GHCR blob redirect without forwarding authorization and still checks bytes', async () => {
+  const data = fixture();
+  const calls = [];
+  const redirected = await observeP1ServiceDeployments({
+    context,
+    namespace,
+    sourceSha,
+    sourceTree,
+    images: data.images,
+    providerCatalog,
+    readObjects: async () => data.items,
+    fetchImpl: createRegistryFetch(data.registryBodies, calls, {
+      blobRedirectOrigin: 'https://pkg-containers.githubusercontent.com',
+    }),
+  });
+  assert.equal(redirected.status, 'passed');
+  const blobCalls = calls.filter(call =>
+    new URL(call.url).origin === 'https://pkg-containers.githubusercontent.com');
+  assert.equal(blobCalls.length, serviceNames.length);
+  assert.ok(blobCalls.every(call => !new Headers(call.options.headers).has('authorization')));
+
+  const changedBodies = new Map(data.registryBodies);
+  const configUrl = [...changedBodies.keys()].find(url => url.includes('/identity-broker/blobs/'));
+  changedBodies.set(configUrl, Buffer.concat([changedBodies.get(configUrl), Buffer.from(' ')]));
+  await assert.rejects(
+    observeP1ServiceDeployments({
+      context, namespace, sourceSha, sourceTree, images: data.images, providerCatalog,
+      readObjects: async () => data.items,
+      fetchImpl: createRegistryFetch(changedBodies, [], {
+        blobRedirectOrigin: 'https://pkg-containers.githubusercontent.com',
+      }),
+    }),
+    /Registry response bytes do not match the immutable image descriptor/,
+  );
+});
+
+test('rejects a GHCR blob redirect to a non-allowlisted host before making the redirected request', async () => {
+  const data = fixture();
+  const calls = [];
+  await assert.rejects(
+    observeP1ServiceDeployments({
+      context, namespace, sourceSha, sourceTree, images: data.images, providerCatalog,
+      readObjects: async () => data.items,
+      fetchImpl: createRegistryFetch(data.registryBodies, calls, {
+        blobRedirectOrigin: 'https://registry-redirect.invalid',
+      }),
+    }),
+    /non-allowlisted HTTPS origin/,
+  );
+  assert.ok(calls.every(call => new URL(call.url).origin === 'https://ghcr.io'));
 });
 
 test('requires the exact provider catalog binding on the Deployment template and ready owner Pod', async () => {
@@ -855,6 +1186,21 @@ test('blocks stale, incomplete, foreign, or unverifiable deployment evidence', a
       providerCatalog,
       readObjects: async () => conflictingWebLabel.items,
       fetchImpl: createRegistryFetch(conflictingWebLabel.registryBodies),
+    }),
+    /not bound to the reviewed source/,
+  );
+
+  const missingWebLabel = fixture({ omitWebTreeLabel: true });
+  await assert.rejects(
+    observeP1ServiceDeployments({
+      context,
+      namespace,
+      sourceSha,
+      sourceTree,
+      images: missingWebLabel.images,
+      providerCatalog,
+      readObjects: async () => missingWebLabel.items,
+      fetchImpl: createRegistryFetch(missingWebLabel.registryBodies),
     }),
     /not bound to the reviewed source/,
   );

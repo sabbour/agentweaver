@@ -117,6 +117,24 @@ with empty evidence; native passes also require completed or not-required
 cleanup, and read-only dispatch-recovery passes must report no created
 resources.
 
+The P1 runner accepts two deployment evidence paths. An images-only integration
+publication requires its saved integration deployment receipt and the current
+checkout at the exact source commit. A published release uses the exact
+`releaseTag` and source manifest, verifies the tag and immutable publication
+result against GitHub, then reads the selected namespace and verifies each live
+image digest and its source-commit and source-tree labels. Release evidence can
+use a newer clean helper checkout because the manifest and project files are
+read from the exact source commit in Git.
+
+The bootstrap path accepts only the tracked draft at its published source
+commit. It derives a digest-pinned deployment manifest from the verified
+publication receipt and records the result as `pre-acceptance`; it does not
+claim that the bootstrap command created release-acceptance evidence. Both
+release paths hash the publication and current resource readbacks together.
+Release and bootstrap inputs require `releaseTag` and omit
+`integrationDeploymentReceiptPath`. Images published without the required
+source-tree label fail this check; immutable images cannot be relabeled.
+
 Native probes cover Storage isolation, network datapath, Sandbox lifecycle,
 AgentHost readiness, numeric dispatch limits, and restart/duplicate-fence
 recovery. The dispatch-recovery reader can query existing Host no-send receipts
