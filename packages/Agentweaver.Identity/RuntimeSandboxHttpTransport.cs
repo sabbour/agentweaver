@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Net.Http.Headers;
+using System.Net.Security;
 using System.Text.Json;
 using Agentweaver.Abstractions;
 
@@ -89,39 +90,54 @@ public static class RuntimeSandboxHttpTransport
     }
 
     /// <summary>
-    /// Creates a handler that disables redirects and proxies and connects the validated
-    /// sandbox hostname directly to its configured Pod address.
+    /// Creates a handler that validates internal TLS with the mounted backend CA, disables
+    /// redirects and proxies, and connects the validated sandbox hostname to its Pod address.
     /// </summary>
-    public static SocketsHttpHandler CreateHandler() => new()
+    public static SocketsHttpHandler CreateHandler() =>
+        CreateHandler(RuntimeOwnerHttpTransport.ServiceBackendCaFile);
+
+    /// <summary>Creates the direct transport using the specified service backend CA file.</summary>
+    internal static SocketsHttpHandler CreateHandler(string caFile)
     {
-        AllowAutoRedirect = false,
-        UseProxy = false,
-        PooledConnectionLifetime = TimeSpan.Zero,
-        ConnectCallback = async (context, cancellationToken) =>
+        if (!File.Exists(caFile))
+            throw new InvalidOperationException("The service backend CA ConfigMap is required.");
+
+        return new SocketsHttpHandler
         {
-            EndPoint destination = context.DnsEndPoint;
-            if (context.InitialRequestMessage.Options.TryGetValue(EndpointOption, out var endpoint))
+            AllowAutoRedirect = false,
+            UseProxy = false,
+            PooledConnectionLifetime = TimeSpan.Zero,
+            SslOptions =
             {
-                endpoint.Validate();
-                var configureEndpoint = endpoint.ReceiverConfigureEndpoint
-                    ?? throw new RuntimeAuthorizationException("runtime_sandbox_endpoint_invalid");
-                endpoint.ValidateForConfigureEndpoint(configureEndpoint);
-                if (context.DnsEndPoint.Host != configureEndpoint.Host ||
-                    context.DnsEndPoint.Port != configureEndpoint.Port)
-                    throw new RuntimeAuthorizationException("runtime_sandbox_endpoint_invalid");
-                destination = new IPEndPoint(IPAddress.Parse(endpoint.PodAddress), configureEndpoint.Port);
-            }
-            var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
-            try
+                RemoteCertificateValidationCallback = (_, certificate, chain, errors) =>
+                    RuntimeOwnerHttpTransport.ValidateServerCertificate(certificate, chain, errors, caFile)
+            },
+            ConnectCallback = async (context, cancellationToken) =>
             {
-                await socket.ConnectAsync(destination, cancellationToken).ConfigureAwait(false);
-                return new NetworkStream(socket, ownsSocket: true);
+                EndPoint destination = context.DnsEndPoint;
+                if (context.InitialRequestMessage.Options.TryGetValue(EndpointOption, out var endpoint))
+                {
+                    endpoint.Validate();
+                    var configureEndpoint = endpoint.ReceiverConfigureEndpoint
+                        ?? throw new RuntimeAuthorizationException("runtime_sandbox_endpoint_invalid");
+                    endpoint.ValidateForConfigureEndpoint(configureEndpoint);
+                    if (context.DnsEndPoint.Host != configureEndpoint.Host ||
+                        context.DnsEndPoint.Port != configureEndpoint.Port)
+                        throw new RuntimeAuthorizationException("runtime_sandbox_endpoint_invalid");
+                    destination = new IPEndPoint(IPAddress.Parse(endpoint.PodAddress), configureEndpoint.Port);
+                }
+                var socket = new Socket(SocketType.Stream, ProtocolType.Tcp) { NoDelay = true };
+                try
+                {
+                    await socket.ConnectAsync(destination, cancellationToken).ConfigureAwait(false);
+                    return new NetworkStream(socket, ownsSocket: true);
+                }
+                catch
+                {
+                    socket.Dispose();
+                    throw;
+                }
             }
-            catch
-            {
-                socket.Dispose();
-                throw;
-            }
-        }
-    };
+        };
+    }
 }

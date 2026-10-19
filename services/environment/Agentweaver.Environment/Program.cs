@@ -103,6 +103,7 @@ builder.Services.AddScoped<EnvironmentRuntimePlacementReader>();
 builder.Services.AddSingleton(new EnvironmentRuntimeBootstrapProfileRegistry(
     builder.Configuration.GetSection("Environment:RuntimeBootstrap:Profiles")
         .Get<EnvironmentRuntimeBootstrapProfileRegistration[]>() ?? []));
+// The direct-Pod transport keeps the TLS hostname while connecting to the validated Pod IP.
 builder.Services.AddHttpClient<EnvironmentRuntimeEndpointVerifier>(client =>
     client.Timeout = TimeSpan.FromSeconds(10))
     .ConfigurePrimaryHttpMessageHandler(RuntimeSandboxHttpTransport.CreateHandler);
@@ -125,6 +126,7 @@ if (runtimeBootstrapEnabled)
     };
     builder.Services.AddSingleton(runtimeDeliveryOptions);
     builder.Services.AddScoped<IEnvironmentRuntimeResumeBootstrapStore, EnvironmentRuntimeResumeBootstrapStore>();
+    // Bootstrap calls share backend-CA validation with direct-Pod sandbox traffic.
     builder.Services.AddHttpClient<EnvironmentRuntimeBootstrapDelivery>(client =>
         client.Timeout = TimeSpan.FromSeconds(20))
         .ConfigurePrimaryHttpMessageHandler(RuntimeSandboxHttpTransport.CreateHandler);
@@ -134,7 +136,7 @@ if (runtimeBootstrapEnabled)
         .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 }
 builder.Services.AddSingleton(ciliumOptions);
-// Owner APIs use the mounted backend CA; sandbox endpoints keep their separate certificate validation.
+// Owner API clients use the mounted backend CA; public issuer discovery keeps system trust.
 builder.Services.AddHttpClient<EnvironmentRuntimeOwnerContextClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
     .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddHttpContextAccessor();

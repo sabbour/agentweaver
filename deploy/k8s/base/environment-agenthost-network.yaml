@@ -85,6 +85,9 @@ spec:
         - matchLabels:
             k8s:io.kubernetes.pod.namespace: agentweaver
             agentweaver.io/workload: orchestrator
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver
+            agentweaver.io/workload: identity-broker
       toPorts:
         - ports:
             - port: "8443"

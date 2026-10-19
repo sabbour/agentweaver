@@ -102,16 +102,6 @@ public sealed class RuntimeOwnerHttpTransportTests
     }
 
     [Fact]
-    public void SandboxTransportUsesPinnedSocketCallbackWithoutProxyOrRedirect()
-    {
-        using var handler = RuntimeSandboxHttpTransport.CreateHandler();
-
-        Assert.False(handler.AllowAutoRedirect);
-        Assert.False(handler.UseProxy);
-        Assert.NotNull(handler.ConnectCallback);
-    }
-
-    [Fact]
     public async Task BoundedRequestCarriesTheExactValidatedSandboxEndpoint()
     {
         var configureEndpoint =

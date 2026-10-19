@@ -1,6 +1,9 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Security;
 using System.Security.Authentication;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using Agentweaver.Abstractions;
 using Agentweaver.Identity;
@@ -10,6 +13,9 @@ namespace Agentweaver.Identity.Tests;
 
 public sealed class RuntimeServiceTlsTests
 {
+    private const string ClientAuthenticationOid = "1.3.6.1.5.5.7.3.2";
+    private const string ServerAuthenticationOid = "1.3.6.1.5.5.7.3.1";
+
     [Fact]
     public void ValidProfileCopiesExplicitPeerPinsWithoutReadingOrCreatingCertificateFiles()
     {
@@ -72,6 +78,78 @@ public sealed class RuntimeServiceTlsTests
             RuntimeServiceTlsIdentity.RequireDirectTls(isHttps, protocol, port, 9443));
 
         Assert.Equal(expectedCode, failure.Code);
+    }
+
+    [Fact]
+    public void PinnedMtlsOwnerClientUsesBackendRootAndKeepsHostnamePinAndClientCertificateChecks()
+    {
+        using var rootKey = RSA.Create(2048);
+        using var otherRootKey = RSA.Create(2048);
+        using var localKey = RSA.Create(2048);
+        using var peerKey = RSA.Create(2048);
+        using var differentPeerKey = RSA.Create(2048);
+        using var foreignPeerKey = RSA.Create(2048);
+        using var root = CreateRoot(rootKey, "Agentweaver mTLS test CA");
+        using var otherRoot = CreateRoot(otherRootKey, "Untrusted mTLS test CA");
+        using var localCertificate = CreateLeaf(
+            root, localKey, "orchestrator.internal", ClientAuthenticationOid, ServerAuthenticationOid);
+        using var peerCertificate = CreateLeaf(root, peerKey, "events.internal", ServerAuthenticationOid);
+        using var differentPeerCertificate = CreateLeaf(root, differentPeerKey, "events.internal", ServerAuthenticationOid);
+        using var untrustedPeerCertificate = CreateLeaf(otherRoot, foreignPeerKey, "events.internal", ServerAuthenticationOid);
+        var directory = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", ".test-certificates", Guid.NewGuid().ToString("N")));
+        Directory.CreateDirectory(directory);
+        var caFile = Path.Combine(directory, "ca.crt");
+        var certificateFile = Path.Combine(directory, "client.crt");
+        var privateKeyFile = Path.Combine(directory, "client.key");
+
+        try
+        {
+            File.WriteAllText(caFile, root.ExportCertificatePem());
+            File.WriteAllText(certificateFile, localCertificate.ExportCertificatePem());
+            File.WriteAllText(privateKeyFile, localKey.ExportPkcs8PrivateKeyPem());
+            using var identity = new RuntimeServiceTlsIdentity(
+                Profile() with
+                {
+                    LocalCertificatePemPath = certificateFile,
+                    LocalPrivateKeyPemPath = privateKeyFile,
+                    LocalCertificateSha256 = Convert.ToHexString(SHA256.HashData(localCertificate.RawData)),
+                    PeerCertificateSha256Pins = [Convert.ToHexString(SHA256.HashData(peerCertificate.RawData))]
+                },
+                "Orchestrator",
+                "EventsAndSessions");
+            using var peerChain = new X509Chain();
+
+            Assert.True(identity.AcceptServerCertificate(
+                peerCertificate, peerChain, SslPolicyErrors.RemoteCertificateChainErrors,
+                caFile, X509RevocationMode.NoCheck));
+            Assert.False(identity.AcceptServerCertificate(
+                peerCertificate, peerChain,
+                SslPolicyErrors.RemoteCertificateNameMismatch | SslPolicyErrors.RemoteCertificateChainErrors,
+                caFile, X509RevocationMode.NoCheck));
+            Assert.False(identity.AcceptServerCertificate(
+                differentPeerCertificate, peerChain, SslPolicyErrors.RemoteCertificateChainErrors,
+                caFile, X509RevocationMode.NoCheck));
+            Assert.False(identity.AcceptServerCertificate(
+                untrustedPeerCertificate, peerChain, SslPolicyErrors.RemoteCertificateChainErrors,
+                caFile, X509RevocationMode.NoCheck));
+
+            using var handler = identity.CreateHandler(caFile);
+            Assert.False(handler.AllowAutoRedirect);
+            Assert.True(handler.CheckCertificateRevocationList);
+            Assert.Equal(RuntimeServiceTlsIdentity.AllowedProtocols, handler.SslProtocols);
+            Assert.Equal(ClientCertificateOption.Manual, handler.ClientCertificateOptions);
+            Assert.Single(handler.ClientCertificates);
+            Assert.Equal(identity.Certificate, handler.ClientCertificates[0]);
+            Assert.NotNull(handler.ServerCertificateCustomValidationCallback);
+            using var request = new HttpRequestMessage();
+            Assert.False(handler.ServerCertificateCustomValidationCallback(
+                request, peerCertificate, peerChain, SslPolicyErrors.RemoteCertificateNameMismatch));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]
@@ -152,6 +230,43 @@ public sealed class RuntimeServiceTlsTests
         PeerOwnerAddress = "https://events.example:9443/",
         PeerCertificateSha256Pins = [new string('b', 64)]
     };
+
+    private static X509Certificate2 CreateRoot(RSA key, string subject)
+    {
+        var request = new CertificateRequest(
+            $"CN={subject}", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(true, false, 0, true));
+        request.CertificateExtensions.Add(new X509KeyUsageExtension(
+            X509KeyUsageFlags.KeyCertSign | X509KeyUsageFlags.CrlSign, true));
+        request.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(request.PublicKey, false));
+        return request.CreateSelfSigned(DateTimeOffset.UtcNow.AddHours(-4), DateTimeOffset.UtcNow.AddDays(1));
+    }
+
+    private static X509Certificate2 CreateLeaf(
+        X509Certificate2 issuer,
+        RSA key,
+        string hostName,
+        params string[] enhancedKeyUsages)
+    {
+        var request = new CertificateRequest(
+            $"CN={hostName}", key, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        request.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, true));
+        request.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature, true));
+        var subjectAlternativeName = new SubjectAlternativeNameBuilder();
+        subjectAlternativeName.AddDnsName(hostName);
+        request.CertificateExtensions.Add(subjectAlternativeName.Build());
+        var usages = new OidCollection();
+        foreach (var usage in enhancedKeyUsages)
+            usages.Add(new Oid(usage));
+        request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(
+            usages, false));
+        using var certificate = request.Create(
+            issuer,
+            DateTimeOffset.UtcNow.AddMinutes(-5),
+            DateTimeOffset.UtcNow.AddHours(1),
+            RandomNumberGenerator.GetBytes(16));
+        return certificate.CopyWithPrivateKey(key);
+    }
 
     private static SecretCredential Bearer() =>
         new("managed-test-bearer", DateTimeOffset.UtcNow.AddMinutes(5), TimeProvider.System);
