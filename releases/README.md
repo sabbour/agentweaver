@@ -799,11 +799,49 @@ npm run release:deploy-bootstrap -- v1.0.2 `
   --provider-catalog-source-commit <reviewed-40-character-source-sha>
 ```
 
+### v1.0.3 pre-acceptance bootstrap
+
+The v1.0.3 bootstrap uses the normal immutable publication for source
+`acfa2732dba0728adfeaf5754c8e9af9118f2482`. Successful release-pack run
+`39183904644` produced artifact
+`v1-publication-receipt-acfa2732dba0728adfeaf5754c8e9af9118f2482-1`.
+Its `publication.json` SHA-256 is
+`e486a3154c4a8b0bded4de664f203cf936e24482b64148bc6a38b5f77697f7e5`; the
+receipt binds provenance SHA-256
+`6d73257065ad1cf4533ae4aa1c3a6c24b4b14538c6571afcdd5a68ad73eac8d8`.
+AgentHost's source-bound `linux/amd64` measurement reports compressed pull
+bytes `321483310`. The checked-in Kustomize digests and AgentHost profile must
+match the publication receipt and measurement; Environment's compressed-pull
+setting must use the same measured byte count. The regression test checks all
+ten image pins and both runtime measurement surfaces against those values.
+
+Download that artifact's `publication.json` to
+`artifacts/release/publish/publication.json` and use it with the exact tag
+source. Continuation receipts and `--completion` proofs are rejected; no image
+is rebuilt or republished. Create the v1.0.3 GitHub Release/tag only after this
+bootstrap-pin change is merged and its checks pass.
+
+```powershell
+npm run release:deploy-bootstrap -- v1.0.3 `
+  --manifest releases/foundation.json `
+  --publication artifacts/release/publish/publication.json `
+  --subscription-id <subscription-id> `
+  --tenant-id <tenant-id> `
+  --resource-group agentweaver `
+  --cluster agentweaver-aks `
+  --namespace agentweaver `
+  --node-min 2 `
+  --node-max 3 `
+  --provider-catalog-configmap <reviewed-configmap-name> `
+  --provider-catalog-source-commit <reviewed-40-character-source-sha>
+```
+
 After P1 live acceptance checks complete, build a separate `stage: release`
 manifest from the tracked composition, the exact deployed source SHA, and the
 actual HTTPS API, UI, and MCP persona evidence URLs. Only then use the strict
 `release:deploy` gate. The current gate does not accept the mixed-version
-v1.0.1 or v1.0.2 compositions, and none of the bootstrap modes relaxes the gate.
+v1.0.1, v1.0.2, or v1.0.3 compositions, and none of the bootstrap modes
+relaxes the gate.
 
 `npm run release:deploy` is the operator-hosted, image-only Kubernetes rollout
 tool. It consumes an already published `v1.x.y` GitHub Release, the release-stage
