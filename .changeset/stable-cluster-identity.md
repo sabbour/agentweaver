@@ -1,4 +1,5 @@
 ---
+"Agentweaver.Environment": patch
 "Agentweaver.Providers.Sandbox.AgentSandbox": patch
 "Agentweaver.Providers.Storage.AzureFiles": patch
 ---
