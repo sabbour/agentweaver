@@ -92,6 +92,24 @@ start. Keep existing pods running, apply the bundle promptly, and verify the
 new ConfigMap before restarting the Deployment. Do not use a broad delete or
 remove the `immutable` setting to bypass the replacement process.
 
+### Guarded AgentHost patch upgrades
+
+The source-bound `release:deploy-bootstrap` flow has a narrowly scoped
+replacement path for `agenthost-runtime-v1`. Its immutable `appsettings.json`
+includes the receipt-verified AgentHost image digest and measured image size,
+so a patch release can change its data. The command compares the live data with
+the rendered source. When an existing immutable map differs, `--dry-run`
+reports that `agenthost-runtime-v1` would be replaced; `--execute` validates
+the rest of the rendered bundle first, force-replaces only that named map from
+the source-rendered object, and then applies the bundle. Before replacement,
+execution verifies namespace-scoped ConfigMap create and name-scoped delete
+permissions. If the data is unchanged, the normal apply path runs without
+replacing the map.
+
+This exception is limited to `agenthost-runtime-v1`. It does not delete or
+replace `environment-cilium-config` or any other ConfigMap. Other immutable
+runtime maps still require the reviewed maintenance procedure above.
+
 `events-and-sessions-runtime-config` is mutable in the checked-in profile.
 Apply its reviewed data with the bundle, then restart the Events & Sessions
 Deployment so the process reads the new environment.

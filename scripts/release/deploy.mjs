@@ -119,6 +119,8 @@ const INCOMPLETE_RUNTIME_CONFIG_MAPS = new Set([
   'web-runtime-config',
 ]);
 const INCOMPLETE_CONFIG_MAPS = new Set([...INCOMPLETE_RUNTIME_CONFIG_MAPS, 'agenthost-runtime-v1']);
+// Only this source-owned immutable runtime profile is eligible for replacement.
+const REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS = new Set(['agenthost-runtime-v1']);
 const PREPROVISIONING_RUNTIME_MARKERS = new Set([
   'CHANGEME-KEYVAULT-HOST',
   'CHANGEME-MANAGED-HOST',
@@ -254,6 +256,83 @@ function parseJson(text, location) {
   } catch (error) {
     fail(`${location} is not valid JSON: ${error.message}`);
   }
+}
+
+function configMapDataDigest(data) {
+  const entries = Object.entries(data ?? {}).sort(([left], [right]) => left.localeCompare(right));
+  return createHash('sha256').update(JSON.stringify(entries)).digest('hex');
+}
+
+function projectRuntimeConfigMap(resource) {
+  return {
+    kind: resource.kind,
+    name: resource.metadata?.name,
+    namespace: resource.metadata?.namespace,
+    immutable: resource.immutable,
+    dataDigest: configMapDataDigest(resource.data),
+    binaryDataDigest: configMapDataDigest(resource.binaryData),
+  };
+}
+
+function findImmutableRuntimeConfigMapReplacements(installationManifest, namespace, { root, run }) {
+  const replacements = [];
+  for (const name of REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS) {
+    const desired = installationManifest.items.find((resource) =>
+      resource.kind === 'ConfigMap' && resource.metadata?.name === name);
+    if (!desired || desired.immutable !== true || desired.metadata?.namespace !== namespace) {
+      fail(`source bundle must include immutable ConfigMap/${name} in namespace ${namespace}`);
+    }
+
+    const currentName = run('kubectl', [
+      'get', 'configmap', name, '--namespace', namespace, '--ignore-not-found', '--output=name',
+    ], { cwd: root });
+    if (!currentName) continue;
+    if (currentName !== `configmap/${name}`) {
+      fail(`live ConfigMap lookup returned an unexpected resource for ${name}`);
+    }
+    const currentText = run('kubectl', [
+      'get', 'configmap', name, '--namespace', namespace, '--output=json',
+    ], {
+      cwd: root,
+      // Project only identity and hashes so runtime settings are never surfaced by command output.
+      projectJson: projectRuntimeConfigMap,
+      preserveProjectedJson: true,
+    });
+    const current = parseJson(currentText, `ConfigMap/${name}`);
+    if (current.kind !== 'ConfigMap' || current.name !== name || current.namespace !== namespace ||
+        typeof current.dataDigest !== 'string' || typeof current.binaryDataDigest !== 'string') {
+      fail(`live ConfigMap/${name} does not match its explicitly managed namespace and name`);
+    }
+    const desiredProjection = projectRuntimeConfigMap(desired);
+    if (current.immutable === true &&
+        (current.dataDigest !== desiredProjection.dataDigest ||
+         current.binaryDataDigest !== desiredProjection.binaryDataDigest)) {
+      replacements.push(desired);
+    }
+  }
+  return replacements;
+}
+
+function verifyImmutableRuntimeConfigMapReplacementPermissions(replacements, namespace, { root, run }) {
+  for (const { metadata } of replacements) {
+    const name = metadata.name;
+    // Check create before delete because force replacement removes the old object before creating the new one.
+    for (const [verb, resource] of [
+      ['create', 'configmaps'],
+      ['delete', `configmaps/${name}`],
+    ]) {
+      const allowed = run('kubectl', [
+        'auth', 'can-i', verb, resource, '--namespace', namespace,
+      ], { cwd: root }).trim().toLowerCase();
+      if (allowed !== 'yes') {
+        fail(`Kubernetes authorization must allow ${verb} ${resource} in namespace ${namespace} before replacing ConfigMap/${name}`);
+      }
+    }
+  }
+}
+
+function serializeKustomizeResources(resources) {
+  return resources.items.map((resource) => stringifyYaml(resource)).join('\n---\n');
 }
 
 function runCommand(file, args, options = {}) {
@@ -2462,14 +2541,37 @@ export async function deployRelease(options = {}, dependencies = {}) {
       fail(`workload deployment is blocked until the incomplete runtime ConfigMaps are sourced: ${incompleteRuntimeConfigMaps.join(', ')}`);
     }
     const targetInfo = await (dependencies.verifyTarget ?? verifyAzureTarget)(parsed.target, { root, run });
+    const immutableRuntimeConfigMapReplacements = parsed.preAcceptance
+      ? findImmutableRuntimeConfigMapReplacements(installationManifest, parsed.target.namespace, { root, run })
+      : [];
+    const immutableRuntimeConfigMapReplacementNames = immutableRuntimeConfigMapReplacements
+      .map((resource) => resource.metadata.name);
     (dependencies.verifyPrerequisites ?? verifyRuntimePrerequisites)(
       runtimeManifest, parsed.target, { root, run, managedResources: installationManifest });
     if (parsed.execute) {
+      verifyImmutableRuntimeConfigMapReplacementPermissions(
+        immutableRuntimeConfigMapReplacements, parsed.target.namespace, { root, run });
       try {
         // Server-side dry-run validates cluster authorization before the first workload write.
-        run('kubectl', [
-          'apply', '--dry-run=server', '--request-timeout=30s', '-k', kustomizeSource.path,
-        ], { cwd: root, timeout: 45_000 });
+        const replacementNames = new Set(immutableRuntimeConfigMapReplacementNames);
+        if (replacementNames.size > 0) {
+          const serverPreflight = {
+            ...installationManifest,
+            items: installationManifest.items.filter((resource) =>
+              resource.kind !== 'ConfigMap' || !replacementNames.has(resource.metadata?.name)),
+          };
+          run('kubectl', [
+            'apply', '--dry-run=server', '--request-timeout=30s', '--filename', '-',
+          ], {
+            cwd: root,
+            timeout: 45_000,
+            input: serializeKustomizeResources(serverPreflight),
+          });
+        } else {
+          run('kubectl', [
+            'apply', '--dry-run=server', '--request-timeout=30s', '-k', kustomizeSource.path,
+          ], { cwd: root, timeout: 45_000 });
+        }
       } catch (error) {
         fail(
           'Release manifest server-side preflight failed before any workload write. Check the Kubernetes API ' +
@@ -2488,6 +2590,9 @@ export async function deployRelease(options = {}, dependencies = {}) {
         ...(parsed.preAcceptance ? { resultType: 'pre-acceptance' } : {}),
         sourceSha,
         target: parsed.target,
+        ...(parsed.preAcceptance
+          ? { immutableRuntimeConfigMapReplacements: immutableRuntimeConfigMapReplacementNames }
+          : {}),
         services: images.filter((image) => image.id !== 'Agentweaver.AgentHost')
           .map(({ id, image }) => ({ id, image })),
         perSandboxAgentHost: images.find((image) => image.id === 'Agentweaver.AgentHost').sandboxImage,
@@ -2520,8 +2625,15 @@ export async function deployRelease(options = {}, dependencies = {}) {
         stages: {},
       };
     }
-    const applied = checkpoint.stages.apply?.completed === true;
+    const applied = checkpoint.stages.apply?.completed === true &&
+      immutableRuntimeConfigMapReplacements.length === 0;
     if (!applied) {
+      for (const configMap of immutableRuntimeConfigMapReplacements) {
+        // Force-replace only after all preflights, using the exact source-rendered map.
+        run('kubectl', [
+          'replace', '--force', '--filename', '-', '--namespace', parsed.target.namespace,
+        ], { cwd: root, input: JSON.stringify(configMap) });
+      }
       run('kubectl', ['apply', '-k', kustomizeSource.path], { cwd: root });
       checkpoint = {
         ...checkpoint,
@@ -2549,6 +2661,9 @@ export async function deployRelease(options = {}, dependencies = {}) {
       resumed: parsed.resume && applied,
       ...(parsed.preAcceptance ? { resultType: 'pre-acceptance' } : {}),
       sourceSha,
+      ...(parsed.preAcceptance
+        ? { immutableRuntimeConfigMapReplacements: immutableRuntimeConfigMapReplacementNames }
+        : {}),
       services: deployedImages.map(({ id }) => id),
       perSandboxAgentHost: images.find((image) => image.id === 'Agentweaver.AgentHost').sandboxImage,
     };
@@ -2568,6 +2683,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       console.log(`${prefix} validated ${result.services.length} product images and ${result.renderedResources} runtime resources at ${result.sourceSha}.`);
       if (result.resultType === 'pre-acceptance') {
         console.log('No release acceptance evidence was recorded.');
+      }
+      if (result.immutableRuntimeConfigMapReplacements?.length > 0) {
+        console.log(
+          `Would replace immutable runtime ConfigMaps: ${result.immutableRuntimeConfigMapReplacements.join(', ')}.`,
+        );
       }
     } else if (result.resultType === 'pre-acceptance') {
       console.log(`Pre-acceptance bootstrap deployment and live verification completed for ${result.services.length} product services at ${result.sourceSha}. This is not a release acceptance result.`);

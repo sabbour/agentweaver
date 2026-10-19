@@ -354,7 +354,16 @@ kubectl wait --for=condition=complete job/identity-broker-migration `
    the Web Service on port 8080. The preflight inventories all routes and
    rejects extra or mismatched routing resources. Do not apply the root
    bundle directly with `kubectl`; the release command is the guarded
-   workload apply.
+   workload apply. For patch upgrades, it compares the live immutable
+   `agenthost-runtime-v1` data with the rendered ConfigMap. If they differ, the
+   command preflights the rest of the bundle, replaces only that named
+   ConfigMap after checking namespace-scoped create and name-scoped delete
+   permissions, and then applies the bundle; unchanged data follows the normal
+   apply path. A read-only dry-run reports when that exact replacement would
+   be needed. The replacement path never deletes or replaces
+   `environment-cilium-config` or any other ConfigMap. See
+   [runtime configuration](../reference/runtime-configuration.md#guarded-agenthost-patch-upgrades)
+   for the scope and behavior.
 
    ```powershell
    npm run release:deploy-bootstrap -- v1.0.3 `

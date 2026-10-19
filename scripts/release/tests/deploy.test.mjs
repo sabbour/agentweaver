@@ -520,6 +520,7 @@ function bootstrapDependencies(fixture, {
           encoding: 'utf8',
         });
       }
+      if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') return '';
       if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=client')) {
         commands.push({ file, args });
         return '';
@@ -574,6 +575,14 @@ function prepareKustomizeFixture(fixture, fixtureRoot, receiptSourceSha, catalog
       catalogSourceCommit;
     writeFileSync(file, `${JSON.stringify(workload, null, 2)}\n`, 'utf8');
   }
+}
+
+function renderedAgentHostRuntimeConfigMap(fixtureRoot) {
+  const rendered = execFileSync('kubectl', [
+    'kustomize', path.join(fixtureRoot, 'deploy', 'k8s'),
+  ], { cwd: fixtureRoot, encoding: 'utf8' });
+  return parseKustomizeResources(rendered).items.find((resource) =>
+    resource.kind === 'ConfigMap' && resource.metadata.name === 'agenthost-runtime-v1');
 }
 
 test('P0 target and every required deployment target input are explicit and exact', () => {
@@ -647,6 +656,53 @@ test('pre-acceptance dry-run accepts only the tracked draft and returns a non-re
     ['apply', '--dry-run=client', '-k', path.join('deploy', 'k8s')]);
 });
 
+test('pre-acceptance dry-run reports a changed owned immutable runtime ConfigMap without writing', async () => {
+  const fixture = bootstrapFixture();
+  const dependencies = bootstrapDependencies(fixture);
+  const desired = renderedAgentHostRuntimeConfigMap(dependencies.root);
+  const existing = structuredClone(desired);
+  const settings = JSON.parse(existing.data['appsettings.json']);
+  settings.AgentHost.Image.Digest = `sha256:${'0'.repeat(64)}`;
+  existing.data['appsettings.json'] = JSON.stringify(settings, null, 2);
+  let targetVerified = false;
+  const originalVerifyTarget = dependencies.verifyTarget;
+  dependencies.verifyTarget = async (...args) => {
+    const result = await originalVerifyTarget(...args);
+    targetVerified = true;
+    return result;
+  };
+  const reads = [];
+  const originalRun = dependencies.run;
+  dependencies.run = (file, args, options = {}) => {
+    if (file === 'kubectl' && args[0] === 'get') {
+      assert.equal(targetVerified, true, 'verify the approved target before reading a live ConfigMap');
+      reads.push({ args, options });
+      return args.includes('--output=name')
+        ? 'configmap/agenthost-runtime-v1'
+        : JSON.stringify(options.projectJson(existing));
+    }
+    return originalRun(file, args, options);
+  };
+
+  const result = await deployRelease({ argv: bootstrapArgsFor() }, dependencies);
+
+  assert.deepEqual(result.immutableRuntimeConfigMapReplacements, ['agenthost-runtime-v1']);
+  assert.deepEqual(reads.map(({ args }) => args), [
+    [
+      'get', 'configmap', 'agenthost-runtime-v1', '--namespace', target.namespace,
+      '--ignore-not-found', '--output=name',
+    ],
+    ['get', 'configmap', 'agenthost-runtime-v1', '--namespace', target.namespace, '--output=json'],
+  ]);
+  assert.equal(reads[1].options.preserveProjectedJson, true);
+  assert.deepEqual(Object.keys(reads[1].options.projectJson(existing)).sort(), [
+    'binaryDataDigest', 'dataDigest', 'immutable', 'kind', 'name', 'namespace',
+  ]);
+  assert.equal(dependencies.commands.length, 1);
+  assert.ok(dependencies.commands.every(({ args }) =>
+    args[0] !== 'replace' && args[0] !== 'delete'));
+});
+
 test('pre-acceptance execute and resume retain a separately labeled checkpoint', async () => {
   const fixture = bootstrapFixture();
   const dependencies = bootstrapDependencies(fixture);
@@ -685,6 +741,218 @@ test('pre-acceptance execute and resume retain a separately labeled checkpoint',
   assert.equal(applies, 1);
   assert.equal(liveChecks, 2);
   assert.equal(clears, 2);
+});
+
+test('pre-acceptance execute replaces only changed agenthost-runtime-v1 after server preflight', async () => {
+  const fixture = bootstrapFixture();
+  const dependencies = bootstrapDependencies(fixture);
+  const desired = renderedAgentHostRuntimeConfigMap(dependencies.root);
+  const existing = structuredClone(desired);
+  const settings = JSON.parse(existing.data['appsettings.json']);
+  settings.AgentHost.Image.Digest = `sha256:${'0'.repeat(64)}`;
+  existing.data['appsettings.json'] = JSON.stringify(settings, null, 2);
+  const calls = [];
+  const originalRun = dependencies.run;
+  dependencies.run = (file, args, options = {}) => {
+    if (file === 'kubectl' && args[0] === 'get') {
+      calls.push({ operation: args.includes('--output=name') ? 'get-name' : 'get-data', args });
+      return args.includes('--output=name')
+        ? 'configmap/agenthost-runtime-v1'
+        : JSON.stringify(options.projectJson(existing));
+    }
+    if (file === 'kubectl' && args[0] === 'auth' && args[1] === 'can-i') {
+      calls.push({ operation: `can-i-${args[2]}`, args });
+      return 'yes';
+    }
+    if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=server') &&
+        args.includes('--filename')) {
+      calls.push({ operation: 'server-preflight', args, input: options.input });
+      return '';
+    }
+    if (file === 'kubectl' && args[0] === 'replace') {
+      calls.push({ operation: 'replace', args, input: options.input });
+      return '';
+    }
+    if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
+        !args.includes('--dry-run=client') && !args.includes('--dry-run=server')) {
+      calls.push({ operation: 'apply' });
+      return '';
+    }
+    return originalRun(file, args, options);
+  };
+  let checkpoint;
+  Object.assign(dependencies, {
+    checkpointDirectory: path.join(root, 'configmap-replacement-checkpoint-fixture'),
+    checkpointMkdir: () => undefined,
+    checkpointWriteFile: (_file, text) => { checkpoint = text; },
+    checkpointReadFile: () => checkpoint,
+    checkpointRm: () => undefined,
+    verifyLive: async () => undefined,
+  });
+
+  const result = await deployRelease({ argv: [...bootstrapArgsFor(), '--execute'] }, dependencies);
+
+  assert.deepEqual(result.immutableRuntimeConfigMapReplacements, ['agenthost-runtime-v1']);
+  assert.deepEqual(calls.map(({ operation }) => operation), [
+    'get-name', 'get-data', 'can-i-create', 'can-i-delete', 'server-preflight', 'replace', 'apply',
+  ]);
+  const serverPreflight = calls[4];
+  assert.deepEqual(serverPreflight.args, [
+    'apply', '--dry-run=server', '--request-timeout=30s', '--filename', '-',
+  ]);
+  const preflightResources = parseKustomizeResources(serverPreflight.input);
+  assert.equal(preflightResources.items.some((resource) =>
+    resource.kind === 'ConfigMap' && resource.metadata.name === 'agenthost-runtime-v1'), false);
+  assert.equal(preflightResources.items.some((resource) =>
+    resource.kind === 'ConfigMap' && resource.metadata.name === 'environment-cilium-config'), true);
+  const replacement = calls[5];
+  assert.deepEqual(replacement.args, [
+    'replace', '--force', '--filename', '-', '--namespace', target.namespace,
+  ]);
+  assert.deepEqual(JSON.parse(replacement.input), desired);
+  assert.equal(calls.filter(({ operation }) => operation === 'replace').length, 1);
+});
+
+test('pre-acceptance execute refuses replacement without create and delete permissions', async () => {
+  for (const deniedVerb of ['create', 'delete']) {
+    const fixture = bootstrapFixture();
+    const dependencies = bootstrapDependencies(fixture);
+    const desired = renderedAgentHostRuntimeConfigMap(dependencies.root);
+    const existing = structuredClone(desired);
+    const settings = JSON.parse(existing.data['appsettings.json']);
+    settings.AgentHost.Image.Digest = `sha256:${'0'.repeat(64)}`;
+    existing.data['appsettings.json'] = JSON.stringify(settings, null, 2);
+    const permissions = [];
+    const writes = [];
+    const originalRun = dependencies.run;
+    dependencies.run = (file, args, options = {}) => {
+      if (file === 'kubectl' && args[0] === 'get') {
+        return args.includes('--output=name')
+          ? 'configmap/agenthost-runtime-v1'
+          : JSON.stringify(options.projectJson(existing));
+      }
+      if (file === 'kubectl' && args[0] === 'auth' && args[1] === 'can-i') {
+        permissions.push([args[2], args[3]]);
+        return args[2] === deniedVerb ? 'no' : 'yes';
+      }
+      if (file === 'kubectl' && (args[0] === 'replace' ||
+          (args[0] === 'apply' && args.includes('-k') && !args.some((arg) => arg.startsWith('--dry-run='))))) {
+        writes.push(args);
+      }
+      return originalRun(file, args, options);
+    };
+
+    await assert.rejects(
+      deployRelease({ argv: [...bootstrapArgsFor(), '--execute'] }, dependencies),
+      new RegExp(`authorization must allow ${deniedVerb}`),
+    );
+    assert.deepEqual(permissions, deniedVerb === 'create'
+      ? [['create', 'configmaps']]
+      : [['create', 'configmaps'], ['delete', 'configmaps/agenthost-runtime-v1']]);
+    assert.deepEqual(writes, [], 'permission denial must happen before replacement or bundle apply');
+  }
+});
+
+test('pre-acceptance execute keeps ordinary apply when the owned immutable runtime data is unchanged', async () => {
+  const fixture = bootstrapFixture();
+  const dependencies = bootstrapDependencies(fixture);
+  const desired = renderedAgentHostRuntimeConfigMap(dependencies.root);
+  const calls = [];
+  const originalRun = dependencies.run;
+  dependencies.run = (file, args, options = {}) => {
+    if (file === 'kubectl' && args[0] === 'get') {
+      calls.push({ operation: args.includes('--output=name') ? 'get-name' : 'get-data' });
+      return args.includes('--output=name')
+        ? 'configmap/agenthost-runtime-v1'
+        : JSON.stringify(options.projectJson(desired));
+    }
+    if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=server')) {
+      calls.push({ operation: 'server-preflight', args });
+      return '';
+    }
+    if (file === 'kubectl' && args[0] === 'replace') {
+      calls.push({ operation: 'replace' });
+      return '';
+    }
+    if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
+        !args.includes('--dry-run=client') && !args.includes('--dry-run=server')) {
+      calls.push({ operation: 'apply' });
+      return '';
+    }
+    return originalRun(file, args, options);
+  };
+  let checkpoint;
+  Object.assign(dependencies, {
+    checkpointDirectory: path.join(root, 'unchanged-configmap-checkpoint-fixture'),
+    checkpointMkdir: () => undefined,
+    checkpointWriteFile: (_file, text) => { checkpoint = text; },
+    checkpointReadFile: () => checkpoint,
+    checkpointRm: () => undefined,
+    verifyLive: async () => undefined,
+  });
+
+  const result = await deployRelease({ argv: [...bootstrapArgsFor(), '--execute'] }, dependencies);
+
+  assert.deepEqual(result.immutableRuntimeConfigMapReplacements, []);
+  assert.deepEqual(calls.map(({ operation }) => operation), [
+    'get-name', 'get-data', 'server-preflight', 'apply',
+  ]);
+  assert.deepEqual(calls[2].args, [
+    'apply', '--dry-run=server', '--request-timeout=30s', '-k', path.join('deploy', 'k8s'),
+  ]);
+});
+
+test('pre-acceptance resume reapplies a completed bundle when the owned immutable runtime ConfigMap drifted', async () => {
+  const fixture = bootstrapFixture();
+  const dependencies = bootstrapDependencies(fixture);
+  const desired = renderedAgentHostRuntimeConfigMap(dependencies.root);
+  let existing = structuredClone(desired);
+  const calls = [];
+  const originalRun = dependencies.run;
+  dependencies.run = (file, args, options = {}) => {
+    if (file === 'kubectl' && args[0] === 'get') {
+      return args.includes('--output=name')
+        ? 'configmap/agenthost-runtime-v1'
+        : JSON.stringify(options.projectJson(existing));
+    }
+    if (file === 'kubectl' && args[0] === 'auth' && args[1] === 'can-i') return 'yes';
+    if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=server')) {
+      calls.push('server-preflight');
+      return '';
+    }
+    if (file === 'kubectl' && args[0] === 'replace') {
+      calls.push('replace');
+      existing = JSON.parse(options.input);
+      return '';
+    }
+    if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
+        !args.some((arg) => arg.startsWith('--dry-run='))) {
+      calls.push('apply');
+      return '';
+    }
+    return originalRun(file, args, options);
+  };
+  let checkpoint;
+  Object.assign(dependencies, {
+    checkpointDirectory: path.join(root, 'resume-configmap-drift-checkpoint-fixture'),
+    checkpointMkdir: () => undefined,
+    checkpointWriteFile: (_file, text) => { checkpoint = text; },
+    checkpointReadFile: () => checkpoint,
+    checkpointRm: () => undefined,
+    verifyLive: async () => undefined,
+  });
+
+  await deployRelease({ argv: [...bootstrapArgsFor(), '--execute'] }, dependencies);
+  assert.equal(JSON.parse(checkpoint).stages.apply.completed, true);
+  const settings = JSON.parse(existing.data['appsettings.json']);
+  settings.AgentHost.Image.Digest = `sha256:${'0'.repeat(64)}`;
+  existing.data['appsettings.json'] = JSON.stringify(settings, null, 2);
+  calls.length = 0;
+
+  await deployRelease({ argv: [...bootstrapArgsFor(), '--execute', '--resume'] }, dependencies);
+
+  assert.deepEqual(calls, ['server-preflight', 'replace', 'apply']);
+  assert.deepEqual(existing, desired);
 });
 
 test('release execute stops with access guidance when server-side manifest preflight is denied', async () => {
