@@ -503,21 +503,29 @@ describe('v1 web project scoping', () => {
   });
 
   it('shows the raw name and a generic explanation for an unknown permission', () => {
+    const unknownScopes = ['custom.resource', 'constructor', 'toString', '__proto__'];
     mocks.consent = {
       consent_required: true,
       consent_handle: 'consent-2',
       client_id: 'agentweaver-web',
-      requested_scopes: ['custom.resource'],
+      requested_scopes: unknownScopes,
       csrf_token: 'csrf-2',
     };
 
     render(<App />);
 
-    expect(screen.getByText('custom.resource')).toBeTruthy();
-    expect(screen.getByText('Agentweaver does not explain this permission.')).toBeTruthy();
-    expect(screen.getByText('The app or service defines what this permission allows. Ask your administrator before approving it.')).toBeTruthy();
-    expect(screen.getByRole('link', { name: 'Documentation for custom.resource' }).getAttribute('href'))
-      .toBe('https://sabbour.github.io/agentweaver/v1/guide/identity-scopes#unknown-scopes');
+    const summary = 'Agentweaver does not explain this permission.';
+    const tooltipText = 'The app or service defines what this permission allows. Ask your administrator before approving it.';
+    const tooltips = screen.getAllByText(tooltipText);
+    expect(screen.getAllByText(summary)).toHaveLength(unknownScopes.length);
+    expect(tooltips).toHaveLength(unknownScopes.length);
+    for (const [index, scope] of unknownScopes.entries()) {
+      expect(screen.getByText(scope)).toBeTruthy();
+      expect(screen.getByRole('button', { name: `About ${scope}` }).getAttribute('aria-describedby'))
+        .toContain(tooltips[index].id);
+      expect(screen.getByRole('link', { name: `Documentation for ${scope}` }).getAttribute('href'))
+        .toBe('https://sabbour.github.io/agentweaver/v1/guide/identity-scopes#unknown-scopes');
+    }
   });
 
   it('renders the Copilot popup callback outside the authenticated provider', async () => {

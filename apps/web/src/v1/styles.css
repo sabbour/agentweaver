@@ -241,7 +241,7 @@
 }
 
 .v1-consent-scope__details code {
-  overflow-wrap: normal;
+  overflow-wrap: anywhere;
 }
 
 .v1-consent-scope__details p {
