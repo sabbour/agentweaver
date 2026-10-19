@@ -1,19 +1,21 @@
 # Foundation release composition (schema version 1)
 
 `foundation.json` is a **draft**, not a release or proof of a deployed service.
-It records prepared `1.0.0` source versions for 23 product components:
-13 packages and 10 service images. None was built or published by version application.
+It tracks the current prepared source versions for 23 product components:
+13 packages and 10 service images, plus the separate acceptance-only
+`Agentweaver.FoundationProbe`. Version application updates source versions; it
+does not build or publish packages or images.
 The eight original .NET foundation NuGet packages were:
 `Agentweaver.Abstractions`, `Agentweaver.Providers`,
 `Agentweaver.Persistence.Postgres`, `Agentweaver.Secrets.AzureKeyVault`,
 `Agentweaver.Identity`, `Agentweaver.Telemetry`,
 `Agentweaver.Telemetry.AzureMonitor`, and `Agentweaver.ObjectStore.AzureBlob`.
 Their historical P0 package baseline was `0.0.0`; its records remain unchanged.
-`Agentweaver.Identity.Broker` now has source version `1.0.0`; it is not one
+`Agentweaver.Identity.Broker` has current source version `1.1.2`; it is not one
 of the NuGet packages.
-`Agentweaver.Orchestrator` is also an unpublished service at source version `1.0.0`;
+`Agentweaver.Orchestrator` is also an unpublished service at source version `1.1.1`;
 its `Agentweaver.Orchestrator.Core` dependency remains a separately versioned library.
-`Agentweaver.FoundationProbe` has a separate prepared source version at `0.0.1`.
+`Agentweaver.FoundationProbe` has a separate prepared source version at `0.0.3`.
 The manifest uses the `service` artifact kind for its executable container.
 The Probe remains acceptance-only, not a product service.
 Its exact `tools/Agentweaver.FoundationProbe` project path is the sole tools
@@ -69,7 +71,7 @@ The earlier patch recorded ordinary release intent. The initial replacement
 did not apply a release plan or change the Broker and eight NuGet baselines.
 
 The sampler-fixed Probe has a separate, default-off legacy replacement path.
-It permits only the current `0.0.0` manifest
+It permits only the exact legacy `0.0.0` manifest
 `sha256:835d5b8899f2a8956faf24d46a934ec745d91ff83363d77f22f2859c2f743969`.
 Use `--foundation-probe-only`, `--confirm-publication`,
 `--confirm-foundation-probe-sampler-replacement <admitted-source-sha>`, and
@@ -164,24 +166,25 @@ must occur in the list; do not infer compatibility from semver proximity.
 Semantic versions have `major.minor.patch` and optional prerelease/build
 suffixes; a prerelease numeric identifier cannot have a leading zero.
 
-The user-selected P1 plan has applied `1.0.0` source versions for all 23 product components:
+The initial product preparation applied `1.0.0` source versions for all 23 product components:
 13 packages and 10 service images.
 The canonical application archived `p1-product-1-0-0-preparation` and all consumed earlier records.
-The acceptance-only Probe has its separate prepared `0.0.1` source version.
+At that time, the acceptance-only Probe had its separate prepared `0.0.1` source version.
 Use `--platform-only` for product artifact preparation and matching publication.
-The draft accepts `1.0.0` on all 53 direct dependency relationships, including
+The initial draft accepted `1.0.0` on all 53 direct dependency relationships, including
 the Probe's product dependencies. Earlier accepted versions remain unchanged.
 These declarations retain the reviewed consumer and dependency source.
 They change no runtime code, API contract, external package pin, or artifact selection.
 Later source changes need their own compatibility decision.
-The manifest, project version fields and Web mirrors now contain these versions.
-The canonical receipt is `releases/receipts/62a0dcf5307dc7ef58c805d4c66b45baecd98e43.json`.
+That application updated the manifest, project version fields and Web mirrors
+with those versions. Its canonical receipt is
+`releases/receipts/62a0dcf5307dc7ef58c805d4c66b45baecd98e43.json`.
 It names the reviewed plan source, checksum, applied versions and archived note hashes.
 The manifest remains a draft. This is not a published platform release or permission to publish.
 
 Draft service entries can omit `imageDigest` until publication supplies an actual digest.
 The #1779 candidate registers `Agentweaver.Identity.Broker` as an unpublished service.
-Its current manifest/project source version is `1.0.0`.
+Its current manifest/project source version is `1.1.2`.
 The record is release intent, not a registry artifact or deployment receipt.
 Do not use a placeholder digest to represent an unpublished service.
 
@@ -262,7 +265,7 @@ the Azure Blob transport adapter.
   writes, and missing-object delete semantics. This draft library composition
   is not a platform release or version bump. Changeset records track intent;
   source-bound version preparation is described here. The original P0 packages
-  were published from an earlier source; #1825 tracks their current 0.0.0 baseline.
+  were published from an earlier source; #1825 tracks their historical 0.0.0 baseline.
   This draft does not claim platform deployment.
 - #1767 adds ordered, layered provider composition: permitted Guardrails and
   Telemetry providers resolve and pin as ordered sets, pinning resource

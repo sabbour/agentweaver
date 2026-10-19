@@ -2,6 +2,21 @@
 
 Applied component version changes, newest first.
 
+## 2026-10-19T10:21:04.079Z — source `a00434837e1dd8236fcfdcea233e0850facf1cec`
+
+- `Agentweaver.AgentHost`: 1.0.1 -> 1.0.2 (patch) — .changeset/v1-0-4-product-image-source-labels.md
+- `Agentweaver.Environment`: 1.1.2 -> 1.1.3 (patch) — .changeset/stable-cluster-identity.md, .changeset/v1-0-4-product-image-source-labels.md
+- `Agentweaver.EventsAndSessions`: 1.1.1 -> 1.1.2 (patch) — .changeset/v1-0-4-product-image-source-labels.md
+- `Agentweaver.Gateway`: 1.1.0 -> 1.1.1 (patch) — .changeset/v1-0-4-product-image-source-labels.md
+- `Agentweaver.Identity.Broker`: 1.1.1 -> 1.1.2 (patch) — .changeset/v1-0-4-product-image-source-labels.md
+- `Agentweaver.Knowledge`: 1.0.2 -> 1.0.3 (patch) — .changeset/v1-0-4-product-image-source-labels.md
+- `Agentweaver.Mcp`: 1.0.1 -> 1.0.2 (patch) — .changeset/v1-0-4-product-image-source-labels.md
+- `Agentweaver.Orchestrator`: 1.1.0 -> 1.1.1 (patch) — .changeset/v1-0-4-product-image-source-labels.md
+- `Agentweaver.Projects.Config`: 1.1.0 -> 1.1.1 (patch) — .changeset/v1-0-4-product-image-source-labels.md
+- `Agentweaver.Providers.Sandbox.AgentSandbox`: 1.1.2 -> 1.1.3 (patch) — .changeset/stable-cluster-identity.md
+- `Agentweaver.Providers.Storage.AzureFiles`: 1.0.3 -> 1.0.4 (patch) — .changeset/stable-cluster-identity.md
+- `Agentweaver.Web`: 1.0.2 -> 1.0.3 (patch) — .changeset/v1-0-4-product-image-source-labels.md
+
 ## 2026-10-19T01:04:30.754Z — source `ead1a2d170b71c5ac24003197445e2166bd08c96`
 
 - `Agentweaver.Environment`: 1.1.1 -> 1.1.2 (patch) — .changeset/environment-connection-delete-body.md
