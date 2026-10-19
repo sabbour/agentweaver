@@ -9,7 +9,7 @@ spec:
   parentRefs:
     - name: identity-broker
       namespace: agentweaver-gateway
-      sectionName: portal
+      sectionName: https
   hostnames:
     - portal.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io
   rules:

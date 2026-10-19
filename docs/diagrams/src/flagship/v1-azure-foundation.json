@@ -27,7 +27,7 @@
     {
       "id": "default-domain",
       "label": "Managed route and TLS",
-      "subLabel": "Native certificate; agentweaver route; explicit Gateway placement",
+      "subLabel": "Native TLS; wildcard listener; exact-host routes",
       "icon": "network",
       "fluentIcon": "network",
       "badge": { "text": "Preview", "tone": "marigold" }

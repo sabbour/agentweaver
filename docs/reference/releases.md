@@ -161,6 +161,12 @@ rendered Kustomize installation. To apply the installation and run live rollout
 and image checks, repeat the command with `--execute` after the target and
 changes are approved.
 
+The deployment preflight inventories the managed Gateway and all HTTPRoutes.
+The Azure routing candidate uses one wildcard-domain HTTPS listener, with exact
+route hostnames and path/backend boundaries retained. This supports HTTP/2
+connection coalescing between the Portal and Broker without matching unknown
+hostnames. A successful render or preflight does not prove live route readiness.
+
 `release:deploy-bootstrap` is a separate pre-acceptance path. It requires the
 exact draft manifest and source-bound publication evidence for the requested
 version; some partial-publication cases also require their immutable completion

@@ -357,7 +357,7 @@ kubectl wait --for=condition=complete job/identity-broker-migration `
    or the exact `web-application` route installed by the root bundle with no
    Gateway or BackendTLSPolicy. In that retry state, the route must target
    Gateway `identity-broker` in namespace `agentweaver-gateway` and select
-   its `portal` listener. If the parent reference specifies a port, it must
+   its shared `https` listener. If the parent reference specifies a port, it must
    be 443. The route must use the managed Portal hostname and route `/` to
    the Web Service on port 8080. The preflight inventories all routes and
    rejects extra or mismatched routing resources. Do not apply the root

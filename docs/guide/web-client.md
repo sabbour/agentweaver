@@ -31,7 +31,7 @@ flowchart LR
   Browser[Agentweaver web client]
   McpClient[MCP clients]
   Broker[Identity Broker]
-  Portal[AKS-managed HTTPS portal listener]
+  Portal[AKS-managed wildcard HTTPS listener with exact-host routes]
   Web[Web service]
   Gateway[Gateway / BFF]
   Mcp[MCP service]

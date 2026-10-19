@@ -646,7 +646,10 @@ routing overlay allows Web HTTP only from the explicitly selected `identity-brok
 Gateway pods and node health probes. The routing source defines a Web root
 HTTPRoute, Gateway API HTTPRoute for `/api/v1` and exact `/openapi/v1.json`,
 and exact `/mcp` plus `/.well-known/oauth-protected-resource/mcp` HTTPRoutes to
-MCP, all on the portal listener. Gateway and MCP
+MCP, all on one wildcard-domain HTTPS listener with exact hostnames retained
+per route. This lets the Broker route remain available when HTTP/2 connection
+coalescing reuses a Portal TLS connection; other hostnames have no route.
+Gateway and MCP
 BackendTLSPolicies pin their service DNS hostnames and the existing public
 `service-backend-ca` ConfigMap. MCP mounts that CA read-only to validate HTTPS
 calls to Gateway. Release preflight checks the public CA and both signed service
