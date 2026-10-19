@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { createP1NativeProcessProvider } from './process-provider.mjs';
 import { runP1NativeCreditDenialReaders, runP1NativeProbes } from './run.mjs';
+import { runP1DispatchRecoveryProbes } from '../p1-dispatch-recovery-probes/run.mjs';
 
 const invocationId = 'a6a04b52-34bd-4c58-8d95-537912dc8e55';
 const policyOperationId = 'b7b15cb2-45a3-4d69-9e06-648023ed9f66';
@@ -1114,6 +1115,29 @@ test('standalone reader accepts production-shaped enum values and returns safe s
   assert.equal(serialized.includes('observationEndpoint'), false);
   assert.equal(serialized.includes('configureEndpoint'), false);
   assert.equal(serialized.includes('modelSelectionReference'), false);
+});
+
+test('dispatch recovery keeps a valid denial receipt when its sibling case blocks', async () => {
+  const input = createCreditReaderInput();
+  const result = await runP1DispatchRecoveryProbes({
+    creditDenialInput: input,
+    creditDenialDependencies: {
+      hostCaller: createCreditHostCaller(input, (kind, response) => {
+        if (kind === 'positive') response.receipt.stage = 'Preparation';
+      }),
+    },
+  });
+
+  assert.equal(result.overallStatus, 'blocked');
+  assert.equal(result.liveObservations.creditDenials.status, 'blocked');
+  assert.equal(result.liveObservations.creditDenials.cases.fixedZero.status, 'passed');
+  assert.equal(result.liveObservations.creditDenials.cases.positive.status, 'blocked');
+  const observation = result.probes[0].evidence.observations.find(item =>
+    item.kind === 'partial-host-credit-denial-read-results');
+  assert.ok(observation);
+  assert.equal(observation.cases.fixedZero.status, 'passed');
+  assert.equal(observation.cases.positive.status, 'blocked');
+  assert.equal(result.probes[0].status, 'blocked');
 });
 
 test('standalone credit readers reject stale current context and incomplete denial evidence', async () => {

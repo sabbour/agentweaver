@@ -4,9 +4,11 @@
 entry point. Importing the module does not start a process, contact a service,
 or read credentials. The runner reports four separate P1 probes and returns
 `{ kind: "p1-native-acceptance", schemaVersion: 1, overallStatus, startedAt,
-completedAt, probes }`. Each probe has `passed`, `failed`, or `blocked` status,
-redacted evidence, and an explicit cleanup result. Missing or mismatched pins,
-fences, UIDs, or live evidence block; they are never inferred.
+completedAt, probes, receiptSha256 }`. The checksum covers the canonical JSON
+envelope without `receiptSha256`; the aggregator verifies it before using the
+envelope. Each probe has `passed`, `failed`, or `blocked` status, redacted
+evidence, and an explicit cleanup result. Missing or mismatched pins, fences,
+UIDs, or live evidence block; they are never inferred.
 
 This is acceptance source, not a live acceptance command. Tests use injected
 fakes only. A caller must explicitly provide an HTTPS Environment origin, same-
@@ -333,15 +335,30 @@ Each entry is `{ name, status, code?, reason?, evidence, cleanup }`, where
 `{ status, actions }` with per-action `complete` or `uncertain` receipts. The
 runner returns these in
 `{ kind: "p1-native-acceptance", schemaVersion: 1, overallStatus, startedAt,
-completedAt, probes }`. `overallStatus` is P1-only; it must not overwrite a
-separate UI/surface status.
+completedAt, probes, receiptSha256 }`. `overallStatus` is P1-only; it must not
+overwrite a separate UI/surface status.
 
-**Integration gap for the surface owner:** `scripts/harness-shared/p1-acceptance-result.mjs`
-currently hardcodes six native probe results to `blocked`, so `fullP1Status`
-cannot pass even when this runner succeeds. Replace those placeholders by
-mapping this runner's four `probes` entries by exact `name`, copy each entry's
-`status` to the corresponding native status slot, and preserve its `evidence`
-and `cleanup` receipts. Keep surface results in their existing surface field;
-aggregate the unchanged surface status and this runner's `overallStatus`
-separately into `fullP1Status`. The shared harness file is outside this
-runner's ownership and was intentionally not changed here.
+## Full P1 aggregation
+
+The full P1 CLI accepts the exact output envelopes from this runner and the
+dispatch-recovery runner:
+
+```powershell
+npm run harness:p1 -- --surface api --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs> --native-probe-envelope <native.json> --dispatch-recovery-envelope <recovery.json>
+```
+
+The aggregator maps the four native probe entries by exact `name`, preserves
+their `status`, `evidence`, and `cleanup`, and adds the two dispatch-recovery
+entries. It keeps surface status separate from native probe status. If either
+envelope is missing, every required probe in that envelope remains blocked.
+Malformed, inconsistent, duplicate, or extra envelope fields are rejected;
+they are not ignored.
+A probe cannot claim `passed` with empty evidence. Native passes also require
+completed or not-required cleanup; read-only dispatch-recovery passes must
+report no created resources.
+
+Supply envelopes written by live probe calls. Test fixtures and scripted
+results are not live evidence. The CLI validates the envelope contract but
+checks the checksum to detect changes after the envelope was written. The
+checksum does not authenticate who wrote a file, so a file alone is not proof
+that its producer contacted the live owners.

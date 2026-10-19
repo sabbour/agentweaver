@@ -3,7 +3,11 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { mkdir, open, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomUUID } from 'node:crypto';
-import { createP1AcceptanceResult, persistP1AcceptanceResult } from './p1-acceptance-result.mjs';
+import {
+  createP1AcceptanceResult,
+  persistP1AcceptanceResult,
+  validateP1NativeProbeResults,
+} from './p1-acceptance-result.mjs';
 import { prepareP1DeploymentEvidence } from './p1-deployment-evidence.mjs';
 import { validateP1RunnerPlanInput } from './p1-journey-input.mjs';
 import {
@@ -30,10 +34,16 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
-/** Bind a persisted invocation to the validated plan and selected surface. */
-function invocationBinding(validated, surface) {
+/** Match resolved paths using the host filesystem's case rules. */
+function pathIdentity(path) {
+  return process.platform === 'win32' ? path.toLowerCase() : path;
+}
+
+/** Bind a persisted invocation to its plan, surface, and exact native probe envelopes. */
+function invocationBinding(validated, surface, nativeProbeResults) {
   return {
-    executionPlanSha256: createHash('sha256').update(stableJson(validated)).digest('hex'),
+    executionPlanSha256: createHash('sha256')
+      .update(stableJson({ validated, nativeProbeResults })).digest('hex'),
     surface,
   };
 }
@@ -41,30 +51,54 @@ function invocationBinding(validated, surface) {
 /** Parse supported CLI flags and reject duplicates or unknown options. */
 function parseArguments(argv) {
   const result = {};
+  const optionKeys = new Map([
+    ['--surface', 'surface'],
+    ['--input', 'input'],
+    ['--output', 'output'],
+    ['--page-module', 'pageModule'],
+    ['--identity-module', 'identityModule'],
+    ['--native-probe-envelope', 'nativeProbeEnvelope'],
+    ['--dispatch-recovery-envelope', 'dispatchRecoveryEnvelope'],
+  ]);
   for (let index = 0; index < argv.length; index++) {
     const name = argv[index];
     if (name === '--help') {
       result.help = true;
       continue;
     }
-    if (!['--surface', '--input', '--output', '--page-module', '--identity-module'].includes(name)
+    if (!optionKeys.has(name)
       || typeof argv[index + 1] !== 'string' || argv[index + 1].startsWith('--')) {
-      throw new Error('Use --surface api|mcp|ui --input <manifest.json> --output <evidence.jsonl> --identity-module <module.mjs> [--page-module <module.mjs>].');
+      throw new Error('Use --surface api|mcp|ui --input <manifest.json> --output <evidence.jsonl> --identity-module <module.mjs> [--page-module <module.mjs>] [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>].');
     }
-    const key = name === '--page-module' ? 'pageModule'
-      : name === '--identity-module' ? 'identityModule' : name.slice(2);
+    const key = optionKeys.get(name);
     if (result[key] !== undefined) throw new Error(`The ${name} option can only be used once.`);
     result[key] = argv[++index];
   }
   return result;
 }
 
-/** Build a blocked acceptance result with redacted failure and no claimed fixture cleanup. */
-function createFailureResult(surface, error, sourceEvidence) {
+/** Read and validate one exact output envelope without accepting a partial or scripted shape. */
+async function readProbeEnvelope(path, expectedKind) {
+  let envelope;
+  try {
+    envelope = JSON.parse(await readFile(path, 'utf8'));
+  } catch {
+    throw new Error(`The ${expectedKind} output envelope is missing or malformed JSON.`);
+  }
+  if (envelope?.kind !== expectedKind) {
+    throw new Error(`The supplied probe output must be an exact ${expectedKind} envelope.`);
+  }
+  validateP1NativeProbeResults([envelope]);
+  return envelope;
+}
+
+/** Build a blocked acceptance result while retaining every valid supplied probe envelope. */
+function createFailureResult(surface, error, sourceEvidence, nativeProbeResults = []) {
   return createP1AcceptanceResult({
     surface,
     surfaceStatus: 'blocked',
     sourceEvidence,
+    nativeProbeResults,
     observations: {
       cleanup: { intent: 'none', status: 'not-started' },
       adapterCleanup: { mcp: 'not-started', ui: surface === 'ui' ? 'not-started' : 'not-required' },
@@ -176,9 +210,11 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
   let inputPath;
   let result;
   let sourceEvidence;
+  const nativeProbeResults = [];
   if (argv.includes('--help')) {
-    io.log('Usage: node scripts/harness-shared/run-p1.mjs --surface api|mcp|ui --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs> [--page-module <authorized-page-provider.mjs>]');
+    io.log('Usage: node scripts/harness-shared/run-p1.mjs --surface api|mcp|ui --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs> [--page-module <authorized-page-provider.mjs>] [--native-probe-envelope <native.json>] [--dispatch-recovery-envelope <recovery.json>]');
     io.log('The runner uses the supplied setup token only after source and deployment evidence pass; it never signs in or requests consent.');
+    io.log('Only exact output envelopes from the P1 probe runners are aggregated; missing probe envelopes remain blocked.');
     return 0;
   }
 
@@ -196,8 +232,27 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
     }
     inputPath = resolve(options.input);
     const requestedOutputPath = resolve(options.output);
-    if (inputPath === requestedOutputPath) throw new Error('The evidence output path must not replace the input manifest.');
+    if (pathIdentity(inputPath) === pathIdentity(requestedOutputPath)) {
+      throw new Error('The evidence output path must not replace the input manifest.');
+    }
     outputPath = requestedOutputPath;
+    const envelopeInputs = [
+      [options.nativeProbeEnvelope, 'p1-native-acceptance'],
+      [options.dispatchRecoveryEnvelope, 'p1-dispatch-recovery-acceptance'],
+    ].filter(([path]) => path !== undefined).map(([path, kind]) => [resolve(path), kind]);
+    const protectedPaths = new Set([inputPath, outputPath].map(pathIdentity));
+    for (const [path] of envelopeInputs) {
+      const identity = pathIdentity(path);
+      if (protectedPaths.has(identity)) {
+        // Do not append the failure receipt to an envelope that was also selected as output.
+        if (identity === pathIdentity(requestedOutputPath)) outputPath = undefined;
+        throw new Error('Probe envelope paths must not replace or duplicate another P1 input or the evidence output.');
+      }
+      protectedPaths.add(identity);
+    }
+    for (const [path, kind] of envelopeInputs) {
+      nativeProbeResults.push(await readProbeEnvelope(path, kind));
+    }
 
     let input;
     try {
@@ -219,7 +274,7 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
     const integrationDeploymentReceiptPath =
       resolveRepositoryPath(deploymentEvidence.integrationDeploymentReceiptPath);
     if ([inputPath, publicationPath, manifestPath, agentHostArchivePath, integrationDeploymentReceiptPath]
-      .includes(requestedOutputPath)) {
+      .some(path => pathIdentity(path) === pathIdentity(requestedOutputPath))) {
       outputPath = undefined;
       throw new Error('The evidence output path must not replace a P1 input or deployment artifact.');
     }
@@ -238,7 +293,8 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
       },
     });
 
-    const invocationId = await getOrCreateInvocationId(outputPath, invocationBinding(validated, surface));
+    const invocationId = await getOrCreateInvocationId(
+      outputPath, invocationBinding(validated, surface, nativeProbeResults));
     const setupToken = env.AGENTWEAVER_P1_SETUP_TOKEN;
     if (typeof setupToken !== 'string' || !setupToken) {
       throw new Error('The setup token is unavailable; set AGENTWEAVER_P1_SETUP_TOKEN after source evidence is ready.');
@@ -284,6 +340,7 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
         result = await runSurfaceJourney(surface, fixture.input, {
           ...adapters,
           sourceEvidence,
+          nativeProbeResults,
           createIdempotencyKey: () => createP1IdempotencyKey(invocationId),
           beforeUiAction: async ({ journey }) => appendRedactedJsonLine(outputPath, {
             kind: 'p1-ui-action-started',
@@ -294,7 +351,7 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
           }),
         });
       } catch (error) {
-        result = createFailureResult(surface, error, sourceEvidence);
+        result = createFailureResult(surface, error, sourceEvidence, nativeProbeResults);
       }
       try {
         cleanup = await fixture.cleanup();
@@ -305,12 +362,13 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
     } finally {
       if (!result) {
         result = createFailureResult(surface,
-          new Error('P1 fixture setup did not produce an acceptance result.'), sourceEvidence);
+          new Error('P1 fixture setup did not produce an acceptance result.'),
+          sourceEvidence, nativeProbeResults);
       }
     }
   } catch (error) {
     if (!['api', 'mcp', 'ui'].includes(surface)) surface = 'api';
-    result = createFailureResult(surface, error, sourceEvidence);
+    result = createFailureResult(surface, error, sourceEvidence, nativeProbeResults);
     if (error.p1SetupState) {
       let cleanup;
       let cleanupError;

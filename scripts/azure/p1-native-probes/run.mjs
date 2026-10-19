@@ -4,6 +4,7 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
+import { sealP1NativeProbeEnvelope } from '../../harness-shared/p1-acceptance-result.mjs';
 
 const TENANT_SELECTOR_HEADER = 'X-Agentweaver-Tenant';
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
@@ -802,7 +803,7 @@ function evidenceError(error, secrets) {
  * Executes the P1 native probe set and returns structured observations for each readiness gate.
  * Invalid evidence bindings fail closed; individual probe failures are captured in the result.
  */
-export async function runP1NativeProbes(input, dependencies) {
+async function runP1NativeProbesCore(input, dependencies) {
   const startedAt = new Date().toISOString();
   const probes = [];
   const secrets = [];
@@ -2553,6 +2554,11 @@ export async function runP1NativeProbes(input, dependencies) {
     completedAt: new Date().toISOString(),
     probes,
   };
+}
+
+/** Seal the completed probe envelope so edits to saved evidence fail validation. */
+export async function runP1NativeProbes(input, dependencies) {
+  return sealP1NativeProbeEnvelope(await runP1NativeProbesCore(input, dependencies));
 }
 
 function hasExactKeys(value, keys) {

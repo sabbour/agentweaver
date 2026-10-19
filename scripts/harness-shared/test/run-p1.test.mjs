@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createP1AcceptanceResult } from '../p1-acceptance-result.mjs';
+import { createP1AcceptanceResult, sealP1NativeProbeEnvelope } from '../p1-acceptance-result.mjs';
 import { runP1Cli } from '../run-p1.mjs';
 
 function validInput() {
@@ -72,7 +72,29 @@ function stableJson(value) {
   return JSON.stringify(value);
 }
 
-function invocationRecord(input, surface, invocationId) {
+/** Build test-only envelopes for CLI contract checks; these are not live acceptance evidence. */
+function probeEnvelope(kind, names) {
+  return sealP1NativeProbeEnvelope({
+    kind,
+    schemaVersion: 1,
+    overallStatus: 'passed',
+    startedAt: '2026-10-13T00:00:00.000Z',
+    completedAt: '2026-10-13T00:00:01.000Z',
+    ...(kind === 'p1-dispatch-recovery-acceptance'
+      ? { ownerObservation: { status: 'observed' }, liveObservations: { creditDenials: { status: 'passed' } } }
+      : {}),
+    probes: names.map(name => ({
+      name,
+      status: 'passed',
+      evidence: { kind: 'controlled-source-receipt', receiptHash: name },
+      cleanup: kind === 'p1-native-acceptance'
+        ? { status: 'not-required', actions: [] }
+        : { status: 'not-started', createdResourceIds: [] },
+    })),
+  });
+}
+
+function invocationRecord(input, surface, invocationId, nativeProbeResults = []) {
   const validated = {
     environment: input.environment,
     pins: input.pins,
@@ -84,7 +106,8 @@ function invocationRecord(input, surface, invocationId) {
     kind: 'p1-setup-invocation',
     schemaVersion: 2,
     invocationId,
-    executionPlanSha256: createHash('sha256').update(stableJson(validated)).digest('hex'),
+    executionPlanSha256: createHash('sha256')
+      .update(stableJson({ validated, nativeProbeResults })).digest('hex'),
     surface,
   };
 }
@@ -96,6 +119,113 @@ test('P1 CLI help describes the explicit identity providers without exposing cre
   assert.match(output.join('\n'), /--surface api\|mcp\|ui/);
   assert.match(output.join('\n'), /supplied setup token only after source and deployment evidence pass/);
   assert.doesNotMatch(output.join('\n'), /--token/);
+});
+
+test('P1 CLI reads exact native envelopes and preserves every supplied probe on later failure', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-cli-'));
+  const inputPath = path.join(directory, 'input.json');
+  const nativePath = path.join(directory, 'native.json');
+  const recoveryPath = path.join(directory, 'recovery.json');
+  const outputPath = path.join(directory, 'evidence.jsonl');
+  const output = [];
+  const native = probeEnvelope('p1-native-acceptance', [
+    'storage-owner-isolation',
+    'network-policy-datapath',
+    'sandbox-owner-lifecycle',
+    'agenthost-image-readiness',
+  ]);
+  const recovery = probeEnvelope('p1-dispatch-recovery-acceptance', [
+    'numeric-copilot-dispatch-boundaries',
+    'checkpoint-restart-duplicate-fence',
+  ]);
+  try {
+    await writeFile(inputPath, JSON.stringify(validInput()), { encoding: 'utf8' });
+    await writeFile(nativePath, JSON.stringify(native), { encoding: 'utf8' });
+    await writeFile(recoveryPath, JSON.stringify(recovery), { encoding: 'utf8' });
+    const code = await runP1Cli([
+      '--surface', 'api',
+      '--input', inputPath,
+      '--output', outputPath,
+      '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
+      '--native-probe-envelope', nativePath,
+      '--dispatch-recovery-envelope', recoveryPath,
+    ], {}, { log: text => output.push(text), error: text => output.push(text) }, {
+      async prepareDeploymentEvidence() {
+        throw new Error('Controlled stop after exact probe envelopes were read.');
+      },
+    });
+
+    assert.equal(code, 2);
+    const result = JSON.parse(output.at(-1));
+    assert.equal(result.fullP1Status, 'blocked');
+    assert.match(result.failure.message, /Controlled stop/);
+    for (const name of [
+      'storage-owner-isolation',
+      'network-policy-datapath',
+      'sandbox-owner-lifecycle',
+      'agenthost-image-readiness',
+      'numeric-copilot-dispatch-boundaries',
+      'checkpoint-restart-duplicate-fence',
+    ]) {
+      assert.equal(result.probes.find(probe => probe.id === name).status, 'passed', name);
+    }
+    assert.deepEqual(
+      result.probes.find(probe => probe.id === 'numeric-copilot-dispatch-boundaries').evidence,
+      recovery.probes[0].evidence,
+    );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('P1 CLI rejects a tampered envelope and retains valid envelopes while blocking missing probes', async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-cli-'));
+  const inputPath = path.join(directory, 'input.json');
+  const nativePath = path.join(directory, 'native.json');
+  const recoveryPath = path.join(directory, 'recovery.json');
+  const outputPath = path.join(directory, 'evidence.jsonl');
+  const output = [];
+  const native = probeEnvelope('p1-native-acceptance', [
+    'storage-owner-isolation',
+    'network-policy-datapath',
+    'sandbox-owner-lifecycle',
+    'agenthost-image-readiness',
+  ]);
+  const recovery = probeEnvelope('p1-dispatch-recovery-acceptance', [
+    'numeric-copilot-dispatch-boundaries',
+    'checkpoint-restart-duplicate-fence',
+  ]);
+  recovery.probes[0].scriptedResult = true;
+  try {
+    await writeFile(inputPath, JSON.stringify(validInput()), { encoding: 'utf8' });
+    await writeFile(nativePath, JSON.stringify(native), { encoding: 'utf8' });
+    await writeFile(recoveryPath, JSON.stringify(recovery), { encoding: 'utf8' });
+    const code = await runP1Cli([
+      '--surface', 'api',
+      '--input', inputPath,
+      '--output', outputPath,
+      '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
+      '--native-probe-envelope', nativePath,
+      '--dispatch-recovery-envelope', recoveryPath,
+    ], {}, { log: text => output.push(text), error: text => output.push(text) });
+
+    assert.equal(code, 2);
+    const result = JSON.parse(output.at(-1));
+    assert.equal(result.fullP1Status, 'blocked');
+    assert.match(result.failure.message, /checksum does not match/);
+    assert.ok(result.probes.filter(probe => [
+      'storage-owner-isolation',
+      'network-policy-datapath',
+      'sandbox-owner-lifecycle',
+      'agenthost-image-readiness',
+    ].includes(probe.id)).every(probe => probe.status === 'passed'));
+    assert.ok(result.probes.filter(probe => [
+      'numeric-copilot-dispatch-boundaries',
+      'checkpoint-restart-duplicate-fence',
+    ].includes(probe.id)).every(probe => probe.status === 'blocked'));
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('P1 CLI rejects non-execute input before credentials or network activity', async () => {
@@ -592,15 +722,32 @@ test('P1 CLI refuses to resume a UI write after its durable action-start marker'
   }
 });
 
-test('P1 CLI does not persist a blocked result over an input or deployment artifact', async () => {
-  for (const artifact of ['input', 'publication', 'integration-deployment']) {
+test('P1 CLI does not persist a blocked result over an input, envelope, or deployment artifact', async () => {
+  for (const artifact of ['input', 'native-envelope', 'dispatch-envelope', 'publication', 'integration-deployment']) {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'agentweaver-p1-cli-'));
     const inputPath = path.join(directory, 'input.json');
     const protectedPath = artifact === 'input'
       ? inputPath
-      : path.join(directory, artifact === 'publication' ? 'publication.json' : 'integration-deployment.json');
+      : path.join(directory, artifact === 'native-envelope'
+        ? 'native.json'
+        : artifact === 'dispatch-envelope' ? 'recovery.json'
+          : artifact === 'publication' ? 'publication.json' : 'integration-deployment.json');
     const input = validInput();
-    const original = artifact === 'input' ? JSON.stringify(input) : 'protected deployment evidence';
+    const original = artifact === 'input'
+      ? JSON.stringify(input)
+      : artifact === 'native-envelope'
+        ? JSON.stringify(probeEnvelope('p1-native-acceptance', [
+          'storage-owner-isolation',
+          'network-policy-datapath',
+          'sandbox-owner-lifecycle',
+          'agenthost-image-readiness',
+        ]))
+        : artifact === 'dispatch-envelope'
+          ? JSON.stringify(probeEnvelope('p1-dispatch-recovery-acceptance', [
+            'numeric-copilot-dispatch-boundaries',
+            'checkpoint-restart-duplicate-fence',
+          ]))
+        : 'protected deployment evidence';
     if (artifact === 'publication') input.deploymentEvidence.publicationPath = protectedPath;
     if (artifact === 'integration-deployment') {
       input.deploymentEvidence.integrationDeploymentReceiptPath = protectedPath;
@@ -610,9 +757,21 @@ test('P1 CLI does not persist a blocked result over an input or deployment artif
     try {
       await writeFile(inputPath, JSON.stringify(input), { encoding: 'utf8' });
       if (artifact !== 'input') await writeFile(protectedPath, original, { encoding: 'utf8' });
+      const envelopeArgs = artifact === 'native-envelope'
+        ? ['--native-probe-envelope', protectedPath]
+        : artifact === 'dispatch-envelope'
+          ? [
+            '--native-probe-envelope', path.join(directory, 'missing-native.json'),
+            '--dispatch-recovery-envelope', protectedPath,
+          ]
+        : [];
+      const outputPath = artifact === 'dispatch-envelope' && process.platform === 'win32'
+        ? protectedPath.toUpperCase()
+        : protectedPath;
       const code = await runP1Cli([
-        '--surface', 'api', '--input', inputPath, '--output', protectedPath,
+        '--surface', 'api', '--input', inputPath, '--output', outputPath,
         '--identity-module', path.join(directory, 'authorized-identity-provider.mjs'),
+        ...envelopeArgs,
       ], {}, { log: text => output.push(text), error: text => output.push(text) }, {
         async prepareDeploymentEvidence() {
           prepared += 1;
@@ -623,7 +782,11 @@ test('P1 CLI does not persist a blocked result over an input or deployment artif
       assert.equal(code, 2);
       assert.equal(prepared, 0);
       assert.equal(await readFile(protectedPath, 'utf8'), original);
-      assert.equal(JSON.parse(output.at(-1)).surfaceStatus, 'blocked');
+      const result = JSON.parse(output.at(-1));
+      assert.equal(result.surfaceStatus, 'blocked');
+      if (artifact === 'dispatch-envelope') {
+        assert.match(result.failure.message, /Probe envelope paths must not replace/);
+      }
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
