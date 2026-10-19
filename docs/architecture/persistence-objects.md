@@ -54,6 +54,10 @@ Delivery remains at least once. The inbox prevents duplicate committed local eff
 `Agentweaver.ObjectStore.AzureBlob` implements `IObjectStore` for opaque platform objects. It does not provide agent workspace storage, create a container, authorize callers, or fall back to disk.
 
 The Blob container exists before adapter use. The caller owns authorization, authoritative references, retention, and upload-stream lifetime. Blob writes do not commit PostgreSQL references.
+The foundation Bicep creates the private `session-material` container used by
+Events & Sessions. Its workload identity receives Storage Blob Data Contributor
+on that container only, not on the storage account. These source definitions do
+not prove that the container or role assignment has been deployed.
 
 Session event payloads store large content as typed opaque `ObjectKey` references with
 purpose and optional byte length; the journal stores and returns references and

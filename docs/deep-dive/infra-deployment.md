@@ -15,6 +15,7 @@ not end-to-end product acceptance.
 | `infra/bicep/main.bicep` and `modules/` | Dedicated foundation resources |
 | `infra/bicep/aks-redeploy.bicep` | Existing-cluster workload-identity federation refresh |
 | `infra/bicep/p1-runtime-identities.bicep` | Separate runtime-identity setup |
+| `infra/bicep/p1-session-material-access.bicep` | Focused private container and Events data-role repair |
 | `deploy/k8s/base/`, `migrations/`, and `acceptance/` | Namespace, Broker runtime, migration Job, and Foundation Probe |
 | `deploy/k8s/routing/identity-broker/` | Managed Gateway routing and backend TLS |
 | `deploy/k8s/profiles/` | Separately selected runtime profiles |
@@ -53,7 +54,8 @@ dedicated resource group and defines:
   identity, Azure role-based access control (RBAC), and
   Cilium networking.
 - Microsoft Entra-only PostgreSQL Flexible Server.
-- RBAC-based Key Vault and private Blob storage for platform artifacts.
+- RBAC-based Key Vault and private Blob storage with private
+  `platform-artifacts` and `session-material` containers.
 - Log Analytics, Application Insights, and Azure Monitor Private Link Scope.
 - Private endpoints, DNS links, workload identities, federation, and scoped
   role assignments.
@@ -62,6 +64,12 @@ Key Vault and Blob disable public network access. PostgreSQL uses the delegated
 private network. Monitor disables public query access while allowing its
 configured ingestion path. The template does not create a workspace Azure
 Files share or install the Agent Sandbox controller.
+The Foundation Probe has account-scoped Blob data access for its acceptance
+round trip. The Events & Sessions identity receives Storage Blob Data
+Contributor on `session-material` only. The focused repair template can add
+that container and role assignment without redeploying the foundation; follow
+the separate operator approval and target checks in the
+[Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#session-material-container-repair).
 
 Reviewed parameters place core resources in `eastus2euap` and Azure Monitor
 service resources in `eastus2`. The Monitor private endpoint stays in the VNet

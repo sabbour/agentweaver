@@ -2,7 +2,7 @@
   "version": 2,
   "source": {
     "file": "v1-azure-foundation.json",
-    "sha256": "0d719912e8be3ad11dc94cd67d20bc807b02fd72cae565d30ae38e378b1fc230"
+    "sha256": "993e6b6972317a1a9848773099a92c02c176f8a846039a79571d0fc393c6750a"
   },
   "drawio": {
     "file": "v1-azure-foundation.drawio",

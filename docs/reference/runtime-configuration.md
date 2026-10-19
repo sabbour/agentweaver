@@ -354,7 +354,7 @@ The `events-and-sessions-runtime-config.json` map contains:
 | `AgentHost__ModelBindings__<reference>__Provider` | Optional for `HostedCopilot` and must be omitted. Required for `Byok`; its `Type` is `azure`, `openai`, or `anthropic`, its `BaseUrl` is HTTPS without credentials, query, or fragment, and `WireApi` is `responses` (default) or `completions`. `AzureApiVersion` is optional only for Azure. Optional header names contain ASCII letters, digits, and hyphens; header values cannot contain control characters. |
 | `AgentHost__ModelBindings__<reference>__PromptCapacityTokens` | Optional positive integer; no upper bound is imposed by the binding validator. |
 | `AgentHost__ModelBindings__<reference>__SupportedReasoningEfforts` | Optional list, empty by default. Values are unique entries from `low`, `medium`, `high`, and `xhigh`. |
-| `EventsAndSessions__SessionMaterial__ContainerUri` | Optional HTTPS URI of the approved private session-material container. Required when remote tool result TLS is configured. |
+| `EventsAndSessions__SessionMaterial__ContainerUri` | Optional HTTPS URI of the approved private `session-material` container. Required when remote tool result TLS is configured. The Events & Sessions identity needs Storage Blob Data Contributor on this container only. |
 | `EventsAndSessions__Knowledge__BaseAddress` | HTTPS Knowledge service root. |
 | `ProjectsConfig__BaseAddress` | HTTPS Projects & Config service root. |
 | `ProjectsConfig__AuthorizationContext__OwnerBaseAddress`, `Audience` | Projects authorization-context owner root and audience. |

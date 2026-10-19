@@ -6,6 +6,7 @@ AKS means Azure Kubernetes Service. The template defines a dedicated network
 and cluster, Entra-only PostgreSQL, and Key Vault, Blob Storage, and Azure
 Monitor resources. PostgreSQL, Key Vault, and Blob use private networking;
 Azure Monitor uses a private query path and an explicit ingestion path.
+Blob creates private `platform-artifacts` and `session-material` containers.
 
 These definitions do not show that anyone deployed the resources, that private
 DNS resolves, or that a service has live access.
@@ -18,7 +19,7 @@ These steps do not change the resource topology shown below.
 
 <figure class="aw-diagram" tabindex="0">
   <a :href="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'">
-    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Structural Azure topology and evidence map. AKS has a public API endpoint with Kubernetes RBAC, managed Entra, Azure RBAC, and local accounts disabled. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault and Blob private endpoints and the in-VNet AMPLS private endpoint attach to the private-endpoint subnet, while AMPLS remains global. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights. No live deployment or P0 completion is claimed." />
+    <img :src="'/agentweaver/v1/diagrams/flagship/v1-azure-foundation.png'" alt="Structural Azure topology and evidence map. AKS has a public API endpoint with Kubernetes RBAC, managed Entra, Azure RBAC, and local accounts disabled. The dedicated VNet has separate AKS-node, delegated PostgreSQL, and private-endpoint subnets; Key Vault and Blob private endpoints and the in-VNet AMPLS private endpoint attach to the private-endpoint subnet, while AMPLS remains global. Blob has private platform-artifacts and session-material containers. The Foundation Probe Job exercises exact-version Key Vault secret redemption, a Blob object-store round trip, and Entra-authenticated PostgreSQL effects. Workspace and App Insights are in eastus2. Bicep grants the probe identity Key Vault Secrets User at the vault, Storage Blob Data Contributor at the storage account, Log Analytics Reader at the workspace, and Monitoring Metrics Publisher at App Insights; the Events & Sessions identity receives Storage Blob Data Contributor only on session-material. No live deployment or P0 completion is claimed." />
   </a>
   <figcaption>Structural resource and evidence dependencies. Bicep and Kustomize definitions are not a deployment record; the figure does not claim live readiness or P0 completion.</figcaption>
 </figure>
@@ -62,6 +63,15 @@ Key Vault, Storage, VNets, Private Endpoints, and PostgreSQL `Standard_B2s` in
 `eastus2euap`. East US 2 EUAP has no Retail Prices API meters, so this page
 makes no EUAP cost quote. Standard `eastus2` rates are only a planning proxy.
 This region map is not deployment evidence and adds no 0.x product scope.
+
+## Blob containers and data access
+
+The storage module creates private `platform-artifacts` and `session-material`
+containers. Both disable public access. The Foundation Probe identity keeps its
+account-scoped Storage Blob Data Contributor role for acceptance checks.
+The Events & Sessions identity receives Storage Blob Data Contributor on the
+`session-material` container only; it has no account-scoped Blob data role.
+These are source-defined scopes, not evidence of live containers or grants.
 
 ## AKS and Application Routing preview
 
@@ -128,13 +138,21 @@ Its fixed service list is Projects & Config, Environment, Knowledge,
 Events & Sessions, and Orchestrator.
 Each identity trusts only its named ServiceAccount in `agentweaver`.
 
-The template creates no Azure resource role assignment, database grant,
+The template grants the Events & Sessions identity Storage Blob Data Contributor
+on the exact `session-material` container. It creates no database grant,
 migration identity, certificate, storage account, server, cluster, or node pool.
 It does not reuse or change Broker and Probe privileges.
 The output provides observed runtime client and principal IDs for workload configuration.
 Identity creation and federation do not prove database access or service readiness.
 The [operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#limited-p1-runtime-identities)
 describes the separate approval boundary.
+
+For an existing resource group that already has the Events & Sessions identity
+but lacks its configured container and grant, the focused
+`infra/bicep/p1-session-material-access.bicep` template creates only the private
+container and its container-scoped role assignment. The operator command and
+approval boundary are documented in the
+[Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#session-material-container-repair).
 
 The P1 PostgreSQL initializer is an explicit operator action, not part of an
 infrastructure deployment. `scripts/azure/bootstrap-p1-postgres.mjs` checks
