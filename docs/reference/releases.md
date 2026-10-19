@@ -30,11 +30,11 @@ digests or release evidence, so it is not an accepted platform release.
 | `Agentweaver.Telemetry` | Library | `1.0.2` |
 | `Agentweaver.Telemetry.AzureMonitor` | Library | `1.0.2` |
 | `Agentweaver.ObjectStore.AzureBlob` | Library | `1.0.2` |
-| `Agentweaver.Identity.Broker` | Service | `1.1.2` |
+| `Agentweaver.Identity.Broker` | Service | `1.1.3` |
 | `Agentweaver.EventsAndSessions` | Service | `1.1.2` |
 | `Agentweaver.Gateway` | Service | `1.1.1` |
 | `Agentweaver.Mcp` | Service | `1.0.2` |
-| `Agentweaver.Web` | Service | `1.0.3` |
+| `Agentweaver.Web` | Service | `1.0.4` |
 | `Agentweaver.Orchestrator` | Service | `1.1.1` |
 | `Agentweaver.Environment` | Service | `1.1.3` |
 | `Agentweaver.Knowledge` | Service | `1.0.3` |
