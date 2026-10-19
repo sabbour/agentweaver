@@ -1,9 +1,10 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { EffectiveRunSelection } from './contracts';
+import type { BrokerConsentPrompt, EffectiveRunSelection } from './contracts';
 
 const mocks = vi.hoisted(() => ({
   binding: null as { projectId: string; runId: string } | null,
+  consent: null as BrokerConsentPrompt | null,
   authProvider: vi.fn(),
   tenantSelector: 'tenant-1',
   completeRemoteMcpOAuthCallback: vi.fn(),
@@ -157,6 +158,7 @@ vi.mock('./AuthContext', () => {
     useAuth: () => ({
       ...auth,
       session: { ...auth.session, binding: mocks.binding },
+      consent: mocks.consent,
     }),
   };
 });
@@ -368,6 +370,7 @@ describe('v1 web project scoping', () => {
     window.__AGENTWEAVER_REPO_APP_CALLBACK__ = undefined;
     mocks.authProvider.mockClear();
     mocks.binding = null;
+    mocks.consent = null;
     mocks.tenantSelector = 'tenant-1';
     mocks.completeRemoteMcpOAuthCallback.mockReset().mockResolvedValue({});
     mocks.listProjects.mockReset().mockResolvedValue([]);
@@ -425,6 +428,96 @@ describe('v1 web project scoping', () => {
     mocks.streamEvents.mockImplementation(() => {
       throw new Error('The event stream is not used by this test.');
     });
+  });
+
+  it('explains known permissions and links each one to Agentweaver documentation', () => {
+    mocks.consent = {
+      consent_required: true,
+      consent_handle: 'consent-1',
+      client_id: 'agentweaver-web',
+      requested_scopes: [
+        'openid',
+        'profile',
+        'email',
+        'offline_access',
+        'api.read',
+        'projects.admin',
+        'projects.orchestrator',
+      ],
+      csrf_token: 'csrf-1',
+    };
+
+    render(<App />);
+
+    const scopeDetails: Record<string, { summary: string; tooltip: string; anchor: string }> = {
+      openid: {
+        summary: 'Lets Agentweaver confirm who you are.',
+        tooltip: 'Lets you sign in to Agentweaver. The sign-in service uses an account ID to recognize you.',
+        anchor: 'openid',
+      },
+      profile: {
+        summary: 'Requests your profile details.',
+        tooltip: 'Agentweaver does not include profile details in the sign-in tokens it gives to apps.',
+        anchor: 'profile',
+      },
+      email: {
+        summary: 'Requests your email address.',
+        tooltip: 'Agentweaver does not include your email address in the sign-in tokens it gives to apps.',
+        anchor: 'email',
+      },
+      offline_access: {
+        summary: 'Lets the app renew your sign-in while the page is open.',
+        tooltip: 'The Web app keeps sign-in tokens in memory. Reloading the page clears them, so you may need to sign in again.',
+        anchor: 'offline-access',
+      },
+      'api.read': {
+        summary: 'Lets the app send requests to Agentweaver.',
+        tooltip: 'This permission alone does not give the app project access or a role. Agentweaver checks your project access and the requested action.',
+        anchor: 'api-read',
+      },
+      'projects.admin': {
+        summary: 'Lets the app ask to manage a project.',
+        tooltip: 'This permission does not make you a project administrator. Agentweaver checks your project access and role before each action.',
+        anchor: 'projects-admin',
+      },
+      'projects.orchestrator': {
+        summary: 'Lets the app work with project runs.',
+        tooltip: 'For each run, Agentweaver checks your current project access and your assignment to manage runs. It checks that saved settings match this project and run. This permission alone does not give project access or a role.',
+        anchor: 'projects-orchestrator',
+      },
+    };
+    const documentationUrl = 'https://sabbour.github.io/agentweaver/v1/guide/identity-scopes';
+
+    expect(screen.getByRole('heading', { name: 'Review access' })).toBeTruthy();
+    expect(screen.getByText("Agentweaver's sign-in service asks to use these permissions for this app.")).toBeTruthy();
+    for (const scope of mocks.consent.requested_scopes) {
+      const details = scopeDetails[scope];
+      const help = screen.getByRole('button', { name: `About ${scope}` });
+      const tooltip = screen.getByText(details.tooltip);
+      expect(screen.getByText(scope)).toBeTruthy();
+      expect(screen.getByText(details.summary)).toBeTruthy();
+      expect(help.getAttribute('aria-describedby')).toContain(tooltip.id);
+      expect(screen.getByRole('link', { name: `Documentation for ${scope}` }).getAttribute('href'))
+        .toBe(`${documentationUrl}#${details.anchor}`);
+    }
+  });
+
+  it('shows the raw name and a generic explanation for an unknown permission', () => {
+    mocks.consent = {
+      consent_required: true,
+      consent_handle: 'consent-2',
+      client_id: 'agentweaver-web',
+      requested_scopes: ['custom.resource'],
+      csrf_token: 'csrf-2',
+    };
+
+    render(<App />);
+
+    expect(screen.getByText('custom.resource')).toBeTruthy();
+    expect(screen.getByText('Agentweaver does not explain this permission.')).toBeTruthy();
+    expect(screen.getByText('The app or service defines what this permission allows. Ask your administrator before approving it.')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Documentation for custom.resource' }).getAttribute('href'))
+      .toBe('https://sabbour.github.io/agentweaver/v1/guide/identity-scopes#unknown-scopes');
   });
 
   it('renders the Copilot popup callback outside the authenticated provider', async () => {

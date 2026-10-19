@@ -93,6 +93,10 @@ the resulting state.
 4. Make a versioned API request through Gateway. Confirm that the owner
    enforces current authorization for the requested operation.
 
+The consent screen lists the scopes requested by the registered client.
+See [Identity Broker scopes](./identity-scopes.md) for their meanings and the
+authorization checks behind the Agentweaver scopes.
+
 ## Configure browser origins
 
 Gateway and Broker CORS are separate. Set `Gateway:WebOrigin` to the Web

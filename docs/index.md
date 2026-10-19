@@ -36,6 +36,7 @@ Azure environment is deployed.
 | [Configure Knowledge memory](./guide/configure-knowledge.md) | Configure native PostgreSQL Memory and understand store identity. |
 | [Gateway and BFF](./guide/gateway.md) | Discover and call the finite Gateway API. |
 | [Web client](./guide/web-client.md) | Configure the browser client and its authentication flow. |
+| [Identity Broker scopes](./guide/identity-scopes.md) | Understand the permissions shown on the Broker consent screen. |
 | [Testing](./guide/testing.md) | Run the relevant test suites and interpret their limits. |
 | [Azure acceptance](./guide/azure-acceptance.md) | Prepare and verify approved Azure acceptance checks. |
 

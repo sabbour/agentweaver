@@ -20,6 +20,11 @@ The app sends sign-in and GitHub Repo App requests directly to the Identity
 Broker. It sends project, run, Knowledge, and GitHub Copilot API requests to
 the Gateway. The Gateway forwards each request to its owner.
 
+During sign-in, the consent screen explains each scope requested by the
+registered client and links to its documentation. See
+[Identity Broker scopes](../guide/identity-scopes.md) for the scope meanings
+and the authorization checks behind Agentweaver scopes.
+
 ## What you can do
 
 1. [Sign in](./onboarding-auth.md) through the Identity Broker.
