@@ -12,7 +12,6 @@ import { alignExistingP0BrokerHostname, assertIdentityRoutingPlacement, bootstra
 import { bootstrapIdentityBrokerState } from './lib/identity-broker-state.mjs';
 import { assertBrokerRuntimeInputs, bootstrapIdentityBrokerRuntime } from './lib/identity-broker-runtime.mjs';
 import { bootstrapFoundationProbeInputs } from './lib/foundation-probe-inputs.mjs';
-import { readSystemNodePool } from './lib/aks-autoscaling.mjs';
 import {
   assertDedicatedTarget,
   assertSubscription,
@@ -24,20 +23,24 @@ import {
 
 const GUID_PATTERN = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
-/** Builds the literal Azure CLI argument list for a source-bound infrastructure deployment. */
+/** Builds source-bound CLI args; only full-foundation creation submits a node-pool count. */
 export function buildDeployArgs({
   resourceGroup, template, parametersFile, deploymentName, subscription, sourceSha, sourceTree, sourceHash,
-  nodePoolCount = 2,
+  scope = 'infrastructure-only', nodePoolCount,
 }) {
   assertDedicatedTarget(resourceGroup);
   if (!subscription || !/^[0-9a-f]{40}$/.test(sourceSha ?? '') || !/^[0-9a-f]{40}$/.test(sourceTree ?? '') ||
-      !/^[0-9a-f]{64}$/.test(sourceHash ?? '') || ![2, 3].includes(nodePoolCount)) {
+      !/^[0-9a-f]{64}$/.test(sourceHash ?? '') ||
+      !['infrastructure-only', 'aks-only'].includes(scope) ||
+      scope === 'aks-only' && nodePoolCount !== undefined ||
+      scope === 'infrastructure-only' && nodePoolCount !== undefined && ![2, 3].includes(nodePoolCount)) {
     throw new Error('Exact source receipt and explicit subscription are required.');
   }
-  return ['deployment', 'group', 'create', '--resource-group', resourceGroup, '--template-file', template,
-    '--parameters', `@${parametersFile}`, `sourceSha=${sourceSha}`, `sourceTree=${sourceTree}`, `sourceHash=${sourceHash}`,
-    `nodePoolCount=${nodePoolCount}`,
-    '--mode', 'Incremental', '--name', deploymentName, '--subscription', subscription, '-o', 'json'];
+  const args = ['deployment', 'group', 'create', '--resource-group', resourceGroup, '--template-file', template,
+    '--parameters', `@${parametersFile}`, `sourceSha=${sourceSha}`, `sourceTree=${sourceTree}`, `sourceHash=${sourceHash}`];
+  if (scope === 'infrastructure-only') args.push(`nodePoolCount=${nodePoolCount ?? 2}`);
+  args.push('--mode', 'Incremental', '--name', deploymentName, '--subscription', subscription, '-o', 'json');
+  return args;
 }
 
 /**
@@ -114,23 +117,17 @@ export async function deploy(config, {
     config.bootstrapIdentityBrokerRuntime) && source.scope === 'aks-only'
     ? readIdentityPostgresBootstrapValues({ ...config, ...source }, boundAz)
     : undefined;
-  const autoscalerTarget = { ...config, ...source };
-  const poolBefore = source.scope === 'aks-only' ? readSystemNodePool(autoscalerTarget, boundAz) : undefined;
-  // The observed count is a Bicep input and must stay inside the reviewed bounds.
-  if (poolBefore &&
-      (poolBefore.count < source.nodePoolMinCount || poolBefore.count > source.nodePoolMaxCount)) {
-    throw new Error('Observed system node-pool count is outside the reviewed deployment input bounds.');
-  }
-  const nodePoolCount = poolBefore?.count ?? source.nodePoolMinCount;
+  // Only full-foundation creation owns the pool count; AKS-only reads the cluster without updating it.
+  const nodePoolCount = source.scope === 'infrastructure-only' ? source.nodePoolMinCount : undefined;
   args = buildDeployArgs({ resourceGroup: config.resourceGroup, ...source,
     subscription: config.subscriptionId, sourceSha: source.sha, deploymentName, nodePoolCount });
   summary.args = args;
   // A guarded what-if precedes create. Failure never admits a mutation.
   const whatIfArgs = ['deployment', 'group', 'what-if', '--resource-group', config.resourceGroup,
     '--template-file', source.template, '--parameters', `@${source.parametersFile}`, `sourceSha=${source.sha}`,
-    `sourceTree=${source.sourceTree}`, `sourceHash=${source.sourceHash}`,
-    `nodePoolCount=${nodePoolCount}`,
-    '--no-pretty-print'];
+    `sourceTree=${source.sourceTree}`, `sourceHash=${source.sourceHash}`];
+  if (nodePoolCount !== undefined) whatIfArgs.push(`nodePoolCount=${nodePoolCount}`);
+  whatIfArgs.push('--no-pretty-print');
   function runWhatIf() {
     const result = boundAz(whatIfArgs, { check: false });
     if (result.status !== 0) throw new Error(`What-if failed: ${result.stderr}`);
@@ -147,10 +144,6 @@ export async function deploy(config, {
   }
   runWhatIf();
   assertSourceUnchanged();
-  // Recheck this Bicep input before create so a concurrent scale change is not overwritten.
-  if (poolBefore && readSystemNodePool(autoscalerTarget, boundAz).count !== nodePoolCount) {
-    throw new Error('System node-pool count changed after what-if; refusing to submit a stale Bicep input.');
-  }
   const result = execAz(args, { check: false });
   if (result.status !== 0) throw new Error(`Infrastructure deployment failed: ${result.stderr}`);
   const deployment = JSON.parse(result.stdout);
@@ -165,8 +158,8 @@ export async function deploy(config, {
   const autoscaling = {
     minCount: source.nodePoolMinCount,
     maxCount: source.nodePoolMaxCount,
-    countBefore: poolBefore?.count ?? null,
-    countSubmitted: nodePoolCount,
+    countBefore: null,
+    countSubmitted: nodePoolCount ?? null,
     scaleUpProven: false,
   };
   let deploymentReceipt;

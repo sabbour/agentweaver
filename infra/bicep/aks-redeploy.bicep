@@ -1,5 +1,5 @@
-// Dedicated cluster update path for an existing P0 foundation. This template
-// does not redeploy the VNet, data services, private DNS, or monitoring.
+// Existing-cluster path for an approved P0 foundation. It refreshes workload
+// identity federation without PUTting the AKS resource or its managed fields.
 targetScope = 'resourceGroup'
 
 @description('Azure region for the existing P0 network and AKS cluster.')
@@ -32,64 +32,31 @@ param sourceTree string
 @description('SHA-256 receipt of tracked infrastructure inputs supplied by deployment tooling.')
 param sourceHash string
 
-@maxLength(5)
-@description('Optional existing application DNS zones for custom routing domains.')
-param appRoutingDnsZoneResourceIds array = []
-
-@allowed([2, 3])
-param nodePoolCount int = 2
-
-@allowed([2])
-param nodePoolMinCount int
-
-@allowed([3])
-param nodePoolMaxCount int
-
-var tags = {
-  'agentweaver:environment': 'v1-p0'
-  'agentweaver:managed-by': 'bicep'
-  'agentweaver:owner': owner
-  'agentweaver:cost-center': costCenter
-  'agentweaver:sourceSha': sourceSha
-}
-
-resource existingVnet 'Microsoft.Network/virtualNetworks@2023-09-01' existing = {
-  name: '${namePrefix}-vnet'
-}
-
-resource existingAksSubnet 'Microsoft.Network/virtualNetworks/subnets@2023-09-01' existing = {
-  parent: existingVnet
-  name: 'aks'
-}
-
-module aks 'modules/aks.bicep' = {
+// AKS owns generated fields such as defaultDomain.domainName; read the cluster
+// instead of redeploying a partial managedClusters resource.
+resource aks 'Microsoft.ContainerService/managedClusters@2026-07-02-preview' existing = {
   name: '${namePrefix}-aks'
-  params: {
-    location: location
-    namePrefix: namePrefix
-    tags: tags
-    nodeSubnetId: existingAksSubnet.id
-    tenantId: tenantId
-    appRoutingDnsZoneResourceIds: appRoutingDnsZoneResourceIds
-    nodePoolCount: nodePoolCount
-    nodePoolMinCount: nodePoolMinCount
-    nodePoolMaxCount: nodePoolMaxCount
-  }
 }
 
 module workloadIdentityFederation 'modules/workload-identity-federation.bicep' = {
   name: '${namePrefix}-workload-identity-federation'
   params: {
     namePrefix: namePrefix
-    oidcIssuerUrl: aks.outputs.oidcIssuerUrl
+    oidcIssuerUrl: aks.properties.oidcIssuerProfile.issuerURL
   }
 }
+
+// Custom DNS clusters can omit defaultDomain, so keep this diagnostic output optional.
+var defaultDomain = aks.properties.?ingressProfile.?webAppRouting.?defaultDomain
 
 output sourceSha string = sourceSha
 output sourceTree string = sourceTree
 output sourceHash string = sourceHash
-output clusterId string = aks.outputs.clusterId
-output clusterName string = aks.outputs.clusterName
-output controlPlanePrincipalId string = aks.outputs.controlPlanePrincipalId
-output oidcIssuerUrl string = aks.outputs.oidcIssuerUrl
-output appRoutingDomain object = aks.outputs.appRoutingDomain
+output clusterId string = aks.id
+output clusterName string = aks.name
+output controlPlanePrincipalId string = aks.identity.principalId
+output oidcIssuerUrl string = aks.properties.oidcIssuerProfile.issuerURL
+output appRoutingDomain object = {
+  managedDefaultRequested: defaultDomain.?enabled ?? false
+  domainName: defaultDomain.?domainName ?? null
+}

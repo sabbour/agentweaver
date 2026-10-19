@@ -13,7 +13,7 @@ not end-to-end product acceptance.
 | Source | Responsibility |
 | --- | --- |
 | `infra/bicep/main.bicep` and `modules/` | Dedicated foundation resources |
-| `infra/bicep/aks-redeploy.bicep` | Bounded AKS replacement path |
+| `infra/bicep/aks-redeploy.bicep` | Existing-cluster workload-identity federation refresh |
 | `infra/bicep/p1-runtime-identities.bicep` | Separate runtime-identity setup |
 | `deploy/k8s/base/`, `migrations/`, and `acceptance/` | Namespace, Broker runtime, migration Job, and Foundation Probe |
 | `deploy/k8s/routing/identity-broker/` | Managed Gateway routing and backend TLS |
@@ -82,10 +82,10 @@ building an Azure what-if request. `deploy.mjs` defaults to a nonexecuting summa
 and rechecks source inputs before mutation. The target preflight does not
 enumerate resources or verify their resulting properties.
 
-The full foundation path applies the full template; the AKS-only path updates
-AKS without redeploying the foundation resources. The AKS-only path reads the
-system node-pool count used as a deployment input. Source SHA, tree, and input
-hash bind the deployment arguments and returned outputs.
+The full-foundation path applies the full template. The AKS-only path reads the
+existing cluster and refreshes its three workload-identity federation records
+without PUTting AKS or redeploying other foundation resources. Source SHA, tree,
+and input hash bind the deployment arguments and returned outputs.
 
 Namespace bootstrap, database setup, Broker runtime/state, routing, and
 acceptance inputs are separate operations; compiling Bicep does not imply them.

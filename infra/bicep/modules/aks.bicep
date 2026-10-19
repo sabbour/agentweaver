@@ -61,6 +61,8 @@ resource aks 'Microsoft.ContainerService/managedClusters@2026-07-02-preview' = {
     kubernetesVersion: empty(kubernetesVersion) ? null : kubernetesVersion
     dnsPrefix: clusterName
     disableLocalAccounts: true
+    // Kubernetes RBAC is separate from Azure RBAC in aadProfile.
+    enableRBAC: true
     aadProfile: {
       managed: true
       enableAzureRBAC: true

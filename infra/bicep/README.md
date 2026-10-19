@@ -7,9 +7,16 @@ permissions, or workloads are deployed.
 Entra-only PostgreSQL, Key Vault, Blob, and Azure Monitor.
 Key Vault and Blob have Private Endpoints and private DNS.
 PostgreSQL has a delegated subnet and private DNS.
-`aks-redeploy.bicep` is a separate, narrow update for an existing P0 foundation.
-It updates only AKS and the three existing workload-identity federated credentials;
-it does not redeploy the VNet, data services, private DNS, or monitoring.
+The full-foundation template explicitly enables Kubernetes RBAC separately from
+Azure RBAC and requests AKS Application Routing's managed default domain when
+no custom DNS zones are configured.
+`aks-redeploy.bicep` is a separate, narrow identity-federation refresh for an
+existing P0 foundation. It reads the existing AKS issuer, identity, and
+Application Routing domain; it updates only the three existing workload-identity
+federated credentials. It does not PUT the AKS resource or change its routing,
+RBAC, network, data-service, private-DNS, or monitoring configuration.
+If AKS omits `defaultDomain` for custom DNS, its diagnostic output uses
+`false` and `null`.
 
 The P0 parameter example keeps the VNet, AKS, PostgreSQL, Key Vault, Blob, and
 their private endpoints in `eastus2euap`. Its required `monitorLocation` places
@@ -62,9 +69,9 @@ It injects exact `sourceSha` and `sourceHash` parameters and reads matching outp
 Neither deployment path grants a human AKS role or accepts an operator object
 ID. The AKS control-plane identity retains Network Contributor only on the
 dedicated AKS subnet. Infrastructure deployment does not create Kubernetes
-namespaces or apply workload manifests. The update path gets the issuer URL
-from the AKS resource and updates only the existing probe, broker, and
-migration federated credentials. Their ServiceAccount subjects and
+namespaces or apply workload manifests. The existing-cluster path gets the issuer URL and the managed Application
+Routing domain from AKS without redeploying the cluster. It updates only the
+existing probe, broker, and migration federated credentials. Their ServiceAccount subjects and
 `api://AzureADTokenExchange` audience remain unchanged. The guard verifies all
 three existing records before deployment and blocks if one is missing or has
 different bindings.

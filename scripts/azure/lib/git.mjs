@@ -100,6 +100,7 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   if (!sourceFiles.length || sourceFiles.join('\n') !== files.join('\n')) {
     throw new Error('Selected source has a different tracked infrastructure input set.');
   }
+  const scope = inputTemplate.local === 'infra/bicep/main.bicep' ? 'infrastructure-only' : 'aks-only';
   const hash = createHash('sha256');
   for (const file of files) {
     const tracked = trackedPath(file);
@@ -111,7 +112,6 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
   }
   const document = JSON.parse(readFile(parameters.absolute, 'utf8'));
   const values = document.parameters;
-  const { minCount: nodePoolMinCount, maxCount: nodePoolMaxCount } = assertAutoscalerBounds(values);
   const location = values?.location?.value;
   const namePrefix = values?.namePrefix?.value;
   let keyVaultName;
@@ -125,12 +125,13 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
       /unassigned|CHANGEME|00000000-0000/i.test(JSON.stringify(document))) {
     throw new Error('Parameters must bind the dedicated target, tenant, region, owner and cost center without placeholders.');
   }
-  const scope = inputTemplate.local === 'infra/bicep/main.bicep' ? 'infrastructure-only' : 'aks-only';
+  let nodePoolBounds;
   let monitorLocation;
   let postgresEntraAdminObjectId;
   let postgresEntraAdminPrincipalName;
   let postgresEntraAdminPrincipalType;
   if (scope === 'infrastructure-only') {
+    nodePoolBounds = assertAutoscalerBounds(values);
     keyVaultName = assertApprovedKeyVaultName(resourceGroup, values?.keyVaultName?.value);
     monitorLocation = values?.monitorLocation?.value;
     postgresEntraAdminObjectId = values?.postgresEntraAdminObjectId?.value;
@@ -147,9 +148,13 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
     if (parameters.local !== 'infra/bicep/parameters/p0-aks-redeploy.approved.json') {
       throw new Error('AKS-only redeployment requires its exact reviewed P0 parameter file.');
     }
+    if (values.appRoutingDnsZoneResourceIds !== undefined) {
+      throw new Error('AKS-only redeployment does not change Application Routing DNS configuration.');
+    }
     const approvedFoundation = trackedPath('infra/bicep/parameters/p0-integration.approved.json');
     const foundationValues = JSON.parse(readFile(approvedFoundation.absolute, 'utf8')).parameters;
-    assertAutoscalerBounds(foundationValues);
+    // The existing-cluster template does not own node-pool settings; retain the full-foundation policy check.
+    nodePoolBounds = assertAutoscalerBounds(foundationValues);
     keyVaultName = assertApprovedKeyVaultName(resourceGroup, foundationValues?.keyVaultName?.value);
     postgresEntraAdminObjectId = foundationValues?.postgresEntraAdminObjectId?.value;
     postgresEntraAdminPrincipalName = foundationValues?.postgresEntraAdminPrincipalName?.value;
@@ -165,14 +170,14 @@ export function resolveSource({ repoRoot, template, parametersFile, resourceGrou
       throw new Error('AKS-only PostgreSQL bootstrap inputs do not match the approved full-foundation parameters.');
     }
   }
-  const appRoutingDnsZoneResourceIds = validateAppRoutingDnsZoneResourceIds(
-    values.appRoutingDnsZoneResourceIds?.value, subscriptionId,
-  );
+  const appRoutingDnsZoneResourceIds = scope === 'infrastructure-only'
+    ? validateAppRoutingDnsZoneResourceIds(values.appRoutingDnsZoneResourceIds?.value, subscriptionId)
+    : [];
   validateRelease(resolve(root, 'releases/foundation.json'), { root });
   return { sha, verifierSha: headSha, branch, sourceTree, sourceHash: hash.digest('hex'), template: inputTemplate.absolute,
     parametersFile: parameters.absolute, owner, costCenter,
     location, monitorLocation, keyVaultName, postgresEntraAdminObjectId, postgresEntraAdminPrincipalName,
-    nodePoolMinCount, nodePoolMaxCount,
+    nodePoolMinCount: nodePoolBounds.minCount, nodePoolMaxCount: nodePoolBounds.maxCount,
     postgresEntraAdminPrincipalType,
     appRoutingDnsZoneResourceIds,
     scope };

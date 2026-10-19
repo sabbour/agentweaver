@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { buildDeployArgs, cliConfig, cliOptions, deploy } from '../deploy.mjs';
 import {
   fixture, source, fakeAzure, ids, tags, deploymentOutputs,
-  clusterId,
 } from './fixtures/target.mjs';
 
 test('deployment uses supported source parameters, explicit subscription and incremental mode, never tags', () => {
@@ -15,8 +14,12 @@ test('deployment uses supported source parameters, explicit subscription and inc
   assert.ok(args.includes(`sourceTree=${source.sourceTree}`));
   assert.ok(!args.some(arg => arg.startsWith('operatorObjectId=') ||
     arg.startsWith('operatorRoleAssignmentName=')));
+  assert.ok(args.includes('nodePoolCount=2'));
   assert.ok(args.includes('Incremental'));
   assert.equal(args[args.indexOf('--subscription') + 1], ids.subscriptionId);
+  const aksOnlyArgs = buildDeployArgs({ ...source, scope: 'aks-only', resourceGroup: fixture.resourceGroup,
+    sourceSha: source.sha, deploymentName: 'candidate', subscription: ids.subscriptionId });
+  assert.ok(!aksOnlyArgs.some(arg => arg.startsWith('nodePoolCount=')));
 });
 
 test('offline dry-run never reads account or mutates', async () => {
@@ -25,101 +28,28 @@ test('offline dry-run never reads account or mutates', async () => {
   assert.equal(result.scope, 'infrastructure-only');
 });
 
-test('AKS-only deployment rechecks the observed count before create and does not read it afterward', async () => {
+test('AKS-only deployment reads the cluster without submitting pool or AKS configuration', async () => {
   const az = fakeAzure();
   const calls = [];
-  const pool = { id: `${clusterId}/agentPools/system`, name: 'system', mode: 'System',
-    vmSize: 'Standard_D2s_v5', count: 3, enableAutoScaling: false,
-    minCount: null, maxCount: null, provisioningState: 'Succeeded' };
   const result = await deploy({ ...fixture, execute: true }, {
     sourceResolver: () => ({ ...source, scope: 'aks-only' }),
     execAz(args, options) {
       calls.push(args);
-      if (args.slice(0, 3).join(' ') === 'aks nodepool show') {
-        return { status: 0, stderr: '', stdout: JSON.stringify(pool) };
-      }
       return az(args, options);
     },
   });
-  assert.equal(result.receipt.autoscaling.countBefore, 3);
-  assert.equal(result.receipt.autoscaling.countSubmitted, 3);
+  assert.equal(result.receipt.autoscaling.countBefore, null);
+  assert.equal(result.receipt.autoscaling.countSubmitted, null);
   assert.equal(result.receipt.autoscaling.minCount, 2);
   assert.equal(result.receipt.autoscaling.maxCount, 3);
   assert.equal(result.receipt.autoscaling.scaleUpProven, false);
-  const poolReads = calls.flatMap((args, index) =>
-    args.slice(0, 3).join(' ') === 'aks nodepool show' ? [index] : []);
   const whatIf = calls.findIndex(args => args.slice(0, 3).join(' ') === 'deployment group what-if');
   const create = calls.findIndex(args => args.slice(0, 3).join(' ') === 'deployment group create');
-  assert.equal(poolReads.length, 2);
-  assert.ok(poolReads[0] < whatIf && whatIf < poolReads[1] && poolReads[1] < create);
+  assert.ok(whatIf < create);
   for (const args of calls.filter(args => ['what-if', 'create'].includes(args[2]))) {
-    assert.ok(args.includes('nodePoolCount=3'));
+    assert.ok(!args.some(arg => arg.startsWith('nodePoolCount=')));
   }
-});
-
-test('AKS-only deployment does not reread node-pool state after deployment', async () => {
-  const az = fakeAzure();
-  let reads = 0;
-  const result = await deploy({ ...fixture, execute: true }, {
-    sourceResolver: () => ({ ...source, scope: 'aks-only' }),
-    execAz(args, options) {
-      if (args.slice(0, 3).join(' ') === 'aks nodepool show') {
-        reads++;
-        return { status: 0, stderr: '', stdout: JSON.stringify({
-          id: `${clusterId}/agentPools/system`, name: 'system', mode: 'System',
-          vmSize: 'Standard_D2s_v5', count: 2,
-          enableAutoScaling: true, minCount: 2, maxCount: 3, provisioningState: 'Succeeded',
-        }) };
-      }
-      return az(args, options);
-    },
-  });
-  assert.equal(result.executed, true);
-  assert.equal(reads, 2);
-  assert.equal(result.receipt.autoscaling.countBefore, 2);
-  assert.equal(result.receipt.autoscaling.countSubmitted, 2);
-  const create = result.args;
-  assert.ok(create.includes('nodePoolCount=2'));
-});
-
-test('AKS-only deployment blocks a node-count change between what-if and create', async () => {
-  const calls = [];
-  let reads = 0;
-  await assert.rejects(deploy({ ...fixture, execute: true }, {
-    sourceResolver: () => ({ ...source, scope: 'aks-only' }),
-    execAz(args, options) {
-      calls.push(args);
-      if (args.slice(0, 3).join(' ') === 'aks nodepool show') {
-        reads++;
-        return { status: 0, stderr: '', stdout: JSON.stringify({ count: reads === 1 ? 2 : 3 }) };
-      }
-      return fakeAzure()(args, options);
-    },
-  }), /count changed after what-if/);
-  assert.equal(reads, 2);
-  assert.ok(calls.some(args => args.slice(0, 3).join(' ') === 'deployment group what-if'));
-  assert.ok(!calls.some(args => args.slice(0, 3).join(' ') === 'deployment group create'));
-});
-
-test('AKS-only deployment validates only the observed count needed as Bicep input', async () => {
-  for (const override of [{ count: 1 }, { count: 4 }, { count: 2.5 }, { count: undefined }]) {
-    const az = fakeAzure({ nodePoolResult: { status: 0, stderr: '', stdout: JSON.stringify({
-      id: `${clusterId}/agentPools/system`, name: 'system', mode: 'System', vmSize: 'Standard_D2s_v5',
-      count: 2, enableAutoScaling: false, minCount: null, maxCount: null,
-      provisioningState: 'Succeeded', ...override,
-    }) } });
-    await assert.rejects(deploy({ ...fixture, execute: true }, {
-      sourceResolver: () => ({ ...source, scope: 'aks-only' }), execAz: az,
-    }), /node.pool|count/i);
-  }
-  const result = await deploy({ ...fixture, execute: true }, {
-    sourceResolver: () => ({ ...source, scope: 'aks-only' }),
-    execAz: fakeAzure({ nodePoolResult: { status: 0, stderr: '', stdout: JSON.stringify({
-      id: 'different-resource-id', name: 'different-name', mode: 'User', vmSize: 'DifferentSku',
-      count: 2, enableAutoScaling: false, minCount: null, maxCount: null, provisioningState: 'Updating',
-    }) } }),
-  });
-  assert.equal(result.executed, true);
+  assert.ok(!calls.some(args => args.slice(0, 3).join(' ') === 'aks nodepool show'));
 });
 
 test('identity PostgreSQL bootstrap is a separate default-off deployment option', () => {

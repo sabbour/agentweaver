@@ -72,28 +72,27 @@ tree, and input hash. The AKS API must be public:
 `apiServerAccessProfile.enablePrivateCluster` must be `false`. A public DNS
 name does not make a private AKS API public.
 
-For an existing environment, use the guarded AKS-only update path when the
-approved change is limited to AKS. That path updates the cluster and its three
-existing workload-identity federation records. It does not redeploy PostgreSQL,
-Key Vault, Blob Storage, the VNet, private DNS, or Monitor. Supply the approved
-infrastructure inputs only; the deployment does not take an operator object ID
-for Kubernetes access.
+For an existing environment, use the guarded AKS-only path to refresh the three
+existing workload-identity federation records. It reads the cluster issuer and
+managed routing-domain state but does not PUT AKS or change its configuration.
+It also does not redeploy PostgreSQL, Key Vault, Blob Storage, the VNet, private
+DNS, or Monitor. Supply the approved infrastructure inputs only; the deployment
+does not take an operator object ID for Kubernetes access.
 
 The tooling never creates, requires, or verifies a human Azure Kubernetes
 Service RBAC Cluster Admin assignment. Provision cluster connectivity and
 Kubernetes API permissions outside the tooling. The cluster-dependent bootstrap
 steps check the access they need and stop before writing resources when it is
-missing. An AKS-only receipt is scoped to that update; it does not replace the
+missing. An AKS-only receipt is scoped to the federation refresh; it does not replace the
 verified full-foundation resource receipt required for Foundation Probe
 acceptance. The Probe image and infrastructure deployment have separate source
 receipts.
 
-The system node pool scales automatically between two and three
-`Standard_D2s_v5` nodes. The AKS-only installer preserves the observed node
-count within those bounds and passes it as a deployment input. It rechecks the
-count immediately before create and stops if the count changed after what-if.
-Its receipt reports the submitted bounds and count; it does not read back the
-resulting pool state or prove that the pool scaled. Available vCPU quota also
+The full-foundation template configures the system node pool to scale
+automatically between two and three `Standard_D2s_v5` nodes, starting with two.
+The AKS-only installer validates these bounds against the approved foundation
+parameters but does not read or configure the pool. Its receipt has no submitted
+node count and does not prove that the pool scaled. Available vCPU quota also
 does not prove that the region has VM capacity.
 
 The AKS API uses managed Microsoft Entra ID authentication and Azure RBAC,

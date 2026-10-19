@@ -64,6 +64,20 @@ test('Broker container restores and copies the complete SourceControl project gr
   }
 });
 
+test('AKS-only routing output tolerates clusters without the managed default domain', () => {
+  const template = JSON.parse(runAz([
+    'bicep', 'build', '--file', 'infra/bicep/aks-redeploy.bicep', '--stdout',
+  ]).stdout);
+  const source = readFileSync('infra/bicep/aks-redeploy.bicep', 'utf8');
+  const domain = template.outputs.appRoutingDomain.value;
+  assert.match(source,
+    /var defaultDomain = aks\.properties\.\?ingressProfile\.\?webAppRouting\.\?defaultDomain/);
+  assert.match(source, /managedDefaultRequested:\s*defaultDomain\.\?enabled \?\? false/);
+  assert.match(source, /domainName:\s*defaultDomain\.\?domainName \?\? null/);
+  assert.match(domain.managedDefaultRequested, /coalesce\(tryGet\([\s\S]*'defaultDomain'\), 'enabled'\), false\(\)\)/);
+  assert.match(domain.domainName, /coalesce\(tryGet\([\s\S]*'defaultDomain'\), 'domainName'\), null\(\)/);
+});
+
 test('Bicep compilation and Kustomize rendering require no credentials or live target', () => {
   const bicep = runAz(['bicep', 'build', '--file', 'infra/bicep/main.bicep', '--stdout']);
   const template = JSON.parse(bicep.stdout);
@@ -131,6 +145,7 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   assert.deepEqual(template.parameters.nodePoolCount.allowedValues, [2, 3]);
   assert.equal(cluster.apiVersion, '2026-07-02-preview');
   assert.equal(cluster.properties.disableLocalAccounts, true);
+  assert.equal(cluster.properties.enableRBAC, true);
   assert.equal(cluster.properties.apiServerAccessProfile.enablePrivateCluster, false);
   assert.equal(cluster.properties.ingressProfile.webAppRouting.enabled, true);
   assert.deepEqual(cluster.properties.ingressProfile.gatewayAPI, { installation: 'Standard' });
@@ -269,21 +284,25 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   const aksOnly = JSON.parse(runAz([
     'bicep', 'build', '--file', 'infra/bicep/aks-redeploy.bicep', '--stdout',
   ]).stdout);
-  assert.deepEqual(aksOnly.parameters.nodePoolMinCount.allowedValues, [2]);
-  assert.deepEqual(aksOnly.parameters.nodePoolMaxCount.allowedValues, [3]);
-  assert.deepEqual(aksOnly.parameters.nodePoolCount.allowedValues, [2, 3]);
-  const aksOnlyModule = aksOnly.resources.find(resource =>
-    resource.name === "[format('{0}-aks', parameters('namePrefix'))]");
-  for (const name of ['nodePoolCount', 'nodePoolMinCount', 'nodePoolMaxCount']) {
-    assert.equal(aksOnlyModule.properties.parameters[name].value, `[parameters('${name}')]`);
-    assert.equal(aksDeployment.properties.parameters[name].value, `[parameters('${name}')]`);
-  }
   assert.equal(aksOnly.outputs.operatorRoleAssignmentId, undefined);
   assert.ok(aksOnly.outputs.oidcIssuerUrl);
+  assert.equal(Object.hasOwn(aksOnly.parameters, 'appRoutingDnsZoneResourceIds'), false);
   assert.deepEqual(aksOnly.resources.map(resource => resource.name), [
-    "[format('{0}-aks', parameters('namePrefix'))]",
     "[format('{0}-workload-identity-federation', parameters('namePrefix'))]",
   ]);
+  assert.ok(!aksOnly.resources.some(resource =>
+    resource.properties?.template?.resources?.some(child =>
+      child.type === 'Microsoft.ContainerService/managedClusters')));
+  assert.match(aksOnly.outputs.oidcIssuerUrl.value, /oidcIssuerProfile\.issuerURL/);
+  assert.match(aksOnly.outputs.appRoutingDomain.value.managedDefaultRequested,
+    /coalesce\(tryGet\([\s\S]*'defaultDomain'\), 'enabled'\), false\(\)\)\]$/);
+  assert.match(aksOnly.outputs.appRoutingDomain.value.domainName,
+    /coalesce\(tryGet\([\s\S]*'defaultDomain'\), 'domainName'\), null\(\)\)\]$/);
+  const aksOnlySource = readFileSync('infra/bicep/aks-redeploy.bicep', 'utf8');
+  assert.match(aksOnlySource,
+    /managedDefaultRequested:\s*defaultDomain\.\?enabled \?\? false/);
+  assert.match(aksOnlySource,
+    /domainName:\s*defaultDomain\.\?domainName \?\? null/);
   const rendered = run('kubectl', ['kustomize', 'deploy/k8s/base']).stdout;
   assert.match(rendered, /kind: ServiceAccount/);
   assert.doesNotMatch(rendered, /foundation-probe/);
