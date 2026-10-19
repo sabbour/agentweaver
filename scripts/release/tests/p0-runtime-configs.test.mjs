@@ -218,7 +218,7 @@ test('P0 PostgreSQL roles, projected identity keys, and issuer use the exact pre
   assert.equal(orchestrator.data.Identity__SecretRedemption__Audience, broker);
 });
 
-test('Portal route, Gateway listener, and Web origin use the same managed-domain hostname', () => {
+test('Portal route and Web origin keep exact hostnames on the shared managed-domain listener', () => {
   const rootKustomization = parse(readFileSync(path.join(root, 'deploy', 'k8s', 'kustomization.yaml'), 'utf8'));
   const route = parse(readFileSync(path.join(root, 'deploy', 'k8s', 'routing', 'identity-broker',
     'web-application-p0.yaml'), 'utf8'));
@@ -227,14 +227,14 @@ test('Portal route, Gateway listener, and Web origin use the same managed-domain
   const portalHostname = new URL(portalOrigin).hostname;
   assert.ok(rootKustomization.resources.includes('routing/identity-broker/web-application-p0.yaml'));
   assert.deepEqual(route.spec.parentRefs, [{
-    name: 'identity-broker', namespace: 'agentweaver-gateway', sectionName: 'portal',
+    name: 'identity-broker', namespace: 'agentweaver-gateway', sectionName: 'https',
   }]);
   assert.deepEqual(route.spec.hostnames, [portalHostname]);
   assert.deepEqual(route.spec.rules[0].backendRefs, [{ name: 'web', port: 8080 }]);
   assert.equal(gatewaySource.metadata.namespace, 'agentweaver-gateway');
-  assert.equal(gatewaySource.spec.listeners.find(({ name }) => name === 'https').hostname,
-    'CHANGEME-MANAGED-HOST');
-  assert.equal(gatewaySource.spec.listeners.find(({ name }) => name === 'portal').hostname, 'CHANGEME-PORTAL-HOST');
+  assert.deepEqual(gatewaySource.spec.listeners.map(({ name, hostname }) => ({ name, hostname })), [{
+    name: 'https', hostname: 'CHANGEME-MANAGED-WILDCARD-HOST',
+  }]);
 });
 
 test('P0 service addresses and source-backed provider defaults are exact', () => {

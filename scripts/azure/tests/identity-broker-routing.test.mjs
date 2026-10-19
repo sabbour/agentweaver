@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { parse } from 'yaml';
 import {
   assertIdentityRoutingPlacement, bootstrapIdentityRouting, deriveIdentityRouting,
   managedBrokerHostname, planPublicBrokerCallback, verifyIdentityBrokerReadiness,
@@ -14,6 +15,7 @@ const p0 = 'agentweaver';
 const gatewayNamespace = 'agentweaver-gateway';
 const hostname = 'agentweaver.test.eastus2.aksapp.io';
 const portalHostname = 'portal.test.eastus2.aksapp.io';
+const wildcardHostname = '*.test.eastus2.aksapp.io';
 const controller = 'istio.aks.azure.com/gateway-controller';
 const clientId = '11111111-1111-1111-1111-111111111111';
 const applicationObjectId = '22222222-2222-2222-2222-222222222222';
@@ -47,15 +49,15 @@ function snapshot() {
       { domain: '*.test.eastus2.aksapp.io', conditions: conditions('Available') }),
     gateway: object('Gateway', gatewayNamespace, {
       gatewayClassName: 'approuting-istio',
-      listeners: ['https', 'portal'].map((name, index) => ({
-        name, hostname: index === 0 ? hostname : portalHostname, port: 443, protocol: 'HTTPS',
+      listeners: ['https'].map(name => ({
+        name, hostname: wildcardHostname, port: 443, protocol: 'HTTPS',
         tls: { mode: 'Terminate', certificateRefs: [{ kind: 'Secret', name: 'identity-broker-tls' }] },
         allowedRoutes: { namespaces: { from: 'Selector',
           selector: { matchLabels: { 'kubernetes.io/metadata.name': p0 } } } },
       })),
     }, {
       conditions: conditions('Accepted', 'Programmed'), addresses: [{ type: 'IPAddress', value: '203.0.113.10' }],
-      listeners: ['https', 'portal'].map(name => ({
+      listeners: ['https'].map(name => ({
         name, conditions: conditions('Accepted', 'Programmed', 'ResolvedRefs'),
       })),
     }),
@@ -74,22 +76,22 @@ function snapshot() {
       conditions: conditions('Accepted', 'ResolvedRefs') }] }),
     webRoute: object('HTTPRoute', p0, {
       hostnames: [portalHostname],
-      parentRefs: [{ name: 'identity-broker', namespace: gatewayNamespace, sectionName: 'portal' }],
+      parentRefs: [{ name: 'identity-broker', namespace: gatewayNamespace, sectionName: 'https' }],
       rules: [{ matches: [{ path: { type: 'PathPrefix', value: '/' } }],
         backendRefs: [{ name: 'web', port: 8080 }] }],
     }, { parents: [{ controllerName: controller,
-      parentRef: { name: 'identity-broker', namespace: gatewayNamespace, sectionName: 'portal' },
+      parentRef: { name: 'identity-broker', namespace: gatewayNamespace, sectionName: 'https' },
       conditions: conditions('Accepted', 'ResolvedRefs') }] }, { name: 'web-application', service: 'web' }),
     apiRoute: object('HTTPRoute', p0, {
       hostnames: [portalHostname],
-      parentRefs: [{ name: 'identity-broker', namespace: gatewayNamespace, sectionName: 'portal' }],
+      parentRefs: [{ name: 'identity-broker', namespace: gatewayNamespace, sectionName: 'https' }],
       rules: [{ matches: [
         { path: { type: 'PathPrefix', value: '/api/v1' } },
         { path: { type: 'Exact', value: '/openapi/v1.json' } },
       ],
         backendRefs: [{ name: 'gateway', port: 8443 }] }],
     }, { parents: [{ controllerName: controller,
-      parentRef: { name: 'identity-broker', namespace: gatewayNamespace, sectionName: 'portal' },
+      parentRef: { name: 'identity-broker', namespace: gatewayNamespace, sectionName: 'https' },
       conditions: conditions('Accepted', 'ResolvedRefs') }] }, { name: 'gateway-api', service: 'gateway' }),
     apiBackendPolicy: object('BackendTLSPolicy', p0, {
       targetRefs: [{ group: '', kind: 'Service', name: 'gateway', sectionName: 'https' }],
@@ -102,14 +104,14 @@ function snapshot() {
       conditions: conditions('Accepted', 'ResolvedRefs') }] }, { name: 'gateway-api', service: 'gateway' }),
     mcpRoute: object('HTTPRoute', p0, {
       hostnames: [portalHostname],
-      parentRefs: [{ name: 'identity-broker', namespace: gatewayNamespace, sectionName: 'portal' }],
+      parentRefs: [{ name: 'identity-broker', namespace: gatewayNamespace, sectionName: 'https' }],
       rules: [{ matches: [
         { path: { type: 'Exact', value: '/mcp' } },
         { path: { type: 'Exact', value: '/.well-known/oauth-protected-resource/mcp' } },
       ],
         backendRefs: [{ name: 'mcp', port: 8443 }] }],
     }, { parents: [{ controllerName: controller,
-      parentRef: { name: 'identity-broker', namespace: gatewayNamespace, sectionName: 'portal' },
+      parentRef: { name: 'identity-broker', namespace: gatewayNamespace, sectionName: 'https' },
       conditions: conditions('Accepted', 'ResolvedRefs') }] }, { name: 'mcp', service: 'mcp' }),
     mcpBackendPolicy: object('BackendTLSPolicy', p0, {
       targetRefs: [{ group: '', kind: 'Service', name: 'mcp', sectionName: 'https' }],
@@ -226,7 +228,8 @@ test('placement requires explicit namespace and policy without a default or a P0
 });
 
 test('issuer and native signin callback come from the programmed exact managed HTTPRoute', () => {
-  const receipt = deriveIdentityRouting(snapshot());
+  const native = snapshot();
+  const receipt = deriveIdentityRouting(native);
   assert.equal(receipt.hostname, hostname);
   assert.equal(receipt.issuer, `https://${hostname}/`);
   assert.equal(receipt.portalHostname, portalHostname);
@@ -235,6 +238,15 @@ test('issuer and native signin callback come from the programmed exact managed H
   assert.equal(receipt.runtimeVerified, false);
   assert.equal(receipt.routingConfigured, true);
   assert.deepEqual(receipt.addresses, ['203.0.113.10']);
+  assert.deepEqual(native.gateway.spec.listeners.map(({ name, hostname: listenerHostname }) =>
+    ({ name, hostname: listenerHostname })), [{ name: 'https', hostname: wildcardHostname }]);
+  for (const [route, routeHostname] of [
+    [native.route, hostname], [native.webRoute, portalHostname],
+    [native.apiRoute, portalHostname], [native.mcpRoute, portalHostname],
+  ]) {
+    assert.deepEqual(route.spec.hostnames, [routeHostname]);
+    assert.equal(route.spec.parentRefs[0].sectionName, 'https');
+  }
 });
 
 test('omitted native policy namespace binds only to the independently verified route parent', () => {
@@ -325,7 +337,7 @@ test('missing, stale, unprogrammed, cross-target, or unsafe native evidence neve
     value => { value.route.status.parents[0].conditions[0].observedGeneration = 0; },
     value => { value.gateway.status.addresses = []; },
     value => { value.gateway.spec.gatewayClassName = 'istio'; },
-    value => { value.gateway.spec.listeners[1].hostname = hostname; },
+    value => { value.gateway.spec.listeners[0].hostname = hostname; },
     value => { value.route.apiVersion = 'networking.istio.io/v1'; },
     value => { value.route.spec.hostnames = ['test.eastus2.aksapp.io']; },
     value => { value.route.spec.parentRefs[0].namespace = 'default'; },
@@ -346,6 +358,8 @@ test('missing, stale, unprogrammed, cross-target, or unsafe native evidence neve
     value => { value.mcpRoute.spec.rules[0].backendRefs[0].name = 'gateway'; },
     value => { value.mcpBackendPolicy.spec.validation.hostname = portalHostname; },
     value => { value.backendPolicy.spec.validation.hostname = 'other.test.eastus2.aksapp.io'; },
+    value => { value.mcpRoute.spec.hostnames = ['unknown.test.eastus2.aksapp.io']; },
+    value => { value.mcpRoute.spec.hostnames = [wildcardHostname]; },
     value => { value.backendPolicy.spec.validation.wellKnownCACertificates = undefined; },
     value => { value.backendPolicy.spec.validation.subjectAltNames = [{ type: 'Hostname', hostname: 'other.example.com' }]; },
     value => { value.backendPolicy.spec.validation.subjectAltNames = [{ type: 'URI', uri: 'spiffe://other.example.com/backend' }]; },
@@ -381,22 +395,35 @@ test('public callback planning appends without loss and becomes a no-op without 
     /exact upstream/);
 });
 
-test('readiness proves ordinary DNS, trusted HTTPS, and both health paths at the native Gateway IP', () => {
+test('readiness proves DNS, trusted HTTPS, and both directions of HTTP/2 cross-host routing', () => {
   const calls = [];
+  const http2Calls = [];
   const result = verifyIdentityBrokerReadiness(deriveIdentityRouting(snapshot()), {
     execCurl: args => { calls.push(args); return ok('Healthy\n200\n203.0.113.10'); },
+    execHttp2: args => { http2Calls.push(args); return ok(JSON.stringify({ alpn: 'h2', status: 200 })); },
   });
   assert.equal(result.runtimeVerified, true);
   assert.equal(result.dnsVerified, true);
   assert.equal(result.httpsVerified, true);
+  assert.equal(result.http2CoalescingVerified, true);
   assert.deepEqual(calls.map(args => args.at(-1)), [`https://${hostname}/health/live`, `https://${hostname}/health/ready`]);
   assert.ok(calls.every(args => !args.some(value => ['-k', '--insecure', '--resolve', '--location'].includes(value))));
   assert.ok(calls.every(args => args[0] === '--disable'));
+  assert.deepEqual(http2Calls, [
+    ['203.0.113.10', hostname, portalHostname, '/'],
+    ['203.0.113.10', portalHostname, hostname, '/health/live'],
+  ]);
   for (const result of [ok('Healthy\n200\n203.0.113.20'), ok('Redirect\n302\n203.0.113.10'),
     { status: 60, stdout: '', stderr: 'certificate validation failed' }]) {
     assert.throws(() => verifyIdentityBrokerReadiness(deriveIdentityRouting(snapshot()), {
       execCurl: () => result,
     }), /DNS\/TLS\/readiness verification failed/);
+  }
+  for (const response of [{ alpn: 'h2', status: 404 }, { alpn: 'h2', status: 421 }, { alpn: 'http/1.1', status: 200 }]) {
+    assert.throws(() => verifyIdentityBrokerReadiness(deriveIdentityRouting(snapshot()), {
+      execCurl: () => ok('Healthy\n200\n203.0.113.10'),
+      execHttp2: () => ok(JSON.stringify(response)),
+    }), /HTTP\/2 cross-host routing verification failed/);
   }
 });
 
@@ -406,8 +433,7 @@ test('production JSON projections preserve the native long DNS hostname and exis
   const observedHost = `agentweaver.${observedDomain.slice(2)}`;
   native.gatewayCertificate.status.domain = observedDomain;
   native.brokerCertificate.status.domain = observedDomain;
-  native.gateway.spec.listeners[0].hostname = observedHost;
-  native.gateway.spec.listeners[1].hostname = `portal.${observedDomain.slice(2)}`;
+  native.gateway.spec.listeners[0].hostname = `*.${observedDomain.slice(2)}`;
   native.route.spec.hostnames = [observedHost];
   native.backendPolicy.spec.validation.hostname = observedHost;
   native.webRoute.spec.hostnames = [`portal.${observedDomain.slice(2)}`];
@@ -553,6 +579,10 @@ test('guarded bootstrap uses normal user kubeconfig, managed certificates in bot
   assert.equal(applies.filter(text => text.includes('kind: DefaultDomainCertificate')).length, 2);
   assert.ok(applies.some(text => text.includes(`k8s:io.kubernetes.pod.namespace: ${gatewayNamespace}`)));
   assert.ok(applies.some(text => text.includes(`hostname: ${hostname}`)));
+  const gateway = applies.find(text => text.includes('kind: Gateway'));
+  assert.ok(gateway);
+  assert.equal(parse(gateway).spec.listeners[0].hostname, wildcardHostname);
+  assert.doesNotMatch(gateway, /name: portal/);
   const webPolicy = applies.find(text => text.includes('name: web-gateway-ingress'));
   assert.ok(webPolicy);
   assert.ok(webPolicy.includes('agentweaver.io/service: web'));
@@ -563,10 +593,12 @@ test('guarded bootstrap uses normal user kubeconfig, managed certificates in bot
   const webRoute = applies.find(text => text.includes('name: web-application'));
   assert.ok(webRoute);
   assert.ok(webRoute.includes(`- ${portalHostname}`));
+  assert.match(webRoute, /sectionName: https/);
   assert.match(webRoute, /backendRefs:\s+- name: web\s+port: 8080/);
   const apiRoute = applies.find(text => text.includes('kind: HTTPRoute') && text.includes('name: gateway-api'));
   assert.ok(apiRoute);
   assert.ok(apiRoute.includes(`- ${portalHostname}`));
+  assert.match(apiRoute, /sectionName: https/);
   assert.match(apiRoute, /value: \/api\/v1/);
   assert.match(apiRoute, /type: Exact\s+value: \/openapi\/v1\.json/);
   assert.match(apiRoute, /backendRefs:\s+- name: gateway\s+port: 8443/);
@@ -575,6 +607,7 @@ test('guarded bootstrap uses normal user kubeconfig, managed certificates in bot
   const mcpRoute = applies.find(text => text.includes('kind: HTTPRoute') && text.includes('name: mcp'));
   assert.ok(mcpRoute);
   assert.ok(mcpRoute.includes(`- ${portalHostname}`));
+  assert.match(mcpRoute, /sectionName: https/);
   assert.match(mcpRoute, /type: Exact\s+value: \/mcp/);
   assert.match(mcpRoute, /type: Exact\s+value: \/.well-known\/oauth-protected-resource\/mcp/);
   assert.match(mcpRoute, /backendRefs:\s+- name: mcp\s+port: 8443/);

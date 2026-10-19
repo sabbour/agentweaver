@@ -111,8 +111,9 @@ existing TLS and configuration references, immutable product images, and
 prepared database permissions. Rendering does not create these prerequisites.
 
 Routing uses the native `approuting-istio` Gateway class, explicit Gateway
-namespace policy, managed certificates, and backend TLS policies. Public route
-definitions do not replace trusted TLS, DNS, or owner health checks.
+namespace policy, a shared wildcard-domain HTTPS listener, exact-host HTTPRoutes,
+managed certificates, and backend TLS policies. Public route definitions do
+not replace trusted TLS, DNS, or owner health checks.
 
 The shared runtime `List` contains nine service Deployment/Service pairs.
 AgentHost is the tenth product image, but it runs per Sandbox instead of as a

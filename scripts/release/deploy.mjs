@@ -1321,7 +1321,7 @@ export function validateKustomizeInstall(document, images, namespace, providerCa
       webRoute.spec.parentRefs?.length !== 1 ||
       webRoute.spec.parentRefs[0]?.name !== 'identity-broker' ||
       webRoute.spec.parentRefs[0]?.namespace !== GATEWAY_NAMESPACE ||
-      webRoute.spec.parentRefs[0]?.sectionName !== 'portal' ||
+      webRoute.spec.parentRefs[0]?.sectionName !== 'https' ||
       webRoute.spec.rules?.length !== 1 ||
       webRoute.spec.rules[0]?.matches?.length !== 1 ||
       webRoute.spec.rules[0].matches[0]?.path?.type !== 'PathPrefix' ||

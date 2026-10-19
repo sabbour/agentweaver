@@ -9,7 +9,7 @@ spec:
   parentRefs:
     - name: identity-broker
       namespace: agentweaver-gateway
-      sectionName: portal
+      sectionName: https
   hostnames:
     - CHANGEME-PORTAL-HOST
   rules:

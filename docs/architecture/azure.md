@@ -81,13 +81,18 @@ The template configures the native managed Gateway API installation and
 Application Routing implementation. Its Gateway class is `approuting-istio`.
 The class name describes Azure's internal implementation, not a service-mesh
 addon or an Istio API requirement.
-The root Kustomize bundle supplies the Portal Web HTTPRoute, which references
-the `portal` listener but does not create the Gateway or listener. The separate
-default-off routing installer uses native managed certificates, a v1 Gateway,
-the Broker/Web/Gateway API/MCP HTTPRoutes, and verified backend HTTPS. It
-requires explicit approved Gateway namespace and security-policy inputs.
-The product namespace remains restricted.
-The portal listener routes `/` to Web, `/api/v1` plus exact
+The root Kustomize bundle supplies the exact-host Portal Web HTTPRoute, which
+references the shared `https` listener but does not create the Gateway or
+listener. The separate default-off routing installer uses native managed
+certificates, one v1 HTTPS listener for the wildcard managed domain, the
+Broker/Web/Gateway API/MCP HTTPRoutes, and verified backend HTTPS. It requires
+explicit approved Gateway namespace and security-policy inputs. The product
+namespace remains restricted.
+All four routes attach to that listener, while each HTTPRoute retains its exact
+Broker or Portal hostname and its existing paths and backend. This keeps both
+hosts' routes available when HTTP/2 connection coalescing reuses a connection
+across the certificate-covered origins; unknown hostnames still have no matching
+route. The shared listener routes `/` to Web, `/api/v1` plus exact
 `/openapi/v1.json` to Gateway, and exact `/mcp` plus the MCP protected-resource
 metadata path to MCP. Gateway and MCP use operator-owned TLS Secrets with
 service-DNS certificates signed by the public CA in the

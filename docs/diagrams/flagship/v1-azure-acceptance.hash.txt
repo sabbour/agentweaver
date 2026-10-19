@@ -2,7 +2,7 @@
   "version": 2,
   "source": {
     "file": "v1-azure-acceptance.json",
-    "sha256": "45ca8f7a54f50a57fe902365e8259aa8115ec4cb7d7a3f3880e7d1bdbfe44321"
+    "sha256": "be86ffa6b8ecb3646d944b83c242af32f0cdb97158fab04225a7df800cc849e9"
   },
   "drawio": {
     "file": "v1-azure-acceptance.drawio",

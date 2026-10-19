@@ -2708,8 +2708,8 @@ test('routing readbacks project actual portal hostnames before output redaction'
     { domain: hostnameDomain, conditions: conditions('Available') });
   const gateway = owned('Gateway', 'identity-broker', gatewayNamespace, 'identity-broker', {
     gatewayClassName: 'approuting-istio',
-    listeners: ['https', 'portal'].map((name, index) => ({
-      name, hostname: index === 0 ? brokerHostname : portalHostname, port: 443, protocol: 'HTTPS',
+    listeners: ['https'].map(name => ({
+      name, hostname: `*.${hostnameDomain.slice(2)}`, port: 443, protocol: 'HTTPS',
       tls: { mode: 'Terminate', certificateRefs: [{ kind: 'Secret', name: 'identity-broker-tls' }] },
       allowedRoutes: { namespaces: { from: 'Selector',
         selector: { matchLabels: { 'kubernetes.io/metadata.name': target.namespace } } } },
@@ -2717,7 +2717,7 @@ test('routing readbacks project actual portal hostnames before output redaction'
   }, {
     conditions: conditions('Accepted', 'Programmed'),
     addresses: [{ type: 'IPAddress', value: '203.0.113.10' }],
-    listeners: ['https', 'portal'].map(name => ({
+    listeners: ['https'].map(name => ({
       name, conditions: conditions('Accepted', 'Programmed', 'ResolvedRefs'),
     })),
   });
@@ -2728,13 +2728,13 @@ test('routing readbacks project actual portal hostnames before output redaction'
     httproutes: {
       'identity-broker': route('identity-broker', 'identity-broker', brokerHostname, 'https',
         parentPaths, 'identity-broker', 443),
-      'web-application': route('web-application', 'web', portalHostname, 'portal',
+      'web-application': route('web-application', 'web', portalHostname, 'https',
         parentPaths, 'web', 8080),
-      'gateway-api': route('gateway-api', 'gateway', portalHostname, 'portal', [
+      'gateway-api': route('gateway-api', 'gateway', portalHostname, 'https', [
         { type: 'PathPrefix', value: '/api/v1' },
         { type: 'Exact', value: '/openapi/v1.json' },
       ], 'gateway', 8443),
-      mcp: route('mcp', 'mcp', portalHostname, 'portal', [
+      mcp: route('mcp', 'mcp', portalHostname, 'https', [
         { type: 'Exact', value: '/mcp' },
         { type: 'Exact', value: '/.well-known/oauth-protected-resource/mcp' },
       ], 'mcp', 8443),
@@ -2843,7 +2843,7 @@ test('release preflight resumes with only the exact root-bundle Web route', () =
       generation: 1, resourceVersion: '7', labels: { 'agentweaver.io/service': 'web' },
     },
     spec: {
-      parentRefs: [{ name: 'identity-broker', namespace: 'agentweaver-gateway', sectionName: 'portal' }],
+      parentRefs: [{ name: 'identity-broker', namespace: 'agentweaver-gateway', sectionName: 'https' }],
       hostnames: [portalHostname],
       rules: [{ matches: [{ path: { type: 'PathPrefix', value: '/' } }],
         backendRefs: [{ name: 'web', port: 8080 }] }],

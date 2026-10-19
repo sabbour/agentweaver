@@ -3,9 +3,9 @@
 This directory contains the v1 Kustomize source for Agentweaver workloads.
 The root bundle defines nine service Deployments and Services, ServiceAccounts,
 runtime ConfigMaps, the provider catalog, namespace controls, network policies,
-and the Portal Web HTTPRoute. The route references a `portal` listener on a
-separately managed Gateway; the bundle does not create that Gateway, listener,
-certificate, or public DNS.
+and the Portal Web HTTPRoute. The route references the shared `https` listener
+on a separately managed Gateway; the bundle does not create that Gateway,
+listener, certificate, or public DNS.
 
 The root also includes an AgentHost runtime ConfigMap. It is incomplete, and
 Environment's optional AgentHost launch profile remains unset until the exact
@@ -88,11 +88,11 @@ database readiness, identity federation, TLS trust, or external permissions.
 | `kustomization.yaml` | Root product bundle. |
 
 The root bundle includes the Portal Web HTTPRoute, but not the managed Gateway,
-its `portal` listener, public DNS, or its certificates. It also does not create
-or populate PostgreSQL databases, apply migrations, or create operator-owned
-Secrets. The separate guarded routing procedure installs and verifies the
-managed Gateway and its routes. The migration Job and acceptance probe remain
-separate overlays.
+its shared wildcard-domain `https` listener, public DNS, or its certificates.
+It also does not create or populate PostgreSQL databases, apply migrations, or
+create operator-owned Secrets. The separate guarded routing procedure installs
+and verifies the managed Gateway and its routes. The migration Job and
+acceptance probe remain separate overlays.
 
 ## Render and apply the bundle
 
@@ -127,9 +127,9 @@ separate overlays.
    a root-bundle apply has started, exactly the bundle-owned
    `web-application` route with no Gateway or BackendTLSPolicy. That route must
    target Gateway `identity-broker` in `agentweaver-gateway` and select its
-   `portal` listener; an explicit parent port must be 443. It must preserve the
-   rendered host, path, and Web backend. The preflight inventories all routes;
-   extra or mismatched routing resources fail closed.
+   shared `https` listener; an explicit parent port must be 443. It must
+   preserve the rendered host, path, and Web backend. The preflight inventories
+   all routes; extra or mismatched routing resources fail closed.
 
 4. Apply the Identity Broker migration Job after its migration identity,
    connection ConfigMap, and approved immutable Broker image are ready, and

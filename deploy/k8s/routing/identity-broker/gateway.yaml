@@ -11,22 +11,7 @@ spec:
     - name: https
       port: 443
       protocol: HTTPS
-      hostname: CHANGEME-MANAGED-HOST
-      tls:
-        mode: Terminate
-        certificateRefs:
-          - kind: Secret
-            name: identity-broker-tls
-      allowedRoutes:
-        namespaces:
-          from: Selector
-          selector:
-            matchLabels:
-              kubernetes.io/metadata.name: agentweaver
-    - name: portal
-      port: 443
-      protocol: HTTPS
-      hostname: CHANGEME-PORTAL-HOST
+      hostname: "CHANGEME-MANAGED-WILDCARD-HOST"
       tls:
         mode: Terminate
         certificateRefs:

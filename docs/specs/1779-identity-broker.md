@@ -241,7 +241,10 @@ immutable registry digest; the checked-in sentinel is not deployable.
 
 The separate routing candidate uses native AKS-managed Gateway API resources.
 Its managed certificate supplies the `agentweaver` hostname within the AKS
-wildcard domain, not the DNS zone root.
+wildcard domain, not the DNS zone root. Broker and Portal HTTPRoutes attach to
+one HTTPS listener for that wildcard domain, but retain their exact hostnames,
+paths, and backends. The shared listener supports HTTP/2 connection coalescing
+between the certificate-covered origins without routing unknown hostnames.
 BackendTLSPolicy keeps HTTPS between the Gateway and Kestrel.
 It validates the backend certificate with system trust and the route hostname.
 The guarded installer derives the issuer and `/signin-oidc` callback from the

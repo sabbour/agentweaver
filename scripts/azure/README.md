@@ -330,7 +330,11 @@ define a managed certificate, HTTPS Gateway, HTTPRoute, and BackendTLSPolicy.
 They are not part of ordinary namespace bootstrap.
 The managed certificate supplies a wildcard domain through its status.
 The route uses `agentweaver` as its single-label prefix, not the zone root.
-The public issuer must match the hostname on the admitted route.
+One HTTPS listener uses that wildcard domain; Broker and Portal HTTPRoutes
+retain their exact hostnames and paths on the shared listener. This allows
+HTTP/2 connection coalescing between the certificate-covered hosts without
+creating a route for unknown hostnames. The public issuer must match the
+hostname on the admitted Broker route.
 
 The Gateway requires a namespace policy compatible with its managed pods.
 AKS currently rejects a Gateway customization that sets a pod or container
@@ -364,7 +368,7 @@ Gateway, route, policy, or Cilium ingress rule.
 If a release-bootstrap attempt has already applied the root bundle, a retry
 also accepts its single `web-application` HTTPRoute when no Gateway or
 BackendTLSPolicy exists. The route must target Gateway `identity-broker` in
-`agentweaver-gateway`, select its `portal` listener, and match the managed
+`agentweaver-gateway`, select its shared `https` listener, and match the managed
 Portal host, `/` path, and Web Service backend. An explicit parent port must be
 443. Extra routes and any other partial routing state fail closed.
 
@@ -395,8 +399,9 @@ After the release bootstrap creates the product Services, run the same
 guarded command again without `--identity-routing-certificates-only`. The full
 phase first verifies that the MCP Service is the exact private HTTPS backend,
 then applies the Gateway, Broker/Web/Gateway API/MCP HTTPRoutes, corresponding
-BackendTLSPolicies, and narrow Cilium ingress policies. The portal listener
-sends `/` to Web, `/api/v1` plus exact `/openapi/v1.json` to Gateway, and exact
+BackendTLSPolicies, and narrow Cilium ingress policies. All routes attach to
+the shared wildcard-domain `https` listener, which sends `/` to Web, `/api/v1`
+plus exact `/openapi/v1.json` to Gateway, and exact
 `/mcp` plus `/.well-known/oauth-protected-resource/mcp` to MCP over HTTPS.
 The full phase rejects a missing or changed MCP Service before its first
 routing write.
@@ -439,7 +444,11 @@ It is not runtime acceptance.
 After the Broker starts with the approved issuer and required runtime inputs,
 `--verify-identity-broker-readiness` also checks `/health/live` and `/health/ready`.
 Both requests use ordinary DNS, trusted HTTPS, and the Gateway's observed IP.
-No insecure TLS, DNS override, or redirect following is permitted.
+It then opens HTTP/2 sessions to the observed Gateway IP in both directions,
+using Broker SNI with Portal authority and Portal SNI with Broker authority;
+each response must negotiate `h2` and return `200`. This verifies the route
+behavior when a browser coalesces the certificate-covered hosts. No insecure
+TLS, DNS override, or redirect following is permitted.
 Failure prevents a successful installer receipt.
 The routing option does not create the Broker's runtime ConfigMap, signing
 Secret, key-ring PVC, OAuth registrations, or runtime Deployment.

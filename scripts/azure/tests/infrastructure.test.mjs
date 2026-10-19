@@ -478,9 +478,9 @@ test('separate routing candidate preserves native managed certificates and HTTPS
   assert.match(gatewayCertificate, /target:\s+secret: identity-broker-tls/);
   const gateway = document('Gateway', 'agentweaver-gateway');
   assert.match(gateway, /gatewayClassName: approuting-istio/);
-  assert.match(gateway, /hostname: CHANGEME-MANAGED-HOST/);
-  assert.match(gateway, /hostname: CHANGEME-PORTAL-HOST\s+name: portal\s+port: 443\s+protocol: HTTPS/);
-  assert.equal((gateway.match(/name: identity-broker-tls/g) ?? []).length, 2);
+  assert.match(gateway, /hostname: CHANGEME-MANAGED-WILDCARD-HOST\s+name: https\s+port: 443\s+protocol: HTTPS/);
+  assert.doesNotMatch(gateway, /name: portal/);
+  assert.equal((gateway.match(/name: identity-broker-tls/g) ?? []).length, 1);
   assert.match(gateway, /port: 443/);
   assert.match(gateway, /protocol: HTTPS/);
   assert.match(gateway, /certificateRefs:\s+- kind: Secret\s+name: identity-broker-tls/);
@@ -494,7 +494,7 @@ test('separate routing candidate preserves native managed certificates and HTTPS
   const webRoute = documents.find(item => item.includes('name: web-application\n'));
   assert.ok(webRoute);
   assert.match(webRoute, /service: web|agentweaver\.io\/service: web/);
-  assert.match(webRoute, /sectionName: portal/);
+  assert.match(webRoute, /sectionName: https/);
   assert.match(webRoute, /hostnames:\s+- CHANGEME-PORTAL-HOST/);
   assert.match(webRoute, /value: \//);
   assert.match(webRoute, /backendRefs:\s+- name: web\s+port: 8080/);
@@ -502,7 +502,7 @@ test('separate routing candidate preserves native managed certificates and HTTPS
     item.includes('kind: HTTPRoute\n'));
   assert.ok(apiRoute);
   assert.match(apiRoute, /agentweaver\.io\/service: gateway/);
-  assert.match(apiRoute, /sectionName: portal/);
+  assert.match(apiRoute, /sectionName: https/);
   assert.match(apiRoute, /hostnames:\s+- CHANGEME-PORTAL-HOST/);
   assert.match(apiRoute,
     /matches:\n    - path:\n        type: PathPrefix\n        value: \/api\/v1\n    - path:\n        type: Exact\n        value: \/openapi\/v1\.json/);
@@ -515,6 +515,7 @@ test('separate routing candidate preserves native managed certificates and HTTPS
   const mcpRoute = documents.find(item => item.includes('name: mcp\n') &&
     item.includes('kind: HTTPRoute\n'));
   assert.ok(mcpRoute);
+  assert.match(mcpRoute, /sectionName: https/);
   assert.match(mcpRoute, /hostnames:\s+- CHANGEME-PORTAL-HOST/);
   assert.match(mcpRoute, /type: Exact\s+value: \/mcp/);
   assert.match(mcpRoute, /backendRefs:\s+- name: mcp\s+port: 8443/);

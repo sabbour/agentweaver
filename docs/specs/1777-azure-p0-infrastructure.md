@@ -269,8 +269,11 @@ the Gateway and Broker namespaces.
 The installer derives the initial `agentweaver` hostname from the certificate's status.
 It applies native v1 Gateway and HTTPRoute resources, BackendTLSPolicy,
 and exact namespace/Gateway-label ingress to the HTTPS Broker.
-The listener admits only the P0 namespace's routes.
-The portal listener also routes `/` to Web, `/api/v1` plus exact
+The listener admits only the P0 namespace's routes. Broker, Web, Gateway API,
+and MCP HTTPRoutes share the HTTPS listener for the wildcard managed domain.
+Each route retains its exact hostname, path, and backend so a reused
+HTTP/2 connection can select the Broker route by authority; an unknown
+hostname has no matching route. The listener routes `/` to Web, `/api/v1` plus exact
 `/openapi/v1.json` to Gateway, and exact `/mcp` plus the exact protected-resource
 metadata path to MCP over verified backend
 HTTPS. Gateway and MCP use operator-owned leaf certificates for their exact

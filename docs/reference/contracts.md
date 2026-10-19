@@ -10,6 +10,15 @@ To configure a provider, follow [Configure providers](../guide/configure-provide
 For runtime settings and deployment configuration, see
 [Runtime configuration](./runtime-configuration.md).
 
+## Azure public routing
+
+The managed Azure Gateway uses one HTTPS listener for the wildcard managed
+domain. Broker, Web, Gateway API, and MCP HTTPRoutes attach to that listener
+with exact hostnames and their existing path and backend rules. This lets a
+Broker request remain routable when HTTP/2 reuses a Portal connection; an
+unknown hostname still has no matching route. This topology does not change
+the authentication or authorization contract of any service.
+
 ## Provider contract
 
 `ProviderDescriptor` identifies a provider seam and records the provider ID,

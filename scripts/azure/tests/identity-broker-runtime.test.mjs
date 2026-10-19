@@ -28,7 +28,7 @@ function object(kind, spec, status, { name = 'identity-broker', service = 'ident
 }
 function routing(host = legacyHostname, includeApplicationRoutes = false) {
   const gatewayListeners = [{
-    name: 'https', hostname: host, protocol: 'HTTPS', port: 443,
+    name: 'https', hostname: includeApplicationRoutes ? `*.${zone}` : host, protocol: 'HTTPS', port: 443,
     tls: { mode: 'Terminate', certificateRefs: [{ name: 'identity-broker-tls' }] },
     allowedRoutes: { namespaces: { from: 'Same' } },
   }];
@@ -62,34 +62,24 @@ function routing(host = legacyHostname, includeApplicationRoutes = false) {
     }] }),
   };
   if (includeApplicationRoutes) {
-    gatewayListeners.push({
-      name: 'portal', hostname: portalHostname, protocol: 'HTTPS', port: 443,
-      tls: { mode: 'Terminate', certificateRefs: [{ name: 'identity-broker-tls' }] },
-      allowedRoutes: { namespaces: { from: 'Same' } },
-    });
-    gatewayListenerStatus.push({
-      name: 'portal', conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
-        { type: 'Programmed', status: 'True', observedGeneration: 1 },
-        { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }],
-    });
     state.webRoute = object('HTTPRoute', {
-      hostnames: [portalHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'portal' }],
+      hostnames: [portalHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'https' }],
       rules: [{ matches: [{ path: { type: 'PathPrefix', value: '/' } }],
         backendRefs: [{ name: 'web', port: 8080 }] }],
     }, { parents: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
-      parentRef: { name: 'identity-broker', sectionName: 'portal' },
+      parentRef: { name: 'identity-broker', sectionName: 'https' },
       conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
         { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
     { name: 'web-application', service: 'web' });
     state.apiRoute = object('HTTPRoute', {
-      hostnames: [portalHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'portal' }],
+      hostnames: [portalHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'https' }],
       rules: [{ matches: [
         { path: { type: 'PathPrefix', value: '/api/v1' } },
         { path: { type: 'Exact', value: '/openapi/v1.json' } },
       ],
         backendRefs: [{ name: 'gateway', port: 8443 }] }],
     }, { parents: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
-      parentRef: { name: 'identity-broker', sectionName: 'portal' },
+      parentRef: { name: 'identity-broker', sectionName: 'https' },
       conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
         { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
     { name: 'gateway-api', service: 'gateway' });
@@ -104,13 +94,13 @@ function routing(host = legacyHostname, includeApplicationRoutes = false) {
         { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
     { name: 'gateway-api', service: 'gateway' });
     state.mcpRoute = object('HTTPRoute', {
-      hostnames: [portalHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'portal' }],
+      hostnames: [portalHostname], parentRefs: [{ name: 'identity-broker', sectionName: 'https' }],
       rules: [{ matches: [
         { path: { type: 'Exact', value: '/mcp' } },
         { path: { type: 'Exact', value: '/.well-known/oauth-protected-resource/mcp' } },
       ], backendRefs: [{ name: 'mcp', port: 8443 }] }],
     }, { parents: [{ controllerName: 'istio.aks.azure.com/gateway-controller',
-      parentRef: { name: 'identity-broker', sectionName: 'portal' },
+        parentRef: { name: 'identity-broker', sectionName: 'https' },
       conditions: [{ type: 'Accepted', status: 'True', observedGeneration: 1 },
         { type: 'ResolvedRefs', status: 'True', observedGeneration: 1 }] }] },
     { name: 'mcp', service: 'mcp' });
