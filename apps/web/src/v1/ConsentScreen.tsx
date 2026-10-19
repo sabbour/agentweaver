@@ -1,3 +1,4 @@
+import { Fragment } from 'react';
 import { Button, MessageBar, MessageBarBody, Tooltip } from '@fluentui/react-components';
 import { Info16Regular } from '@fluentui/react-icons';
 import { useAuth } from './AuthContext';
@@ -35,7 +36,15 @@ export function ConsentScreenView({
                   return (
                     <li className="v1-consent-scope" key={`${scope}-${index}`}>
                       <div className="v1-consent-scope__details">
-                        <strong><code>{scope}</code></strong>
+                        <strong>
+                          <code>
+                            {scope.split(/([._-])/).map((part, partIndex) => (
+                              /[._-]/.test(part)
+                                ? <Fragment key={partIndex}>{part}<wbr /></Fragment>
+                                : part
+                            ))}
+                          </code>
+                        </strong>
                         <p>{details.summary}</p>
                       </div>
                       <div className="v1-consent-scope__actions">

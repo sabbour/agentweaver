@@ -54,5 +54,7 @@ const UNKNOWN_SCOPE_DESCRIPTION: ConsentScopeDescription = {
 
 /** Returns the known explanation or a safe fallback for an unfamiliar permission. */
 export function describeConsentScope(scope: string): ConsentScopeDescription {
-  return SCOPE_DESCRIPTIONS[scope] ?? UNKNOWN_SCOPE_DESCRIPTION;
+  return Object.hasOwn(SCOPE_DESCRIPTIONS, scope)
+    ? SCOPE_DESCRIPTIONS[scope]
+    : UNKNOWN_SCOPE_DESCRIPTION;
 }
