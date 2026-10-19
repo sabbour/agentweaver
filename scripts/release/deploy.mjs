@@ -121,8 +121,11 @@ const INCOMPLETE_RUNTIME_CONFIG_MAPS = new Set([
   'web-runtime-config',
 ]);
 const INCOMPLETE_CONFIG_MAPS = new Set([...INCOMPLETE_RUNTIME_CONFIG_MAPS, 'agenthost-runtime-v1']);
-// Only this source-owned immutable runtime profile is eligible for replacement.
-const REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS = new Set(['agenthost-runtime-v1']);
+// Only these source-owned immutable runtime maps are eligible for pre-acceptance replacement.
+const REPLACEABLE_IMMUTABLE_RUNTIME_CONFIG_MAPS = new Set([
+  'agenthost-runtime-v1',
+  'projects-config-runtime-config',
+]);
 /** Upstream AgentSandbox release asset pinned to its source commit and content digest. */
 export const AGENT_SANDBOX_RELEASE = Object.freeze({
   version: 'v1.0.7',
@@ -230,6 +233,12 @@ const BOOTSTRAP_RELEASES = Object.freeze({
   // Pin v1.0.3 to this source SHA and its immutable normal publication; reject continuation receipts.
   'v1.0.3': Object.freeze({
     sourceSha: 'acfa2732dba0728adfeaf5754c8e9af9118f2482',
+    continuation: false,
+    allowLightweightTag: true,
+  }),
+  // Pin v1.0.4 to this source SHA and its immutable normal publication; reject continuation receipts.
+  'v1.0.4': Object.freeze({
+    sourceSha: '7bb3ceb282c9377e49da2bc7b6d336baa4eb8209',
     continuation: false,
     allowLightweightTag: true,
   }),
@@ -2545,9 +2554,10 @@ Usage:
   npm run release:deploy-bootstrap -- v1.0.1 --manifest releases/foundation.json --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group agentweaver --cluster agentweaver-aks --namespace agentweaver --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
   npm run release:deploy-bootstrap -- v1.0.2 --manifest releases/foundation.json --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group agentweaver --cluster agentweaver-aks --namespace agentweaver --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
   npm run release:deploy-bootstrap -- v1.0.3 --manifest releases/foundation.json --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group agentweaver --cluster agentweaver-aks --namespace agentweaver --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
+  npm run release:deploy-bootstrap -- v1.0.4 --manifest releases/foundation.json --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group agentweaver --cluster agentweaver-aks --namespace agentweaver --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
 
 The default is a read-only pre-acceptance dry-run. v1.0.0 requires its immutable
-continuation proof; v1.0.1, v1.0.2, and v1.0.3 accept only their exact
+continuation proof; v1.0.1, v1.0.2, v1.0.3, and v1.0.4 accept only their exact
 source-bound normal publication receipts and reject --completion. All require
 the tracked draft manifest and never create release acceptance evidence.
 `;

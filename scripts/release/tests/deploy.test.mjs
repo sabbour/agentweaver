@@ -60,6 +60,12 @@ const v103SourceSha = 'acfa2732dba0728adfeaf5754c8e9af9118f2482';
 const v103Manifest = JSON.parse(execFileSync('git', [
   'show', `${v103SourceSha}:releases/foundation.json`,
 ], { cwd: root, encoding: 'utf8' }));
+const v104SourceSha = '7bb3ceb282c9377e49da2bc7b6d336baa4eb8209';
+const v104SourceTreeSha = '61adf823936284285f68df17b890a5b0da70c033';
+const v104ProvenanceSha256 = 'b7a4ef1c71559fe5f8c96d8d7beee2c6c14ed8fad700aea7711a1cc3aa643ea8';
+const v104Manifest = JSON.parse(execFileSync('git', [
+  'show', `${v104SourceSha}:releases/foundation.json`,
+], { cwd: root, encoding: 'utf8' }));
 /** The provider-catalog review merge SHA is distinct from the release source SHA. */
 const providerCatalogSourceSha = 'b002620bd8cb53a971b6d5b082d6ab43dbf11fb7';
 /** Image digests from the immutable publication receipt bound to v102SourceSha. */
@@ -92,6 +98,21 @@ const v103ImageDigests = Object.freeze({
 });
 /** AgentHost's receipt-measured linux/amd64 compressed image size in bytes. */
 const v103AgentHostCompressedPullBytes = 321483310;
+/** Image digests from the immutable publication receipt bound to v104SourceSha. */
+const v104ImageDigests = Object.freeze({
+  'Agentweaver.AgentHost': 'sha256:f6d22c6170e3a0d5a3d2d071cd546220c4742771abc091c237f691df63c83025',
+  'Agentweaver.Identity.Broker': 'sha256:9452b1bb82803ecf5dfa35fc2228ff9d68b3d0998ada58ec6a8e46269e399585',
+  'Agentweaver.EventsAndSessions': 'sha256:d4c5af4ce384c1e1644dcd6d23e57afd4beba5f661c4fbbd82caeef6c123d458',
+  'Agentweaver.Gateway': 'sha256:a10f24fd847409ffca6c328e8206898e46c81caeb9b19aed4386157ba7e7f4a6',
+  'Agentweaver.Mcp': 'sha256:734eb02c991adbe81624ea07ae1c5e057292d6789dd64af76e61fddce2187026',
+  'Agentweaver.Web': 'sha256:c48373e00f43c1c2052507ac1393ca09d5f818cf284f3ab28e7576f0fd6c4d2a',
+  'Agentweaver.Orchestrator': 'sha256:9cf0fc02d816703ad52a2e70ac310b921385ac5c75230f12a2171c83ecd3a9d1',
+  'Agentweaver.Environment': 'sha256:5371b561e8e262134aad50d8aa610a3c9b2308ca4d20576902967843c8b87f96',
+  'Agentweaver.Knowledge': 'sha256:256dd83a1f66b5a3c9a69e3e7db32fb6bffd03dc0cf8c6258fafc50bc8b2f27e',
+  'Agentweaver.Projects.Config': 'sha256:715eeb38463f8688fee41cdff7b2c81ce78aa14ff1acb04f8ff41a15fa69813b',
+});
+/** AgentHost's receipt-measured linux/amd64 compressed image size in bytes. */
+const v104AgentHostCompressedPullBytes = 321483172;
 function sourceFixtureRoot(sourceSha, manifest, prefix) {
   const fixtureRoot = mkdtempSync(path.join(tmpdir(), prefix));
   for (const file of [...manifest.components.map(component => component.project), 'apps/web/package-lock.json']) {
@@ -146,11 +167,13 @@ const p0Root = sourceFixtureRoot(p0SourceSha, p0Manifest, 'agentweaver-v1-0-0-re
 const v101Root = sourceFixtureRoot(v101SourceSha, v101Manifest, 'agentweaver-v1-0-1-release-tests-');
 const v102Root = sourceFixtureRoot(v102SourceSha, v102Manifest, 'agentweaver-v1-0-2-release-tests-');
 const v103Root = sourceFixtureRoot(v103SourceSha, v103Manifest, 'agentweaver-v1-0-3-release-tests-');
+const v104Root = sourceFixtureRoot(v104SourceSha, v104Manifest, 'agentweaver-v1-0-4-release-tests-');
 after(() => {
   rmSync(p0Root, { recursive: true, force: true });
   rmSync(v101Root, { recursive: true, force: true });
   rmSync(v102Root, { recursive: true, force: true });
   rmSync(v103Root, { recursive: true, force: true });
+  rmSync(v104Root, { recursive: true, force: true });
 });
 const sourceSha = 'a'.repeat(40);
 const target = {
@@ -274,12 +297,14 @@ function releaseManifest() {
 function publicationReceipt(manifest = releaseManifest(), receiptSourceSha = sourceSha, {
   agentHostImageDigest = `sha256:${'a'.repeat(64)}`,
   agentHostCompressedPullBytes = 123456,
+  agentHostSourceTree = 'f'.repeat(40),
+  provenanceSha256 = 'b'.repeat(64),
 } = {}) {
   const product = manifest.components.filter(({ id }) => id !== 'Agentweaver.FoundationProbe');
   return {
     schemaVersion: 1,
     sourceSha: receiptSourceSha,
-    provenanceSha256: 'b'.repeat(64),
+    provenanceSha256,
     status: 'published',
     requiredPackageIds: product.filter((component) => component.kind !== 'service')
       .map((component) => component.id),
@@ -314,7 +339,7 @@ function publicationReceipt(manifest = releaseManifest(), receiptSourceSha = sou
                 kind: 'agenthost-image',
                 schemaVersion: 1,
                 sourceSha: receiptSourceSha,
-                sourceTree: 'f'.repeat(40),
+                sourceTree: agentHostSourceTree,
                 image: {
                   digest: agentHostImageDigest,
                   configDigest,
@@ -350,6 +375,8 @@ function bootstrapFixture() {
 function normalBootstrapFixture(sourceManifest = v101Manifest, receiptSourceSha = v101SourceSha, {
   imageDigests,
   agentHostCompressedPullBytes,
+  agentHostSourceTree,
+  provenanceSha256,
 } = {}) {
   const manifest = structuredClone(sourceManifest);
   const publishedManifest = structuredClone(manifest);
@@ -364,6 +391,8 @@ function normalBootstrapFixture(sourceManifest = v101Manifest, receiptSourceSha 
     publication: publicationReceipt(publishedManifest, receiptSourceSha, {
       agentHostImageDigest: imageDigests?.['Agentweaver.AgentHost'],
       agentHostCompressedPullBytes,
+      agentHostSourceTree,
+      provenanceSha256,
     }),
   };
 }
@@ -658,12 +687,20 @@ function prepareKustomizeFixture(fixture, fixtureRoot, receiptSourceSha, catalog
   }
 }
 
-function renderedAgentHostRuntimeConfigMap(fixtureRoot) {
+function renderedRuntimeConfigMap(fixtureRoot, name) {
   const rendered = execFileSync('kubectl', [
     'kustomize', path.join(fixtureRoot, 'deploy', 'k8s'),
   ], { cwd: fixtureRoot, encoding: 'utf8' });
   return parseKustomizeResources(rendered).items.find((resource) =>
-    resource.kind === 'ConfigMap' && resource.metadata.name === 'agenthost-runtime-v1');
+    resource.kind === 'ConfigMap' && resource.metadata.name === name);
+}
+
+function renderedAgentHostRuntimeConfigMap(fixtureRoot) {
+  return renderedRuntimeConfigMap(fixtureRoot, 'agenthost-runtime-v1');
+}
+
+function renderedProjectsConfigRuntimeConfigMap(fixtureRoot) {
+  return renderedRuntimeConfigMap(fixtureRoot, 'projects-config-runtime-config');
 }
 
 test('P0 target and every required deployment target input are explicit and exact', () => {
@@ -694,9 +731,9 @@ test('pre-acceptance mode is explicit and requires its exact v1.0.0 inputs', () 
   assert.throws(() => parseArgs([...bootstrapArgsFor(), '--runtime-manifest', 'runtime.json']),
     /unknown argument "--runtime-manifest"/);
   const wrongTag = bootstrapArgsFor();
-  wrongTag[wrongTag.indexOf('v1.0.0')] = 'v1.0.4';
+  wrongTag[wrongTag.indexOf('v1.0.0')] = 'v1.0.5';
   assert.throws(() => parseArgs(wrongTag),
-    /limited to the exact v1\.0\.0 and v1\.0\.1 and v1\.0\.2 and v1\.0\.3/);
+    /limited to the exact v1\.0\.0 and v1\.0\.1 and v1\.0\.2 and v1\.0\.3 and v1\.0\.4/);
 });
 
 test('v1.0.1 pre-acceptance requires the normal publication inputs and rejects completion proofs', () => {
@@ -880,6 +917,7 @@ test('pre-acceptance dry-run reports a changed owned immutable runtime ConfigMap
   const originalRun = dependencies.run;
   dependencies.run = (file, args, options = {}) => {
     if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
+      if (args[2] !== 'agenthost-runtime-v1') return originalRun(file, args, options);
       assert.equal(targetVerified, true, 'verify the approved target before reading a live ConfigMap');
       reads.push({ args, options });
       return args.includes('--output=name')
@@ -903,6 +941,53 @@ test('pre-acceptance dry-run reports a changed owned immutable runtime ConfigMap
   assert.deepEqual(Object.keys(reads[1].options.projectJson(existing)).sort(), [
     'binaryDataDigest', 'dataDigest', 'immutable', 'kind', 'name', 'namespace',
   ]);
+  assert.equal(dependencies.commands.length, 2);
+  assert.ok(dependencies.commands.every(({ args }) =>
+    args[0] !== 'replace' && args[0] !== 'delete'));
+});
+
+test('pre-acceptance dry-run detects changed Projects.Config data without exposing runtime values', async () => {
+  const fixture = bootstrapFixture();
+  const dependencies = bootstrapDependencies(fixture);
+  const agentHost = renderedAgentHostRuntimeConfigMap(dependencies.root);
+  const desired = renderedProjectsConfigRuntimeConfigMap(dependencies.root);
+  const existing = structuredClone(desired);
+  existing.data.ProjectsConfig__PrivilegedSetup__ApprovedSubject = 'changed-subject';
+  const currentByName = new Map([
+    ['agenthost-runtime-v1', agentHost],
+    ['projects-config-runtime-config', existing],
+  ]);
+  const reads = [];
+  const originalRun = dependencies.run;
+  dependencies.run = (file, args, options = {}) => {
+    if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
+      const name = args[2];
+      const current = currentByName.get(name);
+      reads.push({ args, options, current });
+      return args.includes('--output=name')
+        ? `configmap/${name}`
+        : JSON.stringify(options.projectJson(current));
+    }
+    return originalRun(file, args, options);
+  };
+
+  const result = await deployRelease({ argv: bootstrapArgsFor() }, dependencies);
+
+  assert.deepEqual(result.immutableRuntimeConfigMapReplacements, ['projects-config-runtime-config']);
+  assert.deepEqual(reads.map(({ args }) => args[2]), [
+    'agenthost-runtime-v1', 'agenthost-runtime-v1',
+    'projects-config-runtime-config', 'projects-config-runtime-config',
+  ]);
+  assert.deepEqual(Object.keys(reads[3].options.projectJson(reads[3].current)).sort(), [
+    'binaryDataDigest', 'dataDigest', 'immutable', 'kind', 'name', 'namespace',
+  ]);
+  assert.equal(
+    JSON.stringify(result).includes(desired.data.ProjectsConfig__PrivilegedSetup__ApprovedIssuer),
+    false,
+  );
+  assert.doesNotMatch(JSON.stringify(result), /c4279823-a7c7-477e-982e-f4145bb0a83d/);
+  assert.doesNotMatch(JSON.stringify(result), /ProjectsConfig__PrivilegedSetup__ApprovedTenantId/);
+  assert.equal(result.target.tenantId, target.tenantId);
   assert.equal(dependencies.commands.length, 2);
   assert.ok(dependencies.commands.every(({ args }) =>
     args[0] !== 'replace' && args[0] !== 'delete'));
@@ -960,6 +1045,7 @@ test('pre-acceptance execute replaces only changed agenthost-runtime-v1 after se
   const originalRun = dependencies.run;
   dependencies.run = (file, args, options = {}) => {
     if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
+      if (args[2] !== 'agenthost-runtime-v1') return originalRun(file, args, options);
       calls.push({ operation: args.includes('--output=name') ? 'get-name' : 'get-data', args });
       return args.includes('--output=name')
         ? 'configmap/agenthost-runtime-v1'
@@ -1076,6 +1162,100 @@ test('pre-acceptance execute replaces only changed agenthost-runtime-v1 after se
   assert.equal(calls.filter(({ operation }) => operation === 'replace').length, 1);
 });
 
+test('pre-acceptance execute replaces only changed Projects.Config runtime data after preflight', async () => {
+  const fixture = bootstrapFixture();
+  const dependencies = bootstrapDependencies(fixture);
+  const desiredAgentHost = renderedAgentHostRuntimeConfigMap(dependencies.root);
+  const desired = renderedProjectsConfigRuntimeConfigMap(dependencies.root);
+  const existing = structuredClone(desired);
+  existing.data.ProjectsConfig__PrivilegedSetup__ApprovedSubject = 'changed-subject';
+  const currentByName = new Map([
+    ['agenthost-runtime-v1', desiredAgentHost],
+    ['projects-config-runtime-config', existing],
+  ]);
+  const calls = [];
+  const originalRun = dependencies.run;
+  dependencies.run = (file, args, options = {}) => {
+    if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
+      const name = args[2];
+      const current = currentByName.get(name);
+      calls.push({ operation: args.includes('--output=name') ? 'get-name' : 'get-data', name, args });
+      return args.includes('--output=name')
+        ? `configmap/${name}`
+        : JSON.stringify(options.projectJson(current));
+    }
+    if (file === 'kubectl' && args[0] === 'auth' && args[1] === 'can-i') {
+      calls.push({ operation: `can-i-${args[2]}`, args });
+    } else if (file === 'kubectl' && args[0] === 'replace') {
+      calls.push({ operation: 'replace', args, input: options.input });
+      return '';
+    } else if (file === 'kubectl' && args[0] === 'apply' && args.includes('-k') &&
+        !args.some((arg) => arg.startsWith('--dry-run='))) {
+      calls.push({ operation: 'apply', args });
+      return '';
+    } else if (file === 'kubectl' && args[0] === 'apply' &&
+        !args.some((arg) => arg.startsWith('--dry-run='))) {
+      calls.push({ operation: 'agent-sandbox-apply', args });
+    } else if (file === 'kubectl' && args[0] === 'apply' && args.includes('--dry-run=server')) {
+      const isAgentSandbox = parseAllYamlDocuments(options.input).some((document) => {
+        const resource = document.toJSON();
+        return resource?.kind === 'Namespace' &&
+          resource.metadata?.name === 'agent-sandbox-system';
+      });
+      calls.push({
+        operation: isAgentSandbox ? 'agent-sandbox-server-preflight' : 'server-preflight',
+        args,
+        input: options.input,
+      });
+    }
+    return originalRun(file, args, options);
+  };
+  let checkpoint;
+  Object.assign(dependencies, {
+    checkpointDirectory: path.join(root, 'projects-config-replacement-checkpoint-fixture'),
+    checkpointMkdir: () => undefined,
+    checkpointWriteFile: (_file, text) => { checkpoint = text; },
+    checkpointReadFile: () => checkpoint,
+    checkpointRm: () => undefined,
+    verifyLive: async () => undefined,
+  });
+
+  const result = await deployRelease({ argv: [...bootstrapArgsFor(), '--execute'] }, dependencies);
+
+  assert.deepEqual(result.immutableRuntimeConfigMapReplacements, ['projects-config-runtime-config']);
+  const permissionChecks = calls.filter(({ operation }) => operation === 'can-i-create' ||
+    operation === 'can-i-delete');
+  assert.deepEqual(permissionChecks.slice(0, 2).map(({ args }) => [args[2], args[3]]), [
+    ['create', 'configmaps'],
+    ['delete', 'configmaps/projects-config-runtime-config'],
+  ]);
+  const firstWrite = calls.findIndex(({ operation }) =>
+    ['agent-sandbox-apply', 'replace', 'apply'].includes(operation));
+  assert.ok(permissionChecks.slice(0, 2).every(({ args }) =>
+    calls.findIndex(({ operation, args: checked }) =>
+      operation === `can-i-${args[2]}` && checked === args) < firstWrite));
+
+  const productPreflight = calls.find(({ operation }) => operation === 'server-preflight');
+  const preflightResources = parseKustomizeResources(productPreflight.input);
+  for (const name of [
+    'agenthost-runtime-v1',
+    'projects-config-runtime-config',
+    'environment-cilium-config',
+    'projects-config-provider-catalog',
+  ]) {
+    assert.equal(preflightResources.items.some((resource) =>
+      resource.kind === 'ConfigMap' && resource.metadata.name === name), name !== 'projects-config-runtime-config');
+  }
+  const replacements = calls.filter(({ operation }) => operation === 'replace');
+  assert.equal(replacements.length, 1);
+  assert.deepEqual(replacements[0].args, [
+    'replace', '--force', '--filename', '-', '--namespace', target.namespace,
+  ]);
+  assert.deepEqual(JSON.parse(replacements[0].input), desired);
+  assert.ok(calls.findIndex(({ operation }) => operation === 'replace') <
+    calls.findIndex(({ operation }) => operation === 'apply'));
+});
+
 test('pre-acceptance execute refuses replacement without create and delete permissions', async () => {
   for (const deniedVerb of ['create', 'delete']) {
     const fixture = bootstrapFixture();
@@ -1090,6 +1270,7 @@ test('pre-acceptance execute refuses replacement without create and delete permi
     const originalRun = dependencies.run;
     dependencies.run = (file, args, options = {}) => {
       if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
+        if (args[2] !== 'agenthost-runtime-v1') return originalRun(file, args, options);
         return args.includes('--output=name')
           ? 'configmap/agenthost-runtime-v1'
           : JSON.stringify(options.projectJson(existing));
@@ -1116,6 +1297,51 @@ test('pre-acceptance execute refuses replacement without create and delete permi
   }
 });
 
+test('pre-acceptance execute checks Projects.Config replacement permissions before writes', async () => {
+  for (const deniedVerb of ['create', 'delete']) {
+    const fixture = bootstrapFixture();
+    const dependencies = bootstrapDependencies(fixture);
+    const agentHost = renderedAgentHostRuntimeConfigMap(dependencies.root);
+    const desired = renderedProjectsConfigRuntimeConfigMap(dependencies.root);
+    const existing = structuredClone(desired);
+    existing.data.ProjectsConfig__PrivilegedSetup__ApprovedSubject = 'changed-subject';
+    const currentByName = new Map([
+      ['agenthost-runtime-v1', agentHost],
+      ['projects-config-runtime-config', existing],
+    ]);
+    const permissions = [];
+    const writes = [];
+    const originalRun = dependencies.run;
+    dependencies.run = (file, args, options = {}) => {
+      if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
+        const name = args[2];
+        const current = currentByName.get(name);
+        return args.includes('--output=name')
+          ? `configmap/${name}`
+          : JSON.stringify(options.projectJson(current));
+      }
+      if (file === 'kubectl' && args[0] === 'auth' && args[1] === 'can-i') {
+        permissions.push([args[2], args[3]]);
+        return args[2] === deniedVerb ? 'no' : 'yes';
+      }
+      if (file === 'kubectl' && (args[0] === 'replace' ||
+          (args[0] === 'apply' && !args.some((arg) => arg.startsWith('--dry-run='))))) {
+        writes.push(args);
+      }
+      return originalRun(file, args, options);
+    };
+
+    await assert.rejects(
+      deployRelease({ argv: [...bootstrapArgsFor(), '--execute'] }, dependencies),
+      new RegExp(`authorization must allow ${deniedVerb}`),
+    );
+    assert.deepEqual(permissions, deniedVerb === 'create'
+      ? [['create', 'configmaps']]
+      : [['create', 'configmaps'], ['delete', 'configmaps/projects-config-runtime-config']]);
+    assert.deepEqual(writes, [], 'permission denial must happen before replacement or bundle apply');
+  }
+});
+
 test('pre-acceptance execute keeps ordinary apply when the owned immutable runtime data is unchanged', async () => {
   const fixture = bootstrapFixture();
   const dependencies = bootstrapDependencies(fixture);
@@ -1124,6 +1350,7 @@ test('pre-acceptance execute keeps ordinary apply when the owned immutable runti
   const originalRun = dependencies.run;
   dependencies.run = (file, args, options = {}) => {
     if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
+      if (args[2] !== 'agenthost-runtime-v1') return originalRun(file, args, options);
       calls.push({ operation: args.includes('--output=name') ? 'get-name' : 'get-data' });
       return args.includes('--output=name')
         ? 'configmap/agenthost-runtime-v1'
@@ -1177,6 +1404,7 @@ test('pre-acceptance resume reapplies a completed bundle when the owned immutabl
   const originalRun = dependencies.run;
   dependencies.run = (file, args, options = {}) => {
     if (file === 'kubectl' && args[0] === 'get' && args[1] === 'configmap') {
+      if (args[2] !== 'agenthost-runtime-v1') return originalRun(file, args, options);
       return args.includes('--output=name')
         ? 'configmap/agenthost-runtime-v1'
         : JSON.stringify(options.projectJson(existing));
@@ -1344,16 +1572,46 @@ test('v1.0.2 pre-acceptance rejects its receipt when checked-in pins target a ne
   );
 });
 
-test('v1.0.3 pre-acceptance dry-run uses its exact source, checked-in pins, and published measurements', async () => {
+test('v1.0.3 pre-acceptance rejects checked-in pins for the newer v1.0.4 publication', async () => {
   const fixture = normalBootstrapFixture(v103Manifest, v103SourceSha, {
     imageDigests: v103ImageDigests,
     agentHostCompressedPullBytes: v103AgentHostCompressedPullBytes,
   });
+  const dependencies = bootstrapDependencies(fixture, {
+    root: v103Root,
+    sourceSha: v103SourceSha,
+    rewriteKustomizeFixture: false,
+  });
+  await assert.rejects(
+    deployRelease({
+      argv: normalBootstrapArgsFor({}, 'v1.0.3', providerCatalogSourceSha),
+    }, dependencies),
+    /checked-in P0 Kustomize images and runtime pins must match the exact publication receipt/,
+  );
+});
+
+test('v1.0.4 pre-acceptance dry-run uses its exact source, receipt pins, and image measurement', async () => {
+  const fixture = normalBootstrapFixture(v104Manifest, v104SourceSha, {
+    imageDigests: v104ImageDigests,
+    agentHostCompressedPullBytes: v104AgentHostCompressedPullBytes,
+    agentHostSourceTree: v104SourceTreeSha,
+    provenanceSha256: v104ProvenanceSha256,
+  });
+  const releaseVersions = new Set(fixture.manifest.components
+    .filter(({ id }) => id !== 'Agentweaver.FoundationProbe')
+    .map(({ version }) => version));
+  assert.ok(releaseVersions.size > 1);
+  assert.equal(execFileSync('git', ['rev-parse', `${v104SourceSha}^{tree}`], {
+    cwd: root,
+    encoding: 'utf8',
+  }).trim(), v104SourceTreeSha);
+  assert.equal(fixture.publication.provenanceSha256, v104ProvenanceSha256);
+
   const kubernetesRoot = path.join(root, 'deploy', 'k8s');
   const kustomization = parseYaml(readFileSync(path.join(kubernetesRoot, 'kustomization.yaml'), 'utf8'));
   const pins = new Map(kustomization.images.map(({ name, digest }) => [name, digest]));
   assert.equal(pins.size, 10);
-  for (const [componentId, digest] of Object.entries(v103ImageDigests)) {
+  for (const [componentId, digest] of Object.entries(v104ImageDigests)) {
     assert.equal(
       pins.get(`ghcr.io/sabbour/${componentImageRepository(componentId)}`),
       digest,
@@ -1367,43 +1625,40 @@ test('v1.0.3 pre-acceptance dry-run uses its exact source, checked-in pins, and 
     .map(({ name, value }) => [name, value]));
   assert.equal(
     environmentValues.get('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes'),
-    String(v103AgentHostCompressedPullBytes),
+    String(v104AgentHostCompressedPullBytes),
   );
   const agentHostConfig = parseYaml(readFileSync(path.join(
     kubernetesRoot, 'profiles', 'agenthost', 'runtime-config.example.yaml',
   ), 'utf8'));
   const agentHostImage = JSON.parse(agentHostConfig.data['appsettings.json']).AgentHost.Image;
   assert.deepEqual(agentHostImage, {
-    Digest: v103ImageDigests['Agentweaver.AgentHost'],
+    Digest: v104ImageDigests['Agentweaver.AgentHost'],
     Platform: 'linux/amd64',
-    CompressedPullBytes: v103AgentHostCompressedPullBytes,
+    CompressedPullBytes: v104AgentHostCompressedPullBytes,
   });
   const measured = fixture.publication.published.find(({ id }) => id === 'Agentweaver.AgentHost')
     .preparedOciMeasurement;
-  assert.equal(measured.sourceSha, v103SourceSha);
-  assert.equal(measured.image.digest, v103ImageDigests['Agentweaver.AgentHost']);
-  assert.equal(measured.image.compressedPullBytes, v103AgentHostCompressedPullBytes);
+  assert.equal(measured.sourceSha, v104SourceSha);
+  assert.equal(measured.sourceTree, v104SourceTreeSha);
+  assert.equal(measured.image.digest, v104ImageDigests['Agentweaver.AgentHost']);
+  assert.equal(measured.image.compressedPullBytes, v104AgentHostCompressedPullBytes);
+
   const dependencies = bootstrapDependencies(fixture, {
-    root: v103Root,
-    sourceSha: v103SourceSha,
-    // Verify the actual checked-in Kustomize bundle; synthetic rewriting would mask drift.
+    root: v104Root,
+    sourceSha: v104SourceSha,
     rewriteKustomizeFixture: false,
   });
   const result = await deployRelease({
-    argv: normalBootstrapArgsFor({}, 'v1.0.3', providerCatalogSourceSha),
+    argv: normalBootstrapArgsFor({}, 'v1.0.4', providerCatalogSourceSha),
   }, dependencies);
-  const versions = new Set(fixture.manifest.components
-    .filter(({ id }) => id !== 'Agentweaver.FoundationProbe')
-    .map(({ version }) => version));
-  assert.ok(versions.size > 1);
   assert.equal(result.resultType, 'pre-acceptance');
-  assert.equal(result.sourceSha, v103SourceSha);
+  assert.equal(result.sourceSha, v104SourceSha);
   assert.equal(result.dryRun, true);
   assert.equal(result.renderedResources, 61);
   assert.equal('acceptedRelease' in result, false);
   assert.equal(
     result.perSandboxAgentHost,
-    `ghcr.io/sabbour/${componentImageRepository('Agentweaver.AgentHost')}@${v103ImageDigests['Agentweaver.AgentHost']}`,
+    `ghcr.io/sabbour/${componentImageRepository('Agentweaver.AgentHost')}@${v104ImageDigests['Agentweaver.AgentHost']}`,
   );
   assert.deepEqual(
     result.services.map(({ id, image }) => [id, image]),
@@ -1465,6 +1720,36 @@ test('v1.0.3 pre-acceptance rejects changed-source and continuation receipts', a
       argv: normalBootstrapArgsFor({}, 'v1.0.3', providerCatalogSourceSha),
     }, dependencies),
     /v1\.0\.3 pre-acceptance bootstrap rejects continuation publication receipts/,
+  );
+});
+
+test('v1.0.4 pre-acceptance rejects changed-source and continuation receipts', async () => {
+  const fixture = normalBootstrapFixture(v104Manifest, v104SourceSha, {
+    imageDigests: v104ImageDigests,
+    agentHostCompressedPullBytes: v104AgentHostCompressedPullBytes,
+    agentHostSourceTree: v104SourceTreeSha,
+    provenanceSha256: v104ProvenanceSha256,
+  });
+  const dependencies = bootstrapDependencies(fixture, {
+    root: v104Root,
+    sourceSha: v104SourceSha,
+    rewriteKustomizeFixture: false,
+  });
+  fixture.publication.sourceSha = 'b'.repeat(40);
+  await assert.rejects(
+    deployRelease({
+      argv: normalBootstrapArgsFor({}, 'v1.0.4', providerCatalogSourceSha),
+    }, dependencies),
+    /exact source-bound v1\.0\.4 published receipt/,
+  );
+
+  fixture.publication.sourceSha = v104SourceSha;
+  fixture.publication.continuation = { unexpected: true };
+  await assert.rejects(
+    deployRelease({
+      argv: normalBootstrapArgsFor({}, 'v1.0.4', providerCatalogSourceSha),
+    }, dependencies),
+    /v1\.0\.4 pre-acceptance bootstrap rejects continuation publication receipts/,
   );
 });
 
@@ -1736,6 +2021,55 @@ test('v1.0.3 verifies the exact normal publication result ref and source commit'
     /must resolve to the exact published source commit/);
   tagCommitSha = v103SourceSha;
   await assert.rejects(verifyBootstrapRelease('v1.0.3', {
+    ...fixture.publication,
+    provenanceSha256: 'f'.repeat(64),
+  }, { root, run }), /differs from the immutable GitHub publication result/);
+});
+
+test('v1.0.4 verifies the exact normal publication result ref and source commit', async () => {
+  const fixture = normalBootstrapFixture(v104Manifest, v104SourceSha, {
+    imageDigests: v104ImageDigests,
+    agentHostCompressedPullBytes: v104AgentHostCompressedPullBytes,
+    agentHostSourceTree: v104SourceTreeSha,
+    provenanceSha256: v104ProvenanceSha256,
+  });
+  const resultObjectSha = '6'.repeat(40);
+  const resultRefName = `agentweaver-publication/${v104SourceSha}/result`;
+  let tagCommitSha = v104SourceSha;
+  const calls = [];
+  const run = (file, args) => {
+    if (file === 'git' && args[0] === 'rev-parse') return 'e'.repeat(40);
+    if (file === 'git' && args[0] === 'status') return '';
+    if (file === 'gh' && args[0] === 'api') {
+      const endpoint = args[1];
+      calls.push(endpoint);
+      if (endpoint.endsWith('/releases/tags/v1.0.4')) {
+        return JSON.stringify({ tag_name: 'v1.0.4', draft: false, prerelease: false });
+      }
+      if (endpoint.endsWith(`/git/ref/tags/${encodeURIComponent('v1.0.4')}`)) {
+        return JSON.stringify({ object: { type: 'commit', sha: tagCommitSha } });
+      }
+      if (endpoint.endsWith(`/git/ref/tags/${encodeURIComponent(resultRefName)}`)) {
+        return JSON.stringify({ object: { type: 'tag', sha: resultObjectSha } });
+      }
+      if (endpoint.endsWith(`/git/tags/${resultObjectSha}`)) {
+        return JSON.stringify({
+          tag: resultRefName,
+          object: { type: 'commit', sha: v104SourceSha },
+          message: JSON.stringify(fixture.publication),
+        });
+      }
+    }
+    assert.fail(`unexpected command: ${file} ${args.join(' ')}`);
+  };
+  assert.equal(await verifyBootstrapRelease('v1.0.4', fixture.publication, { root, run }), v104SourceSha);
+  assert.ok(calls.some((endpoint) =>
+    endpoint.endsWith(`/git/ref/tags/${encodeURIComponent(resultRefName)}`)));
+  tagCommitSha = 'f'.repeat(40);
+  await assert.rejects(verifyBootstrapRelease('v1.0.4', fixture.publication, { root, run }),
+    /must resolve to the exact published source commit/);
+  tagCommitSha = v104SourceSha;
+  await assert.rejects(verifyBootstrapRelease('v1.0.4', {
     ...fixture.publication,
     provenanceSha256: 'f'.repeat(64),
   }, { root, run }), /differs from the immutable GitHub publication result/);
