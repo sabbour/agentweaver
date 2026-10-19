@@ -152,6 +152,50 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Authorize_PromptNoneAfterExternalLoginReusesExistingConsent()
+    {
+        await RunHappyPathAuthorizeAsync();
+        using var anonymous = _factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            BaseAddress = new Uri("https://broker.test.local"),
+        });
+        var (verifier, challenge) = Pkce.Create();
+        var promptCount = _fakeIdp.AuthorizationPrompts.Count;
+
+        var authorize = await BrokerFlowDriver.StartAuthorizeAsync(
+            anonymous, IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            "openid profile email api.read offline_access", challenge, "S256",
+            state: "silent-external-state", prompt: "none");
+        Assert.Equal(HttpStatusCode.Redirect, authorize.StatusCode);
+
+        var external = await _fakeIdpClient.GetAsync(authorize.Headers.Location);
+        Assert.Equal(HttpStatusCode.Redirect, external.StatusCode);
+        Assert.Equal(promptCount + 1, _fakeIdp.AuthorizationPrompts.Count);
+        Assert.Equal("none", _fakeIdp.AuthorizationPrompts.Last());
+        Assert.Equal("form_post", _fakeIdp.AuthorizationResponseModes.Last());
+
+        var callback = await anonymous.GetAsync(external.Headers.Location);
+        Assert.Equal(HttpStatusCode.Redirect, callback.StatusCode);
+        var resumed = await anonymous.GetAsync(callback.Headers.Location);
+        Assert.Equal(HttpStatusCode.Redirect, resumed.StatusCode);
+        var completed = await anonymous.GetAsync(resumed.Headers.Location);
+
+        Assert.Equal(HttpStatusCode.Redirect, completed.StatusCode);
+        var location = completed.Headers.Location!;
+        var query = QueryHelpers.ParseQuery(location.Query);
+        Assert.Equal(IdentityBrokerWebApplicationFactory.TestClientRedirectUri, location.GetLeftPart(UriPartial.Path));
+        Assert.False(string.IsNullOrWhiteSpace(query["code"].ToString()));
+        Assert.Equal("silent-external-state", query["state"].ToString());
+        var tokens = await BrokerFlowDriver.ExchangeCodeForTokensAsync(
+            _broker, IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            query["code"].ToString(), verifier);
+        Assert.False(string.IsNullOrWhiteSpace(tokens.GetProperty("access_token").GetString()));
+    }
+
+    [Fact]
     public async Task Authorize_PromptNoneWithoutMatchingConsentReturnsConsentRequiredWithoutCreatingConsent()
     {
         var (_, challenge) = Pkce.Create();
@@ -187,6 +231,51 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
             .GetRequiredService<IdentityBrokerDbContext>().PendingAuthorizations.LongCountAsync());
     }
 
+    [Fact]
+    public async Task Authorize_PromptNoneAfterExternalLoginWithoutConsentReturnsConsentRequired()
+    {
+        using var anonymous = _factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            BaseAddress = new Uri("https://broker.test.local"),
+        });
+        var (_, challenge) = Pkce.Create();
+
+        var authorize = await BrokerFlowDriver.StartAuthorizeAsync(
+            anonymous, IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            "openid api.read", challenge, "S256",
+            state: "silent-external-state", prompt: "none");
+        Assert.Equal(HttpStatusCode.Redirect, authorize.StatusCode);
+
+        var external = await _fakeIdpClient.GetAsync(authorize.Headers.Location);
+        Assert.Equal(HttpStatusCode.Redirect, external.StatusCode);
+        Assert.Equal("none", _fakeIdp.AuthorizationPrompts.Last());
+        Assert.Equal("form_post", _fakeIdp.AuthorizationResponseModes.Last());
+
+        var callback = await anonymous.GetAsync(external.Headers.Location);
+        Assert.Equal(HttpStatusCode.Redirect, callback.StatusCode);
+        var resumed = await anonymous.GetAsync(callback.Headers.Location);
+        Assert.Equal(HttpStatusCode.Redirect, resumed.StatusCode);
+        var completed = await anonymous.GetAsync(resumed.Headers.Location);
+
+        Assert.Equal(HttpStatusCode.Redirect, completed.StatusCode);
+        var location = completed.Headers.Location!;
+        var query = QueryHelpers.ParseQuery(location.Query);
+        Assert.Equal(IdentityBrokerWebApplicationFactory.TestClientRedirectUri, location.GetLeftPart(UriPartial.Path));
+        Assert.Equal("consent_required", query["error"].ToString());
+        Assert.Equal("silent-external-state", query["state"].ToString());
+        using var verification = _factory.Services.CreateScope();
+        var db = verification.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();
+        var authorizations = verification.ServiceProvider.GetRequiredService<IOpenIddictAuthorizationManager>();
+        Assert.Empty(await authorizations.FindAsync(
+            subject: null, client: null, status: Statuses.Valid, type: AuthorizationTypes.Permanent,
+            scopes: null, cancellationToken: default).ToListAsync());
+        Assert.Empty(await db.PendingAuthorizations
+            .Where(pending => pending.SubjectUserId != null && pending.ConsumedAt == null)
+            .ToListAsync());
+    }
+
     [Theory]
     [InlineData("login_required", "login_required")]
     [InlineData("consent_required", "consent_required")]
@@ -215,7 +304,16 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.Redirect, external.StatusCode);
         Assert.Equal("none", _fakeIdp.AuthorizationPrompts.Last());
 
-        var callback = await anonymous.GetAsync(external.Headers.Location);
+        var externalCallbackUri = new Uri(new Uri("https://broker.test.local"), external.Headers.Location!);
+        var callbackQuery = QueryHelpers.ParseQuery(externalCallbackUri.Query);
+        Assert.Equal("form_post", _fakeIdp.AuthorizationResponseModes.Last());
+        var callback = await anonymous.PostAsync(
+            externalCallbackUri.GetLeftPart(UriPartial.Path),
+            new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["error"] = callbackQuery["error"].ToString(),
+                ["state"] = callbackQuery["state"].ToString(),
+            }));
         Assert.Equal(HttpStatusCode.Redirect, callback.StatusCode);
         var completed = await anonymous.GetAsync(callback.Headers.Location);
         Assert.Equal(HttpStatusCode.Redirect, completed.StatusCode);

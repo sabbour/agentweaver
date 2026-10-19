@@ -28,6 +28,8 @@ public sealed class PendingAuthorization
 
     public string? Nonce { get; set; }
 
+    public bool PromptNone { get; set; }
+
     /// <summary>Untrusted authorization selectors, later checked against active Identity grants.</summary>
     public string? ProjectId { get; set; }
 
