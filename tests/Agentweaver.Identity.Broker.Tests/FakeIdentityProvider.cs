@@ -34,6 +34,7 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
     public List<string> SensitiveValues { get; } = [];
     public List<(bool HasClientSecret, string? ClientSecret, bool HasCodeVerifier)> TokenRequests { get; } = [];
     public List<string?> AuthorizationPrompts { get; } = [];
+    public List<string?> AuthorizationResponseModes { get; } = [];
 
     public IdTokenTampering Tampering { get; set; } = IdTokenTampering.None;
     public string? AuthorizationError { get; set; }
@@ -140,6 +141,7 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
         var codeChallenge = query["code_challenge"].ToString();
         var codeChallengeMethod = query["code_challenge_method"].ToString();
         AuthorizationPrompts.Add(query["prompt"].ToString() is { Length: > 0 } prompt ? prompt : null);
+        AuthorizationResponseModes.Add(query["response_mode"].ToString() is { Length: > 0 } mode ? mode : null);
 
         if (AuthorizationError is { } authorizationError)
         {

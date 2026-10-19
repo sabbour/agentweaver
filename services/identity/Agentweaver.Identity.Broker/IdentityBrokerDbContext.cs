@@ -74,6 +74,7 @@ public sealed class IdentityBrokerDbContext : DbContext
             entity.Property(pending => pending.CodeChallenge).HasMaxLength(256);
             entity.Property(pending => pending.CodeChallengeMethod).HasMaxLength(32);
             entity.Property(pending => pending.Nonce).HasMaxLength(256);
+            entity.Property(pending => pending.PromptNone).HasDefaultValue(false);
             entity.Property(pending => pending.ProjectId).HasMaxLength(256);
             entity.Property(pending => pending.RunId).HasMaxLength(256);
             entity.HasIndex(pending => pending.HandleHash).IsUnique();

@@ -67,6 +67,7 @@ public sealed class WebHostCallbackTests
         var body = await response.Content.ReadAsStringAsync();
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal("SAMEORIGIN", response.Headers.GetValues("X-Frame-Options").Single());
         Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
         Assert.Equal("no-referrer", response.Headers.GetValues("Referrer-Policy").Single());
         Assert.False(response.Headers.Contains("Access-Control-Allow-Origin"));
@@ -81,6 +82,9 @@ public sealed class WebHostCallbackTests
             StringComparison.Ordinal);
         Assert.DoesNotContain("returnUrl.search", body, StringComparison.Ordinal);
         Assert.DoesNotContain("must-not-be-embedded", body, StringComparison.Ordinal);
+
+        using var appShell = await client.GetAsync("/");
+        Assert.Equal("DENY", appShell.Headers.GetValues("X-Frame-Options").Single());
     }
 
     [Fact]

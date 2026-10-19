@@ -87,6 +87,7 @@ public static class IdentityBrokerEndpoints
                 CodeChallenge = request.CodeChallenge,
                 CodeChallengeMethod = request.CodeChallengeMethod,
                 Nonce = request.Nonce,
+                PromptNone = silent,
                 ProjectId = runBinding?.ProjectId,
                 RunId = runBinding?.RunId,
                 CreatedAt = timeProvider.GetUtcNow(),
@@ -483,13 +484,15 @@ public static class IdentityBrokerEndpoints
     /// Returns silent upstream interaction failures through the original, one-use
     /// authorization continuation. Other external authentication failures remain denied.
     /// </summary>
-    public static Task HandleExternalAuthenticationFailure(RemoteFailureContext context)
+    public static async Task HandleExternalAuthenticationFailure(RemoteFailureContext context)
     {
         context.HandleResponse();
         var properties = context.Properties;
+        var upstreamError = await ReadExternalInteractionErrorAsync(
+            context.Request, context.HttpContext.RequestAborted);
         if (properties?.Items.TryGetValue(SilentAuthorizationProperty, out var silent) == true &&
             silent == "true" &&
-            TryMapInteractionError(context.Request.Query["error"].ToString(), out var mappedError) &&
+            TryMapInteractionError(upstreamError, out var mappedError) &&
             properties.RedirectUri is { } redirectUri)
         {
             context.Response.Redirect(QueryHelpers.AddQueryString(redirectUri, "error", mappedError));
@@ -498,7 +501,19 @@ public static class IdentityBrokerEndpoints
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
         }
-        return Task.CompletedTask;
+    }
+
+    private static async Task<string?> ReadExternalInteractionErrorAsync(
+        HttpRequest request, CancellationToken cancellationToken)
+    {
+        var queryErrors = request.Query["error"];
+        if (!request.HasFormContentType)
+            return queryErrors.Count == 1 ? queryErrors[0] : null;
+
+        var formErrors = (await request.ReadFormAsync(cancellationToken).ConfigureAwait(false))["error"];
+        if (queryErrors.Count != 0 || formErrors.Count != 1)
+            return null;
+        return formErrors[0];
     }
 
     private static bool TryMapInteractionError(string? upstreamError, out string mappedError)
@@ -583,6 +598,7 @@ public static class IdentityBrokerEndpoints
             ["code_challenge"] = pending.CodeChallenge,
             ["code_challenge_method"] = pending.CodeChallengeMethod,
             ["nonce"] = pending.Nonce,
+            ["prompt"] = pending.PromptNone ? "none" : null,
             [SecretRedemptionEndpoints.ProjectIdClaim] = pending.ProjectId,
             [SecretRedemptionEndpoints.RunIdClaim] = pending.RunId,
         };

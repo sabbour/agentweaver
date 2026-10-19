@@ -92,6 +92,8 @@ app.MapGet("/auth/github/copilot-app/callback", async context =>
 
 app.MapGet("/auth/callback", async context =>
 {
+    // Silent authorization relays only through this same-origin callback frame.
+    context.Response.Headers["X-Frame-Options"] = "SAMEORIGIN";
     context.Response.Headers["Cache-Control"] = "no-store";
     context.Response.Headers["Referrer-Policy"] = "no-referrer";
     context.Response.ContentType = "text/html; charset=utf-8";

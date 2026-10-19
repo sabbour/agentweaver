@@ -196,6 +196,11 @@ namespace Agentweaver.Identity.Broker.Migrations
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)");
 
+                    b.Property<bool>("PromptNone")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
                     b.Property<string>("RedirectUri")
                         .IsRequired()
                         .HasMaxLength(2048)
