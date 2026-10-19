@@ -97,6 +97,22 @@ The consent screen lists the scopes requested by the registered client.
 See [Identity Broker scopes](./identity-scopes.md) for their meanings and the
 authorization checks behind the Agentweaver scopes.
 
+## Restore sign-in after a reload
+
+Access and refresh tokens stay in memory. After a successful sign-in, the
+current tab stores a non-secret marker in `sessionStorage`. If that marker is
+present after a reload, the client makes one hidden-frame authorization request
+with `prompt=none` and PKCE. The Broker returns an authorization code only when
+the same registered client already has valid consent for the requested scopes.
+The silent request does not show a consent screen or create or extend consent.
+
+If the Broker or identity provider needs user interaction, the client clears
+the marker and the pending PKCE transaction, then shows the normal sign-in
+screen. It does not retry silently until the user signs in again. Signing out
+also clears the marker. The marker does not contain tokens, and the client does
+not put access or refresh tokens in browser storage, cookies, or the URL. The
+authorization code remains in the standard callback URL for the code exchange.
+
 ## Configure browser origins
 
 Gateway and Broker CORS are separate. Set `Gateway:WebOrigin` to the Web

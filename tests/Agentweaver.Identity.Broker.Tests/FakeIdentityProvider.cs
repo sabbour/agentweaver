@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.IdentityModel.Tokens;
@@ -32,8 +33,10 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
     private readonly Dictionary<string, PendingCode> _codes = new();
     public List<string> SensitiveValues { get; } = [];
     public List<(bool HasClientSecret, string? ClientSecret, bool HasCodeVerifier)> TokenRequests { get; } = [];
+    public List<string?> AuthorizationPrompts { get; } = [];
 
     public IdTokenTampering Tampering { get; set; } = IdTokenTampering.None;
+    public string? AuthorizationError { get; set; }
 
     public string AuthorityUri => _authority;
 
@@ -136,6 +139,19 @@ public sealed class FakeIdentityProvider : IAsyncDisposable
         var nonce = query["nonce"].ToString();
         var codeChallenge = query["code_challenge"].ToString();
         var codeChallengeMethod = query["code_challenge_method"].ToString();
+        AuthorizationPrompts.Add(query["prompt"].ToString() is { Length: > 0 } prompt ? prompt : null);
+
+        if (AuthorizationError is { } authorizationError)
+        {
+            var errorLocation = QueryHelpers.AddQueryString(redirectUri,
+                new Dictionary<string, string?>
+                {
+                    ["error"] = authorizationError,
+                    ["state"] = state,
+                });
+            context.Response.Redirect(errorLocation);
+            return;
+        }
 
         var code = Guid.NewGuid().ToString("N");
         SensitiveValues.Add(code);

@@ -124,6 +124,109 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Authorize_PromptNone_ReusesExistingConsentWithoutExternalInteraction()
+    {
+        await RunHappyPathAuthorizeAsync();
+        var promptCount = _fakeIdp.AuthorizationPrompts.Count;
+        var (verifier, challenge) = Pkce.Create();
+
+        var response = await BrokerFlowDriver.StartAuthorizeAsync(
+            _broker, IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            "openid profile email api.read offline_access", challenge, "S256",
+            state: "silent-state", nonce: "silent-nonce", prompt: "none");
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        var location = response.Headers.Location!;
+        var query = QueryHelpers.ParseQuery(location.Query);
+        Assert.Equal("silent-state", query["state"].ToString());
+        Assert.False(string.IsNullOrWhiteSpace(query["code"].ToString()));
+        Assert.Equal(IdentityBrokerWebApplicationFactory.TestClientRedirectUri, location.GetLeftPart(UriPartial.Path));
+        Assert.Equal(promptCount, _fakeIdp.AuthorizationPrompts.Count);
+
+        var tokens = await BrokerFlowDriver.ExchangeCodeForTokensAsync(
+            _broker, IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            query["code"].ToString(), verifier);
+        Assert.False(string.IsNullOrWhiteSpace(tokens.GetProperty("access_token").GetString()));
+    }
+
+    [Fact]
+    public async Task Authorize_PromptNoneWithoutMatchingConsentReturnsConsentRequiredWithoutCreatingConsent()
+    {
+        var (_, challenge) = Pkce.Create();
+        await BrokerFlowDriver.BeginConsentAsync(
+            _broker, _fakeIdpClient, IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri, "openid api.read", challenge);
+        long pendingCount;
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<IdentityBrokerDbContext>();
+            pendingCount = await db.PendingAuthorizations.LongCountAsync();
+        }
+
+        var (_, silentChallenge) = Pkce.Create();
+        var response = await BrokerFlowDriver.StartAuthorizeAsync(
+            _broker, IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            "openid api.read offline_access", silentChallenge, "S256",
+            state: "consent-state", prompt: "none");
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        var location = response.Headers.Location!;
+        var query = QueryHelpers.ParseQuery(location.Query);
+        Assert.Equal("consent_required", query["error"].ToString());
+        Assert.Equal("consent-state", query["state"].ToString());
+        Assert.Equal(IdentityBrokerWebApplicationFactory.TestClientRedirectUri, location.GetLeftPart(UriPartial.Path));
+        using var verification = _factory.Services.CreateScope();
+        var authorizations = verification.ServiceProvider.GetRequiredService<IOpenIddictAuthorizationManager>();
+        Assert.Empty(await authorizations.FindAsync(
+            subject: null, client: null, status: Statuses.Valid, type: AuthorizationTypes.Permanent,
+            scopes: null, cancellationToken: default).ToListAsync());
+        Assert.Equal(pendingCount, await verification.ServiceProvider
+            .GetRequiredService<IdentityBrokerDbContext>().PendingAuthorizations.LongCountAsync());
+    }
+
+    [Theory]
+    [InlineData("login_required", "login_required")]
+    [InlineData("consent_required", "consent_required")]
+    [InlineData("interaction_required", "interaction_required")]
+    [InlineData("account_selection_required", "interaction_required")]
+    [InlineData("session_selection_required", "interaction_required")]
+    public async Task Authorize_PromptNoneForwardsPromptAndMapsUpstreamInteractionErrors(
+        string upstreamError, string expectedError)
+    {
+        _fakeIdp.AuthorizationError = upstreamError;
+        using var anonymous = _factory.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            BaseAddress = new Uri("https://broker.test.local"),
+        });
+        var (_, challenge) = Pkce.Create();
+
+        var authorize = await BrokerFlowDriver.StartAuthorizeAsync(
+            anonymous, IdentityBrokerWebApplicationFactory.TestClientId,
+            IdentityBrokerWebApplicationFactory.TestClientRedirectUri,
+            "openid api.read", challenge, "S256",
+            state: "upstream-state", prompt: "none");
+        Assert.Equal(HttpStatusCode.Redirect, authorize.StatusCode);
+
+        var external = await _fakeIdpClient.GetAsync(authorize.Headers.Location);
+        Assert.Equal(HttpStatusCode.Redirect, external.StatusCode);
+        Assert.Equal("none", _fakeIdp.AuthorizationPrompts.Last());
+
+        var callback = await anonymous.GetAsync(external.Headers.Location);
+        Assert.Equal(HttpStatusCode.Redirect, callback.StatusCode);
+        var completed = await anonymous.GetAsync(callback.Headers.Location);
+        Assert.Equal(HttpStatusCode.Redirect, completed.StatusCode);
+        var location = completed.Headers.Location!;
+        var query = QueryHelpers.ParseQuery(location.Query);
+        Assert.Equal(IdentityBrokerWebApplicationFactory.TestClientRedirectUri, location.GetLeftPart(UriPartial.Path));
+        Assert.Equal(expectedError, query["error"].ToString());
+        Assert.Equal("upstream-state", query["state"].ToString());
+    }
+
+    [Fact]
     public async Task ExternalLoginSupportsPublicPkceAndConfiguredConfidentialClient()
     {
         var publicConnectionString = await _postgres.CreateMigratedDatabaseAsync();

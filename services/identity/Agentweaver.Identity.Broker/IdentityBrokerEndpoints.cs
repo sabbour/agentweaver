@@ -23,6 +23,7 @@ public static class IdentityBrokerEndpoints
 {
     public const string LocalCookieScheme = "Identity.Local";
     public const string ExternalScheme = "Identity.External";
+    private const string SilentAuthorizationProperty = "agentweaver.prompt.none";
 
     /// <summary>Maps OAuth endpoints, the discovery root redirect, and broker health and identity diagnostics routes.</summary>
     public static void MapIdentityBrokerEndpoints(this IEndpointRouteBuilder app)
@@ -50,8 +51,8 @@ public static class IdentityBrokerEndpoints
 
     /// <summary>
     /// Validates requested project/run selectors and current authority before reusing an
-    /// existing authorization or creating a one-use consent transaction. An unauthenticated
-    /// request stores only a hash of its opaque resume handle.
+    /// existing authorization, completing silent authorization, or creating a one-use
+    /// consent transaction. An unauthenticated request stores only a hash of its resume handle.
     /// </summary>
     private static async Task<IResult> AuthorizeAsync(
         HttpContext context, IdentityBrokerDbContext db, IOpenIddictScopeManager scopes,
@@ -69,6 +70,7 @@ public static class IdentityBrokerEndpoints
             BrokerRunBindingAuthority.UsesProjectsAuthority(requestedScopes);
         if (usesProjectsAuthority && !HasSupportedProjectsScopes(requestedScopes))
             return Forbid(Errors.AccessDenied, "The requested project and run scopes are not supported.");
+        var silent = request.HasPromptValue("none");
 
         var local = await context.AuthenticateAsync(LocalCookieScheme);
         if (!local.Succeeded || local.Principal?.FindFirst(Claims.Subject) is not { } subjectClaim)
@@ -93,8 +95,14 @@ public static class IdentityBrokerEndpoints
             await db.SaveChangesAsync(ct);
 
             var resumeUri = $"/connect/authorize/resume?handle={Uri.EscapeDataString(handle)}";
+            var properties = new AuthenticationProperties { RedirectUri = resumeUri };
+            if (silent)
+            {
+                properties.Items[SilentAuthorizationProperty] = "true";
+                properties.Parameters["prompt"] = "none";
+            }
             return Results.Challenge(
-                new AuthenticationProperties { RedirectUri = resumeUri }, [ExternalScheme]);
+                properties, [ExternalScheme]);
         }
 
         if (!Guid.TryParseExact(subjectClaim.Value, "D", out var userId) || userId == Guid.Empty)
@@ -134,6 +142,10 @@ public static class IdentityBrokerEndpoints
         if (existing.Count > 0)
             return await SignInAsync(db, scopes, authorizations, existing[0], userId, requestedScopes,
                 runBinding, authorityKind, bindingReceipt, grantAuthority, runBindingAuthority, ct);
+        if (silent)
+            return RedirectAuthorizationError(
+                request.RedirectUri!, request.State, "consent_required",
+                "Consent is required for the requested permissions.");
 
         var consentHandle = OpaqueHandle.NewHandle();
         db.PendingAuthorizations.Add(new PendingAuthorization
@@ -166,13 +178,35 @@ public static class IdentityBrokerEndpoints
     }
 
     /// <summary>
-    /// Atomically claims an unexpired login continuation for the authenticated local user,
-    /// then restores the saved OAuth request. A missing, expired or replayed handle is rejected.
+    /// Atomically claims an unexpired login continuation or silent error for the saved OAuth
+    /// request. A missing, expired or replayed handle is rejected.
     /// </summary>
     private static async Task<IResult> ResumeAsync(
-        HttpContext context, string? handle, IdentityBrokerDbContext db,
+        HttpContext context, string? handle, string? error, IdentityBrokerDbContext db,
         TimeProvider timeProvider, CancellationToken ct)
     {
+        if (context.Request.Query.ContainsKey("error"))
+        {
+            if (context.Request.Query["error"].Count != 1 ||
+                !TryMapInteractionError(error, out var mappedError) ||
+                string.IsNullOrWhiteSpace(handle))
+                return Results.BadRequest(new { error = Errors.InvalidRequest });
+
+            var errorHash = OpaqueHandle.Hash(handle);
+            var errorNow = timeProvider.GetUtcNow();
+            var claimedError = await db.PendingAuthorizations
+                .Where(p => p.HandleHash == errorHash && p.ConsumedAt == null &&
+                    p.ExpiresAt > errorNow && p.SubjectUserId == null)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(p => p.ConsumedAt, errorNow), ct);
+            if (claimedError != 1)
+                return Results.BadRequest(new { error = Errors.InvalidRequest });
+
+            var pendingError = await db.PendingAuthorizations.AsNoTracking()
+                .SingleAsync(p => p.HandleHash == errorHash, ct);
+            return RedirectAuthorizationError(pendingError.RedirectUri, pendingError.State,
+                mappedError, InteractionErrorDescription(mappedError));
+        }
+
         var local = await context.AuthenticateAsync(LocalCookieScheme);
         if (!local.Succeeded || local.Principal?.FindFirst(Claims.Subject) is not { } subjectClaim ||
             string.IsNullOrWhiteSpace(handle))
@@ -444,6 +478,58 @@ public static class IdentityBrokerEndpoints
                 new { error = "temporarily_unavailable", error_description = "The project authorization owner is unavailable." },
                 statusCode: StatusCodes.Status503ServiceUnavailable)
             : Forbid(deniedError, "The project and run authorization is no longer active.");
+
+    /// <summary>
+    /// Returns silent upstream interaction failures through the original, one-use
+    /// authorization continuation. Other external authentication failures remain denied.
+    /// </summary>
+    public static Task HandleExternalAuthenticationFailure(RemoteFailureContext context)
+    {
+        context.HandleResponse();
+        var properties = context.Properties;
+        if (properties?.Items.TryGetValue(SilentAuthorizationProperty, out var silent) == true &&
+            silent == "true" &&
+            TryMapInteractionError(context.Request.Query["error"].ToString(), out var mappedError) &&
+            properties.RedirectUri is { } redirectUri)
+        {
+            context.Response.Redirect(QueryHelpers.AddQueryString(redirectUri, "error", mappedError));
+        }
+        else
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        }
+        return Task.CompletedTask;
+    }
+
+    private static bool TryMapInteractionError(string? upstreamError, out string mappedError)
+    {
+        mappedError = upstreamError switch
+        {
+            "login_required" => "login_required",
+            "consent_required" => "consent_required",
+            "interaction_required" or "account_selection_required" or "session_selection_required" =>
+                "interaction_required",
+            _ => string.Empty,
+        };
+        return mappedError.Length > 0;
+    }
+
+    private static string InteractionErrorDescription(string error) => error switch
+    {
+        "login_required" => "An active sign-in is required.",
+        "consent_required" => "Consent is required for the requested permissions.",
+        _ => "More sign-in interaction is required.",
+    };
+
+    private static IResult RedirectAuthorizationError(
+        string redirectUri, string? state, string error, string description) =>
+        Results.Redirect(QueryHelpers.AddQueryString(redirectUri,
+            new Dictionary<string, string?>
+            {
+                ["error"] = error,
+                ["error_description"] = description,
+                ["state"] = state,
+            }));
 
     private static async Task<bool> RequestRunBindingMatchesAsync(
         HttpRequest request,

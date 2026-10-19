@@ -145,6 +145,7 @@ vi.mock('./AuthContext', () => {
     authorize: async () => {},
     signOut: () => {},
     busy: false,
+    restoringSession: false,
     consent: null,
     error: null,
     configurationError: null,
@@ -467,7 +468,7 @@ describe('v1 web project scoping', () => {
       },
       offline_access: {
         summary: 'Lets the app renew your sign-in while the page is open.',
-        tooltip: 'The Web app keeps sign-in tokens in memory. Reloading the page clears them, so you may need to sign in again.',
+        tooltip: 'The Web app keeps tokens in memory. After a reload, it tries one silent sign-in in this tab.',
         anchor: 'offline-access',
       },
       'api.read': {
@@ -744,6 +745,34 @@ describe('v1 web project scoping', () => {
         Object.defineProperty(window, 'opener', previousOpener);
       else
         Reflect.deleteProperty(window, 'opener');
+    }
+  });
+
+  it('relays an identity callback from a hidden same-origin frame to its parent', async () => {
+    const previousParent = Object.getOwnPropertyDescriptor(window, 'parent');
+    const parent = { postMessage: vi.fn() } as unknown as Window;
+    Object.defineProperty(window, 'parent', { configurable: true, value: parent });
+    window.__AGENTWEAVER_IDENTITY_CALLBACK__ =
+      '?code=one-time-code&state=state-value&iss=https%3A%2F%2Fidentity.example.test%2F';
+    window.history.replaceState({}, '', '/auth/callback');
+    try {
+      render(<App />);
+
+      await waitFor(() => expect(parent.postMessage).toHaveBeenCalledWith(
+        {
+          type: 'agentweaver.identity.callback',
+          state: 'state-value',
+          code: 'one-time-code',
+        },
+        window.location.origin,
+      ));
+      expect(mocks.authProvider).not.toHaveBeenCalled();
+    } finally {
+      window.__AGENTWEAVER_IDENTITY_CALLBACK__ = undefined;
+      if (previousParent)
+        Object.defineProperty(window, 'parent', previousParent);
+      else
+        Reflect.deleteProperty(window, 'parent');
     }
   });
 

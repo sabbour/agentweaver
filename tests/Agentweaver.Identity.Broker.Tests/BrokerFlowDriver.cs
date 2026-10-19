@@ -16,7 +16,7 @@ public static class BrokerFlowDriver
     public static async Task<HttpResponseMessage> StartAuthorizeAsync(
         HttpClient broker, string clientId, string redirectUri, string scope,
         string? codeChallenge, string? codeChallengeMethod, string state = "state-1", string nonce = "nonce-1",
-        string? projectId = null, string? runId = null)
+        string? projectId = null, string? runId = null, string? prompt = null)
     {
         var query = new Dictionary<string, string?>
         {
@@ -31,6 +31,7 @@ public static class BrokerFlowDriver
         if (codeChallengeMethod is not null) query["code_challenge_method"] = codeChallengeMethod;
         if (projectId is not null) query["project_id"] = projectId;
         if (runId is not null) query["run_id"] = runId;
+        if (prompt is not null) query["prompt"] = prompt;
 
         var url = QueryHelpers.AddQueryString("/connect/authorize", query);
         return await broker.GetAsync(url);

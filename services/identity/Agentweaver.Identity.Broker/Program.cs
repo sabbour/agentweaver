@@ -394,12 +394,7 @@ builder.Services
 
                 context.Principal = localPrincipal;
             },
-            OnRemoteFailure = context =>
-            {
-                context.HandleResponse();
-                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                return Task.CompletedTask;
-            },
+            OnRemoteFailure = IdentityBrokerEndpoints.HandleExternalAuthenticationFailure,
         };
     });
 

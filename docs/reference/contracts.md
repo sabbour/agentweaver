@@ -641,8 +641,8 @@ These routes belong to the unpublished Identity broker candidate. They are servi
 | Method and path | Contract |
 | --- | --- |
 | `GET /` | Redirect to `/.well-known/openid-configuration` with HTTP 302. |
-| `GET /connect/authorize` | OpenIddict authorization request and external sign-in or consent prompt. |
-| `GET /connect/authorize/resume` | Authenticated, single-use external sign-in continuation. |
+| `GET /connect/authorize` | OpenIddict authorization request and external sign-in or consent prompt. Supports `prompt=none`: it never displays sign-in or consent UI, and returns an authorization code only when the same client already has valid consent for the requested scopes. |
+| `GET /connect/authorize/resume` | Single-use external sign-in continuation; completes a silent interaction error before returning it to the registered redirect URI. |
 | `POST /connect/consent` | Consent handle, approval, optional scope subset, local cookie, and `X-CSRF-TOKEN`. |
 | `POST /connect/token` | Form-encoded authorization-code or refresh exchange. |
 | `GET /diagnostics/whoami` | Bearer validation diagnostic. It is not an audience acceptance test. |
@@ -674,6 +674,14 @@ expose the selection code or any credential value.
 
 The service has no secret-grant administration HTTP endpoint. The browser consent
 experience belongs to Web; these routes provide its broker protocol.
+
+For a valid `prompt=none` request, the Broker forwards `prompt=none` to the
+external identity provider when it needs to establish a local session. It maps
+upstream `login_required`, `consent_required`, and `interaction_required`
+responses to those same OpenID Connect error codes. A missing or revoked
+authorization returns `consent_required`. These errors go only to the
+registered redirect URI and include the original `state`; silent authorization
+does not create or extend a permanent authorization.
 
 `IdentityBroker:WebOrigin` is an optional, origin-only HTTPS value, required when
 `IdentityBroker:GitHubRepoApp` is configured. It has no path, credentials, query, or
