@@ -53,8 +53,12 @@ const v102SourceSha = '3c834c12cf1e66bf385b3833a7f0a5cdd5782f8a';
 const v102Manifest = JSON.parse(execFileSync('git', [
   'show', `${v102SourceSha}:releases/foundation.json`,
 ], { cwd: root, encoding: 'utf8' }));
-/** The provider-catalog merge SHA is distinct from the v1.0.2 release source SHA. */
-const v102ProviderCatalogSourceSha = 'b002620bd8cb53a971b6d5b082d6ab43dbf11fb7';
+const v103SourceSha = 'acfa2732dba0728adfeaf5754c8e9af9118f2482';
+const v103Manifest = JSON.parse(execFileSync('git', [
+  'show', `${v103SourceSha}:releases/foundation.json`,
+], { cwd: root, encoding: 'utf8' }));
+/** The provider-catalog review merge SHA is distinct from the release source SHA. */
+const providerCatalogSourceSha = 'b002620bd8cb53a971b6d5b082d6ab43dbf11fb7';
 /** Image digests from the immutable publication receipt bound to v102SourceSha. */
 const v102ImageDigests = Object.freeze({
   'Agentweaver.AgentHost': 'sha256:aa5baafb79ca1210188053834ededebe708cc27f167e5b24bab6633199e6245e',
@@ -70,6 +74,21 @@ const v102ImageDigests = Object.freeze({
 });
 /** AgentHost's receipt-measured linux/amd64 compressed image size in bytes. */
 const v102AgentHostCompressedPullBytes = 321483218;
+/** Image digests from the immutable publication receipt bound to v103SourceSha. */
+const v103ImageDigests = Object.freeze({
+  'Agentweaver.AgentHost': 'sha256:1b551cbb274a820c65a991813e490583b21615b479cd1fc41effe09da34d5972',
+  'Agentweaver.Identity.Broker': 'sha256:b462827eee091f6e4351681820041a516d0e2f2e7630bfef134c9e13d96fdea4',
+  'Agentweaver.EventsAndSessions': 'sha256:d0c38a8519348a478a5c48d9d0a922677e4499a25314f5b72cf7dc1d3329dd0f',
+  'Agentweaver.Gateway': 'sha256:2df9bc2cccbf762887e4a0ccbb1187ee8e65601e0d76c43f73eb39e068579085',
+  'Agentweaver.Mcp': 'sha256:7529591ce6c71d4f1e1a0ec7889718b95217c166f93f88906880a4ea7397a779',
+  'Agentweaver.Web': 'sha256:11a3a57e175a6c5361f1d84fe5be24ac8f7716f9666d25e4e2c19d990e5944e2',
+  'Agentweaver.Orchestrator': 'sha256:fad8b3217ccaf680fb9fe5b750ca4e0dc67a8d2f4584b9b05795b35832eef771',
+  'Agentweaver.Environment': 'sha256:460b98f9970fcd1cf871c0f969e407416457f074f7782cae2919fb881df2230b',
+  'Agentweaver.Knowledge': 'sha256:f42829d3f93783f020f2893f439fcd25dfdfed5fa3f6973c783bcc8a752940d5',
+  'Agentweaver.Projects.Config': 'sha256:0775465f17a0cf339694c8090756fce9063d119d0ceac5134f94d700a1f9dc45',
+});
+/** AgentHost's receipt-measured linux/amd64 compressed image size in bytes. */
+const v103AgentHostCompressedPullBytes = 321483310;
 function sourceFixtureRoot(sourceSha, manifest, prefix) {
   const fixtureRoot = mkdtempSync(path.join(tmpdir(), prefix));
   for (const file of [...manifest.components.map(component => component.project), 'apps/web/package-lock.json']) {
@@ -123,10 +142,12 @@ function completePreprovisioningRuntimeInputs(kubernetesRoot) {
 const p0Root = sourceFixtureRoot(p0SourceSha, p0Manifest, 'agentweaver-v1-0-0-release-tests-');
 const v101Root = sourceFixtureRoot(v101SourceSha, v101Manifest, 'agentweaver-v1-0-1-release-tests-');
 const v102Root = sourceFixtureRoot(v102SourceSha, v102Manifest, 'agentweaver-v1-0-2-release-tests-');
+const v103Root = sourceFixtureRoot(v103SourceSha, v103Manifest, 'agentweaver-v1-0-3-release-tests-');
 after(() => {
   rmSync(p0Root, { recursive: true, force: true });
   rmSync(v101Root, { recursive: true, force: true });
   rmSync(v102Root, { recursive: true, force: true });
+  rmSync(v103Root, { recursive: true, force: true });
 });
 const sourceSha = 'a'.repeat(40);
 const target = {
@@ -583,9 +604,9 @@ test('pre-acceptance mode is explicit and requires its exact v1.0.0 inputs', () 
   assert.throws(() => parseArgs([...bootstrapArgsFor(), '--runtime-manifest', 'runtime.json']),
     /unknown argument "--runtime-manifest"/);
   const wrongTag = bootstrapArgsFor();
-  wrongTag[wrongTag.indexOf('v1.0.0')] = 'v1.0.3';
+  wrongTag[wrongTag.indexOf('v1.0.0')] = 'v1.0.4';
   assert.throws(() => parseArgs(wrongTag),
-    /limited to the exact v1\.0\.0 and v1\.0\.1 and v1\.0\.2/);
+    /limited to the exact v1\.0\.0 and v1\.0\.1 and v1\.0\.2 and v1\.0\.3/);
 });
 
 test('v1.0.1 pre-acceptance requires the normal publication inputs and rejects completion proofs', () => {
@@ -759,16 +780,34 @@ test('v1.0.1 pre-acceptance dry-run uses the mixed source-bound draft and normal
     ['apply', '--dry-run=client', '-k', path.join('deploy', 'k8s')]);
 });
 
-test('v1.0.2 pre-acceptance dry-run uses its exact mixed-version source and publication digests', async () => {
+test('v1.0.2 pre-acceptance rejects its receipt when checked-in pins target a newer publication', async () => {
   const fixture = normalBootstrapFixture(v102Manifest, v102SourceSha, {
     imageDigests: v102ImageDigests,
     agentHostCompressedPullBytes: v102AgentHostCompressedPullBytes,
   });
-  const kubernetesRoot = path.join(v102Root, 'deploy', 'k8s');
+  const dependencies = bootstrapDependencies(fixture, {
+    root: v102Root,
+    sourceSha: v102SourceSha,
+    rewriteKustomizeFixture: false,
+  });
+  await assert.rejects(
+    deployRelease({
+      argv: normalBootstrapArgsFor({}, 'v1.0.2', providerCatalogSourceSha),
+    }, dependencies),
+    /checked-in P0 Kustomize images and runtime pins must match the exact publication receipt/,
+  );
+});
+
+test('v1.0.3 pre-acceptance dry-run uses its exact source, checked-in pins, and published measurements', async () => {
+  const fixture = normalBootstrapFixture(v103Manifest, v103SourceSha, {
+    imageDigests: v103ImageDigests,
+    agentHostCompressedPullBytes: v103AgentHostCompressedPullBytes,
+  });
+  const kubernetesRoot = path.join(root, 'deploy', 'k8s');
   const kustomization = parseYaml(readFileSync(path.join(kubernetesRoot, 'kustomization.yaml'), 'utf8'));
   const pins = new Map(kustomization.images.map(({ name, digest }) => [name, digest]));
   assert.equal(pins.size, 10);
-  for (const [componentId, digest] of Object.entries(v102ImageDigests)) {
+  for (const [componentId, digest] of Object.entries(v103ImageDigests)) {
     assert.equal(
       pins.get(`ghcr.io/sabbour/${componentImageRepository(componentId)}`),
       digest,
@@ -782,38 +821,43 @@ test('v1.0.2 pre-acceptance dry-run uses its exact mixed-version source and publ
     .map(({ name, value }) => [name, value]));
   assert.equal(
     environmentValues.get('Environment__Sandbox__AgentSandbox__ContainerImageCompressedPullBytes'),
-    String(v102AgentHostCompressedPullBytes),
+    String(v103AgentHostCompressedPullBytes),
   );
   const agentHostConfig = parseYaml(readFileSync(path.join(
     kubernetesRoot, 'profiles', 'agenthost', 'runtime-config.example.yaml',
   ), 'utf8'));
   const agentHostImage = JSON.parse(agentHostConfig.data['appsettings.json']).AgentHost.Image;
   assert.deepEqual(agentHostImage, {
-    Digest: v102ImageDigests['Agentweaver.AgentHost'],
+    Digest: v103ImageDigests['Agentweaver.AgentHost'],
     Platform: 'linux/amd64',
-    CompressedPullBytes: v102AgentHostCompressedPullBytes,
+    CompressedPullBytes: v103AgentHostCompressedPullBytes,
   });
+  const measured = fixture.publication.published.find(({ id }) => id === 'Agentweaver.AgentHost')
+    .preparedOciMeasurement;
+  assert.equal(measured.sourceSha, v103SourceSha);
+  assert.equal(measured.image.digest, v103ImageDigests['Agentweaver.AgentHost']);
+  assert.equal(measured.image.compressedPullBytes, v103AgentHostCompressedPullBytes);
   const dependencies = bootstrapDependencies(fixture, {
-    root: v102Root,
-    sourceSha: v102SourceSha,
-    // Exercise the checked-in v1.0.2 receipt pins; synthetic rewriting would mask drift.
+    root: v103Root,
+    sourceSha: v103SourceSha,
+    // Verify the actual checked-in Kustomize bundle; synthetic rewriting would mask drift.
     rewriteKustomizeFixture: false,
   });
   const result = await deployRelease({
-    argv: normalBootstrapArgsFor({}, 'v1.0.2', v102ProviderCatalogSourceSha),
+    argv: normalBootstrapArgsFor({}, 'v1.0.3', providerCatalogSourceSha),
   }, dependencies);
   const versions = new Set(fixture.manifest.components
     .filter(({ id }) => id !== 'Agentweaver.FoundationProbe')
     .map(({ version }) => version));
   assert.ok(versions.size > 1);
   assert.equal(result.resultType, 'pre-acceptance');
-  assert.equal(result.sourceSha, v102SourceSha);
+  assert.equal(result.sourceSha, v103SourceSha);
   assert.equal(result.dryRun, true);
   assert.equal(result.renderedResources, 61);
   assert.equal('acceptedRelease' in result, false);
   assert.equal(
     result.perSandboxAgentHost,
-    `ghcr.io/sabbour/${componentImageRepository('Agentweaver.AgentHost')}@${v102ImageDigests['Agentweaver.AgentHost']}`,
+    `ghcr.io/sabbour/${componentImageRepository('Agentweaver.AgentHost')}@${v103ImageDigests['Agentweaver.AgentHost']}`,
   );
   assert.deepEqual(
     result.services.map(({ id, image }) => [id, image]),
@@ -831,12 +875,11 @@ test('v1.0.2 pre-acceptance rejects changed-source and continuation receipts', a
   const dependencies = bootstrapDependencies(fixture, {
     root: v102Root,
     sourceSha: v102SourceSha,
-    rewriteKustomizeFixture: false,
   });
   fixture.publication.sourceSha = 'b'.repeat(40);
   await assert.rejects(
     deployRelease({
-      argv: normalBootstrapArgsFor({}, 'v1.0.2', v102ProviderCatalogSourceSha),
+      argv: normalBootstrapArgsFor({}, 'v1.0.2', providerCatalogSourceSha),
     }, dependencies),
     /exact source-bound v1\.0\.2 published receipt/,
   );
@@ -845,9 +888,37 @@ test('v1.0.2 pre-acceptance rejects changed-source and continuation receipts', a
   fixture.publication.continuation = { unexpected: true };
   await assert.rejects(
     deployRelease({
-      argv: normalBootstrapArgsFor({}, 'v1.0.2', v102ProviderCatalogSourceSha),
+      argv: normalBootstrapArgsFor({}, 'v1.0.2', providerCatalogSourceSha),
     }, dependencies),
     /v1\.0\.2 pre-acceptance bootstrap rejects continuation publication receipts/,
+  );
+});
+
+test('v1.0.3 pre-acceptance rejects changed-source and continuation receipts', async () => {
+  const fixture = normalBootstrapFixture(v103Manifest, v103SourceSha, {
+    imageDigests: v103ImageDigests,
+    agentHostCompressedPullBytes: v103AgentHostCompressedPullBytes,
+  });
+  const dependencies = bootstrapDependencies(fixture, {
+    root: v103Root,
+    sourceSha: v103SourceSha,
+    rewriteKustomizeFixture: false,
+  });
+  fixture.publication.sourceSha = 'b'.repeat(40);
+  await assert.rejects(
+    deployRelease({
+      argv: normalBootstrapArgsFor({}, 'v1.0.3', providerCatalogSourceSha),
+    }, dependencies),
+    /exact source-bound v1\.0\.3 published receipt/,
+  );
+
+  fixture.publication.sourceSha = v103SourceSha;
+  fixture.publication.continuation = { unexpected: true };
+  await assert.rejects(
+    deployRelease({
+      argv: normalBootstrapArgsFor({}, 'v1.0.3', providerCatalogSourceSha),
+    }, dependencies),
+    /v1\.0\.3 pre-acceptance bootstrap rejects continuation publication receipts/,
   );
 });
 
@@ -1072,6 +1143,53 @@ test('v1.0.2 verifies the exact normal publication result ref and source commit'
     /must resolve to the exact published source commit/);
   tagCommitSha = v102SourceSha;
   await assert.rejects(verifyBootstrapRelease('v1.0.2', {
+    ...fixture.publication,
+    provenanceSha256: 'f'.repeat(64),
+  }, { root, run }), /differs from the immutable GitHub publication result/);
+});
+
+test('v1.0.3 verifies the exact normal publication result ref and source commit', async () => {
+  const fixture = normalBootstrapFixture(v103Manifest, v103SourceSha, {
+    imageDigests: v103ImageDigests,
+    agentHostCompressedPullBytes: v103AgentHostCompressedPullBytes,
+  });
+  const resultObjectSha = '5'.repeat(40);
+  const resultRefName = `agentweaver-publication/${v103SourceSha}/result`;
+  let tagCommitSha = v103SourceSha;
+  const calls = [];
+  const run = (file, args) => {
+    if (file === 'git' && args[0] === 'rev-parse') return 'e'.repeat(40);
+    if (file === 'git' && args[0] === 'status') return '';
+    if (file === 'gh' && args[0] === 'api') {
+      const endpoint = args[1];
+      calls.push(endpoint);
+      if (endpoint.endsWith('/releases/tags/v1.0.3')) {
+        return JSON.stringify({ tag_name: 'v1.0.3', draft: false, prerelease: false });
+      }
+      if (endpoint.endsWith(`/git/ref/tags/${encodeURIComponent('v1.0.3')}`)) {
+        return JSON.stringify({ object: { type: 'commit', sha: tagCommitSha } });
+      }
+      if (endpoint.endsWith(`/git/ref/tags/${encodeURIComponent(resultRefName)}`)) {
+        return JSON.stringify({ object: { type: 'tag', sha: resultObjectSha } });
+      }
+      if (endpoint.endsWith(`/git/tags/${resultObjectSha}`)) {
+        return JSON.stringify({
+          tag: resultRefName,
+          object: { type: 'commit', sha: v103SourceSha },
+          message: JSON.stringify(fixture.publication),
+        });
+      }
+    }
+    assert.fail(`unexpected command: ${file} ${args.join(' ')}`);
+  };
+  assert.equal(await verifyBootstrapRelease('v1.0.3', fixture.publication, { root, run }), v103SourceSha);
+  assert.ok(calls.some((endpoint) =>
+    endpoint.endsWith(`/git/ref/tags/${encodeURIComponent(resultRefName)}`)));
+  tagCommitSha = 'f'.repeat(40);
+  await assert.rejects(verifyBootstrapRelease('v1.0.3', fixture.publication, { root, run }),
+    /must resolve to the exact published source commit/);
+  tagCommitSha = v103SourceSha;
+  await assert.rejects(verifyBootstrapRelease('v1.0.3', {
     ...fixture.publication,
     provenanceSha256: 'f'.repeat(64),
   }, { root, run }), /differs from the immutable GitHub publication result/);

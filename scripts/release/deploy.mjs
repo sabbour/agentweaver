@@ -194,6 +194,12 @@ const BOOTSTRAP_RELEASES = Object.freeze({
     continuation: false,
     allowLightweightTag: true,
   }),
+  // Pin v1.0.3 to this source SHA and its immutable normal publication; reject continuation receipts.
+  'v1.0.3': Object.freeze({
+    sourceSha: 'acfa2732dba0728adfeaf5754c8e9af9118f2482',
+    continuation: false,
+    allowLightweightTag: true,
+  }),
 });
 /** Maps each service to all required Cilium policy names, including shared egress policies. */
 export const SERVICE_NETWORK_POLICY_NAMES = Object.freeze({
@@ -2343,11 +2349,12 @@ Usage:
   npm run release:deploy-bootstrap -- v1.0.0 --manifest releases/foundation.json --publication <publication.json> --completion <continuation.json> --subscription-id <id> --tenant-id <id> --resource-group agentweaver --cluster agentweaver-aks --namespace agentweaver --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
   npm run release:deploy-bootstrap -- v1.0.1 --manifest releases/foundation.json --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group agentweaver --cluster agentweaver-aks --namespace agentweaver --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
   npm run release:deploy-bootstrap -- v1.0.2 --manifest releases/foundation.json --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group agentweaver --cluster agentweaver-aks --namespace agentweaver --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
+  npm run release:deploy-bootstrap -- v1.0.3 --manifest releases/foundation.json --publication <publication.json> --subscription-id <id> --tenant-id <id> --resource-group agentweaver --cluster agentweaver-aks --namespace agentweaver --node-min 2 --node-max 3 --provider-catalog-configmap <name> --provider-catalog-source-commit <sha> [--execute] [--resume]
 
 The default is a read-only pre-acceptance dry-run. v1.0.0 requires its immutable
-continuation proof; v1.0.1 and v1.0.2 accept only their exact source-bound normal
-publication receipts and reject --completion. All require the tracked draft
-manifest and never create release acceptance evidence.
+continuation proof; v1.0.1, v1.0.2, and v1.0.3 accept only their exact
+source-bound normal publication receipts and reject --completion. All require
+the tracked draft manifest and never create release acceptance evidence.
 `;
 }
 

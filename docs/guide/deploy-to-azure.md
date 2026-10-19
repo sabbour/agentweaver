@@ -357,9 +357,9 @@ kubectl wait --for=condition=complete job/identity-broker-migration `
    workload apply.
 
    ```powershell
-   npm run release:deploy-bootstrap -- v1.0.1 `
+   npm run release:deploy-bootstrap -- v1.0.3 `
      --manifest releases/foundation.json `
-     --publication <v1.0.1-publication.json> `
+     --publication artifacts/release/publish/publication.json `
      --subscription-id <subscription-id> `
      --tenant-id <tenant-id> `
      --resource-group agentweaver `
@@ -372,8 +372,11 @@ kubectl wait --for=condition=complete job/identity-broker-migration `
      --execute
    ```
 
-   Use the exact reviewed receipt and catalog values for the selected release.
-   See [local v1 release deployment](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#local-v1-release-deployment)
+   For v1.0.3, download `publication.json` from artifact
+   `v1-publication-receipt-acfa2732dba0728adfeaf5754c8e9af9118f2482-1`
+   produced by release-pack run `39183904644`. Verify its source SHA and use
+   the exact reviewed provider-catalog values; do not rebuild or substitute
+   image tags. See [local v1 release deployment](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v103-pre-acceptance-bootstrap)
    for the full admission contract.
 
 4. After the release bootstrap succeeds and the product Services exist, run
