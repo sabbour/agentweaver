@@ -583,6 +583,7 @@ owner-scope authorization, not browser local cookies.
 
 | Method | Full path | Auth | Purpose |
 | --- | --- | --- | --- |
+| GET | `/` | Public | Redirect to `/.well-known/openid-configuration` with HTTP 302. |
 | GET | `/connect/authorize` | Registered OAuth client request; local session or external challenge | Start PKCE authorization and consent. |
 | GET | `/connect/authorize/resume` | Local session and one-use resume handle | Resume saved authorization. |
 | POST | `/connect/consent` | Browser; exact pending consent | Approve or decline requested scopes. |
