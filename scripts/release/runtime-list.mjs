@@ -57,6 +57,10 @@ export const PROVIDER_ADAPTER_VERSION_RUNTIME_INPUTS = Object.freeze([
 const TARGET_NAMESPACE = 'agentweaver';
 const TLS_MODE = 0o440;
 const BACKEND_TLS_CA_CONFIGMAP = 'service-backend-ca';
+/** Static service deployments that make HTTPS calls to internal owner APIs. */
+export const BACKEND_CA_WORKLOADS = Object.freeze([
+  'environment', 'events-and-sessions', 'gateway', 'identity-broker', 'knowledge', 'mcp', 'orchestrator',
+]);
 const ENVIRONMENT_CILIUM_CONFIGMAP = 'environment-cilium-config';
 const ENVIRONMENT_CILIUM_CONFIG_KEY = 'appsettings.Production.json';
 const ENVIRONMENT_CILIUM_CONFIG_PATH = '/app/appsettings.Production.json';
@@ -250,16 +254,22 @@ function createWorkload(name, image, namespace, providerCatalog, agentHost, brok
     volumeMounts.push({ name: 'tls', mountPath: tlsDirectory, readOnly: true });
   }
 
-  if (name === 'mcp') {
+  if (BACKEND_CA_WORKLOADS.includes(name)) {
+    const volumeName = identity ? 'projects-ca' : 'backend-ca';
     volumes.push({
-      name: 'backend-ca',
+      name: volumeName,
       configMap: {
         name: BACKEND_TLS_CA_CONFIGMAP,
         optional: false,
+        ...(identity ? { defaultMode: TLS_MODE } : {}),
         items: [{ key: 'ca.crt', path: 'ca.crt' }],
       },
     });
-    volumeMounts.push({ name: 'backend-ca', mountPath: '/var/run/service-backend-ca', readOnly: true });
+    volumeMounts.push({
+      name: volumeName,
+      mountPath: '/var/run/service-backend-ca',
+      readOnly: true,
+    });
   }
 
   if (identity) {
@@ -289,22 +299,6 @@ function createWorkload(name, image, namespace, providerCatalog, agentHost, brok
       { name: 'signing-material', mountPath: '/var/run/identity-broker-signing', readOnly: true },
       { name: 'key-ring', mountPath: '/var/lib/identity-broker/key-ring' },
     );
-    if (brokerRunBinding) {
-      volumes.push({
-        name: 'projects-ca',
-        configMap: {
-          name: BACKEND_TLS_CA_CONFIGMAP,
-          optional: false,
-          defaultMode: TLS_MODE,
-          items: [{ key: 'ca.crt', path: 'ca.crt' }],
-        },
-      });
-      volumeMounts.push({
-        name: 'projects-ca',
-        mountPath: '/var/run/service-backend-ca',
-        readOnly: true,
-      });
-    }
   }
 
   if (name === 'environment') {

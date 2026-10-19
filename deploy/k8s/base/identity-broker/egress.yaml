@@ -47,10 +47,28 @@ spec:
           rules:
             dns:
               - matchName: login.microsoftonline.com
+              - matchName: projects-config.agentweaver.svc.cluster.local
+              - matchName: orchestrator.agentweaver.svc.cluster.local
+              - matchName: environment.agentweaver.svc.cluster.local
               - matchName: CHANGEME-KEYVAULT-HOST
               - matchName: CHANGEME-POSTGRES-HOST
               - matchName: CHANGEME-UPSTREAM-OIDC-AUTHORITY
               - matchName: CHANGEME-UPSTREAM-OIDC-METADATA-HOST
+    # Broker owner APIs use the private service DNS names and service TLS port.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver
+            agentweaver.io/workload: projects-config
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver
+            agentweaver.io/workload: orchestrator
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver
+            agentweaver.io/workload: environment
+      toPorts:
+        - ports:
+            - port: "8443"
+              protocol: TCP
     - toFQDNs:
         - matchName: login.microsoftonline.com
       toPorts:

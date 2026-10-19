@@ -80,7 +80,7 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddSingleton(options);
 builder.Services.AddSingleton(sessions);
 builder.Services.AddHttpClient("runtime-owners", client => client.Timeout = TimeSpan.FromSeconds(20))
-    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddSingleton(services =>
 {
     var http = services.GetRequiredService<IHttpClientFactory>().CreateClient("runtime-owners");

@@ -21,12 +21,17 @@ routes the operation to its owner, which checks current authority and state.
 | `GatewayJsonSchemaValidator.cs` | Validates advertised argument schemas |
 | `McpToolHandlers.cs` | Discovers tools, builds requests, and maps results and errors |
 | `GatewayApiClient.cs` | Preserves the caller bearer, restricts paths, and forwards supported headers |
-| `McpGatewayCertificateValidation.cs` | Validates Gateway TLS using the mounted backend CA |
+| `RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler()` | Validates internal owner TLS using the mounted backend CA |
 | `McpServiceOptions.cs` | Configures Broker issuer/audience, Gateway root, metadata path, and timeout |
 | `Program.cs` | Composes the stateless HTTP transport, authentication, health routes, and handlers |
 
 The tool catalog's authoritative API definitions come from Gateway's
 `GatewayRouteCatalog.cs` and `GatewayOpenApi.cs`.
+
+MCP uses the shared owner transport for its internal Gateway calls. The handler
+trusts only the read-only `service-backend-ca` mount and checks the owner
+hostname and server-authentication purpose. Broker issuer discovery continues
+to use normal system trust.
 
 ## Understand discovery and inputs
 

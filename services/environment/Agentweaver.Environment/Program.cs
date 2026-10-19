@@ -131,21 +131,22 @@ if (runtimeBootstrapEnabled)
     builder.Services.AddScoped<EnvironmentRuntimeWorkspaceResumeManager>();
     builder.Services.AddHttpClient<EnvironmentRuntimeSuspendReleaseAuthority>(client =>
         client.Timeout = TimeSpan.FromSeconds(15))
-        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 }
 builder.Services.AddSingleton(ciliumOptions);
+// Owner APIs use the mounted backend CA; sandbox endpoints keep their separate certificate validation.
 builder.Services.AddHttpClient<EnvironmentRuntimeOwnerContextClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
-    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddHttpClient<
         ISandboxBuildTestAcceptedCommandVerifier,
         EnvironmentSandboxBuildTestAcceptedCommandVerifier>(client => client.Timeout = TimeSpan.FromSeconds(15))
-    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddHttpClient<IProjectsConfigClient, ProjectsConfigHttpClient>(client =>
 {
     client.BaseAddress = projectsBaseAddress;
     client.Timeout = TimeSpan.FromSeconds(15);
-}).ConfigurePrimaryHttpMessageHandler(EnvironmentHttpTransport.CreateRedirectDisabledHandler);
+}).ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddHttpClient<KubernetesCiliumPolicyResourceStore>(client =>
 {
     client.BaseAddress = kubernetesBaseAddress;

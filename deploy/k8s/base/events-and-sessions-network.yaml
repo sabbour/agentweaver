@@ -1,5 +1,5 @@
 # Events accepts requests only from its configured runtime owners and node health probes.
-# Its egress allows those owners, the configured data services, Broker metadata, and Entra.
+# Its egress allows those owners, configured data services, Broker metadata through its Gateway, and Entra.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -78,6 +78,15 @@ spec:
         - matchName: agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io
         - matchName: login.microsoftonline.com
         - matchName: agentweaverblob.blob.core.windows.net
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    # The public issuer address resolves through the managed Gateway pods inside the cluster.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-gateway
+            k8s:gateway.networking.k8s.io/gateway-name: identity-broker
       toPorts:
         - ports:
             - port: "443"

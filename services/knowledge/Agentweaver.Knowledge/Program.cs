@@ -2,6 +2,7 @@ extern alias AzureIdentity;
 
 using System.Collections.Immutable;
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Knowledge;
 using Agentweaver.Persistence.Postgres;
 using Agentweaver.Providers;
@@ -108,14 +109,14 @@ builder.Services.AddSingleton<IReadOnlyDictionary<string, IMemoryProvider>>(serv
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddHttpClient<ProjectsConfigClient>(client =>
     client.BaseAddress = runtimeOptions.ProjectsConfigBaseAddress)
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddHttpClient<AcceptedEffectRelay>()
     .RedactLoggedHeaders(
         [
             "X-Agentweaver-Events-Authorization",
             "X-Agentweaver-Knowledge-Authorization"
         ])
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddScoped<KnowledgeProviderBindingService>();
 builder.Services.AddSingleton<MemoryContextCompiler>();
 builder.Services.AddScoped<KnowledgeApplicationService>();

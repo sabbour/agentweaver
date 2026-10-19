@@ -2454,11 +2454,20 @@ test('runtime manifest requires nine shared workloads and pins AgentHost through
   assert.equal(webContainer.ports[0].containerPort, 8080);
   assert.ok(webContainer.envFrom.some(({ configMapRef }) =>
     configMapRef?.name === 'web-runtime-config' && configMapRef.optional === false));
-  const mcp = item('Deployment', 'mcp').spec.template.spec;
-  assert.ok(mcp.volumes.some(volume => volume.configMap?.name === 'service-backend-ca' &&
-    volume.configMap.optional === false && volume.configMap.items?.[0]?.key === 'ca.crt'));
-  assert.ok(mcp.containers[0].volumeMounts.some(mount => mount.name === 'backend-ca' &&
-    mount.mountPath === '/var/run/service-backend-ca' && mount.readOnly === true));
+  // Generated runtime manifests mount the CA for every static owner caller before deployment validation.
+  for (const name of [
+    'environment', 'events-and-sessions', 'gateway', 'identity-broker', 'knowledge', 'mcp', 'orchestrator',
+  ]) {
+    const pod = item('Deployment', name).spec.template.spec;
+    const volumeName = name === 'identity-broker' ? 'projects-ca' : 'backend-ca';
+    const caVolume = pod.volumes.find(({ name: candidate }) => candidate === volumeName);
+    assert.equal(caVolume?.configMap?.name, 'service-backend-ca', `${name} backend CA ConfigMap`);
+    assert.equal(caVolume?.configMap?.optional, false, `${name} backend CA is required`);
+    assert.deepEqual(caVolume?.configMap?.items, [{ key: 'ca.crt', path: 'ca.crt' }]);
+    assert.ok(pod.containers[0].volumeMounts.some(mount =>
+      mount.name === volumeName && mount.mountPath === '/var/run/service-backend-ca' &&
+      mount.readOnly === true), `${name} backend CA mount`);
+  }
   const missingOrchestratorCatalog = structuredClone(rendered);
   const orchestratorContainer = missingOrchestratorCatalog.items.find(({ kind, metadata }) =>
     kind === 'Deployment' && metadata.name === 'orchestrator').spec.template.spec.containers[0];
@@ -2536,6 +2545,12 @@ test('runtime manifest requires nine shared workloads and pins AgentHost through
     missingMcpCaContainer.volumeMounts.filter(({ name }) => name !== 'backend-ca');
   assert.throws(() => validateRuntimeManifest(missingMcpCaMount, images, target.namespace),
     /exact public backend CA ConfigMap/);
+  const missingGatewayCa = structuredClone(rendered);
+  const gatewayPod = missingGatewayCa.items.find(({ kind, metadata }) =>
+    kind === 'Deployment' && metadata.name === 'gateway').spec.template.spec;
+  gatewayPod.volumes = gatewayPod.volumes.filter(({ name }) => name !== 'backend-ca');
+  assert.throws(() => validateRuntimeManifest(missingGatewayCa, images, target.namespace),
+    /exact public backend CA ConfigMap/);
   const nonMcpCaMount = structuredClone(rendered);
   const mcpBackendCaVolume = nonMcpCaMount.items.find(({ kind, metadata }) =>
     kind === 'Deployment' && metadata.name === 'mcp').spec.template.spec.volumes
@@ -2544,7 +2559,7 @@ test('runtime manifest requires nine shared workloads and pins AgentHost through
     kind === 'Deployment' && metadata.name === 'web').spec.template.spec;
   webPodSpec.volumes.push(structuredClone(mcpBackendCaVolume));
   assert.throws(() => validateRuntimeManifest(nonMcpCaMount, images, target.namespace),
-    /only MCP may mount the public backend CA ConfigMap/);
+    /only owner-calling workloads may mount the public backend CA ConfigMap/);
   const aliasedNonMcpCa = structuredClone(rendered);
   const aliasedCaVolume = structuredClone(aliasedNonMcpCa.items.find(({ kind, metadata }) =>
     kind === 'Deployment' && metadata.name === 'mcp').spec.template.spec.volumes
@@ -2559,7 +2574,7 @@ test('runtime manifest requires nine shared workloads and pins AgentHost through
     readOnly: true,
   });
   assert.throws(() => validateRuntimeManifest(aliasedNonMcpCa, images, target.namespace),
-    /only MCP may mount the public backend CA ConfigMap/);
+    /only owner-calling workloads may mount the public backend CA ConfigMap/);
   const aliasedMcpCa = structuredClone(rendered);
   const aliasedMcpPod = aliasedMcpCa.items.find(({ kind, metadata }) =>
     kind === 'Deployment' && metadata.name === 'mcp').spec.template.spec;

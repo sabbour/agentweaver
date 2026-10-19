@@ -1110,7 +1110,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         return JsonSerializer.SerializeToElement(document);
     }
 
-    /// <summary>Adds AgentHost mounts, HTTPS probes, runtime configuration, state volumes, and fixed UID settings.</summary>
+    /// <summary>Adds AgentHost mounts, owner CA trust, HTTPS probes, runtime configuration, state volumes, and fixed UID settings.</summary>
     /// <exception cref="ArgumentException">No explicit AgentHost launch profile is configured.</exception>
     private static void ApplyAgentHostProfile(JsonObject podSpec, AgentSandboxOptions options, string mountPath)
     {
@@ -1162,6 +1162,17 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         {
             name = "agenthost-tls", secret = new { secretName = host.TlsSecretName, defaultMode = 288 }
         }));
+        volumes.Add(JsonSerializer.SerializeToNode(new
+        {
+            name = "backend-ca",
+            configMap = new
+            {
+                name = "service-backend-ca",
+                optional = false,
+                defaultMode = 288,
+                items = new[] { new { key = "ca.crt", path = "ca.crt" } }
+            }
+        }));
         var mounts = container["volumeMounts"]!.AsArray();
         mounts.Add(JsonSerializer.SerializeToNode(new { name = "agenthost-state", mountPath = "/state", readOnly = false }));
         mounts.Add(JsonSerializer.SerializeToNode(new { name = "agenthost-tmp", mountPath = "/tmp", readOnly = false }));
@@ -1170,6 +1181,10 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             name = "agenthost-configuration", mountPath = "/app/appsettings.json", subPath = "appsettings.json", readOnly = true
         }));
         mounts.Add(JsonSerializer.SerializeToNode(new { name = "agenthost-tls", mountPath = "/run/agenthost-tls", readOnly = true }));
+        mounts.Add(JsonSerializer.SerializeToNode(new
+        {
+            name = "backend-ca", mountPath = "/var/run/service-backend-ca", readOnly = true
+        }));
     }
 
     /// <summary>Creates the zero-replica SandboxWarmPool manifest for one exact template and owner.</summary>

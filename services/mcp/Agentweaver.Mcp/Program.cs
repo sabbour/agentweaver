@@ -1,6 +1,7 @@
 // Product MCP host: validates bearer tokens, exposes owner APIs as stateless MCP tools,
 // and uses a mounted backend CA for Gateway TLS rather than accepting forwarded certificates.
 using Agentweaver.Abstractions;
+using Agentweaver.Identity;
 using Agentweaver.Mcp;
 using Agentweaver.Telemetry;
 using Microsoft.AspNetCore.Mvc;
@@ -11,7 +12,6 @@ using OpenIddict.Validation.AspNetCore;
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(server => server.Limits.MaxRequestBodySize = 64 * 1024);
 var options = McpServiceOptions.Read(builder.Configuration);
-const string gatewayCaFile = "/var/run/service-backend-ca/ca.crt";
 
 builder.Logging.AddFilter("OpenIddict", LogLevel.Warning);
 builder.Logging.AddFilter("OpenIddict.Validation.OpenIddictValidationDispatcher", LogLevel.Warning);
@@ -23,13 +23,13 @@ builder.Services.AddHttpClient<GatewayApiClient>(client =>
         client.BaseAddress = new Uri(options.GatewayBaseAddress.AbsoluteUri.TrimEnd('/') + "/", UriKind.Absolute);
         client.Timeout = McpServiceOptions.GatewayRequestTimeout;
     })
-    .ConfigurePrimaryHttpMessageHandler(() => CreateGatewayHandler(gatewayCaFile));
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddHttpClient<GatewayToolCatalog>(client =>
     {
         client.BaseAddress = options.GatewayBaseAddress;
         client.Timeout = McpServiceOptions.GatewayRequestTimeout;
     })
-    .ConfigurePrimaryHttpMessageHandler(() => CreateGatewayHandler(gatewayCaFile));
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddTransient<McpToolHandlers>();
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 builder.Services.AddOpenIddict().AddValidation(validation =>
@@ -96,20 +96,6 @@ app.MapGet(options.ProtectedResourceMetadataPath, () => Results.Json(new
     authorization_servers = new[] { options.IdentityIssuer.AbsoluteUri },
 }));
 app.Run();
-
-static HttpMessageHandler CreateGatewayHandler(string caFile)
-{
-    if (!Path.IsPathFullyQualified(caFile) || !File.Exists(caFile))
-        throw new InvalidOperationException("The public Gateway backend CA ConfigMap is required.");
-
-    return new HttpClientHandler
-    {
-        AllowAutoRedirect = false,
-        UseCookies = false,
-        ServerCertificateCustomValidationCallback = (_, certificate, peerChain, errors) =>
-            McpGatewayCertificateValidation.Validate(certificate, peerChain, errors, caFile),
-    };
-}
 
 static McpToolHandlers GetToolHandlers(IServiceProvider? services) =>
     services?.GetRequiredService<McpToolHandlers>()

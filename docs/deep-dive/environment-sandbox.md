@@ -67,8 +67,10 @@ candidate, a bound workspace, and applied network-policy evidence.
 
 The adapter disables automatic service-account token mounting and validates
 the restricted Pod profile. The optional AgentHost launch profile supplies its
-pinned image, configuration, private state, and HTTPS endpoint. A zero-replica
-warm pool does not prestart a spare worker.
+pinned image, configuration, private state, and HTTPS endpoint. It also mounts
+`service-backend-ca` read-only at `/var/run/service-backend-ca` so AgentHost can
+validate internal owner HTTPS calls. A zero-replica warm pool does not prestart
+a spare worker.
 
 ## Compile network egress
 

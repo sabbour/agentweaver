@@ -541,6 +541,17 @@
     },
     {
       "consumer": "Agentweaver.Gateway",
+      "dependency": "Agentweaver.Identity",
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0",
+        "1.1.0",
+        "1.2.0"
+      ]
+    },
+    {
+      "consumer": "Agentweaver.Gateway",
       "dependency": "Agentweaver.Telemetry",
       "versions": [
         "0.0.0",
@@ -558,6 +569,17 @@
         "1.0.0",
         "1.1.0",
         "1.1.1"
+      ]
+    },
+    {
+      "consumer": "Agentweaver.Mcp",
+      "dependency": "Agentweaver.Identity",
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0",
+        "1.1.0",
+        "1.2.0"
       ]
     },
     {
@@ -644,6 +666,17 @@
         "1.0.0",
         "1.1.0",
         "1.1.1"
+      ]
+    },
+    {
+      "consumer": "Agentweaver.Knowledge",
+      "dependency": "Agentweaver.Identity",
+      "versions": [
+        "0.0.0",
+        "0.1.0",
+        "1.0.0",
+        "1.1.0",
+        "1.2.0"
       ]
     },
     {

@@ -651,11 +651,15 @@ per route. This lets the Broker route remain available when HTTP/2 connection
 coalescing reuses a Portal TLS connection; other hostnames have no route.
 Gateway and MCP
 BackendTLSPolicies pin their service DNS hostnames and the existing public
-`service-backend-ca` ConfigMap. MCP mounts that CA read-only to validate HTTPS
-calls to Gateway. Release preflight checks the public CA and both signed service
-certificates, and reads back the exact managed Gateway, routes, and backend TLS
-policies before apply; the release tool does not create or manage these routes
-or certificates. GHCR verification resolves the published AgentHost
+`service-backend-ca` ConfigMap. Every static workload that calls internal owner
+APIs mounts that ConfigMap read-only, and the Sandbox provider adds the same
+mount to each generated AgentHost Pod. `RuntimeOwnerHttpTransport` validates
+owner certificates against this custom root and the requested hostname; public
+issuer discovery and external providers continue to use system trust. Release
+preflight checks the public CA and signed service certificates, and reads back
+the exact managed Gateway, routes, and backend TLS policies before apply; the
+release tool does not create or manage these routes or certificates. GHCR
+verification resolves the published AgentHost
 `linux/amd64` child manifest, checks its config against prepared source labels,
 and measures the published manifest, config, and compressed layers before
 pinning that child digest in Environment. Resume checks the live Environment

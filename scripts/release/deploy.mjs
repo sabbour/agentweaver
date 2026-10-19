@@ -15,6 +15,7 @@ import {
 } from 'yaml';
 import { componentImageRepository, componentImageTag } from './pack.mjs';
 import {
+  BACKEND_CA_WORKLOADS,
   BROKER_RUN_BINDING_ANNOTATION,
   PROJECTS_CONFIG_TLS_CERTIFICATE_PATH,
   PROJECTS_CONFIG_TLS_KEY_PATH, brokerRunBindingFingerprint,
@@ -1096,11 +1097,11 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
     const backendCaVolumeNames = new Set(backendCaVolumes.map((volume) => volume.name));
     const backendCaMounts = (container.volumeMounts ?? []).filter((mount) =>
       mount.name === 'backend-ca' || backendCaVolumeNames.has(mount.name));
-    const mountsBackendCa = name === 'mcp' || (name === 'identity-broker' && binding);
+    const mountsBackendCa = BACKEND_CA_WORKLOADS.includes(name);
     if (mountsBackendCa) {
       const backendCaVolume = backendCaVolumes[0];
       const backendCaMount = backendCaMounts[0];
-      const expectedVolumeName = name === 'mcp' ? 'backend-ca' : 'projects-ca';
+      const expectedVolumeName = name === 'identity-broker' ? 'projects-ca' : 'backend-ca';
       if (backendCaVolumes.length !== 1 ||
           backendCaVolume.name !== expectedVolumeName ||
           backendCaVolume.configMap?.name !== BACKEND_TLS_CA_CONFIGMAP ||
@@ -1112,15 +1113,12 @@ export function validateRuntimeManifest(document, images, namespace, brokerRunBi
           backendCaMount.name !== expectedVolumeName ||
           backendCaMount.mountPath !== '/var/run/service-backend-ca' ||
           backendCaMount.readOnly !== true ||
-          (name === 'identity-broker' &&
-            (backendCaVolume.configMap.optional !== false ||
-             backendCaVolume.configMap.defaultMode !== 0o440))) {
+          backendCaVolume.configMap.optional !== false ||
+          name === 'identity-broker' && backendCaVolume.configMap.defaultMode !== 0o440) {
         fail(`${name} must mount the exact public backend CA ConfigMap read-only`);
       }
     } else if (backendCaVolumes.length || backendCaMounts.length) {
-      fail(binding
-        ? 'only MCP and an opted-in Identity Broker may mount the public backend CA ConfigMap'
-        : 'only MCP may mount the public backend CA ConfigMap');
+      fail('only owner-calling workloads may mount the public backend CA ConfigMap');
     }
     // Endpoint-selector keys are file configuration because their '/' and ':' are not valid env-var names.
     const ciliumConfigVolumes = (podSpec.volumes ?? []).filter((volume) =>

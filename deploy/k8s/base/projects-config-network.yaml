@@ -1,5 +1,5 @@
 # Projects accepts requests only from source-backed service callers and node health probes.
-# Its egress is limited to the Broker, Entra, PostgreSQL, and its marketplace hosts.
+# Its egress is limited to the Broker issuer Gateway, Entra, PostgreSQL, and marketplace hosts.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -74,4 +74,13 @@ spec:
       toPorts:
         - ports:
             - port: "5432"
+              protocol: TCP
+    # Cilium maps the public issuer address to the managed identity-broker Gateway pods.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-gateway
+            k8s:gateway.networking.k8s.io/gateway-name: identity-broker
+      toPorts:
+        - ports:
+            - port: "443"
               protocol: TCP

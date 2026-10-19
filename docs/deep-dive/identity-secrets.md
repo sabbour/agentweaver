@@ -20,6 +20,7 @@ bytes only after Identity approves that binding.
 | `SecretRedemptionEndpoints.cs` | Authenticated secret redemption |
 | `RuntimeGrantAuthority.cs` | Runtime bootstrap, source, and model-session grants |
 | `AuthorizedSecretRedemption.cs` | Exact grant checks |
+| `RuntimeOwnerHttpTransport.cs` | Shared internal owner HTTPS trust and bounded requests |
 | `AzureKeyVaultSecretRedemption.cs` | Exact-version Key Vault reads |
 | `AzureKeyVaultSecretVersionWriter.cs` | Protected secret-version writes |
 | `Program.cs` | Authentication and trusted dependency composition |
@@ -33,6 +34,13 @@ but does not own or write that table. The migration command applies the
 canonical runtime table grants as the separate migration owner.
 [Migration history and grants](../reference/runtime-configuration#identity-broker-migration-history-and-grants)
 defines the runtime role setting and the separately approved repair path.
+
+Internal owner HTTPS clients use `RuntimeOwnerHttpTransport` with the
+read-only `service-backend-ca` mount at
+`/var/run/service-backend-ca/ca.crt`. The handler trusts only that root and
+checks the owner hostname, certificate validity, and server-authentication
+purpose. Public issuer discovery and external OAuth providers continue to use
+normal system trust.
 
 ## Understand token authority
 

@@ -68,6 +68,19 @@
             }
           },
           {
+            "name": "backend-ca",
+            "configMap": {
+              "name": "service-backend-ca",
+              "optional": false,
+              "items": [
+                {
+                  "key": "ca.crt",
+                  "path": "ca.crt"
+                }
+              ]
+            }
+          },
+          {
             "name": "cilium-options",
             "configMap": {
               "name": "environment-cilium-config",
@@ -151,6 +164,11 @@
               {
                 "name": "tls",
                 "mountPath": "/var/run/environment-tls",
+                "readOnly": true
+              },
+              {
+                "name": "backend-ca",
+                "mountPath": "/var/run/service-backend-ca",
                 "readOnly": true
               },
               {

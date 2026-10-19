@@ -1191,10 +1191,13 @@ public sealed class NativeMcpProtocolTests : IAsyncLifetime
             IServiceCollection services,
             string clientName,
             Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> handler) =>
-            services.Configure<HttpClientFactoryOptions>(
-                clientName,
-                options => options.HttpMessageHandlerBuilderActions.Add(
-                    builder => builder.PrimaryHandler = new OwnerHandler(handler)));
+            services.Configure<HttpClientFactoryOptions>(clientName, options =>
+            {
+                // In-memory owner responses do not load the production CA mount.
+                options.HttpMessageHandlerBuilderActions.Clear();
+                options.HttpMessageHandlerBuilderActions.Add(
+                    builder => builder.PrimaryHandler = new OwnerHandler(handler));
+            });
 
         public sealed record ObservedOrchestratorRequest(string Method, string PathAndQuery, string? Body);
         public sealed record ObservedKnowledgeRequest(

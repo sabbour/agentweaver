@@ -176,6 +176,9 @@ The Azure routing candidate uses one wildcard-domain HTTPS listener, with exact
 route hostnames and path/backend boundaries retained. This supports HTTP/2
 connection coalescing between the Portal and Broker without matching unknown
 hostnames. A successful render or preflight does not prove live route readiness.
+The runtime manifest validator also requires read-only `service-backend-ca`
+mounts on each static owner-calling service. The Sandbox provider adds the same
+mount to generated AgentHost Pods.
 
 `release:deploy-bootstrap` is a separate pre-acceptance path. It requires the
 exact draft manifest and source-bound publication evidence for the requested

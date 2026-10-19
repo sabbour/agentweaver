@@ -137,14 +137,14 @@ builder.Services.AddSingleton<IBacklogPrerequisiteEvidenceReader>(services =>
         services.GetRequiredService<PostgresMafCheckpointStore>(),
         services.GetRequiredService<MafExecutionOutputWitnessStore>()));
 builder.Services.AddHttpClient<ProjectsRunSelectionClient>()
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddHttpClient<EventsAddressedMessageClient>()
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddHttpClient<RuntimeRunAdmissionClient>(client => client.Timeout = TimeSpan.FromSeconds(20))
-    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddSingleton(secretRedemptionOptions);
 builder.Services.AddHttpClient<SourceControlSecretRedemptionClient>()
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddHttpClient<GitHubSourceControlAdapter>(client =>
     {
         client.BaseAddress = new Uri("https://api.github.com/");
@@ -200,7 +200,7 @@ if (remoteToolTlsSection.Exists())
 if (runtimeRegistrationEnabled)
 {
     builder.Services.AddHttpClient<MafBuildTestEnvironmentClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
-        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
     builder.Services.AddScoped<ReviewedRemoteToolResultVerifier>();
 }
 builder.AddRemoteMcpCallVerificationTls(runtimeRegistrationEnabled);

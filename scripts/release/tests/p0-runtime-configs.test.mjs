@@ -382,7 +382,7 @@ test('nested Cilium selectors match the existing source policies and contain no 
     'knowledge', 'mcp', 'orchestrator', 'projects-config',
   ]);
   for (const value of policyText.matchAll(/^\s*(?:namespace|k8s:io\.kubernetes\.pod\.namespace):\s*(\S+)\s*$/gm))
-    assert.ok(value[1] === namespace || value[1] === 'kube-system');
+    assert.ok([namespace, 'kube-system', 'agentweaver-gateway'].includes(value[1]));
   assert.deepEqual(Object.keys(options.EndpointSelectors).sort(),
     [...workloads].map(workload => `${namespace}/${workload}`).sort());
   for (const workload of workloads) {
@@ -647,6 +647,8 @@ test('new Events and Projects Cilium policies admit only source-backed callers a
 test('runtime owner policies allow only configured issuer, database, and Kubernetes API paths', () => {
   const policyFiles = [
     'service-owner-network.yaml',
+    'events-and-sessions-network.yaml',
+    'projects-config-network.yaml',
     'environment-agenthost-network.yaml',
     path.join('identity-broker', 'egress.yaml'),
   ];
@@ -660,7 +662,8 @@ test('runtime owner policies allow only configured issuer, database, and Kuberne
     return policy;
   };
   const workloads = policy => policy.spec.endpointSelector.matchExpressions
-    .find(expression => expression.key === 'agentweaver.io/workload').values;
+    ?.find(expression => expression.key === 'agentweaver.io/workload').values ??
+      [policy.spec.endpointSelector.matchLabels['agentweaver.io/workload']];
   const endpoints = rule => rule.toEndpoints.map(endpoint =>
     endpoint.matchLabels['agentweaver.io/workload']).sort();
   const ports = rule => rule.toPorts.flatMap(group => group.ports)
@@ -669,9 +672,45 @@ test('runtime owner policies allow only configured issuer, database, and Kuberne
   assert.deepEqual([...workloads(issuer)].sort(),
     ['agenthost', 'environment', 'gateway', 'knowledge', 'mcp', 'orchestrator']);
   assert.deepEqual(issuer.spec.egress[0].toPorts[0].rules.dns.map(({ matchName }) => matchName),
-    [brokerHost]);
+    [
+      brokerHost,
+      'gateway.agentweaver.svc.cluster.local',
+      'projects-config.agentweaver.svc.cluster.local',
+      'orchestrator.agentweaver.svc.cluster.local',
+      'knowledge.agentweaver.svc.cluster.local',
+      'events-and-sessions.agentweaver.svc.cluster.local',
+      'environment.agentweaver.svc.cluster.local',
+      'identity-broker.agentweaver.svc.cluster.local',
+    ]);
   assert.deepEqual(issuer.spec.egress[1].toFQDNs, [{ matchName: brokerHost }]);
   assert.deepEqual(ports(issuer.spec.egress[1]), [{ port: '443', protocol: 'TCP' }]);
+  const issuerGateway = issuer.spec.egress[2];
+  assert.deepEqual(issuerGateway.toEndpoints, [{
+    matchLabels: {
+      'k8s:io.kubernetes.pod.namespace': 'agentweaver-gateway',
+      'k8s:gateway.networking.k8s.io/gateway-name': 'identity-broker',
+    },
+  }]);
+  assert.deepEqual(ports(issuerGateway), [{ port: '443', protocol: 'TCP' }]);
+
+  const events = getPolicy('events-and-sessions-network');
+  const eventsIssuerGateway = events.spec.egress.find(rule => rule.toEndpoints
+    ?.some(endpoint => endpoint.matchLabels['k8s:io.kubernetes.pod.namespace'] === 'agentweaver-gateway'));
+  assert.deepEqual(eventsIssuerGateway.toEndpoints, issuerGateway.toEndpoints);
+  assert.deepEqual(ports(eventsIssuerGateway), [{ port: '443', protocol: 'TCP' }]);
+  assert.deepEqual(events.spec.egress[0].toPorts[0].rules.dns
+    .filter(({ matchName }) => matchName.endsWith('.agentweaver.svc.cluster.local'))
+    .map(({ matchName }) => matchName), [
+    'knowledge.agentweaver.svc.cluster.local',
+    'projects-config.agentweaver.svc.cluster.local',
+    'orchestrator.agentweaver.svc.cluster.local',
+  ]);
+
+  const projects = getPolicy('projects-config-network');
+  const projectsIssuerGateway = projects.spec.egress.find(rule => rule.toEndpoints
+    ?.some(endpoint => endpoint.matchLabels['k8s:io.kubernetes.pod.namespace'] === 'agentweaver-gateway'));
+  assert.deepEqual(projectsIssuerGateway.toEndpoints, issuerGateway.toEndpoints);
+  assert.deepEqual(ports(projectsIssuerGateway), [{ port: '443', protocol: 'TCP' }]);
 
   const database = getPolicy('database-workload-identity-egress');
   assert.deepEqual([...workloads(database)].sort(), ['environment', 'knowledge', 'orchestrator']);
@@ -700,6 +739,17 @@ test('runtime owner policies allow only configured issuer, database, and Kuberne
   assert.deepEqual(ports(api), [{ port: '443', protocol: 'TCP' }]);
 
   const broker = getPolicy('identity-broker-egress');
+  assert.deepEqual(broker.spec.egress[0].toPorts[0].rules.dns
+    .filter(({ matchName }) => matchName.endsWith('.agentweaver.svc.cluster.local'))
+    .map(({ matchName }) => matchName), [
+    'projects-config.agentweaver.svc.cluster.local',
+    'orchestrator.agentweaver.svc.cluster.local',
+    'environment.agentweaver.svc.cluster.local',
+  ]);
+  const brokerOwners = broker.spec.egress.find(rule => rule.toEndpoints
+    ?.some(endpoint => endpoint.matchLabels['agentweaver.io/workload'] === 'projects-config'));
+  assert.deepEqual(endpoints(brokerOwners), ['environment', 'orchestrator', 'projects-config']);
+  assert.deepEqual(ports(brokerOwners), [{ port: '8443', protocol: 'TCP' }]);
   const environmentBrokerIngress = broker.spec.ingress.find(rule => rule.fromEndpoints
     ?.some(endpoint => endpoint.matchLabels['agentweaver.io/workload'] === 'environment'));
   assert.deepEqual(environmentBrokerIngress.fromEndpoints, [{
@@ -776,6 +826,9 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
   assert.deepEqual([...new Set([...JSON.stringify(brokerPolicy).matchAll(/matchName["\s:]+([A-Za-z0-9.-]+)/g)]
     .map(match => match[1]))], [
     'login.microsoftonline.com',
+    'projects-config.agentweaver.svc.cluster.local',
+    'orchestrator.agentweaver.svc.cluster.local',
+    'environment.agentweaver.svc.cluster.local',
     'agentweaver-kv-v1.vault.azure.net',
     'agentweaver-pg.postgres.database.azure.com',
   ]);
@@ -840,6 +893,21 @@ test('P0 Kustomize install renders every workload, identity, runtime map, and ne
   };
   assert.deepEqual(validateKustomizeInstall(installation, images, namespace, providerCatalog)
     .incompleteRuntimeConfigMaps, []);
+
+  for (const name of [
+    'environment', 'events-and-sessions', 'gateway', 'identity-broker', 'knowledge', 'mcp', 'orchestrator',
+  ]) {
+    const pod = resources.find(resource =>
+      resource.kind === 'Deployment' && resource.metadata.name === name).spec.template.spec;
+    const volumeName = name === 'identity-broker' ? 'projects-ca' : 'backend-ca';
+    const caVolume = pod.volumes.find(volume => volume.name === volumeName);
+    assert.equal(caVolume.configMap.name, 'service-backend-ca', `${name} backend CA ConfigMap`);
+    assert.equal(caVolume.configMap.optional, false, `${name} backend CA is required`);
+    assert.deepEqual(caVolume.configMap.items, [{ key: 'ca.crt', path: 'ca.crt' }]);
+    assert.ok(pod.containers[0].volumeMounts.some(mount =>
+      mount.name === volumeName && mount.mountPath === '/var/run/service-backend-ca' &&
+      mount.readOnly === true), `${name} backend CA mount`);
+  }
 
   const unresolvedBroker = structuredClone(installation);
   unresolvedBroker.items.find(resource => resource.kind === 'ConfigMap' &&

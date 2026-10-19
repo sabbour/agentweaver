@@ -300,8 +300,8 @@ public sealed partial class AgentSandboxProviderTests
         var podSpec = podTemplate["spec"]!;
         var container = podSpec["containers"]![0]!;
         Assert.Equal(1000, podSpec["securityContext"]!["runAsUser"]!.GetValue<int>());
-        Assert.Equal(agentHostProfile ? 5 : 1, podSpec["volumes"]!.AsArray().Count);
-        Assert.Equal(agentHostProfile ? 5 : 1, container["volumeMounts"]!.AsArray().Count);
+        Assert.Equal(agentHostProfile ? 6 : 1, podSpec["volumes"]!.AsArray().Count);
+        Assert.Equal(agentHostProfile ? 6 : 1, container["volumeMounts"]!.AsArray().Count);
         var pinnedJson = JsonSerializer.Serialize(options, new JsonSerializerOptions(JsonSerializerDefaults.Web));
         if (agentHostProfile)
         {
@@ -320,8 +320,12 @@ public sealed partial class AgentSandboxProviderTests
             Assert.Equal(288, podSpec["volumes"]![3]!["configMap"]!["defaultMode"]!.GetValue<int>());
             Assert.Equal("agenthost-runtime-tls", podSpec["volumes"]![4]!["secret"]!["secretName"]!.GetValue<string>());
             Assert.Equal(288, podSpec["volumes"]![4]!["secret"]!["defaultMode"]!.GetValue<int>());
+            Assert.Equal("service-backend-ca", podSpec["volumes"]![5]!["configMap"]!["name"]!.GetValue<string>());
+            Assert.Equal(288, podSpec["volumes"]![5]!["configMap"]!["defaultMode"]!.GetValue<int>());
             Assert.True(container["volumeMounts"]![3]!["readOnly"]!.GetValue<bool>());
             Assert.True(container["volumeMounts"]![4]!["readOnly"]!.GetValue<bool>());
+            Assert.Equal("/var/run/service-backend-ca", container["volumeMounts"]![5]!["mountPath"]!.GetValue<string>());
+            Assert.True(container["volumeMounts"]![5]!["readOnly"]!.GetValue<bool>());
             Assert.Equal("HTTPS", container["readinessProbe"]!["httpGet"]!["scheme"]!.GetValue<string>());
             Assert.Equal(8443, container["readinessProbe"]!["httpGet"]!["port"]!.GetValue<int>());
             Assert.Equal(36, container["startupProbe"]!["failureThreshold"]!.GetValue<int>());

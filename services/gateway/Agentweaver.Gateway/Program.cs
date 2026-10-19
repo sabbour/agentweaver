@@ -1,4 +1,5 @@
 using Agentweaver.Gateway;
+using Agentweaver.Identity;
 using Agentweaver.Telemetry;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authorization.Policy;
@@ -17,19 +18,19 @@ builder.Services.AddGatewayWebCors(options);
 builder.Services.AddAgentweaverTelemetry("agentweaver.gateway");
 builder.Services.AddHttpClient(nameof(GatewayOwner.Projects), client =>
     client.Timeout = Timeout.InfiniteTimeSpan)
-    .ConfigurePrimaryHttpMessageHandler(CreateOwnerHandler);
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddHttpClient(nameof(GatewayOwner.Orchestrator), client =>
     client.Timeout = Timeout.InfiniteTimeSpan)
-    .ConfigurePrimaryHttpMessageHandler(CreateOwnerHandler);
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddHttpClient(nameof(GatewayOwner.Knowledge), client =>
     client.Timeout = Timeout.InfiniteTimeSpan)
-    .ConfigurePrimaryHttpMessageHandler(CreateOwnerHandler);
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddHttpClient(nameof(GatewayOwner.Events), client =>
     client.Timeout = Timeout.InfiniteTimeSpan)
-    .ConfigurePrimaryHttpMessageHandler(CreateOwnerHandler);
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddHttpClient(nameof(GatewayOwner.IdentityBroker), client =>
     client.Timeout = Timeout.InfiniteTimeSpan)
-    .ConfigurePrimaryHttpMessageHandler(CreateOwnerHandler);
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddSingleton<GatewayOwnerClient>();
 builder.Services.AddSingleton<IAuthorizationMiddlewareResultHandler, GatewayAuthorizationResultHandler>();
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
@@ -50,11 +51,5 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapGatewayEndpoints();
 app.Run();
-
-static HttpMessageHandler CreateOwnerHandler() => new HttpClientHandler
-{
-    AllowAutoRedirect = false,
-    UseCookies = false,
-};
 
 public partial class Program;

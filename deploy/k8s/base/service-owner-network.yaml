@@ -170,7 +170,7 @@ spec:
           - knowledge
           - mcp
           - orchestrator
-  # These workloads fetch signing metadata only from the configured public Broker issuer.
+  # These workloads use exact service names for internal owners and the configured public Broker issuer.
   egress:
     - toEndpoints:
         - matchLabels:
@@ -185,8 +185,24 @@ spec:
           rules:
             dns:
               - matchName: agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io
+              - matchName: gateway.agentweaver.svc.cluster.local
+              - matchName: projects-config.agentweaver.svc.cluster.local
+              - matchName: orchestrator.agentweaver.svc.cluster.local
+              - matchName: knowledge.agentweaver.svc.cluster.local
+              - matchName: events-and-sessions.agentweaver.svc.cluster.local
+              - matchName: environment.agentweaver.svc.cluster.local
+              - matchName: identity-broker.agentweaver.svc.cluster.local
     - toFQDNs:
         - matchName: agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io
+      toPorts:
+        - ports:
+            - port: "443"
+              protocol: TCP
+    # Cilium maps the public issuer address to the managed identity-broker Gateway pods.
+    - toEndpoints:
+        - matchLabels:
+            k8s:io.kubernetes.pod.namespace: agentweaver-gateway
+            k8s:gateway.networking.k8s.io/gateway-name: identity-broker
       toPorts:
         - ports:
             - port: "443"

@@ -70,6 +70,19 @@
                 }
               ]
             }
+          },
+          {
+            "name": "backend-ca",
+            "configMap": {
+              "name": "service-backend-ca",
+              "optional": false,
+              "items": [
+                {
+                  "key": "ca.crt",
+                  "path": "ca.crt"
+                }
+              ]
+            }
           }
         ],
         "containers": [
@@ -125,6 +138,11 @@
               {
                 "name": "tls",
                 "mountPath": "/var/run/orchestrator-tls",
+                "readOnly": true
+              },
+              {
+                "name": "backend-ca",
+                "mountPath": "/var/run/service-backend-ca",
                 "readOnly": true
               }
             ],
