@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using Agentweaver.Abstractions;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Environment;
 
@@ -37,7 +38,9 @@ public sealed record LinkRemoteMcpIdentityBindingRequest(
 /// <summary>Maps authenticated project APIs for Remote MCP connection management.</summary>
 public static class RemoteMcpConnectionEndpoints
 {
-    /// <summary>Registers list, create, read, update, state, identity-binding, and discovery routes.</summary>
+    /// <summary>
+    /// Registers authenticated connection routes; state mutations use a JSON body for revision and idempotency.
+    /// </summary>
     public static IEndpointRouteBuilder MapRemoteMcpConnectionEndpoints(
         this IEndpointRouteBuilder endpoints)
     {
@@ -228,7 +231,7 @@ public static class RemoteMcpConnectionEndpoints
         group.MapDelete("/{connectionId:guid}", async (
             string projectId,
             Guid connectionId,
-            RemoteMcpConnectionStateRequest request,
+            [FromBody] RemoteMcpConnectionStateRequest request,
             HttpContext context,
             RemoteMcpConnectionStore store,
             CancellationToken cancellationToken) =>
