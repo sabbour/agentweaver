@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createP1AcceptanceResult } from '../p1-acceptance-result.mjs';
+import { createP1AcceptanceResult, sealP1NativeProbeEnvelope } from '../p1-acceptance-result.mjs';
 
 const names = [
   'storage-owner-isolation',
@@ -23,16 +23,18 @@ function envelope(kind, probeNames, status = 'passed') {
       observed: status === 'passed',
       observations: [],
     },
-    cleanup: { status: 'not-started', createdResourceIds: [] },
+    cleanup: kind === 'p1-native-acceptance'
+      ? { status: 'not-required', actions: [] }
+      : { status: 'not-started', createdResourceIds: [] },
   }));
-  return {
+  return sealP1NativeProbeEnvelope({
     kind,
     schemaVersion: 1,
     overallStatus: status,
     startedAt: '2026-10-13T00:00:00.000Z',
     completedAt: '2026-10-13T00:00:01.000Z',
     probes,
-  };
+  });
 }
 
 function nativeProbeResults(status = 'passed') {
@@ -63,6 +65,7 @@ test('a failed required native probe makes the full P1 result failed', () => {
   results[0].probes[1].status = 'failed';
   results[0].probes[1].reason = 'controlled native failure';
   results[0].overallStatus = 'failed';
+  results[0] = sealP1NativeProbeEnvelope(results[0]);
   const result = createP1AcceptanceResult({
     surface: 'api',
     surfaceStatus: 'passed',
@@ -112,19 +115,47 @@ test('preserves the verified four-probe source envelope and blocks only the miss
 test('rejects a missing, duplicate, or inconsistent native probe result', () => {
   const missing = nativeProbeResults();
   missing[0].probes.pop();
+  missing[0] = sealP1NativeProbeEnvelope(missing[0]);
   assert.throws(() => createP1AcceptanceResult({
     surface: 'api', surfaceStatus: 'passed', nativeProbeResults: missing,
   }), /missing a required P1 probe/);
 
   const duplicate = nativeProbeResults();
   duplicate[1].probes[0] = { ...duplicate[1].probes[0], name: duplicate[0].probes[0].name };
+  duplicate[1] = sealP1NativeProbeEnvelope(duplicate[1]);
   assert.throws(() => createP1AcceptanceResult({
     surface: 'api', surfaceStatus: 'passed', nativeProbeResults: duplicate,
   }), /invalid or duplicated/);
 
   const inconsistent = nativeProbeResults('blocked');
   inconsistent[1].overallStatus = 'passed';
+  inconsistent[1] = sealP1NativeProbeEnvelope(inconsistent[1]);
   assert.throws(() => createP1AcceptanceResult({
     surface: 'api', surfaceStatus: 'passed', nativeProbeResults: inconsistent,
   }), /overall status does not match/);
+});
+
+test('rejects tampered envelope fields instead of dropping them during aggregation', () => {
+  const tampered = nativeProbeResults();
+  tampered[1].probes[0].evidence.receiptHash = 'tampered';
+
+  assert.throws(() => createP1AcceptanceResult({
+    surface: 'api', surfaceStatus: 'passed', nativeProbeResults: tampered,
+  }), /checksum does not match/);
+});
+
+test('a passed probe requires nonempty evidence and confirmed cleanup', () => {
+  const missingEvidence = nativeProbeResults();
+  missingEvidence[0].probes[0].evidence = {};
+  missingEvidence[0] = sealP1NativeProbeEnvelope(missingEvidence[0]);
+  assert.throws(() => createP1AcceptanceResult({
+    surface: 'api', surfaceStatus: 'passed', nativeProbeResults: missingEvidence,
+  }), /lacks evidence or confirmed cleanup/);
+
+  const uncertainCleanup = nativeProbeResults();
+  uncertainCleanup[0].probes[0].cleanup = { status: 'uncertain', actions: [] };
+  uncertainCleanup[0] = sealP1NativeProbeEnvelope(uncertainCleanup[0]);
+  assert.throws(() => createP1AcceptanceResult({
+    surface: 'api', surfaceStatus: 'passed', nativeProbeResults: uncertainCleanup,
+  }), /lacks evidence or confirmed cleanup/);
 });

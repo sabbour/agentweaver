@@ -105,9 +105,26 @@ explicit target and authorized runtime inputs. Its result separates
 image-measurement, and native probes remain blocked until evidence exists.
 The aggregate exits `0` for passed, `1` for failed, and `2` for blocked.
 
+Pass the exact native and dispatch-recovery output envelopes with
+`--native-probe-envelope` and `--dispatch-recovery-envelope`. The aggregator
+preserves every supplied receipt and blocks any missing required probe. It
+rejects malformed, inconsistent, duplicate, and extra envelope fields rather
+than silently dropping them. It also verifies each envelope's canonical
+`receiptSha256` checksum to detect changes after writing. Use output from live
+probe calls; test fixtures and scripted results are not live evidence. The
+checksum does not authenticate who wrote a file. A probe cannot claim `passed`
+with empty evidence; native passes also require completed or not-required
+cleanup, and read-only dispatch-recovery passes must report no created
+resources.
+
 Native probes cover Storage isolation, network datapath, Sandbox lifecycle,
 AgentHost readiness, numeric dispatch limits, and restart/duplicate-fence
-recovery. A policy-object readback or usage query cannot replace those probes.
+recovery. The dispatch-recovery reader can query existing Host no-send receipts
+and a current replacement Host recovery receipt, but it does not create a
+dispatch or replace a Host. Numeric-boundary, soft-warning, and complete
+gate/join no-duplicate receipts remain blocked until source owners expose all
+required evidence. A policy-object readback or usage query cannot replace those
+probes.
 
 ## Treat coverage as an artifact
 
