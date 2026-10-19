@@ -632,9 +632,10 @@ export async function deployIntegration(options = {}, dependencies = {}) {
 
   const verifyServiceImage = dependencies.verifyServiceImage ?? verifyServiceRegistryImage;
   const verifyAgentHostImage = dependencies.verifyAgentHostImage ?? verifyAgentHostRegistryImage;
+  // Keep injected fetch and delay behavior identical before and after apply.
   const acceptedDigests = new Map();
   for (const entry of images) {
-    const observation = await verifyServiceImage(entry.result.image, dependencies.fetch ?? globalThis.fetch);
+    const observation = await verifyServiceImage(entry.result.image, dependencies.fetch ?? globalThis.fetch, dependencies.delay);
     const expectedTopDigest = entry.result.image.slice(entry.result.image.lastIndexOf('@') + 1);
     if (observation.sourceSha !== parsed.sourceSha || observation.sourceTree !== sourceTree ||
         observation.version !== entry.component.version ||
@@ -653,7 +654,7 @@ export async function deployIntegration(options = {}, dependencies = {}) {
       const published = await verifyAgentHostImage({
         ...image,
         preparedOciMeasurement: entry.result.preparedOciMeasurement,
-      }, dependencies.fetch ?? globalThis.fetch);
+      }, dependencies.fetch ?? globalThis.fetch, dependencies.delay);
       if (published.digest !== observation.digest ||
           published.image !== observation.image ||
           !published.acceptedDigests.has(published.digest)) {
@@ -718,7 +719,7 @@ export async function deployIntegration(options = {}, dependencies = {}) {
   });
   const freshImages = [];
   for (const entry of images) {
-    const observation = await verifyServiceImage(entry.result.image, dependencies.fetch ?? globalThis.fetch);
+    const observation = await verifyServiceImage(entry.result.image, dependencies.fetch ?? globalThis.fetch, dependencies.delay);
     const expectedTopDigest = entry.result.image.slice(entry.result.image.lastIndexOf('@') + 1);
     if (observation.sourceSha !== parsed.sourceSha || observation.sourceTree !== sourceTree ||
         observation.version !== entry.component.version ||
@@ -736,7 +737,7 @@ export async function deployIntegration(options = {}, dependencies = {}) {
   const hostObservation = await verifyAgentHostImage({
     ...freshHost.runtimeImage,
     preparedOciMeasurement: freshHost.result.preparedOciMeasurement,
-  }, dependencies.fetch ?? globalThis.fetch);
+  }, dependencies.fetch ?? globalThis.fetch, dependencies.delay);
   if (hostObservation.digest !== freshImages.find((_, index) =>
     images[index].component.id === 'Agentweaver.AgentHost').digest) {
     fail('AgentHost registry measurement changed after apply');

@@ -1017,6 +1017,27 @@ release, source, manifest, publication receipt, runtime List, and exact target. 
 always repeats live verification. Checkpoint read/write/cleanup errors fail
 explicitly.
 
+Registry token, image manifest (including platform children), image-config, and
+pinned AgentSandbox manifest reads retry fetch `TypeError` failures (including
+interrupted response bodies), HTTP 429, and HTTP 500–599. Each individual read
+gets at most four attempts, waiting 1, 2, and 4 seconds between attempts. The
+same policy applies to release and integration deployment verification before
+and after apply. Other statuses, including 401/403/404, malformed JSON, and
+digest, size, or source-identity mismatches fail without retrying; the checks
+are not weakened by a successful retry.
+
+An exhausted read reports its request URL without user information, query
+parameters, or fragment, attempt count, and underlying `error.cause` code and
+message when available (for example `ECONNRESET` or `UND_ERR_CONNECT_TIMEOUT`).
+Do not print bearer tokens or signed URLs while diagnosing it. If apply
+completed but registry verification exhausted its attempts, keep the exact
+checkpoint and original inputs. Once connectivity is restored, rerun the
+same separately authorized command with `--resume --execute`; do not reset
+the checkpoint or substitute images. A matching apply-complete checkpoint
+skips apply, not current publication, image, target, or live-health checks.
+Only successful live verification clears it. Integration deployment has the
+same read retry policy, but does not offer the release checkpoint/resume CLI.
+
 The runtime List cannot create or change namespaces, ServiceAccounts, Secrets,
 ConfigMaps, PVCs, NetworkPolicies, Cilium policies, Jobs, routes, Gateway
 resources, or databases. Those references must already exist and be operator

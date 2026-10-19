@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
-import { verifyServiceRegistryImage } from '../registry.mjs';
+import { verifyRegistryImage, verifyServiceRegistryImage } from '../registry.mjs';
 
 const sourceSha = 'a'.repeat(40);
 const sourceTree = 'b'.repeat(40);
@@ -122,20 +122,68 @@ test('service registry verification rejects missing and malformed identity label
 test('service registry verification rejects non-matching raw registry bytes', async () => {
   for (const tamper of ['top', 'child', 'config']) {
     const fixture = serviceFixture({ tamper });
-    await assert.rejects(verifyServiceRegistryImage(`${fixture.topReference}${fixture.topDigest}`, fixture.fetchImpl),
+    await assert.rejects(verifyServiceRegistryImage(`${fixture.topReference}${fixture.topDigest}`, fixture.fetchImpl,
+      async () => assert.fail('digest mismatch must not retry')),
       /bytes do not match the exact published digest|config bytes do not match their manifest descriptor/);
+    assert.equal(fixture.calls.length, { top: 2, child: 3, config: 4 }[tamper]);
   }
 });
 
 test('service registry verification reports authorization and token failures', async () => {
   const unauthorized = async () => ({ ok: false, status: 401 });
   await assert.rejects(verifyServiceRegistryImage(`${topReference}${`sha256:${'c'.repeat(64)}`}`, unauthorized),
-    /anonymous pull verification \(HTTP 401\)/);
+    /https:\/\/ghcr.io\/token.*after 1 attempt.*HTTP 401/);
 
   const missingToken = serviceFixture({ missingToken: true });
   await assert.rejects(verifyServiceRegistryImage(
     `${missingToken.topReference}${missingToken.topDigest}`, missingToken.fetchImpl),
   /GHCR returned no pull token/);
+});
+
+test('service registry verification retries each token, index, child and config read independently', async () => {
+  const fixture = serviceFixture();
+  const attempts = new Map();
+  const delays = [];
+  const result = await verifyServiceRegistryImage(`${fixture.topReference}${fixture.topDigest}`, async (url, options) => {
+    const count = (attempts.get(String(url)) ?? 0) + 1;
+    attempts.set(String(url), count);
+    if (count === 1) throw new TypeError('fetch failed');
+    return fixture.fetchImpl(url, options);
+  }, async milliseconds => delays.push(milliseconds));
+  assert.equal(result.digest, fixture.childDigest);
+  assert.deepEqual([...attempts.values()], [2, 2, 2, 2]);
+  assert.deepEqual(delays, [1000, 1000, 1000, 1000]);
+});
+
+test('release registry verification retries manifest failures and never retries a digest mismatch', async () => {
+  const fixture = serviceFixture();
+  let manifestAttempts = 0;
+  const delays = [];
+  const result = await verifyRegistryImage(`${fixture.topReference}${fixture.topDigest}`, async (url, options) => {
+    if (String(url).includes('/manifests/') && ++manifestAttempts === 1) {
+      return { ok: false, status: 503 };
+    }
+    const response = await fixture.fetchImpl(url, options);
+    if (String(url).includes('/manifests/')) {
+      response.json = async () => JSON.parse(await response.text());
+    }
+    return response;
+  }, async milliseconds => delays.push(milliseconds));
+  assert.ok(result.has(fixture.childDigest));
+  assert.equal(manifestAttempts, 2);
+  assert.deepEqual(delays, [1000]);
+
+  let calls = 0;
+  await assert.rejects(verifyRegistryImage(`${fixture.topReference}${fixture.topDigest}`, async url => {
+    calls++;
+    if (String(url).includes('/token?')) return { ok: true, json: async () => ({ token: 'test' }) };
+    return {
+      ok: true,
+      headers: { get: () => 'wrong-digest' },
+      json: async () => assert.fail('mismatched digest must fail before reading a broken body'),
+    };
+  }, async () => assert.fail('digest mismatch must not retry')), /different manifest digest/);
+  assert.equal(calls, 2);
 });
 
 test('service registry verification returns the actual allowlisted config labels', async () => {
