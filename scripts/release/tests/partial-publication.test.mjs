@@ -20,7 +20,11 @@ import {
 import { PARTIAL_PUBLICATION as P } from '../partial-publication-contract.mjs';
 import { readDockerArchiveConfig } from '../docker-archive.mjs';
 import { measureAgentHostArchiveSync } from '../measure-agenthost-image.mjs';
-import { deployRelease, validatePublicationReceipt } from '../deploy.mjs';
+import {
+  AGENT_SANDBOX_RELEASE,
+  deployRelease,
+  validatePublicationReceipt,
+} from '../deploy.mjs';
 import { WEB_LOCK_PATH } from '../validate.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -31,6 +35,18 @@ const sha = value => createHash('sha256').update(value).digest('hex');
 const digest = value => `sha256:${sha(value)}`;
 const HELPER = 'a'.repeat(40);
 const RUN_ID = '40000000001';
+// Keep the deployment smoke test offline while verifying the pinned manifest dry-run input.
+const agentSandboxTestManifest = [
+  'apiVersion: v1',
+  'kind: Namespace',
+  'metadata:',
+  '  name: agent-sandbox-system',
+].join('\n');
+const agentSandboxTestRelease = Object.freeze({
+  ...AGENT_SANDBOX_RELEASE,
+  manifestUrl: 'https://example.test/agent-sandbox.yaml',
+  manifestSha256: sha(agentSandboxTestManifest),
+});
 
 function newWorld(overrides = {}) {
   const tags = new Map();
@@ -590,6 +606,15 @@ test('helper deploy CLI uses a product cwd with the Kustomize bundle and accepts
   let rendered = 0;
   const releaseTagSha = 'e'.repeat(40);
   const dependencies = {
+    agentSandboxRelease: agentSandboxTestRelease,
+    fetchAgentSandbox: async url => {
+      assert.equal(url, agentSandboxTestRelease.manifestUrl);
+      return {
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => Buffer.from(agentSandboxTestManifest),
+      };
+    },
     verifyImages: async () => new Map(validatePublicationReceipt(completion, manifest, P.sourceSha)
       .map(image => [image.name, new Set([image.image.split('@')[1], image.sandboxImageDigest].filter(Boolean))])),
     verifyTarget: async () => ({ exact: true }),
@@ -619,6 +644,11 @@ test('helper deploy CLI uses a product cwd with the Kustomize bundle and accepts
         assert.equal(opts.cwd, productRoot);
         if (args[0] === 'kustomize') {
           return execFileSync('kubectl', args, { cwd: opts.cwd, encoding: 'utf8' });
+        }
+        if (args[0] === 'apply' && args[1] === '--dry-run=client' && args[2] === '--filename') {
+          assert.deepEqual(args, ['apply', '--dry-run=client', '--filename', '-']);
+          assert.equal(opts.input, agentSandboxTestManifest);
+          return '';
         }
         assert.deepEqual(args.slice(0, 3), ['apply', '--dry-run=client', '-k']);
         assert.equal(args.length, 4);
