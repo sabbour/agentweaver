@@ -117,6 +117,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             request.Workspace.Negotiation,
             workspace,
             cancellationToken).ConfigureAwait(false);
+        // Use the trusted CA certificate so service and external API addresses share one pin.
+        var clusterIdentity = await _client.GetClusterIdentityAsync(cancellationToken).ConfigureAwait(false);
 
         var ownerFingerprint = GetOwnerFingerprint(request.Fence.Owner);
         var names = GetResourceNames(
@@ -206,7 +208,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
                 request.Workspace.Negotiation.ReadOnly,
                 workspaceFingerprint,
                 endpoint.Value,
-                _client.ClusterIdentity);
+                clusterIdentity);
             var claim = BuildClaim(names.ClaimName, names.WarmPoolName, labels, recovery);
             var ensuredClaim = await EnsureResourceAsync(
                 ExtensionsApiGroup,
@@ -257,7 +259,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
             return new SandboxProvisionedResource(
                 resource,
                 endpoint,
-                CreatePlacementReference(_client.ClusterIdentity, _options.Namespace),
+                CreatePlacementReference(clusterIdentity, _options.Namespace),
                 capabilities,
                 [],
                 binding).Validate();
@@ -284,11 +286,13 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         CancellationToken cancellationToken = default)
     {
         request = (request ?? throw new ArgumentNullException(nameof(request))).Validate();
+        var clusterIdentity = await _client.GetClusterIdentityAsync(cancellationToken).ConfigureAwait(false);
         var (options, descriptor) = ReadBinding(
             request.Fence,
             request.Resource,
             request.FencingGeneration,
-            request.ProviderBinding);
+            request.ProviderBinding,
+            clusterIdentity);
         if (!string.Equals(descriptor.Namespace, options.Namespace, StringComparison.Ordinal))
             throw ProviderBindingMismatch();
         var operationId = Guid.ParseExact(descriptor.OperationId, "N");
@@ -770,11 +774,13 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         CancellationToken cancellationToken = default)
     {
         request = (request ?? throw new ArgumentNullException(nameof(request))).Validate();
+        var clusterIdentity = await _client.GetClusterIdentityAsync(cancellationToken).ConfigureAwait(false);
         var (options, descriptor) = ReadBinding(
             request.Fence,
             request.Resource,
             request.FencingGeneration,
-            request.ProviderBinding);
+            request.ProviderBinding,
+            clusterIdentity);
         var claimInitiallyPresent = await _client.GetAsync(
             ExtensionsApiGroup,
             "sandboxclaims",
@@ -1977,7 +1983,8 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         EnvironmentGenerationFence fence,
         ProviderResourceRef resource,
         long fencingGeneration,
-        SandboxProviderBindingSnapshot binding)
+        SandboxProviderBindingSnapshot binding,
+        string clusterIdentity)
     {
         _ = binding.ValidateFor(resource);
         if (!string.Equals(binding.ProviderId, AgentSandboxProviderMetadata.ProviderId, StringComparison.Ordinal) ||
@@ -2013,7 +2020,7 @@ public sealed partial class AgentSandboxProvider : ISandboxProvider, ISandboxBui
         if (!string.Equals(options.OptionsRevision, binding.OptionsRevision, StringComparison.Ordinal) ||
             options.OptionsSchemaVersion != binding.OptionsSchemaVersion ||
             !string.Equals(options.Namespace, descriptor.Namespace, StringComparison.Ordinal) ||
-            !string.Equals(descriptor.ClusterIdentity, _client.ClusterIdentity, StringComparison.Ordinal) ||
+            !string.Equals(descriptor.ClusterIdentity, clusterIdentity, StringComparison.Ordinal) ||
             !string.Equals(descriptor.ClaimUid, resource.ResourceId, StringComparison.Ordinal) ||
             descriptor.ResourceGeneration != resource.Generation ||
             !string.Equals(descriptor.StorageProviderId, options.WorkspaceStorageProviderId, StringComparison.Ordinal))

@@ -490,7 +490,10 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
         });
         var egress = new EnvironmentEgressManager(projects, adapter, networkOptions, fixture.CreateStore());
         var manager = new EnvironmentSandboxManager(projects, fixture.CreateStore(), restarted, provider,
-            sandboxOptions, new KubernetesAgentSandboxClient(_kubernetes), networkOptions, egress);
+            sandboxOptions,
+            new KubernetesAgentSandboxClient(_kubernetes, KubernetesTestCaCertificate.Primary),
+            networkOptions,
+            egress);
         var read = manager.GetCurrentPlacementCoreAsync(caller, owner.ProjectId, owner.RunId, owner.EnvironmentId,
             runBoundRead: true, (projection, _) => Task.FromResult(projection), timeout.Token, includeRuntimeReadiness: true);
         await Task.WhenAny(observed.Task, read).WaitAsync(timeout.Token);
@@ -571,7 +574,7 @@ public sealed class EnvironmentRuntimePlacementPostgresTests(EnvironmentPostgres
             "runtime-test@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "linux/amd64", 1, "kata-test", "kata-test", "100m", "128Mi", 20, 100,
             new(30, 30, 30, 30, 30, 120));
-        var client = new KubernetesAgentSandboxClient(_kubernetes);
+        var client = new KubernetesAgentSandboxClient(_kubernetes, KubernetesTestCaCertificate.Primary);
         return new(projects, lifecycle, store, new AgentSandboxProvider(sandboxOptions, client),
             sandboxOptions, client, options, egress);
     }

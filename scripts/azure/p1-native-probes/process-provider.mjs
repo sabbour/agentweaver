@@ -2,7 +2,7 @@
  * Supplies the allowlisted local process recipes used by P1 native recovery probes.
  * Each recipe invokes a fixed command with structured arguments rather than accepting shell text.
  */
-import { createHash } from 'node:crypto';
+import { createHash, X509Certificate } from 'node:crypto';
 import { run } from '../lib/exec.mjs';
 
 const SAFE_RECIPES = new Set([
@@ -20,6 +20,7 @@ const LABEL_VALUE = /^(?:[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?)?$/;
 const DNS_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SHA256 = /^[a-f0-9]{64}$/i;
+const CLUSTER_IDENTITY_PREFIX = 'agentweaver.cluster-identity.v1\0cluster-ca\0';
 const CILIUM_GENERATION = 'agentweaver.dev/egress-generation';
 const CILIUM_HASH = 'agentweaver.dev/egress-intent-sha256';
 const CILIUM_REVOKED = 'agentweaver.dev/egress-revoked';
@@ -132,6 +133,20 @@ function parseJson(text, description) {
   }
 }
 
+/** Parses kubectl jsonpath-as-json output, which wraps selected fields in an array. */
+function parseJsonArray(text, description) {
+  if (typeof text !== 'string' || text.length === 0 || text.length > 1024 * 1024) {
+    throw new Error(`${description} JSON output is missing or too large.`);
+  }
+  try {
+    const value = JSON.parse(text);
+    if (!Array.isArray(value)) throw new Error('not an array');
+    return value;
+  } catch {
+    throw new Error(`${description} returned invalid JSON.`);
+  }
+}
+
 function ownerFingerprint(owner) {
   const values = [owner?.tenantId, owner?.projectId, owner?.runId, owner?.environmentId];
   if (values.some(value => typeof value !== 'string' || value.length === 0)) {
@@ -161,22 +176,58 @@ function labelSelector(labels) {
     .join(',');
 }
 
-function verifyKubernetesServer(server, expectedUid) {
+/** Requires HTTPS and rejects kubeconfig entries that disable CA verification. */
+function verifyKubernetesServer(cluster) {
   let parsed;
   try {
-    parsed = new URL(server);
+    parsed = new URL(cluster.server);
   } catch {
     throw new Error('The selected Kubernetes context has no valid API server URL.');
   }
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password ||
       parsed.search || parsed.hash || parsed.pathname !== '/' ||
-      parsed.port && parsed.port !== '443') {
-    throw new Error('The selected Kubernetes context does not use the pinned HTTPS API server.');
+      parsed.port && parsed.port !== '443' ||
+      cluster['insecure-skip-tls-verify'] === true) {
+    throw new Error('The selected Kubernetes context does not use HTTPS with CA validation.');
   }
-  const identity = createHash('sha256').update(parsed.origin).digest('hex');
-  if (identity !== expectedUid) {
-    throw new Error('The selected Kubernetes API server does not match the pinned cluster identity.');
+}
+
+/** Hashes sorted CA certificate DER bytes so PEM formatting and bundle order do not change the pin. */
+function clusterIdentityFromCaPem(pem) {
+  if (typeof pem !== 'string' || pem.trim().length === 0) {
+    throw new Error('The Kubernetes cluster CA certificate is unavailable.');
   }
+  const blockPattern = /-----BEGIN CERTIFICATE-----\s*([A-Za-z0-9+/=\s]+?)\s*-----END CERTIFICATE-----/g;
+  const blocks = [...pem.matchAll(blockPattern)];
+  const remainder = pem.replace(blockPattern, '');
+  if (blocks.length === 0 ||
+      remainder.split(/\r?\n/).some(line => line.trim() && !line.trim().startsWith('#'))) {
+    throw new Error('The Kubernetes cluster CA bundle is invalid.');
+  }
+  const certificates = [...new Map(blocks.map(([, body]) => {
+    const encoded = body.replace(/\s/g, '');
+    const der = Buffer.from(encoded, 'base64');
+    if (der.length === 0 || der.toString('base64') !== encoded) {
+      throw new Error('The Kubernetes cluster CA bundle is invalid.');
+    }
+    try {
+      new X509Certificate(der);
+    } catch {
+      throw new Error('The Kubernetes cluster CA bundle is invalid.');
+    }
+    return [der.toString('hex'), der];
+  })).values()].sort(Buffer.compare);
+
+  const hash = createHash('sha256').update(CLUSTER_IDENTITY_PREFIX, 'utf8');
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(certificates.length);
+  hash.update(length);
+  for (const certificate of certificates) {
+    length.writeUInt32BE(certificate.length);
+    hash.update(length);
+    hash.update(certificate);
+  }
+  return hash.digest('hex');
 }
 
 function objectIdentity(resource, namespace, name, uid) {
@@ -306,13 +357,13 @@ export function createP1NativeProcessProvider({
   now = Date.now,
 } = {}) {
   requireString(kubeContext, 'Kubernetes context');
-  if (!isRecord(clusterIdentity) || !SHA256.test(clusterIdentity.uid ?? '')) {
+  if (!isRecord(clusterIdentity) || !SHA256.test(clusterIdentity.sha256 ?? '')) {
     throw new Error('A SHA-256 Kubernetes cluster identity is required.');
   }
   if (typeof execute !== 'function' || typeof now !== 'function') {
     throw new Error('The fixed native probe requires process and clock functions.');
   }
-  const expectedClusterIdentity = Object.freeze({ uid: clusterIdentity.uid });
+  const expectedClusterIdentity = Object.freeze({ sha256: clusterIdentity.sha256 });
 
   const invoke = (command, args, timeout = 15_000) => {
     const result = execute(command, args, { check: false, timeout });
@@ -337,19 +388,30 @@ export function createP1NativeProcessProvider({
   };
 
   const verifyTarget = () => {
-    const config = kubectlJson(null, [
-      'config', 'view', '--minify',
-    ], 'Kubernetes context');
-    const contexts = config.contexts;
-    const clusters = config.clusters;
-    if (!Array.isArray(contexts) || contexts.length !== 1 ||
-        contexts[0]?.name !== kubeContext ||
-        !Array.isArray(clusters) || clusters.length !== 1 ||
-        !isRecord(clusters[0]?.cluster) ||
-        typeof clusters[0].cluster.server !== 'string') {
+    // Flatten resolves file-based CA data; JSONPath keeps user credentials out of captured output.
+    const result = invoke('kubectl', kubectlArgs(null, [
+      'config', 'view', '--minify', '--flatten', '--raw',
+      '-o=jsonpath-as-json={.clusters[0].cluster}',
+    ]));
+    if (result.status !== 0) {
+      throw new Error('Kubernetes context observation failed.');
+    }
+    const clusters = parseJsonArray(result.stdout, 'Kubernetes cluster trust');
+    if (!Array.isArray(clusters) || clusters.length !== 1 ||
+        !isRecord(clusters[0]) || typeof clusters[0].server !== 'string') {
       throw new Error('The selected Kubernetes context is ambiguous.');
     }
-    verifyKubernetesServer(clusters[0].cluster.server, expectedClusterIdentity.uid);
+    const cluster = clusters[0];
+    verifyKubernetesServer(cluster);
+    const encodedCa = cluster['certificate-authority-data'];
+    if (typeof encodedCa !== 'string' || encodedCa.length === 0) {
+      throw new Error('The selected Kubernetes context has no cluster CA certificate.');
+    }
+    const caData = Buffer.from(encodedCa, 'base64');
+    if (caData.length === 0 || caData.toString('base64') !== encodedCa ||
+        clusterIdentityFromCaPem(caData.toString('utf8')) !== expectedClusterIdentity.sha256) {
+      throw new Error('The selected Kubernetes cluster does not match the pinned cluster identity.');
+    }
   };
 
   const readPod = (namespace, name) => {
@@ -832,7 +894,7 @@ export function createP1NativeProcessProvider({
         throw new Error('Only source-owned P1 native recipes are supported.');
       }
       if (!isRecord(request.args.expectedClusterIdentity) ||
-          request.args.expectedClusterIdentity.uid !== expectedClusterIdentity.uid) {
+          request.args.expectedClusterIdentity.sha256 !== expectedClusterIdentity.sha256) {
         throw new Error('The native recipe target does not match the configured cluster identity.');
       }
       verifyTarget();

@@ -212,7 +212,8 @@ public sealed partial class AgentSandboxProviderTests
         var handler = new FakeKubernetesHandler();
         handler.EnableBuildTestWorkspace();
         var client = new HttpClient(handler) { BaseAddress = new Uri("https://kubernetes.example/") };
-        var provider = new AgentSandboxProvider(options, new KubernetesAgentSandboxClient(client));
+        var provider = new AgentSandboxProvider(
+            options, new KubernetesAgentSandboxClient(client, KubernetesTestCaCertificate.Primary));
         var provisioned = await provider.ProvisionAsync(new(fence, candidate, 1, 1, operationId, labels, workspace));
         var binding = new SandboxBuildTestExpectedBinding(fence, operationId, provisioned.Resource, 1, volume, 0, 1)
         {

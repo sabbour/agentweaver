@@ -299,6 +299,7 @@ public sealed class EnvironmentSandboxManager(
             await lifecycleStore.RequireActiveAsync(context.Fence, cancellationToken).ConfigureAwait(false);
             if (requireCurrent is not null)
                 await requireCurrent(cancellationToken).ConfigureAwait(false);
+            await VerifyWorkspaceClusterIdentityAsync(latestWorkspace, cancellationToken).ConfigureAwait(false);
             providerAttemptStarted = true;
             var attemptReservation = await leaseStore.BeginProviderAttemptAsync(
                 SandboxProviderAttemptRequest.ForProvision(lease),
@@ -1179,6 +1180,7 @@ public sealed class EnvironmentSandboxManager(
             context.Selection.RunSelection,
             recovery.Request,
             cancellationToken).ConfigureAwait(false);
+        await VerifyWorkspaceClusterIdentityAsync(workspace, cancellationToken).ConfigureAwait(false);
         var expectedAttachment = NegotiateWorkspace(
             context.Fence, recovery.Request, workspace, plannedResource);
         if (!SameSandboxWorkspaceAttachment(expectedAttachment, provisionRequest.Workspace))
@@ -1669,6 +1671,7 @@ public sealed class EnvironmentSandboxManager(
             capabilities,
             binding).Validate();
         var releaseDescriptor = binding.ReleaseDescriptor;
+        var clusterIdentity = RequiredJsonString(releaseDescriptor, "clusterIdentity");
         var claim = new AgentSandboxPersistentVolumeClaimAttachment(
             1,
             binding.ProviderId,
@@ -1676,14 +1679,23 @@ public sealed class EnvironmentSandboxManager(
             RequiredJsonString(releaseDescriptor, "claimName"),
             RequiredJsonString(releaseDescriptor, "claimUid"));
         if (!string.Equals(storageOptions.Namespace, sandboxOptions.Namespace, StringComparison.Ordinal) ||
-            !string.Equals(claim.Namespace, storageOptions.Namespace, StringComparison.Ordinal) ||
-            !string.Equals(
-                RequiredJsonString(releaseDescriptor, "clusterIdentity"),
-                kubernetesClient.ClusterIdentity,
-                StringComparison.Ordinal))
+            !string.Equals(claim.Namespace, storageOptions.Namespace, StringComparison.Ordinal))
             throw new NotSupportedException(
                 "The Workspace PVC provider binding targets a different Kubernetes cluster or namespace.");
-        return new(snapshot, spec, storageResource, claim);
+        return new(snapshot, spec, storageResource, claim, clusterIdentity);
+    }
+
+    /// <summary>Checks the stored Workspace pin against the CA after caller authorization is revalidated.</summary>
+    private async Task VerifyWorkspaceClusterIdentityAsync(
+        WorkspaceContext workspace,
+        CancellationToken cancellationToken)
+    {
+        // Check the cluster pin only after owner and resume authorization checks.
+        var currentClusterIdentity = await kubernetesClient.GetClusterIdentityAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (!string.Equals(workspace.ClusterIdentity, currentClusterIdentity, StringComparison.Ordinal))
+            throw new NotSupportedException(
+                "The Workspace PVC provider binding targets a different Kubernetes cluster.");
     }
 
     /// <summary>Reserves, performs, and records the volume attachment to the exact Sandbox resource generation.</summary>
@@ -2374,12 +2386,13 @@ public sealed class EnvironmentSandboxManager(
         return options;
     }
 
-    /// <summary>Validated workspace-volume request and snapshot used while preparing a Sandbox placement.</summary>
+    /// <summary>Validated workspace snapshot, storage pin, and PVC attachment used for Sandbox placement.</summary>
     private sealed record WorkspaceContext(
         EnvironmentWorkspaceVolumeSnapshot Snapshot,
         WorkspaceVolumeSpec Specification,
         WorkspaceVolumeResource StorageResource,
-        AgentSandboxPersistentVolumeClaimAttachment ClaimAttachment);
+        AgentSandboxPersistentVolumeClaimAttachment ClaimAttachment,
+        string ClusterIdentity);
 
     /// <summary>Persisted provider intent needed to reconcile an uncertain Sandbox operation.</summary>
     private sealed record SandboxProviderRecoveryIntent(

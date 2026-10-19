@@ -359,7 +359,7 @@ function validateOwnerPins(input) {
         matchingProvider.pv?.name !== storage.volume.pv.name ||
         matchingProvider.claimUid !== storage.volume.claimUid ||
         !sameJson(matchingProvider.providerBinding, storage.volume.providerBinding) ||
-        matchingProvider.clusterIdentity?.uid !== pins.context.clusterIdentity.uid) {
+        matchingProvider.clusterIdentity?.sha256 !== pins.context.clusterIdentity.sha256) {
       block('provider_storage_receipt_mismatch', 'Provider PVC/PV and binding receipts must match the owner-scoped storage pin.', {
         ownerId: storage.ownerId,
       });
@@ -484,17 +484,17 @@ function validateInput(input, dependencies) {
   const { pins } = input;
   if (!isRecord(pins.context) || !nonEmpty(pins.context.namespace) ||
       !DNS_LABEL.test(pins.context.namespace) ||
-      !isRecord(pins.context.clusterIdentity) || !nonEmpty(pins.context.clusterIdentity.uid) ||
+      !isRecord(pins.context.clusterIdentity) || !isSha256Hash(pins.context.clusterIdentity.sha256) ||
       pins.namespace !== pins.context.namespace) {
     block('cluster_context_missing', 'The target namespace and exact same-cluster identity are required.');
   }
   if (!isRecord(pins.providerReceipt) ||
-      pins.providerReceipt.clusterIdentity?.uid !== pins.context.clusterIdentity.uid ||
+      pins.providerReceipt.clusterIdentity?.sha256 !== pins.context.clusterIdentity.sha256 ||
       !Array.isArray(pins.providerReceipt.owners)) {
     block('provider_receipt_mismatch', 'The provider receipt must pin the same cluster and both owner PVC/PV resources.');
   }
   if (!isRecord(pins.runtimeReceipt) ||
-      pins.runtimeReceipt.clusterIdentity?.uid !== pins.context.clusterIdentity.uid ||
+      pins.runtimeReceipt.clusterIdentity?.sha256 !== pins.context.clusterIdentity.sha256 ||
       !isRecord(pins.runtimeReceipt.network) ||
       !positive(pins.runtimeReceipt.network.generation) ||
       !Array.isArray(pins.runtimeReceipt.network.allowedServiceIdentities) ||
@@ -690,11 +690,12 @@ function requireOwnerFence(lifecycle, placement, owner, label) {
   }
 }
 
+/** Requires each native receipt to carry the exact pinned CA-bundle digest. */
 function verifyCluster(observed, expected) {
-  if (observed?.clusterIdentity?.uid !== expected.uid) {
+  if (observed?.clusterIdentity?.sha256 !== expected.sha256) {
     block('cluster_identity_mismatch', 'Native evidence does not identify the pinned cluster.', {
-      expectedClusterUid: expected.uid,
-      observedClusterUid: observed?.clusterIdentity?.uid ?? null,
+      expectedClusterIdentitySha256: expected.sha256,
+      observedClusterIdentitySha256: observed?.clusterIdentity?.sha256 ?? null,
     });
   }
 
@@ -1947,7 +1948,7 @@ async function runP1NativeProbesCore(input, dependencies) {
         });
       }
     }
-    return { evidence: { clusterUid: input.pins.context.clusterIdentity.uid, policyUid: policy.uid, generation: network.generation, traffic: observed } };
+    return { evidence: { clusterIdentitySha256: input.pins.context.clusterIdentity.sha256, policyUid: policy.uid, generation: network.generation, traffic: observed } };
   });
 
   const cleanupSandbox = async () => {
@@ -1998,7 +1999,7 @@ async function runP1NativeProbesCore(input, dependencies) {
             current.body?.projectId !== owner.storage.projectId ||
             current.body?.runId !== owner.storage.runId ||
             current.body?.environmentId !== owner.storage.environmentId ||
-            currentNative?.clusterIdentity?.uid !== input.pins.context.clusterIdentity.uid) {
+            currentNative?.clusterIdentity?.sha256 !== input.pins.context.clusterIdentity.sha256) {
           recordCleanup('sandbox-owner-lifecycle', 'final-sandbox-release', 'uncertain', {
             ownerId: owner.storage.ownerId,
             observedResourceId: currentId ?? null,

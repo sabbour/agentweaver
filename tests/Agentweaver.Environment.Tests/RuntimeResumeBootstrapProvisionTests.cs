@@ -44,7 +44,7 @@ public sealed partial class RuntimeResumeBootstrapTests
         var projects = new EnvironmentEgressManagerTests.FakeProjectsConfigClient(authorization, selection);
         using var handler = new Handler(new { });
         using var http = new HttpClient(handler) { BaseAddress = new("https://kubernetes.test/") };
-        var kubernetes = new KubernetesAgentSandboxClient(http);
+        var kubernetes = new KubernetesAgentSandboxClient(http, KubernetesTestCaCertificate.Primary);
         var storage = new ProviderResourceRef(ProviderSeam.Storage, "azure-files-csi", "claim-1", 1);
         var specification = JsonSerializer.SerializeToElement(new WorkspaceVolumeSpec(
             "workspace", fence.Owner.ProjectId, new(WorkspaceVolumeOwnerKind.Run, fence.Owner.RunId),
@@ -58,7 +58,8 @@ public sealed partial class RuntimeResumeBootstrapTests
                 JsonSerializer.SerializeToElement(new
                 {
                     @namespace = "agentweaver", claimName = "claim-1", claimUid = "claim-uid",
-                    clusterIdentity = kubernetes.ClusterIdentity
+                    // Keep setup free of Kubernetes calls so denial tests can assert no provider traffic.
+                    clusterIdentity = "6b333f2199e82077ee02ceffd63b1a2e6ff8becf905f3aa56167a853c36aea75"
                 }, JsonOptions)));
         var lifecycle = new ProvisionLifecycle(fence, volume);
         var egress = EnvironmentEgressManagerTests.Manager(projects,

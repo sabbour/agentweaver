@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { createP1NativeProcessProvider } from './process-provider.mjs';
+import { OTHER_TEST_CLUSTER_CA_PEM, TEST_CLUSTER_CA_PEM } from './test-fixtures.mjs';
 
 const server = 'https://p1-cluster.example.test/';
 const clusterIdentity = {
-  uid: createHash('sha256').update(new URL(server).origin).digest('hex'),
+  sha256: '6b333f2199e82077ee02ceffd63b1a2e6ff8becf905f3aa56167a853c36aea75',
 };
-const expectedClusterIdentity = { uid: clusterIdentity.uid };
+const expectedClusterIdentity = { sha256: clusterIdentity.sha256 };
 const mountOwner = {
   ownerId: 'owner-a',
   actorId: 'actor-a',
@@ -189,14 +190,16 @@ function createServiceProbeHarness({
   };
 }
 
-function configResponse() {
-  return {
-    apiVersion: 'v1',
-    kind: 'Config',
-    contexts: [{ name: 'p1-fixture', context: { cluster: 'p1-cluster' } }],
-    clusters: [{ name: 'p1-cluster', cluster: { server } }],
-  };
+function configResponse(apiServer = server, caPem = TEST_CLUSTER_CA_PEM) {
+  return [{
+    server: apiServer,
+    'certificate-authority-data': Buffer.from(caPem, 'utf8').toString('base64'),
+  }];
 }
+
+test('cluster identity matches the shared C# CA certificate digest', () => {
+  assert.equal(clusterIdentity.sha256, '6b333f2199e82077ee02ceffd63b1a2e6ff8becf905f3aa56167a853c36aea75');
+});
 
 test('only fixed recipes can invoke native commands', async () => {
   const harness = createHarness(() => {
@@ -219,6 +222,7 @@ test('cluster and namespace receipts come from the selected Kubernetes target', 
     assert.equal(args.includes('--context'), true);
     assert.equal(args.includes('p1-fixture'), true);
     if (args.includes('config')) {
+      assert.equal(args.at(-1), '-o=jsonpath-as-json={.clusters[0].cluster}');
       return { status: 0, stdout: JSON.stringify(configResponse()), stderr: '' };
     }
     assert.deepEqual(args.slice(-4), ['namespace', 'p1-fixture', '-o', 'json']);
@@ -245,15 +249,67 @@ test('cluster and namespace receipts come from the selected Kubernetes target', 
   assert.ok(harness.calls.every(call => call.options.check === false));
 });
 
-test('a context pointing at a different API server fails closed', async () => {
+test('the same CA identity is accepted through a different API address and commented PEM bundle', async () => {
+  const alternateServer = 'https://internal-kubernetes.example.test/';
+  const harness = createHarness((command, args) => {
+    assert.equal(command, 'kubectl');
+    if (args.includes('config')) {
+      return {
+        status: 0,
+        stdout: JSON.stringify(configResponse(
+          alternateServer,
+          `# Cluster root CA\r\n${TEST_CLUSTER_CA_PEM.replace(/\n/g, '\r\n')}`,
+        )),
+        stderr: '',
+      };
+    }
+    assert.deepEqual(args.slice(-4), ['namespace', 'p1-fixture', '-o', 'json']);
+    return {
+      status: 0,
+      stdout: JSON.stringify({
+        apiVersion: 'v1',
+        kind: 'Namespace',
+        metadata: { name: 'p1-fixture', uid: 'namespace-uid-1' },
+      }),
+      stderr: '',
+    };
+  });
+
+  const result = await harness.provider.run({
+    recipeId: 'observe-cluster',
+    args: { namespace: 'p1-fixture', expectedClusterIdentity },
+  });
+
+  assert.equal(result.clusterIdentity.sha256, clusterIdentity.sha256);
+  assert.equal(harness.calls.length, 2);
+});
+
+test('a kubeconfig that disables TLS verification fails before Kubernetes reads', async () => {
+  const cluster = [{ ...configResponse()[0], 'insecure-skip-tls-verify': true }];
   const harness = createHarness((command, args) => ({
     status: 0,
-    stdout: JSON.stringify({
-      ...configResponse(),
-      clusters: [{ name: 'p1-cluster', cluster: { server: 'https://other.example.test/' } }],
-    }),
+    stdout: JSON.stringify(cluster),
     stderr: '',
   }));
+
+  await assert.rejects(
+    harness.provider.run({
+      recipeId: 'observe-cluster',
+      args: { namespace: 'p1-fixture', expectedClusterIdentity },
+    }),
+    /does not use HTTPS with CA validation/,
+  );
+  assert.equal(harness.calls.length, 1);
+});
+
+test('a different CA certificate fails the exact-cluster check', async () => {
+  const harness = createHarness(
+    (command, args) => ({
+      status: 0,
+      stdout: JSON.stringify(configResponse('https://other.example.test/', OTHER_TEST_CLUSTER_CA_PEM)),
+      stderr: '',
+    }),
+  );
 
   await assert.rejects(
     harness.provider.run({
@@ -852,7 +908,8 @@ test('marker traversal is rejected before running a container command', async ()
     /outside its exact owned marker path/,
   );
   assert.equal(harness.calls.length, 1);
-  assert.equal(harness.calls[0].args.includes('exec'), false);
+  assert.equal(harness.calls.some(call => call.args.includes('exec')), false);
+  assert.ok(harness.calls.some(call => call.args.includes('config')));
 });
 
 test('service probes require ready endpoints and a matching current Cilium flow', async () => {

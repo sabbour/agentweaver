@@ -25,12 +25,16 @@ public static class WorkspaceVolumeServiceCollectionExtensions
             nameof(kubernetesBaseAddress));
 
         services.AddSingleton(options.Validate());
+        // Both Kubernetes providers derive their cluster pin from this TLS trust bundle.
+        services.AddSingleton<byte[]>(_ => File.ReadAllBytes(certificateAuthorityFile));
         services.AddHttpClient<IAzureFilesCsiClient, KubernetesAzureFilesCsiClient>(client =>
         {
             client.BaseAddress = trustedKubernetesBaseAddress;
             client.Timeout = TimeSpan.FromSeconds(30);
-        }).ConfigurePrimaryHttpMessageHandler(() =>
-            KubernetesServiceAccountHandler.Create(serviceAccountTokenFile, certificateAuthorityFile));
+        }).ConfigurePrimaryHttpMessageHandler(serviceProvider =>
+            KubernetesServiceAccountHandler.Create(
+                serviceAccountTokenFile,
+                serviceProvider.GetRequiredService<byte[]>()));
         services.AddScoped<IWorkspaceVolumeProvider, AzureFilesCsiWorkspaceVolumeProvider>();
         services.AddScoped<WorkspaceVolumeService>();
         services.AddScoped<EnvironmentWorkspaceVolumeManager>();
