@@ -15,6 +15,10 @@ tenant, source revision, and any resource changes. Install Azure CLI, Bicep,
 exact-source procedure in the
 [Azure operator guide](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md);
 do not replace its receipt and target checks with an ad hoc deployment command.
+The separately approved
+[session-material container repair](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#session-material-container-repair)
+is limited to that container and its Events identity grant; it does not replace
+the guarded foundation workflow or establish acceptance evidence.
 
 The examples in this article use the requested environment identifiers.
 `agentweaver-aks` is the Azure Kubernetes Service (AKS) cluster name:
@@ -99,6 +103,12 @@ The AKS API uses managed Microsoft Entra ID authentication and Azure RBAC,
 with local accounts disabled. The deployment keeps PostgreSQL, Key Vault,
 Blob Storage, VNet/private endpoints, and Monitor in their approved target
 and region.
+
+The foundation creates the private `platform-artifacts` and `session-material`
+Blob containers. The Foundation Probe keeps its account-scoped Blob data role;
+Events & Sessions receives Storage Blob Data Contributor on
+`session-material` only. These definitions do not confirm live resource or
+role-assignment state.
 
 ## Check the deployed environment
 

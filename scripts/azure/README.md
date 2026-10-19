@@ -60,15 +60,42 @@ It creates only the Projects & Config, Environment, Knowledge, Events & Sessions
 and Orchestrator runtime identities and their exact ServiceAccount federations.
 Every federation names its service in `agentweaver` and accepts only
 `api://AzureADTokenExchange`.
+The Events & Sessions identity receives Storage Blob Data Contributor only on
+the existing private `session-material` container.
 The target preflight does not enumerate existing resources or compare
 federated-credential bindings after deployment.
 Supply the existing resource group tags and the exact reviewed source SHA.
 
-This template defines no Azure role assignment, database grant, migration,
-certificate, server, storage account, cluster, or node pool change.
-It does not alter Broker, Probe, or migration identities.
+This template defines no database grant, migration, certificate, server,
+storage account, cluster, or node pool change. It does not alter Broker, Probe,
+or migration identities.
 Applying it requires approval for these five identities and workload links.
 A created identity does not prove database access or a ready service.
+
+### Session-material container repair
+
+Use `infra/bicep/p1-session-material-access.bicep` only when the approved
+`agentweaver` resource group already contains the `agentweaverblob` storage
+account and `agentweaver-id-events-and-sessions` identity, but is missing the
+private `session-material` container or its container-scoped role assignment.
+This focused template creates only that container and the Events identity's
+Storage Blob Data Contributor assignment on it. It does not create or update
+identities, federations, the storage account, networking, or workloads.
+
+After separate operator approval, apply it with:
+
+```powershell
+az deployment group create `
+  --subscription 90ab3701-83f0-4ba1-a90a-f2e68683adab `
+  --resource-group agentweaver `
+  --name agentweaver-session-material-access `
+  --template-file infra\bicep\p1-session-material-access.bicep `
+  --parameters namePrefix=agentweaver
+```
+
+This command is an operator procedure, not a command run by local source checks
+or by merging a pull request. The template requires the storage account and
+identity to exist before deployment.
 
 ### P1 PostgreSQL initializer source proposal
 

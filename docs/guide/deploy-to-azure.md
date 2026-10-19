@@ -223,6 +223,11 @@ Before you install the product bundle, confirm that the five identities are
 provisioned and federated to the exact `agentweaver` namespace and service
 ServiceAccounts. Read each client ID from Azure CLI as described in the
 [runtime configuration reference](../reference/runtime-configuration.md).
+The Events & Sessions identity needs Storage Blob Data Contributor on the
+private `session-material` container only. If an existing target is missing
+that container or grant, use the separately approved
+[focused repair procedure](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#session-material-container-repair);
+do not redeploy the full foundation to repair these resources.
 Then review and run the source-bound PostgreSQL initializer:
 
 ```powershell

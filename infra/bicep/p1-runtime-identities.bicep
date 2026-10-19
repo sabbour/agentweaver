@@ -35,6 +35,7 @@ var services = [for name in serviceNames: {
   namespace: namespace
   serviceAccountName: name
 }]
+var eventsAndSessionsIndex = indexOf(serviceNames, 'events-and-sessions')
 
 resource identities 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = [
   for service in services: {
@@ -59,6 +60,20 @@ module federatedCredentials 'modules/workload-identity-federation.bicep' = {
   ]
 }
 
+// Events stores typed session material in this container and needs no account-wide Blob role.
+module eventsSessionMaterialBlobRole 'modules/blob-container-data-contributor.bicep' = {
+  name: '${namePrefix}-events-session-material-blob-role'
+  params: {
+    storageAccountName: toLower(replace('${namePrefix}blob', '-', ''))
+    containerName: 'session-material'
+    identityResourceId: identities[eventsAndSessionsIndex].id
+    principalId: identities[eventsAndSessionsIndex].properties.principalId
+  }
+  dependsOn: [
+    identities
+  ]
+}
+
 output runtimeIdentities array = [for (service, i) in services: {
   name: service.name
   resourceId: identities[i].id
@@ -69,3 +84,4 @@ output runtimeIdentities array = [for (service, i) in services: {
 }]
 
 output oidcIssuerUrl string = aks.properties.oidcIssuerProfile.issuerURL
+output eventsSessionMaterialBlobRoleAssignmentId string = eventsSessionMaterialBlobRole.outputs.roleAssignmentId

@@ -604,7 +604,7 @@ Configuration:
 | `ConnectionStrings:EventsAndSessionsMigration` | Separate PostgreSQL connection using the migration Entra role; required only by `--migrate`. |
 | `EventsAndSessions:Migration:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Separate explicit workload identity used only by `--migrate`. |
 | `EventsAndSessions:RuntimeUsage:Enabled` | Default-off reference-only SDK usage consumer and totals routes. |
-| `EventsAndSessions:SessionMaterial:ContainerUri` | Optional explicit HTTPS Blob container for typed material. Enables the material routes with the existing workload identity. User information, query parameters, fragments, and nested container paths are rejected. |
+| `EventsAndSessions:SessionMaterial:ContainerUri` | Optional explicit HTTPS Blob container for typed material. Enables the material routes with the Events & Sessions workload identity, which receives Storage Blob Data Contributor on the private `session-material` container only. User information, query parameters, fragments, and nested container paths are rejected. |
 | `EventsAndSessions:OrchestratorOwner:OwnerBaseAddress` / `Audience` | Fixed HTTPS Orchestrator owner and existing required audience for immutable source receipts. |
 
 Both connection strings must omit passwords and name their Entra database role.

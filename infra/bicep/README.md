@@ -6,6 +6,7 @@ permissions, or workloads are deployed.
 `main.bicep` composes a dedicated VNet, AKS with a public API endpoint and OIDC/workload identity,
 Entra-only PostgreSQL, Key Vault, Blob, and Azure Monitor.
 Key Vault and Blob have Private Endpoints and private DNS.
+Blob creates private `platform-artifacts` and `session-material` containers.
 PostgreSQL has a delegated subnet and private DNS.
 The full-foundation template explicitly enables Kubernetes RBAC separately from
 Azure RBAC and requests AKS Application Routing's managed default domain when
@@ -55,6 +56,8 @@ Run the local compiler:
 ```powershell
 az bicep build --file infra\bicep\main.bicep --stdout
 az bicep build --file infra\bicep\aks-redeploy.bicep --stdout
+az bicep build --file infra\bicep\p1-runtime-identities.bicep --stdout
+az bicep build --file infra\bicep\p1-session-material-access.bicep --stdout
 ```
 
 This command requires no Azure login.
@@ -121,6 +124,11 @@ migrations or provisions database roles. The
 [infrastructure specification](../../docs/specs/1777-azure-p0-infrastructure.md)
 records the full acceptance boundary. No live database or Azure operation is
 part of these definitions.
+
+The P1 runtime identity definition grants the Events & Sessions identity
+Storage Blob Data Contributor only on the private `session-material` container.
+It does not grant that identity access to the storage account or other
+containers.
 
 Projects & Config applies migrations as its schema owner. After migration
 `20261009021400_AddCastingAuthorityLockFunction` is applied, an approved

@@ -19,9 +19,9 @@ param privateEndpointsSubnetId string
 @description('Resource ID of the privatelink.blob.core.windows.net private DNS zone, linked to the dedicated VNet by the caller.')
 param privateDnsZoneId string
 
-@description('Blob containers to create for platform artifacts. Each is private (no public access).')
-param containerNames array = [
+var containerNames = [
   'platform-artifacts'
+  'session-material'
 ]
 
 var storageAccountName = toLower(replace('${namePrefix}blob', '-', ''))
@@ -51,15 +51,16 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-01-01'
   name: 'default'
 }
 
-resource containers 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-01-01' = [
-  for containerName in containerNames: {
-    parent: blobService
-    name: containerName
-    properties: {
-      publicAccess: 'None'
-    }
+module containers 'blob-containers.bicep' = {
+  name: '${namePrefix}-blob-containers'
+  params: {
+    storageAccountName: storage.name
+    containerNames: containerNames
   }
-]
+  dependsOn: [
+    blobService
+  ]
+}
 
 resource privateEndpoint 'Microsoft.Network/privateEndpoints@2023-09-01' = {
   name: '${namePrefix}-blob-pe'
@@ -101,4 +102,16 @@ resource privateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneG
 output storageAccountId string = storage.id
 output storageAccountName string = storage.name
 output blobEndpoint string = storage.properties.primaryEndpoints.blob
-output platformArtifactsContainerId string = containers[indexOf(containerNames, 'platform-artifacts')].id
+output platformArtifactsContainerId string = resourceId(
+  'Microsoft.Storage/storageAccounts/blobServices/containers',
+  storage.name,
+  'default',
+  'platform-artifacts'
+)
+output sessionMaterialContainerId string = resourceId(
+  'Microsoft.Storage/storageAccounts/blobServices/containers',
+  storage.name,
+  'default',
+  'session-material'
+)
+output sessionMaterialContainerUri string = '${storage.properties.primaryEndpoints.blob}session-material'

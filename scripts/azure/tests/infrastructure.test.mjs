@@ -14,7 +14,7 @@ test('Broker container includes the canonical embedded runtime grants before its
   assert.ok(!dockerfile.includes('COPY infra/ infra/'));
 });
 
-test('limited P1 identity setup creates only five isolated identities and exact workload federations', () => {
+test('limited P1 identity setup grants Events access only to session-material', () => {
   const compiled = runAz([
     'bicep', 'build', '--file', 'infra/bicep/p1-runtime-identities.bicep', '--stdout',
   ]);
@@ -41,8 +41,64 @@ test('limited P1 identity setup creates only five isolated identities and exact 
     'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials',
     'Microsoft.Resources/deployments',
   ].includes(resource.type)));
-  assert.doesNotMatch(JSON.stringify(resources), /Microsoft\.Authorization\/roleAssignments/);
+  const eventsRoleDeployment = template.resources.find(resource =>
+    resource.name === "[format('{0}-events-session-material-blob-role', parameters('namePrefix'))]");
+  assert.ok(eventsRoleDeployment);
+  assert.equal(eventsRoleDeployment.properties.parameters.containerName.value, 'session-material');
+  assert.equal(template.variables.eventsAndSessionsIndex,
+    "[indexOf(variables('serviceNames'), 'events-and-sessions')]");
+  assert.match(eventsRoleDeployment.properties.parameters.identityResourceId.value,
+    /variables\('eventsAndSessionsIndex'\)/);
+  assert.match(eventsRoleDeployment.properties.parameters.principalId.value, /userAssignedIdentities/);
+  const role = eventsRoleDeployment.properties.template.resources.find(resource =>
+    resource.type === 'Microsoft.Authorization/roleAssignments');
+  assert.ok(role);
+  assert.equal(role.properties.principalType, 'ServicePrincipal');
+  assert.equal(role.properties.roleDefinitionId,
+    "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorRoleId'))]");
+  assert.equal(eventsRoleDeployment.properties.template.variables.storageBlobDataContributorRoleId,
+    'ba92f5b4-2d11-453d-a403-e96b0029c9fe');
+  assert.equal(role.scope,
+    "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', parameters('containerName'))]");
+  assert.match(role.name, /parameters\('containerName'\).*parameters\('identityResourceId'\).*storageBlobDataContributorRoleId/);
   assert.equal(template.variables.namespace, 'agentweaver');
+});
+
+test('P0 storage and focused repair define only private session-material access', () => {
+  const storage = JSON.parse(runAz([
+    'bicep', 'build', '--file', 'infra/bicep/modules/storage.bicep', '--stdout',
+  ]).stdout);
+  assert.deepEqual(storage.variables.containerNames, ['platform-artifacts', 'session-material']);
+  const containerDeployment = storage.resources.find(resource =>
+    resource.type === 'Microsoft.Resources/deployments');
+  const containerResource = containerDeployment.properties.template.resources.find(resource =>
+    resource.type === 'Microsoft.Storage/storageAccounts/blobServices/containers');
+  assert.equal(containerResource.properties.publicAccess, 'None');
+
+  const repair = JSON.parse(runAz([
+    'bicep', 'build', '--file', 'infra/bicep/p1-session-material-access.bicep', '--stdout',
+  ]).stdout);
+  assert.deepEqual(repair.parameters.namePrefix.allowedValues, ['agentweaver']);
+  assert.equal(repair.resources.length, 2);
+  const repairContainerDeployment = repair.resources.find(resource =>
+    resource.name === "[format('{0}-session-material-container', parameters('namePrefix'))]");
+  assert.deepEqual(repairContainerDeployment.properties.parameters.containerNames.value, ['session-material']);
+  const repairContainer = repairContainerDeployment.properties.template.resources.find(resource =>
+    resource.type === 'Microsoft.Storage/storageAccounts/blobServices/containers');
+  assert.equal(repairContainer.properties.publicAccess, 'None');
+
+  const repairRoleDeployment = repair.resources.find(resource =>
+    resource.name === "[format('{0}-events-session-material-blob-role', parameters('namePrefix'))]");
+  assert.equal(repairRoleDeployment.properties.parameters.containerName.value, 'session-material');
+  assert.match(repairRoleDeployment.properties.parameters.identityResourceId.value, /events-and-sessions/);
+  const repairRole = repairRoleDeployment.properties.template.resources.find(resource =>
+    resource.type === 'Microsoft.Authorization/roleAssignments');
+  assert.equal(repairRole.scope,
+    "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', parameters('containerName'))]");
+  assert.equal(repairRole.properties.principalType, 'ServicePrincipal');
+  assert.equal(repairRole.properties.roleDefinitionId,
+    "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorRoleId'))]");
+  assert.match(repairRole.name, /parameters\('containerName'\).*parameters\('identityResourceId'\).*storageBlobDataContributorRoleId/);
 });
 
 test('Broker container restores and copies the complete SourceControl project graph', () => {
@@ -280,6 +336,8 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
   ]) {
     assert.ok(template.outputs[field]);
   }
+  assert.ok(template.outputs.sessionMaterialContainerId);
+  assert.ok(template.outputs.sessionMaterialContainerUri);
   assert.equal(template.outputs.operatorRoleAssignmentId, undefined);
   const aksOnly = JSON.parse(runAz([
     'bicep', 'build', '--file', 'infra/bicep/aks-redeploy.bicep', '--stdout',
