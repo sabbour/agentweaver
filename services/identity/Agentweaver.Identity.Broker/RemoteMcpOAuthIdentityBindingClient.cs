@@ -47,7 +47,7 @@ internal sealed class RemoteMcpOAuthIdentityBindingClient : IDisposable
     private readonly Uri _environmentAddress;
 
     public RemoteMcpOAuthIdentityBindingClient(Uri environmentAddress)
-        : this(environmentAddress, new HttpClient(RuntimeOwnerHttpTransport.CreateHandler(), disposeHandler: true),
+        : this(environmentAddress, new HttpClient(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler(), disposeHandler: true),
             ownsClient: true)
     {
     }

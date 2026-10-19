@@ -68,6 +68,14 @@ specific operations, including skill content and Knowledge import. Ordinary
 owner responses are limited to 8 MiB, and redirects are rejected. See the
 [Gateway/BFF guide](../guide/gateway.md) for operation-specific limits.
 
+## Validate owner TLS
+
+Gateway uses `RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler()` for its
+internal owner clients. The handler trusts only the read-only
+`service-backend-ca` mount and checks the owner hostname, certificate validity,
+and server-authentication purpose. The public Broker issuer remains on normal
+system trust for token discovery.
+
 `GET /api/v1/authorization/context` uses a dedicated path. Gateway validates
 the Projects response's no-store header, exact contract shape, caller scope,
 and confirmed tenant context. It does not create membership or derive

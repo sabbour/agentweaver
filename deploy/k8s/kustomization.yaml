@@ -64,31 +64,31 @@ patches:
       name: identity-broker-egress
     patch: |-
       - op: replace
-        path: /spec/egress/0/toPorts/0/rules/dns/2/matchName
+        path: /spec/egress/0/toPorts/0/rules/dns/5/matchName
         value: agentweaver-pg.postgres.database.azure.com
       - op: replace
-        path: /spec/egress/0/toPorts/0/rules/dns/3/matchName
+        path: /spec/egress/0/toPorts/0/rules/dns/6/matchName
         value: login.microsoftonline.com
       - op: replace
-        path: /spec/egress/0/toPorts/0/rules/dns/4/matchName
+        path: /spec/egress/0/toPorts/0/rules/dns/7/matchName
         value: login.microsoftonline.com
       - op: replace
-        path: /spec/egress/2/toFQDNs/1/matchName
+        path: /spec/egress/3/toFQDNs/1/matchName
         value: login.microsoftonline.com
       - op: replace
-        path: /spec/egress/2/toFQDNs/2/matchName
+        path: /spec/egress/3/toFQDNs/2/matchName
         value: login.microsoftonline.com
       - op: replace
-        path: /spec/egress/3/toFQDNs/0/matchName
+        path: /spec/egress/4/toFQDNs/0/matchName
         value: agentweaver-pg.postgres.database.azure.com
       - op: remove
-        path: /spec/egress/0/toPorts/0/rules/dns/4
+        path: /spec/egress/0/toPorts/0/rules/dns/7
       - op: remove
-        path: /spec/egress/0/toPorts/0/rules/dns/3
+        path: /spec/egress/0/toPorts/0/rules/dns/6
       - op: remove
-        path: /spec/egress/2/toFQDNs/2
+        path: /spec/egress/3/toFQDNs/2
       - op: remove
-        path: /spec/egress/2/toFQDNs/1
+        path: /spec/egress/3/toFQDNs/1
 replacements:
   - source:
       kind: ConfigMap
@@ -101,8 +101,8 @@ replacements:
           kind: CiliumNetworkPolicy
           name: identity-broker-egress
         fieldPaths:
-          - spec.egress.0.toPorts.0.rules.dns.1.matchName
-          - spec.egress.2.toFQDNs.0.matchName
+          - spec.egress.0.toPorts.0.rules.dns.4.matchName
+          - spec.egress.3.toFQDNs.0.matchName
   - source:
       kind: ConfigMap
       name: identity-broker-runtime-config-v2

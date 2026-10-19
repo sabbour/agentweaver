@@ -1,5 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Net.Security;
+using System.Security.Cryptography.X509Certificates;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Security.Cryptography;
@@ -13,6 +15,9 @@ namespace Agentweaver.Identity;
 /// </summary>
 public static class RuntimeOwnerHttpTransport
 {
+    private const string ServiceBackendCaFile = "/var/run/service-backend-ca/ca.crt";
+    private const string ServerAuthenticationOid = "1.3.6.1.5.5.7.3.1";
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
@@ -20,8 +25,61 @@ public static class RuntimeOwnerHttpTransport
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) }
     };
 
-    /// <summary>Creates an HTTP handler that refuses owner redirects.</summary>
+    /// <summary>Creates a redirect-disabled handler that uses the operating system certificate trust.</summary>
     public static HttpClientHandler CreateHandler() => new() { AllowAutoRedirect = false };
+
+    /// <summary>
+    /// Creates an internal owner handler that trusts only the mounted service backend CA.
+    /// Use the system-trust handler for public OIDC discovery and other public HTTPS endpoints.
+    /// </summary>
+    public static HttpClientHandler CreateTrustedOwnerHandler()
+    {
+        if (!File.Exists(ServiceBackendCaFile))
+            throw new InvalidOperationException("The public service backend CA ConfigMap is required.");
+
+        return new HttpClientHandler
+        {
+            AllowAutoRedirect = false,
+            UseCookies = false,
+            ServerCertificateCustomValidationCallback = (_, certificate, peerChain, errors) =>
+                ValidateServerCertificate(certificate, peerChain, errors, ServiceBackendCaFile),
+        };
+    }
+
+    /// <summary>
+    /// Validates an owner certificate against the mounted root and requires server-auth usage.
+    /// It rebuilds the chain because the backend root is not in system trust; the handler still
+    /// checks the configured owner hostname.
+    /// </summary>
+    internal static bool ValidateServerCertificate(
+        X509Certificate? certificate,
+        X509Chain? peerChain,
+        SslPolicyErrors errors,
+        string caFile)
+    {
+        if (certificate is null || errors.HasFlag(SslPolicyErrors.RemoteCertificateNameMismatch))
+            return false;
+
+        using var root = X509CertificateLoader.LoadCertificateFromFile(caFile);
+        using var leaf = X509CertificateLoader.LoadCertificate(certificate.Export(X509ContentType.Cert));
+        var extendedKeyUsage = leaf.Extensions.OfType<X509EnhancedKeyUsageExtension>().SingleOrDefault();
+        if (extendedKeyUsage is null ||
+            !extendedKeyUsage.EnhancedKeyUsages.Cast<Oid>().Any(oid => oid.Value == ServerAuthenticationOid))
+            return false;
+
+        using var chain = new X509Chain();
+        chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+        chain.ChainPolicy.CustomTrustStore.Add(root);
+        chain.ChainPolicy.ApplicationPolicy.Add(new Oid(ServerAuthenticationOid));
+        chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+        chain.ChainPolicy.DisableCertificateDownloads = true;
+        if (peerChain is not null)
+        {
+            foreach (var element in peerChain.ChainElements.Cast<X509ChainElement>().Skip(1))
+                chain.ChainPolicy.ExtraStore.Add(element.Certificate);
+        }
+        return chain.Build(leaf);
+    }
 
     /// <summary>Requires an absolute HTTPS owner origin with no path, query, or fragment.</summary>
     public static Uri RequireOwnerAddress(Uri address)

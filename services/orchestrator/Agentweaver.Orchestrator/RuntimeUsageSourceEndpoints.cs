@@ -28,7 +28,7 @@ public static class RuntimeUsageSourceEndpoints
         services.AddSingleton(new RuntimeUsageSourceOptions(RuntimeOwnerHttpTransport.RequireOwnerAddress(uri)));
         services.AddScoped<RuntimeUsageSourceOwner>();
         services.AddHttpClient<RuntimeUsageBrokerClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
-            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
         return true;
     }
 

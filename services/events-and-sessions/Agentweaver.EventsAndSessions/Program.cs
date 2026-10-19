@@ -94,10 +94,10 @@ builder.Services.AddSingleton<IProjectFactJournal, PostgresProjectFactJournal>()
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddHttpClient<KnowledgeAcceptedEffectReceiptClient>(client =>
     client.BaseAddress = acceptedEffectOptions.KnowledgeBaseAddress)
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddHttpClient<ProjectsConfigAuthorizationClient>(client =>
     client.BaseAddress = acceptedEffectOptions.ProjectsConfigBaseAddress)
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddScoped<AcceptedEffectApplicationService>();
 var projectsAuthorization = builder.Configuration.GetSection("ProjectsConfig:AuthorizationContext");
 builder.Services.AddSingleton(new ProjectsAuthorizationContextOptions(
@@ -105,14 +105,14 @@ builder.Services.AddSingleton(new ProjectsAuthorizationContextOptions(
     projectsAuthorization["Audience"],
     issuerUri.AbsoluteUri));
 builder.Services.AddHttpClient<IProjectsAuthorizationContextClient, ProjectsAuthorizationContextClient>()
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 var coordinationOwner = builder.Configuration.GetSection("EventsAndSessions:OrchestratorOwner");
 builder.Services.AddSingleton(new CoordinationOwnerClientOptions(
     coordinationOwner["OwnerBaseAddress"],
     coordinationOwner["Audience"],
     issuerUri.AbsoluteUri));
 builder.Services.AddHttpClient<ICoordinationOwnerClient, CoordinationOwnerClient>()
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+    .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
 builder.Services.AddAuthentication(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
 builder.Services.AddOpenIddict().AddValidation(validation =>
 {

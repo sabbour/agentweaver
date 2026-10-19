@@ -442,6 +442,8 @@ UID/GID/fsGroup 1000, and HTTPS health probes. Only this profile asks the Sandbo
 controller to create its private ClusterIP Service. The provider and runtime endpoint
 require HTTPS on TCP 8443 and verify that the Service selector resolves to exactly the
 actual AgentHost Pod; no shared AgentHost Deployment or Service is created.
+The Pod also mounts `service-backend-ca` read-only at
+`/var/run/service-backend-ca` for its internal owner HTTP clients.
 That Pod has stable `agentweaver.io/workload: agenthost` and
 `agentweaver.io/identity-client: "true"` labels. The latter selects the existing
 Identity Broker network rule and grants no application authority.

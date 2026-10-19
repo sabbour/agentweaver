@@ -1,20 +1,19 @@
-extern alias McpHost;
-
 using System.Net.Security;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
-using McpGatewayCertificateValidation = McpHost::Agentweaver.Mcp.McpGatewayCertificateValidation;
 using Xunit;
 
-namespace Agentweaver.Mcp.Tests;
+namespace Agentweaver.Identity.Tests;
 
-public sealed class BackendCertificateValidationTests
+/// <summary>Checks the custom-root and server-purpose contract for internal owner HTTPS calls.</summary>
+public sealed class ServiceBackendCertificateValidationTests
 {
     private const string ServerAuthenticationOid = "1.3.6.1.5.5.7.3.1";
     private const string ClientAuthenticationOid = "1.3.6.1.5.5.7.3.2";
 
+    /// <summary>Rejects untrusted roots, hostname mismatch, expiry, and certificates without server-auth usage.</summary>
     [Fact]
-    public void GatewayCertificateRequiresServerAuthenticationTrustedRootAndMatchingHostname()
+    public void OwnerCertificateRequiresServerAuthenticationTrustedRootAndMatchingHostname()
     {
         using var rootKey = RSA.Create(2048);
         using var otherRootKey = RSA.Create(2048);
@@ -34,15 +33,18 @@ public sealed class BackendCertificateValidationTests
             File.WriteAllText(rootFile, root.ExportCertificatePem());
             File.WriteAllText(otherRootFile, otherRoot.ExportCertificatePem());
 
-            Assert.True(McpGatewayCertificateValidation.Validate(leaf, null, SslPolicyErrors.None, rootFile));
-            Assert.False(McpGatewayCertificateValidation.Validate(
-                leaf, null, SslPolicyErrors.RemoteCertificateNameMismatch, rootFile));
-            Assert.False(McpGatewayCertificateValidation.Validate(leaf, null, SslPolicyErrors.None, otherRootFile));
-            Assert.False(McpGatewayCertificateValidation.Validate(
+            Assert.True(RuntimeOwnerHttpTransport.ValidateServerCertificate(
+                leaf, null, SslPolicyErrors.RemoteCertificateChainErrors, rootFile));
+            Assert.False(RuntimeOwnerHttpTransport.ValidateServerCertificate(
+                leaf, null, SslPolicyErrors.RemoteCertificateNameMismatch |
+                    SslPolicyErrors.RemoteCertificateChainErrors, rootFile));
+            Assert.False(RuntimeOwnerHttpTransport.ValidateServerCertificate(
+                leaf, null, SslPolicyErrors.None, otherRootFile));
+            Assert.False(RuntimeOwnerHttpTransport.ValidateServerCertificate(
                 clientAuthLeaf, null, SslPolicyErrors.None, rootFile));
-            Assert.False(McpGatewayCertificateValidation.Validate(
+            Assert.False(RuntimeOwnerHttpTransport.ValidateServerCertificate(
                 expiredLeaf, null, SslPolicyErrors.None, rootFile));
-            Assert.False(McpGatewayCertificateValidation.Validate(
+            Assert.False(RuntimeOwnerHttpTransport.ValidateServerCertificate(
                 unrestrictedLeaf, null, SslPolicyErrors.None, rootFile));
         }
         finally
@@ -52,6 +54,7 @@ public sealed class BackendCertificateValidationTests
         }
     }
 
+    /// <summary>Creates a root certificate for an isolated validation test.</summary>
     private static X509Certificate2 CreateRoot(RSA key, string subject)
     {
         var request = new CertificateRequest(
@@ -63,6 +66,7 @@ public sealed class BackendCertificateValidationTests
         return request.CreateSelfSigned(DateTimeOffset.UtcNow.AddHours(-4), DateTimeOffset.UtcNow.AddDays(1));
     }
 
+    /// <summary>Creates a service leaf with a configurable purpose and validity window.</summary>
     private static X509Certificate2 CreateLeaf(
         X509Certificate2 root,
         RSA key,

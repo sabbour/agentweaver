@@ -28,11 +28,11 @@ public static class RuntimeRegistrationEndpoints
             services.GetRequiredService<Npgsql.NpgsqlDataSource>(), options.Schema,
             services.GetRequiredService<TimeProvider>()));
         services.AddHttpClient<RuntimeEnvironmentContextClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
-            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
         services.AddHttpClient("runtime-suspend-environment", client => client.Timeout = TimeSpan.FromSeconds(15))
-            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
         services.AddHttpClient("runtime-suspend-host", client => client.Timeout = TimeSpan.FromSeconds(30))
-            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
         services.AddScoped(serviceProvider => new RuntimeWorkspaceSuspendHttpClient(
             serviceProvider.GetRequiredService<IHttpClientFactory>().CreateClient("runtime-suspend-environment"),
             serviceProvider.GetRequiredService<RuntimeRegistrationOwnerOptions>().EnvironmentOwnerAddress,

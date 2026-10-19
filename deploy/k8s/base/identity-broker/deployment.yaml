@@ -67,6 +67,9 @@ spec:
             - name: tls-certificate
               mountPath: /var/run/identity-broker-tls
               readOnly: true
+            - name: projects-ca
+              mountPath: /var/run/service-backend-ca
+              readOnly: true
             - name: signing-material
               mountPath: /var/run/identity-broker-signing
               readOnly: true
@@ -122,6 +125,14 @@ spec:
             items:
               - key: signing.pfx
                 path: signing.pfx
+        - name: projects-ca
+          configMap:
+            name: service-backend-ca
+            optional: false
+            defaultMode: 0440
+            items:
+              - key: ca.crt
+                path: ca.crt
         - name: key-ring
           persistentVolumeClaim:
             claimName: identity-broker-key-ring

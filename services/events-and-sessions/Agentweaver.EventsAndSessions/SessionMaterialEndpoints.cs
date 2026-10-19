@@ -218,7 +218,7 @@ public static class SessionMaterialEndpoints
         services.AddScoped<SessionMaterialStore>();
         services.AddScoped<SessionMaterialApplicationService>();
         services.AddHttpClient<SessionMaterialRuntimeClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
-            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
     }
 
     /// <summary>Maps write, read, and resume-configuration routes; every response is marked no-store.</summary>

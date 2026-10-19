@@ -224,6 +224,12 @@
       "agentweaver.abstractions": {
         "type": "Project"
       },
+      "agentweaver.identity": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[1.1.1, )"
+        }
+      },
       "agentweaver.telemetry": {
         "type": "Project",
         "dependencies": {

@@ -24,9 +24,9 @@ public static class RuntimeCredentialComposition
         services.AddSingleton(new RuntimeCredentialPolicy(
             issuer, options.BootstrapLifetime, options.SourceLifetime));
         services.AddHttpClient(nameof(RuntimeRegistrationHttpClient))
-            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
         services.AddHttpClient(nameof(BrokerRuntimeBootstrapDeliveryClient))
-            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
         services.AddSingleton(options);
         services.AddTransient<IRuntimeRegistrationOwner>(provider =>
             new RuntimeRegistrationHttpClient(

@@ -255,7 +255,7 @@ if (copilotConnectionOptions is not null)
             "Copilot connections require explicit OAuth and protected-store configuration with the fixed browser return path.");
     builder.Services.AddSingleton(copilotConnectionOptions);
     builder.Services.AddHttpClient("CopilotConnectionProjects")
-        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
     builder.Services.AddHttpClient("CopilotConnectionGitHub")
         .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
     builder.Services.AddSingleton<ISecretVersionWriter>(provider => new AzureKeyVaultSecretVersionWriter(
@@ -302,9 +302,9 @@ if (identityOptions.RemoteMcpOAuth is { } remoteMcpOAuthOptions)
     RuntimeOwnerHttpTransport.RequireOwnerAddress(environmentOwnerAddress);
     builder.Services.AddSingleton(remoteMcpOAuthOptions);
     builder.Services.AddHttpClient("RemoteMcpOAuthProjects")
-        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
     builder.Services.AddHttpClient("RemoteMcpOAuthEnvironment")
-        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+        .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
     builder.Services.AddHttpClient("RemoteMcpOAuthProvider")
         .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
     builder.Services.AddScoped(provider => new RemoteMcpOAuthManagementService(
@@ -340,7 +340,7 @@ builder.Services.AddHttpClient(BrokerRunBindingAuthority.HttpClientName, client 
         client.Timeout = TimeSpan.FromSeconds(15))
     .ConfigurePrimaryHttpMessageHandler(services =>
         services.GetService<BrokerRunBindingTlsIdentity>()?.CreateHandler() ??
-        RuntimeOwnerHttpTransport.CreateHandler());
+       RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler());
 builder.Services.AddScoped(provider => new BrokerRunBindingAuthority(
     identityOptions,
     provider.GetRequiredService<X509Certificate2>(),

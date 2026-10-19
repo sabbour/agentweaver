@@ -210,6 +210,15 @@ AKS exposes a public API endpoint protected by managed Entra authentication and 
 
 The base NetworkPolicy denies traffic by default. The Foundation Probe overlay grants its own egress. The base does not provide telemetry exporter egress.
 
+The base Cilium policies allow internal owner calls by exact service DNS name on
+the service HTTPS port. The shared Broker-issuer policy also allows its selected
+workloads to reach the `identity-broker` Gateway Pods on TCP 443. Cilium
+kube-proxy replacement maps the public issuer address to those Pods inside the
+cluster, so an FQDN-only rule cannot authorize that hairpin path. Events &
+Sessions and Projects & Config have separate endpoint rules for the same
+Gateway. Identity Broker has exact DNS and endpoint rules for its Projects,
+Orchestrator, and Environment owner calls.
+
 The Foundation Probe Job has a dedicated workload identity. It exercises Key
 Vault, Blob, PostgreSQL, and telemetry without redeeming through the Identity
 broker. A separate read-only consumer checks the completed Job and pod. It

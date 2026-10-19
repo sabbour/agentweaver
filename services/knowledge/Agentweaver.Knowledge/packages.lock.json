@@ -245,6 +245,12 @@
       "agentweaver.abstractions": {
         "type": "Project"
       },
+      "agentweaver.identity": {
+        "type": "Project",
+        "dependencies": {
+          "Agentweaver.Abstractions": "[1.1.1, )"
+        }
+      },
       "agentweaver.persistence.postgres": {
         "type": "Project",
         "dependencies": {
@@ -254,7 +260,7 @@
       "agentweaver.providers": {
         "type": "Project",
         "dependencies": {
-          "Agentweaver.Abstractions": "[1.0.0, )"
+          "Agentweaver.Abstractions": "[1.1.1, )"
         }
       },
       "agentweaver.telemetry": {

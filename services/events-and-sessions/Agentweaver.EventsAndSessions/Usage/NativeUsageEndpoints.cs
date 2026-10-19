@@ -314,9 +314,9 @@ public static class NativeUsageEndpoints
         services.AddSingleton<NativeUsageReceiptConsumer>();
         services.AddScoped<NativeUsageApplicationService>();
         services.AddHttpClient<RuntimeRunAdmissionService>(client => client.Timeout = TimeSpan.FromSeconds(20))
-            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
         services.AddHttpClient<NativeUsageReceiptClient>(client => client.Timeout = TimeSpan.FromSeconds(15))
-            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateHandler);
+            .ConfigurePrimaryHttpMessageHandler(RuntimeOwnerHttpTransport.CreateTrustedOwnerHandler);
         return true;
     }
 
