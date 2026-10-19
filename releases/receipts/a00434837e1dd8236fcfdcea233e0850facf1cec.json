@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "a00434837e1dd8236fcfdcea233e0850facf1cec",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "992b8bee19a8e6124ce9604cb8484d9655b6657093aebebc4cddf8a185e3af2a",
+  "appliedAt": "2026-10-19T10:21:04.079Z",
+  "components": [
+    {
+      "id": "Agentweaver.AgentHost",
+      "fromVersion": "1.0.1",
+      "toVersion": "1.0.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Environment",
+      "fromVersion": "1.1.2",
+      "toVersion": "1.1.3",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.EventsAndSessions",
+      "fromVersion": "1.1.1",
+      "toVersion": "1.1.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Gateway",
+      "fromVersion": "1.1.0",
+      "toVersion": "1.1.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Identity.Broker",
+      "fromVersion": "1.1.1",
+      "toVersion": "1.1.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Knowledge",
+      "fromVersion": "1.0.2",
+      "toVersion": "1.0.3",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Mcp",
+      "fromVersion": "1.0.1",
+      "toVersion": "1.0.2",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Orchestrator",
+      "fromVersion": "1.1.0",
+      "toVersion": "1.1.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Projects.Config",
+      "fromVersion": "1.1.0",
+      "toVersion": "1.1.1",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Providers.Sandbox.AgentSandbox",
+      "fromVersion": "1.1.2",
+      "toVersion": "1.1.3",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Providers.Storage.AzureFiles",
+      "fromVersion": "1.0.3",
+      "toVersion": "1.0.4",
+      "bump": "patch"
+    },
+    {
+      "id": "Agentweaver.Web",
+      "fromVersion": "1.0.2",
+      "toVersion": "1.0.3",
+      "bump": "patch"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/stable-cluster-identity.md",
+      "archivedPath": ".changeset/archive/stable-cluster-identity.md",
+      "sha256": "3c2ace835a55aa6dfdf565bed44f9dd7d2d6db4d735d6e4921b7d298eb95373d"
+    },
+    {
+      "sourcePath": ".changeset/v1-0-4-product-image-source-labels.md",
+      "archivedPath": ".changeset/archive/v1-0-4-product-image-source-labels.md",
+      "sha256": "1225fe44e37b73eec1fecf7b5fc5b403e90b291626d7de213b2b45a9ad790ab8"
+    }
+  ]
+}

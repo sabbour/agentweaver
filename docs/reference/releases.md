@@ -26,22 +26,22 @@ digests or release evidence, so it is not an accepted platform release.
 | `Agentweaver.Secrets.AzureKeyVault` | Library | `1.0.2` |
 | `Agentweaver.Identity` | Library | `1.2.0` |
 | `Agentweaver.AgentRuntime` | Library | `1.1.1` |
-| `Agentweaver.AgentHost` | Service | `1.0.1` |
+| `Agentweaver.AgentHost` | Service | `1.0.2` |
 | `Agentweaver.Telemetry` | Library | `1.0.2` |
 | `Agentweaver.Telemetry.AzureMonitor` | Library | `1.0.2` |
 | `Agentweaver.ObjectStore.AzureBlob` | Library | `1.0.2` |
-| `Agentweaver.Identity.Broker` | Service | `1.1.0` |
-| `Agentweaver.EventsAndSessions` | Service | `1.1.0` |
-| `Agentweaver.Gateway` | Service | `1.1.0` |
-| `Agentweaver.Mcp` | Service | `1.0.1` |
-| `Agentweaver.Web` | Service | `1.0.1` |
-| `Agentweaver.Orchestrator` | Service | `1.1.0` |
-| `Agentweaver.Environment` | Service | `1.1.0` |
-| `Agentweaver.Knowledge` | Service | `1.0.1` |
-| `Agentweaver.Projects.Config` | Service | `1.1.0` |
-| `Agentweaver.FoundationProbe` | Acceptance-only service | `0.0.2` |
-| `Agentweaver.Providers.Storage.AzureFiles` | Library | `1.0.2` |
-| `Agentweaver.Providers.Sandbox.AgentSandbox` | Library | `1.1.1` |
+| `Agentweaver.Identity.Broker` | Service | `1.1.2` |
+| `Agentweaver.EventsAndSessions` | Service | `1.1.2` |
+| `Agentweaver.Gateway` | Service | `1.1.1` |
+| `Agentweaver.Mcp` | Service | `1.0.2` |
+| `Agentweaver.Web` | Service | `1.0.3` |
+| `Agentweaver.Orchestrator` | Service | `1.1.1` |
+| `Agentweaver.Environment` | Service | `1.1.3` |
+| `Agentweaver.Knowledge` | Service | `1.0.3` |
+| `Agentweaver.Projects.Config` | Service | `1.1.1` |
+| `Agentweaver.FoundationProbe` | Acceptance-only service | `0.0.3` |
+| `Agentweaver.Providers.Storage.AzureFiles` | Library | `1.0.4` |
+| `Agentweaver.Providers.Sandbox.AgentSandbox` | Library | `1.1.3` |
 
 The manifest pins project-reference compatibility but does not yet pin service
 images. Its compatibility table contains 53 direct dependency relationships.
