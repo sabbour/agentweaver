@@ -158,7 +158,11 @@ changes are approved.
 `release:deploy-bootstrap` is a separate pre-acceptance path. It requires the
 exact draft manifest and source-bound publication evidence for the requested
 version; some partial-publication cases also require their immutable completion
-proof. Its dry run does not create release-acceptance evidence. Use
+proof. For patch upgrades, it can report and replace only a changed immutable
+`agenthost-runtime-v1` ConfigMap after preflighting the rest of the bundle;
+unchanged data follows the normal apply path. It never replaces
+`environment-cilium-config` or any other ConfigMap. Its dry run does not create
+release-acceptance evidence. Use
 `release:deploy` for the strict release gate. For the exact v1.0.3 source,
 receipt artifact, and bootstrap invocation, follow the
 [release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v103-pre-acceptance-bootstrap).
