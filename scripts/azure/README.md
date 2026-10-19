@@ -641,6 +641,11 @@ arguments for a guarded live read-only what-if. `deploy.mjs --execute` performs
 the guarded what-if before Incremental create. The source guard requires a
 clean HEAD equal to the fetched admitted `origin/v1` tip; deployment does not
 accept a caller-selected `--expected-sha`.
+For the AKS-only template, the top-level what-if does not show resources inside
+the nested workload-identity federation deployment. The preflight lists the
+three federated identity credentials that the nested deployment will create or
+update. It does not query existing credentials to distinguish creates from
+updates.
 Bicep source parameters and outputs bind the receipt to exact reviewed inputs.
 No unsupported deployment tags occur.
 

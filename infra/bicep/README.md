@@ -78,6 +78,9 @@ existing probe, broker, and migration federated credentials. Their ServiceAccoun
 `api://AzureADTokenExchange` audience remain unchanged. The guard verifies all
 three existing records before deployment and blocks if one is missing or has
 different bindings.
+The parent what-if does not show resources inside the nested federation module.
+The AKS-only preflight lists the three credential create-or-update declarations,
+but does not query existing credentials to distinguish creates from updates.
 
 ## Identity and PostgreSQL
 

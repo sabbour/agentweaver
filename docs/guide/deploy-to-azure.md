@@ -102,6 +102,10 @@ template only for an approved initial deployment into an empty managed-resource
 target. For an existing P0 cluster, the AKS-only template refreshes the three
 workload-identity federated credentials without PUTting AKS; its what-if must
 not contain a managed-cluster change. Review the what-if output before execution.
+The top-level what-if does not show resources inside the nested workload-identity
+federation deployment. The preflight lists the three federated identity
+credentials that the nested deployment will create or update. It does not query
+existing credentials to distinguish creates from updates.
 
 The infrastructure installer does not create Kubernetes namespaces or grant
 human AKS permissions. It never creates, requires, or verifies a human
