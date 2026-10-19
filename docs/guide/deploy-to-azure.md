@@ -97,9 +97,11 @@ call. After the target and effects are approved, add `--execute` to the same
 command. It provisions the Azure foundation. The preflight checks the allowed
 subscription and tenant, enabled account, dedicated resource group, configured
 Key Vault name, exact source, and Bicep inputs. It does not enumerate existing
-resources or compare their properties after deployment. Choose the full
-foundation or AKS-only template for the intended change and review the
-what-if output before execution.
+resources or compare their properties after deployment. Use the full-foundation
+template only for an approved initial deployment into an empty managed-resource
+target. For an existing P0 cluster, the AKS-only template refreshes the three
+workload-identity federated credentials without PUTting AKS; its what-if must
+not contain a managed-cluster change. Review the what-if output before execution.
 
 The infrastructure installer does not create Kubernetes namespaces or grant
 human AKS permissions. It never creates, requires, or verifies a human
@@ -117,8 +119,10 @@ configuration.
 
 ## 4. Connect to AKS and prepare the namespace
 
-The AKS template enables Microsoft Entra authentication with Azure RBAC and
-disables local accounts. Before you run Kubernetes commands, an administrator
+The full-foundation template enables Kubernetes RBAC and Microsoft Entra
+authentication with Azure RBAC, and disables local accounts. The AKS-only
+template reads the existing cluster and does not change those settings or its
+AKS-managed Application Routing domain. Before you run Kubernetes commands, an administrator
 must provision authorization for your identity to retrieve user credentials,
 such as the `Azure Kubernetes Service Cluster User Role`. This Azure role does
 not grant Kubernetes API permissions. Your identity also needs API connectivity

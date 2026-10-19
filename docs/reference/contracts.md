@@ -1129,9 +1129,9 @@ and migration-history writes remain forbidden.
 
 ## AKS Application Routing preview
 
-`appRoutingDnsZoneResourceIds` is an optional deployment input. Empty input requests AKS's managed default domain. One to five unique existing public or private DNS zone IDs request custom domains and disable that default. IDs must belong to the exact authorized subscription, cannot name PrivateLink zones, and can use at most one resource group per zone kind.
+`appRoutingDnsZoneResourceIds` is an optional full-foundation input. Empty input requests AKS's managed default domain. One to five unique existing public or private DNS zone IDs request custom domains and disable that default. IDs must belong to the exact authorized subscription, cannot name PrivateLink zones, and can use at most one resource group per zone kind. The existing-cluster `aks-redeploy.bicep` path does not accept this input or change routing configuration.
 
-The `appRoutingDomain` output has `managedDefaultRequested` and `domainName` fields. For an empty zone list, the template returns the exact `defaultDomain.domainName` from the AKS response. For custom zones, it returns `domainName: null`. The source does not construct hostnames or configure HTTP routes.
+The full-foundation `appRoutingDomain` output has `managedDefaultRequested` and `domainName` fields. For an empty zone list, the template returns the exact `defaultDomain.domainName` from the AKS response. For custom zones, it returns `domainName: null`. The AKS-only output reports the existing `defaultDomain.enabled` and `defaultDomain.domainName` values, or `false` and `null` when AKS omits `defaultDomain`. Neither path constructs hostnames or configures HTTP routes.
 
 The `appRoutingIdentity` output is separate from `foundationProbeIdentity`. It contains the AKS-generated `resourceId`, `clientId`, and `objectId`.
 

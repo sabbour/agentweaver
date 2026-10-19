@@ -23,7 +23,7 @@ function sourceFixture(overrides = {}) {
   const parameterValues = aksOnly
     ? { namePrefix: { value: 'agentweaver' }, tenantId: { value: ids.tenantId },
       owner: { value: 'team' }, costCenter: { value: 'p0' }, location: { value: source.location },
-      appRoutingDnsZoneResourceIds: { value: [] } }
+    }
     : { namePrefix: { value: 'agentweaver' },
       tenantId: { value: ids.tenantId }, owner: { value: 'team' }, costCenter: { value: 'p0' },
       location: { value: source.location }, monitorLocation: { value: source.monitorLocation },
@@ -32,9 +32,13 @@ function sourceFixture(overrides = {}) {
       postgresEntraAdminPrincipalName: { value: source.postgresEntraAdminPrincipalName },
       postgresEntraAdminPrincipalType: { value: source.postgresEntraAdminPrincipalType } };
   Object.assign(parameterValues, overrides.parameterValues);
-  parameterValues.nodePoolMinCount ??= { value: 2 };
-  parameterValues.nodePoolMaxCount ??= { value: 3 };
-  if (!overrides.omitZones) parameterValues.appRoutingDnsZoneResourceIds = { value: overrides.zoneIds ?? [] };
+  if (!aksOnly) {
+    parameterValues.nodePoolMinCount ??= { value: 2 };
+    parameterValues.nodePoolMaxCount ??= { value: 3 };
+  }
+  if (!aksOnly && !overrides.omitZones) {
+    parameterValues.appRoutingDnsZoneResourceIds = { value: overrides.zoneIds ?? [] };
+  }
   const parameters = JSON.stringify({ parameters: parameterValues });
   const files = { [template]: 'targetScope = \'resourceGroup\'\n', [parameterPath]: parameters };
   if (aksOnly) {
@@ -148,6 +152,9 @@ test('AKS-only source accepts only its reviewed template and parameter file', ()
   assert.equal(receipt.scope, 'aks-only');
   assert.equal(receipt.template.endsWith('aks-redeploy.bicep'), true);
   assert.equal(receipt.parametersFile.endsWith('p0-aks-redeploy.approved.json'), true);
+  assert.equal(receipt.nodePoolMinCount, 2);
+  assert.equal(receipt.nodePoolMaxCount, 3);
+  assert.deepEqual(receipt.appRoutingDnsZoneResourceIds, []);
 
   for (const overrides of [
     { config: { template: 'infra/bicep/aks-redeploy.bicep', parametersFile: 'infra/bicep/parameters/approved.json' } },
@@ -155,6 +162,14 @@ test('AKS-only source accepts only its reviewed template and parameter file', ()
     const invalid = sourceFixture({ config: { template: 'infra/bicep/aks-redeploy.bicep', ...overrides.config } });
     assert.throws(() => resolveSource(invalid.config, invalid.deps));
   }
+});
+
+test('AKS-only source rejects App Routing DNS inputs because it does not update the cluster', () => {
+  const { config, deps } = sourceFixture({
+    config: { template: 'infra/bicep/aks-redeploy.bicep' },
+    parameterValues: { appRoutingDnsZoneResourceIds: { value: [] } },
+  });
+  assert.throws(() => resolveSource(config, deps), /does not change Application Routing DNS/);
 });
 
 test('AKS-only source binds existing PostgreSQL admin to the exact approved full-foundation inputs', () => {

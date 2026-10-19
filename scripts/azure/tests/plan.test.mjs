@@ -28,3 +28,9 @@ test('what-if rejects caller template without source receipt', () => {
   assert.throws(() => buildWhatIfArgs({ resourceGroup: 'shared', template: 'anything' }));
   assert.throws(() => buildWhatIfArgs({ resourceGroup: 'agentweaver', template: 'anything' }));
 });
+
+test('AKS-only what-if does not submit a cluster node-pool setting', () => {
+  const args = buildWhatIfArgs({ ...source, scope: 'aks-only', resourceGroup: fixture.resourceGroup,
+    sourceSha: source.sha, subscription: ids.subscriptionId });
+  assert.ok(!args.some(arg => arg.startsWith('nodePoolCount=')));
+});
