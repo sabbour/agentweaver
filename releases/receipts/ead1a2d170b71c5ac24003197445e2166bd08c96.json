@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "sourceSha": "ead1a2d170b71c5ac24003197445e2166bd08c96",
+  "manifestPath": "releases/foundation.json",
+  "planChecksum": "16dcdaf218f9f8939088828663083badd68d379d028ceb72ed53d94e4539150d",
+  "appliedAt": "2026-10-19T01:04:30.754Z",
+  "components": [
+    {
+      "id": "Agentweaver.Environment",
+      "fromVersion": "1.1.1",
+      "toVersion": "1.1.2",
+      "bump": "patch"
+    }
+  ],
+  "changesets": [
+    {
+      "sourcePath": ".changeset/environment-connection-delete-body.md",
+      "archivedPath": ".changeset/archive/environment-connection-delete-body.md",
+      "sha256": "06865a8d70ea6ceaffecde693aa74cff725d8ac3a6e36b174d69069dd6dc07b6"
+    }
+  ]
+}
