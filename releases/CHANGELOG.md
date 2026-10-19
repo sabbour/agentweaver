@@ -2,6 +2,11 @@
 
 Applied component version changes, newest first.
 
+## 2026-10-19T18:34:01.409Z — source `520d351d5584eb616de4635ca4702b2e0e6dc511`
+
+- `Agentweaver.Identity.Broker`: 1.1.2 -> 1.1.3 (patch) — .changeset/broker-root-redirect.md, .changeset/identity-broker-shared-listener.md
+- `Agentweaver.Web`: 1.0.3 -> 1.0.4 (patch) — .changeset/consent-scope-explanations.md
+
 ## 2026-10-19T10:21:04.079Z — source `a00434837e1dd8236fcfdcea233e0850facf1cec`
 
 - `Agentweaver.AgentHost`: 1.0.1 -> 1.0.2 (patch) — .changeset/v1-0-4-product-image-source-labels.md
