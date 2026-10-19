@@ -640,6 +640,7 @@ These routes belong to the unpublished Identity broker candidate. They are servi
 
 | Method and path | Contract |
 | --- | --- |
+| `GET /` | Redirect to `/.well-known/openid-configuration` with HTTP 302. |
 | `GET /connect/authorize` | OpenIddict authorization request and external sign-in or consent prompt. |
 | `GET /connect/authorize/resume` | Authenticated, single-use external sign-in continuation. |
 | `POST /connect/consent` | Consent handle, approval, optional scope subset, local cookie, and `X-CSRF-TOKEN`. |

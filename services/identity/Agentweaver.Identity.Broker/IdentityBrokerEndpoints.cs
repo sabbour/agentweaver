@@ -24,7 +24,7 @@ public static class IdentityBrokerEndpoints
     public const string LocalCookieScheme = "Identity.Local";
     public const string ExternalScheme = "Identity.External";
 
-    /// <summary>Maps OAuth endpoints and the broker's live, ready and identity diagnostics routes.</summary>
+    /// <summary>Maps OAuth endpoints, the discovery root redirect, and broker health and identity diagnostics routes.</summary>
     public static void MapIdentityBrokerEndpoints(this IEndpointRouteBuilder app)
     {
         var webEndpoints = app.MapGroup("/connect")
@@ -34,6 +34,7 @@ public static class IdentityBrokerEndpoints
         webEndpoints.MapPost("/consent", ConsentAsync);
         webEndpoints.MapPost("/token", TokenAsync);
 
+        app.MapGet("/", () => Results.Redirect("/.well-known/openid-configuration"));
         app.MapGet("/health/live", () => Results.Ok(new { status = "live" }));
         app.MapGet("/health/ready", async (IdentityBrokerDbContext db, CancellationToken ct) =>
             await db.Database.CanConnectAsync(ct) ? Results.Ok(new { status = "ready" }) : Results.StatusCode(503));

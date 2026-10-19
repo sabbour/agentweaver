@@ -71,6 +71,15 @@ public sealed class IdentityBrokerEndpointTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task BrokerRoot_RedirectsToOpenIdConnectDiscovery()
+    {
+        var response = await _broker.GetAsync("/");
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal("/.well-known/openid-configuration", response.Headers.Location?.OriginalString);
+    }
+
+    [Fact]
     public async Task HappyPath_IssuesAccessTokenValidatedByRealMiddleware()
     {
         var (code, verifier) = await RunHappyPathAuthorizeAsync();
