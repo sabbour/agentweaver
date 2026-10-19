@@ -101,7 +101,13 @@ This selection prepares product components and excludes the acceptance-only
 Foundation Probe. It cannot be combined with `--packages-only` or
 `--foundation-probe-only`. The automated workflow prepares packages and images
 as separate artifacts, then merges and validates them against the same source
-SHA and manifest before publication.
+SHA and manifest before publication. Product container images carry the exact
+source commit, Git tree, and component version in their OCI labels for both
+release and integration preparation.
+
+Published images are immutable. An existing image that lacks the source-tree
+label cannot be relabeled in place; rebuild and publish a new image before it
+can pass the strict P1 source check.
 
 The `v1-release-pack.yml` workflow runs for a qualifying receipt push to `v1` or
 a manual dispatch. It requires the v1 CI and documentation checks for the exact
@@ -167,4 +173,15 @@ release-acceptance evidence. Use
 receipt artifact, and bootstrap invocation, follow the
 [release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v103-pre-acceptance-bootstrap).
 Neither a Kustomize apply nor a successful rollout alone proves external
-acceptance.
+acceptance. The P1 runner can use a published release receipt without an
+integration deployment receipt, but it must verify the exact source tree and
+live image digests, then bind its publication hash to fresh namespace
+readbacks. The P1 runner requires the exact `releaseTag`; it verifies the
+published release and immutable publication-result receipt before reading
+deployment resources. For bootstrap, it reads the tracked draft manifest from
+the published source commit, derives image-digest pins from that verified
+receipt, and labels the result as pre-acceptance evidence. This is separate
+evidence from the bootstrap command and does not relabel or repair previously
+published images. Release and bootstrap images must be rebuilt and published
+with the source-commit and source-tree labels before they can pass the strict
+P1 source check; existing immutable images cannot be relabeled.

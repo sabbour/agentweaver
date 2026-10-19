@@ -194,7 +194,7 @@ function addFixtureCleanup(result, state, cleanup, nativeFence, cleanupError) {
 
 /**
  * Validate inputs and source evidence, create an owned fixture, run one surface journey, and clean up.
- * The output file is append-only JSONL evidence; setup tokens and interactive sign-in are not handled here.
+ * Release evidence carries its exact tag into the source verifier; output stays append-only and sign-in is external.
  */
 export async function runP1Cli(argv = process.argv.slice(2), env = process.env, io = console, {
   prepareDeploymentEvidence = prepareP1DeploymentEvidence,
@@ -271,9 +271,11 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
     const publicationPath = resolveRepositoryPath(deploymentEvidence.publicationPath);
     const manifestPath = resolveRepositoryPath(deploymentEvidence.manifestPath);
     const agentHostArchivePath = resolveRepositoryPath(deploymentEvidence.agentHostArchivePath);
-    const integrationDeploymentReceiptPath =
-      resolveRepositoryPath(deploymentEvidence.integrationDeploymentReceiptPath);
+    const integrationDeploymentReceiptPath = deploymentEvidence.integrationDeploymentReceiptPath
+      ? resolveRepositoryPath(deploymentEvidence.integrationDeploymentReceiptPath)
+      : undefined;
     if ([inputPath, publicationPath, manifestPath, agentHostArchivePath, integrationDeploymentReceiptPath]
+      .filter(Boolean)
       .some(path => pathIdentity(path) === pathIdentity(requestedOutputPath))) {
       outputPath = undefined;
       throw new Error('The evidence output path must not replace a P1 input or deployment artifact.');
@@ -285,6 +287,7 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
       namespace: pins.namespace,
       publicationPath,
       manifestPath,
+      releaseTag: deploymentEvidence.releaseTag,
       agentHostArchivePath,
       integrationDeploymentReceiptPath,
       providerCatalog: {

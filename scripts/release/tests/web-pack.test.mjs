@@ -80,6 +80,7 @@ function runners(root, {
   baseImageReference = baseImage,
 } = {}) {
   const sourceSha = git(root, 'rev-parse', 'HEAD');
+  const sourceTree = git(root, 'rev-parse', 'HEAD^{tree}');
   return {
     calls,
     dotnet(args) {
@@ -123,6 +124,7 @@ function runners(root, {
           Architecture: 'amd64',
           Config: { Labels: {
             'org.opencontainers.image.revision': sourceSha,
+            'io.agentweaver.source-tree': sourceTree,
             'org.opencontainers.image.version': '0.1.0',
           } },
         });
@@ -173,6 +175,7 @@ test('locked web build creates a pinned local image archive and source-bound pro
   const dockerBuild = runnersForPack.calls.find((call) => call[0] === 'docker' && call[1] === 'build');
   assert.ok(dockerBuild.includes('--pull=false'));
   assert.ok(dockerBuild.includes('--network=none'));
+  assert.ok(dockerBuild.includes(`io.agentweaver.source-tree=${git(root, 'rev-parse', 'HEAD^{tree}')}`));
   assert.ok(dockerBuild.includes('--platform=linux/amd64'));
   assert.ok(!dockerBuild.some((argument) => argument.startsWith('--build-arg') && argument.includes('BASE')));
   assert.equal(seenEnvironment.length, 2);

@@ -3,6 +3,13 @@ import { spawnSync } from 'node:child_process';
 import { createReadStream, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { redact } from './redaction.mjs';
+import { componentImageRepository, componentImageTag } from '../release/pack.mjs';
+import {
+  validateBootstrapManifest,
+  validatePublicationReceipt as validateReleasePublicationReceipt,
+  verifyBootstrapRelease,
+  verifyPublishedSource,
+} from '../release/deploy.mjs';
 import { pullToken } from '../release/registry.mjs';
 import { measureAgentHostArchiveSync } from '../release/measure-agenthost-image.mjs';
 import { validateManifest } from '../release/validate.mjs';
@@ -18,6 +25,9 @@ const IMAGE_ACCEPT = [
   'application/vnd.docker.distribution.manifest.list.v2+json',
   'application/vnd.docker.distribution.manifest.v2+json',
 ].join(', ');
+const GHCR_ORIGIN = 'https://ghcr.io';
+const GHCR_BLOB_ORIGIN = 'https://pkg-containers.githubusercontent.com';
+const MAX_REGISTRY_REDIRECTS = 3;
 const SERVICE_NAMES = [
   'identity-broker',
   'events-and-sessions',
@@ -108,17 +118,54 @@ function sha256(bytes) {
   return `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
 }
 
-/** Fetch registry metadata and require its exact bytes to match the requested immutable digest. */
+/**
+ * Read immutable GHCR metadata through bounded HTTPS redirects without forwarding credentials off-origin.
+ * The final response body must still match the requested descriptor digest byte for byte.
+ */
 async function registryJson(url, expectedDigest, fetchImpl, token) {
+  const currentOrigin = new URL(url).origin;
+  if (currentOrigin !== GHCR_ORIGIN) {
+    throw new Error('Registry metadata reads must start at HTTPS GHCR.');
+  }
+  const requestHeaders = new Headers({ Accept: IMAGE_ACCEPT, Authorization: `Bearer ${token}` });
+  const signal = AbortSignal.timeout(15000);
+  let currentUrl = new URL(url);
   let response;
   try {
     response = await fetchImpl(url, {
       headers: { Accept: IMAGE_ACCEPT, Authorization: `Bearer ${token}` },
-      redirect: 'error',
-      signal: AbortSignal.timeout(15000),
+      redirect: 'manual',
+      signal,
     });
   } catch (error) {
     throw new Error(`Authenticated public registry read failed: ${redact(error).message}`);
+  }
+  for (let redirects = 0; [301, 302, 303, 307, 308].includes(response.status); redirects += 1) {
+    if (redirects >= MAX_REGISTRY_REDIRECTS) {
+      throw new Error('GHCR registry redirect limit exceeded.');
+    }
+    let nextUrl;
+    try {
+      const location = response.headers.get('location');
+      if (!location) throw new Error('missing location');
+      nextUrl = new URL(location, currentUrl);
+    } catch {
+      throw new Error('GHCR returned an invalid registry redirect.');
+    }
+    const allowedOrigins = currentUrl.origin === GHCR_ORIGIN
+      ? [GHCR_ORIGIN, GHCR_BLOB_ORIGIN]
+      : [GHCR_BLOB_ORIGIN];
+    if (nextUrl.protocol !== 'https:' || nextUrl.username || nextUrl.password
+      || nextUrl.hash || !allowedOrigins.includes(nextUrl.origin)) {
+      throw new Error('GHCR redirected registry metadata to a non-allowlisted HTTPS origin.');
+    }
+    if (nextUrl.origin !== currentUrl.origin) requestHeaders.delete('authorization');
+    currentUrl = nextUrl;
+    try {
+      response = await fetchImpl(currentUrl, { headers: requestHeaders, redirect: 'manual', signal });
+    } catch (error) {
+      throw new Error(`Authenticated public registry read failed: ${redact(error).message}`);
+    }
   }
   if (response.status !== 200) {
     throw new Error(`Authenticated public registry read returned HTTP ${response.status}.`);
@@ -138,10 +185,10 @@ async function registryJson(url, expectedDigest, fetchImpl, token) {
   return { bytes, value };
 }
 
-/** Verify registry manifest and image-config digests, platform, and source labels against the reviewed image. */
-async function verifyRegistryImage(reference, imageId, sourceSha, sourceTree, fetchImpl, { allowMissingSourceTree = false } = {}) {
+/** Verify registry manifest and image-config digests, platform, and exact source labels against the reviewed image. */
+async function verifyRegistryImage(reference, imageId, sourceSha, sourceTree, fetchImpl) {
   const { repository, digest } = imageParts(reference);
-  const base = `https://ghcr.io/v2/${repository}`;
+  const base = `${GHCR_ORIGIN}/v2/${repository}`;
   const token = await pullToken(repository, fetchImpl);
   const first = await registryJson(`${base}/manifests/${digest}`, digest, fetchImpl, token);
   let manifest = first.value;
@@ -168,8 +215,7 @@ async function verifyRegistryImage(reference, imageId, sourceSha, sourceTree, fe
   const labels = config.config?.Labels ?? config.config?.labels;
   if (config.os !== 'linux' || config.architecture !== 'amd64'
     || labels?.['org.opencontainers.image.revision'] !== sourceSha
-    || labels?.['io.agentweaver.source-tree'] !== sourceTree
-      && !(allowMissingSourceTree && labels?.['io.agentweaver.source-tree'] === undefined)) {
+    || labels?.['io.agentweaver.source-tree'] !== sourceTree) {
     throw new Error('The running image configuration is not bound to the reviewed source commit and tree.');
   }
   return { manifestDigest, platformDigest, configDigest, sourceSha, sourceTree, platform: 'linux/amd64' };
@@ -220,7 +266,7 @@ function selectRuntimeObjects(items, kind, namespace) {
 }
 
 /**
- * Observe the exact P1 Deployments, ReplicaSets, Pods, provider catalog, and registry image metadata.
+ * Observe the exact P1 Services, Deployments, ReplicaSets, Pods, provider catalog, and registry metadata.
  * Uses read-only Kubernetes and registry calls; incomplete rollouts or mismatched source pins throw.
  */
 export async function observeP1ServiceDeployments({
@@ -288,15 +334,26 @@ export async function observeP1ServiceDeployments({
     uid: configMaps[0].metadata.uid,
     resourceVersion: configMaps[0].metadata.resourceVersion,
     sourceCommit: providerCatalog.sourceCommit,
+    sha256: hashJson(configMaps[0]),
   };
   const kubernetesServices = selectRuntimeObjects(items, 'Service', namespace);
+  const serviceReadbacks = new Map();
   for (const name of SERVICE_NAMES) {
     const serviceMatches = kubernetesServices.filter(service => service.metadata?.name === name);
     if (serviceMatches.length !== 1
       || serviceMatches[0].metadata?.labels?.['app.kubernetes.io/name'] !== name
-      || serviceMatches[0].metadata?.labels?.['agentweaver.io/service'] !== name) {
+      || serviceMatches[0].metadata?.labels?.['agentweaver.io/service'] !== name
+      || typeof serviceMatches[0].metadata?.uid !== 'string' || !serviceMatches[0].metadata.uid
+      || typeof serviceMatches[0].metadata?.resourceVersion !== 'string'
+      || !serviceMatches[0].metadata.resourceVersion) {
       throw new Error(`Service ${name} is missing or its owner labels do not match.`);
     }
+    serviceReadbacks.set(name, {
+      name,
+      uid: serviceMatches[0].metadata.uid,
+      resourceVersion: serviceMatches[0].metadata.resourceVersion,
+      sha256: hashJson(serviceMatches[0]),
+    });
   }
   const deployments = selectRuntimeObjects(items, 'Deployment', namespace);
   const replicaSets = selectRuntimeObjects(items, 'ReplicaSet', namespace);
@@ -392,11 +449,11 @@ export async function observeP1ServiceDeployments({
         sourceSha,
         sourceTree,
         fetchImpl,
-        { allowMissingSourceTree: image.name === 'web' },
       );
       podEvidence.push({
         name: pod.metadata.name,
         uid: pod.metadata.uid,
+        sha256: hashJson(pod),
         phase: pod.status.phase,
         ready: true,
         image: containers[0].image,
@@ -407,14 +464,20 @@ export async function observeP1ServiceDeployments({
     }
     observed.push({
       componentId: image.id,
+      service: serviceReadbacks.get(image.name),
       deployment: {
         name: deployment.metadata.name,
         uid: deploymentUid,
+        sha256: hashJson(deployment),
         generation,
         observedGeneration: deployment.status.observedGeneration,
         desiredReplicas: desired,
       },
-      replicaSet: { name: replicaSet.metadata.name, uid: replicaSet.metadata.uid },
+      replicaSet: {
+        name: replicaSet.metadata.name,
+        uid: replicaSet.metadata.uid,
+        sha256: hashJson(replicaSet),
+      },
       pods: podEvidence,
     });
   }
@@ -471,11 +534,16 @@ export async function loadValidatedPublicationImages({
 }
 
 /**
- * Match each planned and published immutable image to the release manifest and reviewed source.
- * Returns normalized image evidence or throws when component, archive, digest, or source receipts disagree.
+ * Match release or bootstrap publication images to the exact source manifest and reviewed source.
+ * Bootstrap drafts need their separately validated digest-pinned deployment manifest.
  */
-export function validateP1PublicationReceipt(publication, manifest, sourceSha, sourceTree) {
+export function validateP1PublicationReceipt(
+  publication, manifest, sourceSha, sourceTree, deploymentManifest = manifest,
+) {
   const integrationImagesOnly = publication?.mode === 'images-only';
+  const bootstrapDraft = !integrationImagesOnly && manifest?.stage === 'draft'
+    && manifest.evidence === undefined && deploymentManifest !== manifest
+    && deploymentManifest?.stage === 'draft' && deploymentManifest.evidence === undefined;
   if (!publication || typeof publication !== 'object' || Array.isArray(publication)
     || publication.schemaVersion !== 1 || publication.status !== 'published'
     || publication.sourceSha !== sourceSha || !SHA.test(sourceTree ?? '')
@@ -484,19 +552,65 @@ export function validateP1PublicationReceipt(publication, manifest, sourceSha, s
     || integrationImagesOnly && (manifest?.stage !== 'draft' || manifest.evidence !== undefined
       || publication.planned?.length !== P1_SERVICE_COMPONENTS.length
       || publication.published?.length !== P1_SERVICE_COMPONENTS.length)
+    || !integrationImagesOnly && !bootstrapDraft && (manifest?.stage !== 'release'
+      || manifest.evidence?.sourceSha !== sourceSha || deploymentManifest !== manifest)
     || !SHA256.test(publication.provenanceSha256 ?? '')
     || !Array.isArray(publication.planned) || !Array.isArray(publication.published)
-    || !Array.isArray(manifest?.components)) {
+    || !Array.isArray(manifest?.components) || !Array.isArray(deploymentManifest?.components)) {
     throw new Error('The publication receipt is not a complete result for the exact reviewed source.');
   }
   const components = new Map();
+  const deploymentComponents = new Map();
   for (const { id } of P1_SERVICE_COMPONENTS) {
     const matches = manifest.components.filter(component => component?.id === id);
+    const deploymentMatches = deploymentManifest.components.filter(component => component?.id === id);
     if (matches.length !== 1 || matches[0].kind !== 'service'
-      || typeof matches[0].version !== 'string' || !matches[0].version) {
+      || typeof matches[0].version !== 'string' || !matches[0].version
+      || deploymentMatches.length !== 1 || deploymentMatches[0].kind !== 'service'
+      || deploymentMatches[0].version !== matches[0].version
+      || deploymentMatches[0].project !== matches[0].project) {
       throw new Error(`The exact source manifest is missing service component ${id}.`);
     }
     components.set(id, matches[0]);
+    deploymentComponents.set(id, deploymentMatches[0]);
+  }
+
+  if (!integrationImagesOnly) {
+    if (!Array.isArray(publication.requiredPackageIds)
+      || publication.sourceTree !== undefined && publication.sourceTree !== sourceTree) {
+      throw new Error('The release publication receipt is not bound to the exact source commit and tree.');
+    }
+    const validated = validateReleasePublicationReceipt(publication, deploymentManifest, sourceSha);
+    const validatedById = new Map(validated.map(image => [image.id, image]));
+    if (validatedById.size !== P1_SERVICE_COMPONENTS.length
+      || P1_SERVICE_COMPONENTS.some(({ id }) => !validatedById.has(id))) {
+      throw new Error('The release publication receipt does not contain the exact P1 product image set.');
+    }
+    return P1_SERVICE_COMPONENTS.map(({ id, name }) => {
+      const image = validatedById.get(id);
+      const component = components.get(id);
+      const deploymentComponent = deploymentComponents.get(id);
+      const planned = publication.planned.find(record => record.id === id);
+      const published = publication.published.find(record => record.id === id);
+      const repository = `ghcr.io/sabbour/${componentImageRepository(id)}`;
+      const expectedImage = `${repository}@${deploymentComponent.imageDigest}`;
+      if (image.image !== expectedImage || published.image !== expectedImage
+        || planned.destination !== `${repository}:${componentImageTag(component.version, sourceSha)}`) {
+        throw new Error(`The release image for ${id} does not match its exact component-version tag and digest.`);
+      }
+      // Keep the AgentHost archive pins so the later local measurement can match this publication.
+      return {
+        ...image,
+        id,
+        name,
+        component,
+        result: published,
+        ...(id === 'Agentweaver.AgentHost' ? {
+          ociArchiveSha256: published.ociArchiveSha256,
+          imageConfigDigest: published.imageConfigDigest,
+        } : {}),
+      };
+    });
   }
 
   const images = [];
@@ -511,7 +625,7 @@ export function validateP1PublicationReceipt(publication, manifest, sourceSha, s
       || published[0].archiveSha256 !== planned[0].sha256) {
       throw new Error(`The publication receipt does not contain one source-matched image for ${id}.`);
     }
-    const tag = integrationImagesOnly ? sourceSha : component.version;
+    const tag = integrationImagesOnly ? sourceSha : componentImageTag(component.version, sourceSha);
     const versionSuffix = `:${tag}`;
     const destination = planned[0].destination;
     if (typeof destination !== 'string' || !destination.startsWith('ghcr.io/')
@@ -683,6 +797,112 @@ export function validateP1IntegrationDeploymentReceipt(receipt, {
   };
 }
 
+/**
+ * Bind the release publication hash to fresh, exact Kubernetes and registry readbacks.
+ * This path records observed deployment state instead of claiming a bootstrap receipt exists.
+ */
+export function createP1ReleaseDeploymentEvidence({
+  sourceSha,
+  sourceTree,
+  manifest,
+  deploymentManifest = manifest,
+  publication,
+  context,
+  namespace,
+  providerCatalog,
+  images,
+  serviceEvidence,
+}) {
+  requireTarget(context, namespace);
+  const bootstrapDraft = manifest?.stage === 'draft' && manifest.evidence === undefined
+    && deploymentManifest !== manifest && deploymentManifest?.stage === 'draft'
+    && deploymentManifest.evidence === undefined;
+  if (namespace !== 'agentweaver' || !SHA.test(sourceSha ?? '') || !SHA.test(sourceTree ?? '')
+    || publication?.sourceSha !== sourceSha || publication?.mode !== undefined
+    || !bootstrapDraft && (manifest?.stage !== 'release' || manifest.evidence?.sourceSha !== sourceSha
+      || deploymentManifest !== manifest)
+    || !Array.isArray(images) || images.length !== P1_SERVICE_COMPONENTS.length
+    || serviceEvidence?.status !== 'passed' || serviceEvidence.context !== context
+    || serviceEvidence.namespace !== namespace || serviceEvidence.sourceSha !== sourceSha
+    || serviceEvidence.sourceTree !== sourceTree
+    || !Number.isFinite(Date.parse(serviceEvidence.observedAt ?? ''))
+    || !Array.isArray(serviceEvidence.services)
+    || serviceEvidence.services.length !== SERVICE_NAMES.length) {
+    throw new Error('The release deployment readbacks are not bound to the exact source and target.');
+  }
+  // Revalidate image identities here so callers cannot create a receipt from unchecked image rows.
+  validateP1PublicationReceipt(publication, manifest, sourceSha, sourceTree, deploymentManifest);
+  const expected = new Map(images.filter(image => image.id !== 'Agentweaver.AgentHost')
+    .map(image => [image.id, image]));
+  const agentHostImages = images.filter(image => image.id === 'Agentweaver.AgentHost');
+  const observed = new Map();
+  for (const service of serviceEvidence.services) {
+    if (typeof service?.componentId !== 'string' || observed.has(service.componentId)) {
+      throw new Error('The release deployment readbacks contain a missing or duplicate service identity.');
+    }
+    observed.set(service.componentId, service);
+  }
+  if (images.length !== P1_SERVICE_COMPONENTS.length || agentHostImages.length !== 1
+    || expected.size !== SERVICE_NAMES.length || observed.size !== SERVICE_NAMES.length
+    || P1_SERVICE_COMPONENTS.filter(image => image.id !== 'Agentweaver.AgentHost')
+      .some(image => !expected.has(image.id) || !observed.has(image.id))) {
+    throw new Error('The release deployment readbacks do not contain all nine published services.');
+  }
+  for (const [id, image] of expected) {
+    const readback = observed.get(id);
+    const expectedDigest = imageParts(image.image).digest;
+    if (!readback || readback.service?.name !== image.name || !readback.service.uid
+      || !readback.service.resourceVersion || !SHA256.test(readback.service.sha256 ?? '')
+      || !readback.deployment?.uid || readback.deployment.name !== image.name
+      || !SHA256.test(readback.deployment.sha256 ?? '')
+      || !readback.replicaSet?.uid || !SHA256.test(readback.replicaSet.sha256 ?? '')
+      || !Array.isArray(readback.pods) || readback.pods.length === 0) {
+      throw new Error(`The release deployment readback for ${id} is incomplete.`);
+    }
+    for (const pod of readback.pods) {
+      const podDigest = imageParts(pod.imageID).digest;
+      const registry = pod.registry;
+      if (pod.ready !== true || !pod.uid || !SHA256.test(pod.sha256 ?? '') || pod.image !== image.image
+        || !registry || registry.manifestDigest !== expectedDigest
+        || !DIGEST.test(registry.platformDigest ?? '')
+        || podDigest !== registry.manifestDigest && podDigest !== registry.platformDigest
+        || registry.sourceSha !== sourceSha || registry.sourceTree !== sourceTree
+        || !DIGEST.test(registry.configDigest ?? '')) {
+        throw new Error(`The release deployment image readback for ${id} differs from its source publication.`);
+      }
+    }
+  }
+  const readbacks = {
+    context,
+    namespace,
+    sourceSha,
+    sourceTree,
+    providerCatalog: serviceEvidence.providerCatalog,
+    services: serviceEvidence.services,
+  };
+  if (readbacks.providerCatalog?.name !== providerCatalog?.configMapName
+    || readbacks.providerCatalog?.sourceCommit !== providerCatalog?.sourceCommit
+    || typeof readbacks.providerCatalog?.uid !== 'string' || !readbacks.providerCatalog.uid
+    || typeof readbacks.providerCatalog.resourceVersion !== 'string'
+    || !readbacks.providerCatalog.resourceVersion
+    || !SHA256.test(readbacks.providerCatalog.sha256 ?? '')) {
+    throw new Error('The release deployment readbacks do not bind the provider catalog resource.');
+  }
+  return {
+    status: 'deployed',
+    resultType: bootstrapDraft ? 'pre-acceptance' : 'release',
+    sourceSha,
+    sourceTree,
+    manifestSha256: hashJson(manifest),
+    deploymentManifestSha256: hashJson(deploymentManifest),
+    publicationSha256: hashJson(publication),
+    readbacks,
+    readbackSha256: hashJson(readbacks),
+    completedAt: serviceEvidence.observedAt,
+    target: { context, namespace },
+  };
+}
+
 function runGit(args, repoRoot, spawnSyncImpl = spawnSync) {
   const result = spawnSyncImpl('git', args, {
     cwd: repoRoot,
@@ -696,6 +916,22 @@ function runGit(args, repoRoot, spawnSyncImpl = spawnSync) {
   return result.stdout.trim();
 }
 
+/** Run bounded read-only GitHub or Git queries without exposing command output on failure. */
+function runReadOnlyCommand(executable, args, { cwd }, spawnSyncImpl = spawnSync) {
+  const result = spawnSyncImpl(executable, args, {
+    cwd,
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 15000,
+    maxBuffer: 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error('Cannot verify the exact release publication result.');
+  }
+  return result.stdout.trim();
+}
+
 function sha256File(file) {
   return new Promise((resolve, reject) => {
     const digest = createHash('sha256');
@@ -706,33 +942,46 @@ function sha256File(file) {
   });
 }
 
-/** Require the repository HEAD to equal the reviewed commit and the worktree to be clean. */
+/**
+ * Resolve the reviewed commit and tree from Git objects while requiring a clean helper worktree.
+ * Integration evidence also requires HEAD to be the reviewed commit; release evidence may use a newer helper checkout.
+ */
 export function resolveReviewedSource({
   repoRoot,
   expectedSourceSha,
+  requireHeadMatch = true,
   spawnSyncImpl = spawnSync,
 }) {
-  if (typeof repoRoot !== 'string' || !repoRoot || !SHA.test(expectedSourceSha ?? '')) {
+  if (typeof repoRoot !== 'string' || !repoRoot || !SHA.test(expectedSourceSha ?? '')
+    || typeof requireHeadMatch !== 'boolean') {
     throw new Error('A repository root and exact reviewed source SHA are required.');
   }
   const actualSourceSha = runGit(['rev-parse', '--verify', 'HEAD'], repoRoot, spawnSyncImpl);
-  const sourceTree = runGit(['rev-parse', 'HEAD^{tree}'], repoRoot, spawnSyncImpl);
+  const resolvedSourceSha = runGit([
+    'rev-parse', '--verify', `${expectedSourceSha}^{commit}`,
+  ], repoRoot, spawnSyncImpl);
+  const sourceTree = runGit([
+    'rev-parse', '--verify', `${expectedSourceSha}^{tree}`,
+  ], repoRoot, spawnSyncImpl);
   const dirty = runGit(['status', '--porcelain', '--untracked-files=normal'], repoRoot, spawnSyncImpl);
-  if (actualSourceSha !== expectedSourceSha || !SHA.test(sourceTree) || dirty) {
-    throw new Error('The current clean repository does not match the exact reviewed source commit.');
+  if (resolvedSourceSha !== expectedSourceSha
+    || requireHeadMatch && actualSourceSha !== expectedSourceSha
+    || !SHA.test(sourceTree) || dirty) {
+    throw new Error('The clean repository does not contain the exact reviewed source commit and tree.');
   }
-  return { sourceSha: actualSourceSha, sourceTree };
+  return { sourceSha: expectedSourceSha, sourceTree };
 }
 
 /**
- * Assemble source, publication, deployment, live workload, and AgentHost archive measurements.
- * This function reads evidence and live state only; it does not publish images or change infrastructure.
+ * Assemble exact-source publication, deployment, live workload, and AgentHost archive measurements.
+ * Release evidence verifies the immutable GitHub result; the function makes read-only evidence queries only.
  */
 export async function prepareP1DeploymentEvidence({
   repoRoot,
   expectedSourceSha,
   publicationPath,
   manifestPath,
+  releaseTag,
   agentHostArchivePath,
   integrationDeploymentReceiptPath,
   providerCatalog,
@@ -743,7 +992,6 @@ export async function prepareP1DeploymentEvidence({
   readObjects = runKubectl,
   spawnSyncImpl = spawnSync,
 }) {
-  const source = resolveReviewedSource({ repoRoot, expectedSourceSha, spawnSyncImpl });
   let publication;
   let manifest;
   let manifestFile;
@@ -756,11 +1004,29 @@ export async function prepareP1DeploymentEvidence({
       || path.isAbsolute(relativeManifest)) {
       throw new Error('The release manifest must be inside the exact source repository.');
     }
-    manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
-    integrationDeploymentReceipt = JSON.parse(readFileSync(integrationDeploymentReceiptPath, 'utf8'));
+    if (publication?.mode === 'images-only') {
+      if (!integrationDeploymentReceiptPath) {
+        throw new Error('The images-only publication requires its integration deployment receipt.');
+      }
+      integrationDeploymentReceipt = JSON.parse(readFileSync(integrationDeploymentReceiptPath, 'utf8'));
+    } else if (integrationDeploymentReceiptPath) {
+      throw new Error('Release publication evidence uses fresh resource readbacks, not an integration receipt.');
+    }
   } catch {
-    throw new Error('The exact source-bound publication, integration deployment receipt, or manifest is missing or malformed.');
+    throw new Error('The exact source-bound publication, required deployment receipt, or manifest is missing or malformed.');
   }
+  const integrationImagesOnly = publication?.mode === 'images-only';
+  if (integrationImagesOnly && releaseTag !== undefined
+    || !integrationImagesOnly && (typeof releaseTag !== 'string'
+      || !/^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(releaseTag))) {
+    throw new Error('Release and bootstrap evidence requires an exact versioned releaseTag; integration evidence does not.');
+  }
+  const source = resolveReviewedSource({
+    repoRoot,
+    expectedSourceSha,
+    requireHeadMatch: integrationImagesOnly,
+    spawnSyncImpl,
+  });
   const relativeManifest = path.relative(path.resolve(repoRoot), manifestFile).replaceAll('\\', '/');
   let committedManifest;
   try {
@@ -768,26 +1034,86 @@ export async function prepareP1DeploymentEvidence({
   } catch {
     throw new Error('The P1 release manifest is not present in the exact reviewed Git source.');
   }
-  if (JSON.stringify(committedManifest) !== JSON.stringify(manifest)) {
-    throw new Error('The P1 release manifest differs from the exact reviewed Git source.');
+  if (integrationImagesOnly) {
+    try {
+      manifest = JSON.parse(readFileSync(manifestFile, 'utf8'));
+    } catch {
+      throw new Error('The integration manifest is missing or malformed.');
+    }
+    if (JSON.stringify(committedManifest) !== JSON.stringify(manifest)) {
+      throw new Error('The P1 integration manifest differs from the exact reviewed Git source.');
+    }
+  } else {
+    manifest = committedManifest;
   }
-  validateManifest(manifest, { root: repoRoot });
+  const readSourceProject = (file) => {
+    const relativePath = path.relative(repoRoot, file);
+    if (relativePath === '..' || relativePath.startsWith(`..${path.sep}`)
+      || path.isAbsolute(relativePath)) {
+      throw new Error('A P1 manifest project path escapes the exact reviewed source tree.');
+    }
+    return runGit([
+      'show',
+      `${source.sourceSha}:${relativePath.split(path.sep).join('/')}`,
+    ], repoRoot, spawnSyncImpl);
+  };
+  validateManifest(manifest, { root: repoRoot, readProject: readSourceProject });
+  let deploymentManifest = manifest;
+  if (!integrationImagesOnly) {
+    const run = (executable, args, options) =>
+      runReadOnlyCommand(executable, args, options, spawnSyncImpl);
+    if (manifest.stage === 'draft') {
+      deploymentManifest = validateBootstrapManifest(manifest, publication, {
+        root: repoRoot,
+        sourceSha: source.sourceSha,
+        releaseTag,
+        manifestPath: manifestFile,
+        run,
+      });
+      const verifiedSource = await verifyBootstrapRelease(releaseTag, publication, {
+        root: repoRoot,
+        run,
+      });
+      if (verifiedSource !== source.sourceSha) {
+        throw new Error('The bootstrap publication result differs from the exact reviewed source commit.');
+      }
+    } else if (manifest.stage === 'release') {
+      const verifiedSource = await verifyPublishedSource(releaseTag, publication, source.sourceSha, {
+        root: repoRoot,
+        run,
+        sourceCommitDescription: 'published source',
+      });
+      if (verifiedSource !== source.sourceSha) {
+        throw new Error('The release publication result differs from the exact reviewed source commit.');
+      }
+    } else {
+      throw new Error('The release publication requires an exact release manifest or tracked bootstrap draft.');
+    }
+  }
   const images = await loadValidatedPublicationImages({
     publication,
-    manifest,
+    manifest: deploymentManifest,
     sourceSha: source.sourceSha,
-    validatePublicationReceipt: validatePublicationReceipt
+    validatePublicationReceipt: (publication.mode === 'images-only' ? validatePublicationReceipt : undefined)
       ?? ((receipt, sourceManifest, sourceSha) =>
-        validateP1PublicationReceipt(receipt, sourceManifest, sourceSha, source.sourceTree)),
+        validateP1PublicationReceipt(
+          receipt,
+          manifest,
+          sourceSha,
+          source.sourceTree,
+          sourceManifest,
+        )),
   });
-  const integrationDeployment = validateP1IntegrationDeploymentReceipt(integrationDeploymentReceipt, {
-    sourceSha: source.sourceSha,
-    sourceTree: source.sourceTree,
-    manifest,
-    publication,
-    namespace,
-    images,
-  });
+  const integrationDeployment = publication.mode === 'images-only'
+    ? validateP1IntegrationDeploymentReceipt(integrationDeploymentReceipt, {
+      sourceSha: source.sourceSha,
+      sourceTree: source.sourceTree,
+      manifest,
+      publication,
+      namespace,
+      images,
+    })
+    : undefined;
   const serviceEvidence = await observeP1ServiceDeployments({
     context,
     namespace,
@@ -797,6 +1123,18 @@ export async function prepareP1DeploymentEvidence({
     providerCatalog,
     fetchImpl,
     readObjects,
+  });
+  const releaseDeployment = integrationDeployment ? undefined : createP1ReleaseDeploymentEvidence({
+    sourceSha: source.sourceSha,
+    sourceTree: source.sourceTree,
+    manifest,
+    deploymentManifest,
+    publication,
+    context,
+    namespace,
+    providerCatalog,
+    images,
+    serviceEvidence,
   });
   let agentHostMeasurement;
   try {
@@ -824,7 +1162,7 @@ export async function prepareP1DeploymentEvidence({
   }
   return {
     source,
-    integrationDeployment,
+    ...(integrationDeployment ? { integrationDeployment } : { releaseDeployment }),
     providerCatalog: serviceEvidence.providerCatalog,
     services: serviceEvidence,
     agentHostImageMeasurement: {

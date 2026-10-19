@@ -190,8 +190,8 @@ test('integration image-only publication keeps ten image outputs without NuGet c
         const archive = args.find(value => value.startsWith('-p:ContainerArchiveOutputPath=')).slice('-p:ContainerArchiveOutputPath='.length);
         const repository = args.find(value => value.startsWith('-p:ContainerRepository=')).slice('-p:ContainerRepository='.length);
         const tag = args.find(value => value.startsWith('-p:ContainerImageTag=')).slice('-p:ContainerImageTag='.length);
-        const version = args.find(value => value.startsWith('-p:AgentweaverIntegrationVersion='))
-          .slice('-p:AgentweaverIntegrationVersion='.length);
+        const version = args.find(value => value.startsWith('-p:AgentweaverImageVersion='))
+          .slice('-p:AgentweaverImageVersion='.length);
         writeDockerArchive(archive, `${repository}:${tag}`, sourceSha, sourceTree, version);
       }
     },
@@ -229,10 +229,9 @@ test('integration image-only publication keeps ten image outputs without NuGet c
   assert.equal(containerPublish.length, 8);
   assert.ok(containerPublish.every(args =>
     args.includes(`-p:ContainerImageTag=${sourceSha}`) &&
-    args.includes('-p:AgentweaverIntegrationImagesOnly=true') &&
-    args.includes(`-p:AgentweaverIntegrationSourceSha=${sourceSha}`) &&
-    args.includes(`-p:AgentweaverIntegrationSourceTree=${sourceTree}`) &&
-    args.includes('-p:AgentweaverIntegrationVersion=1.0.0')));
+    args.includes(`-p:AgentweaverImageSourceSha=${sourceSha}`) &&
+    args.includes(`-p:AgentweaverImageSourceTree=${sourceTree}`) &&
+    args.includes('-p:AgentweaverImageVersion=1.0.0')));
 
   const hostArtifact = provenance.artifacts.find(({ componentId }) => componentId === 'Agentweaver.AgentHost');
   assert.equal(hostArtifact.tag, sourceSha);

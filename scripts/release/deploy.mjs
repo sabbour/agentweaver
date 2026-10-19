@@ -1610,7 +1610,11 @@ function verifyCleanCheckout(root, run, checkoutName = 'release source') {
 }
 
 /** Confirms the public Release, exact source tag, and immutable receipt for one source SHA. */
-async function verifyPublishedSource(tag, publication, sourceSha, {
+/**
+ * Verify that a published release tag and its immutable result receipt bind the supplied publication to one source commit.
+ * Callers that accept historical deployment evidence must provide the exact source SHA independently.
+ */
+export async function verifyPublishedSource(tag, publication, sourceSha, {
   root, run, sourceCommitDescription, allowLightweightTag = false,
 }) {
   const release = parseJson(run('gh', ['api', `repos/${REPOSITORY}/releases/tags/${tag}`], { cwd: root }), 'GitHub Release');

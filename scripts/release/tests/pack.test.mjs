@@ -126,7 +126,41 @@ test('images-only preparation builds product service images without packages', t
   assert.deepEqual(provenance.components.map(({ id }) => id), ['Svc']);
   assert.deepEqual(provenance.artifacts.map(({ kind }) => kind), ['image']);
   assert.deepEqual(calls.map(([verb]) => verb), ['restore', 'build', 'publish']);
+  const publish = calls.find(args => args[0] === 'publish');
+  assert.ok(publish.includes(`-p:AgentweaverImageSourceSha=${provenance.sourceSha}`));
+  assert.ok(publish.includes(`-p:AgentweaverImageSourceTree=${git(dir, 'rev-parse', 'HEAD^{tree}')}`));
+  assert.ok(publish.includes('-p:AgentweaverImageVersion=0.1.0'));
   assert.ok(existsSync(path.join(outDir, 'Svc.0.1.0.tar.gz')));
+});
+
+test('release preparation passes exact source labels to product service container publishing', t => {
+  const dir = initRepo(t);
+  mkdirSync(path.join(dir, 'services', 'Svc'), { recursive: true });
+  writeFileSync(path.join(dir, 'services', 'Svc', 'Svc.csproj'), serviceCsproj('0.1.0'));
+  writeFileSync(path.join(dir, 'services', 'Svc', 'packages.lock.json'), '{"version":1,"dependencies":{}}');
+  git(dir, 'add', '.');
+  git(dir, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'add service');
+  const sourceSha = git(dir, 'rev-parse', 'HEAD');
+  const sourceTree = git(dir, 'rev-parse', 'HEAD^{tree}');
+  const manifest = manifestBase();
+  manifest.stage = 'release';
+  manifest.evidence = { sourceSha };
+  manifest.components.push({
+    id: 'Svc', kind: 'service', version: '0.1.0', project: 'services/Svc/Svc.csproj',
+  });
+  const calls = [];
+  packComponents(manifest, {
+    root: dir,
+    dotnet: fakeDotnet(calls),
+    outDir: path.join(dir, 'artifacts', 'release', 'platform'),
+    platformOnly: true,
+  });
+
+  const publish = calls.find(args => args[0] === 'publish');
+  assert.ok(publish.includes('-p:ContainerImageTag=0.1.0'));
+  assert.ok(publish.includes(`-p:AgentweaverImageSourceSha=${sourceSha}`));
+  assert.ok(publish.includes(`-p:AgentweaverImageSourceTree=${sourceTree}`));
+  assert.ok(publish.includes('-p:AgentweaverImageVersion=0.1.0'));
 });
 
 test('platform-only preparation excludes only the acceptance Probe', t => {
@@ -180,7 +214,7 @@ test('integration image selection requires all product services and excludes pac
     /exact ten product services and excludes FoundationProbe/);
 });
 
-test('ordinary service container labels require explicit integration source properties', () => {
+test('product service container labels use explicit exact-source properties on the release path', () => {
   const dotnet = process.env.DOTNET_HOST_PATH || 'dotnet';
   const project = path.resolve('services', 'gateway', 'Agentweaver.Gateway', 'Agentweaver.Gateway.csproj');
   const evaluate = (properties = []) => JSON.parse(execFileSync(dotnet, [
@@ -189,10 +223,9 @@ test('ordinary service container labels require explicit integration source prop
   ], { encoding: 'utf8' })).Items.ContainerLabel;
   assert.deepEqual(evaluate(), []);
   const labels = Object.fromEntries(evaluate([
-    '-p:AgentweaverIntegrationImagesOnly=true',
-    `-p:AgentweaverIntegrationSourceSha=${'a'.repeat(40)}`,
-    `-p:AgentweaverIntegrationSourceTree=${'b'.repeat(40)}`,
-    '-p:AgentweaverIntegrationVersion=1.0.0',
+    `-p:AgentweaverImageSourceSha=${'a'.repeat(40)}`,
+    `-p:AgentweaverImageSourceTree=${'b'.repeat(40)}`,
+    '-p:AgentweaverImageVersion=1.0.0',
   ]).map(({ Identity, Value }) => [Identity, Value]));
   assert.deepEqual(labels, {
     'org.opencontainers.image.revision': 'a'.repeat(40),

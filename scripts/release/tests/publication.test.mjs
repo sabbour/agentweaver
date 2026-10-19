@@ -126,6 +126,7 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
             Architecture: 'amd64',
             Config: { Labels: {
               'org.opencontainers.image.revision': git('rev-parse', 'HEAD'),
+              'io.agentweaver.source-tree': sourceTree,
               'org.opencontainers.image.version': '0.1.0',
             } },
           });
@@ -147,6 +148,7 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
     RELEASE_REGISTRY_PASSWORD: 'test-password', DOCKER_CONFIG: path.join(root, 'artifacts', 'docker-config'),
   };
   const sourceSha = git('rev-parse', 'HEAD');
+  const sourceTree = git('rev-parse', 'HEAD^{tree}');
   const tags = new Map();
   const refs = new Map();
   const remoteCalls = [];
@@ -184,6 +186,7 @@ function fixture(t, { service = true, pinnedBase = true, lock = true, baseImageX
           Architecture: 'amd64',
           Config: { Labels: {
             'org.opencontainers.image.revision': sourceSha,
+            'io.agentweaver.source-tree': sourceTree,
             'org.opencontainers.image.version': '0.1.0',
           } },
         });
