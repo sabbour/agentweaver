@@ -284,7 +284,7 @@ Kustomize base intentionally does not own:
 3. Resolve all required runtime ConfigMap values before applying the product
    bundle. For an existing installation, use the
    [immutable ConfigMap update procedure](../reference/runtime-configuration.md#update-an-immutable-configmap).
-   The v1.0.4 Projects & Config map includes only the approved privileged-setup
+   The Projects & Config map includes only the approved privileged-setup
    issuer, tenant, and subject. Review the exact values in the
    [runtime configuration reference](../reference/runtime-configuration.md#projects-config-settings);
    do not add another subject or role.
@@ -375,7 +375,7 @@ kubectl wait --for=condition=complete job/identity-broker-migration `
    for the scope and behavior.
 
    ```powershell
-   npm run release:deploy-bootstrap -- v1.0.4 `
+   npm run release:deploy-bootstrap -- v1.0.5 `
      --manifest releases/foundation.json `
     --publication artifacts/release/publish/publication.json `
      --subscription-id <subscription-id> `
@@ -406,18 +406,21 @@ kubectl wait --for=condition=complete job/identity-broker-migration `
    This procedure installs the upstream controller directly; it does not
    enable the AKS AgentSandbox extension, which remains a future option.
 
-   The [v1.0.4 GitHub Release and tag](https://github.com/sabbour/agentweaver/releases/tag/v1.0.4)
+   The [v1.0.5 GitHub Release and tag](https://github.com/sabbour/agentweaver/releases/tag/v1.0.5)
    are already published. Do not create another release or tag after the
    bootstrap-pins pull request merges. Use the publication receipt for source
-   `7bb3ceb282c9377e49da2bc7b6d336baa4eb8209` and source tree
-   `61adf823936284285f68df17b890a5b0da70c033`. Verify the publication SHA-256
-   `128f868f2f59d7eadccae84f36808690ee242e4ebcfe5f23d7f5763bacc3496e` and
+   `edae14b469548b8409b0eef651504691e0216a1e` and source tree
+   `265da7c601e033adc99501735b74ccdb2df94420`. Verify the publication SHA-256
+   `149972c64222f1cf294b3795107f4e0ebf418bc766fbed4b1e2dcdd6e796c51b` and
    provenance SHA-256
-   `b7a4ef1c71559fe5f8c96d8d7beee2c6c14ed8fad700aea7711a1cc3aa643ea8`.
-   Use the reviewed provider-catalog ConfigMap and source commit shown in the
-   command; do not rebuild or substitute image tags. See
-   [local v1 release deployment](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v104-pre-acceptance-bootstrap)
-   for the image digests and full admission contract.
+   `78c1fe655be9321727aa9882cb9bad2cf32d1e7faef86f6736151085adca9d21`.
+   The receipt measures AgentHost's `linux/amd64` image config as
+   `sha256:2bb01d7d5b90f225d98fde16904f11ef3d090b5f0c358f30f1fa35ec607fe618`
+   and its compressed pull size as `321483958` bytes. Use the reviewed
+   provider-catalog ConfigMap and source commit shown in the command; do not
+   rebuild or substitute image tags. See
+   [local v1 release deployment](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v105-pre-acceptance-bootstrap)
+   for all image digests and the full admission contract.
 
 4. After the release bootstrap succeeds and the product Services exist, run
    the full, default-off `--bootstrap-identity-routing` operation without
