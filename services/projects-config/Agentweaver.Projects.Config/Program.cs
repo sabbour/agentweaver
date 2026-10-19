@@ -12,7 +12,7 @@ using Microsoft.IdentityModel.Tokens;
 using Npgsql;
 using WorkloadIdentityCredential = AzureIdentity::Azure.Identity.WorkloadIdentityCredential;
 
-// Composes the Projects & Config host and its separate migration and privileged-setup command paths.
+// Composes the host and keeps migration, privileged setup, and first-admin bootstrap on separate command paths.
 // Runtime database access uses workload identity and verifies the applied schema and read-only authority boundary.
 var runMigrations = args.Length == 1 && args[0] == "--migrate";
 if (args.Contains("--migrate", StringComparer.Ordinal) && !runMigrations)
@@ -21,8 +21,13 @@ var runPrivilegedProjectSetup = args.Length == 1 && args[0] == "--privileged-pro
 if (args.Contains("--privileged-project-setup", StringComparer.Ordinal) && !runPrivilegedProjectSetup)
     throw new ArgumentException(
         "The --privileged-project-setup command must be used by itself.", nameof(args));
+var runFirstTenantAdminBootstrap = args.Length == 1 && args[0] == "--bootstrap-first-tenant-admin";
+if (args.Contains("--bootstrap-first-tenant-admin", StringComparer.Ordinal) && !runFirstTenantAdminBootstrap)
+    throw new ArgumentException(
+        "The --bootstrap-first-tenant-admin command must be used by itself.", nameof(args));
 
-var builder = WebApplication.CreateBuilder(runMigrations || runPrivilegedProjectSetup ? [] : args);
+var builder = WebApplication.CreateBuilder(
+    runMigrations || runPrivilegedProjectSetup || runFirstTenantAdminBootstrap ? [] : args);
 if (runPrivilegedProjectSetup)
 {
     // This one-shot path reports only a stable error code; token and exception details never reach console output.
@@ -43,17 +48,34 @@ if (runPrivilegedProjectSetup)
     return;
 }
 
+if (runFirstTenantAdminBootstrap)
+{
+    try
+    {
+        var created = await TenantAdminBootstrapCommand.RunAsync(builder.Configuration);
+        await Console.Out.WriteLineAsync(created
+            ? "The first TenantAdmin was created."
+            : "The approved TenantAdmin already exists; no changes were made.");
+    }
+    catch (TenantAdminBootstrapConflictException)
+    {
+        await Console.Error.WriteLineAsync(
+            "First TenantAdmin bootstrap refused because another active TenantAdmin exists for this tenant.");
+        Environment.ExitCode = 1;
+    }
+    catch (Exception)
+    {
+        await Console.Error.WriteLineAsync(
+            "First TenantAdmin bootstrap failed. Check the approved identity, migration settings, and database connectivity.");
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
 if (runMigrations)
 {
-    // Migration credentials and connection settings are separate from the runtime database identity.
-    var migrationConnectionString = builder.Configuration.GetConnectionString("ProjectsConfigMigration")
-        ?? throw new InvalidOperationException(
-            "Missing required configuration 'ConnectionStrings:ProjectsConfigMigration'.");
-    var migrationIdentity = ProjectsConfigPostgresDataSource.ReadWorkloadIdentityOptions(
-        builder.Configuration, "ProjectsConfig:Migration:WorkloadIdentity");
-    var migrationCredential = new WorkloadIdentityCredential(migrationIdentity);
-    await using var migrationDataSource = ProjectsConfigPostgresDataSource.Create(
-        migrationConnectionString, migrationCredential);
+    await using var migrationDataSource =
+        ProjectsConfigPostgresDataSource.CreateMigrationDataSource(builder.Configuration);
     var migrationDbOptions = new DbContextOptionsBuilder<ProjectsConfigDbContext>()
         .UseNpgsql(
             migrationDataSource,

@@ -473,6 +473,97 @@ and the [Kubernetes operator guide](https://github.com/sabbour/agentweaver/blob/
    kubectl rollout status deployment/web -n agentweaver
    ```
 
+### Bootstrap the first Projects & Config TenantAdmin
+
+Run this command once after the Projects & Config Deployment is ready and
+before the approved user opens the Projects page. The database is private.
+Run the command in a one-shot Job inside the cluster network. Use the exact
+Projects & Config image digest already approved for this deployment.
+
+The command uses the issuer, subject, and tenant in
+`projects-config-runtime-config`. It does not accept identity arguments.
+Provide the separate migration/schema-owner connection and a short-lived
+PostgreSQL Entra access token through a Kubernetes Secret. Do not put the
+token in a command argument or log.
+
+In PowerShell, write the access token to a protected local file without
+printing it:
+
+```powershell
+az account get-access-token --resource-type oss-rdbms --query accessToken --output tsv |
+  Set-Content -NoNewline .\projects-config-access-token.txt
+```
+
+Put the password-free migration connection string in
+`projects-config-migration-connection.txt`. Its Entra role must own the
+Projects & Config schema and migration history. Create a short-lived Secret
+from these files:
+
+```powershell
+kubectl create secret generic projects-config-first-admin `
+  --namespace agentweaver `
+  --from-file=migration-connection=.\projects-config-migration-connection.txt `
+  --from-file=access-token=.\projects-config-access-token.txt
+```
+
+Create a Job with the approved Projects & Config image. Copy the pod labels
+selected by the existing Projects & Config network policy so the Job can reach
+the private PostgreSQL server. Disable service-account token mounting. Set the
+container command and environment to:
+
+```yaml
+command:
+  - dotnet
+  - Agentweaver.Projects.Config.dll
+  - --bootstrap-first-tenant-admin
+env:
+  - name: ProjectsConfig__Authentication__Authority
+    valueFrom:
+      configMapKeyRef:
+        name: projects-config-runtime-config
+        key: ProjectsConfig__Authentication__Authority
+  - name: ProjectsConfig__PrivilegedSetup__ApprovedIssuer
+    valueFrom:
+      configMapKeyRef:
+        name: projects-config-runtime-config
+        key: ProjectsConfig__PrivilegedSetup__ApprovedIssuer
+  - name: ProjectsConfig__PrivilegedSetup__ApprovedSubject
+    valueFrom:
+      configMapKeyRef:
+        name: projects-config-runtime-config
+        key: ProjectsConfig__PrivilegedSetup__ApprovedSubject
+  - name: ProjectsConfig__PrivilegedSetup__ApprovedTenantId
+    valueFrom:
+      configMapKeyRef:
+        name: projects-config-runtime-config
+        key: ProjectsConfig__PrivilegedSetup__ApprovedTenantId
+  - name: ConnectionStrings__ProjectsConfigMigration
+    valueFrom:
+      secretKeyRef:
+        name: projects-config-first-admin
+        key: migration-connection
+  - name: ProjectsConfig__Migration__AccessToken
+    valueFrom:
+      secretKeyRef:
+        name: projects-config-first-admin
+        key: access-token
+```
+
+Run the Job and read its result:
+
+```powershell
+kubectl wait --for=condition=complete job/projects-config-first-admin `
+  --namespace agentweaver --timeout=10m
+kubectl logs job/projects-config-first-admin --namespace agentweaver
+```
+
+The command reports whether it created the grant or found the same active
+grant. A different active TenantAdmin stops the command without changes.
+After the Job succeeds, remove the Job and Secret and delete the local token
+file. Sign in as the approved user and load the Projects page. The page should
+open without `403`. The runtime database role remains SELECT-only on authority
+tables.
+
 3. Check readiness, the deployed image digests, and the exact ServiceAccount
    on each workload. Review only the affected pod's logs if a rollout fails.
    If you enabled public routing, verify the Gateway and route conditions too:
