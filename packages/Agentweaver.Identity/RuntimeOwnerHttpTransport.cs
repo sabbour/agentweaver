@@ -15,7 +15,7 @@ namespace Agentweaver.Identity;
 /// </summary>
 public static class RuntimeOwnerHttpTransport
 {
-    private const string ServiceBackendCaFile = "/var/run/service-backend-ca/ca.crt";
+    internal const string ServiceBackendCaFile = "/var/run/service-backend-ca/ca.crt";
     private const string ServerAuthenticationOid = "1.3.6.1.5.5.7.3.1";
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
@@ -35,7 +35,7 @@ public static class RuntimeOwnerHttpTransport
     public static HttpClientHandler CreateTrustedOwnerHandler()
     {
         if (!File.Exists(ServiceBackendCaFile))
-            throw new InvalidOperationException("The public service backend CA ConfigMap is required.");
+            throw new InvalidOperationException("The service backend CA ConfigMap is required.");
 
         return new HttpClientHandler
         {
@@ -55,9 +55,12 @@ public static class RuntimeOwnerHttpTransport
         X509Certificate? certificate,
         X509Chain? peerChain,
         SslPolicyErrors errors,
-        string caFile)
+        string caFile,
+        X509RevocationMode revocationMode = X509RevocationMode.NoCheck,
+        bool disableCertificateDownloads = true)
     {
-        if (certificate is null || errors.HasFlag(SslPolicyErrors.RemoteCertificateNameMismatch))
+        var unexpectedErrors = errors & ~SslPolicyErrors.RemoteCertificateChainErrors;
+        if (certificate is null || unexpectedErrors != SslPolicyErrors.None)
             return false;
 
         using var root = X509CertificateLoader.LoadCertificateFromFile(caFile);
@@ -71,8 +74,10 @@ public static class RuntimeOwnerHttpTransport
         chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
         chain.ChainPolicy.CustomTrustStore.Add(root);
         chain.ChainPolicy.ApplicationPolicy.Add(new Oid(ServerAuthenticationOid));
-        chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-        chain.ChainPolicy.DisableCertificateDownloads = true;
+        chain.ChainPolicy.RevocationMode = revocationMode;
+        chain.ChainPolicy.RevocationFlag = X509RevocationFlag.ExcludeRoot;
+        chain.ChainPolicy.VerificationFlags = X509VerificationFlags.NoFlag;
+        chain.ChainPolicy.DisableCertificateDownloads = disableCertificateDownloads;
         if (peerChain is not null)
         {
             foreach (var element in peerChain.ChainElements.Cast<X509ChainElement>().Skip(1))

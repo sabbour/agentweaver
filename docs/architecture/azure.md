@@ -217,7 +217,8 @@ kube-proxy replacement maps the public issuer address to those Pods inside the
 cluster, so an FQDN-only rule cannot authorize that hairpin path. Events &
 Sessions and Projects & Config have separate endpoint rules for the same
 Gateway. Identity Broker has exact DNS and endpoint rules for its Projects,
-Orchestrator, and Environment owner calls.
+Orchestrator, and Environment owner calls. Orchestrator and Environment also
+allow Broker ingress on TCP 8443 for those requests.
 
 The Foundation Probe Job has a dedicated workload identity. It exercises Key
 Vault, Blob, PostgreSQL, and telemetry without redeeming through the Identity

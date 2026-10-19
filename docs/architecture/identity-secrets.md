@@ -53,14 +53,16 @@ The Broker owner call uses `IdentityBroker:RunBinding:ProjectsOwnerAddress` and
 audience. Configuring it maps only the private proof route; it does not replace
 the public Projects bearer audience.
 
-Internal owner HTTPS clients use `RuntimeOwnerHttpTransport` and the
-`service-backend-ca` ConfigMap mounted read-only at
-`/var/run/service-backend-ca/ca.crt`. The handler requires that file and trusts
-only its CA root. It also checks the requested hostname, certificate validity,
-and server-authentication purpose, and it rejects redirects. Gateway, MCP,
-Orchestrator, Knowledge, Environment, Events & Sessions, Identity Broker, and
-per-run AgentHost Pods use this handler for owner calls. Public issuer discovery
-and external HTTPS providers keep normal system trust.
+Internal owner HTTPS clients validate server certificates against the
+read-only `service-backend-ca` mount at
+`/var/run/service-backend-ca/ca.crt`. `RuntimeOwnerHttpTransport` supplies the
+bounded owner-request handler; Environment's `RuntimeSandboxHttpTransport`
+retains direct-to-Pod-IP routing for bootstrap and sandbox calls while
+validating the TLS hostname and the same backend CA. `RuntimeServiceTlsIdentity`
+adds custom-root chain validation to pinned mTLS owner clients while retaining
+hostname checks, the configured peer leaf pin, server-authentication purpose,
+the client certificate, and online revocation checks. Public issuer discovery
+and external HTTPS providers continue to use normal system trust.
 
 When run binding is configured, Broker requires
 `ProjectsTrustBundleSha256`, the SHA-256 of the exact raw UTF-8 PEM bytes at

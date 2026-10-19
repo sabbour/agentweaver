@@ -57,9 +57,25 @@ public sealed class RuntimeSandboxHttpTransportTests
     [Fact]
     public void CreatedHandlerDoesNotReuseConnectionsAcrossPodVerifications()
     {
-        using var handler = RuntimeSandboxHttpTransport.CreateHandler();
+        var directory = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", ".test-certificates", Guid.NewGuid().ToString("N")));
+        Directory.CreateDirectory(directory);
+        var caFile = Path.Combine(directory, "ca.crt");
+        try
+        {
+            File.WriteAllText(caFile, "test certificate authority");
+            using var handler = RuntimeSandboxHttpTransport.CreateHandler(caFile);
 
-        Assert.Equal(TimeSpan.Zero, handler.PooledConnectionLifetime);
+            Assert.Equal(TimeSpan.Zero, handler.PooledConnectionLifetime);
+            Assert.False(handler.AllowAutoRedirect);
+            Assert.False(handler.UseProxy);
+            Assert.NotNull(handler.ConnectCallback);
+            Assert.NotNull(handler.SslOptions.RemoteCertificateValidationCallback);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Theory]

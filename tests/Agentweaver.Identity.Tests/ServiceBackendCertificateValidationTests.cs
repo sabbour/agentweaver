@@ -39,6 +39,8 @@ public sealed class ServiceBackendCertificateValidationTests
                 leaf, null, SslPolicyErrors.RemoteCertificateNameMismatch |
                     SslPolicyErrors.RemoteCertificateChainErrors, rootFile));
             Assert.False(RuntimeOwnerHttpTransport.ValidateServerCertificate(
+                leaf, null, SslPolicyErrors.RemoteCertificateNotAvailable, rootFile));
+            Assert.False(RuntimeOwnerHttpTransport.ValidateServerCertificate(
                 leaf, null, SslPolicyErrors.None, otherRootFile));
             Assert.False(RuntimeOwnerHttpTransport.ValidateServerCertificate(
                 clientAuthLeaf, null, SslPolicyErrors.None, rootFile));
@@ -51,6 +53,40 @@ public sealed class ServiceBackendCertificateValidationTests
         {
             File.Delete(rootFile);
             File.Delete(otherRootFile);
+        }
+    }
+
+    [Fact]
+    public void DirectPodTransportValidatesTlsAgainstTheBackendCaWithoutSkippingHostnameChecks()
+    {
+        using var rootKey = RSA.Create(2048);
+        using var otherRootKey = RSA.Create(2048);
+        using var leafKey = RSA.Create(2048);
+        using var root = CreateRoot(rootKey, "Agentweaver direct transport CA");
+        using var otherRoot = CreateRoot(otherRootKey, "Untrusted direct transport CA");
+        using var leaf = CreateLeaf(root, leafKey);
+        using var untrustedLeaf = CreateLeaf(otherRoot, leafKey);
+        var directory = Path.GetFullPath(Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", ".test-certificates", Guid.NewGuid().ToString("N")));
+        Directory.CreateDirectory(directory);
+        var rootFile = Path.Combine(directory, "ca.crt");
+
+        try
+        {
+            File.WriteAllText(rootFile, root.ExportCertificatePem());
+            using var handler = RuntimeSandboxHttpTransport.CreateHandler(rootFile);
+            var validate = handler.SslOptions.RemoteCertificateValidationCallback;
+            Assert.NotNull(validate);
+
+            Assert.True(validate(null!, leaf, null, SslPolicyErrors.RemoteCertificateChainErrors));
+            Assert.False(validate(null!, leaf, null,
+                SslPolicyErrors.RemoteCertificateNameMismatch | SslPolicyErrors.RemoteCertificateChainErrors));
+            Assert.False(validate(null!, untrustedLeaf, null, SslPolicyErrors.RemoteCertificateChainErrors));
+            Assert.False(validate(null!, leaf, null, SslPolicyErrors.RemoteCertificateNotAvailable));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
         }
     }
 

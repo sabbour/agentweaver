@@ -444,6 +444,9 @@ require HTTPS on TCP 8443 and verify that the Service selector resolves to exact
 actual AgentHost Pod; no shared AgentHost Deployment or Service is created.
 The Pod also mounts `service-backend-ca` read-only at
 `/var/run/service-backend-ca` for its internal owner HTTP clients.
+Environment's own bootstrap and sandbox HTTPS clients validate internal
+servers against the same CA. Their direct-Pod transport still verifies the TLS
+hostname while connecting to the validated Pod IP.
 That Pod has stable `agentweaver.io/workload: agenthost` and
 `agentweaver.io/identity-client: "true"` labels. The latter selects the existing
 Identity Broker network rule and grants no application authority.

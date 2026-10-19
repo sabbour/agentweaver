@@ -760,6 +760,28 @@ test('runtime owner policies allow only configured issuer, database, and Kuberne
   }]);
   assert.deepEqual(ports(environmentBrokerIngress), [{ port: '8443', protocol: 'TCP' }]);
 
+  const orchestrator = getPolicy('orchestrator-owner-network');
+  const orchestratorBrokerIngress = orchestrator.spec.ingress.find(rule => rule.fromEndpoints
+    ?.some(endpoint => endpoint.matchLabels['agentweaver.io/workload'] === 'identity-broker'));
+  assert.deepEqual(orchestratorBrokerIngress.fromEndpoints.find(endpoint =>
+    endpoint.matchLabels['agentweaver.io/workload'] === 'identity-broker'), {
+    matchLabels: {
+      'k8s:io.kubernetes.pod.namespace': namespace,
+      'agentweaver.io/workload': 'identity-broker',
+    },
+  });
+  assert.deepEqual(ports(orchestratorBrokerIngress), [{ port: '8443', protocol: 'TCP' }]);
+
+  const environmentOwnerBrokerIngress = getPolicy('environment-agenthost-ingress').spec.ingress[0];
+  assert.deepEqual(environmentOwnerBrokerIngress.fromEndpoints.find(endpoint =>
+    endpoint.matchLabels['agentweaver.io/workload'] === 'identity-broker'), {
+    matchLabels: {
+      'k8s:io.kubernetes.pod.namespace': namespace,
+      'agentweaver.io/workload': 'identity-broker',
+    },
+  });
+  assert.deepEqual(ports(environmentOwnerBrokerIngress), [{ port: '8443', protocol: 'TCP' }]);
+
   const agenthost = getPolicy('agenthost-egress');
   assert.deepEqual(endpoints(agenthost.spec.egress[0]), [
     'environment', 'events-and-sessions', 'identity-broker', 'orchestrator',

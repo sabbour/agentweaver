@@ -34,6 +34,9 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
 
     public HttpMessageHandler CreateHandler() => _factory.Server.CreateHandler();
 
+    public HttpClient CreateOwnerClient(string name) =>
+        _factory.Server.Services.GetRequiredService<IHttpClientFactory>().CreateClient(name);
+
     public static GatewayProductionResourceServer Start(
         SecurityKey signingKey,
         Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> projectsOwner,
@@ -118,29 +121,41 @@ internal sealed class GatewayProductionResourceServer : IAsyncDisposable
                             Issuer = new Uri(IdentityBrokerWebApplicationFactory.Issuer),
                             SigningKeys = { _signingKey },
                         }));
-                services.Configure<HttpClientFactoryOptions>(
+                services.PostConfigure<HttpClientFactoryOptions>(
                     nameof(GatewayOwner.Projects),
-                    options => options.HttpMessageHandlerBuilderActions.Add(
-                        handlerBuilder => handlerBuilder.PrimaryHandler =
-                        new OwnerHandler(_projectsOwner)));
+                    options =>
+                    {
+                        options.HttpMessageHandlerBuilderActions.Clear();
+                        options.HttpMessageHandlerBuilderActions.Add(handlerBuilder =>
+                            handlerBuilder.PrimaryHandler = new OwnerHandler(_projectsOwner));
+                    });
                 if (_eventsOwner is not null)
-                    services.Configure<HttpClientFactoryOptions>(
+                    services.PostConfigure<HttpClientFactoryOptions>(
                         nameof(GatewayOwner.Events),
-                        options => options.HttpMessageHandlerBuilderActions.Add(
-                            handlerBuilder => handlerBuilder.PrimaryHandler =
-                            new OwnerHandler(_eventsOwner)));
+                        options =>
+                        {
+                            options.HttpMessageHandlerBuilderActions.Clear();
+                            options.HttpMessageHandlerBuilderActions.Add(handlerBuilder =>
+                                handlerBuilder.PrimaryHandler = new OwnerHandler(_eventsOwner));
+                        });
                 if (_knowledgeOwner is not null)
-                    services.Configure<HttpClientFactoryOptions>(
+                    services.PostConfigure<HttpClientFactoryOptions>(
                         nameof(GatewayOwner.Knowledge),
-                        options => options.HttpMessageHandlerBuilderActions.Add(
-                        handlerBuilder => handlerBuilder.PrimaryHandler =
-                            new OwnerHandler(_knowledgeOwner)));
+                        options =>
+                        {
+                            options.HttpMessageHandlerBuilderActions.Clear();
+                            options.HttpMessageHandlerBuilderActions.Add(handlerBuilder =>
+                                handlerBuilder.PrimaryHandler = new OwnerHandler(_knowledgeOwner));
+                        });
                 if (_orchestratorOwner is not null)
-                    services.Configure<HttpClientFactoryOptions>(
+                    services.PostConfigure<HttpClientFactoryOptions>(
                         nameof(GatewayOwner.Orchestrator),
-                        options => options.HttpMessageHandlerBuilderActions.Add(
-                            handlerBuilder => handlerBuilder.PrimaryHandler =
-                                new OwnerHandler(_orchestratorOwner)));
+                        options =>
+                        {
+                            options.HttpMessageHandlerBuilderActions.Clear();
+                            options.HttpMessageHandlerBuilderActions.Add(handlerBuilder =>
+                                handlerBuilder.PrimaryHandler = new OwnerHandler(_orchestratorOwner));
+                        });
                 if (_observeSseData is not null)
                     services.AddSingleton<IStartupFilter>(
                         new SseObservationStartupFilter(_observeSseData));

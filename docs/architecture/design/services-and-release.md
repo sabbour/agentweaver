@@ -654,9 +654,11 @@ BackendTLSPolicies pin their service DNS hostnames and the existing public
 `service-backend-ca` ConfigMap. Every static workload that calls internal owner
 APIs mounts that ConfigMap read-only, and the Sandbox provider adds the same
 mount to each generated AgentHost Pod. `RuntimeOwnerHttpTransport` validates
-owner certificates against this custom root and the requested hostname; public
-issuer discovery and external providers continue to use system trust. Release
-preflight checks the public CA and signed service certificates, and reads back
+owner certificates against this custom root and the requested hostname.
+Environment's direct-Pod transport and pinned mTLS owner clients use the same
+custom-root validator without bypassing hostname checks. Public issuer discovery
+and external providers continue to use system trust. Release preflight checks
+the public CA and signed service certificates, and reads back
 the exact managed Gateway, routes, and backend TLS policies before apply; the
 release tool does not create or manage these routes or certificates. GHCR
 verification resolves the published AgentHost

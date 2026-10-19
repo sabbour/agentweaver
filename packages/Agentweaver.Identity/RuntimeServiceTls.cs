@@ -49,8 +49,8 @@ public sealed record RuntimeServiceTlsOptions
 }
 
 /// <summary>
-/// Loads the local certificate and applies mutual TLS, EKU, validity, and peer certificate
-/// pin checks to direct service connections.
+/// Loads the local certificate and applies mutual TLS, custom-root server validation, EKU,
+/// validity, and peer certificate pin checks to direct service connections.
 /// </summary>
 public sealed class RuntimeServiceTlsIdentity : IDisposable
 {
@@ -115,11 +115,18 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
             throw new RuntimeAuthorizationException("runtime_remote_tool_result_service_listener_denied");
     }
 
-    /// <summary>Builds a non-redirecting, revocation-checking TLS client pinned to the configured peer.</summary>
-    public HttpClientHandler CreateHandler()
+    /// <summary>Builds a non-redirecting TLS client with backend-CA trust and online revocation, pinned to the peer.</summary>
+    public HttpClientHandler CreateHandler() =>
+        CreateHandler(RuntimeOwnerHttpTransport.ServiceBackendCaFile);
+
+    /// <summary>Creates the pinned mTLS owner handler using the specified service backend CA file.</summary>
+    internal HttpClientHandler CreateHandler(string caFile)
     {
         if (!HasCertificatePurpose(Certificate, ClientAuthentication, _timeProvider.GetUtcNow()))
             throw new RuntimeAuthorizationException("runtime_remote_tool_result_service_certificate_expired");
+        if (!File.Exists(caFile))
+            throw new InvalidOperationException("The service backend CA ConfigMap is required.");
+
         var handler = new HttpClientHandler
         {
             AllowAutoRedirect = false,
@@ -127,19 +134,38 @@ public sealed class RuntimeServiceTlsIdentity : IDisposable
             SslProtocols = AllowedProtocols,
             ClientCertificateOptions = ClientCertificateOption.Manual,
             ServerCertificateCustomValidationCallback = (_, certificate, chain, errors) =>
-                chain is not null && errors == SslPolicyErrors.None &&
-                AcceptPeerCertificate(certificate, ServerAuthentication)
+                AcceptServerCertificate(certificate, chain, errors, caFile)
         };
         handler.ClientCertificates.Add(Certificate);
         return handler;
     }
 
+    /// <summary>Checks backend-CA trust and hostname before enforcing server purpose and the peer pin.</summary>
+    internal bool AcceptServerCertificate(
+        X509Certificate? certificate,
+        X509Chain? chain,
+        SslPolicyErrors errors,
+        string caFile,
+        X509RevocationMode revocationMode = X509RevocationMode.Online) =>
+        chain is not null &&
+        RuntimeOwnerHttpTransport.ValidateServerCertificate(
+            certificate, chain, errors, caFile, revocationMode, disableCertificateDownloads: false) &&
+        AcceptPeerCertificate(certificate, ServerAuthentication);
+
     /// <summary>Checks certificate validity, required EKU, and fixed-time SHA-256 pin equality.</summary>
-    private bool AcceptPeerCertificate(X509Certificate2? certificate, string purpose) =>
-        certificate is not null &&
-        HasCertificatePurpose(certificate, purpose, _timeProvider.GetUtcNow()) &&
-        _peerPins.Any(pin => CryptographicOperations.FixedTimeEquals(
-            pin, SHA256.HashData(certificate.RawData)));
+    private bool AcceptPeerCertificate(X509Certificate? certificate, string purpose)
+    {
+        if (certificate is null)
+            return false;
+
+        using var converted = certificate is X509Certificate2
+            ? null
+            : X509CertificateLoader.LoadCertificate(certificate.Export(X509ContentType.Cert));
+        var leaf = certificate as X509Certificate2 ?? converted!;
+        return HasCertificatePurpose(leaf, purpose, _timeProvider.GetUtcNow()) &&
+               _peerPins.Any(pin => CryptographicOperations.FixedTimeEquals(
+                   pin, SHA256.HashData(leaf.RawData)));
+    }
 
     /// <summary>Checks the certificate time window, non-CA status, and required extended key usage.</summary>
     private static bool HasCertificatePurpose(
