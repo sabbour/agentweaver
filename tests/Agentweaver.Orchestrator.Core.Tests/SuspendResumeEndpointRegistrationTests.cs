@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Http;
 using Npgsql;
 using Xunit;
 
@@ -199,6 +200,9 @@ public sealed class SuspendResumeEndpointRegistrationTests
             serviceProvider.GetService<IExecutableActionPolicyEvaluationReceiptWriter>()));
         Assert.True(services.AddRuntimeRegistrationOwner(configuration, options));
         Assert.False(services.AddRuntimeUsageSource(configuration));
+        ConfigureTestOwnerHttpClient(services, nameof(ProjectsRunSelectionClient));
+        ConfigureTestOwnerHttpClient(services, nameof(EventsAddressedMessageClient));
+        ConfigureTestOwnerHttpClient(services, nameof(RuntimeEnvironmentContextClient));
         Assert.Contains(services, descriptor => descriptor.ServiceType == typeof(RuntimeActionOwner));
         Assert.DoesNotContain(services, descriptor => descriptor.ServiceType == typeof(RuntimeUsageSourceStore));
         using var serviceProvider = services.BuildServiceProvider();
@@ -245,4 +249,8 @@ public sealed class SuspendResumeEndpointRegistrationTests
     private static RuntimeActionRequest TestAction(RuntimeRegistration registration, string actionId) =>
         new(1, registration.RuntimeInstanceId, registration.Revision,
             registration.Binding.ExecutionFence, Guid.NewGuid(), actionId, new string('b', 64));
+
+    private static void ConfigureTestOwnerHttpClient(IServiceCollection services, string clientName) =>
+        services.Configure<HttpClientFactoryOptions>(
+            clientName, options => options.HttpMessageHandlerBuilderActions.Clear());
 }

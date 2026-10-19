@@ -38,6 +38,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Http;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.Playwright;
 using Npgsql;
@@ -6564,6 +6565,15 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         }
     }
 
+    private static void ConfigureTestHttpClient(
+        IServiceCollection services, string clientName, Func<HttpMessageHandler> handlerFactory) =>
+        services.PostConfigure<HttpClientFactoryOptions>(clientName, options =>
+        {
+            options.HttpMessageHandlerBuilderActions.Clear();
+            options.HttpMessageHandlerBuilderActions.Add(builder =>
+                builder.PrimaryHandler = handlerFactory());
+        });
+
     private sealed class OrchestratorIntegrationFactory(
         string connectionString,
         string schema,
@@ -6609,29 +6619,33 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 services.RemoveAll<ProviderCatalog>();
                 services.AddSingleton(providerCatalog ?? CreateSandboxProviderCatalog());
                 AddJwtBearer(services, signingKey);
-                services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.ProjectsRunSelectionClient>()
-                    .ConfigurePrimaryHttpMessageHandler(projectsHandler);
-                services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.EventsAddressedMessageClient>()
-                    .ConfigurePrimaryHttpMessageHandler(eventsHandler);
-                services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.RuntimeRunAdmissionClient>()
-                    .ConfigurePrimaryHttpMessageHandler(eventsHandler);
+                ConfigureTestHttpClient(services,
+                    typeof(OrchestratorHost::Agentweaver.Orchestrator.ProjectsRunSelectionClient).Name,
+                    projectsHandler);
+                ConfigureTestHttpClient(services,
+                    typeof(OrchestratorHost::Agentweaver.Orchestrator.EventsAddressedMessageClient).Name,
+                    eventsHandler);
+                ConfigureTestHttpClient(services,
+                    typeof(OrchestratorHost::Agentweaver.Orchestrator.RuntimeRunAdmissionClient).Name,
+                    eventsHandler);
                 if (brokerHandler is not null)
-                    services.AddHttpClient<
-                            OrchestratorHost::Agentweaver.Orchestrator.SourceControlSecretRedemptionClient>()
-                        .ConfigurePrimaryHttpMessageHandler(brokerHandler);
+                    ConfigureTestHttpClient(services,
+                        typeof(OrchestratorHost::Agentweaver.Orchestrator.SourceControlSecretRedemptionClient).Name,
+                        brokerHandler);
                 if (sourceControlHandler is not null)
-                    services.AddHttpClient<GitHubSourceControlAdapter>()
-                        .ConfigurePrimaryHttpMessageHandler(sourceControlHandler);
+                    ConfigureTestHttpClient(services, nameof(GitHubSourceControlAdapter), sourceControlHandler);
                 if (policyOptions is not null)
                     services.AddSingleton(policyOptions);
                 if (gitWorkspaceManager is not null)
                     services.AddSingleton(gitWorkspaceManager);
                 if (environmentHandler is not null)
-                    services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.RuntimeEnvironmentContextClient>()
-                        .ConfigurePrimaryHttpMessageHandler(environmentHandler);
+                    ConfigureTestHttpClient(services,
+                        typeof(OrchestratorHost::Agentweaver.Orchestrator.RuntimeEnvironmentContextClient).Name,
+                        environmentHandler);
                 if (runtimeUsageHandler is not null)
-                    services.AddHttpClient<OrchestratorHost::Agentweaver.Orchestrator.RuntimeUsageBrokerClient>()
-                        .ConfigurePrimaryHttpMessageHandler(runtimeUsageHandler);
+                    ConfigureTestHttpClient(services,
+                        typeof(OrchestratorHost::Agentweaver.Orchestrator.RuntimeUsageBrokerClient).Name,
+                        runtimeUsageHandler);
                 if (objectStore is not null)
                     services.AddSingleton<IObjectStore>(objectStore);
                 if (sandboxProvider is not null)
@@ -6856,27 +6870,22 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 services.RemoveAll<NpgsqlDataSource>();
                 services.AddSingleton<NpgsqlDataSource>(_ => NpgsqlDataSource.Create(connectionString));
                 AddJwtBearer(services, signingKey);
-                services.AddHttpClient<
-                        EventsHost::Agentweaver.EventsAndSessions.IProjectsAuthorizationContextClient,
-                        EventsHost::Agentweaver.EventsAndSessions.ProjectsAuthorizationContextClient>()
-                    .ConfigurePrimaryHttpMessageHandler(projectsHandler);
-                services.AddHttpClient<
-                        EventsHost::Agentweaver.EventsAndSessions.ICoordinationOwnerClient,
-                        EventsHost::Agentweaver.EventsAndSessions.CoordinationOwnerClient>()
-                    .ConfigurePrimaryHttpMessageHandler(orchestratorHandler);
+                ConfigureTestHttpClient(services,
+                    typeof(EventsHost::Agentweaver.EventsAndSessions.IProjectsAuthorizationContextClient).Name,
+                    projectsHandler);
+                ConfigureTestHttpClient(services,
+                    typeof(EventsHost::Agentweaver.EventsAndSessions.ICoordinationOwnerClient).Name,
+                    orchestratorHandler);
                 if (nativeUsageHandler is not null)
                 {
-                    services.AddHttpClient("RuntimeRunAdmissionService")
-                        .ConfigurePrimaryHttpMessageHandler(projectsHandler);
-                    services.AddHttpClient("NativeUsageReceiptClient")
-                        .ConfigurePrimaryHttpMessageHandler(nativeUsageHandler);
+                    ConfigureTestHttpClient(services, "RuntimeRunAdmissionService", projectsHandler);
+                    ConfigureTestHttpClient(services, "NativeUsageReceiptClient", nativeUsageHandler);
                 }
                 if (sessionMaterialObjects is not null)
                 {
                     services.RemoveAll<IObjectStore>();
                     services.AddSingleton(sessionMaterialObjects);
-                    services.AddHttpClient("SessionMaterialRuntimeClient")
-                        .ConfigurePrimaryHttpMessageHandler(orchestratorHandler);
+                    ConfigureTestHttpClient(services, "SessionMaterialRuntimeClient", orchestratorHandler);
                 }
             });
         }

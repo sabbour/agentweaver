@@ -1,8 +1,10 @@
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Http;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 
@@ -128,7 +130,7 @@ public sealed class IdentityBrokerWebApplicationFactory : WebApplicationFactory<
             logging.SetMinimumLevel(LogLevel.Trace);
         });
 
-        builder.ConfigureServices(services =>
+        builder.ConfigureTestServices(services =>
         {
             services.RemoveAll<NpgsqlDataSource>();
             services.AddSingleton<NpgsqlDataSource>(_ => NpgsqlDataSource.Create(_connectionString));
@@ -148,9 +150,29 @@ public sealed class IdentityBrokerWebApplicationFactory : WebApplicationFactory<
                 };
             });
 
+            ConfigureTestOwnerHttpClients(services);
             _configureServices?.Invoke(services);
+            if (!services.Any(descriptor => descriptor.ServiceType == typeof(BrokerRunBindingTlsIdentity)))
+                ConfigureTestOwnerHttpClient(services, BrokerRunBindingAuthority.HttpClientName);
         });
     }
+
+    private static void ConfigureTestOwnerHttpClients(IServiceCollection services)
+    {
+        foreach (var clientName in new[]
+        {
+            "RuntimeRegistrationHttpClient",
+            "BrokerRuntimeBootstrapDeliveryClient",
+            "CopilotConnectionProjects",
+            "RemoteMcpOAuthProjects",
+            "RemoteMcpOAuthEnvironment",
+        })
+            ConfigureTestOwnerHttpClient(services, clientName);
+    }
+
+    private static void ConfigureTestOwnerHttpClient(IServiceCollection services, string clientName) =>
+        services.Configure<HttpClientFactoryOptions>(
+            clientName, options => options.HttpMessageHandlerBuilderActions.Clear());
 
     protected override void Dispose(bool disposing)
     {

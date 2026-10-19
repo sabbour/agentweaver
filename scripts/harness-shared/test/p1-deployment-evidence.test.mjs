@@ -890,7 +890,7 @@ test('fails explicitly when anonymous GHCR token exchange fails or omits its tok
 
   await assert.rejects(
     observe(createRegistryFetch(data.registryBodies, [], { tokenEndpointStatus: 503 })),
-    /GHCR does not expose sabbour\/agentweaver\/identity-broker for anonymous pull verification \(HTTP 503\)/,
+    /Registry\/manifest read failed for https:\/\/ghcr\.io\/token after 4 attempt\(s\): HTTP 503/,
   );
   await assert.rejects(
     observe(createRegistryFetch(data.registryBodies, [], { missingToken: true })),
