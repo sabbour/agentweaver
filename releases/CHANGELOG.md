@@ -2,6 +2,10 @@
 
 Applied component version changes, newest first.
 
+## 2026-10-19T01:04:30.754Z — source `ead1a2d170b71c5ac24003197445e2166bd08c96`
+
+- `Agentweaver.Environment`: 1.1.1 -> 1.1.2 (patch) — .changeset/environment-connection-delete-body.md
+
 ## 2026-10-18T21:08:13.458Z — source `0d9ead8705f44e4bf56c6ca2c3492a6cb0971287`
 
 - `Agentweaver.Environment`: 1.1.0 -> 1.1.1 (patch) — .changeset/configuration-contract-docs.md, .changeset/environment-cilium-config-reader.md
