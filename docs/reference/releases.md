@@ -175,20 +175,21 @@ proof. For patch upgrades, it can report and replace only changed immutable
 preflighting the rest of the bundle; unchanged data follows the normal apply
 path. It never replaces `environment-cilium-config`,
 `projects-config-provider-catalog`, or any other ConfigMap. Its dry run does
-not create release-acceptance evidence. The v1.0.4 bootstrap is bound to source
-`7bb3ceb282c9377e49da2bc7b6d336baa4eb8209`, tree
-`61adf823936284285f68df17b890a5b0da70c033`, publication SHA-256
-`128f868f2f59d7eadccae84f36808690ee242e4ebcfe5f23d7f5763bacc3496e`, and
+not create release-acceptance evidence. The [v1.0.5 GitHub Release and
+tag](https://github.com/sabbour/agentweaver/releases/tag/v1.0.5) are already
+published. Its bootstrap is bound to source
+`edae14b469548b8409b0eef651504691e0216a1e`, tree
+`265da7c601e033adc99501735b74ccdb2df94420`, publication SHA-256
+`149972c64222f1cf294b3795107f4e0ebf418bc766fbed4b1e2dcdd6e796c51b`, and
 provenance SHA-256
-`b7a4ef1c71559fe5f8c96d8d7beee2c6c14ed8fad700aea7711a1cc3aa643ea8`.
-AgentHost's measured compressed pull size is `321483172` bytes. Use
-`release:deploy` for the strict release gate. For the exact v1.0.3 source,
-receipt artifact, and bootstrap invocation, follow the
-[release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v103-pre-acceptance-bootstrap).
-The [v1.0.4 GitHub Release and tag](https://github.com/sabbour/agentweaver/releases/tag/v1.0.4)
-are already published; do not create another release or tag after the
-bootstrap-pins pull request merges. For the v1.0.4 image digests and bootstrap invocation, see the
-[v1.0.4 release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v104-pre-acceptance-bootstrap).
+`78c1fe655be9321727aa9882cb9bad2cf32d1e7faef86f6736151085adca9d21`.
+AgentHost's receipt-measured `linux/amd64` image config digest is
+`sha256:2bb01d7d5b90f225d98fde16904f11ef3d090b5f0c358f30f1fa35ec607fe618`;
+its compressed pull size is `321483958` bytes. Do not create another release
+or tag after the bootstrap-pins pull request merges. Use `release:deploy` for
+the strict release gate. For the v1.0.5 image digests and bootstrap invocation,
+see the
+[v1.0.5 release operations guide](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#v105-pre-acceptance-bootstrap).
 Neither a Kustomize apply nor a successful rollout alone proves external
 acceptance. The P1 runner can use a published release receipt without an
 integration deployment receipt, but it must verify the exact source tree and

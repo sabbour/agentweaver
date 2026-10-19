@@ -901,8 +901,68 @@ After P1 live acceptance checks complete, build a separate `stage: release`
 manifest from the tracked composition, the exact deployed source SHA, and the
 actual HTTPS API, UI, and MCP persona evidence URLs. Only then use the strict
 `release:deploy` gate. The current gate does not accept the mixed-version
-v1.0.1, v1.0.2, v1.0.3, or v1.0.4 compositions, and none of the bootstrap modes
+v1.0.1, v1.0.2, v1.0.3, v1.0.4, or v1.0.5 compositions, and none of the bootstrap modes
 relaxes the gate.
+
+### v1.0.5 pre-acceptance bootstrap
+
+The [v1.0.5 GitHub Release and tag](https://github.com/sabbour/agentweaver/releases/tag/v1.0.5)
+are already published at this source. Do not create another release or tag
+after this bootstrap-pins pull request merges. Use the normal immutable
+publication for source `edae14b469548b8409b0eef651504691e0216a1e` and Git tree
+`265da7c601e033adc99501735b74ccdb2df94420`. The exact receipt is the
+`v1-publication-receipt-edae14b469548b8409b0eef651504691e0216a1e-1` artifact
+from [release-pack run 39305725074](https://github.com/sabbour/agentweaver/actions/runs/39305725074).
+Verify the publication receipt SHA-256
+`149972c64222f1cf294b3795107f4e0ebf418bc766fbed4b1e2dcdd6e796c51b` and
+provenance SHA-256
+`78c1fe655be9321727aa9882cb9bad2cf32d1e7faef86f6736151085adca9d21`.
+AgentHost's receipt-measured image is `linux/amd64`, version `1.0.2`, with
+config digest
+`sha256:2bb01d7d5b90f225d98fde16904f11ef3d090b5f0c358f30f1fa35ec607fe618`
+and compressed pull size `321483958` bytes. The measurement counts the
+platform manifest plus unique config and gzip-layer blob bytes. All checked-in
+image digests and AgentHost measurements must match this receipt.
+
+| Service | Image digest |
+| --- | --- |
+| AgentHost (per Sandbox) | `sha256:015a081bea2e0b6cd36fb75c7adf868995785594cf81b3a4dc988ba3810ffe99` |
+| Identity Broker | `sha256:d6e5efbc36622c123813e23a42de48192b70e9315c1093a41462d43660f141bc` |
+| Events & Sessions | `sha256:38cb0ffc8a48f2fdd768189cb99a1638f94a736d24a18b79150aeae30d20f8e9` |
+| Gateway | `sha256:93de1e732a97ab885ea9a2b83671ce129b016e1a827de754b09f082870627c1c` |
+| MCP | `sha256:c0f85eb908337d5c70d3d32261bfeeb5a068ece93d34a57bfc063028b50d43dc` |
+| Web | `sha256:4097186fc602065617f07dbde72d69f4cda16f4394bc1ab2c6747884b9c9259b` |
+| Orchestrator | `sha256:2b131ad738b0c6841d3981d72369d5fca13dfd79237035e39273f2aec048f156` |
+| Environment | `sha256:70eb93a709f801e2e27a931a92f40e2dd9f8ced960eec518b191ab844cf8ea0f` |
+| Knowledge | `sha256:ea43f7c166927a00bc3ceb529ab94f688d03c4e1ab7c3dfb3e538dc721a9b45c` |
+| Projects & Config | `sha256:5bb6e9b3a204924bb63f9ae27d41e591d36e56d5df261e2d715da53e321550b0` |
+
+The `projects-config-provider-catalog` ConfigMap remains bound to product
+source `c24d0000fe5fc6163e4f38594c39dff782d3a46d`; pass the separately reviewed
+catalog-source merge commit `b002620bd8cb53a971b6d5b082d6ab43dbf11fb7` as
+`--provider-catalog-source-commit`. The approved Projects & Config
+privileged-setup allowlist is unchanged by this bootstrap-pin update.
+
+Download `publication.json` from the exact receipt artifact to
+`artifacts/release/publish/publication.json`. Continuation receipts and
+`--completion` proofs are rejected; no image is rebuilt or republished. This
+pre-acceptance bootstrap does not close release issue #2104, and issue #2101
+remains open for live sign-in verification.
+
+```powershell
+npm run release:deploy-bootstrap -- v1.0.5 `
+  --manifest releases/foundation.json `
+  --publication artifacts/release/publish/publication.json `
+  --subscription-id <subscription-id> `
+  --tenant-id <tenant-id> `
+  --resource-group agentweaver `
+  --cluster agentweaver-aks `
+  --namespace agentweaver `
+  --node-min 2 `
+  --node-max 3 `
+  --provider-catalog-configmap projects-config-provider-catalog `
+  --provider-catalog-source-commit b002620bd8cb53a971b6d5b082d6ab43dbf11fb7
+```
 
 `npm run release:deploy` is the operator-hosted, image-only Kubernetes rollout
 tool. It consumes an already published `v1.x.y` GitHub Release, the release-stage
