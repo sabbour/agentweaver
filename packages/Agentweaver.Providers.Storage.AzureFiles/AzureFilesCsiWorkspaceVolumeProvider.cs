@@ -73,6 +73,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
                 "Workspace volume capacity exceeds the configured provider limit.",
                 effectMayHaveApplied: false);
 
+        var clusterIdentity = await ReadClusterIdentityAsync(cancellationToken).ConfigureAwait(false);
         AzureFilesStorageClassSnapshot? storageClass;
         try
         {
@@ -175,7 +176,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
                         persistentVolume.Name,
                         persistentVolume.Uid,
                         spec.EnvironmentId,
-                        _client.ClusterIdentity),
+                        clusterIdentity),
                     BindingJsonOptions))).Validate();
     }
 
@@ -214,7 +215,8 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
             request.Spec.OwnerDeletionPolicy,
             binding,
             request.IdempotencyKey).Validate());
-        if (descriptor.ClusterIdentity != _client.ClusterIdentity ||
+        var clusterIdentity = await ReadClusterIdentityAsync(cancellationToken).ConfigureAwait(false);
+        if (descriptor.ClusterIdentity != clusterIdentity ||
             descriptor.EnvironmentId != request.EnvironmentFence.Owner.EnvironmentId)
             throw new AzureFilesCsiException(
                 "flush_resource_binding_mismatch",
@@ -285,10 +287,11 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
     {
         request = (request ?? throw new ArgumentNullException(nameof(request))).Validate();
         var descriptor = ReadReleaseBinding(request);
-        if (!string.Equals(descriptor.ClusterIdentity, _client.ClusterIdentity, StringComparison.Ordinal))
+        var clusterIdentity = await ReadClusterIdentityAsync(cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(descriptor.ClusterIdentity, clusterIdentity, StringComparison.Ordinal))
             throw new AzureFilesCsiException(
                 "cluster_identity_mismatch",
-                "The configured Kubernetes API target differs from the target pinned to this volume generation.",
+                "The Kubernetes cluster differs from the cluster pinned to this volume generation.",
                 effectMayHaveApplied: false);
         var reference = request.Volume;
         var claim = await _client.GetClaimAsync(
@@ -697,6 +700,23 @@ public sealed class AzureFilesCsiWorkspaceVolumeProvider : IWorkspaceVolumeProvi
         WorkspaceVolumeReclaimPolicy.Retain => "Retain",
         _ => throw new ArgumentOutOfRangeException(nameof(policy))
     };
+
+    /// <summary>Reads the cluster pin before an operation uses or records a volume binding.</summary>
+    private async Task<string> ReadClusterIdentityAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _client.GetClusterIdentityAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            throw new AzureFilesCsiException(
+                "cluster_identity_unavailable",
+                "The Kubernetes cluster identity could not be verified.",
+                effectMayHaveApplied: false,
+                exception);
+        }
+    }
 
     /// <summary>Immutable provider-owned identities needed to recover or release a volume generation.</summary>
     private sealed record AzureFilesReleaseDescriptor(

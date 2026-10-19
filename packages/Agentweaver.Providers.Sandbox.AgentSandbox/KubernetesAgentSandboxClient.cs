@@ -1,7 +1,9 @@
 using System.Collections.Immutable;
+using System.Buffers.Binary;
 using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using Agentweaver.Abstractions;
@@ -14,15 +16,23 @@ namespace Agentweaver.Providers.Sandbox.AgentSandbox;
 /// </summary>
 public sealed partial class KubernetesAgentSandboxClient
 {
+    // Keep this versioned prefix identical to the Azure Files client and native P1 probes.
+    private const string ClusterIdentityPrefix = "agentweaver.cluster-identity.v1\0cluster-ca\0";
     private const int MaximumResponseBytes = 4 * 1024 * 1024;
     private readonly HttpClient _httpClient;
+    private readonly byte[] _clusterCaCertificate;
 
-    /// <summary>Creates a client for a clean HTTPS Kubernetes API origin.</summary>
+    /// <summary>Creates a client with the CA bundle used to verify its Kubernetes API connection.</summary>
     /// <param name="httpClient">Configured client carrying the cluster's authentication and trusted CA.</param>
-    /// <exception cref="ArgumentException">The client base address is absent or is not a clean HTTPS URI.</exception>
-    public KubernetesAgentSandboxClient(HttpClient httpClient)
+    /// <param name="clusterCaCertificate">PEM CA bundle used to derive the address-independent cluster pin.</param>
+    /// <exception cref="ArgumentException">The base address is not a clean HTTPS URI or the CA bundle is empty.</exception>
+    public KubernetesAgentSandboxClient(HttpClient httpClient, byte[] clusterCaCertificate)
     {
         _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        ArgumentNullException.ThrowIfNull(clusterCaCertificate);
+        if (clusterCaCertificate.Length == 0)
+            throw new ArgumentException("The Kubernetes cluster CA bundle is required.", nameof(clusterCaCertificate));
+        _clusterCaCertificate = clusterCaCertificate.ToArray();
         if (_httpClient.BaseAddress is null ||
             !string.Equals(_httpClient.BaseAddress.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal) ||
             !string.IsNullOrEmpty(_httpClient.BaseAddress.UserInfo) ||
@@ -32,15 +42,61 @@ public sealed partial class KubernetesAgentSandboxClient
                 nameof(httpClient));
     }
 
-    /// <summary>Gets a lower-case SHA-256 identity of the configured Kubernetes API target.</summary>
-    public string ClusterIdentity
+    /// <summary>
+    /// Hashes the normalized CA certificate set using the shared versioned format.
+    /// Sorting DER certificates makes the pin independent of PEM whitespace and bundle order.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the identity operation.</param>
+    /// <returns>A lower-case SHA-256 digest that is independent of the API address.</returns>
+    public Task<string> GetClusterIdentityAsync(CancellationToken cancellationToken = default)
     {
-        get
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_clusterCaCertificate.Length == 0)
+            throw new SandboxProviderException(
+                "cluster_identity_unavailable",
+                "The Kubernetes cluster CA certificate is unavailable.",
+                effectMayHaveApplied: false);
+
+        var pem = Encoding.UTF8.GetString(_clusterCaCertificate);
+        var certificates = new X509Certificate2Collection();
+        try
         {
-            var target = _httpClient.BaseAddress!.GetLeftPart(UriPartial.Path).TrimEnd('/');
-            var digest = SHA256.HashData(Encoding.UTF8.GetBytes(target));
-            return Convert.ToHexString(digest).ToLowerInvariant();
+            certificates.ImportFromPem(pem);
         }
+        catch (CryptographicException exception)
+        {
+            throw new SandboxProviderException(
+                "cluster_identity_invalid",
+                "The Kubernetes cluster CA certificate is invalid.",
+                effectMayHaveApplied: false,
+                exception);
+        }
+
+        var rawCertificates = certificates.Cast<X509Certificate2>()
+            .Select(certificate => certificate.RawData)
+            .DistinctBy(certificate => Convert.ToHexString(certificate), StringComparer.Ordinal)
+            .OrderBy(certificate => Convert.ToHexString(certificate), StringComparer.Ordinal)
+            .ToArray();
+        foreach (var certificate in certificates)
+            certificate.Dispose();
+        if (rawCertificates.Length == 0)
+            throw new SandboxProviderException(
+                "cluster_identity_invalid",
+                "The Kubernetes cluster CA bundle contains no certificates.",
+                effectMayHaveApplied: false);
+
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData(Encoding.UTF8.GetBytes(ClusterIdentityPrefix));
+        Span<byte> length = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32BigEndian(length, rawCertificates.Length);
+        hash.AppendData(length);
+        foreach (var certificate in rawCertificates)
+        {
+            BinaryPrimitives.WriteInt32BigEndian(length, certificate.Length);
+            hash.AppendData(length);
+            hash.AppendData(certificate);
+        }
+        return Task.FromResult(Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant());
     }
 
     /// <summary>Reads a namespaced Kubernetes resource, returning null when it does not exist.</summary>

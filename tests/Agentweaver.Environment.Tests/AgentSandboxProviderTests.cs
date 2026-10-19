@@ -45,6 +45,41 @@ public sealed partial class AgentSandboxProviderTests
     }
 
     [Fact]
+    public async Task KubernetesClusterIdentityMatchesAcrossApiAddressesAndClusters()
+    {
+        // PEM formatting and API addresses must not change the identity of the same CA.
+        var firstHandler = new FakeKubernetesHandler();
+        var sameClusterHandler = new FakeKubernetesHandler();
+        var otherClusterHandler = new FakeKubernetesHandler();
+        using var firstHttp = new HttpClient(firstHandler)
+        {
+            BaseAddress = new Uri("https://kubernetes.default.svc/")
+        };
+        using var sameClusterHttp = new HttpClient(sameClusterHandler)
+        {
+            BaseAddress = new Uri("https://agentweaver-aks.example.test/")
+        };
+        using var otherClusterHttp = new HttpClient(otherClusterHandler)
+        {
+            BaseAddress = new Uri("https://other-kubernetes.example/")
+        };
+
+        var sameCaWithDifferentLineEndings = Encoding.UTF8.GetBytes(
+            Encoding.UTF8.GetString(KubernetesTestCaCertificate.PrimaryWithComment)
+                .Replace("\n", "\r\n", StringComparison.Ordinal));
+        var identity = await new KubernetesAgentSandboxClient(firstHttp, KubernetesTestCaCertificate.Primary)
+            .GetClusterIdentityAsync();
+        var sameClusterIdentity = await new KubernetesAgentSandboxClient(
+            sameClusterHttp, sameCaWithDifferentLineEndings).GetClusterIdentityAsync();
+        var otherClusterIdentity = await new KubernetesAgentSandboxClient(
+            otherClusterHttp, KubernetesTestCaCertificate.Other).GetClusterIdentityAsync();
+
+        Assert.Equal("6b333f2199e82077ee02ceffd63b1a2e6ff8becf905f3aa56167a853c36aea75", identity);
+        Assert.Equal(identity, sameClusterIdentity);
+        Assert.NotEqual(identity, otherClusterIdentity);
+    }
+
+    [Fact]
     public async Task ListOwnedUsesPinnedOptionsNamespaceInsteadOfCurrentDefaults()
     {
         var currentOptions = new AgentSandboxOptions(
@@ -74,7 +109,7 @@ public sealed partial class AgentSandboxProviderTests
         };
         var provider = new AgentSandboxProvider(
             currentOptions,
-            new KubernetesAgentSandboxClient(httpClient));
+            new KubernetesAgentSandboxClient(httpClient, KubernetesTestCaCertificate.Primary));
         var owner = new EnvironmentOwnerIdentity("tenant-a", "project-a", "run-a", "environment-a");
         var intent = new SandboxLeaseProvisionIntent(
             AgentSandboxProviderMetadata.ProviderId,
@@ -245,7 +280,7 @@ public sealed partial class AgentSandboxProviderTests
         {
             BaseAddress = new Uri("https://kubernetes.example/")
         };
-        var kubernetesClient = new KubernetesAgentSandboxClient(httpClient);
+        var kubernetesClient = new KubernetesAgentSandboxClient(httpClient, KubernetesTestCaCertificate.Primary);
         var leaseCreatedAt = DateTimeOffset.Parse("2026-10-06T11:58:50Z");
         var provider = new AgentSandboxProvider(
             options,

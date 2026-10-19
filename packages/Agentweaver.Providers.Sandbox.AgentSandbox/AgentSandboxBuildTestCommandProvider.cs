@@ -119,7 +119,8 @@ public sealed partial class AgentSandboxProvider
         context = await VerifyBuildTestContextAsync(
             request,
             SandboxBuildTestLimits.CollectorPolicyRole,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            context).ConfigureAwait(false);
         await RequireSuccessfulCommandPodAsync(request, context, cancellationToken).ConfigureAwait(false);
 
         var podName = BuildTestPodName(request.AcceptedCommand.OperationId, SandboxBuildTestLimits.CollectorPolicyRole);
@@ -175,6 +176,7 @@ public sealed partial class AgentSandboxProvider
     {
         request = (request ?? throw new ArgumentNullException(nameof(request))).Validate();
         var context = ReadBuildTestContext(request);
+        await VerifyBuildTestClusterIdentityAsync(context, cancellationToken).ConfigureAwait(false);
         var podName = BuildTestPodName(request.AcceptedCommand.OperationId, role);
         var pod = await _client.GetAsync(
             string.Empty, "pods", context.Descriptor.Namespace, podName, cancellationToken).ConfigureAwait(false);
@@ -385,9 +387,11 @@ public sealed partial class AgentSandboxProvider
     private async Task<BuildTestContext> VerifyBuildTestContextAsync(
         SandboxBuildTestProviderRequest request,
         string role,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        BuildTestContext? validatedContext = null)
     {
-        var context = ReadBuildTestContext(request);
+        var context = validatedContext ?? ReadBuildTestContext(request);
+        await VerifyBuildTestClusterIdentityAsync(context, cancellationToken).ConfigureAwait(false);
         await VerifyRuntimeClassAsync(context.Options, cancellationToken).ConfigureAwait(false);
         await VerifyWorkspaceClaimForBuildTestAsync(context, cancellationToken).ConfigureAwait(false);
         var policy = role == SandboxBuildTestLimits.CommandPolicyRole
@@ -423,11 +427,17 @@ public sealed partial class AgentSandboxProvider
     private BuildTestContext ReadBuildTestContext(SandboxBuildTestProviderRequest request)
     {
         var expected = request.ExpectedBinding;
+        var releaseDescriptor = expected.SandboxProviderBinding!.ReleaseDescriptor;
+        var pinnedClusterIdentity = releaseDescriptor.TryGetProperty("clusterIdentity", out var clusterPin) &&
+            clusterPin.ValueKind == JsonValueKind.String
+                ? clusterPin.GetString()!
+                : string.Empty;
         var (options, descriptor) = ReadBinding(
             expected.Fence,
             expected.SandboxResource,
             expected.ProviderFencingGeneration,
-            expected.SandboxProviderBinding!);
+            expected.SandboxProviderBinding!,
+            pinnedClusterIdentity);
         var accepted = request.AcceptedCommand;
         if (options.AcceptedBuildTestProfile is not { } profile ||
             !SameExecutionOptions(profile, accepted.ExecutionOptions) ||
@@ -466,6 +476,16 @@ public sealed partial class AgentSandboxProvider
             false,
             WorkspaceVolumeAttachmentProtocol.PersistentVolumeClaim).Validate();
         return new(options, descriptor, workspace);
+    }
+
+    /// <summary>Checks the stored cluster pin against the trusted Kubernetes API CA bundle.</summary>
+    private async Task VerifyBuildTestClusterIdentityAsync(
+        BuildTestContext context,
+        CancellationToken cancellationToken)
+    {
+        var clusterIdentity = await _client.GetClusterIdentityAsync(cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(context.Descriptor.ClusterIdentity, clusterIdentity, StringComparison.Ordinal))
+            throw ProviderBindingMismatch();
     }
 
     /// <summary>Rechecks the exact bound PVC and requires multi-writer mode for the command-plus-collector flow.</summary>
@@ -1327,6 +1347,7 @@ public sealed partial class AgentSandboxProvider
         _ = pod.Validate();
         var role = GetRoleFromPodName(request, pod.Name);
         var context = ReadBuildTestContext(request);
+        await VerifyBuildTestClusterIdentityAsync(context, cancellationToken).ConfigureAwait(false);
         if (!string.Equals(pod.KubernetesNamespace, context.Descriptor.Namespace, StringComparison.Ordinal))
             throw ProviderResourceMismatch("The BuildTest Pod reference is outside the pinned namespace.");
         var resource = await _client.GetAsync(

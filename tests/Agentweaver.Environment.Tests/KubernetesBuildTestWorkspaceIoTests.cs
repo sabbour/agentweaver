@@ -42,7 +42,7 @@ public sealed class KubernetesBuildTestWorkspaceIoTests
         bytes[0] = 255;
         bytes[^1] = 128;
         var input = System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsImmutableArray(bytes);
-        var client = new KubernetesAgentSandboxClient(server.Client);
+        var client = new KubernetesAgentSandboxClient(server.Client, KubernetesTestCaCertificate.Primary);
 
         var output = await client.ExchangeBuildTestWorkspaceAsync(
             Pod, Fingerprint, input, true, ProducedRunCaptureLimits.MaximumPackageBytes, CancellationToken.None);
@@ -63,7 +63,7 @@ public sealed class KubernetesBuildTestWorkspaceIoTests
         var command = ImmutableArray.Create(
             "dotnet", "/app/Agentweaver.AgentHost.dll", SandboxBuildTestLimits.WorkspaceCollectorMode,
             "encoded-request", preparing ? "prepare" : "export");
-        var client = new KubernetesAgentSandboxClient(server.Client);
+        var client = new KubernetesAgentSandboxClient(server.Client, KubernetesTestCaCertificate.Primary);
 
         var output = await client.ExchangeBuildTestWorkspaceAsync(
             Pod, Fingerprint, input, preparing, 100, CancellationToken.None, command);
@@ -82,7 +82,7 @@ public sealed class KubernetesBuildTestWorkspaceIoTests
     {
         await using var server = await NativeServer.StartAsync("ok");
         var input = Enumerable.Range(0, 100_000).Select(index => (byte)index).ToImmutableArray();
-        var client = new KubernetesAgentSandboxClient(server.Client);
+        var client = new KubernetesAgentSandboxClient(server.Client, KubernetesTestCaCertificate.Primary);
 
         var output = await client.ExchangeBuildTestWorkspaceAsync(
             Pod, Fingerprint, input, preparing, 100, CancellationToken.None);
@@ -112,7 +112,7 @@ public sealed class KubernetesBuildTestWorkspaceIoTests
     public async Task NativeExchangeRejectsIdentityProtocolAndIncompleteEvidence(string fault, string code)
     {
         await using var server = await NativeServer.StartAsync(fault);
-        var client = new KubernetesAgentSandboxClient(server.Client);
+        var client = new KubernetesAgentSandboxClient(server.Client, KubernetesTestCaCertificate.Primary);
 
         var exception = await Assert.ThrowsAsync<SandboxProviderException>(() =>
             client.ExchangeBuildTestWorkspaceAsync(

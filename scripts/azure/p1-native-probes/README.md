@@ -25,7 +25,7 @@ The outer contract is:
 {
   environment: { baseUrl, issuer, audience, actorId, tenantId },
   pins: {
-    context: { kubeContext, clusterIdentity }, namespace, providerReceipt, runtimeReceipt, storageReceipt,
+    context: { kubeContext, clusterIdentity: { sha256 } }, namespace, providerReceipt, runtimeReceipt, storageReceipt,
     sourceReceipt: { acceptedOptions, startupBudget }, imageReceipt, ownerFences, fixtureScope
   }
 }
@@ -92,9 +92,20 @@ lifecycle, resource, and provider-fencing generations, the actual creation
 operation ID, and the exact SandboxClaim UID; the same labels are used for
 subsequent ownership validation. Provider
 receipt entries pin those owner PVC/PV UIDs and provider bindings to
-`context.clusterIdentity.uid`. The Kubernetes process adapter independently
+`context.clusterIdentity.sha256`. The Kubernetes process adapter independently
 checks the PVC/PV UIDs, claim reference, and both Azure Files owner annotations
 against the current volume specification.
+The `context.clusterIdentity.sha256` pin is the lower-case SHA-256 digest of
+the selected cluster CA certificate set. Certificates are normalized to DER,
+deduplicated, sorted, and length-prefixed before hashing with the
+`agentweaver.cluster-identity.v1\0cluster-ca\0` domain prefix. The Environment
+service derives the pin from its projected service-account CA file; the native
+adapter derives it from the selected kubeconfig's CA data. Different HTTPS API
+addresses for the same cluster therefore produce the same pin without requiring
+permission to read the `kube-system` namespace. The adapter still requires a
+clean HTTPS API URL and the selected kubeconfig's normal TLS validation. See the
+[Environment Sandbox architecture reference](../../../docs/architecture/environment-sandbox.md#ownership-and-admission)
+for the shared C# and Node.js contract.
 For AgentSandbox, `sandboxResourceId` is the SandboxClaim UID and
 `sandboxUid` is the distinct AgentHost Pod UID. The claim UID must match the
 Pod's `agents.x-k8s.io/claim-uid` label; `volume.claimUid` is the separate
@@ -259,9 +270,11 @@ the original exact marker bytes.
 
 `process-provider.mjs` exports
 `createP1NativeProcessProvider({ kubeContext, clusterIdentity })`. Its only
-native executables are the fixed `kubectl` and `hubble` commands. It checks the
-selected kubeconfig server's SHA-256 origin against the Azure Files provider's
-cluster identity before each recipe. The service-probe recipe performs a
+native executables are the fixed `kubectl` and `hubble` commands. Before each
+recipe, it hashes the selected context's normalized CA certificate set and
+requires the result to match the Azure Files provider's cluster identity. The
+flattened kubeconfig read captures only the selected cluster fields, not user
+credentials. The service-probe recipe performs a
 bounded Bash `/dev/tcp` attempt from the exact `agenthost` container and reads
 matching recent flow records using Hubble at `127.0.0.1:4245`; it fails closed
 if a ready endpoint, exact current Pod, or consistent Cilium verdict is

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import test from 'node:test';
 import { createP1NativeProcessProvider } from './process-provider.mjs';
+import { TEST_CLUSTER_CA_PEM } from './test-fixtures.mjs';
 import { runP1NativeCreditDenialReaders, runP1NativeProbes } from './run.mjs';
 import { runP1DispatchRecoveryProbes } from '../p1-dispatch-recovery-probes/run.mjs';
 
@@ -10,6 +11,9 @@ const policyOperationId = 'b7b15cb2-45a3-4d69-9e06-648023ed9f66';
 const future = '2099-01-01T00:00:00.000Z';
 const hash = character => character.repeat(64);
 const sha256 = value => createHash('sha256').update(value, 'utf8').digest('hex');
+const testClusterIdentity = {
+  sha256: '6b333f2199e82077ee02ceffd63b1a2e6ff8becf905f3aa56167a853c36aea75',
+};
 const phaseTimes = {
   scheduled: '2026-01-01T00:00:30.000Z',
   imageReady: '2026-01-01T00:02:30.000Z',
@@ -29,7 +33,7 @@ const sandboxLabelKeys = {
 };
 
 function createInput() {
-  const context = { kubeContext: 'p1-fixture', clusterIdentity: { uid: 'cluster-uid-1' } };
+  const context = { kubeContext: 'p1-fixture', clusterIdentity: { ...testClusterIdentity } };
   const owners = [
     {
       ownerId: 'owner-a',
@@ -1654,9 +1658,6 @@ test('four native probes pass with injected production-shaped reads, mutations, 
 test('late Sandbox lifecycle rejects a changed-label Pod using the real adapter contract', async () => {
   const input = createInput();
   const clusterServer = 'https://p1-cluster.example.test/';
-  input.pins.context.clusterIdentity.uid = createHash('sha256')
-    .update(new URL(clusterServer).origin)
-    .digest('hex');
   const harness = successDependencies(input);
   const fakeProvider = harness.dependencies.processProvider;
   const lateResourceId = input.pins.runtimeReceipt.owners[1].lateSandboxResourceId;
@@ -1679,20 +1680,13 @@ test('late Sandbox lifecycle rejects a changed-label Pod using the real adapter 
     execute(command, args) {
       assert.equal(command, 'kubectl');
       if (args.includes('config')) {
+        assert.equal(args.at(-1), '-o=jsonpath-as-json={.clusters[0].cluster}');
         return {
           status: 0,
-          stdout: JSON.stringify({
-            apiVersion: 'v1',
-            kind: 'Config',
-            contexts: [{
-              name: input.pins.context.kubeContext,
-              context: { cluster: 'p1-cluster' },
-            }],
-            clusters: [{
-              name: 'p1-cluster',
-              cluster: { server: clusterServer },
-            }],
-          }),
+          stdout: JSON.stringify([{
+            server: clusterServer,
+            'certificate-authority-data': Buffer.from(TEST_CLUSTER_CA_PEM, 'utf8').toString('base64'),
+          }]),
           stderr: '',
         };
       }

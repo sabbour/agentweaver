@@ -480,7 +480,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
             new WorkspaceVolumeProvisionRequest(spec, 1, "provision-target-pinned"));
         var request = ReleaseRequest(spec, resource, WorkspaceVolumeReclaimPolicy.Delete, "release-target-pinned");
         var getClaimCalls = client.GetClaimCalls;
-        client.ClusterIdentity = "https://different-kubernetes.example";
+        client.ClusterIdentity = new string('f', 64);
 
         var exception = await Assert.ThrowsAsync<AzureFilesCsiException>(() => provider.ReleaseAsync(request));
 
@@ -595,7 +595,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
         });
         using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://kubernetes.example/") };
-        var client = new KubernetesAzureFilesCsiClient(httpClient);
+        var client = new KubernetesAzureFilesCsiClient(httpClient, KubernetesTestCaCertificate.Primary);
 
         await client.SetPersistentVolumeReclaimPolicyAsync(
             "pv-1", "pv-uid-1", WorkspaceVolumeReclaimPolicy.Retain);
@@ -614,7 +614,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         {
             BaseAddress = new Uri("https://kubernetes.example/")
         };
-        await new KubernetesAzureFilesCsiClient(deleteClient)
+        await new KubernetesAzureFilesCsiClient(deleteClient, KubernetesTestCaCertificate.Primary)
             .DeleteClaimAsync("agentweaver", "claim-1", "claim-uid-1");
         using var deleteOptions = JsonDocument.Parse(deleteHandler.RequestBody!);
         Assert.Equal(
@@ -630,21 +630,37 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
             BaseAddress = new Uri("https://user:password@kubernetes.example/")
         };
 
-        Assert.Throws<ArgumentException>(() => new KubernetesAzureFilesCsiClient(httpClient));
+        Assert.Throws<ArgumentException>(() =>
+            new KubernetesAzureFilesCsiClient(httpClient, KubernetesTestCaCertificate.Primary));
     }
 
     [Fact]
-    public void KubernetesClusterIdentityIsStableAndDoesNotExposeTheApiAddress()
+    public async Task KubernetesClusterIdentityUsesTheSameCaAcrossApiAddresses()
     {
-        using var first = new HttpClient { BaseAddress = new Uri("https://Kubernetes.example/") };
-        using var equivalent = new HttpClient { BaseAddress = new Uri("https://kubernetes.example") };
-        using var other = new HttpClient { BaseAddress = new Uri("https://other-kubernetes.example/") };
+        // The normalized CA DER is the shared C# and Node.js input.
+        using var first = new HttpClient
+        {
+            BaseAddress = new Uri("https://kubernetes.default.svc/")
+        };
+        using var equivalent = new HttpClient
+        {
+            BaseAddress = new Uri("https://agentweaver-aks.example.test/")
+        };
+        using var other = new HttpClient
+        {
+            BaseAddress = new Uri("https://other-kubernetes.example/")
+        };
 
-        var identity = new KubernetesAzureFilesCsiClient(first).ClusterIdentity;
+        var identity = await new KubernetesAzureFilesCsiClient(first, KubernetesTestCaCertificate.Primary)
+            .GetClusterIdentityAsync();
+        var equivalentIdentity = await new KubernetesAzureFilesCsiClient(
+            equivalent, KubernetesTestCaCertificate.PrimaryWithComment).GetClusterIdentityAsync();
+        var otherIdentity = await new KubernetesAzureFilesCsiClient(other, KubernetesTestCaCertificate.Other)
+            .GetClusterIdentityAsync();
 
-        Assert.Equal(identity, new KubernetesAzureFilesCsiClient(equivalent).ClusterIdentity);
-        Assert.NotEqual(identity, new KubernetesAzureFilesCsiClient(other).ClusterIdentity);
-        Assert.DoesNotContain("kubernetes.example", identity, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("6b333f2199e82077ee02ceffd63b1a2e6ff8becf905f3aa56167a853c36aea75", identity);
+        Assert.Equal(identity, equivalentIdentity);
+        Assert.NotEqual(identity, otherIdentity);
     }
 
     [Fact]
@@ -669,7 +685,8 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         });
         using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://kubernetes.example/") };
         request = request with { EnvironmentId = "environment-4" };
-        var claim = await new KubernetesAzureFilesCsiClient(httpClient).EnsureClaimAsync(request);
+        var claim = await new KubernetesAzureFilesCsiClient(
+            httpClient, KubernetesTestCaCertificate.Primary).EnsureClaimAsync(request);
 
         Assert.Equal("Pending", claim.Phase);
         Assert.Equal("4", claim.Annotations["agentweaver.dev/generation"]);
@@ -710,7 +727,7 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
             BaseAddress = new Uri("https://kubernetes.example/")
         };
 
-        var claim = await new KubernetesAzureFilesCsiClient(httpClient)
+        var claim = await new KubernetesAzureFilesCsiClient(httpClient, KubernetesTestCaCertificate.Primary)
             .GetClaimAsync(request.Namespace, request.Name);
 
         Assert.NotNull(claim);
@@ -740,7 +757,8 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         };
 
         var exception = await Assert.ThrowsAsync<AzureFilesCsiException>(() =>
-            new KubernetesAzureFilesCsiClient(httpClient).GetClaimAsync(request.Namespace, request.Name));
+            new KubernetesAzureFilesCsiClient(httpClient, KubernetesTestCaCertificate.Primary)
+                .GetClaimAsync(request.Namespace, request.Name));
 
         Assert.Equal("kubernetes_response_invalid", exception.Code);
     }
@@ -770,7 +788,8 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         });
         using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://kubernetes.example/") };
 
-        var claim = await new KubernetesAzureFilesCsiClient(httpClient).EnsureClaimAsync(request);
+        var claim = await new KubernetesAzureFilesCsiClient(
+            httpClient, KubernetesTestCaCertificate.Primary).EnsureClaimAsync(request);
 
         Assert.Equal("claim-uid-1", claim.Uid);
         Assert.Equal(2, getCount);
@@ -906,7 +925,8 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         private readonly Dictionary<string, int> _pendingReads = new(StringComparer.Ordinal);
         private int _nextUid = 1;
 
-        public string ClusterIdentity { get; set; } = "https://kubernetes.example";
+        public string ClusterIdentity { get; set; } =
+            "6b333f2199e82077ee02ceffd63b1a2e6ff8becf905f3aa56167a853c36aea75";
         public AzureFilesStorageClassSnapshot? StorageClass { get; set; } =
             new(
                 Options.StorageClassName,
@@ -926,6 +946,10 @@ public sealed class AzureFilesCsiWorkspaceVolumeProviderTests
         public Dictionary<string, AzureFilesPersistentVolumeSnapshot> PersistentVolumes { get; } =
             new(StringComparer.Ordinal);
         public List<(string Uid, string Name)> DeletedClaims { get; } = [];
+
+        /// <summary>Returns the configured test cluster CA identity.</summary>
+        public Task<string> GetClusterIdentityAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(ClusterIdentity);
 
         public Task<AzureFilesStorageClassSnapshot?> GetStorageClassAsync(
             string name,

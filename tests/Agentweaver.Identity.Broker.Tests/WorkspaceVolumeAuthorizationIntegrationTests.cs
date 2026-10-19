@@ -322,8 +322,10 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         {
             BaseAddress = new Uri("https://kubernetes.test/")
         };
-        var sandboxKubernetesClient = new KubernetesAgentSandboxClient(sandboxKubernetesHttpClient);
-        var provider = new CountingWorkspaceVolumeProvider(sandboxKubernetesClient.ClusterIdentity);
+        var sandboxKubernetesClient = new KubernetesAgentSandboxClient(
+            sandboxKubernetesHttpClient, KubernetesTestCaCertificate.Primary);
+        var provider = new CountingWorkspaceVolumeProvider(
+            await sandboxKubernetesClient.GetClusterIdentityAsync());
         var sandboxProvider = new AgentSandboxProvider(sandboxOptions, sandboxKubernetesClient);
         var ciliumStore = new InMemoryCiliumPolicyResourceStore();
         await using var environment = await WorkspaceVolumeApiTestServer.StartAsync(

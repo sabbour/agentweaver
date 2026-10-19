@@ -162,8 +162,8 @@ public sealed record AzureFilesPersistentVolumeSnapshot(
 /// </summary>
 public interface IAzureFilesCsiClient
 {
-    /// <summary>Gets a stable hash of the Kubernetes API target used by this client.</summary>
-    string ClusterIdentity { get; }
+    /// <summary>Derives a stable cluster identity from the trusted Kubernetes API CA bundle.</summary>
+    Task<string> GetClusterIdentityAsync(CancellationToken cancellationToken = default);
 
     /// <summary>Reads a StorageClass, or returns <see langword="null"/> when it is absent.</summary>
     Task<AzureFilesStorageClassSnapshot?> GetStorageClassAsync(

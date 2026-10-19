@@ -2,7 +2,9 @@ extern alias AzureIdentity;
 
 using System.Collections.Immutable;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.Text;
 using Agentweaver.Abstractions;
 using Agentweaver.Environment;
 using Agentweaver.Identity;
@@ -148,8 +150,10 @@ builder.Services.AddHttpClient<KubernetesCiliumPolicyResourceStore>(client =>
 {
     client.BaseAddress = kubernetesBaseAddress;
     client.Timeout = TimeSpan.FromSeconds(20);
-}).ConfigurePrimaryHttpMessageHandler(() =>
-    KubernetesServiceAccountHandler.Create(serviceAccountToken, serviceAccountCa));
+}).ConfigurePrimaryHttpMessageHandler(services =>
+    KubernetesServiceAccountHandler.Create(
+        serviceAccountToken,
+        services.GetRequiredService<byte[]>()));
 builder.Services.AddScoped<ICiliumPolicyResourceStore>(services =>
     services.GetRequiredService<KubernetesCiliumPolicyResourceStore>());
 builder.Services.AddScoped<CiliumEgressPolicyAdapter>();
@@ -159,8 +163,10 @@ builder.Services.AddHttpClient<KubernetesAgentSandboxClient>(client =>
 {
     client.BaseAddress = kubernetesBaseAddress;
     client.Timeout = TimeSpan.FromSeconds(sandboxOptions.ReconciliationTimeoutSeconds);
-}).ConfigurePrimaryHttpMessageHandler(() =>
-    KubernetesServiceAccountHandler.Create(serviceAccountToken, serviceAccountCa));
+}).ConfigurePrimaryHttpMessageHandler(services =>
+    KubernetesServiceAccountHandler.Create(
+        serviceAccountToken,
+        services.GetRequiredService<byte[]>()));
 builder.Services.AddScoped<ISandboxProvider, AgentSandboxProvider>();
 builder.Services.AddScoped<ISandboxBuildTestCommandProvider>(services =>
     (ISandboxBuildTestCommandProvider)services.GetRequiredService<ISandboxProvider>());
@@ -242,7 +248,7 @@ static AzureFilesCsiOptions ReadAzureFilesOptions(IConfiguration configuration)
         section.GetValue("PollIntervalMilliseconds", 0)).Validate();
 }
 
-/// <summary>Signs Kubernetes API calls with the projected service-account token and validates the cluster CA.</summary>
+/// <summary>Signs Kubernetes calls and validates TLS against the CA snapshot used for cluster pins.</summary>
 internal sealed class KubernetesServiceAccountHandler : DelegatingHandler
 {
     private readonly string _tokenFile;
@@ -252,16 +258,22 @@ internal sealed class KubernetesServiceAccountHandler : DelegatingHandler
         : base(innerHandler) =>
         _tokenFile = tokenFile;
 
-    /// <summary>Creates a redirect-disabled Kubernetes client handler using the projected token and CA files.</summary>
-    public static HttpMessageHandler Create(string tokenFile, string caFile)
+    /// <summary>Creates a Kubernetes handler whose TLS trust matches the shared cluster-pin CA snapshot.</summary>
+    /// <param name="tokenFile">Absolute path to the projected service-account token.</param>
+    /// <param name="clusterCaCertificate">Projected CA bytes also used to derive provider cluster pins.</param>
+    public static HttpMessageHandler Create(string tokenFile, byte[] clusterCaCertificate)
     {
-        if (!Path.IsPathFullyQualified(tokenFile) || !Path.IsPathFullyQualified(caFile))
-            throw new InvalidOperationException("Kubernetes token and CA paths must be absolute.");
-        if (!File.Exists(tokenFile) || !File.Exists(caFile))
-            throw new InvalidOperationException("The projected Kubernetes service-account token and CA are required.");
+        if (!Path.IsPathFullyQualified(tokenFile))
+            throw new InvalidOperationException("The Kubernetes token path must be absolute.");
+        if (!File.Exists(tokenFile))
+            throw new InvalidOperationException("The projected Kubernetes service-account token is required.");
+        ArgumentNullException.ThrowIfNull(clusterCaCertificate);
+        if (clusterCaCertificate.Length == 0)
+            throw new InvalidOperationException("The projected Kubernetes service-account CA is required.");
+        var caSnapshot = clusterCaCertificate.ToArray();
         var handler = EnvironmentHttpTransport.CreateRedirectDisabledHandler();
         handler.ServerCertificateCustomValidationCallback = (_, certificate, chain, errors) =>
-            ValidateClusterCertificate(certificate, chain, errors, caFile);
+            ValidateClusterCertificate(certificate, chain, errors, caSnapshot);
         return new KubernetesServiceAccountHandler(
             handler,
             tokenFile);
@@ -285,31 +297,46 @@ internal sealed class KubernetesServiceAccountHandler : DelegatingHandler
         return response;
     }
 
-    /// <summary>Validates the cluster certificate using normal TLS checks or the configured custom root CA.</summary>
+    /// <summary>Validates the server name and chain against every root in the configured CA snapshot.</summary>
     private static bool ValidateClusterCertificate(
         X509Certificate? certificate,
         X509Chain? peerChain,
         System.Net.Security.SslPolicyErrors errors,
-        string caFile)
+        byte[] clusterCaCertificate)
     {
         if (certificate is null ||
             errors.HasFlag(System.Net.Security.SslPolicyErrors.RemoteCertificateNameMismatch))
             return false;
-        if (errors == System.Net.Security.SslPolicyErrors.None)
-            return true;
 
-        using var root = X509CertificateLoader.LoadCertificateFromFile(caFile);
-        using var leaf = X509CertificateLoader.LoadCertificate(certificate.Export(X509ContentType.Cert));
-        using var chain = new X509Chain();
-        chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
-        chain.ChainPolicy.CustomTrustStore.Add(root);
-        chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-        if (peerChain is not null)
+        var roots = new X509Certificate2Collection();
+        try
         {
-            foreach (var element in peerChain.ChainElements.Cast<X509ChainElement>().Skip(1))
-                chain.ChainPolicy.ExtraStore.Add(element.Certificate);
+            roots.ImportFromPem(Encoding.UTF8.GetString(clusterCaCertificate));
+            if (roots.Count == 0)
+                return false;
+
+            using var leaf = X509CertificateLoader.LoadCertificate(certificate.Export(X509ContentType.Cert));
+            using var chain = new X509Chain();
+            chain.ChainPolicy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+            foreach (var root in roots)
+                chain.ChainPolicy.CustomTrustStore.Add(root);
+            chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
+            if (peerChain is not null)
+            {
+                foreach (var element in peerChain.ChainElements.Cast<X509ChainElement>().Skip(1))
+                    chain.ChainPolicy.ExtraStore.Add(element.Certificate);
+            }
+            return chain.Build(leaf);
         }
-        return chain.Build(leaf);
+        catch (CryptographicException)
+        {
+            return false;
+        }
+        finally
+        {
+            foreach (var root in roots)
+                root.Dispose();
+        }
     }
 }
 

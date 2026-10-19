@@ -6966,7 +6966,8 @@ public sealed class SourceControlProviderCatalogFixtureTests
         {
             BaseAddress = new Uri("https://kubernetes.test/")
         };
-        var sandboxKubernetesClient = new KubernetesAgentSandboxClient(sandboxHttpClient);
+        var sandboxKubernetesClient = new KubernetesAgentSandboxClient(
+            sandboxHttpClient, KubernetesTestCaCertificate.Primary);
         var sandboxProvider = new AgentSandboxProvider(sandboxOptions, sandboxKubernetesClient);
         var networkOptions = new CiliumEgressProviderOptions(
             "agentweaver",

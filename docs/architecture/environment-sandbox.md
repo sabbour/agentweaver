@@ -72,6 +72,20 @@ manager does not substitute a default provider when the selected one is missing
 or incompatible. The provider itself advertises VM isolation and PVC attachment;
 Environment separately verifies the selected Cilium policy generation.
 
+The Sandbox and Azure Files adapters use the same cluster pin: a lower-case
+SHA-256 digest of the trusted API CA certificate set. Each certificate is
+normalized to DER, duplicate certificates are removed, and the remaining bytes
+are sorted and length-prefixed before hashing with the
+`agentweaver.cluster-identity.v1\0cluster-ca\0` domain prefix. This makes the
+pin independent of PEM whitespace, certificate order, and API address. The
+Environment adapters read the projected service-account CA file; the native P1
+process adapter reads the selected kubeconfig's CA data and applies the same
+normalization. This avoids requiring permission to read the `kube-system`
+namespace. Both paths still require HTTPS and normal TLS validation.
+Cluster pin validation does not replace the exact PVC/PV UID, claim reference,
+or owner-annotation checks. Pins created from API-address hashes are not
+accepted as aliases.
+
 ## Authorization and API
 
 Environment lifecycle registration and release use separate owner routes.
