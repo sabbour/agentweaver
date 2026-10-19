@@ -406,6 +406,18 @@ kubectl wait --for=condition=complete job/identity-broker-migration `
    This procedure installs the upstream controller directly; it does not
    enable the AKS AgentSandbox extension, which remains a future option.
 
+   Registry token, manifest, and image-config reads, and the pinned upstream
+   manifest download, retry network `TypeError` failures and HTTP 429/5xx up
+   to four attempts with 1, 2, and 4 second waits. Authorization failures,
+   other statuses, and digest/content mismatches do not retry. Exhaustion
+   reports the credential-free request URL and underlying network cause.
+   If apply completed before verification failed, preserve the checkpoint
+   and exact inputs. After connectivity recovers, use the same separately
+   authorized command with `--resume --execute`: apply is skipped only for
+   the matching completed stage, and all live verification still runs.
+   See the [release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#local-v1-release-deployment)
+   for retry scope, diagnostics, and checkpoint recovery.
+
    The [v1.0.5 GitHub Release and tag](https://github.com/sabbour/agentweaver/releases/tag/v1.0.5)
    are already published. Do not create another release or tag after the
    bootstrap-pins pull request merges. Use the publication receipt for source

@@ -161,6 +161,16 @@ rendered Kustomize installation. To apply the installation and run live rollout
 and image checks, repeat the command with `--execute` after the target and
 changes are approved.
 
+Registry and pinned upstream manifest reads use four attempts with exponential
+backoff (1, 2, and 4 seconds) only for network `TypeError` failures and HTTP
+429/5xx. Other statuses and digest/content mismatches fail immediately.
+Failures report a credential-free URL and the underlying network cause.
+After an exhausted post-apply read, preserve the exact checkpoint and inputs;
+a separately authorized `--resume --execute` repeats verification without
+reapplying the completed stage. See the
+[release runbook](https://github.com/sabbour/agentweaver/blob/v1/releases/README.md#local-v1-release-deployment)
+for the complete retry and recovery contract.
+
 The deployment preflight inventories the managed Gateway and all HTTPRoutes.
 The Azure routing candidate uses one wildcard-domain HTTPS listener, with exact
 route hostnames and path/backend boundaries retained. This supports HTTP/2

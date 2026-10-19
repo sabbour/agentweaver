@@ -3,6 +3,7 @@
  * Pull-only authorization is requested, and response digests are checked against requested references.
  */
 import { createHash } from 'node:crypto';
+import { readRegistry } from './registry-read.mjs';
 
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
 const SHA = /^[a-f0-9]{40}$/;
@@ -53,43 +54,46 @@ function splitImageReference(image) {
   return { repository: repository.slice('ghcr.io/'.length), digest: imageDigest };
 }
 
-/** Requests a pull-scoped bearer token for one registry repository. */
-export async function pullToken(repository, fetchImpl) {
+/**
+ * Requests a pull-scoped bearer token for one registry repository.
+ * Transient reads retry; the token is used only in the registry request headers.
+ */
+export async function pullToken(repository, fetchImpl, delay) {
   const tokenUrl = new URL('https://ghcr.io/token');
   tokenUrl.searchParams.set('service', 'ghcr.io');
   tokenUrl.searchParams.set('scope', `repository:${repository}:pull`);
-  const tokenResponse = await fetchImpl(tokenUrl, { headers: { accept: 'application/json' } });
-  if (!tokenResponse.ok) {
-    fail(`GHCR does not expose ${repository} for anonymous pull verification (HTTP ${tokenResponse.status})`);
-  }
-  const tokenJson = await tokenResponse.json();
+  const { value: tokenJson } = await readRegistry(tokenUrl,
+    { headers: { accept: 'application/json' } }, response => response.json(), { fetchImpl, delay });
   const token = tokenJson.token ?? tokenJson.access_token;
   if (typeof token !== 'string' || !token) fail(`GHCR returned no pull token for ${repository}`);
   return token;
 }
 
-async function registryReader(repository, fetchImpl) {
-  const token = await pullToken(repository, fetchImpl);
+/** Creates a reader that retries each manifest or config request independently. */
+async function registryReader(repository, fetchImpl, delay) {
+  const token = await pullToken(repository, fetchImpl, delay);
   return {
     async manifest(imageDigest, expectedSize) {
-      const response = await fetchImpl(`https://ghcr.io/v2/${repository}/manifests/${imageDigest}`, {
+      const { value: text } = await readRegistry(`https://ghcr.io/v2/${repository}/manifests/${imageDigest}`, {
         headers: { accept: registryManifestAccept, authorization: `Bearer ${token}` },
-      });
-      if (!response.ok) fail(`published image ${repository}@${imageDigest} is unavailable from GHCR (HTTP ${response.status})`);
-      const bytes = Buffer.from(await response.text(), 'utf8');
-      if (response.headers.get('docker-content-digest') !== imageDigest ||
-          digest(bytes) !== imageDigest ||
+      }, response => {
+        if (response.headers.get('docker-content-digest') !== imageDigest) {
+          fail(`GHCR manifest bytes do not match the exact published digest for ${repository}@${imageDigest}`);
+        }
+        return response.text();
+      }, { fetchImpl, delay });
+      const bytes = Buffer.from(text, 'utf8');
+      if (digest(bytes) !== imageDigest ||
           (expectedSize !== undefined && bytes.length !== expectedSize)) {
         fail(`GHCR manifest bytes do not match the exact published digest for ${repository}@${imageDigest}`);
       }
       return { bytes, value: parseJson(bytes.toString('utf8'), `GHCR manifest ${imageDigest}`) };
     },
     async blob(imageDigest, expectedSize) {
-      const response = await fetchImpl(`https://ghcr.io/v2/${repository}/blobs/${imageDigest}`, {
+      const { value } = await readRegistry(`https://ghcr.io/v2/${repository}/blobs/${imageDigest}`, {
         headers: { authorization: `Bearer ${token}` },
-      });
-      if (!response.ok) fail(`published image config is unavailable from GHCR (HTTP ${response.status})`);
-      const bytes = Buffer.from(await response.arrayBuffer());
+      }, response => response.arrayBuffer(), { fetchImpl, delay });
+      const bytes = Buffer.from(value);
       if (bytes.length !== expectedSize || digest(bytes) !== imageDigest) {
         fail('published image config bytes do not match their manifest descriptor');
       }
@@ -98,21 +102,24 @@ async function registryReader(repository, fetchImpl) {
   };
 }
 
-/** Verifies a registry image reference and its manifest digest without downloading image layers. */
-export async function verifyRegistryImage(image, fetchImpl = globalThis.fetch) {
+/**
+ * Verifies a registry image reference and its manifest digest without downloading image layers.
+ * Only transient reads retry; digest mismatches fail immediately.
+ */
+export async function verifyRegistryImage(image, fetchImpl = globalThis.fetch, delay) {
   const separator = image.indexOf('/', 'ghcr.io/'.length);
   const repository = image.slice('ghcr.io/'.length, image.lastIndexOf('@'));
   const imageDigest = image.slice(image.lastIndexOf('@') + 1);
   if (separator < 0 || !repository || !DIGEST.test(imageDigest)) fail(`invalid immutable GHCR image reference "${image}"`);
-  const token = await pullToken(repository, fetchImpl);
-  const response = await fetchImpl(`https://ghcr.io/v2/${repository}/manifests/${imageDigest}`, {
+  const token = await pullToken(repository, fetchImpl, delay);
+  const { value } = await readRegistry(`https://ghcr.io/v2/${repository}/manifests/${imageDigest}`, {
     headers: { accept: registryManifestAccept, authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) fail(`published image ${image} is unavailable from GHCR (HTTP ${response.status})`);
-  if (response.headers.get('docker-content-digest') !== imageDigest) {
-    fail(`GHCR returned a different manifest digest for ${image}`);
-  }
-  const value = await response.json();
+  }, response => {
+    if (response.headers.get('docker-content-digest') !== imageDigest) {
+      fail(`GHCR returned a different manifest digest for ${image}`);
+    }
+    return response.json();
+  }, { fetchImpl, delay });
   const acceptedDigests = new Set([imageDigest]);
   if (Array.isArray(value.manifests)) {
     const amd64 = value.manifests.filter((entry) =>
@@ -124,10 +131,13 @@ export async function verifyRegistryImage(image, fetchImpl = globalThis.fetch) {
   return acceptedDigests;
 }
 
-/** Verifies service image manifests and their platform-specific child manifests. */
-export async function verifyServiceRegistryImage(image, fetchImpl = globalThis.fetch) {
+/**
+ * Verifies service image manifests and their platform-specific child manifests.
+ * Transient reads retry without weakening source, digest, or size checks.
+ */
+export async function verifyServiceRegistryImage(image, fetchImpl = globalThis.fetch, delay) {
   const reference = splitImageReference(image);
-  const reader = await registryReader(reference.repository, fetchImpl);
+  const reader = await registryReader(reference.repository, fetchImpl, delay);
   const top = await reader.manifest(reference.digest);
   let childDigest = reference.digest;
   let child = top;

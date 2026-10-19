@@ -3331,12 +3331,14 @@ test('dry-run refuses a GHCR receipt that omits the measured AgentHost platform 
   }), /does not attest the exact measured linux\/amd64 AgentHost image/);
 });
 
-test('resume rechecks publication, GHCR, target and live deployment health before success', async () => {
+test('resume after exhausted post-apply registry reads retries and completes all live checks without reapplying', async () => {
   const manifest = releaseManifest();
   const publication = publicationReceipt(manifest);
   const verification = {
     release: 0, images: 0, target: 0, prerequisites: 0, live: 0, clear: 0, apply: 0, applyPreflight: 0,
   };
+  const retryDelays = [];
+  let resumedManifestAttempts = 0;
   const directory = path.join(root, 'scripts', 'release', 'tests', 'owned-checkpoint-fixture');
   let checkpoint;
   const dependencies = {
@@ -3348,7 +3350,27 @@ test('resume rechecks publication, GHCR, target and live deployment health befor
     checkpointWriteFile: (_file, text) => { checkpoint = text; },
     checkpointRm: () => { verification.clear++; },
     verifyRelease: async () => { verification.release++; return sourceSha; },
-    verifyImages: async () => { verification.images++; return verifiedImageDigests(manifest); },
+    verifyImages: async refs => {
+      verification.images++;
+      const service = refs.find(image => image.id !== 'Agentweaver.AgentHost');
+      await verifyRegistryImage(service.image, async url => {
+        if (verification.images === 2 ||
+            (verification.images === 4 && String(url).includes('/manifests/') && ++resumedManifestAttempts === 1)) {
+          throw new TypeError('fetch failed', {
+            cause: Object.assign(new Error('connection reset'), { code: 'ECONNRESET' }),
+          });
+        }
+        if (String(url).includes('/token?')) {
+          return { ok: true, json: async () => ({ token: 'test-token' }) };
+        }
+        return {
+          ok: true,
+          headers: { get: () => service.image.slice(service.image.lastIndexOf('@') + 1) },
+          json: async () => ({ schemaVersion: 2 }),
+        };
+      }, async milliseconds => retryDelays.push(milliseconds));
+      return verifiedImageDigests(manifest);
+    },
     verifyTarget: async () => { verification.target++; },
     verifyPrerequisites: () => { verification.prerequisites++; },
     verifyLive: async (images) => {
@@ -3374,7 +3396,7 @@ test('resume rechecks publication, GHCR, target and live deployment health befor
       return '';
     },
   };
-  const first = await deployRelease({
+  await assert.rejects(deployRelease({
     releaseTag: 'v1.0.0',
     target,
     manifest,
@@ -3383,9 +3405,11 @@ test('resume rechecks publication, GHCR, target and live deployment health befor
     providerCatalogSourceCommit: 'd'.repeat(40),
     execute: true,
     dryRun: false,
-  }, dependencies);
-  assert.equal(first.dryRun, false);
+  }, dependencies), /https:\/\/ghcr.io\/token.*after 4 attempt.*ECONNRESET connection reset/);
   assert.ok(checkpoint);
+  assert.equal(JSON.parse(checkpoint).stages.apply.completed, true);
+  assert.equal(verification.live, 0);
+  assert.equal(verification.clear, 0);
   const result = await deployRelease({
     releaseTag: 'v1.0.0',
     target,
@@ -3401,13 +3425,15 @@ test('resume rechecks publication, GHCR, target and live deployment health befor
   assert.deepEqual(verification, {
     release: 4,
     images: 4,
-    target: 4,
+    target: 3,
     prerequisites: 2,
-    live: 2,
-    clear: 2,
+    live: 1,
+    clear: 1,
     apply: 1,
     applyPreflight: 4,
   });
+  assert.deepEqual(retryDelays, [1000, 2000, 4000, 1000]);
+  assert.equal(resumedManifestAttempts, 2);
 });
 
 test('checkpoint read and write failures are surfaced as deployment failures', async () => {
@@ -3517,6 +3543,22 @@ test('AgentHost registry verification pins the published child digest and measur
     Buffer.byteLength(fixture.childText) + fixture.configBytes.length + 4);
   assert.ok(result.acceptedDigests.has(fixture.topDigest));
   assert.ok(result.acceptedDigests.has(fixture.childDigest));
+});
+
+test('AgentHost verification retries token, index, platform manifest and config independently', async () => {
+  const fixture = publishedAgentHostFixture();
+  const host = fixture.images.find(image => image.id === 'Agentweaver.AgentHost');
+  const attempts = new Map();
+  const delays = [];
+  const result = await verifyAgentHostRegistryImage(host, async (url, options) => {
+    const count = (attempts.get(String(url)) ?? 0) + 1;
+    attempts.set(String(url), count);
+    if (count === 1) return { ok: false, status: 429 };
+    return fixture.fetch(url, options);
+  }, async milliseconds => delays.push(milliseconds));
+  assert.equal(result.digest, fixture.childDigest);
+  assert.deepEqual([...attempts.values()], [2, 2, 2, 2]);
+  assert.deepEqual(delays, [1000, 1000, 1000, 1000]);
 });
 
 test('AgentHost registry verification rejects source-label drift in the published config', async () => {

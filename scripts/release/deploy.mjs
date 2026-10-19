@@ -27,6 +27,7 @@ import {
 } from './kustomize-runtime.mjs';
 import { validateManifest } from './validate.mjs';
 import { verifyRegistryImage } from './registry.mjs';
+import { readRegistry } from './registry-read.mjs';
 import { verifyPartialPublicationCompletion } from './partial-publication.mjs';
 import { PARTIAL_PUBLICATION } from './partial-publication-contract.mjs';
 import { run as runProcess } from '../azure/lib/exec.mjs';
@@ -427,13 +428,14 @@ function verifyAgentSandboxNamespacePermissions(resources, { root, run }) {
   }
 }
 
-/** Fetches the upstream manifest only when its bytes match the reviewed release digest. */
-async function fetchPinnedAgentSandboxManifest(fetchImpl, release) {
-  const response = await fetchImpl(release.manifestUrl);
-  if (!response.ok) {
-    fail(`AgentSandbox ${release.version} manifest download failed with HTTP ${response.status}`);
-  }
-  const manifest = Buffer.from(await response.arrayBuffer());
+/**
+ * Fetches the pinned upstream manifest with transient-read retries.
+ * The byte digest remains a strict check after the response is read.
+ */
+export async function fetchPinnedAgentSandboxManifest(fetchImpl, release, delay) {
+  const { value } = await readRegistry(release.manifestUrl, undefined,
+    response => response.arrayBuffer(), { fetchImpl, delay });
+  const manifest = Buffer.from(value);
   const digest = createHash('sha256').update(manifest).digest('hex');
   if (digest !== release.manifestSha256) {
     fail(`AgentSandbox ${release.version} manifest SHA-256 does not match its pinned release digest`);
@@ -1608,8 +1610,11 @@ function clearCheckpoint(key, io) {
   }
 }
 
-/** Reads registry manifests and verifies that the AgentHost image digest and platform are consistent. */
-export async function verifyAgentHostRegistryImage(image, fetchImpl = globalThis.fetch) {
+/**
+ * Reads AgentHost registry objects with transient-read retries.
+ * Source identity, platform, and digest checks remain strict.
+ */
+export async function verifyAgentHostRegistryImage(image, fetchImpl = globalThis.fetch, delay) {
   const referenceSeparator = image.image.lastIndexOf('@');
   const repository = image.image.slice('ghcr.io/'.length, referenceSeparator);
   const topDigest = image.image.slice(referenceSeparator + 1);
@@ -1626,21 +1631,23 @@ export async function verifyAgentHostRegistryImage(image, fetchImpl = globalThis
   const tokenUrl = new URL('https://ghcr.io/token');
   tokenUrl.searchParams.set('service', 'ghcr.io');
   tokenUrl.searchParams.set('scope', `repository:${repository}:pull`);
-  const tokenResponse = await fetchImpl(tokenUrl, { headers: { accept: 'application/json' } });
-  if (!tokenResponse.ok) fail(`GHCR does not expose ${repository} for anonymous pull verification (HTTP ${tokenResponse.status})`);
-  const tokenJson = await tokenResponse.json();
+  const { value: tokenJson } = await readRegistry(tokenUrl,
+    { headers: { accept: 'application/json' } }, response => response.json(), { fetchImpl, delay });
   const token = tokenJson.token ?? tokenJson.access_token;
   if (typeof token !== 'string' || !token) fail(`GHCR returned no anonymous pull token for ${repository}`);
 
   async function getManifest(digest) {
-    const response = await fetchImpl(`https://ghcr.io/v2/${repository}/manifests/${digest}`, {
+    const { value: text } = await readRegistry(`https://ghcr.io/v2/${repository}/manifests/${digest}`, {
       headers: { accept: registryManifestAccept, authorization: `Bearer ${token}` },
-    });
-    if (!response.ok) fail(`published image ${image.image} is unavailable from GHCR (HTTP ${response.status})`);
-    const text = await response.text();
+    }, response => {
+      if (response.headers.get('docker-content-digest') !== digest) {
+        fail(`GHCR manifest bytes do not match the exact published digest for ${image.image}`);
+      }
+      return response.text();
+    }, { fetchImpl, delay });
     const bytes = Buffer.from(text, 'utf8');
     const actualDigest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
-    if (response.headers.get('docker-content-digest') !== digest || actualDigest !== digest) {
+    if (actualDigest !== digest) {
       fail(`GHCR manifest bytes do not match the exact published digest for ${image.image}`);
     }
     return { text, bytes, value: parseJson(text, `GHCR manifest ${digest}`) };
@@ -1684,11 +1691,9 @@ export async function verifyAgentHostRegistryImage(image, fetchImpl = globalThis
     fail('published AgentHost manifest does not match its exact prepared OCI config and compressed layers');
   }
 
-  const configResponse = await fetchImpl(`https://ghcr.io/v2/${repository}/blobs/${manifest.config.digest}`, {
+  const { value: configText } = await readRegistry(`https://ghcr.io/v2/${repository}/blobs/${manifest.config.digest}`, {
     headers: { authorization: `Bearer ${token}` },
-  });
-  if (!configResponse.ok) fail(`published AgentHost config is unavailable from GHCR (HTTP ${configResponse.status})`);
-  const configText = await configResponse.text();
+  }, response => response.text(), { fetchImpl, delay });
   const configBytes = Buffer.from(configText, 'utf8');
   if (configBytes.length !== manifest.config.size ||
       `sha256:${createHash('sha256').update(configBytes).digest('hex')}` !== manifest.config.digest) {
@@ -2642,17 +2647,18 @@ export async function deployRelease(options = {}, dependencies = {}) {
     })
     : validatePublishedManifest(manifest, { root, sourceSha });
   const images = validatePublicationReceipt(publication, deploymentManifest, sourceSha);
+  // Reuse the injected fetch and delay seams for every pre- and post-apply registry read.
   const verifyImages = dependencies.verifyImages ?? (async (refs) => {
     const result = new Map();
     for (const image of refs) {
       if (image.id === 'Agentweaver.AgentHost') {
-        const published = await verifyAgentHostRegistryImage(image, fetchImpl);
+        const published = await verifyAgentHostRegistryImage(image, fetchImpl, dependencies.delay);
         image.sandboxImage = published.image;
         image.sandboxImageDigest = published.digest;
         image.compressedPullBytes = published.compressedPullBytes;
         result.set(image.name, published.acceptedDigests);
       } else {
-        result.set(image.name, await verifyRegistryImage(image.image, fetchImpl));
+        result.set(image.name, await verifyRegistryImage(image.image, fetchImpl, dependencies.delay));
       }
     }
     return result;
@@ -2661,7 +2667,7 @@ export async function deployRelease(options = {}, dependencies = {}) {
   verifyMeasuredAgentHostDigest(images, acceptedDigests);
   const agentSandboxRelease = dependencies.agentSandboxRelease ?? AGENT_SANDBOX_RELEASE;
   const agentSandboxManifest = await fetchPinnedAgentSandboxManifest(
-    dependencies.fetchAgentSandbox ?? fetchImpl, agentSandboxRelease);
+    dependencies.fetchAgentSandbox ?? fetchImpl, agentSandboxRelease, dependencies.delay);
   const providerCatalog = {
     configMapName: parsed.providerCatalogConfigMapName,
     sourceCommit: parsed.providerCatalogSourceCommit,

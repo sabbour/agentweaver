@@ -921,7 +921,7 @@ test('execute mode rejects unsafe or existing result paths before mutating apply
   }
 });
 
-test('execute mode records exact registry and Kubernetes readbacks without external commands', async t => {
+test('execute mode forwards fetch and delay to pre/post-apply registry verification and records exact readbacks', async t => {
   const fixture = createFixture(t);
   const resultPath = path.join(fixture.root, 'deployment-result.json');
   const options = deployOptions(fixture, {
@@ -960,8 +960,21 @@ test('execute mode records exact registry and Kubernetes readbacks without exter
       }],
     });
   });
+  dependencies.fetch = async () => assert.fail('stub verifiers do not perform network reads');
+  dependencies.delay = async () => assert.fail('stub verifiers do not delay');
+  const verificationCalls = { service: 0, host: 0 };
+  for (const [name, key] of [['verifyServiceImage', 'service'], ['verifyAgentHostImage', 'host']]) {
+    const verify = dependencies[name];
+    dependencies[name] = async (image, fetchImpl, delay) => {
+      assert.equal(fetchImpl, dependencies.fetch);
+      assert.equal(delay, dependencies.delay);
+      verificationCalls[key]++;
+      return verify(image);
+    };
+  }
 
   const result = await deployIntegration(options, dependencies);
+  assert.deepEqual(verificationCalls, { service: 20, host: 2 });
   assert.equal(result.dryRun, false);
   assert.equal(result.services.length, 9);
   assert.equal(result.resultPath, resultPath);
