@@ -1,12 +1,82 @@
 using System.Collections.Concurrent;
 using Agentweaver.Projects.Config;
 using Azure.Core;
+using Microsoft.Extensions.Configuration;
+using Npgsql;
 using Xunit;
 
 namespace Agentweaver.Projects.Config.Tests;
 
 public sealed class ProjectsConfigPostgresDataSourceTests
 {
+    [Fact]
+    public async Task MigrationConnectionAcceptsShortLivedTokenWithoutWorkloadIdentity()
+    {
+        const string token = "test-postgres-access-token";
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:ProjectsConfigMigration"] =
+                    "Host=postgres.example.test;Port=5432;Database=agentweaver;Username=projects_config_owner",
+                ["ProjectsConfig:Migration:AccessToken"] = token,
+            })
+            .Build();
+
+        await using var dataSource =
+            ProjectsConfigPostgresDataSource.CreateMigrationDataSource(configuration);
+
+        var connection = new NpgsqlConnectionStringBuilder(dataSource.ConnectionString);
+        Assert.Equal("projects_config_owner", connection.Username);
+        Assert.Null(connection.Password);
+        Assert.Equal(SslMode.VerifyFull, connection.SslMode);
+    }
+
+    [Fact]
+    public async Task MigrationConnectionUsesExplicitWorkloadIdentityWhenNoOperatorTokenIsSet()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:ProjectsConfigMigration"] =
+                    "Host=postgres.example.test;Port=5432;Database=agentweaver;Username=projects_config_owner",
+                ["ProjectsConfig:Migration:WorkloadIdentity:TenantId"] =
+                    "11111111-1111-1111-1111-111111111111",
+                ["ProjectsConfig:Migration:WorkloadIdentity:ClientId"] =
+                    "22222222-2222-2222-2222-222222222222",
+                ["ProjectsConfig:Migration:WorkloadIdentity:TokenFilePath"] =
+                    Path.GetFullPath(Path.Combine(Path.GetTempPath(), "projects-config-token")),
+            })
+            .Build();
+
+        await using var dataSource =
+            ProjectsConfigPostgresDataSource.CreateMigrationDataSource(configuration);
+
+        var connection = new NpgsqlConnectionStringBuilder(dataSource.ConnectionString);
+        Assert.Equal("projects_config_owner", connection.Username);
+        Assert.True(string.IsNullOrEmpty(connection.Password));
+        Assert.Equal(SslMode.VerifyFull, connection.SslMode);
+    }
+
+    [Fact]
+    public void MigrationConnectionRejectsBothCredentialSources()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:ProjectsConfigMigration"] =
+                    "Host=postgres.example.test;Port=5432;Database=agentweaver;Username=projects_config_owner",
+                ["ProjectsConfig:Migration:AccessToken"] = "test-postgres-access-token",
+                ["ProjectsConfig:Migration:WorkloadIdentity:TenantId"] =
+                    "11111111-1111-1111-1111-111111111111",
+            })
+            .Build();
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            ProjectsConfigPostgresDataSource.CreateMigrationDataSource(configuration));
+
+        Assert.Contains("Configure either", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task ReturnsCurrentEntraTokenForPostgresScope()
     {

@@ -996,11 +996,24 @@ For complete deployment-setting guidance, see
 | `ProjectsConfig:Authentication:BrokerRunBindingAudience` | Optional, distinct HTTPS audience for the private Broker proof route. When configured, the route requires its TLS certificate, private key, and server-certificate digest. |
 | `ProjectsConfig:Tls:CertificatePath` / `KeyPath` | Absolute paths to the existing Projects server certificate and private key. The certificate must be current, non-CA, and valid for server authentication. |
 | `ProjectsConfig:Tls:ServerCertificateSha256` | SHA-256 hex digest of the exact leaf certificate DER used by Kestrel. |
+| `ConnectionStrings:ProjectsConfigMigration` | Separate password-free PostgreSQL connection for `--migrate` and `--bootstrap-first-tenant-admin`. Its Entra role must own the Projects & Config schema and migration history. |
+| `ProjectsConfig:Migration:AccessToken` | Optional short-lived PostgreSQL Entra access token for the explicit migration connection. The command supplies it as the PostgreSQL password. Keep it in a short-lived Secret or environment variable, never in arguments or logs. |
+| `ProjectsConfig:Migration:WorkloadIdentity:{TenantId,ClientId,TokenFilePath}` | Alternative explicit migration credential used by `--migrate` and the bootstrap command. Configure either this identity or `ProjectsConfig:Migration:AccessToken`, not both. |
+| `ProjectsConfig:Authentication:Authority` and `ProjectsConfig:PrivilegedSetup:{ApprovedIssuer,ApprovedSubject,ApprovedTenantId}` | The approved identity and tenant for the first TenantAdmin. The approved issuer must match the authentication authority. The command does not accept a different identity as an argument. |
 
 The deployment profile also configures Kestrel's default certificate paths.
 Those paths and the Projects TLS settings must identify the same certificate.
 The service accepts the private proof request only after native TLS 1.2 or TLS
 1.3; forwarded HTTPS headers are not proof.
+
+Run `dotnet Agentweaver.Projects.Config.dll --bootstrap-first-tenant-admin`
+once as an operator after the first deployment. The command uses only the
+approved identity settings and the separate migration connection. It creates
+the active tenant membership, TenantAdmin assignment, and authority audit rows
+in one transaction. It exits without changes when that identity already has
+the active grant. It refuses when another active TenantAdmin exists. Normal
+host startup never runs this command. Runtime database grants remain
+SELECT-only on authority tables.
 
 ## Knowledge and Memory
 

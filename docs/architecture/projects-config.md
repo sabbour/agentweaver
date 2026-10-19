@@ -262,6 +262,13 @@ does not produce a receipt.
   have SELECT-only access to membership, assignment, and audit tables. Casting
   row locks use the fixed security-definer authority function. Startup checks
   its exact EXECUTE grant.
+- Operators create the first TenantAdmin with the one-shot
+  `--bootstrap-first-tenant-admin` command. It reads only the approved issuer,
+  subject, and tenant from `ProjectsConfig:PrivilegedSetup` and uses the
+  separate migration/schema-owner connection. It writes the active membership,
+  TenantAdmin assignment, and audit rows in one transaction. A rerun for the
+  same active identity makes no changes; another active TenantAdmin stops the
+  command. Normal host startup never bootstraps authority.
 - Run-selection acceptance serializes a run ID and rechecks the current Orchestrator assignment before committing. Replays return the originally stored snapshot, but still require current authorization; snapshots never pin membership or roles.
 - Provider resolution returns candidates, not resource bindings. Resource identity, generation, negotiated capabilities, and final pins are owned by the consumer after provisioning.
 

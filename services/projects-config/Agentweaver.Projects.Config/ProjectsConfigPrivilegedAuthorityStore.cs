@@ -821,6 +821,114 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
         return json;
     }
 
+    /// <summary>Creates the approved identity's first active tenant membership and TenantAdmin grant atomically.</summary>
+    /// <returns><see langword="true"/> when created; <see langword="false"/> when the approved grant already exists.</returns>
+    /// <exception cref="TenantAdminBootstrapConflictException">A different active TenantAdmin already exists.</exception>
+    public async Task<bool> BootstrapFirstTenantAdminAsync(
+        string issuer,
+        string subject,
+        string tenantId,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateIdentifier(issuer, nameof(issuer));
+        ValidateIdentifier(subject, nameof(subject));
+        ValidateIdentifier(tenantId, nameof(tenantId));
+
+        for (var attempt = 0; ; attempt++)
+        {
+            await using var db = new ProjectsConfigDbContext(options);
+            await using var transaction = await db.Database
+                .BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
+                .ConfigureAwait(false);
+            try
+            {
+                await LockTenantAdminGrantsAsync(db, tenantId, cancellationToken).ConfigureAwait(false);
+                var activeAdmins = await (
+                    from existingAssignment in db.RoleAssignments.AsNoTracking()
+                    join existingMembership in db.TenantMemberships.AsNoTracking()
+                        on existingAssignment.MembershipId equals existingMembership.MembershipId
+                    where existingAssignment.ResourceType == ProjectAuthorityResourceType.Tenant &&
+                          existingAssignment.ResourceId == tenantId &&
+                          existingAssignment.Role == ProjectAuthorityRole.TenantAdmin &&
+                          existingAssignment.State == ProjectAuthorityRecordState.Active &&
+                          existingMembership.State == ProjectAuthorityRecordState.Active
+                    select new { existingMembership.Issuer, existingMembership.Subject })
+                    .ToArrayAsync(cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (activeAdmins.Length > 0)
+                {
+                    if (activeAdmins.Length == 1 &&
+                        string.Equals(activeAdmins[0].Issuer, issuer, StringComparison.Ordinal) &&
+                        string.Equals(activeAdmins[0].Subject, subject, StringComparison.Ordinal))
+                    {
+                        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                        return false;
+                    }
+
+                    throw new TenantAdminBootstrapConflictException();
+                }
+
+                const string actor = "first-tenant-admin-bootstrap";
+                var membership = await db.TenantMemberships.SingleOrDefaultAsync(item =>
+                        item.Issuer == issuer &&
+                        item.Subject == subject &&
+                        item.TenantId == tenantId &&
+                        item.State == ProjectAuthorityRecordState.Active,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (membership is null)
+                {
+                    membership = new ProjectTenantMembershipRecord
+                    {
+                        MembershipId = Guid.NewGuid(),
+                        Issuer = issuer,
+                        Subject = subject,
+                        TenantId = tenantId,
+                        State = ProjectAuthorityRecordState.Active,
+                        Revision = 1,
+                        GrantedBy = actor,
+                        GrantedAt = timeProvider.GetUtcNow(),
+                    };
+                    db.TenantMemberships.Add(membership);
+                    db.AuthorityAudit.Add(ToAudit(membership, "membership_granted", actor));
+                }
+
+                var assignment = new ProjectRoleAssignmentRecord
+                {
+                    AssignmentId = Guid.NewGuid(),
+                    MembershipId = membership.MembershipId,
+                    ResourceType = ProjectAuthorityResourceType.Tenant,
+                    ResourceId = tenantId,
+                    Role = ProjectAuthorityRole.TenantAdmin,
+                    State = ProjectAuthorityRecordState.Active,
+                    Revision = 1,
+                    GrantedBy = actor,
+                    GrantedAt = timeProvider.GetUtcNow(),
+                };
+                db.RoleAssignments.Add(assignment);
+                db.AuthorityAudit.Add(ToAudit(membership, assignment, "role_assigned", actor));
+                await db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+                return true;
+            }
+            catch (Exception exception) when (
+                IsSerializationFailure(exception) && attempt < MaxSerializationRetries - 1)
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (DbUpdateException exception) when (
+                IsUniqueViolation(exception) && attempt < MaxSerializationRetries - 1)
+            {
+                await transaction.RollbackAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (DbUpdateException exception) when (IsUniqueViolation(exception))
+            {
+                throw new TenantAdminBootstrapConflictException();
+            }
+        }
+    }
+
     /// <summary>Creates one active issuer/subject/tenant membership and its grant audit event.</summary>
     /// <exception cref="ProjectAuthorityConcurrencyException">An active membership already exists for this identity and tenant.</exception>
     public async Task<ProjectTenantMembershipRecord> GrantMembershipAsync(
@@ -885,6 +993,10 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
                 .ConfigureAwait(false);
             try
             {
+                if (resourceType == ProjectAuthorityResourceType.Tenant &&
+                    role == ProjectAuthorityRole.TenantAdmin)
+                    await LockTenantAdminGrantsAsync(db, resourceId, cancellationToken).ConfigureAwait(false);
+
                 var membership = await db.TenantMemberships.AsNoTracking()
                     .SingleOrDefaultAsync(item =>
                         item.MembershipId == membershipId &&
@@ -1151,6 +1263,15 @@ public sealed class ProjectsConfigPrivilegedAuthorityStore(
             $"SELECT pg_advisory_xact_lock(hashtextextended({"project-owner:" + projectId}, 0))",
             cancellationToken).ConfigureAwait(false);
     }
+
+    /// <summary>Serializes first-admin bootstrap and later TenantAdmin assignments for one tenant.</summary>
+    private static Task LockTenantAdminGrantsAsync(
+        ProjectsConfigDbContext db,
+        string tenantId,
+        CancellationToken cancellationToken) =>
+        db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT pg_advisory_xact_lock(hashtextextended({"tenant-admin-grant:" + tenantId}, 0))",
+            cancellationToken);
 
     /// <summary>Creates the grant and membership audit row used by privileged authority changes.</summary>
     private ProjectAuthorityAuditRecord ToAudit(

@@ -315,6 +315,15 @@ The `projects-config-runtime-config.json` map contains:
 | `ProjectsConfig__PrivilegedSetup__ApprovedTenantId` | Exact approved Entra tenant: `72f988bf-86f1-41af-91ab-2d7cd011db47`. |
 | `ProjectsConfig__PrivilegedSetup__ApprovedSubject` | Exact approved caller subject: `c4279823-a7c7-477e-982e-f4145bb0a83d`. Do not add another subject or role. |
 
+The following settings are supplied only to the explicit migration or first
+TenantAdmin command. They are not part of the runtime ConfigMap:
+
+| Setting | Contract |
+| --- | --- |
+| `ConnectionStrings__ProjectsConfigMigration` | Separate password-free PostgreSQL connection whose Entra role owns the Projects & Config schema and migration history. Require `SSL Mode=VerifyFull`. |
+| `ProjectsConfig__Migration__AccessToken` | Optional short-lived PostgreSQL Entra access token. The explicit command supplies it as the connection password. Store it in a short-lived Secret or environment variable. Do not put it in arguments or logs. |
+| `ProjectsConfig__Migration__WorkloadIdentity__TenantId`, `ClientId`, `TokenFilePath` | Alternative explicit workload identity for migration. Configure these settings or `AccessToken`, not both. |
+
 The provider catalog is supplied separately with the
 `ProjectsConfig__ProviderCatalog__` prefix. See
 [Configure providers](../guide/configure-providers.md) for the active catalog

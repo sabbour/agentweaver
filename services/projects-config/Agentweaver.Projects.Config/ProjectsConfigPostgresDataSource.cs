@@ -2,6 +2,7 @@ extern alias AzureIdentity;
 
 using Azure.Core;
 using Npgsql;
+using WorkloadIdentityCredential = AzureIdentity::Azure.Identity.WorkloadIdentityCredential;
 using WorkloadIdentityCredentialOptions = AzureIdentity::Azure.Identity.WorkloadIdentityCredentialOptions;
 
 namespace Agentweaver.Projects.Config;
@@ -19,19 +20,42 @@ internal static class ProjectsConfigPostgresDataSource
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(connectionString);
         ArgumentNullException.ThrowIfNull(credential);
-        var connection = new NpgsqlConnectionStringBuilder(connectionString);
-        if (string.IsNullOrWhiteSpace(connection.Username))
-            throw new InvalidOperationException("The Projects & Config PostgreSQL Entra role is required.");
-        if (!string.IsNullOrEmpty(connection.Password))
-            throw new InvalidOperationException("Projects & Config PostgreSQL connections must use Entra token authentication, not a password.");
-
-        connection.SslMode = SslMode.VerifyFull;
+        var connection = CreatePasswordlessConnectionString(connectionString);
         var builder = new NpgsqlDataSourceBuilder(connection.ConnectionString);
         builder.UsePasswordProvider(
             _ => throw new InvalidOperationException("Synchronous PostgreSQL token acquisition is disabled."),
             async (_, cancellationToken) =>
                 await GetPostgresTokenAsync(credential, cancellationToken, TimeProvider.System).ConfigureAwait(false));
         return builder.Build();
+    }
+
+    /// <summary>
+    /// Creates the separate migration connection with either a short-lived operator token or migration workload identity.
+    /// </summary>
+    public static NpgsqlDataSource CreateMigrationDataSource(IConfiguration configuration)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        var connectionString = configuration.GetConnectionString("ProjectsConfigMigration")
+            ?? throw new InvalidOperationException(
+                "Missing required configuration 'ConnectionStrings:ProjectsConfigMigration'.");
+        var accessToken = configuration["ProjectsConfig:Migration:AccessToken"];
+        if (accessToken is not null)
+        {
+            if (string.IsNullOrWhiteSpace(accessToken))
+                throw new InvalidOperationException(
+                    "'ProjectsConfig:Migration:AccessToken' must not be empty.");
+            if (configuration.GetSection("ProjectsConfig:Migration:WorkloadIdentity").Exists())
+                throw new InvalidOperationException(
+                    "Configure either 'ProjectsConfig:Migration:AccessToken' or 'ProjectsConfig:Migration:WorkloadIdentity', not both.");
+
+            var connection = CreatePasswordlessConnectionString(connectionString);
+            connection.Password = accessToken;
+            return NpgsqlDataSource.Create(connection.ConnectionString);
+        }
+
+        var identity = ReadWorkloadIdentityOptions(
+            configuration, "ProjectsConfig:Migration:WorkloadIdentity");
+        return Create(connectionString, new WorkloadIdentityCredential(identity));
     }
 
     /// <summary>Loads workload-identity settings and requires GUID tenant/client IDs plus an absolute projected token path.</summary>
@@ -46,6 +70,19 @@ internal static class ProjectsConfigPostgresDataSource
             throw new InvalidOperationException(
                 $"'{section}' requires GUID tenant/client IDs and an absolute token-file path.");
         return options;
+    }
+
+    private static NpgsqlConnectionStringBuilder CreatePasswordlessConnectionString(string connectionString)
+    {
+        var connection = new NpgsqlConnectionStringBuilder(connectionString);
+        if (string.IsNullOrWhiteSpace(connection.Username))
+            throw new InvalidOperationException("The Projects & Config PostgreSQL Entra role is required.");
+        if (!string.IsNullOrEmpty(connection.Password))
+            throw new InvalidOperationException(
+                "Projects & Config PostgreSQL connection strings must not contain a password.");
+
+        connection.SslMode = SslMode.VerifyFull;
+        return connection;
     }
 
     /// <summary>Requests a PostgreSQL-scoped token and rejects empty or already expired credentials.</summary>
