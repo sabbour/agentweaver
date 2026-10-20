@@ -203,6 +203,7 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
   acquireRunIdentity = acquireP1RunIdentity,
   createSurfaceAdapters = createP1SurfaceAdapters,
   runSurfaceJourney = runP1SurfaceJourney,
+  identityProvider,
 } = {}) {
   let options;
   let surface = 'api';
@@ -224,11 +225,8 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
       throw new Error('A P1 surface, input manifest, and evidence output path are required.');
     }
     surface = options.surface;
-    if (!options.identityModule) {
+    if (surface !== 'ui' && !options.identityModule && typeof identityProvider !== 'function') {
       throw new Error('The selected API identity provider module is required.');
-    }
-    if (surface === 'ui' && !options.pageModule) {
-      throw new Error('The UI surface requires an already-authorized page provider module.');
     }
     inputPath = resolve(options.input);
     const requestedOutputPath = resolve(options.output);
@@ -280,6 +278,9 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
       outputPath = undefined;
       throw new Error('The evidence output path must not replace a P1 input or deployment artifact.');
     }
+    if (surface === 'ui') {
+      throw new Error('The P1 UI page provider is blocked on #1859 until the 0.x UI is restored onto v1.');
+    }
     sourceEvidence = await prepareDeploymentEvidence({
       repoRoot: repositoryRoot,
       expectedSourceSha: pins.sourceReceipt.sourceSha,
@@ -321,10 +322,21 @@ export async function runP1Cli(argv = process.argv.slice(2), env = process.env, 
         namespace: pins.namespace,
         acquireRunIdentity: async binding => {
           const identity = await acquireRunIdentity({
-            modulePath: resolve(options.identityModule),
+            modulePath: options.identityModule ? resolve(options.identityModule) : undefined,
             environment: validated.environment,
             projectId: binding.projectId,
             runId: binding.runId,
+            ...(validated.fixturePlan.deniedActor
+              ? { deniedActor: validated.fixturePlan.deniedActor }
+              : {}),
+            provideIdentity: identityProvider
+              ? providerInput => identityProvider({
+                ...providerInput,
+                ...(validated.fixturePlan.deniedActor
+                  ? { deniedActor: validated.fixturePlan.deniedActor }
+                  : {}),
+              })
+              : undefined,
           });
           return {
             ...identity,

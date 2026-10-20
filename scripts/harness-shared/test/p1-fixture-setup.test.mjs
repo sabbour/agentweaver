@@ -659,6 +659,50 @@ test('same-invocation fixture creation uses owner readbacks and retains accepted
   assert.deepEqual(events, ['setup:setup', 'identity', 'setup:cleanup']);
 });
 
+test('one-account fixture setup never reads a denied token or creates a denied API', async () => {
+  const fixturePlan = plan('journal');
+  delete fixturePlan.fixturePlan.deniedActor;
+  let deniedTokenRead = false;
+  const fixture = await createP1Fixture(fixturePlan, {
+    api: apiFor(),
+    invocationId: INVOCATION_ID,
+    setupToken: 'controlled-secret-token',
+    sourceEvidence: sourceEvidence(),
+    sourceReceipt: { sourceSha: SOURCE_SHA, sourceTree: SOURCE_TREE },
+    runPrivilegedSetup: async request =>
+      setupResult(request.request.invocationId, request.request.operationKind),
+    acquireRunIdentity: async binding => {
+      const identity = {
+        token: 'run-token',
+        projectId: binding.projectId,
+        runId: binding.runId,
+        api: apiFor({
+          bound: true,
+          journey: 'journal',
+          expectedRunId: binding.runId,
+        }),
+      };
+      Object.defineProperty(identity, 'deniedToken', {
+        get() {
+          deniedTokenRead = true;
+          throw new Error('denied token must not be read');
+        },
+      });
+      return identity;
+    },
+    createId: purpose => ({
+      run: '00000000-0000-4000-8000-000000000021',
+      'root-session': '00000000-0000-4000-8000-000000000022',
+      fixture: '00000000-0000-4000-8000-000000000026',
+    }[purpose] ?? '00000000-0000-4000-8000-000000000027'),
+  });
+
+  assert.equal(deniedTokenRead, false);
+  assert.equal(fixture.deniedApi, undefined);
+  assert.equal(Object.hasOwn(fixture.input.pins.fixtureScope, 'deniedActor'), false);
+  await fixture.cleanup();
+});
+
 test('TenantAdmin setup with Owner and Orchestrator grants accepts selection without platform defaults', async () => {
   const api = apiFor();
   const fixturePlan = plan('journal');

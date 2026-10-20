@@ -1138,7 +1138,7 @@ export async function prepareP1DeploymentEvidence({
   });
   let agentHostMeasurement;
   try {
-    agentHostMeasurement = measureAgentHostArchiveSync(agentHostArchivePath, repoRoot);
+    agentHostMeasurement = measureAgentHostArchiveSync(agentHostArchivePath, repoRoot, source.sourceSha);
   } catch (error) {
     throw new Error(`The existing AgentHost image measurement failed: ${redact(error).message}`);
   }

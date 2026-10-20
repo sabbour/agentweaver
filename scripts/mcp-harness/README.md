@@ -83,22 +83,40 @@ the active grants. The runner does not invoke an Orchestrator dispatch method.
 Supply the same `executionIntent: "execute"` manifest and four
 `deploymentEvidence` paths documented by the API harness. `fixturePlan`
 requires a positive `expectedPlatformRuntimeRevision`, the exact selection
-context, a distinct denied actor, and the selected gate or message content.
+context, and the selected gate or message content. A distinct
+`fixturePlan.deniedActor` is optional. When supplied, it must remain a distinct
+actor with its own token. When omitted, the `valid-denied-actor-403` step is
+recorded as blocked with the explicit missing-account reason; the runner
+continues other checks, but the surface and full P1 result cannot pass. Do not
+substitute the signed-in actor or change any role or access grant.
 The runner sends that expected revision through the existing run-selection
 request and verifies the accepted and observed owner selection revisions.
 This plan value is not authority or an ownership receipt; the owner
 compare-and-swap checks it against current state. The fixture retains its
 project-configuration read and does not call the PlatformAdmin-only global
-runtime-default endpoint. After source and deployment checks pass,
-set `AGENTWEAVER_P1_SETUP_TOKEN` in the process environment and provide
-`--identity-module <authorized-identity-provider.mjs>` returning already-issued
-run-bound and denied-actor tokens. No sign-in, token refresh, or consent is
-performed. The unfinished invocation ID is persisted so setup and idempotent
-MCP actions can be replayed with the same IDs.
+runtime-default endpoint.
 
 ```powershell
-npm run harness:p1 -- --surface mcp --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs>
+npm run harness:p1:signin-run -- --surface mcp --input <manifest.json> --output <evidence.jsonl>
 ```
+
+The sign-in launcher uses the existing `agentweaver-web` public client and one
+interactive TenantAdmin sign-in. It uses one fresh empty headed-Chrome profile
+for the setup and run-bound authorization flows, then deletes it on success,
+failure, or cancellation. It never reads/copies an existing profile, cookie
+store, or credential cache. Token values stay in memory and never enter logs
+or evidence. This one-account command requires `fixturePlan.deniedActor` to be
+omitted, so the distinct denied-actor check remains blocked while other
+journey steps continue. The Host-caller probe-provider gap remains blocked;
+the launcher adds no Host-caller provider, and missing native probes still
+block full P1 acceptance.
+
+For advanced runs, the lower-level `npm run harness:p1` command still accepts
+`--identity-module` and `AGENTWEAVER_P1_SETUP_TOKEN`. A separately authorized
+actor can be supplied there when one is genuinely available; do not use the
+one-account launcher to impersonate or substitute an actor. The unfinished
+invocation ID is persisted so setup and idempotent MCP actions can be replayed
+with the same IDs.
 
 Surface results are reported separately from full P1 acceptance. Full P1 stays
 blocked until the required native probes have real evidence. Controlled MCP

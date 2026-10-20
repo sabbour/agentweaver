@@ -75,10 +75,13 @@ export async function acquireP1RunIdentity({
   environment,
   projectId,
   runId,
+  deniedActor,
+  provideIdentity,
   importModule = specifier => import(specifier),
   fetchImpl = globalThis.fetch,
 }) {
-  const provideIdentity = await loadModule(modulePath, 'already-authorized identity provider', importModule);
+  const identityFunction = provideIdentity
+    ?? await loadModule(modulePath, 'already-authorized identity provider', importModule);
   const identity = {
     actorId: environment.actorId,
     tenantId: environment.tenantId,
@@ -87,48 +90,59 @@ export async function acquireP1RunIdentity({
   };
   let credentials;
   try {
-    credentials = await provideIdentity({
+    credentials = await identityFunction({
       baseUrl: environment.baseUrl,
       ...identity,
       projectId,
       runId,
+      ...(deniedActor ? { deniedActor } : {}),
     });
   } catch {
     throw new Error('The already-authorized identity provider did not return run credentials.');
   }
+  const expectedCredentialKeys = deniedActor ? 'deniedToken,token' : 'token';
   if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials)
-    || Object.keys(credentials).sort().join(',') !== 'deniedToken,token') {
-    throw new Error('The identity provider must return only the run token and denied-actor token.');
+    || Object.keys(credentials).sort().join(',') !== expectedCredentialKeys) {
+    throw new Error(deniedActor
+      ? 'The identity provider must return only the run token and distinct denied-actor token.'
+      : 'The identity provider must return only the run token when no distinct denied actor is planned.');
   }
   const token = requireToken(credentials.token, identity, { projectId, runId });
-  const deniedActor = credentials.deniedActor;
-  if (deniedActor !== undefined) {
-    throw new Error('The denied actor identity must come from the runner plan, not the identity provider.');
-  }
   return {
     token,
-    deniedToken: credentials.deniedToken,
+    ...(deniedActor ? { deniedToken: credentials.deniedToken } : {}),
     projectId,
     runId,
-    /** Bind normal and denied API clients to the selected environment and distinct actor identities. */
-    createClients({ deniedActor }) {
+    /** Bind clients only to the actor identities explicitly selected by the fixture plan. */
+    createClients({ deniedActor: requestedDeniedActor } = {}) {
       const base = validateNetworkTarget(environment.baseUrl, { exactPath: '/' });
       const authProvider = createBrokerAuthProvider({ target: base, token, ...identity });
+      const api = new AgentweaverClient({
+        baseUrl: environment.baseUrl, authProvider, tenantId: environment.tenantId, fetchImpl,
+      });
+      if (!deniedActor) {
+        if (requestedDeniedActor) {
+          throw new Error('A denied-actor client cannot be created without a denied actor in the runner plan.');
+        }
+        return { api };
+      }
+      if (!requestedDeniedActor
+        || requestedDeniedActor.actorId !== deniedActor.actorId
+        || requestedDeniedActor.tenantId !== deniedActor.tenantId) {
+        throw new Error('The denied-actor client must match the exact actor selected by the runner plan.');
+      }
       const deniedIdentity = {
         issuer: environment.issuer,
         audience: environment.audience,
-        actorId: deniedActor.actorId,
+        actorId: requestedDeniedActor.actorId,
       };
       const deniedToken = requireToken(credentials.deniedToken, deniedIdentity, null);
       const deniedAuthProvider = createBrokerAuthProvider({
         target: base, token: deniedToken, ...deniedIdentity,
       });
-      const api = new AgentweaverClient({
-        baseUrl: environment.baseUrl, authProvider, tenantId: environment.tenantId, fetchImpl,
-      });
       const deniedApi = new AgentweaverClient({
         baseUrl: environment.baseUrl, authProvider: deniedAuthProvider,
-        tenantId: deniedActor.tenantId, fetchImpl,
+        tenantId: requestedDeniedActor.tenantId, fetchImpl,
       });
       return { api, deniedApi };
     },
