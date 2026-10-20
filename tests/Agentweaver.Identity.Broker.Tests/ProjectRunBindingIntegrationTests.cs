@@ -46,8 +46,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     EgressBaseline = [],
                     RunLimits = new CopilotRunLimits
                     {
-                        MaxModelTurns = 12, MaxToolCalls = 100, MaxChildren = 4,
-                        MaxConcurrentChildren = 2, MaxWallTimeSeconds = 3600, MaxPromptTokens = 20_000,
+                        MaxModelTurns = 12,
+                        MaxToolCalls = 100,
+                        MaxChildren = 4,
+                        MaxConcurrentChildren = 2,
+                        MaxWallTimeSeconds = 3600,
+                        MaxPromptTokens = 20_000,
                     },
                 },
             }),
@@ -196,5 +200,63 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
         journal.Parameters.AddWithValue("run", pending.RunId);
         journal.Parameters.AddWithValue("key", $"{pending.RunId}:first");
         Assert.Equal(1L, await journal.ExecuteScalarAsync());
+
+        // Project Contributors can cancel another actor's run without obtaining that actor's run-bound token.
+        var contributorToken = await IssueTokenAsync(
+            "projects.orchestrator", [TenantId], "chat-contributor", null, null, []);
+        var contributorSubject = SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(contributorToken).Claims, "sub");
+        var contributorMembership = await AddMembershipAsync(
+            projects.PrivilegedFixtureDataSource, contributorSubject, TenantId);
+        await AssignRoleAsync(projects.PrivilegedFixtureDataSource, contributorMembership.MembershipId,
+            ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Contributor);
+        var viewerToken = await IssueTokenAsync(
+            "projects.orchestrator", [TenantId], "chat-viewer", null, null, []);
+        var viewerSubject = SingleClaim(new JwtSecurityTokenHandler().ReadJwtToken(viewerToken).Claims, "sub");
+        var viewerMembership = await AddMembershipAsync(projects.PrivilegedFixtureDataSource, viewerSubject, TenantId);
+        await AssignRoleAsync(projects.PrivilegedFixtureDataSource, viewerMembership.MembershipId,
+            ProjectAuthorityResourceType.Project, project.ProjectId, ProjectAuthorityRole.Viewer);
+        using (var deniedCreate = new HttpRequestMessage(HttpMethod.Post, $"/api/v1/projects/{project.ProjectId}/runs")
+        {
+            Content = JsonContent.Create(new CreateProjectRunRequest("Not an Orchestrator.", project.ConfigurationRevision)),
+        })
+        {
+            AddBearerAndTenant(deniedCreate, contributorToken, TenantId);
+            deniedCreate.Headers.Add("Idempotency-Key", "contributor-create");
+            using var response = await gateway.Client.SendAsync(deniedCreate);
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            Assert.Contains("project_orchestrator_role_required_acceptRunSelection",
+                await response.Content.ReadAsStringAsync());
+        }
+        using (var denied = await CancelChatAsync(viewerToken, "viewer-cancel"))
+            Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        using (var boundDenied = await CancelChatAsync(boundToken, "bound-cancel"))
+            Assert.Equal(HttpStatusCode.Forbidden, boundDenied.StatusCode);
+        using (var cancelled = await CancelChatAsync(contributorToken, "contributor-cancel"))
+        {
+            Assert.Equal(HttpStatusCode.OK, cancelled.StatusCode);
+            var receipt = await cancelled.Content.ReadFromJsonAsync<CancelProjectRunResponse>(OrchestratorJsonOptions);
+            Assert.NotNull(receipt);
+            Assert.False(receipt.AlreadyTerminal);
+        }
+        using (var terminal = await CancelChatAsync(contributorToken, "terminal-cancel"))
+        {
+            Assert.Equal(HttpStatusCode.OK, terminal.StatusCode);
+            var receipt = await terminal.Content.ReadFromJsonAsync<CancelProjectRunResponse>(OrchestratorJsonOptions);
+            Assert.NotNull(receipt);
+            Assert.True(receipt.AlreadyTerminal);
+        }
+
+        // Exercise the production Gateway and both fresh Projects checks for each cancellation.
+        async Task<HttpResponseMessage> CancelChatAsync(string token, string key)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post,
+                $"/api/v1/projects/{project.ProjectId}/runs/{pending.RunId}/cancel")
+            {
+                Content = JsonContent.Create(new CancelProjectRunRequest()),
+            };
+            AddBearerAndTenant(request, token, TenantId);
+            request.Headers.Add("Idempotency-Key", key);
+            return await gateway.Client.SendAsync(request);
+        }
     }
 }

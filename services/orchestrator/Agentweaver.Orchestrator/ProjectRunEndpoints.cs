@@ -68,25 +68,26 @@ public static partial class CoordinationEndpoints
         return Results.Ok(result);
     }, cancellationToken);
 
-    /// <summary>Cancels accepted runs and bound pending requests without delivering the saved first message.</summary>
+    /// <summary>Cancels project runs using fresh unbound Contributor, Owner, or tenant-admin authority.</summary>
     private static Task<IResult> CancelProjectRunAsync(
         string projectId, string runId, CancelProjectRunRequest request, HttpContext context,
-        OrchestratorOptions options, ProjectsRunSelectionClient projects, EventsAddressedMessageClient events,
-        CoordinationOwnerStore store, CoordinatorDecisionOwnerStore decisions,
+        OrchestratorOptions options, ProjectsRunSelectionClient projects, CoordinationOwnerStore store,
         CancellationToken cancellationToken) => ExecuteAsync(async () =>
     {
         RequireProjectRunRequestShape(context);
         context.Response.Headers.CacheControl = "no-store";
         var key = RequireProjectRunIdempotencyKey(context);
-        var actor = RequireOwnerActor(context, options, projectId, runId, options.Audience);
-        var selection = await projects.ReadAcceptedSelectionWithAuthorityAsync(context, projectId, runId, cancellationToken);
+        var selection = await projects.ReadSelectionForCancelAsync(context, projectId, runId, cancellationToken);
+        var actor = CoordinationIdentity.RequireActor(context.User, options.Issuer);
         return Results.Ok(await store.CancelProjectRunAsync(actor, selection, key, request,
-            async (row, token) =>
+            async token =>
             {
-                await AcceptInteractiveRootAsync(projectId, runId, row.RootSessionId,
-                    context, options, projects, events, store, decisions, token);
+                var refreshed = await projects.ReadSelectionForCancelAsync(context, projectId, runId, token);
+                if (refreshed.Authorization.TenantId != selection.Authorization.TenantId ||
+                    CoordinationOwnerStore.HashSelection(refreshed.Selection) !=
+                        CoordinationOwnerStore.HashSelection(selection.Selection))
+                    throw new CoordinationException("accepted_run_conflict", StatusCodes.Status409Conflict);
             },
-            token => RequireUnchangedAuthorizedSelectionAsync(context, projectId, runId, selection, projects, token),
             cancellationToken));
     }, cancellationToken);
 

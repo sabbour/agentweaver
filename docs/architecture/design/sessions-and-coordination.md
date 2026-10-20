@@ -677,12 +677,17 @@ root session and deliver the saved message.
 The first message is a root-to-root addressed message with the idempotency key
 `{runId}:first`. v1 has only session-to-session messages, so the root session
 is both sender and recipient. The owner rejects a self-addressed message unless
-its payload matches the saved request exactly.
+its key is exactly `{runId}:first` and its payload matches the saved request
+exactly. Start's lock, connection, and downstream work share a 30-second deadline.
 
 Cancel advances the execution fence, so stale writes from the old generation
 fail. It sets the run and its active sessions to `cancelled` and enqueues
 `orchestrator.run.cancelled` in the same transaction. A cancel retry with the
-same key returns the saved receipt.
+same key returns the saved receipt. Cancellation uses an unbound token with a
+fresh Projects `cancelRun` permission from a Contributor, Owner, or tenant
+administrator role; it is not restricted to the run creator. A terminal run
+returns `200` with `alreadyTerminal: true`. A pending request is cancelled
+without accepting its root or delivering a first message.
 
 ```mermaid
 sequenceDiagram
@@ -718,8 +723,9 @@ sequenceDiagram
     O->>E: Register root session
     O->>E: Admit first message with key runId:first
     O-->>B: 200 started
-    B->>GW: POST /projects/{p}/runs/{runId}/cancel with Idempotency-Key
+    B->>GW: POST /projects/{p}/runs/{runId}/cancel (unbound token, Idempotency-Key)
     GW->>O: Forward cancel
+    O->>PC: Read and refresh cancelRun authority
     O->>O: Advance fence, set cancelled, save receipt and outbox event
     O-->>B: 200 cancelled
 ```

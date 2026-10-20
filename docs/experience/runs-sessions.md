@@ -7,10 +7,11 @@ is a node in the run's owner-reported tree.
 ## Prerequisites
 
 - Know the exact project ID, and the run ID for an existing run.
-- Have the Orchestrator role on the project. A tenant admin grants it through
+- To create a chat, have the project Orchestrator role (`acceptRunSelection`).
+  Owner or Contributor alone receives `403`. A tenant admin grants the role through
   `/api/v1/projects/{projectId}/role-assignments`.
 - Sign in with a Broker token that requests `api.read` and
-  `projects.orchestrator`. Start, cancel, and run pages need a token bound to
+  `projects.orchestrator`. Start and run pages need a token bound to
   that exact project and run.
 
 Open `/projects/:projectId/runs/:runId`, then select
@@ -41,19 +42,24 @@ session and delivers the saved first message once, using the idempotency key
 Retrying start returns the same result without sending the message again.
 
 The first message is limited to 32,768 UTF-8 bytes. The default title is the
-first 80 characters of the message.
+first 80 characters of the message. Start has a 30-second deadline, including
+database lock waits and downstream calls. A timeout returns `504 run_start_timeout`;
+retry start with the same run ID.
 
 ## Cancel a run
 
 Send `POST /api/v1/projects/{projectId}/runs/{runId}/cancel` with an
-`Idempotency-Key` header, a run-bound token, and an optional `reason` of up to
-2,048 characters.
+`Idempotency-Key` header, a token that is not bound to a run, and an optional
+`reason` of up to 2,048 characters. The caller needs a current project
+Contributor or Owner role, or the tenant administrator role. The caller does
+not need to have started the run. A Viewer receives `403`.
 
 **Expected result:** The response reports `cancelled` and `cancelledAt`. The
 Orchestrator advances the run's execution fence, so later writes that use the
 old fence fail. Active sessions become `cancelled`. A run that was created but
 not started is cancelled without delivering its first message. Cancelling a
-finished run returns `409 run_terminal`.
+finished run returns `200` with `alreadyTerminal: true` without changing its
+state or sending another event. Idempotency receipts are scoped to each caller.
 
 ## Inspect an existing run
 

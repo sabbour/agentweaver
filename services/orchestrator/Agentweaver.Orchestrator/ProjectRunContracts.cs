@@ -24,5 +24,6 @@ public sealed record StartProjectRunResponse(string RunId, string RootSessionId,
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record CancelProjectRunRequest(string? Reason = null);
 
-/// <summary>Stable cancellation receipt; replay does not advance the fence again.</summary>
-public sealed record CancelProjectRunResponse(string RunId, string State, DateTimeOffset CancelledAt);
+/// <summary>Stable receipt; terminal no-ops do not advance the fence or invent a cancellation timestamp.</summary>
+public sealed record CancelProjectRunResponse(
+    string RunId, string State, DateTimeOffset? CancelledAt, bool AlreadyTerminal = false);

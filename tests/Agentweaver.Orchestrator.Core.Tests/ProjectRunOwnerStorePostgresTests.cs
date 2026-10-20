@@ -95,6 +95,27 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
         var replay = await Start(row.RunId, (_, _) => throw new InvalidOperationException("Replay must not redeliver."));
         Assert.Equal(started, replay);
         Assert.Equal(1, deliveries);
+
+        // Only the reserved key replays the persisted message; another self-route cannot create a delivery.
+        var identity = new SessionIdentity(Project, row.RunId, row.RootSessionId);
+        var firstMessage = FirstMessage(row, row.RunId, row.FirstMessage, row.WorkflowId);
+        var messageReplay = await _store.SendMessageAsync(_actor, identity, firstMessage, CancellationToken.None);
+        Assert.Equal(delivered.OwnerMessageId, messageReplay.OwnerMessageId);
+        var rejected = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.SendMessageAsync(_actor, identity, firstMessage with { IdempotencyKey = "another-key" },
+                CancellationToken.None));
+        Assert.Equal("first_message_invalid", rejected.Code);
+        Assert.Equal(1L, await CountAsync("coordination_messages"));
+        Assert.Equal(1L, await CountAsync("outbox_events"));
+        var outbound = await _store.ReadOutboundMessageAsync(delivered.OwnerMessageId, CancellationToken.None);
+        var route = await _store.ValidateMessageRouteAsync(
+            _actor, identity, new MessageRouteValidationRequest(outbound), CancellationToken.None);
+        Assert.Equal(identity, route.Recipient);
+        var rejectedRoute = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.ValidateMessageRouteAsync(_actor, identity,
+                new MessageRouteValidationRequest(outbound with { IdempotencyKey = "another-key" }),
+                CancellationToken.None));
+        Assert.Equal("first_message_invalid", rejectedRoute.Code);
     }
 
     [Fact]
@@ -126,55 +147,120 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
     public async Task CancelFencesPendingRunsReplaysReceiptsAndBlocksStart()
     {
         var row = await Create("cancel", new CreateProjectRunRequest("Hello", 1));
-        var selection = Selection(row.RunId);
-        var accepted = 0;
+        var selection = CancellationSelection(row.RunId, _actor);
         var cancel = new CancelProjectRunRequest("No longer needed");
-        var first = await _store.CancelProjectRunAsync(_actor, selection, "c-1", cancel,
-            async (pending, token) =>
-            {
-                accepted++;
-                await _store.AcceptRootAsync(_actor, selection, pending.RootSessionId, token);
-            }, NoCheck, CancellationToken.None);
+        var first = await _store.CancelProjectRunAsync(
+            _actor, selection, "c-1", cancel, NoCheck, CancellationToken.None);
         Assert.Equal("cancelled", first.State);
-        Assert.Equal(1, accepted);
+        Assert.False(first.AlreadyTerminal);
+        Assert.Equal(0L, await CountAsync("accepted_runs"));
 
         var replay = await _store.CancelProjectRunAsync(_actor, selection, "c-1", cancel,
-            (_, _) => throw new InvalidOperationException("Cancelled requests are not re-accepted."),
             NoCheck, CancellationToken.None);
         Assert.Equal(first, replay);
 
         var changed = await Assert.ThrowsAsync<CoordinationException>(() =>
             _store.CancelProjectRunAsync(_actor, selection, "c-1", new CancelProjectRunRequest("Other"),
-                NoDelivery, NoCheck, CancellationToken.None));
+                NoCheck, CancellationToken.None));
         Assert.Equal("idempotency_conflict", changed.Code);
-        var again = await Assert.ThrowsAsync<CoordinationException>(() =>
-            _store.CancelProjectRunAsync(_actor, selection, "c-2", cancel, NoDelivery, NoCheck,
-                CancellationToken.None));
-        Assert.Equal("run_terminal", again.Code);
+        var again = await _store.CancelProjectRunAsync(
+            _actor, selection, "c-2", cancel, NoCheck, CancellationToken.None);
+        Assert.True(again.AlreadyTerminal);
         var start = await Assert.ThrowsAsync<CoordinationException>(() => Start(row.RunId, NoDelivery));
         Assert.Equal("run_terminal", start.Code);
 
         await using var connection = await _fixture.DataSource.OpenConnectionAsync();
         await using var query = new NpgsqlCommand($"""
-            SELECT r.execution_state, r.cancelled_at IS NOT NULL, r.completed_at = r.cancelled_at,
-                   s.lifecycle_state, q.state,
+            SELECT q.state,
                    (SELECT count(*) FROM "{_schema}".outbox_events e
                     WHERE e.event_type = 'orchestrator.run.cancelled')
-            FROM "{_schema}".accepted_runs r
-            JOIN "{_schema}".coordination_sessions s ON s.project_id = r.project_id AND s.run_id = r.run_id
-            JOIN "{_schema}".project_run_requests q ON q.project_id = r.project_id AND q.run_id = r.run_id
-            WHERE r.project_id = @project AND r.run_id = @run
+            FROM "{_schema}".project_run_requests q
+            WHERE q.project_id = @project AND q.run_id = @run
             """, connection);
         query.Parameters.AddWithValue("project", Project);
         query.Parameters.AddWithValue("run", row.RunId);
         await using var reader = await query.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal("cancelled", reader.GetString(0));
-        Assert.True(reader.GetBoolean(1));
-        Assert.True(reader.GetBoolean(2));
-        Assert.Equal("cancelled", reader.GetString(3));
-        Assert.Equal("cancelled", reader.GetString(4));
-        Assert.Equal(1L, reader.GetInt64(5));
+        Assert.Equal(1L, reader.GetInt64(1));
+    }
+
+    /// <summary>Project cancellation is independent of the accepted run's creator and receipts remain caller-scoped.</summary>
+    [Fact]
+    public async Task AnotherProjectContributorCancelsStartedRunAndTerminalRequestsSucceed()
+    {
+        var row = await Create("cross-actor", new CreateProjectRunRequest("Hello", 1));
+        await Start(row.RunId, async (pending, token) =>
+            await _store.AcceptRootAsync(_actor, Selection(row.RunId), pending.RootSessionId, token));
+        var contributor = _actor with { Subject = "other-contributor" };
+        var selection = CancellationSelection(row.RunId, contributor);
+        var cancelled = await _store.CancelProjectRunAsync(contributor, selection,
+            "shared-key", new(), NoCheck, CancellationToken.None);
+        Assert.False(cancelled.AlreadyTerminal);
+        var replay = await _store.CancelProjectRunAsync(contributor, selection,
+            "shared-key", new(), NoCheck, CancellationToken.None);
+        Assert.Equal(cancelled, replay);
+        var otherCaller = await _store.CancelProjectRunAsync(_actor, CancellationSelection(row.RunId, _actor),
+            "shared-key", new(), NoCheck, CancellationToken.None);
+        Assert.True(otherCaller.AlreadyTerminal);
+        Assert.Equal(2L, await CountAsync("project_run_cancellations"));
+        Assert.Equal(1L, await CountAsync("outbox_events"));
+    }
+
+    /// <summary>Read-only project access never grants cancellation authority, even to a run creator.</summary>
+    [Fact]
+    public async Task ViewerCannotCancel()
+    {
+        var row = await Create("viewer", new CreateProjectRunRequest("Hello", 1));
+        var selection = CancellationSelection(row.RunId, _actor);
+        selection = selection with
+        {
+            Authorization = selection.Authorization with
+            {
+                EffectiveAuthority = [new ProjectsAuthority("project", Project, [new ProjectsPermissionGrant("readProjects", 1)])]
+            }
+        };
+        var denied = await Assert.ThrowsAsync<CoordinationException>(() =>
+            _store.CancelProjectRunAsync(_actor, selection, "denied", new(), NoCheck, CancellationToken.None));
+        Assert.Equal(403, denied.StatusCode);
+        Assert.Equal(0L, await CountAsync("project_run_cancellations"));
+    }
+
+    /// <summary>Builds the unbound Projects permission evidence used only by project cancellation.</summary>
+    private AuthorizedRunSelection CancellationSelection(string runId, CoordinationActor actor) =>
+        Selection(runId) with
+        {
+            Authorization = new ProjectsAuthorizationContext(
+            1, actor.Issuer, actor.Subject, Tenant, 1, null, null,
+            [new ProjectsAuthority("project", Project, [new ProjectsPermissionGrant("cancelRun", 1)])])
+        };
+
+    /// <summary>Terminal success or failure is preserved and receives only a no-op cancellation receipt.</summary>
+    [Theory]
+    [InlineData("completed")]
+    [InlineData("failed")]
+    [InlineData("indeterminate")]
+    public async Task AlreadyEndedRunReturnsSuccessfulNoOp(string state)
+    {
+        var row = await Create("ended", new CreateProjectRunRequest("Hello", 1));
+        await _store.AcceptRootAsync(_actor, Selection(row.RunId), row.RootSessionId, CancellationToken.None);
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var update = new NpgsqlCommand($"""
+            UPDATE "{_schema}".accepted_runs SET execution_state = @state,
+                execution_cause_code = CASE WHEN @state IN ('failed', 'indeterminate') THEN 'fixture_failure' END,
+                execution_reference = CASE WHEN @state IN ('failed', 'indeterminate') THEN 'fixture_reference' END
+            WHERE project_id = @project AND run_id = @run
+            """, connection);
+        update.Parameters.AddWithValue("state", state);
+        update.Parameters.AddWithValue("project", Project);
+        update.Parameters.AddWithValue("run", row.RunId);
+        await update.ExecuteNonQueryAsync();
+        var result = await _store.CancelProjectRunAsync(_actor, CancellationSelection(row.RunId, _actor),
+            "terminal", new(), NoCheck, CancellationToken.None);
+        Assert.Equal(state, result.State);
+        Assert.True(result.AlreadyTerminal);
+        Assert.Null(result.CancelledAt);
+        Assert.Equal(0L, await CountAsync("outbox_events"));
     }
 
     private Task<CoordinationOwnerStore.ProjectRunRequestRow> Create(string key, CreateProjectRunRequest request) =>

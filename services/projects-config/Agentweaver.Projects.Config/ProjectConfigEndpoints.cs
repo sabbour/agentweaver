@@ -524,27 +524,31 @@ public static class ProjectConfigEndpoints
             }
         });
 
-        projects.MapGet("/{projectId}/runs/{runId}/selection", async (
-            string projectId,
-            string runId,
-            HttpContext context,
-            ProjectsConfigService service,
-            ProjectAuthorizationOwner authorizationOwner,
-            CancellationToken cancellationToken) =>
-        {
-            try
+        // Cancellation reads use fresh project-access roles without granting Orchestrator admission.
+        foreach (var forCancellation in new[] { false, true })
+            projects.MapGet(forCancellation
+                ? "/{projectId}/runs/{runId}/cancellation-selection"
+                : "/{projectId}/runs/{runId}/selection", async (
+                string projectId,
+                string runId,
+                HttpContext context,
+                ProjectsConfigService service,
+                ProjectAuthorizationOwner authorizationOwner,
+                CancellationToken cancellationToken) =>
             {
-                context.Response.Headers.CacheControl = "no-store";
-                var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
-                    .ConfigureAwait(false);
-                return Results.Ok(await service.GetRunSelectionAsync(
-                    caller, projectId, runId, cancellationToken).ConfigureAwait(false));
-            }
-            catch (ProjectConfigException exception)
-            {
-                return ToProblem(exception);
-            }
-        });
+                try
+                {
+                    context.Response.Headers.CacheControl = "no-store";
+                    var caller = await ResolveCallerAsync(context, authorizationOwner, cancellationToken)
+                        .ConfigureAwait(false);
+                    return Results.Ok(await service.GetRunSelectionAsync(
+                        caller, projectId, runId, cancellationToken, forCancellation).ConfigureAwait(false));
+                }
+                catch (ProjectConfigException exception)
+                {
+                    return ToProblem(exception);
+                }
+            });
 
         var platform = app.MapGroup("/api/platform/runtime-defaults").RequireAuthorization();
         platform.MapGet("/", async (

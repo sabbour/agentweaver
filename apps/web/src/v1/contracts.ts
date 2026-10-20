@@ -27,11 +27,12 @@ export interface CancelProjectRunRequest {
   reason?: string;
 }
 
-/** Durable cancellation receipt returned unchanged on an identical retry. */
+/** Durable cancellation receipt; ended runs are successful no-ops with no new cancellation timestamp. */
 export interface CancelProjectRunResponse {
   runId: string;
-  state: 'cancelled';
-  cancelledAt: string;
+  state: 'cancelled' | 'completed' | 'failed' | 'indeterminate';
+  cancelledAt: string | null;
+  alreadyTerminal: boolean;
 }
 
 /** Problem details returned for failed Gateway requests. */

@@ -696,12 +696,21 @@ public sealed partial class ProjectsConfigService
         ProjectAuthorizationContext caller,
         string projectId,
         string runId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool forCancellation = false)
     {
         caller.RequireScope(ProjectAuthorizationOwner.ApiReadScope);
         caller.RequireScope(ProjectAuthorizationOwner.OrchestratorScope);
         caller.RequireResourceBinding(projectId, runId);
-        if (!await HasCurrentRoleAsync(
+        // Only the cancellation owner route permits project-access roles without run binding.
+        var canCancel = forCancellation && caller.BoundRunId is null &&
+            (await HasCurrentRoleAsync(caller, ProjectAuthorityResourceType.Tenant, caller.TenantId,
+                ProjectAuthorityRole.TenantAdmin, cancellationToken).ConfigureAwait(false) ||
+             await HasCurrentRoleAsync(caller, ProjectAuthorityResourceType.Project, projectId,
+                ProjectAuthorityRole.Owner, cancellationToken).ConfigureAwait(false) ||
+             await HasCurrentRoleAsync(caller, ProjectAuthorityResourceType.Project, projectId,
+                ProjectAuthorityRole.Contributor, cancellationToken).ConfigureAwait(false));
+        if (forCancellation ? !canCancel : !await HasCurrentRoleAsync(
             caller,
             ProjectAuthorityResourceType.Project,
             projectId,

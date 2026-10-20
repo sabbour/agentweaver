@@ -18,7 +18,7 @@ public static partial class CoordinationEndpoints
     /// </summary>
     public static IEndpointRouteBuilder MapCoordinationEndpoints(this IEndpointRouteBuilder app)
     {
-        // Creation accepts an unbound token; start and cancel retain the existing run-bound owner gate.
+        // Create and cancel use unbound project authority; only start uses the run-bound owner gate.
         var runs = app.MapGroup("/api/projects/{projectId}/runs").RequireAuthorization();
         runs.MapPost("", CreateProjectRunAsync)
             .WithMetadata(new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(256 * 1024));
@@ -1891,6 +1891,14 @@ public static partial class CoordinationEndpoints
         }
         catch (CoordinationException exception)
         {
+            // Chat admission is an Orchestrator assignment, not implicit Owner or Contributor authority.
+            if (exception.Code == "project_orchestrator_role_required_acceptRunSelection")
+                return Results.Json(new
+                {
+                    error = exception.Code,
+                    detail = "Creating a chat requires the project Orchestrator role (acceptRunSelection). " +
+                        "Owner or Contributor alone is not sufficient."
+                }, statusCode: exception.StatusCode);
             return Results.Json(new { error = exception.Code }, statusCode: exception.StatusCode);
         }
         catch (Agentweaver.SourceControl.GitWorkspaceException exception)

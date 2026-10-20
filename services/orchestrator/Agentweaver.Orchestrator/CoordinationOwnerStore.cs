@@ -2743,6 +2743,10 @@ internal sealed partial class CoordinationOwnerStore
             outbound.Recipient.RunId != sender.RunId)
             throw new CoordinationException("owner_message_invalid", StatusCodes.Status400BadRequest);
 
+        // Root self-delivery is reserved for the durable first-message retry key.
+        if (outbound.Sender == outbound.Recipient && outbound.IdempotencyKey != $"{sender.RunId}:first")
+            throw new CoordinationException("first_message_invalid", StatusCodes.Status409Conflict);
+
         var persistedOutbound = await ReadOutboundMessageAsync(
             outbound.OwnerMessageId, cancellationToken).ConfigureAwait(false);
         if (!SameOutboundMessage(persistedOutbound, outbound))

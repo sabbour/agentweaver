@@ -239,16 +239,13 @@ public static class CoordinationOwnerMigrator
                 to_regclass(@projectRunRequests) IS NOT NULL,
                 to_regclass(@projectRunCancellations) IS NOT NULL,
                 EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass(@runs)
-                    AND attname = 'cancelled_at' AND attnum > 0 AND NOT attisdropped),
-                to_regclass(@runUpdatedIndex) IS NOT NULL
+                    AND attname = 'cancelled_at' AND attnum > 0 AND NOT attisdropped)
             """, connection);
         command.Parameters.AddWithValue(
             "runListIndex", NpgsqlDbType.Text, $"{schema}.ix_accepted_runs_project_created");
         command.Parameters.AddWithValue("projectRunRequests", NpgsqlDbType.Text, $"{schema}.project_run_requests");
         command.Parameters.AddWithValue(
             "projectRunCancellations", NpgsqlDbType.Text, $"{schema}.project_run_cancellations");
-        command.Parameters.AddWithValue(
-            "runUpdatedIndex", NpgsqlDbType.Text, $"{schema}.ix_accepted_runs_project_updated");
         command.Parameters.AddWithValue("runs", NpgsqlDbType.Text, $"{schema}.accepted_runs");
         command.Parameters.AddWithValue("sessions", NpgsqlDbType.Text, $"{schema}.coordination_sessions");
         command.Parameters.AddWithValue("messages", NpgsqlDbType.Text, $"{schema}.coordination_messages");
@@ -321,7 +318,7 @@ public static class CoordinationOwnerMigrator
             Enumerable.Range(50, 3).Any(column => !reader.GetBoolean(column)) ||
             !reader.GetBoolean(53) || !reader.GetBoolean(54) ||
             !reader.GetBoolean(55) || !reader.GetBoolean(56) ||
-            Enumerable.Range(57, 18).Any(column => !reader.GetBoolean(column)))
+            Enumerable.Range(57, 17).Any(column => !reader.GetBoolean(column)))
             throw new InvalidOperationException(
                 "Orchestrator coordination schema is not current; run the explicit --migrate command.");
     }

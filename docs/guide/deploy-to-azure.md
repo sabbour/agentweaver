@@ -235,9 +235,9 @@ do not redeploy the full foundation to repair these resources.
 Orchestrator migration 023 adds interactive run requests and cancellation
 receipts. The reviewed P1 plan includes that migration and grants
 `SELECT, INSERT, UPDATE` on `project_run_requests` and `SELECT, INSERT` on
-`project_run_cancellations`. These changes produce a new plan hash. Approve
-that exact hash, the migration, and the runtime grants separately before any
-live apply or P1 retry. A source change does not authorize those actions.
+`project_run_cancellations`. Migration 023 changes the execution-state CHECK
+constraint on `accepted_runs`, which scans the whole table. Its ALTERs block
+writes until the transaction commits. Review table size and plan a write pause.
 
 Then review and run the source-bound PostgreSQL initializer:
 

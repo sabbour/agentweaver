@@ -282,10 +282,8 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
                 to_regclass(@projectRunRequests) IS NOT NULL,
                 to_regclass(@projectRunCancellations) IS NOT NULL,
                 (SELECT pg_get_constraintdef(oid) FROM pg_constraint
-                 WHERE conrelid = to_regclass(@runs) AND conname = 'accepted_runs_execution_state_check'),
-                (SELECT pg_get_indexdef(to_regclass(@runUpdatedIndex)))
+                 WHERE conrelid = to_regclass(@runs) AND conname = 'accepted_runs_execution_state_check')
             """, connection);
-        command.Parameters.AddWithValue("runUpdatedIndex", $"{_schema}.ix_accepted_runs_project_updated");
         command.Parameters.AddWithValue("projectRunRequests", $"{_schema}.project_run_requests");
         command.Parameters.AddWithValue("projectRunCancellations", $"{_schema}.project_run_cancellations");
         command.Parameters.AddWithValue("runs", $"{_schema}.accepted_runs");
@@ -333,7 +331,6 @@ public sealed partial class CoordinationOwnerMigrationTests(CoordinationPostgres
         Assert.True(reader.GetBoolean(19));
         Assert.True(reader.GetBoolean(20));
         Assert.Contains("'cancelled'", reader.GetString(21));
-        Assert.Contains("(tenant_id, project_id, updated_at DESC, run_id)", reader.GetString(22));
     }
 
     private async Task<string> ReadMigrationHistoryAsync(int version, bool includePreviouslyUnregistered = true)

@@ -169,7 +169,7 @@ test('Current source catalog preserves exact Core and Events versions and embedd
       assert.deepEqual(allowed[1].split(',').map(Number), versions);
       assert.ok(source.includes("tgtype = 27 AND tgenabled = 'O' AND NOT tgisinternal"));
       assert.equal((source.match(/tgtype = 19/g) ?? []).length, 2);
-      assert.ok(source.includes('Enumerable.Range(57, 18)'));
+      assert.ok(source.includes('Enumerable.Range(57, 17)'));
     } else {
       assert.ok(source.includes('private const int CurrentSchemaVersion = 8;'));
       assert.ok(source.includes('(applied.Contains(8) && !applied.Contains(7))'));

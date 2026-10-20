@@ -150,11 +150,11 @@ runtime role already has table-level UPDATE on `accepted_runs`.
 Version 23 adds durable interactive requests, cancellation receipts,
 `cancelled_at`, and the `cancelled` state. Its runtime grants are
 `SELECT,INSERT,UPDATE` on `project_run_requests` and `SELECT,INSERT` on
-`project_run_cancellations`. The expanded inventory changes the plan hash;
-the migration, grants, and exact new hash each need separate live-apply
-approval. This source change does not authorize initialization or a P1 retry.
+`project_run_cancellations`. Its execution-state CHECK validation scans
+`accepted_runs`, and ALTERs block writes until the migration transaction commits.
+Review the table size and plan a write pause.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
-The plan retains 95 tables and eight exact row-lock columns.
+The plan retains 97 tables and eight exact row-lock columns.
 The plan contains five principal object IDs from the approved target snapshot.
 The initializer does not query Azure to refresh those IDs. Review the plan and
 its hash against the approved deployment before initialization; unresolved

@@ -67,8 +67,27 @@ internal sealed partial class CoordinationOwnerStore
         return row;
     }
 
-    /// <summary>Holds the durable request lock until its root and first-message delivery are acknowledged.</summary>
+    /// <summary>Bounds connection and request-lock ownership, including downstream calls, to thirty seconds.</summary>
     internal async Task<StartProjectRunResponse> StartProjectRunAsync(
+        CoordinationActor actor, string tenantId, string projectId, string runId,
+        Func<ProjectRunRequestRow, CancellationToken, Task> deliverFirstMessage,
+        Func<CancellationToken, Task> revalidateAuthority, CancellationToken cancellationToken)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(30));
+        try
+        {
+            return await StartProjectRunWithinDeadlineAsync(actor, tenantId, projectId, runId,
+                deliverFirstMessage, revalidateAuthority, deadline.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && deadline.IsCancellationRequested)
+        {
+            throw new CoordinationException("run_start_timeout", StatusCodes.Status504GatewayTimeout);
+        }
+    }
+
+    /// <summary>Holds the durable request lock while idempotent admission and delivery finish within the shared deadline.</summary>
+    private async Task<StartProjectRunResponse> StartProjectRunWithinDeadlineAsync(
         CoordinationActor actor, string tenantId, string projectId, string runId,
         Func<ProjectRunRequestRow, CancellationToken, Task> deliverFirstMessage,
         Func<CancellationToken, Task> revalidateAuthority, CancellationToken cancellationToken)
@@ -90,12 +109,12 @@ internal sealed partial class CoordinationOwnerStore
         return new StartProjectRunResponse(runId, row.RootSessionId, "started");
     }
 
-    /// <summary>Cancels a run once, fences every session and persists its replay receipt and owner event atomically.</summary>
+    /// <summary>Cancels project runs atomically; unstarted requests need no root admission or first-message delivery.</summary>
     internal async Task<CancelProjectRunResponse> CancelProjectRunAsync(
         CoordinationActor actor, AuthorizedRunSelection selection, string key, CancelProjectRunRequest request,
-        Func<ProjectRunRequestRow, CancellationToken, Task> acceptPendingRoot,
         Func<CancellationToken, Task> revalidateAuthority, CancellationToken cancellationToken)
     {
+        RequireProjectRunCancellationAuthority(actor, selection);
         if (request.Reason is { Length: > 2048 })
             throw new CoordinationException("cancel_reason_invalid", StatusCodes.Status400BadRequest);
         var projectId = selection.Selection.ProjectId;
@@ -106,14 +125,19 @@ internal sealed partial class CoordinationOwnerStore
         await using var connection = await _dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         var pending = await LockProjectRunRequestAsync(
-            connection, transaction, actor, tenantId, projectId, runId, cancellationToken);
-        if (pending is { State: "awaiting_binding" })
-            await acceptPendingRoot(pending, cancellationToken);
-        var run = await ReadAcceptedRunAsync(
-            connection, transaction, projectId, runId, forUpdate: true, cancellationToken);
-        if (run.TenantId != tenantId || run.SelectionHash != HashSelection(selection.Selection))
+            connection, transaction, actor, tenantId, projectId, runId, cancellationToken, requireCreator: false);
+        await using var exists = new NpgsqlCommand($"""
+            SELECT EXISTS (SELECT 1 FROM {_runs} WHERE project_id = @project AND run_id = @run)
+            """, connection, transaction);
+        AddRunScope(exists, projectId, runId);
+        var run = (bool)(await exists.ExecuteScalarAsync(cancellationToken))!
+            ? await ReadAcceptedRunAsync(connection, transaction, projectId, runId, forUpdate: true, cancellationToken)
+            : null;
+        if (run is null && pending is null)
+            throw new CoordinationException("run_request_not_found", StatusCodes.Status404NotFound);
+        if (run is not null &&
+            (run.TenantId != tenantId || run.SelectionHash != HashSelection(selection.Selection)))
             throw new CoordinationException("accepted_run_conflict", StatusCodes.Status409Conflict);
-        RequireRunOwner(run, actor);
         await using (var replay = new NpgsqlCommand($"""
             SELECT request_fingerprint, result::text FROM {_schema}.project_run_cancellations
             WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run
@@ -136,14 +160,21 @@ internal sealed partial class CoordinationOwnerStore
                 return receipt;
             }
         }
-        if (run.ExecutionState is "completed" or "failed" or "indeterminate" or "cancelled")
-            throw new CoordinationException("run_terminal", StatusCodes.Status409Conflict);
-        var nextFence = checked(run.Fence + 1);
+        var alreadyTerminal = pending?.State == "cancelled" ||
+            run?.ExecutionState is "completed" or "failed" or "indeterminate" or "cancelled";
         // Use the database clock shared by accepted_runs.created_at and its completion constraint.
         await using var clock = new NpgsqlCommand("SELECT clock_timestamp()", connection, transaction);
         var cancelledAt = new DateTimeOffset((DateTime)(await clock.ExecuteScalarAsync(cancellationToken))!);
-        var result = new CancelProjectRunResponse(runId, "cancelled", cancelledAt);
-        await using (var update = new NpgsqlCommand($"""
+        var result = new CancelProjectRunResponse(
+            runId, alreadyTerminal ? run?.ExecutionState ?? "cancelled" : "cancelled",
+            alreadyTerminal ? null : cancelledAt, alreadyTerminal);
+        var operationId = Guid.NewGuid();
+        var nextFence = run is null ? 1 : alreadyTerminal ? run.Fence : checked(run.Fence + 1);
+        if (!alreadyTerminal)
+        {
+            if (run is not null)
+            {
+                await using (var update = new NpgsqlCommand($"""
             UPDATE {_runs}
             SET execution_state = 'cancelled', cancelled_at = @now, completed_at = @now,
                 execution_fence = @fence, state_version = state_version + 1, updated_at = @now
@@ -154,20 +185,21 @@ internal sealed partial class CoordinationOwnerStore
                 turn_boundary_request_version = NULL, turn_boundary_result = NULL
             WHERE project_id = @project AND run_id = @run
             """, connection, transaction))
-        {
-            AddRunScope(update, projectId, runId);
-            update.Parameters.AddWithValue("now", cancelledAt);
-            update.Parameters.AddWithValue("fence", nextFence);
-            await update.ExecuteNonQueryAsync(cancellationToken);
+                {
+                    AddRunScope(update, projectId, runId);
+                    update.Parameters.AddWithValue("now", cancelledAt);
+                    update.Parameters.AddWithValue("fence", nextFence);
+                    await update.ExecuteNonQueryAsync(cancellationToken);
+                }
+                var root = await ReadRootSessionAsync(connection, transaction, projectId, runId, forUpdate: true, cancellationToken)
+                    ?? throw new CoordinationException("run_root_unavailable", StatusCodes.Status503ServiceUnavailable);
+                await AdvanceCurrentDecisionFenceAsync(connection, transaction, actor,
+                    new SessionIdentity(projectId, runId, root.SessionId), selection,
+                    run.Fence, nextFence, operationId, "execution.cancelled", cancellationToken);
+            }
+            if (pending is not null)
+                await SetProjectRunRequestStateAsync(connection, transaction, projectId, runId, "cancelled", cancellationToken);
         }
-        var operationId = Guid.NewGuid();
-        var root = await ReadRootSessionAsync(connection, transaction, projectId, runId, forUpdate: true, cancellationToken)
-            ?? throw new CoordinationException("run_root_unavailable", StatusCodes.Status503ServiceUnavailable);
-        await AdvanceCurrentDecisionFenceAsync(connection, transaction, actor,
-            new SessionIdentity(projectId, runId, root.SessionId), selection,
-            run.Fence, nextFence, operationId, "execution.cancelled", cancellationToken);
-        if (pending is not null)
-            await SetProjectRunRequestStateAsync(connection, transaction, projectId, runId, "cancelled", cancellationToken);
         await using (var save = new NpgsqlCommand($"""
             INSERT INTO {_schema}.project_run_cancellations
                 (tenant_id, project_id, run_id, actor_issuer, actor_subject,
@@ -182,7 +214,8 @@ internal sealed partial class CoordinationOwnerStore
             save.Parameters.AddWithValue("result", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(result, JsonOptions));
             await save.ExecuteNonQueryAsync(cancellationToken);
         }
-        await _outbox.EnqueueAsync(connection, transaction, new OutboxEvent(
+        if (!alreadyTerminal)
+            await _outbox.EnqueueAsync(connection, transaction, new OutboxEvent(
             operationId, $"coordination/{projectId}/{runId}/execution", $"cancel:{keyHash}",
             "orchestrator.run.cancelled", EventVersion,
             JsonSerializer.SerializeToElement(new { result, request.Reason, executionFence = nextFence }, JsonOptions),
@@ -192,10 +225,10 @@ internal sealed partial class CoordinationOwnerStore
         return result;
     }
 
-    /// <summary>Locks request state before accepted-run locks so start and cancel use one lock order.</summary>
+    /// <summary>Locks request state before accepted-run locks; only start is restricted to its creator.</summary>
     private async Task<ProjectRunRequestRow?> LockProjectRunRequestAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, CoordinationActor actor,
-        string tenantId, string projectId, string runId, CancellationToken cancellationToken)
+        string tenantId, string projectId, string runId, CancellationToken cancellationToken, bool requireCreator = true)
     {
         await using var query = new NpgsqlCommand($"""
             SELECT run_id, root_session_id, first_message, workflow_id,
@@ -209,9 +242,27 @@ internal sealed partial class CoordinationOwnerStore
         await using var reader = await query.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
             return null;
-        if (reader.GetString(6) != actor.Issuer || reader.GetString(7) != actor.Subject)
+        if (requireCreator && (reader.GetString(6) != actor.Issuer || reader.GetString(7) != actor.Subject))
             throw new CoordinationException("run_request_permission_denied", StatusCodes.Status403Forbidden);
         return ReadProjectRunRequest(reader);
+    }
+
+    /// <summary>Requires fresh unbound Projects cancellation evidence without impersonating the run creator.</summary>
+    internal static void RequireProjectRunCancellationAuthority(
+        CoordinationActor actor, AuthorizedRunSelection selection)
+    {
+        var authority = selection.Authorization;
+        if (authority.ContractVersion != 1 || authority.Issuer != actor.Issuer ||
+            authority.ActorId != actor.Subject || authority.MembershipRevision < 1 ||
+            string.IsNullOrWhiteSpace(authority.TenantId) || authority.BoundRunId is not null ||
+            authority.BoundProjectId is not null && authority.BoundProjectId != selection.Selection.ProjectId ||
+            authority.EffectiveAuthority.IsDefault ||
+            !authority.EffectiveAuthority.Any(item =>
+                (item.ResourceType == "project" && item.ResourceId == selection.Selection.ProjectId ||
+                 item.ResourceType == "tenant" && item.ResourceId == authority.TenantId) &&
+                !item.Permissions.IsDefault && item.Permissions.Any(permission =>
+                    permission.Permission == "cancelRun" && permission.RoleRevision > 0)))
+            throw new CoordinationException("run_cancel_permission_denied", StatusCodes.Status403Forbidden);
     }
 
     /// <summary>Updates request state within its start or cancellation transaction.</summary>
@@ -261,6 +312,8 @@ internal sealed partial class CoordinationOwnerStore
         NpgsqlConnection connection, NpgsqlTransaction transaction, CoordinationActor actor, string? tenantId,
         SessionIdentity identity, CoordinationMessageRequest request, CancellationToken cancellationToken)
     {
+        if (request.IdempotencyKey != $"{identity.RunId}:first")
+            throw new CoordinationException("first_message_invalid", StatusCodes.Status409Conflict);
         await using var query = new NpgsqlCommand($"""
             SELECT first_message, workflow_id FROM {_schema}.project_run_requests
             WHERE tenant_id = @tenant AND project_id = @project AND run_id = @run

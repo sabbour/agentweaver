@@ -798,8 +798,10 @@ internal static partial class GatewayOpenApi
         ["StartProjectRunResponse"] = Obj(["runId", "rootSessionId", "state"],
             ("runId", Str()), ("rootSessionId", Str()), ("state", Enum("started"))),
         ["CancelProjectRunRequest"] = Obj([], ("reason", new { type = "string", maxLength = 2048 })),
-        ["CancelProjectRunResponse"] = Obj(["runId", "state", "cancelledAt"],
-            ("runId", Str()), ("state", Enum("cancelled")), ("cancelledAt", Str())),
+        // Terminal cancellations are successful no-ops, not conflicts or invented cancellation times.
+        ["CancelProjectRunResponse"] = Obj(["runId", "state", "cancelledAt", "alreadyTerminal"],
+            ("runId", Str()), ("state", Enum("cancelled", "completed", "failed", "indeterminate")),
+            ("cancelledAt", NullableStr()), ("alreadyTerminal", Bool())),
         ["ProposeCoordinatorOutcomeRequest"] = Obj(["expectedStateVersion", "idempotencyKey", "requestId", "specification"],
             ("expectedStateVersion", Int()), ("idempotencyKey", Str()), ("requestId", Str()),
             ("specification", Ref("CoordinatorOutcomeSpecification"))),
