@@ -136,6 +136,9 @@ test('normal CI never instruments tests and only the weekly workflow publishes',
   assert.match(publish.if, /inputs.publish && needs.measure.result == 'success'/);
   assert.deepEqual(publish.permissions, { contents: 'write', issues: 'write' });
   const script = publish.steps.map((step) => step.run ?? '').join('\n');
+  const download = publish.steps.find((step) => step.uses === 'actions/download-artifact@v4');
+  assert.equal(download.with.pattern, 'v1-coverage-${{ github.sha }}-*', 'a publish-only rerun must find the earlier measurement attempt');
+  assert.ok(script.includes('COVERAGE_ARTIFACT=v1-coverage-$GITHUB_SHA-$latest'));
   assert.match(script, /push origin HEAD:refs\/heads\/badges/);
   assert.doesNotMatch(script, /push origin [^\n]*v1\b/);
   assert.equal(publish.steps.at(-1).env.COPILOT_BASE_BRANCH, 'v1');
