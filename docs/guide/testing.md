@@ -209,6 +209,24 @@ doubles, not a browser. These tests check fixture creation, selected surface
 calls, cleanup outcomes, and refusal of unverified ownership claims. They do
 not prove live owner behavior, native model execution, or deployment.
 
+The one-account P1 sign-in launcher also has a real browser regression that
+uses loopback redirects only. Install the Playwright test browser and run it:
+
+```powershell
+npx playwright install chromium
+npm run test:harness:signin-browser
+```
+
+The regression starts Chrome with a fresh empty profile under the ignored
+`scripts/ui-harness/.auth/` directory and deletes it in `finally`. It checks
+that a callback reached through server-side redirects is blocked before the
+Portal document or script loads. It also rejects an invalid callback state.
+It renders Broker consent when that response arrives through a redirect.
+The shared harness tests cover `--surface api,mcp`, separate evidence paths,
+one setup sign-in, and distinct run-bound tokens. These tests do not sign in
+to Entra, use an existing profile or credential cache, or prove live SSO.
+CI runs both the harness contract suite and this browser regression.
+
 The runtime-observation probe also has a focused local test:
 
 ```powershell
