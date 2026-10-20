@@ -152,6 +152,11 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 | `prepareSourceControlMergeIntent` | Request merge approval. |
 | `readSourceControlMergeIntent` | Read a merge intent. |
 | `executeSourceControlMergeIntent` | Execute an approved intent. |
+| `captureSourceControlWorkspaceOutput` | Capture the produced output of a workspace. |
+| `listSourceControlOutputCaptures` | List admitted output captures, newest first. |
+| `readSourceControlOutputCapture` | Read a capture and its file list. |
+| `readSourceControlOutputCaptureDiff` | Read the diff of a capture. |
+| `readSourceControlOutputCaptureFile` | Read one captured file. The tool returns the body as text. |
 
 ### Knowledge
 

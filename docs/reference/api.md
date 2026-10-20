@@ -286,6 +286,9 @@ Gateway prefix:
 These routes require Coordination authority and current Source Control
 selection/pins. Gateway routes require an explicit `X-Agentweaver-Tenant`.
 Merge operations also validate the current merge gate and intent.
+Output-capture reads return only admitted captures. The Gateway forwards the
+`X-Source-Control-Output-Sha256` file header and allows up to 64 MiB for capture
+reads, because a capture can hold a 32 MiB manifest and 16 MiB files.
 
 | Method | Suffix | Purpose | Gateway |
 | --- | --- | --- | --- |
@@ -295,11 +298,11 @@ Merge operations also validate the current merge gate and intent.
 | GET | `/pull-requests/{pullRequestNumber:long}/reviews` | Read reviews. | Yes |
 | POST | `/workspaces` | Prepare pinned repository workspace. | Yes |
 | POST | `/workspaces/{workspaceId}/diff` | Read repository diff. | Yes |
-| POST | `/workspaces/{workspaceId}/output-captures` | Capture verified produced output. | No |
-| GET | `/output-captures` | Read capture page. | No |
-| GET | `/output-captures/{captureId}` | Read capture metadata. | No |
-| GET | `/output-captures/{captureId}/diff` | Read captured diff. | No |
-| GET | `/output-captures/{captureId}/files` | Read exact captured file. | No |
+| POST | `/workspaces/{workspaceId}/output-captures` | Capture verified produced output. | Yes |
+| GET | `/output-captures` | Read capture page. | Yes |
+| GET | `/output-captures/{captureId}` | Read capture metadata. | Yes |
+| GET | `/output-captures/{captureId}/diff` | Read captured diff. | Yes |
+| GET | `/output-captures/{captureId}/files` | Read exact captured file. | Yes |
 | POST | `/merge-intents` | Request approval for merge intent. | Yes |
 | GET | `/merge-intents/{intentId}` | Read merge intent. | Yes |
 | POST | `/merge-intents/{intentId}/execute` | Execute approved intent. | Yes |

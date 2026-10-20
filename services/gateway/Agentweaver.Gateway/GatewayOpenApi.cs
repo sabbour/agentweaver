@@ -48,6 +48,11 @@ internal static partial class GatewayOpenApi
             ["prepareSourceControlMergeIntent"] = C("PrepareSourceControlMergeIntentRequest", "SourceControlMergeApprovalView", "200", "202"),
             ["readSourceControlMergeIntent"] = C(null, "SourceControlMergeIntentView", "200"),
             ["executeSourceControlMergeIntent"] = C(null, "SourceControlMergeExecutionView", "200"),
+        ["captureSourceControlWorkspaceOutput"] = C("PrepareSourceControlWorkspaceRevisionRequest", "SourceControlOutputCaptureSummary", "200", "201"),
+        ["listSourceControlOutputCaptures"] = C(null, "SourceControlOutputCapturePage", "200"),
+        ["readSourceControlOutputCapture"] = C(null, "SourceControlOutputCaptureDetail", "200"),
+        ["readSourceControlOutputCaptureDiff"] = C(null, "SourceControlOutputCaptureDiff", "200"),
+        ["readSourceControlOutputCaptureFile"] = C(null, "SourceControlOutputFileContent", "200"),
             ["acceptRunRoot"] = C("AcceptRootRequest", "AcceptedRoot", "201"),
             ["proposeOutcome"] = C("ProposeCoordinatorOutcomeRequest", "CoordinatorDecisionOperationResponse", "200"),
             ["readRunStatus"] = C(null, "OwnerRunStatus", "200"),
@@ -237,6 +242,8 @@ internal static partial class GatewayOpenApi
                 ? new { description = "The owning service completed the operation without a response body." }
                 : route.IsRunEventStream
                     ? EventStreamResponse()
+                    : route.OperationId == "readSourceControlOutputCaptureFile"
+                    ? OutputFileResponse()
                     : JsonResponse(
                         Ref(contract.ResponseSchema
                             ?? throw new InvalidOperationException(
@@ -280,6 +287,19 @@ internal static partial class GatewayOpenApi
             responses["503"] = ProblemResponse("The marketplace source or skill content store is unavailable.");
             if (route.OperationId == "importMarketplaceSkill")
                 responses["500"] = ProblemResponse("The owner reported a skill content store integrity error.");
+        }
+        else if (route.OperationId is
+            "captureSourceControlWorkspaceOutput" or
+            "listSourceControlOutputCaptures" or
+            "readSourceControlOutputCapture" or
+            "readSourceControlOutputCaptureDiff" or
+            "readSourceControlOutputCaptureFile")
+        {
+            responses["400"] = ProblemResponse("The owner rejected the request, cursor, or file path.");
+            responses["404"] = ProblemResponse(
+                "The owner did not find the capture or file, or withholds captures while the run is failed or indeterminate.");
+            responses["409"] = ProblemResponse("The accepted run selection or owner authority changed during the request.");
+            responses["503"] = ProblemResponse("The capture store is unavailable or failed an integrity check.");
         }
 
         var description =
@@ -384,6 +404,30 @@ internal static partial class GatewayOpenApi
             },
         };
 
+    /// <summary>Describes the raw bytes of one captured file and the digest header that verifies them.</summary>
+    private static object OutputFileResponse() =>
+        new
+        {
+            description =
+                "The exact bytes of the captured file. The digest header holds the lowercase hexadecimal " +
+                "SHA-256 of the body.",
+            headers = new Dictionary<string, object>(StringComparer.Ordinal)
+            {
+                [GatewayRouteCatalog.SourceControlOutputSha256Header] = new
+                {
+                    description = "Lowercase hexadecimal SHA-256 digest of the response body.",
+                    schema = new { type = "string" },
+                },
+            },
+            content = new Dictionary<string, object>
+            {
+                ["application/octet-stream"] = new
+                {
+                    schema = Ref("SourceControlOutputFileContent"),
+                },
+            },
+        };
+
     private static object PathParameterSchema(string constraint) => constraint switch
     {
         "guid" => new { type = "string", format = "uuid" },
@@ -393,10 +437,21 @@ internal static partial class GatewayOpenApi
 
     private static bool IsRequiredQueryParameter(string operationId, string name) =>
         operationId == "removeMarketplaceSource" && name == "expectedRevision" ||
-        operationId == "browseMarketplaceSource" && name == "expectedSourceRevision";
+        operationId == "browseMarketplaceSource" && name == "expectedSourceRevision" ||
+        operationId == "readSourceControlOutputCaptureFile" && name == "path";
 
     private static object QuerySchema(string operationId, string name)
     {
+        if (operationId == "listSourceControlOutputCaptures")
+        {
+            return name switch
+            {
+                "limit" => new { type = "integer", minimum = 1, maximum = 100, @default = 50 },
+                "beforeCapturedAt" => new { type = "string", format = "date-time" },
+                _ => new { type = "string" },
+            };
+        }
+
         if (operationId == "listProjectSkillInventory" && name == "pageSize")
             return new { type = "integer", minimum = 1, maximum = 50, @default = 25 };
 
@@ -652,6 +707,31 @@ internal static partial class GatewayOpenApi
             ("grantReference", NullableRef("ExecutableActionGrantReference"))),
         ["SourceControlMergeExecutionView"] = Obj(["intentId", "state"],
             ("intentId", Str()), ("state", Str()), ("mergeSha", NullableStr()), ("failureCode", NullableStr())),
+        ["SourceControlOutputCaptureSummary"] = Obj(
+            ["captureId", "eventId", "eventPosition", "capturedAt", "workspaceId", "branchName", "baseSha",
+                "outputTreeSha", "manifestSha256", "manifestByteLength", "patchSha256", "patchByteLength",
+                "packageByteLength"],
+            ("captureId", Str()), ("eventId", Uuid()), ("eventPosition", Int()), ("capturedAt", Date()),
+            ("workspaceId", Str()), ("branchName", Str()), ("baseSha", Str()), ("outputTreeSha", Str()),
+            ("manifestSha256", Str()), ("manifestByteLength", Int()), ("patchSha256", Str()),
+            ("patchByteLength", Int()), ("packageByteLength", Int())),
+        ["SourceControlOutputCapturePage"] = Obj(["captures"],
+            ("captures", Arr(Ref("SourceControlOutputCaptureSummary"))),
+            ("nextBeforeCapturedAt", NullableDate()), ("nextBeforeCaptureId", NullableStr())),
+        ["SourceControlOutputFile"] = Obj(["path", "mode", "sha256", "byteLength"],
+            ("path", Str()), ("mode", Str()), ("sha256", Str()), ("byteLength", Int())),
+        ["SourceControlOutputManifest"] = Obj(
+            ["contractVersion", "workspaceId", "runId", "repositoryId", "resourceGeneration",
+                "workspaceIncarnationId", "branchName", "baseSha", "outputTreeSha", "files"],
+            ("contractVersion", Int()), ("workspaceId", Str()), ("runId", Str()), ("repositoryId", Str()),
+            ("resourceGeneration", Int()), ("workspaceIncarnationId", Uuid()), ("branchName", Str()),
+            ("baseSha", Str()), ("outputTreeSha", Str()), ("files", Arr(Ref("SourceControlOutputFile")))),
+        ["SourceControlOutputCaptureDetail"] = Obj(["capture", "manifest"],
+            ("capture", Ref("SourceControlOutputCaptureSummary")),
+            ("manifest", Ref("SourceControlOutputManifest"))),
+        ["SourceControlOutputCaptureDiff"] = Obj(["capture", "patch"],
+            ("capture", Ref("SourceControlOutputCaptureSummary")), ("patch", Str())),
+        ["SourceControlOutputFileContent"] = new { type = "string", format = "binary" },
         ["ProjectProviderOverride"] = Obj(["seam", "providerId"],
             ("seam", ProviderSeamSchema()),
             ("providerId", Str())),
