@@ -155,7 +155,7 @@ test('the Orchestrator host is registered as a prepared service with all project
   assert.deepEqual(fixture.compatibility
     .filter(({ consumer }) => consumer === host.id)
     .map(({ dependency, versions }) => [dependency, versions]), [
-    ['Agentweaver.Identity', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.2.0']],
+    ['Agentweaver.Identity', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.2.0', '1.3.0']],
     ['Agentweaver.Orchestrator.Core', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.1.1']],
     ['Agentweaver.Abstractions', ['0.0.0', '0.1.0', '1.0.0', '1.1.0', '1.1.1']],
     ['Agentweaver.Persistence.Postgres', ['0.0.0', '0.1.0', '1.0.0', '1.0.1', '1.0.2']],
