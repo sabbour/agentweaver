@@ -163,6 +163,24 @@ test('accepts an execution plan without caller-created owner receipts', () => {
   assert.equal(Object.hasOwn(value.pins, 'ownerFences'), false);
 });
 
+test('allows omitted distinct denied actor while retaining validation when one is supplied', () => {
+  const oneAccount = planInput();
+  delete oneAccount.fixturePlan.deniedActor;
+  const validated = validateP1RunnerPlanInput(oneAccount, { now });
+  assert.equal(Object.hasOwn(validated.fixturePlan, 'deniedActor'), false);
+
+  const sameActor = planInput();
+  sameActor.fixturePlan.deniedActor = {
+    actorId: sameActor.environment.actorId,
+    tenantId: sameActor.environment.tenantId,
+  };
+  assert.throws(() => validateP1RunnerPlanInput(sameActor, { now }), /must be different/);
+
+  const malformed = planInput();
+  malformed.fixturePlan.deniedActor = { actorId: 'distinct-actor' };
+  assert.throws(() => validateP1RunnerPlanInput(malformed, { now }), /exactly: actorId, tenantId/);
+});
+
 test('requires a positive expected platform-runtime revision in runner fixture plans', () => {
   const missing = planInput();
   delete missing.fixturePlan.expectedPlatformRuntimeRevision;

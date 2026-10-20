@@ -150,6 +150,20 @@ test('AgentHost preparation rejects archives that change after byte measurement'
   assert.equal(existsSync(path.join(f.outDir, 'provenance.json')), false);
 });
 
+test('AgentHost archive measurement verifies an explicit published source after the checkout moves on', t => {
+  const f = fixture(t);
+  const provenance = f.prepare();
+  const archive = path.join(f.outDir, provenance.artifacts[0].ociArchive.path);
+  const publishedSource = f.git('rev-parse', 'HEAD');
+  writeFileSync(path.join(f.root, 'later.txt'), 'later reviewed change\n');
+  f.git('add', 'later.txt');
+  f.git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'later source');
+  assert.throws(() => measureAgentHostArchiveSync(archive, f.root), /clean-source labels do not match/);
+  const measured = measureAgentHostArchiveSync(archive, f.root, publishedSource);
+  assert.equal(measured.sourceSha, publishedSource);
+  assert.equal(measured.sourceTree, f.git('rev-parse', `${publishedSource}^{tree}`));
+});
+
 test('AgentHost preparation requires every committed dependency lock and retains the existing recipe', t => {
   const f = fixture(t);
   const dockerfile = readFileSync(path.join(f.root, AGENTHOST_DOCKERFILE), 'utf8');

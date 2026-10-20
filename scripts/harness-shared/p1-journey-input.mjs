@@ -206,9 +206,11 @@ function validatePlan(input, { environment, pins }) {
   }
   const plan = input.fixturePlan;
   if (!isRecord(plan)) throw new Error('An explicit runner fixture plan is required.');
-  requireExactKeys(plan,
-    ['expectedPlatformRuntimeRevision', 'selectionContext', 'deniedActor', 'gate', 'message'],
-    'runner fixture plan');
+  const fixturePlanKeys = [
+    'expectedPlatformRuntimeRevision', 'selectionContext', 'gate', 'message',
+    ...(Object.hasOwn(plan, 'deniedActor') ? ['deniedActor'] : []),
+  ];
+  requireExactKeys(plan, fixturePlanKeys, 'runner fixture plan');
   if (!Number.isSafeInteger(plan.expectedPlatformRuntimeRevision)
     || plan.expectedPlatformRuntimeRevision < 1) {
     throw new Error('A positive expected platform runtime revision is required in the runner fixture plan.');
@@ -227,12 +229,14 @@ function validatePlan(input, { environment, pins }) {
     throw new Error('The run selection context contains an invalid reference or requirement.');
   }
 
-  const deniedActor = plan.deniedActor;
-  requireExactKeys(deniedActor, ['actorId', 'tenantId'], 'denied actor');
-  requireString(deniedActor.actorId, 'denied actor ID');
-  requireString(deniedActor.tenantId, 'denied actor tenant ID');
-  if (deniedActor.actorId === environment.actorId && deniedActor.tenantId === environment.tenantId) {
-    throw new Error('The denied actor must be different from the selected P1 actor.');
+  if (Object.hasOwn(plan, 'deniedActor')) {
+    const deniedActor = plan.deniedActor;
+    requireExactKeys(deniedActor, ['actorId', 'tenantId'], 'denied actor');
+    requireString(deniedActor.actorId, 'denied actor ID');
+    requireString(deniedActor.tenantId, 'denied actor tenant ID');
+    if (deniedActor.actorId === environment.actorId && deniedActor.tenantId === environment.tenantId) {
+      throw new Error('The denied actor must be different from the selected P1 actor.');
+    }
   }
 
   if (input.journey.startsWith('gate-')) {
