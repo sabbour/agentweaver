@@ -21,8 +21,8 @@ public static class ProjectUsageEndpoints
         return ProjectMetricsRange.Parse(query["from"].SingleOrDefault(), query["to"].SingleOrDefault(), null, now);
     }
 
-    /// <summary>Authorizes the requested project and narrows ledger rows for run-bound callers.</summary>
-    private static async Task<IResult> ReadAsync(
+    /// <summary>Returns stable query failures, then authorizes and narrows reads for run-bound callers.</summary>
+    internal static async Task<IResult> ReadAsync(
         string projectId, HttpContext context, ProjectsAuthorizationContextClient projects,
         ProjectUsageReadStore store, IConfiguration configuration, TimeProvider timeProvider,
         CancellationToken cancellationToken)
@@ -41,9 +41,10 @@ public static class ProjectUsageEndpoints
         {
             return Results.Problem(statusCode: (int)exception.StatusCode, title: exception.Code);
         }
-        catch (ArgumentException exception)
+        catch (ArgumentException)
         {
-            return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: exception.Message);
+            return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "query_invalid",
+                extensions: new Dictionary<string, object?> { ["code"] = "query_invalid" });
         }
     }
 }

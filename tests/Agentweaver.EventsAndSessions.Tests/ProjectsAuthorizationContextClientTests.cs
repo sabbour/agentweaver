@@ -15,6 +15,52 @@ public sealed class ProjectsAuthorizationContextClientTests
     private const string Audience = "agentweaver.projects";
     private const string ActorId = "33333333-3333-3333-3333-333333333333";
 
+    /// <summary>Forwards the original project-read token and tenant to the fixed Projects authority endpoint.</summary>
+    [Fact]
+    public async Task ProjectReadForwardsCallerTokenAndTenantToProjects()
+    {
+        var owner = ValidContext() with
+        {
+            EffectiveAuthority = [new("project", "project-1", [new("readProjects", 1)])]
+        };
+        var handler = new CaptureHandler(_ => Success(owner));
+        var context = CreateRequestContext();
+        ((ClaimsIdentity)context.User.Identity!).AddClaims([new("aud", "events"), new("scope", "api.read")]);
+
+        var result = await CreateClient(handler).GetProjectReadAsync(context, "project-1", "events", default);
+
+        Assert.Equal(new Uri("https://projects.internal/api/authorization/context"), handler.RequestUri);
+        Assert.Equal(HttpMethod.Get, handler.Method);
+        Assert.Equal("current-caller-token", handler.BearerToken);
+        Assert.Equal("tenant-1", handler.TenantSelector);
+        Assert.Equal("run-1", result.BoundRunId);
+    }
+
+    /// <summary>Fails closed without retrying when Projects cannot provide fresh read authority.</summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProjectReadFailsClosedWhenProjectsIsUnavailable(bool transportFailure)
+    {
+        var calls = 0;
+        var handler = new CaptureHandler(_ =>
+        {
+            calls++;
+            return transportFailure
+                ? throw new HttpRequestException("Projects is unavailable.")
+                : new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+        });
+        var context = CreateRequestContext();
+        ((ClaimsIdentity)context.User.Identity!).AddClaims([new("aud", "events"), new("scope", "api.read")]);
+
+        var exception = await Assert.ThrowsAsync<ProjectsAuthorizationContextException>(
+            () => CreateClient(handler).GetProjectReadAsync(context, "project-1", "events", default));
+
+        Assert.Equal(HttpStatusCode.BadGateway, exception.StatusCode);
+        Assert.Equal("projects_authorization_unavailable", exception.Code);
+        Assert.Equal(1, calls);
+    }
+
     /// <summary>Rechecks project permission on every call rather than caching a previously granted read.</summary>
     [Fact]
     public async Task ProjectReadObservesRevokedAuthorityOnNextCall()

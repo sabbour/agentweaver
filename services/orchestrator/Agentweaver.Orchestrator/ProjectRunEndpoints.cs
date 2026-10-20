@@ -22,23 +22,25 @@ public static class ProjectRunEndpoints
         return app;
     }
 
-    /// <summary>Reads bounded UTC project metrics without caching or changing owner state.</summary>
-    private static Task<IResult> ReadMetricsAsync(
+    /// <summary>Returns stable query failures and reads bounded, uncached UTC project metrics.</summary>
+    internal static Task<IResult> ReadMetricsAsync(
         string projectId, HttpContext context, ProjectsRunSelectionClient projects,
         ProjectRunReadStore store, TimeProvider timeProvider, CancellationToken cancellationToken) =>
         CoordinationEndpoints.ExecuteAsync(async () =>
         {
             context.Response.Headers.CacheControl = "no-store";
-            var query = ReadSingleValuedQuery(context.Request.Query, new(["from", "to", "bucket"], StringComparer.Ordinal));
             ProjectMetricsRange range;
             try
             {
+                var query = ReadSingleValuedQuery(context.Request.Query, new(["from", "to", "bucket"], StringComparer.Ordinal));
                 range = ProjectMetricsRange.Parse(query.GetValueOrDefault("from"), query.GetValueOrDefault("to"),
                     query.GetValueOrDefault("bucket"), timeProvider.GetUtcNow());
             }
-            catch (ArgumentException)
+            catch (Exception exception) when (exception is ArgumentException ||
+                exception is CoordinationException { Code: "query_invalid" })
             {
-                throw new CoordinationException("query_invalid", StatusCodes.Status400BadRequest);
+                return Results.Problem(statusCode: StatusCodes.Status400BadRequest, title: "query_invalid",
+                    extensions: new Dictionary<string, object?> { ["code"] = "query_invalid" });
             }
             var authority = await projects.ReadProjectReadAuthorityAsync(context, projectId, cancellationToken);
             return Results.Ok(await store.ReadMetricsAsync(

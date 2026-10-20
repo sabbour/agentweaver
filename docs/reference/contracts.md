@@ -111,19 +111,13 @@ defaults to the last 30 days and cannot exceed 92 days. Only metrics accepts
 `bucket=day`. Both owners validate fresh project read authority, return
 `Cache-Control: no-store`, and narrow run-bound tokens to their own run.
 OpenAPI defines strict response objects and query schemas. Invalid or repeated
-query values return `400`.
+query values return a `400` problem response with `title` and `code` set to
+`query_invalid`, without exception text.
 
 Usage measurements remain nullable when source data is missing. Cost subtotals
 are grouped by unit and disposition; consumers must not add different units
 or treat unpriced usage as zero. The read path does not invoke pricing or
-budgeting. Events migration 009 adds the project/time ledger index through the
-separately approved migration path. Existing ledger `SELECT` grants cover
-these reads.
-
-The source-only P1 PostgreSQL plan records Events versions 001 through 009
-and includes them in its review hash. The initializer rejects a plan that
-omits migration 009. Updating these source checks does not authorize running
-the initializer or applying the index.
+budgeting.
 
 The `Agentweaver.Gateway` source exposes a finite, versioned client API at
 `/api/v1`. The service is a source candidate; these mappings do not confirm a

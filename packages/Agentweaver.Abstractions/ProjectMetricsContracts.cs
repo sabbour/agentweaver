@@ -6,12 +6,14 @@ namespace Agentweaver.Abstractions;
 public sealed record ProjectMetricsRange(DateTimeOffset From, DateTimeOffset To)
 {
     /// <summary>Parses ISO dates or timestamps with explicit offsets; defaults to the preceding 30 days.</summary>
-    /// <exception cref="ArgumentException">The range or daily bucket is invalid, reversed, or exceeds 92 days.</exception>
+    /// <exception cref="ArgumentException">The range or bucket is invalid, outside supported dates, reversed, or exceeds 92 days.</exception>
     public static ProjectMetricsRange Parse(string? from, string? to, string? bucket, DateTimeOffset now)
     {
         if (bucket is not null && bucket != "day")
             throw new ArgumentException("query_invalid");
         var end = to is null ? now.ToUniversalTime() : ReadDate(to);
+        if (from is null && end < DateTimeOffset.MinValue.AddDays(30))
+            throw new ArgumentException("query_invalid");
         var start = from is null ? end.AddDays(-30) : ReadDate(from);
         if (start > end || end - start > TimeSpan.FromDays(92))
             throw new ArgumentException("query_invalid");

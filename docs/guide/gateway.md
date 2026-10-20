@@ -166,8 +166,8 @@ keys return `400`.
 
 Both routes require `api.read`, the owning service and Projects audiences,
 and current project or tenant read permission. Run-bound callers see only
-their own run. Responses use `Cache-Control: no-store`. No live database
-changes occur during a read.
+their own run. Responses use `Cache-Control: no-store`. Reads do not change
+stored data.
 
 Read the [metrics definitions](../reference/api.md#project-metrics-and-usage)
 before comparing v1 with the 0.x dashboard. Run success uses completed runs,
@@ -175,10 +175,6 @@ not agent dependencies. Usage retains unknown values and separate cost units.
 These routes do not price usage or change budgets. Cross-project overview
 is out of scope.
 
-Before deploying this source, obtain separate approval for Events migration
-009, which adds the project/time usage index. G2's Orchestrator migration 022
-must also be present. The existing Events ledger read grant is sufficient;
-these routes do not introduce a new grant.
 ## Review project casting
 
 Casting routes use the Projects & Config owner. The Gateway forwards the

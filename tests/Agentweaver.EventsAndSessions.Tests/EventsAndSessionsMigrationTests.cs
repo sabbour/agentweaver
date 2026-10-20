@@ -45,6 +45,30 @@ public sealed partial class EventsAndSessionsMigrationTests : IAsyncLifetime
         Assert.Contains("(tenant_id, project_id, occurred_at)", (string)(await index.ExecuteScalarAsync())!);
     }
 
+    /// <summary>Records migration 009 without rebuilding an index already present under its expected name.</summary>
+    [Fact]
+    public async Task ProjectUsageMigrationToleratesPrebuiltIndex()
+    {
+        await EventsAndSessionsMigrator.MigrateAsync(_fixture.DataSource, _schema);
+        await using var connection = await _fixture.DataSource.OpenConnectionAsync();
+        await using var index = new NpgsqlCommand("""
+            SELECT oid FROM pg_class WHERE relnamespace = @schema::regnamespace
+                AND relname = 'ix_usage_ledger_project_occurred'
+            """, connection);
+        index.Parameters.AddWithValue("schema", _schema);
+        var originalIndex = await index.ExecuteScalarAsync();
+        Assert.NotNull(originalIndex);
+        await using (var reset = new NpgsqlCommand($"""
+            DELETE FROM "{_schema}".sessions_schema_migrations WHERE version = 9
+            """, connection))
+            await reset.ExecuteNonQueryAsync();
+
+        await EventsAndSessionsMigrator.MigrateAsync(_fixture.DataSource, _schema);
+        await EventsAndSessionsMigrator.VerifyAsync(_fixture.DataSource, _schema);
+
+        Assert.Equal(originalIndex, await index.ExecuteScalarAsync());
+    }
+
     /// <summary>Preserves legacy facts while adding the current usage and project reporting migrations.</summary>
     [Fact]
     public async Task LegacyProjectFactsAtVersionTwoUpgradesWithoutReapplyingFactsMigration()

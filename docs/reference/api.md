@@ -364,7 +364,9 @@ When `from` is omitted, it defaults to 30 days before `to`. An interval can
 span at most 92 days. Equal bounds are valid and return no interval activity.
 Only metrics accepts `bucket`; its only value is `day`. Unknown or repeated
 query parameters, invalid dates, reversed bounds, and unsupported buckets
-return `400 query_invalid`.
+return a `400` problem response with `title` and `code` set to `query_invalid`.
+The response does not include exception text. A default start date earlier
+than the supported date range is also invalid.
 
 Metrics returns `projectId`, normalized `from` and `to`, the counts below,
 and `series`. Current state and lifetime counts are not limited by the date
@@ -387,8 +389,7 @@ series. A run created before the interval can contribute to its completion
 count. Terminal rows without `completed_at` do not contribute to completion
 metrics.
 
-These definitions map to the controls in 0.x
-`apps/web/src/pages/DashboardPage.tsx:839-1062` on `dev`. v1 uses persisted
+These definitions map to the 0.x dashboard controls. v1 uses persisted
 owner data, not Application Insights, and cannot reproduce historic 0.x
 telemetry. v1 run success is `succeededRuns / completedRuns`; display it as
 unknown when the denominator is zero. 0.x used per-agent dependency success,
@@ -413,19 +414,11 @@ Disposition is `estimate`, `reconciled`, or `unpriced`. Never sum across
 units. An unpriced amount remains `null`, including a missing unit.
 `unpricedRequestCount` sums request counts on unpriced rows; it is `null`
 when any such row has an unknown request count, and zero when no rows are
-unpriced. Reads do not price, reprice, reserve, or change budgets (#1924 and
-#1926).
+unpriced. Reads do not price, reprice, reserve, or change budgets.
 
 Cross-project overview is out of scope. The Gateway proxies each owner; it
 does not combine metrics and usage into one response. Clients that need
 aligned intervals should pass the same explicit bounds to both routes.
-
-Events migration `009_project_usage_index.sql` adds
-`usage_ledger (tenant_id, project_id, occurred_at)`. Applying it to a live
-database requires separate approval. Existing service grant definitions
-already include `SELECT` on `usage_ledger`; no new grant is required.
-G2's Orchestrator migration 022 remains a prerequisite for `completed_at`.
-Neither migration is applied by these read endpoints.
 
 ### Coordination
 
