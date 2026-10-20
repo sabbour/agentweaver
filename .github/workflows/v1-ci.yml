@@ -461,10 +461,15 @@ jobs:
       - name: Test project issue-to-merge workflow
         if: ${{ !cancelled() }}
         run: node --test .github/extensions/agentweaver-issue-to-merge/workflow.test.mjs
+      - name: Record coverage attempt
+        if: ${{ !cancelled() && env.COLLECT_COVERAGE == 'true' }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: node scripts/coverage/attempts.mjs record artifacts/coverage/node node
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && env.COLLECT_COVERAGE == 'true' }}
         with:
-          name: v1-node-coverage
+          name: v1-node-coverage-${{ github.run_attempt }}
           path: artifacts/coverage/node/
           if-no-files-found: error
           retention-days: 30
@@ -513,10 +518,15 @@ jobs:
           path: apps/web/dist/
           if-no-files-found: error
           retention-days: 1
+      - name: Record coverage attempt
+        if: ${{ !cancelled() && env.COLLECT_COVERAGE == 'true' }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: node scripts/coverage/attempts.mjs record artifacts/coverage/web web
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() && env.COLLECT_COVERAGE == 'true' }}
         with:
-          name: v1-web-coverage
+          name: v1-web-coverage-${{ github.run_attempt }}
           path: artifacts/coverage/web/
           if-no-files-found: error
           retention-days: 30
@@ -591,10 +601,16 @@ jobs:
         env:
           TEST_SUITE: ${{ matrix.name }}
         run: node scripts/ci/v1-test-plan.mjs run "$TEST_SUITE"
+      - name: Record test attempt
+        if: ${{ !cancelled() }}
+        env:
+          JOB_STATUS: ${{ job.status }}
+          TEST_SUITE: ${{ matrix.name }}
+        run: node scripts/coverage/attempts.mjs record "artifacts/coverage/dotnet/$TEST_SUITE" "$TEST_SUITE"
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: v1-dotnet-${{ matrix.name }}
+          name: v1-dotnet-${{ matrix.name }}-${{ github.run_attempt }}
           path: artifacts/coverage/dotnet/${{ matrix.name }}/
           if-no-files-found: error
           retention-days: 30
@@ -612,31 +628,29 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      # A failed-jobs rerun leaves one artifact per attempt for each rerun suite.
+      # Keep only the newest attempt of each suite, and fail unless it passed.
       - uses: actions/download-artifact@v4
         with:
           pattern: v1-dotnet-*
           path: artifacts/downloads/
-      - name: Restore suite directory layout
-        run: |
-          mkdir -p artifacts/coverage/dotnet
-          for suite in artifacts/downloads/v1-dotnet-*; do
-            mv "$suite" "artifacts/coverage/dotnet/${suite##*/v1-dotnet-}"
-          done
       - uses: actions/download-artifact@v4
         with:
-          name: v1-node-coverage
-          path: artifacts/coverage/node/
+          pattern: v1-node-coverage-*
+          path: artifacts/downloads/
       - uses: actions/download-artifact@v4
         with:
-          name: v1-web-coverage
-          path: artifacts/coverage/web/
+          pattern: v1-web-coverage-*
+          path: artifacts/downloads/
+      - name: Select the newest attempt of each suite
+        run: node scripts/coverage/attempts.mjs select artifacts/downloads artifacts/coverage
       - name: Combine coverage without rerunning tests
         run: node scripts/coverage/dotnet.mjs --combine
       - name: Record coverage candidate
         env:
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          node --input-type=module -e 'import fs from "node:fs"; fs.writeFileSync("artifacts/coverage/source.json", JSON.stringify({ testedSourceSha: process.env.GITHUB_SHA, headSha: process.env.PR_HEAD_SHA, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT }, null, 2) + "\n");'
+          node --input-type=module -e 'import fs from "node:fs"; fs.writeFileSync("artifacts/coverage/source.json", JSON.stringify({ testedSourceSha: process.env.GITHUB_SHA, headSha: process.env.PR_HEAD_SHA, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT, suiteAttempts: Object.fromEntries(Object.entries(JSON.parse(fs.readFileSync("artifacts/coverage/attempts.json", "utf8")).suites).map(([suite, { attempt }]) => [suite, attempt])) }, null, 2) + "\n");'
       - name: Publish coverage summary
         run: |
           {

@@ -149,6 +149,18 @@ must pass. The coverage job merges the .NET shard reports without rerunning
 tests and uploads the source-bound `v1-coverage-<sha>-<attempt>` artifact,
 which is kept for 30 days.
 
+Every suite artifact is bound to the run attempt that produced it. Each .NET
+shard and the Node and Web coverage jobs write `attempt.json` (suite, run
+attempt, and job status) and upload `<artifact>-<attempt>`, for example
+`v1-dotnet-identity-broker-2-2`. **Re-run failed jobs** keeps the artifacts of
+jobs that passed, so a rerun has one artifact per attempt for each rerun suite.
+Before combining, `scripts/coverage/attempts.mjs select` keeps only the newest
+attempt of each suite. It fails if that attempt has no marker, a marker from
+another suite or attempt, or a job status other than `success`. The selected
+attempt of each suite is recorded in `attempts.json` and in the `suiteAttempts`
+field of `source.json`. Data from a failed attempt therefore never enters the
+combined report.
+
 GitHub runs scheduled workflows only from the default branch, which is `dev`.
 A `dev` copy of `v1-coverage.yml` runs every Monday at 05:00 UTC and
 dispatches the real workflow on `refs/heads/v1` with `publish=true`. To
