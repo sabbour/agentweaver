@@ -119,6 +119,37 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task StartRetryAfterLostDeliveryResultResendsTheSameFirstMessageOnce()
+    {
+        var row = await Create("resend", new CreateProjectRunRequest("Resend me", 1));
+        var selection = Selection(row.RunId);
+        var identity = new SessionIdentity(Project, row.RunId, row.RootSessionId);
+        var ownerMessageIds = new List<string>();
+        async Task Deliver(CoordinationOwnerStore.ProjectRunRequestRow pending, CancellationToken token)
+        {
+            await _store.AcceptRootAsync(_actor, selection, pending.RootSessionId, token);
+            var sent = await _store.SendMessageAsync(_actor, identity,
+                FirstMessage(pending, row.RunId, pending.FirstMessage, pending.WorkflowId), token);
+            ownerMessageIds.Add(sent.OwnerMessageId);
+        }
+
+        // The message commits, but the caller loses the result, so the request stays unstarted.
+        await Assert.ThrowsAsync<HttpRequestException>(() => Start(row.RunId, async (pending, token) =>
+        {
+            await Deliver(pending, token);
+            throw new HttpRequestException("Lost response after delivery.");
+        }));
+        Assert.Equal(1L, await CountAsync("coordination_messages"));
+
+        var started = await Start(row.RunId, Deliver);
+        Assert.Equal("started", started.State);
+        Assert.Equal(2, ownerMessageIds.Count);
+        Assert.Equal(ownerMessageIds[0], ownerMessageIds[1]);
+        Assert.Equal(1L, await CountAsync("coordination_messages"));
+        Assert.Equal(1L, await CountAsync("outbox_events"));
+    }
+
+    [Fact]
     public async Task SelfAddressedMessageMustMatchThePersistedFirstMessage()
     {
         var row = await Create("forge", new CreateProjectRunRequest("Persisted", 1));

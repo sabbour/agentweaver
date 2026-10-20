@@ -151,8 +151,9 @@ Version 23 adds durable interactive requests, cancellation receipts,
 `cancelled_at`, and the `cancelled` state. Its runtime grants are
 `SELECT,INSERT,UPDATE` on `project_run_requests` and `SELECT,INSERT` on
 `project_run_cancellations`. Its execution-state CHECK validation scans
-`accepted_runs`, and ALTERs block writes until the migration transaction commits.
-Review the table size and plan a write pause.
+`accepted_runs`. Its `ACCESS EXCLUSIVE` lock blocks reads and writes to `accepted_runs`
+until the migration transaction commits. It doesn't alter `sessions` or build indexes on
+existing tables. Review the table size and plan a write pause.
 Events requires versions 1 through 8 and preserves the earlier version-2 layout.
 The plan retains 97 tables and eight exact row-lock columns.
 The plan contains five principal object IDs from the approved target snapshot.

@@ -1,7 +1,11 @@
 -- Durable interactive requests retain their identity across browser rebinding and retries.
--- The accepted_runs ADD/DROP CHECK constraint scans the whole table and its ALTERs
--- block writes until this transaction commits. Review table size and schedule a write
--- pause before applying. This migration does not ALTER sessions or build indexes.
+-- Write blocking: the accepted_runs ALTER (ADD COLUMN cancelled_at, then DROP and re-ADD
+-- accepted_runs_execution_state_check) takes an ACCESS EXCLUSIVE lock and validates the new
+-- CHECK with a full-table scan. Reads and writes to accepted_runs block until this transaction
+-- commits; review the table size and schedule a write pause before applying.
+-- sessions: no ALTER; the cancelled lifecycle state already exists (migration 004).
+-- Indexes: none are built on existing tables. Only the primary-key and unique indexes of the
+-- two new, empty tables are created.
 CREATE TABLE {schema}.project_run_requests (
     tenant_id varchar(256) NOT NULL,
     project_id varchar(256) NOT NULL,
