@@ -1,0 +1,33 @@
+name: v1 coverage
+
+# GitHub runs `schedule` triggers and registers `workflow_dispatch` workflows only
+# from the default branch. This dev copy owns the weekly schedule and forwards
+# every run to the real v1-coverage.yml on refs/heads/v1, which measures the v1
+# suites, publishes badges, and updates the Copilot coverage-improvement issue.
+on:
+  schedule:
+    # Every Monday at 05:00 UTC, matching dev's weekly coverage baseline.
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish badges and update the Copilot coverage-improvement issue
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  dispatch-v1:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch the v1 coverage workflow on refs/heads/v1
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Scheduled runs always publish; manual dev runs forward the chosen input.
+          PUBLISH: ${{ github.event_name == 'schedule' || inputs.publish }}
+        run: |
+          gh workflow run v1-coverage.yml --repo "$GITHUB_REPOSITORY" --ref v1 -f publish="$PUBLISH"
+          echo "Dispatched v1-coverage.yml on v1 with publish=$PUBLISH." >> "$GITHUB_STEP_SUMMARY"
