@@ -102,18 +102,23 @@ export function summarizeP1SourceEvidence(sourceEvidence, pins) {
 export function validateP1AdapterBindings({ api, deniedApi, mcp, ui }, environment, fixtureScope, surface) {
   const origin = new URL(environment.baseUrl).origin;
   const deniedIdentity = fixtureScope.deniedActor;
-  if (!api || !deniedApi || surface === 'mcp' && !mcp || surface === 'ui' && !ui) {
-    throw new P1BlockedError('The API, denied-actor API, and selected-surface adapters are required.');
+  if (!api || deniedIdentity && !deniedApi || !deniedIdentity && deniedApi
+    || surface === 'mcp' && !mcp || surface === 'ui' && !ui) {
+    throw new P1BlockedError(deniedIdentity
+      ? 'The API, planned denied-actor API, and selected-surface adapters are required.'
+      : 'The API and selected-surface adapters are required; no denied-actor adapter is allowed without a planned actor.');
   }
   if (api.target?.origin !== origin || api.tenantId !== environment.tenantId
     || api.authProvider?.origin !== origin || api.authProvider.issuer !== environment.issuer
     || api.authProvider.audience !== environment.audience || api.authProvider.actorId !== environment.actorId) {
     throw new P1BlockedError('The API client is not bound to the selected Environment origin, tenant, and actor.');
   }
-  if (deniedApi.target?.origin !== origin || deniedApi.tenantId !== deniedIdentity?.tenantId
+  if (deniedIdentity && (
+    deniedApi.target?.origin !== origin || deniedApi.tenantId !== deniedIdentity.tenantId
     || deniedApi.authProvider?.origin !== origin || deniedApi.authProvider.issuer !== environment.issuer
     || deniedApi.authProvider.audience !== environment.audience
-    || deniedApi.authProvider.actorId !== deniedIdentity?.actorId) {
+    || deniedApi.authProvider.actorId !== deniedIdentity.actorId
+  )) {
     throw new P1BlockedError('The denied-actor API client is not bound to its selected Environment identity.');
   }
   if (surface === 'mcp' && (mcp.target?.origin !== origin || mcp.target.pathname !== '/mcp'

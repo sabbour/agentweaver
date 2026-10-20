@@ -517,6 +517,38 @@ test('P1 API journal journey checks a real denied-actor 403 and correlated Gatew
   }
 });
 
+test('one-account P1 journal records the missing denied-actor check as blocked and continues', async () => {
+  const fixture = await host();
+  try {
+    const journeyInput = input(fixture.baseUrl);
+    delete journeyInput.pins.fixtureScope.deniedActor;
+    fixture.deniedApi = undefined;
+    const result = await runP1ApiJourney(journeyInput, {
+      ...fixture,
+      deniedApi: undefined,
+      mcp: undefined,
+      sourceEvidence: SOURCE_EVIDENCE,
+      clock: CLOCK,
+    });
+
+    const deniedStep = result.steps.find(step => step.id === 'valid-denied-actor-403');
+    assert.deepEqual(deniedStep, {
+      id: 'valid-denied-actor-403',
+      status: 'blocked',
+      reason: 'Distinct authorized-but-denied actor unavailable: fixturePlan.deniedActor not provided (no second Broker account available)',
+    });
+    assert.equal(result.steps.find(step => step.id === 'current-owner-fences')?.status, 'passed');
+    assert.equal(result.steps.find(step => step.id === 'committed-run-journal')?.status, 'passed');
+    assert.equal(result.surfaceStatus, 'blocked');
+    assert.equal(result.fullP1Status, 'blocked');
+    assert.notEqual(result.fullP1Status, 'passed');
+    assert.ok(fixture.requests.some(request =>
+      request.method === 'GET' && request.url.startsWith('/api/v1/projects/controlled-project/runs/controlled-run/events')));
+  } finally {
+    await fixture.close();
+  }
+});
+
 test('P1 API journal follows the discovered cursor chain across Gateway pages', async () => {
   const secondEvent = {
     ...eventPage().events[0],

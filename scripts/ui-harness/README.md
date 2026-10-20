@@ -92,38 +92,24 @@ cursor pages and Activity view. It does not use MCP replay as UI evidence.
 Gate-answer, approval, rejection, and addressed-message journeys use the
 borrowed page and verify the actual owner response.
 
-The shared CLI creates and verifies an invocation-owned project, grants,
-selection, and sessions before it supplies those receipts to the selected
-surface. It rejects caller-supplied `ownerFences` and `fixtureScope` claims.
-Cleanup revokes setup grants and archives the project only when no run
-selection was accepted; otherwise it reports `retainedPending` and preserves
-the active grants.
-
-Use the same `executionIntent: "execute"` manifest and four
-`deploymentEvidence` paths documented by the API harness. Set
-`AGENTWEAVER_P1_SETUP_TOKEN` in the process environment and provide
-`--identity-module <authorized-identity-provider.mjs>` returning already-issued
-run-bound and denied-actor tokens. The required `--page-module` must return an
-already-authorized page on the selected Environment web origin. The runner
-does not start a browser, sign in, refresh credentials, or request consent.
-Credentials and the page provider are used only after source and deployment
-evidence passes.
-
-UI writes use an application-generated idempotency key that cannot be restored
-by the harness after a process crash. Before a UI gate or message action, the
-runner appends a `p1-ui-action-started` record to the evidence file. If it finds
-that marker on a later invocation, it refuses to replay the action; reconcile
-the current owner state before starting a new run. Read-only UI journal
-journeys do not use this marker.
+The shared P1 CLI currently returns a blocked result for the UI surface:
+**blocked on #1859** until the 0.x UI is restored onto v1. Do not build
+selectors against the current `apps/web/src/v1/App.tsx` pages or use a
+`--page-module` as a workaround. No UI page provider is supplied by the
+one-account sign-in launcher.
 
 ```powershell
-npm run harness:p1 -- --surface ui --input <manifest.json> --output <evidence.jsonl> --identity-module <authorized-identity-provider.mjs> --page-module <authorized-page-provider.mjs>
+npm run harness:p1:signin-run -- --surface ui --input <manifest.json> --output <evidence.jsonl>
 ```
 
-Surface results are reported separately from full P1 acceptance. Full P1 stays
-blocked until required native probes have real evidence. Controlled UI and
-runner tests do not start a browser or prove a deployed Gateway, Broker, owner,
-native execution, or AKS acceptance.
+The UI blocker is returned before a browser is opened or sign-in is attempted.
+When UI work resumes under #1859, add a page provider against the restored
+surface and its explicit contract tests. The launcher uses one account only;
+distinct denied-actor coverage is unavailable in this one-account operator
+flow. A lower-level runner can retain that check only when a separate actor
+credential is independently available; never substitute the signed-in actor
+or alter access. The Host-caller probe-provider gap remains blocked, and
+missing native probes continue to block full P1 acceptance.
 
 The required `fixturePlan.expectedPlatformRuntimeRevision` is a positive
 expected value passed through the existing run-selection request and verified
