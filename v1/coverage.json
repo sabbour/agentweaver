@@ -1,0 +1,135 @@
+{
+  "sha": "5ccd0c69ce01dbb8c762392b24abcbeb252b6313",
+  "ref": "sabbour-v1-coverage-verify",
+  "runUrl": "https://github.com/sabbour/agentweaver/actions/runs/39449240042",
+  "artifact": "v1-coverage-5ccd0c69ce01dbb8c762392b24abcbeb252b6313-1",
+  "measuredAt": "2026-10-20T15:44:47.935Z",
+  "surfaces": {
+    "dotnet": {
+      "covered": 104913,
+      "total": 126543,
+      "pct": 82.9,
+      "gaps": [
+        {
+          "name": "Agentweaver.AgentHost: Agentweaver.AgentHost.BuildTestOutputCollectorProgram",
+          "covered": 0,
+          "total": 674,
+          "pct": 0,
+          "missed": 674
+        },
+        {
+          "name": "Agentweaver.Projects.Config: Agentweaver.Projects.Config.SkillMarketplaceEndpoints",
+          "covered": 0,
+          "total": 334,
+          "pct": 0,
+          "missed": 334
+        },
+        {
+          "name": "Agentweaver.Knowledge: Agentweaver.Knowledge.CosmosMemoryDocumentStore",
+          "covered": 0,
+          "total": 265,
+          "pct": 0,
+          "missed": 265
+        },
+        {
+          "name": "Agentweaver.Projects.Config: Program",
+          "covered": 0,
+          "total": 195,
+          "pct": 0,
+          "missed": 195
+        },
+        {
+          "name": "Agentweaver.Knowledge: Program",
+          "covered": 0,
+          "total": 183,
+          "pct": 0,
+          "missed": 183
+        }
+      ]
+    },
+    "web": {
+      "covered": 2189,
+      "total": 2892,
+      "pct": 75.6,
+      "gaps": [
+        {
+          "name": "apps/web/src/v1/contracts.ts",
+          "covered": 15,
+          "total": 30,
+          "pct": 50,
+          "missed": 15
+        },
+        {
+          "name": "apps/web/src/v1/App.tsx",
+          "covered": 876,
+          "total": 1238,
+          "pct": 70.7,
+          "missed": 362
+        },
+        {
+          "name": "apps/web/src/v1/api.ts",
+          "covered": 113,
+          "total": 158,
+          "pct": 71.5,
+          "missed": 45
+        },
+        {
+          "name": "apps/web/src/v1/SkillsMarketplacePanel.tsx",
+          "covered": 342,
+          "total": 477,
+          "pct": 71.6,
+          "missed": 135
+        },
+        {
+          "name": "apps/web/src/v1/CopilotUserConnectionPanel.tsx",
+          "covered": 190,
+          "total": 242,
+          "pct": 78.5,
+          "missed": 52
+        }
+      ]
+    },
+    "node": {
+      "covered": 8944,
+      "total": 10119,
+      "pct": 88.3,
+      "gaps": [
+        {
+          "name": "scripts/release/merge-packs.mjs",
+          "covered": 186,
+          "total": 244,
+          "pct": 76.2,
+          "missed": 58
+        },
+        {
+          "name": "scripts/release/plan.mjs",
+          "covered": 170,
+          "total": 209,
+          "pct": 81.3,
+          "missed": 39
+        },
+        {
+          "name": "scripts/release/publication-selection.mjs",
+          "covered": 59,
+          "total": 72,
+          "pct": 81.9,
+          "missed": 13
+        },
+        {
+          "name": "scripts/release/publish.mjs",
+          "covered": 661,
+          "total": 796,
+          "pct": 83,
+          "missed": 135
+        },
+        {
+          "name": "scripts/release/kustomize-runtime.mjs",
+          "covered": 59,
+          "total": 71,
+          "pct": 83,
+          "missed": 12
+        }
+      ]
+    }
+  }
+}
