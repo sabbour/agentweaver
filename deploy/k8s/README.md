@@ -134,8 +134,12 @@ acceptance probe remain separate overlays.
 4. Apply the Identity Broker migration Job after its migration identity,
    connection ConfigMap, and approved immutable Broker image are ready, and
    before the release bootstrap. Wait for the Job to complete and apply the
-   required runtime grants. Broker startup checks the schema; it does not run
-   migrations.
+   required runtime grants. The overlay binds migration egress to
+   `agentweaver-pg.postgres.database.azure.com` on DNS and TCP 5432, matching
+   the root runtime policy. For another approved database host, update the
+   overlay patch before applying it; do not apply an unresolved
+   `CHANGEME-POSTGRES-HOST` template. Broker startup checks the schema; it does
+   not run migrations.
 
    ```powershell
    kubectl apply -k deploy\k8s\migrations\identity-broker

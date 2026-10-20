@@ -5,3 +5,16 @@ resources:
   - serviceaccount.yaml
   - job.yaml
   - egress.yaml
+patches:
+  - target:
+      group: cilium.io
+      version: v2
+      kind: CiliumNetworkPolicy
+      name: identity-broker-migration-egress
+    patch: |-
+      - op: replace
+        path: /spec/egress/0/toPorts/0/rules/dns/1/matchName
+        value: agentweaver-pg.postgres.database.azure.com
+      - op: replace
+        path: /spec/egress/2/toFQDNs/0/matchName
+        value: agentweaver-pg.postgres.database.azure.com

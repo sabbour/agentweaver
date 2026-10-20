@@ -55,12 +55,14 @@ Run these commands from the repository root:
 
    ```powershell
    kubectl kustomize deploy\k8s\base
+   kubectl kustomize deploy\k8s\migrations\identity-broker
    kubectl kustomize deploy\k8s\acceptance\foundation-probe
    ```
 
 The commands must complete without validation errors. They do not contact
 Azure, apply SQL, create identities, execute an operator bootstrap, or prove a
-running service.
+running service. Confirm the migration egress policy renders the approved
+PostgreSQL FQDN and TCP 5432 rule without a `CHANGEME` host.
 
 The Identity runtime-table compatibility tests use disposable PostgreSQL
 principals. They check the source-defined grants for compare-and-swap updates

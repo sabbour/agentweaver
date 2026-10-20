@@ -220,6 +220,12 @@ Gateway. Identity Broker has exact DNS and endpoint rules for its Projects,
 Orchestrator, and Environment owner calls. Orchestrator and Environment also
 allow Broker ingress on TCP 8443 for those requests.
 
+The separate Identity Broker migration Job uses its own Cilium policy. Its
+Kustomize overlay resolves both the DNS rule and PostgreSQL TCP 5432 rule to
+`agentweaver-pg.postgres.database.azure.com`, matching the root runtime policy.
+This source binding does not prove that the live policy is accepted or that the
+database is reachable.
+
 The Foundation Probe Job has a dedicated workload identity. It exercises Key
 Vault, Blob, PostgreSQL, and telemetry without redeeming through the Identity
 broker. A separate read-only consumer checks the completed Job and pod. It

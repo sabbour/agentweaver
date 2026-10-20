@@ -339,8 +339,11 @@ identities, operator-owned TLS resources, and runtime values are ready:
 
 2. Apply the Identity Broker migration overlay after its migration identity,
    connection ConfigMap, and approved immutable Broker image are ready. Wait
-   for the Job to complete, then verify the runtime database grants. The Broker
-   runtime checks its schema at startup and does not run migrations.
+   for the Job to complete, then verify the runtime database grants. Confirm
+   the rendered migration egress policy names
+   `agentweaver-pg.postgres.database.azure.com` for DNS and TCP 5432; update
+   its reviewed Kustomize patch first if the approved database host differs.
+   The Broker runtime checks its schema at startup and does not run migrations.
 
 ```powershell
 kubectl kustomize deploy\k8s\migrations\identity-broker

@@ -42,6 +42,9 @@ and the canonical explicit table grants as the migration owner. Initial
 bootstrap success alone does not prove post-migration runtime access.
 Read-only bootstrap verification checks the table grants without repairing
 them. See [Broker database permissions](../reference/runtime-configuration#identity-broker-migration-history-and-grants).
+Its separate Kustomize overlay resolves migration DNS and TCP 5432 egress to
+the exact `agentweaver-pg.postgres.database.azure.com` host; the guarded root
+release apply does not include that Job or policy.
 
 ## Understand the Azure foundation
 
