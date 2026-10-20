@@ -119,3 +119,33 @@ test('rejects unlisted image output rather than copying it into the publisher in
     'releases/foundation.json', f.packages, f.images, f.combined, { root: f.root },
   ), /artifact directory contains missing or unlisted images files/);
 });
+
+test('rejects source changes before reading release packs', t => {
+  const f = fixture(t);
+  writeFileSync(path.join(f.root, 'releases', 'foundation.json'), 'changed');
+
+  assert.throws(() => mergePacks(
+    'releases/foundation.json', f.packages, f.images, f.combined, { root: f.root },
+  ), /working tree must be clean before merging release packs/);
+});
+
+test('rejects overlapping artifact directories without copying files', t => {
+  const f = fixture(t);
+  const combined = path.join(f.packages, 'combined');
+
+  assert.throws(() => mergePacks(
+    'releases/foundation.json', f.packages, f.images, combined, { root: f.root },
+  ), /package, image, and combined artifact directories must not overlap/);
+  assert.equal(readFileSync(path.join(f.packages, 'Pkg.0.1.0.nupkg'), 'utf8'), 'Pkg library');
+});
+
+test('rejects an existing nonempty combined directory without replacing its contents', t => {
+  const f = fixture(t);
+  mkdirSync(f.combined, { recursive: true });
+  writeFileSync(path.join(f.combined, 'keep.txt'), 'existing output');
+
+  assert.throws(() => mergePacks(
+    'releases/foundation.json', f.packages, f.images, f.combined, { root: f.root },
+  ), /expected a fresh, empty combined artifact directory/);
+  assert.equal(readFileSync(path.join(f.combined, 'keep.txt'), 'utf8'), 'existing output');
+});

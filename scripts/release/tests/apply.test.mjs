@@ -141,6 +141,41 @@ test('publication package selection includes bumped packages and excludes bumped
   ] }), /does not match the current manifest/);
 });
 
+test('publication package selection rejects incomplete, duplicate, and unknown component data', () => {
+  const manifest = manifestBase();
+
+  assert.throws(() => selectPublicationPackageComponents(null, { components: [] }),
+    /expected manifest components and a verified version plan/);
+  assert.throws(() => selectPublicationPackageComponents(manifest, null),
+    /expected manifest components and a verified version plan/);
+  assert.throws(() => selectPublicationPackageComponents({
+    components: [...manifest.components, manifest.components[0]],
+  }, { components: [] }), /manifest component IDs must be unique/);
+  assert.throws(() => selectPublicationPackageComponents(manifest, { components: [
+    { id: 'Missing', toVersion: '1.0.0' },
+  ] }), /does not match the current manifest for Missing/);
+  assert.throws(() => selectPublicationPackageComponents(manifest, { components: [
+    { id: 'Pkg.A', toVersion: '0.1.0' },
+    { id: 'Pkg.A', toVersion: '0.1.0' },
+  ] }), /does not match the current manifest for Pkg.A/);
+  assert.throws(() => selectPublicationPackageComponents(manifest, { components: [
+    { id: 'Pkg.A', toVersion: 1 },
+  ] }), /does not match the current manifest for Pkg.A/);
+});
+
+test('version-source selection rejects unsupported events and incomplete source revisions', () => {
+  const sha = 'a'.repeat(40);
+
+  assert.throws(() => resolveVersionApplicationSourceSha('.', {
+    eventName: 'push', testedSourceSha: 'short', baseSha: sha,
+  }), /expected full tested-source and comparison-base commit SHAs/);
+  assert.throws(() => resolveVersionApplicationSourceSha('.', {
+    eventName: 'pull_request', testedSourceSha: sha, baseSha: sha,
+  }), /publication requires a v1 push or workflow_dispatch event/);
+  assert.throws(() => readPublicationPackageComponents('.', sha, '../foundation.json'),
+    /expected a repository-relative release composition path/);
+});
+
 test('records the initial baseline without a bump, then plans later published changes with normal semver', (t) => {
   const dir = initRepo(t, { initialBaseline: true, changeset: false });
   const manifest = readManifest(dir);
