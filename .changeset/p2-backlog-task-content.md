@@ -1,4 +1,7 @@
 ---
+"Agentweaver.Gateway": minor
+"Agentweaver.Orchestrator.Core": minor
+"Agentweaver.Orchestrator": minor
 ---
 
 Capture and edit project backlog task titles, descriptions, open or closed
