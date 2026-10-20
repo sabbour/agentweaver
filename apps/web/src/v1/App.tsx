@@ -12,8 +12,18 @@ import {
   AddRegular,
   ArrowClockwiseRegular,
   Brain24Regular,
+  Branch24Regular,
   Chat24Regular,
+  Code24Regular,
+  Delete24Regular,
   Flowchart24Regular,
+  History24Regular,
+  People24Regular,
+  PlugConnected24Regular,
+  PuzzlePiece24Regular,
+  Settings24Regular,
+  Sparkle24Regular,
+  Wrench24Regular,
 } from '@fluentui/react-icons';
 import { agentweaverLightTheme } from '../theme';
 import { PageSection } from '../components/ui/PageSection';
@@ -39,7 +49,7 @@ import {
   useParams,
   useSearchParams,
 } from 'react-router-dom';
-import type { FormEvent } from 'react';
+import type { FormEvent, ReactElement } from 'react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { AuthProvider, useAuth } from './AuthContext';
 import { ConsentScreen } from './ConsentScreen';
@@ -96,6 +106,21 @@ import { AgentsView } from './AgentsView';
 import { accessSummary, permissionsForProject, useAuthorizationContext, useProjectConfiguration, useProjectSummary } from './projectData';
 import { useBrowserRunList } from './runListData';
 import { CONFIGURATION_SECTIONS, SETTINGS_SECTIONS, settingsSection } from './settingsSections';
+import type { SettingsSection } from './settingsSections';
+
+/** 0.x settings rail icons; v1-only sections use icons from the same Fluent set. */
+const SETTINGS_SECTION_ICONS: Record<SettingsSection, ReactElement> = {
+  general: <Settings24Regular />,
+  access: <People24Regular />,
+  repository: <Branch24Regular />,
+  models: <Sparkle24Regular />,
+  components: <PuzzlePiece24Regular />,
+  limits: <Wrench24Regular />,
+  connections: <PlugConnected24Regular />,
+  history: <History24Regular />,
+  danger: <Delete24Regular />,
+  advanced: <Code24Regular />,
+};
 import { AccessSection, DangerZoneSection, GeneralSection, RepositoryFields, RunLimitsFields } from './ProjectSettingsSections';
 
 /** Checks that a callback or response still refers to the selected project/run pair. */
@@ -805,7 +830,9 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
             <Link key={item.key} to={`${base}?section=${item.key}`}
               className={item.key === 'danger' ? 'v1-settings-rail__danger' : undefined}
               aria-current={item.key === section ? 'page' : undefined}>
-              {item.label}
+              <span className="v1-settings-rail__icon" aria-hidden="true">{SETTINGS_SECTION_ICONS[item.key]}</span>
+              <span>{item.label}</span>
+              {item.key === 'danger' && <Badge appearance="tint" color="danger" size="small">Risk</Badge>}
             </Link>
           ))}
         </nav>

@@ -85,8 +85,9 @@ surface. It does not approve that work.
 | Run settings | Model, revisions, and allowed implementations per platform component. | None | — |
 | Agents | 0.x metrics row, filter, tiles, and a drawer with Overview and Charter. Charter edits save a configuration revision. | G4 | #1913 reviewed casting |
 | Cast a team | Old link explains the gap. | G4 | #1913 |
-| Skills | Marketplace sources, browse, preview, import, inventory, and assignment. | G9 | #1916, #1912 |
-| Memories | Run and agent pickers, kind tabs (All, Memories, Decisions, Proposals, Session context), search, revisions, and transfer. | G10 | #1911 |
+| Skills | 0.x stat strip, **Import skill** and **Browse marketplaces** dialogs, and **Catalog** and **Assignments** tabs. Marketplace sources, browse, preview, import, inventory, and assignment. | G9 | #1916, #1912 |
+| Memories | Run and agent pickers, kind tabs (All, Memories, Decisions, Proposals, Session context), search, revisions, and transfer. The 0.x count strip is not shown: counts for each kind need project knowledge. | G10 | #1911 |
+| Settings rail | 0.x section icons and the **Risk** badge on **Danger zone**. | None | — |
 | Settings > General | Rename with the project revision. | None | — |
 | Settings > Access | Your permissions. **Members** lists role assignments for a tenant administrator or project owner. Only a tenant administrator sees **Add member** and **Remove**. | Role-assignment API, [#2156](https://github.com/sabbour/agentweaver/pull/2156) | — |
 | Settings > Repository | Repository owner, name, and sign-in method. | None | — |

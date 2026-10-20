@@ -114,10 +114,18 @@
 }
 
 .v1-settings-rail a {
+  display: flex;
+  align-items: center;
+  gap: var(--spacingHorizontalS);
   padding: var(--spacingVerticalS) var(--spacingHorizontalM);
   border-radius: var(--borderRadiusMedium);
   color: var(--colorNeutralForeground2);
   text-decoration: none;
+}
+
+.v1-settings-rail__icon {
+  display: flex;
+  flex-shrink: 0;
 }
 
 .v1-settings-rail a:hover {
@@ -137,6 +145,11 @@
 
 .v1-settings-rail a.v1-settings-rail__danger {
   color: var(--colorPaletteRedForeground1);
+}
+
+.v1-settings-rail a.v1-settings-rail__danger:hover {
+  color: var(--colorPaletteRedForeground1);
+  background: var(--colorPaletteRedBackground1);
 }
 
 .v1-permission-list {
@@ -624,3 +637,9 @@
 .v1-implementation-list { margin: 0; padding-inline-start: var(--spacingHorizontalL); display: grid; gap: var(--spacingVerticalXS); }
 .v1-composer { gap: var(--spacingVerticalS); }
 .v1-visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* Wide 0.x dialog for multi-step Skills flows (marketplace browse, local import). */
+.v1-dialog-surface--wide {
+  width: min(960px, 92vw);
+  max-width: min(960px, 92vw);
+}

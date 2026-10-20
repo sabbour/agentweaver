@@ -209,7 +209,8 @@ or a cached authorization decision.
 **Project settings** has a section rail: **General**, **Access**,
 **Repository**, **Models**, **Platform components**, **Run limits**,
 **Connections**, **History**, **Danger zone**, and **Advanced**. The `section`
-query selects a section. An unknown value opens **General**.
+query selects a section. An unknown value opens **General**. Each rail entry
+has the 0.x section icon, and **Danger zone** has a **Risk** badge.
 
 - **General** renames the project.
 - **Access** shows your permissions in this project and a **Members** panel.
@@ -260,6 +261,13 @@ current form.
 The project's **Skills** destination can manage public marketplace sources,
 browse pinned source revisions, preview and import Skills, and assign imported
 revisions to agents in the current project cast.
+
+The page keeps the 0.x layout. A stat strip shows **Assigned**, **Enabled**,
+**Marketplace sources**, and **Agents**. The toolbar has **Import skill** and
+**Browse marketplaces**; each opens a dialog. The **Catalog** tab lists the
+imported skill inventory. The **Assignments** tab lists project assignments
+and assigns a skill to agents. After an import, the page opens
+**Assignments**.
 
 Project settings links to Skills. Skill assignment uses the current
 configuration revision, and the owner rejects stale updates. Skills does not

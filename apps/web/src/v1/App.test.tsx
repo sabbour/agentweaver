@@ -1582,6 +1582,22 @@ describe('v1 web project scoping', () => {
     await screen.findByText('Project Three');
   });
 
+  it('shows the 0.x settings rail with section icons and a Risk badge on Danger zone', async () => {
+    mocks.getProjectConfiguration.mockResolvedValue(projectConfiguration('p1', 2));
+    window.history.replaceState({}, '', '/projects/p1/settings?section=advanced');
+    render(<App />);
+
+    const rail = await screen.findByRole('navigation', { name: 'Settings sections' });
+    const links = within(rail).getAllByRole('link');
+    expect(links.length).toBeGreaterThan(0);
+    for (const link of links) {
+      expect(link.querySelector('.v1-settings-rail__icon svg')).not.toBeNull();
+    }
+    expect(within(rail).getByRole('link', { name: 'Advanced' }).getAttribute('aria-current')).toBe('page');
+    const danger = within(rail).getByRole('link', { name: /Danger zone/ });
+    expect(within(danger).getByText('Risk')).toBeTruthy();
+  });
+
   it('does not show or save an old project configuration after navigation', async () => {
     const oldProjectLoad = deferred<ReturnType<typeof projectConfiguration>>();
     mocks.getProjectConfiguration.mockImplementation((_token: string, projectId: string) =>
@@ -1671,18 +1687,20 @@ describe('v1 web project scoping', () => {
 
     render(<App />);
 
-    await screen.findByRole('heading', { name: 'Skills and marketplace' });
-    await screen.findByRole('heading', { name: 'Skills and marketplace' });
+    await screen.findByRole('tab', { name: 'Catalog' });
     await waitFor(() => expect(mocks.listMarketplaceSources).toHaveBeenCalledWith(
       'broker-token',
       'p1',
       'tenant-1',
     ));
-    fireEvent.click(screen.getByRole('button', { name: 'Browse skills' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Browse marketplaces' }));
+    // happy-dom loses Tabster's modal focus when the busy button disables, so it marks the
+    // dialog aria-hidden. Chromium keeps it exposed; `hidden: true` keeps these role queries.
+    fireEvent.click(await screen.findByRole('button', { name: 'Browse skills', hidden: true }));
     await screen.findByText('0123456789abcdef');
-    fireEvent.click(screen.getByRole('button', { name: 'Preview Sample skill' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview Sample skill', hidden: true }));
     await screen.findByLabelText('Marketplace skill preview');
-    fireEvent.click(screen.getByRole('button', { name: 'Import selected source skill' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Import selected source skill', hidden: true }));
     await screen.findByText(/The Skills owner imported Sample skill at revision 2/);
 
     expect(mocks.previewMarketplaceSkillContent).toHaveBeenCalledWith(
@@ -1759,16 +1777,19 @@ describe('v1 web project scoping', () => {
     mocks.updateSkillAssignment.mockReturnValue(pendingAssignment.promise);
     render(<App />);
 
-    await screen.findByRole('heading', { name: 'Skills and marketplace' });
+    await screen.findByRole('tab', { name: 'Catalog' });
     expect(screen.queryByLabelText('Typed ProjectConfiguration JSON')).toBeNull();
-    fireEvent.change(screen.getByLabelText('Skill folder or files'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Import skill' }));
+    fireEvent.change(await screen.findByLabelText('Skill folder or files'), {
       target: { files: [new File(['# Sample skill'], 'SKILL.md', { type: 'text/markdown' })] },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Validate skill files' }));
+    // See the marketplace test: happy-dom can mark the open dialog aria-hidden.
+    fireEvent.click(screen.getByRole('button', { name: 'Validate skill files', hidden: true }));
     await screen.findByText('sha256:sample');
-    fireEvent.click(screen.getByRole('button', { name: 'Import skill to project' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Import skill to project', hidden: true }));
     await screen.findByText(/The Skills owner imported Sample skill at revision 1/);
-    fireEvent.click(screen.getByRole('checkbox', { name: 'Agent One' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close', hidden: true }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Agent One' }));
     fireEvent.click(screen.getByRole('button', { name: 'Assign to selected agents' }));
     await waitFor(() => expect(mocks.updateSkillAssignment).toHaveBeenCalledOnce());
 
