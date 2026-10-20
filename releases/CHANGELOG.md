@@ -2,6 +2,21 @@
 
 Applied component version changes, newest first.
 
+## 2026-10-20T01:51:31.753Z — source `cbb8a12d0243839106a19a71a804f2240ac27dfe`
+
+- `Agentweaver.AgentHost`: 1.0.2 -> 1.0.3 (patch) — .changeset/owner-egress-ca-trust.md
+- `Agentweaver.Environment`: 1.1.3 -> 1.1.4 (patch) — .changeset/owner-egress-ca-trust.md
+- `Agentweaver.EventsAndSessions`: 1.1.2 -> 1.1.3 (patch) — .changeset/owner-egress-ca-trust.md
+- `Agentweaver.Gateway`: 1.1.1 -> 1.1.2 (patch) — .changeset/owner-egress-ca-trust.md
+- `Agentweaver.Identity`: 1.2.0 -> 1.3.0 (minor) — .changeset/owner-egress-ca-trust.md
+- `Agentweaver.Identity.Broker`: 1.1.3 -> 1.1.4 (patch) — .changeset/owner-egress-ca-trust.md, .changeset/silent-sign-in-2118.md
+- `Agentweaver.Knowledge`: 1.0.3 -> 1.0.4 (patch) — .changeset/owner-egress-ca-trust.md
+- `Agentweaver.Mcp`: 1.0.2 -> 1.0.3 (patch) — .changeset/owner-egress-ca-trust.md
+- `Agentweaver.Orchestrator`: 1.1.1 -> 1.1.2 (patch) — .changeset/owner-egress-ca-trust.md
+- `Agentweaver.Projects.Config`: 1.1.1 -> 1.1.2 (patch) — .changeset/first-tenant-admin-bootstrap.md, .changeset/owner-egress-ca-trust.md
+- `Agentweaver.Providers.Sandbox.AgentSandbox`: 1.1.3 -> 1.1.4 (patch) — .changeset/owner-egress-ca-trust.md
+- `Agentweaver.Web`: 1.0.4 -> 1.0.5 (patch) — .changeset/silent-sign-in-2118.md
+
 ## 2026-10-19T18:34:01.409Z — source `520d351d5584eb616de4635ca4702b2e0e6dc511`
 
 - `Agentweaver.Identity.Broker`: 1.1.2 -> 1.1.3 (patch) — .changeset/broker-root-redirect.md, .changeset/identity-broker-shared-listener.md
