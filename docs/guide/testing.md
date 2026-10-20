@@ -99,11 +99,9 @@ contexts or cookies. NuGet caches are keyed by SDK/project/lock inputs.
 Chromium caches are keyed by OS, architecture and Broker package lock; the
 installer still runs on cache hits to install required Linux libraries.
 
-PR test invocations do not collect coverage. Pushes to `v1` and manual
-dispatches run full coverage, instrumenting the same single test pass per
-suite. The coverage job merges downloaded .NET shard reports without rerunning
-tests, checks the expected production assemblies, and uploads the existing
-source-bound `v1-coverage-*` artifact with Web and Node reports. Local
+Pull request, push, and manual `v1 foundation CI` runs never collect
+coverage. Coverage is a separate weekly measurement; see
+[Measure v1 coverage weekly](#measure-v1-coverage-weekly). Local
 `npm run coverage:dotnet` retains its full sequential diagnostic behavior.
 Only superseded runs for the same PR are cancelled; pushes and manual runs
 have independent concurrency groups.
@@ -133,6 +131,68 @@ runs, a median total duration of at most 20 minutes and a longest Broker shard
 of at most 8 minutes. Record run URLs, cache warmth and runner/queue caveats
 on the tracking issue before closing it; configuration changes alone do not
 prove those timing targets.
+
+## Measure v1 coverage weekly
+
+The `v1 coverage` workflow (`.github/workflows/v1-coverage.yml`) measures
+coverage once a week. It calls `v1-ci.yml` with `collect_coverage: true`, so
+the same test jobs run with instrumentation, and the same `foundation` gate
+must pass. The coverage job merges the .NET shard reports without rerunning
+tests and uploads the source-bound `v1-coverage-<sha>-<attempt>` artifact,
+which is kept for 30 days.
+
+GitHub runs scheduled workflows only from the default branch, which is `dev`.
+A `dev` copy of `v1-coverage.yml` runs every Monday at 05:00 UTC and
+dispatches the real workflow on `refs/heads/v1` with `publish=true`. To
+validate coverage collection by hand, run the workflow on a branch:
+
+```powershell
+gh workflow run v1-coverage.yml --ref <branch>
+gh workflow run v1-coverage.yml --ref <branch> -f publish=true
+```
+
+The first command only measures. The second also publishes. Publishing from
+a branch other than `v1` replaces the current badges until the next weekly
+run, so publish only to verify the publication path.
+
+Each surface reports its own line coverage. The value is covered executable
+lines divided by coverable lines in that surface's instrumented scope:
+
+| Surface | Scope | Source report |
+| --- | --- | --- |
+| .NET | Production assemblies in the combined suite reports | ReportGenerator `Summary.json` |
+| Web | `apps/web/src/v1` source files | Vitest `coverage-summary.json` |
+| Node release tooling | `scripts/release/*.mjs` | Node test LCOV, merged per line |
+
+The surfaces are not combined, because one overall value would be dominated
+by .NET and hide the smaller surfaces. Values are rounded down to one decimal
+place.
+
+When a run publishes, `scripts/ci/v1-coverage-report.mjs`:
+
+1. Writes one shields.io endpoint document per surface, plus `coverage.json`
+   and `coverage.md`, to `v1/` on the `badges` branch. The README badges read
+   these documents and link to `coverage.md`, which records the source SHA,
+   run, and artifact. Only a run that passes the `foundation` gate publishes,
+   and the artifact's tested SHA must match the run's SHA. The workflow never
+   pushes to `v1`.
+1. Creates or updates one open issue labeled `area:testing` that starts with
+   the `agentweaver:v1-coverage-improvement` marker. The issue lists the
+   measured values, the five largest gaps for each surface (classes or files
+   with at least 10 uncovered lines), and acceptance criteria. If an open
+   marker issue exists, the run updates it instead of creating another.
+1. Assigns the issue to the Copilot coding agent with a `v1` base branch, then
+   reads the issue back to confirm the assignment. If Copilot is already
+   assigned, the run leaves the assignment unchanged.
+
+`GITHUB_TOKEN` can't assign Copilot. As a one-time setup, an administrator
+adds a repository secret named `COPILOT_ASSIGN_TOKEN` that holds a user
+token: a fine-grained personal access token with read access to metadata and
+read and write access to actions, contents, issues, and pull requests, or a
+classic token with the `repo` scope. If the secret is missing, the run still
+creates or updates the issue, logs a warning, and comments on the issue that
+Copilot was not assigned. If the secret is present but assignment fails, the
+job fails.
 
 ## Run focused database checks
 

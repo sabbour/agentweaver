@@ -171,12 +171,16 @@ the pinned native runtime and isolated native prompt-capacity tests.
 .NET projects run concurrently, with four deterministic method shards for
 Broker and verified per-shard TRX receipts. NuGet and Chromium caches avoid
 repeated downloads, without caching mutable databases or browser contexts.
-PRs run without coverage; pushes and manual runs collect it in the same
-single test invocation and combine reports without a second pass.
+PR, push, and manual CI runs never collect coverage. The weekly
+`v1-coverage.yml` workflow reuses the same jobs with instrumentation, combines
+the reports without a second pass, and publishes separate .NET, Web, and Node
+line-coverage badges plus one Copilot coverage-improvement issue.
 The [testing guide](../guide/testing.md#understand-v1-pull-request-ci)
 describes path dependencies, cache invalidation, retained skip behavior and
-the measured performance acceptance criteria. Controlled journeys are not
-automatic deployed acceptance.
+the measured performance acceptance criteria. Its
+[coverage section](../guide/testing.md#measure-v1-coverage-weekly) covers the
+schedule, denominators, and one-time Copilot token setup. Controlled journeys
+are not automatic deployed acceptance.
 
 `v1-docs-ci.yml` builds VitePress, checks links and source coverage, and
 validates diagram provenance and readability. On a `v1` push it stages a

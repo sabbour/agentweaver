@@ -74,7 +74,9 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   assert.equal(jobs.dotnet.strategy['fail-fast'], false);
   assert.match(parsed.concurrency['cancel-in-progress'], /pull_request/);
   assert.match(parsed.concurrency.group, /github.run_id/);
-  assert.match(parsed.env.COLLECT_COVERAGE, /!= 'pull_request'/);
+  assert.equal(parsed.env.COLLECT_COVERAGE, '${{ inputs.collect_coverage == true }}');
+  assert.equal(parsed.on.workflow_call.inputs.collect_coverage.default, false);
+  assert.equal(parsed.on.workflow_dispatch, null);
   assert.ok(jobs.images.steps.some((step) => step.name === 'Run pinned native prompt-capacity tests in an isolated AMD64 container'));
   assert.ok(jobs.node.steps.some((step) => step.name === 'Validate release composition'));
   assert.match(jobs.node.steps.find((step) => step.name === 'Validate release composition').run,
@@ -90,7 +92,8 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   assert.ok(jobs.dotnet.steps.some((step) => step.with?.path === '~/.cache/ms-playwright'));
   assert.ok(jobs.dotnet.steps.some((step) => step.if === 'matrix.shard > 0' &&
     step.run === 'npm ci --prefix apps/web --no-audit --no-fund'));
-  assert.match(jobs.coverage.if, /!= 'pull_request'/);
+  assert.match(jobs.coverage.if, /inputs.collect_coverage == true/);
+  assert.doesNotMatch(workflow, /github.event_name != 'pull_request'/);
   assert.ok(jobs.coverage.steps.some((step) => step.run === 'node scripts/coverage/dotnet.mjs --combine'));
 });
 
@@ -112,8 +115,8 @@ test('Broker fixture keeps one PostgreSQL container, lazy shared driver and test
 test('the real foundation gate rejects failures, cancellation and unexpected skips while accepting scoped PRs', async () => {
   const { parse } = await import('yaml');
   const gate = parse(workflow).jobs.foundation.steps[0].run.match(/-e '([\s\S]*)'\s*$/)[1];
-  function execute(results, event = 'pull_request') {
-    return runInNewContext(gate, { process: { env: { RESULTS: JSON.stringify(results), EVENT_NAME: event } } });
+  function execute(results, collect = 'false') {
+    return runInNewContext(gate, { process: { env: { RESULTS: JSON.stringify(results), COLLECT_COVERAGE: collect } } });
   }
   const full = Object.fromEntries(['changes', 'images', 'node', 'web', 'dotnet', 'coverage']
     .map((name) => [name, { result: name === 'coverage' ? 'skipped' : 'success' }]));
@@ -126,10 +129,11 @@ test('the real foundation gate rejects failures, cancellation and unexpected ski
       assert.throws(() => execute(broken), new RegExp(name));
     }
   }
-  assert.throws(() => execute(full, 'push'), /coverage/);
-  const push = structuredClone(full);
-  push.coverage.result = 'success';
-  execute(push, 'push');
+  assert.throws(() => execute(full, 'true'), /coverage/);
+  const weekly = structuredClone(full);
+  weekly.coverage.result = 'success';
+  execute(weekly, 'true');
+  assert.throws(() => execute(weekly), /coverage/);
   const scoped = structuredClone(full);
   scoped.changes.outputs = { images: 'false', web: 'false', dotnet: 'false' };
   for (const name of ['images', 'web', 'dotnet']) scoped[name].result = 'skipped';

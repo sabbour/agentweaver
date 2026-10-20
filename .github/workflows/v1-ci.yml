@@ -6,6 +6,13 @@ on:
   push:
     branches: [v1]
   workflow_dispatch:
+  # Only the weekly v1-coverage.yml caller sets collect_coverage; pull request,
+  # push, and manual runs of this workflow always test without instrumentation.
+  workflow_call:
+    inputs:
+      collect_coverage:
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -15,7 +22,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  COLLECT_COVERAGE: ${{ github.event_name != 'pull_request' }}
+  COLLECT_COVERAGE: ${{ inputs.collect_coverage == true }}
 
 jobs:
   changes:
@@ -550,7 +557,7 @@ jobs:
   coverage:
     name: v1 coverage summary
     needs: [dotnet, web, node]
-    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.dotnet.result == 'success' && needs.web.result == 'success' && needs.node.result == 'success' }}
+    if: ${{ !cancelled() && inputs.collect_coverage == true && needs.dotnet.result == 'success' && needs.web.result == 'success' && needs.node.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -628,7 +635,6 @@ jobs:
       - name: Preserve the foundation gate and reject failed or unexpectedly skipped work
         env:
           RESULTS: ${{ toJSON(needs) }}
-          EVENT_NAME: ${{ github.event_name }}
         run: |
           node --input-type=module -e '
             const jobs = JSON.parse(process.env.RESULTS);
@@ -637,7 +643,7 @@ jobs:
               images: jobs.changes.outputs.images === "true",
               web: jobs.changes.outputs.web === "true",
               dotnet: jobs.changes.outputs.dotnet === "true",
-              coverage: process.env.EVENT_NAME !== "pull_request"
+              coverage: process.env.COLLECT_COVERAGE === "true"
             };
             for (const [name, required] of Object.entries(expected)) {
               const actual = jobs[name].result;
