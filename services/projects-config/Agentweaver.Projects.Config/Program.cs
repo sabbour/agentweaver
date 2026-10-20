@@ -106,6 +106,7 @@ builder.Services.AddScoped<MarketplaceSourceStore>();
 builder.Services.AddScoped<IProjectMarketplaceSourceStore>(
     provider => provider.GetRequiredService<MarketplaceSourceStore>());
 builder.Services.AddScoped<ProjectMarketplaceSourceService>();
+builder.Services.AddSingleton(SkillMarketplaceCatalog.FromConfiguration(builder.Configuration));
 builder.Services.AddScoped<ProjectMarketplaceSkillContentService>();
 builder.Services.AddHttpClient<SkillMarketplaceBrowseService>();
 var skillContentContainer = builder.Configuration["ProjectsConfig:SkillContent:ContainerUri"];

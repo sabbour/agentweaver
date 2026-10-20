@@ -91,6 +91,10 @@ public static class GatewayRouteCatalog
             "updateProjectConfiguration", "Update project configuration", body: true,
             forwardTenantSelector: true);
         const long skillContentMaximumRequestBytes = 3 * 1024 * 1024;
+        Add("GET", GatewayOwner.Projects, "/projects/{projectId}/skill-marketplaces/definitions",
+            "/api/projects/{projectId}/skill-marketplaces/definitions",
+            "listMarketplaceDefinitions", "List suggested skill marketplaces for a project",
+            forwardTenantSelector: true);
         var marketplaceSources = "/projects/{projectId}/skill-marketplaces/sources";
         Add("GET", GatewayOwner.Projects, marketplaceSources, "/api" + marketplaceSources,
             "listMarketplaceSources", "List project marketplace sources",

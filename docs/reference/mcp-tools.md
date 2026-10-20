@@ -86,6 +86,7 @@ Every name below has the `agentweaver_` prefix. For example, the first entry is
 
 | Operation ID | Purpose |
 | --- | --- |
+| `listMarketplaceDefinitions` | List suggested marketplaces for a project. |
 | `listMarketplaceSources` | List project marketplace sources. |
 | `createMarketplaceSource` | Add a public source. |
 | `updateMarketplaceSource` | Append a source revision. |
