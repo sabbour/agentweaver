@@ -65,10 +65,15 @@ For `forbidden`, compare the approved issuer, subject, and tenant in
 check current tenant membership, TenantAdmin authority, unbound request
 claims, and the `api.read`, `projects.admin`, and `projects.orchestrator` scopes.
 A `kubectl-forbidden` classification instead indicates Kubernetes
-authorization. For `product-unclassified`, check migration state, required
-configuration, workload identity, database connectivity, and concurrency
-failures. A `timeout` or `exec-transport` result does not establish whether
-the owner committed the operation.
+authorization. For `product-unclassified`, first confirm that the Projects
+Config runtime ConfigMap contains `ConnectionStrings__ProjectsConfigAuthority`
+and the `ProjectsConfig__AuthorityDatabase__WorkloadIdentity__*` keys. The
+command fails before it connects to the database when they're missing. Then
+check migration state, workload identity, database connectivity, and
+concurrency failures. For the required values, see
+[Runtime configuration](../reference/runtime-configuration.md). A `timeout` or
+`exec-transport` result does not establish whether the owner committed the
+operation.
 
 The runner does not retry an indeterminate command automatically. Do not
 retry setup, start a replacement invocation, or run cleanup until you have
