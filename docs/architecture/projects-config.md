@@ -454,7 +454,12 @@ last-Owner invariant, and database append-only triggers.
 ## Skill content and assignment
 
 `POST /api/skills/preview` validates a `SKILL.md` document and its text resources
-and returns a digest without storing the content. Project import requires current
+and returns a digest without storing the content. `POST /api/skills/package`
+groups uploaded files, one ZIP archive, or draft form fields into candidates.
+Each `SKILL.md` marks a skill root, and files under a nested root belong only to
+that nested skill. The route checks every path, applies file-count and size
+limits while it expands an archive, and validates each candidate with the same
+preview rules. It stores nothing. Project import requires current
 project write authority, that exact digest, and an idempotency key. Each successful
 import creates an immutable revision with source provenance. Reusing the key for a
 different request or importing against a stale revision returns a conflict.

@@ -1193,6 +1193,12 @@ The consumer validates the native probe receipt against the admitted source SHA,
 
 Projects & Config validates skill markdown and text resources before storage.
 `POST /api/skills/preview` returns a content digest without storing the upload.
+`POST /api/skills/package` accepts exactly one of `files` (relative paths and
+base64 content), `archive` (a base64 ZIP), or `draft` (name, description, and
+instructions). It returns one package for each `SKILL.md` root, with the
+candidate, its preview, a per-skill error, and the binary or oversized paths it
+skipped. The upload is limited to 1,024 files and 2 MiB, and it stores nothing.
+Pass each candidate and digest to the import route.
 `POST /api/projects/{projectId}/skills/import` stores a new immutable revision
 and returns its receipt. The request supplies the expected digest, an idempotency
 key, and optional expected revision and source provenance. A repeated key with
