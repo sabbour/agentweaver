@@ -80,6 +80,27 @@ public sealed partial class ProjectsConfigService
             cancellationToken);
     }
 
+    /// <summary>
+    /// Creates a pending proposal from a built-in or inline blueprint: team, workflows, default workflow, bound skills,
+    /// and sandbox profile. Nothing changes until the proposal is confirmed.
+    /// </summary>
+    public Task<ProjectCastingProposal> CreateBlueprintCastingProposalAsync(
+        ProjectAuthorizationContext caller,
+        string projectId,
+        long expectedConfigurationRevision,
+        string? blueprintId,
+        BlueprintDefinition? blueprint,
+        CancellationToken cancellationToken)
+    {
+        RequireCastingWrite(caller, projectId);
+        return CreateCastingProposalFromCurrentConfigurationAsync(
+            caller,
+            projectId,
+            expectedConfigurationRevision,
+            current => ProjectBlueprintCatalog.CreateDraft(current, blueprintId, blueprint),
+            cancellationToken);
+    }
+
     private Task<ProjectCastingProposal> CreateCastingProposalAsync(
         ProjectAuthorizationContext caller,
         string projectId,

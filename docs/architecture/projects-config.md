@@ -100,9 +100,12 @@ The Identity broker validates upstream identity but does not forward upstream te
 | `PUT /api/projects/{projectId}/configuration` | Append a configuration revision with an expected configuration revision. |
 | `GET /api/casting/templates` | List the built-in scenario templates available to seed a reviewed team proposal. |
 | `GET /api/catalog/roles` | List the role definitions available to scenario and manual team proposals. |
+| `GET /api/blueprints` | List the built-in blueprints with their default workflow and availability. |
+| `POST /api/blueprints/validate` | Check a blueprint against the blueprint rules without changing state. |
 | `POST /api/projects/{projectId}/casting/proposals` | Create a reviewed proposal from a complete project configuration draft. |
 | `POST /api/projects/{projectId}/casting/proposals/scenario` | Create a version-bound proposal from a scenario template. |
 | `POST /api/projects/{projectId}/casting/proposals/manual` | Create a version-bound proposal from selected role IDs. |
+| `POST /api/projects/{projectId}/casting/proposals/blueprint` | Create a version-bound proposal from a built-in blueprint ID or an inline blueprint. |
 | `GET /api/projects/{projectId}/casting/proposals` | List casting proposals for an authorized project. |
 | `GET /api/projects/{projectId}/casting/proposals/{proposalId}` | Read a proposal and its draft for review. |
 | `PATCH /api/projects/{projectId}/casting/proposals/{proposalId}` | Amend a pending proposal against its expected draft revision. |
@@ -152,6 +155,16 @@ resource bytes, or object keys.
 ### Reviewed casting proposals and explicit transfers
 
 Casting templates and role definitions are authenticated catalog reads. Scenario proposal creation accepts an `expectedConfigurationRevision` and a `templateId`; manual creation accepts the expected revision and a non-empty list of catalog `roleIds`. Both create a pending proposal from the configuration at that revision, replacing only the proposed `AgentCharters` and `Casting` while retaining unrelated project settings. Manual inputs reject unknown, repeated, and reserved orchestration roles. The original full-draft proposal route remains available for callers that already compose a complete `ProjectConfiguration`.
+
+### Blueprints
+
+A blueprint is a team recipe carried over from 0.x: a roster of roles, one or more workflows, a review policy, a sandbox profile, and optional skill bindings. Projects & Config embeds the five 0.x blueprints (AI agent engineering, content authoring, PM and software development, product management, and software development).
+
+- `GET /api/blueprints` lists each blueprint with its default workflow (the first workflow) and an `exportability` result. The status is `exportable` or `unavailable`, with sorted reason codes such as `role_missing` or `workflow_unavailable`. A blueprint stays in the list when it is unavailable, so callers can show why.
+- `POST /api/blueprints/validate` checks a blueprint and returns `{ valid, errors }`. It never changes state. The rules match 0.x: id and name are required, the review policy must be `default`, workflows must be known and unique, the sandbox profile must be `default` or `restricted`, roster roles must be catalog or bespoke roles and not reserved, skill bindings must name roster roles, and bespoke roles need a charter of at most 8,192 characters.
+- `POST /api/projects/{projectId}/casting/proposals/blueprint` takes `expectedConfigurationRevision` and either `blueprintId` or an inline `blueprint`. It creates a pending proposal; nothing changes until the proposal is confirmed. The draft casts the roster, adds a `blueprintWorkflowReferences` entry for each workflow, sets `defaultWorkflowId` to the first workflow, assigns bound skills that the project already pins to the matching agents, and, for `restricted`, sets an empty `egressNarrowing` so the project has no network egress. A built-in blueprint can be applied only when it is exportable.
+
+Workflow availability comes from the workflows the v1 Orchestrator registers. Today that is only `default`, so the built-in blueprints report `workflow_unavailable` until the workflow library (#1914) adds their workflows.
 
 Authorized project readers can list and read proposals. Project writers can
 amend a draft with its expected draft revision and explicitly confirm or reject

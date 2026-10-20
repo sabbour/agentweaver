@@ -84,6 +84,21 @@ public static class ProjectConfigEndpoints
             return Results.Ok(ProjectCastingCatalog.Roles);
         }).WithName("ListProjectCastingRoles");
 
+        var blueprints = app.MapGroup("/api/blueprints").RequireAuthorization();
+        blueprints.MapGet("/", (HttpContext context) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            return Results.Ok(ProjectBlueprintCatalog.List());
+        }).WithName("ListBlueprints");
+
+        blueprints.MapPost("/validate", (ValidateBlueprintRequest request, HttpContext context) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            return request.Blueprint is null
+                ? ToProblem(ProjectConfigException.Invalid("invalid_blueprint_request", "A blueprint is required."))
+                : Results.Ok(ProjectBlueprintCatalog.Validate(request.Blueprint));
+        }).WithName("ValidateBlueprint");
+
         var projects = app.MapGroup("/api/projects").RequireAuthorization();
 
         projects.MapPost("/", async (
@@ -290,6 +305,34 @@ public static class ProjectConfigEndpoints
                     projectId,
                     request.ExpectedConfigurationRevision,
                     request.RoleIds,
+                    cancellationToken).ConfigureAwait(false);
+                return Results.Created(
+                    $"/api/projects/{projectId}/casting/proposals/{proposal.ProposalId}",
+                    proposal);
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
+        projects.MapPost("/{projectId}/casting/proposals/blueprint", async (
+            string projectId,
+            CreateBlueprintProjectCastingProposalRequest request,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                var proposal = await service.CreateBlueprintCastingProposalAsync(
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    projectId,
+                    request.ExpectedConfigurationRevision,
+                    request.BlueprintId,
+                    request.Blueprint,
                     cancellationToken).ConfigureAwait(false);
                 return Results.Created(
                     $"/api/projects/{projectId}/casting/proposals/{proposal.ProposalId}",

@@ -324,7 +324,9 @@ public static class ProjectConfigurationValidator
 
         if (configuration.BlueprintWorkflowReferences.Any(item => item is null))
             throw Invalid("Configuration contains a null blueprint reference.");
-        EnsureUnique(configuration.BlueprintWorkflowReferences.Select(item => item.BlueprintId), "blueprint");
+        EnsureUnique(
+            configuration.BlueprintWorkflowReferences.Select(item => $"{item.BlueprintId}\n{item.WorkflowId}"),
+            "blueprint workflow");
         foreach (var item in configuration.BlueprintWorkflowReferences)
         {
             ValidateIdentifier(item.BlueprintId, "blueprintWorkflowReferences.blueprintId");
