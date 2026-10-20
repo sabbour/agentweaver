@@ -67,7 +67,8 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         IObjectStore? skillContentObjects = null,
         bool usePublicWriterFixture = false,
         string? brokerRunBindingAudience = null,
-        X509Certificate2? brokerRunBindingServerCertificate = null)
+        X509Certificate2? brokerRunBindingServerCertificate = null,
+        bool grantRoleAssignmentWrites = false)
     {
         if ((brokerRunBindingAudience is null) != (brokerRunBindingServerCertificate is null))
             throw new ArgumentException(
@@ -91,7 +92,8 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
 
         var runtimeRole = $"projects_config_runtime_{Guid.NewGuid():N}";
         var runtimePassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        await CreateRuntimeRoleAsync(privilegedDataSource, connectionString, runtimeRole, runtimePassword);
+        await CreateRuntimeRoleAsync(
+            privilegedDataSource, connectionString, runtimeRole, runtimePassword, grantRoleAssignmentWrites);
         var runtimeConnectionString = new NpgsqlConnectionStringBuilder(connectionString)
         {
             Username = runtimeRole,
@@ -146,12 +148,13 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
                             System.Text.Json.JsonNamingPolicy.CamelCase));
                 });
                 services.AddSingleton(serviceDataSource);
-                services.AddDbContext<ProjectsConfigDbContext>((_, options) =>
+                services.AddDbContextFactory<ProjectsConfigDbContext>((_, options) =>
                     options.UseNpgsql(serviceDataSource, npgsql => npgsql.MigrationsHistoryTable(
                         "__ef_migrations_history", ProjectsConfigDbContext.Schema)));
                 services.AddSingleton(catalog);
                 services.AddSingleton(TimeProvider.System);
                 services.AddScoped<ProjectsConfigService>();
+                services.AddScoped<ProjectRoleAssignmentService>();
                 if (skillContentObjects is not null)
                     services.AddScoped(_ => new SkillContentObjectStore(skillContentObjects));
                 services.AddScoped<SkillContentService>(provider => new SkillContentService(
@@ -288,7 +291,8 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         NpgsqlDataSource privilegedDataSource,
         string ownerConnectionString,
         string runtimeRole,
-        string runtimePassword)
+        string runtimePassword,
+        bool grantRoleAssignmentWrites)
     {
         var database = new NpgsqlConnectionStringBuilder(ownerConnectionString).Database;
         await using var connection = await privilegedDataSource.OpenConnectionAsync();
@@ -315,6 +319,14 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             $"GRANT SELECT ON projects_config.authority_audit TO \"{runtimeRole}\"",
             $"GRANT EXECUTE ON FUNCTION projects_config.lock_casting_authority(uuid, text, text, text, bigint, text, boolean) TO \"{runtimeRole}\"",
         };
+        if (grantRoleAssignmentWrites)
+            statements =
+            [
+                .. statements,
+                $"GRANT INSERT ON projects_config.project_role_assignments TO \"{runtimeRole}\"",
+                $"GRANT UPDATE (state, revision, revoked_by, revoked_at) ON projects_config.project_role_assignments TO \"{runtimeRole}\"",
+                $"GRANT INSERT ON projects_config.authority_audit TO \"{runtimeRole}\"",
+            ];
         foreach (var statement in statements)
         {
             await using var grant = new NpgsqlCommand(statement, connection);
