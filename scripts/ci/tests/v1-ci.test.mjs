@@ -26,6 +26,9 @@ test('source, lockfile, Docker, browser and harness changes select all dependent
     assert.equal(result.images, true, path);
   }
   assert.equal(classify(['apps/web/src/v1/test.ts']).dotnet, true);
+  assert.equal(classify(['apps/web/src/v1/test.ts']).node, true);
+  assert.equal(classify(['services/agenthost/Agentweaver.AgentHost/BuildTestOutputCollectorProgram.cs']).node, true);
+  assert.equal(classify(['Directory.Build.props']).node, true);
   assert.equal(classify(['scripts/harness-shared/run-p1.mjs']).node, true);
   assert.equal(classify(['scripts/release/validate.mjs']).images, true);
   assert.equal(classify(['deploy/k8s/profiles/events-and-sessions/render.mjs']).node, true);

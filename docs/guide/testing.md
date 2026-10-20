@@ -80,6 +80,8 @@ fixtures; the built artifact alone does not replace their development server.
 Service/package/test, lockfile and deployment
 inputs select image checks, including source receipts and isolated native
 prompt-capacity verification; no images are published by this workflow.
+Web, AgentHost, deployment and .NET build/lock inputs also select Node tooling
+because its executable Linux contracts consume those inputs.
 
 Each .NET project runs on its own runner. The Broker suite has four stable
 SHA-256 method shards, derived from the built assembly's VSTest discovery.

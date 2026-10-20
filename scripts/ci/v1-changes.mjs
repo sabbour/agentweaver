@@ -9,12 +9,14 @@ export function classify(paths, full = false) {
     if (/^(docs\/|\.squad\/|\.changeset\/)/.test(path) || /^[^/]+\.md$/.test(path)) continue;
     if (path.startsWith('.github/workflows/') && path !== '.github/workflows/v1-ci.yml') continue;
     if (/^(apps\/web\/)/.test(path)) {
-      result.dotnet = result.web = result.images = true;
+      result.dotnet = result.web = result.node = result.images = true;
     } else if (/^(services\/|packages\/|tests\/|deploy\/)/.test(path) ||
                /(^|\/)([^/]+\.(csproj|props|targets|slnx)|packages\.lock\.json)$/.test(path) ||
                /^(global\.json|[Nn]u[Gg]et\.[Cc]onfig|coverage\.runsettings)$/.test(path)) {
       result.dotnet = result.images = true;
-      if (path.startsWith('deploy/')) result.node = true;
+      if (/^(deploy\/|services\/agenthost\/)/.test(path) ||
+          /(^|\/)([^/]+\.(csproj|props|targets|slnx)|packages\.lock\.json)$/.test(path) ||
+          /^(global\.json|[Nn]u[Gg]et\.[Cc]onfig)$/.test(path)) result.node = true;
     } else if (/^scripts\/(release|azure|.*harness|harness-shared)\//.test(path) ||
                path.startsWith('.github/extensions/')) {
       result.node = result.images = true;
