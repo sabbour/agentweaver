@@ -423,7 +423,8 @@ test('Bicep compilation and Kustomize rendering require no credentials or live t
     'CHANGEME-UPSTREAM-OIDC-METADATA-HOST',
   ]) assert.ok(identityEgress.includes(host));
   assert.ok(migrationEgress.includes('login.microsoftonline.com'));
-  assert.ok(migrationEgress.includes('CHANGEME-POSTGRES-HOST'));
+  assert.ok(migrationEgress.includes('agentweaver-pg.postgres.database.azure.com'));
+  assert.doesNotMatch(migrationEgress, /CHANGEME-POSTGRES-HOST/);
   assert.doesNotMatch(`${identityEgress}\n${migrationEgress}`, /toEntities:\s*\n\s+- world|0\.0\.0\.0\/0|matchPattern:\s*\*/);
   const dnsPolicy = rendered.split('---').find(document => document.includes('name: allow-dns-egress'));
   assert.match(dnsPolicy, /namespaceSelector:\s+matchLabels:\s+kubernetes\.io\/metadata\.name: kube-system/);
