@@ -142,6 +142,17 @@ change does not need a fabricated run or session identity.
 - Startup verifies the expected schema. Migration uses a separate `--migrate`
   path; serving traffic does not silently initialize the schema.
 
+## Verify AgentSessions record exports
+
+The P2 proof of concept exports sessions recorded with the public
+[AgentSessions](https://github.com/agent-primitives/sessions) contract.
+AgentSessionsRecordVerifier checks an export without Go or upstream code: it
+decodes each stored protobuf event, recomputes the RFC 8785 record hash, and
+checks sequence, links, and fork lineage. The chain is unkeyed, so compare the
+verified head with a separately held head to detect truncation. See
+[Agent primitives proof of concept](https://github.com/sabbour/agentweaver/blob/v1/docs/architecture/design/agent-primitives.md)
+for the export format and failure codes.
+
 ## Related content
 
 - [Orchestration](./orchestration.md) explains session and turn ownership.

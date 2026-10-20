@@ -43,6 +43,20 @@ jobs:
           npm run test:harness
           npm run test:harness:signin-browser
 
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tools/agent-primitives/go.mod
+          cache-dependency-path: tools/agent-primitives/go.sum
+      - name: Test the AgentSessions and AgentSuite reference tools
+        working-directory: tools/agent-primitives
+        run: |
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -673,7 +687,7 @@ jobs:
           retention-days: 30
 
   foundation:
-    needs: [changes, harness, images, node, web, dotnet, coverage]
+    needs: [changes, harness, go, images, node, web, dotnet, coverage]
     if: ${{ always() }}
     runs-on: ubuntu-latest
     steps:
@@ -684,7 +698,7 @@ jobs:
           node --input-type=module -e '
             const jobs = JSON.parse(process.env.RESULTS);
             const expected = {
-              changes: true, harness: true, node: true,
+              changes: true, harness: true, go: true, node: true,
               images: jobs.changes.outputs.images === "true",
               web: jobs.changes.outputs.web === "true",
               dotnet: jobs.changes.outputs.dotnet === "true",

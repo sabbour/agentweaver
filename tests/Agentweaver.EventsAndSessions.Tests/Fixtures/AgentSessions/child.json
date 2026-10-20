@@ -1,0 +1,109 @@
+{
+  "format": "agentweaver.agentsessions.export.v1",
+  "upstream": {
+    "repository": "https://github.com/agent-primitives/sessions",
+    "commit": "465e82175da7815db39ec14852deb3949ff82670",
+    "contract": "0.2.0-draft"
+  },
+  "session": {
+    "uid": "agentweaver-fixture-child",
+    "parent": {
+      "uid": "agentweaver-fixture-parent",
+      "fork_seq": "5"
+    },
+    "origin": {
+      "source": "agentweaver",
+      "subject": "fixture-project"
+    }
+  },
+  "producer": {
+    "system": "agentweaver",
+    "references": {
+      "projectId": "fixture-project",
+      "runId": "fixture-child-run"
+    }
+  },
+  "source_head": {
+    "seq": "11",
+    "hash": "68007cb01412ad849cffb5ed071945597f5581d1d6a92cd0ab4a39a131a71f45"
+  },
+  "records": [
+    {
+      "seq": "1",
+      "prev_hash": "",
+      "content_hash": "1c545bd7125aadc5dfd4a8240e781b8bb2de57d6872933a2926c4641e1c5fbf9",
+      "fence": "1",
+      "event": "EhBmODY3OTdiODMyZWIyYjA5OAyaAT4KKHsicHJvZmlsZSI6ImFnZW50d2VhdmVyLXAyLXBvYy1maXh0dXJlIn0QgYCAgICAgBAYASIEZWNobyoBMQ=="
+    },
+    {
+      "seq": "2",
+      "prev_hash": "1c545bd7125aadc5dfd4a8240e781b8bb2de57d6872933a2926c4641e1c5fbf9",
+      "content_hash": "487093a51afeb422d446075218ae47c76b79d033945f5aa20464772abde16f19",
+      "fence": "1",
+      "event": "EhBmODY3OTdiODMyZWIyYjA5OAFCEQoEdXNlchIJCgcKBWZpcnN0"
+    },
+    {
+      "seq": "3",
+      "prev_hash": "487093a51afeb422d446075218ae47c76b79d033945f5aa20464772abde16f19",
+      "content_hash": "f91239ebfe4fd566e5b30ebd9e8651a4d61ea02afbd1fdb991525059364e1ce2",
+      "fence": "1",
+      "event": "EhBmODY3OTdiODMyZWIyYjA5OAJKWgoEZWNobxpANGI2NTBlN2NhYmEyYjIwYjY3ZTQ3YjlmM2Y0MzE0NDc1MTAxYmFiNjIyZWEzZDk0MTcwMjIyZTc3MDVjZmQ1MCIQYTJmNDUxNjdiNzQ4N2Q3NA=="
+    },
+    {
+      "seq": "4",
+      "prev_hash": "f91239ebfe4fd566e5b30ebd9e8651a4d61ea02afbd1fdb991525059364e1ce2",
+      "content_hash": "902b438e189825160e0cc93c4dfc425ad4cdc223af4238a7da60dcb05e57308b",
+      "fence": "1",
+      "event": "EhBmODY3OTdiODMyZWIyYjA5OANCGwoJYXNzaXN0YW50Eg4KDAoKZWNobzpmaXJzdA=="
+    },
+    {
+      "seq": "5",
+      "prev_hash": "902b438e189825160e0cc93c4dfc425ad4cdc223af4238a7da60dcb05e57308b",
+      "content_hash": "062843469c7e451c99d3552b4ca2c2dc8850d62e0fc8062bb569d1a5e082ec2c",
+      "fence": "1",
+      "event": "EhBmODY3OTdiODMyZWIyYjA5OAqCAQsKCUNPTVBMRVRFRA=="
+    },
+    {
+      "seq": "6",
+      "prev_hash": "062843469c7e451c99d3552b4ca2c2dc8850d62e0fc8062bb569d1a5e082ec2c",
+      "content_hash": "f18963d8d01459667b26d4ecede000a10da576edd013307a04895aa0d0493bc9",
+      "fence": "1",
+      "event": "OAl6DAgDEghwYXJlbnRANQ=="
+    },
+    {
+      "seq": "7",
+      "prev_hash": "f18963d8d01459667b26d4ecede000a10da576edd013307a04895aa0d0493bc9",
+      "content_hash": "af3484e009aa0f927f8d514921d94b686ef50948268873a2c41ee59c3337e092",
+      "fence": "2",
+      "event": "EhAzZTI1MzczMDJkZWJjNzcyOAyaATUKKHsicHJvZmlsZSI6ImFnZW50d2VhdmVyLXAyLXBvYy1maXh0dXJlIn0YASIEZWNobyoBMQ=="
+    },
+    {
+      "seq": "8",
+      "prev_hash": "af3484e009aa0f927f8d514921d94b686ef50948268873a2c41ee59c3337e092",
+      "content_hash": "c1883e9f70ff1cd5a62eb08bb1fcda0b60edcc2d8465b5d3fa6005e830150805",
+      "fence": "2",
+      "event": "EhAzZTI1MzczMDJkZWJjNzcyOAFCEQoEdXNlchIJCgcKBWNoaWxk"
+    },
+    {
+      "seq": "9",
+      "prev_hash": "c1883e9f70ff1cd5a62eb08bb1fcda0b60edcc2d8465b5d3fa6005e830150805",
+      "content_hash": "0d71bb4564d2544b7e781da9d68cd48db46a3b2a1e1eb0be5a4a9417f124b0b0",
+      "fence": "2",
+      "event": "EhAzZTI1MzczMDJkZWJjNzcyOAJKWgoEZWNobxpANzY4NmZkZjcwZGFlN2EzN2UyNWNjZDAzNjdmN2JhZGY5MDIxNzU5MjQyZTc3M2Y0N2M4YzQ5OTI1NThmOTY3YSIQNGI3OWM3MWY0OWQyODM3ZQ=="
+    },
+    {
+      "seq": "10",
+      "prev_hash": "0d71bb4564d2544b7e781da9d68cd48db46a3b2a1e1eb0be5a4a9417f124b0b0",
+      "content_hash": "611f2a009bcc88eac66d2942c934a626db816cd71ecf4801106c2e0c3dee2baa",
+      "fence": "2",
+      "event": "EhAzZTI1MzczMDJkZWJjNzcyOANCGwoJYXNzaXN0YW50Eg4KDAoKZWNobzpjaGlsZA=="
+    },
+    {
+      "seq": "11",
+      "prev_hash": "611f2a009bcc88eac66d2942c934a626db816cd71ecf4801106c2e0c3dee2baa",
+      "content_hash": "68007cb01412ad849cffb5ed071945597f5581d1d6a92cd0ab4a39a131a71f45",
+      "fence": "2",
+      "event": "EhAzZTI1MzczMDJkZWJjNzcyOAqCAQsKCUNPTVBMRVRFRA=="
+    }
+  ]
+}

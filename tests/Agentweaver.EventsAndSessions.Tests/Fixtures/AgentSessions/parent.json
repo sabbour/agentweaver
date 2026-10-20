@@ -1,0 +1,98 @@
+{
+  "format": "agentweaver.agentsessions.export.v1",
+  "upstream": {
+    "repository": "https://github.com/agent-primitives/sessions",
+    "commit": "465e82175da7815db39ec14852deb3949ff82670",
+    "contract": "0.2.0-draft"
+  },
+  "session": {
+    "uid": "agentweaver-fixture-parent",
+    "origin": {
+      "source": "agentweaver",
+      "subject": "fixture-project"
+    }
+  },
+  "producer": {
+    "system": "agentweaver",
+    "references": {
+      "projectId": "fixture-project",
+      "runId": "fixture-parent-run"
+    }
+  },
+  "source_head": {
+    "seq": "10",
+    "hash": "9b4771d65aad3f4f54284069825e6ad2a55fcb528d2b2eb1ac0f57878cee7379"
+  },
+  "records": [
+    {
+      "seq": "1",
+      "prev_hash": "",
+      "content_hash": "1c545bd7125aadc5dfd4a8240e781b8bb2de57d6872933a2926c4641e1c5fbf9",
+      "fence": "1",
+      "event": "EhBmODY3OTdiODMyZWIyYjA5OAyaAT4KKHsicHJvZmlsZSI6ImFnZW50d2VhdmVyLXAyLXBvYy1maXh0dXJlIn0QgYCAgICAgBAYASIEZWNobyoBMQ=="
+    },
+    {
+      "seq": "2",
+      "prev_hash": "1c545bd7125aadc5dfd4a8240e781b8bb2de57d6872933a2926c4641e1c5fbf9",
+      "content_hash": "487093a51afeb422d446075218ae47c76b79d033945f5aa20464772abde16f19",
+      "fence": "1",
+      "event": "EhBmODY3OTdiODMyZWIyYjA5OAFCEQoEdXNlchIJCgcKBWZpcnN0"
+    },
+    {
+      "seq": "3",
+      "prev_hash": "487093a51afeb422d446075218ae47c76b79d033945f5aa20464772abde16f19",
+      "content_hash": "f91239ebfe4fd566e5b30ebd9e8651a4d61ea02afbd1fdb991525059364e1ce2",
+      "fence": "1",
+      "event": "EhBmODY3OTdiODMyZWIyYjA5OAJKWgoEZWNobxpANGI2NTBlN2NhYmEyYjIwYjY3ZTQ3YjlmM2Y0MzE0NDc1MTAxYmFiNjIyZWEzZDk0MTcwMjIyZTc3MDVjZmQ1MCIQYTJmNDUxNjdiNzQ4N2Q3NA=="
+    },
+    {
+      "seq": "4",
+      "prev_hash": "f91239ebfe4fd566e5b30ebd9e8651a4d61ea02afbd1fdb991525059364e1ce2",
+      "content_hash": "902b438e189825160e0cc93c4dfc425ad4cdc223af4238a7da60dcb05e57308b",
+      "fence": "1",
+      "event": "EhBmODY3OTdiODMyZWIyYjA5OANCGwoJYXNzaXN0YW50Eg4KDAoKZWNobzpmaXJzdA=="
+    },
+    {
+      "seq": "5",
+      "prev_hash": "902b438e189825160e0cc93c4dfc425ad4cdc223af4238a7da60dcb05e57308b",
+      "content_hash": "062843469c7e451c99d3552b4ca2c2dc8850d62e0fc8062bb569d1a5e082ec2c",
+      "fence": "1",
+      "event": "EhBmODY3OTdiODMyZWIyYjA5OAqCAQsKCUNPTVBMRVRFRA=="
+    },
+    {
+      "seq": "6",
+      "prev_hash": "062843469c7e451c99d3552b4ca2c2dc8850d62e0fc8062bb569d1a5e082ec2c",
+      "content_hash": "dd01d53048f165a8be89d3e62d13b1724217372bed6481bf7631d4480ac0500d",
+      "fence": "2",
+      "event": "EhAyZDhkM2YyMGVmNzJiZjk2OAyaAT4KKHsicHJvZmlsZSI6ImFnZW50d2VhdmVyLXAyLXBvYy1maXh0dXJlIn0QgYCAgICAgBAYASIEZWNobyoBMQ=="
+    },
+    {
+      "seq": "7",
+      "prev_hash": "dd01d53048f165a8be89d3e62d13b1724217372bed6481bf7631d4480ac0500d",
+      "content_hash": "0140d9654fcd8dc7333db82a1b78ec371467bb0428902c165e94be1b738ec63c",
+      "fence": "2",
+      "event": "EhAyZDhkM2YyMGVmNzJiZjk2OAFCEgoEdXNlchIKCggKBnNlY29uZA=="
+    },
+    {
+      "seq": "8",
+      "prev_hash": "0140d9654fcd8dc7333db82a1b78ec371467bb0428902c165e94be1b738ec63c",
+      "content_hash": "526c065c3a71d4d1b973e70d3947c9a0b5cf4a3fae779218f719026372bac3bd",
+      "fence": "2",
+      "event": "EhAyZDhkM2YyMGVmNzJiZjk2OAJKWgoEZWNobxpAYTM3ZGIzZjU5MzkxYTRkNjNlODQ2YWE1OGIwMTdjNDljNTlkNTVlMmUwM2RhNzM4NDlkZGNkMmExYTc0YjVjZSIQM2UwNmFjNzMwYTA5MzAwMQ=="
+    },
+    {
+      "seq": "9",
+      "prev_hash": "526c065c3a71d4d1b973e70d3947c9a0b5cf4a3fae779218f719026372bac3bd",
+      "content_hash": "a4794d8d7fb493c5dcaa98056804fa1586e0f9d393e0034674dba1b93757356f",
+      "fence": "2",
+      "event": "EhAyZDhkM2YyMGVmNzJiZjk2OANCHAoJYXNzaXN0YW50Eg8KDQoLZWNobzpzZWNvbmQ="
+    },
+    {
+      "seq": "10",
+      "prev_hash": "a4794d8d7fb493c5dcaa98056804fa1586e0f9d393e0034674dba1b93757356f",
+      "content_hash": "9b4771d65aad3f4f54284069825e6ad2a55fcb528d2b2eb1ac0f57878cee7379",
+      "fence": "2",
+      "event": "EhAyZDhkM2YyMGVmNzJiZjk2OAqCAQsKCUNPTVBMRVRFRA=="
+    }
+  ]
+}

@@ -10,6 +10,11 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Azure.Identity" Version="1.17.1" Aliases="AzureIdentity" />
+    <PackageReference Include="Google.Protobuf" Version="3.36.2" />
+    <PackageReference Include="Grpc.Tools" Version="2.84.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
     <PackageReference Include="OpenIddict.Validation.AspNetCore" Version="7.7.1" />
     <PackageReference Include="OpenIddict.Validation.SystemNetHttp" Version="7.7.1" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Abstractions\Agentweaver.Abstractions.csproj" />
@@ -18,6 +23,10 @@
     <ProjectReference Include="..\..\..\packages\Agentweaver.Persistence.Postgres\Agentweaver.Persistence.Postgres.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.Telemetry\Agentweaver.Telemetry.csproj" />
     <ProjectReference Include="..\..\..\packages\Agentweaver.ObjectStore.AzureBlob\Agentweaver.ObjectStore.AzureBlob.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Pinned agent-primitives/sessions 465e82175da7815db39ec14852deb3949ff82670 (MIT); see AgentSessions/README.md. -->
+    <Protobuf Include="AgentSessions\Protos\agentsessions\v1\common.proto" ProtoRoot="AgentSessions\Protos" GrpcServices="None" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Migrations\001_sessions_journal.sql" />
