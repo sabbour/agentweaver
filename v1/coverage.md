@@ -13,4 +13,4 @@ instrumented scope. The surfaces are not combined into one percentage.
 - Source: `834acf5461d50f8864f4d42ab8592f98e98629ed` on `v1`
 - Run: https://github.com/sabbour/agentweaver/actions/runs/39459165856
 - Artifact: `v1-coverage-834acf5461d50f8864f4d42ab8592f98e98629ed-1` (retained 30 days)
-- Measured: 2026-10-20T16:52:24.340Z
+- Measured: 2026-10-20T19:52:24.735Z
