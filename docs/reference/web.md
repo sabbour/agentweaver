@@ -30,8 +30,9 @@ Paths in this table are relative to `apps/web`.
 | `src/v1/SkillsMarketplacePanel.tsx` | Marketplace sources, local upload, inventory, import, and assignment. |
 | `src/v1/RemoteMcpOAuthCallbackPage.tsx` | Remote MCP OAuth popup return handling. |
 | `src/v1/RemoteMcpConnectionPanel.tsx` | Remote MCP connection status, sign-in, refresh, and disconnect in project settings. |
-| `src/v1/RetainedShell.tsx` | 0.x rail, project switcher, and persona menu filled with Gateway projects and the Broker session. |
-| `src/v1/ConfigurationFields.tsx` | Readable model, reasoning, per-task model, and provider fields for project configuration. |
+| `src/v1/RetainedShell.tsx` | 0.x rail, project switcher, and persona menu filled with Gateway projects and the Broker session. Shows **Run chat** only for a session bound to a run. |
+| `src/v1/ConfigurationFields.tsx` | Readable model, reasoning, credential, per-task model, and provider fields for project configuration. |
+| `src/v1/modelCredential.ts` | Save check that requires a new credential after the default model changes. |
 | `src/v1/ConfigurationHistory.tsx` | Read-only view of one earlier configuration revision. |
 | `host/Program.cs` | Static files, runtime settings, callback headers, SPA fallback, and health routes. |
 | `index.html` | Callback query capture and removal before app assets load. |

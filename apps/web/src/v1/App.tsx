@@ -28,6 +28,7 @@ import { RetainedShell as Shell } from './RetainedShell';
 import { iconForRole, workflowNodeTypes } from '../components/WorkflowGraphPanel';
 import type { WorkflowNodeData } from '../components/WorkflowGraphPanel';
 import { ConfigurationFields } from './ConfigurationFields';
+import { needsModelCredential } from './modelCredential';
 import { ConfigurationHistory } from './ConfigurationHistory';
 import { RemoteMcpConnectionPanel } from './RemoteMcpConnectionPanel';
 import {
@@ -703,6 +704,7 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
       setErrorScope(scope);
       return;
     }
+    if (needsModelCredential(configuration, versioned.configuration.modelSelection)) return;
     setSavingScope(scope);
     setError(null);
     setErrorScope(null);
@@ -841,6 +843,7 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
           {view === 'settings' && <section id="general"><Panel title={`Revision ${currentConfiguration.revision}`}>
             <form className="v1-form" onSubmit={(event) => void save(event)}>
               {configurationDraft && <ConfigurationFields configuration={configurationDraft}
+                savedSelection={currentConfiguration.configuration.modelSelection}
                 readOnly={skillAssignmentPending || savingScope === requestScope || editor !== JSON.stringify(configurationDraft, null, 2)}
                 onChange={(next) => { setConfigurationDraft(next); setEditor(JSON.stringify(next, null, 2)); }} />}
               <details>
@@ -861,7 +864,9 @@ function ProjectConfigurationPage({ view = 'settings' }: { view?: 'settings' | '
               </Field>
               </details>
               <div className="v1-actions">
-                <Button appearance="primary" type="submit" disabled={savingScope === requestScope || skillAssignmentPending || !editor.trim()}>
+                <Button appearance="primary" type="submit" disabled={savingScope === requestScope || skillAssignmentPending || !editor.trim()
+                  || Boolean(configurationDraft && editor === JSON.stringify(configurationDraft, null, 2)
+                    && needsModelCredential(configurationDraft, currentConfiguration.configuration.modelSelection))}>
                   {savingScope === requestScope ? 'Saving…' : 'Save changes'}
                 </Button>
                 <Button appearance="secondary" type="button" disabled={savingScope === requestScope || skillAssignmentPending} onClick={() => void load()}>Reload owner revision</Button>

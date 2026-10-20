@@ -31,7 +31,7 @@ bypassed most incumbent pages with a separate route tree.
 | `/projects/:id/memories` | Dedicated destination and shared section/error patterns | Exact run/agent scope, trust state, revisions, supported record mutations and transfer. |
 | `/projects/:id/knowledge` | Compatibility URL | Opens the same Memories view. |
 | `/projects/:id/team/:agentName/memory` | Existing deep links | Seeds the agent field; the display name never grants authority. The service validates exact scope. |
-| `/projects/:id/settings` | Section rail, readable form sections, advanced controls | Default and per-task models, reasoning effort, saved providers, immutable revision reads and complete-document saves. JSON is an advanced fallback. |
+| `/projects/:id/settings` | Section rail, readable form sections, advanced controls | Default and per-task models, reasoning effort, saved providers, immutable revision reads and complete-document saves. Changing the default model clears its credential until you enter a new one. JSON is an advanced fallback. |
 | Settings > Connections | Settings layout and connection controls | Existing GitHub and Copilot flows plus exact-ID Remote MCP registration, status, authorization, refresh and disconnect. |
 | `/settings` | Account settings entry | Broker session controls and GitHub account status. Project-specific connections remain in project settings. |
 

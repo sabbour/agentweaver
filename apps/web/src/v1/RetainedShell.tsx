@@ -83,14 +83,14 @@ export function RetainedShell({ children }: { children: ReactNode }) {
           />
         )}
         identity={(collapsed) => <BrokerIdentity collapsed={collapsed} />}
-        sessionAction={(
-          <Button appearance="subtle" disabled={!session?.binding}
+        sessionAction={session?.binding ? (
+          <Button appearance="subtle"
             onClick={() => {
-              if (session?.binding) navigate(`/projects/${encodeURIComponent(session.binding.projectId)}/runs/${encodeURIComponent(session.binding.runId)}?view=chat`);
+              if (session.binding) navigate(`/projects/${encodeURIComponent(session.binding.projectId)}/runs/${encodeURIComponent(session.binding.runId)}?view=chat`);
             }}>
-            {session?.binding ? 'Run chat' : 'Run chat opens from a run'}
+            Run chat
           </Button>
-        )}
+        ) : undefined}
         onNewSession={() => navigate(projectId ? `/projects/${encodeURIComponent(projectId)}/orchestrations` : '/assistant')}
       />
       <div className="aw-shell-canvas">

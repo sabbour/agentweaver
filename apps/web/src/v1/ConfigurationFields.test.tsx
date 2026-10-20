@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { ConfigurationFields } from './ConfigurationFields';
+import { needsModelCredential } from './modelCredential';
 import type { ProjectConfiguration } from './contracts';
 
 /** A complete configuration with unrelated exact references to preserve during edits. */
@@ -48,6 +49,39 @@ describe('readable project configuration', () => {
     expect(onChange).toHaveBeenCalledWith({
       ...configuration, providerOverrides: [{ seam: 'memory', providerId: 'other' }],
     });
+  });
+
+  it('clears a credential pin when the default model changes and restores it for the saved model', () => {
+    const configuration = fixture();
+    const saved = configuration.modelSelection;
+    const onChange = vi.fn();
+    const { rerender } = render(<ConfigurationFields configuration={configuration} onChange={onChange} savedSelection={saved} />);
+    fireEvent.change(screen.getByLabelText('Default model reference'), { target: { value: 'model-other' } });
+    const changed = onChange.mock.calls[0][0] as ProjectConfiguration;
+    expect(changed.modelSelection).toEqual({ ...saved, reference: 'model-other', credentialReference: null });
+    expect(needsModelCredential(changed, saved)).toBe(true);
+
+    rerender(<ConfigurationFields configuration={changed} onChange={onChange} savedSelection={saved} />);
+    expect(screen.getByText('Choose a credential for this model.')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Default model reference'), { target: { value: 'model-default' } });
+    expect((onChange.mock.calls[1][0] as ProjectConfiguration).modelSelection).toEqual(saved);
+  });
+
+  it('accepts a new credential pin for a changed model', () => {
+    const configuration = fixture();
+    const saved = configuration.modelSelection;
+    const changed = { ...configuration, modelSelection: { ...saved!, reference: 'model-other', credentialReference: null } };
+    const onChange = vi.fn();
+    const { rerender } = render(<ConfigurationFields configuration={changed} onChange={onChange} savedSelection={saved} />);
+    fireEvent.change(screen.getByLabelText('Model credential ID'), { target: { value: 'credential-other' } });
+    const withId = onChange.mock.calls[0][0] as ProjectConfiguration;
+    expect(needsModelCredential(withId, saved)).toBe(true);
+    rerender(<ConfigurationFields configuration={withId} onChange={onChange} savedSelection={saved} />);
+    fireEvent.change(screen.getByLabelText('Model credential version'), { target: { value: '1' } });
+    const complete = onChange.mock.calls[1][0] as ProjectConfiguration;
+    expect(complete.modelSelection?.credentialReference).toEqual({ id: 'credential-other', version: '1' });
+    expect(needsModelCredential(complete, saved)).toBe(false);
+    expect(needsModelCredential({ ...changed, modelSelection: { ...changed.modelSelection, sourceMode: 'hostedCopilot' } }, saved)).toBe(false);
   });
 
   it('keeps historical settings read-only', () => {

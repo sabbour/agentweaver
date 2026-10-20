@@ -1146,15 +1146,11 @@ describe('v1 web project scoping', () => {
     }
   });
 
-  it('keeps Run chat disabled until a session has an exact run binding', () => {
+  it('hides Run chat until a session has an exact run binding', () => {
     window.history.replaceState({}, '', '/projects?preset=1');
     render(<App />);
 
-    const runChat = screen.getByRole('button', { name: 'Run chat opens from a run' }) as HTMLButtonElement;
-    expect(runChat.disabled).toBe(true);
-    fireEvent.click(runChat);
-    expect(window.location.pathname).toBe('/projects');
-    expect(window.location.search).toBe('?preset=1');
+    expect(screen.queryByRole('button', { name: /Run chat/ })).toBeNull();
   });
 
   it('opens the exact bound run directly on Chat from the shell', async () => {

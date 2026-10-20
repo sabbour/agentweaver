@@ -63,8 +63,20 @@ and Platform settings. Their old addresses open one **Not available in this
 version** page that explains why and links back. Unknown addresses show **Page
 not found**.
 
-The shell enables **Run chat** only when your current Broker session is bound
-to an exact project and run. Otherwise, the control is disabled.
+The shell shows **Run chat** only when your current Broker session is bound to
+an exact project and run. Otherwise, the control is hidden.
+
+## Model defaults
+
+In **Project settings > General**, set the default model reference and
+reasoning effort. If the saved default uses a credential, the form also shows
+**Model credential ID** and **Model credential version**. A credential belongs
+to one model. When you change the default model, the form clears the saved
+credential and shows **Choose a credential for this model.** You can't save
+until you enter both credential fields. To keep the saved credential, change
+the model back to the saved reference. Hosted Copilot models don't use a
+credential. The service still validates the complete configuration when you
+save.
 
 ## Access follows the operation
 

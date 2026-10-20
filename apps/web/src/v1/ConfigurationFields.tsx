@@ -1,6 +1,7 @@
 import { Field, Input, Select } from '@fluentui/react-components';
 import { PageSection } from '../components/ui/PageSection';
-import type { ModelTaskKind, ProjectConfiguration, ReasoningEffort } from './contracts';
+import type { ModelSelectionSettings, ModelTaskKind, ProjectConfiguration, ReasoningEffort } from './contracts';
+import { needsModelCredential } from './modelCredential';
 
 /** Owner-defined task names, not an invented model eligibility catalog. */
 const TASKS: ReadonlyArray<{ value: ModelTaskKind; label: string }> = [
@@ -15,12 +16,35 @@ function reasoning(value: string): ReasoningEffort | null {
   return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' ? value : null;
 }
 
-/** Readable settings preserve every unedited field, including exact credential and model pins. */
-export function ConfigurationFields({ configuration, onChange, readOnly = false }: {
+/**
+ * Readable settings preserve every unedited field. Changing the default model clears a saved
+ * credential pin; returning to the saved model restores it.
+ */
+export function ConfigurationFields({ configuration, onChange, readOnly = false, savedSelection }: {
   configuration: ProjectConfiguration;
   onChange: (configuration: ProjectConfiguration) => void;
   readOnly?: boolean;
+  /** Owner-saved default selection; omit for read-only history. */
+  savedSelection?: ModelSelectionSettings | null;
 }) {
+  const setModelReference = (reference: string) => {
+    if (!reference && !configuration.modelSelection) return;
+    const current = configuration.modelSelection;
+    const credentialReference = savedSelection?.credentialReference
+      ? reference === savedSelection.reference ? savedSelection.credentialReference : null
+      : current?.credentialReference;
+    onChange({ ...configuration, modelSelection: { ...current, reference, credentialReference } });
+  };
+  const setCredential = (part: 'id' | 'version', value: string) => {
+    if (!configuration.modelSelection) return;
+    const previous = configuration.modelSelection.credentialReference ?? { id: '', version: '' };
+    onChange({
+      ...configuration,
+      modelSelection: { ...configuration.modelSelection, credentialReference: { ...previous, [part]: value } },
+    });
+  };
+  const missingCredential = needsModelCredential(configuration, savedSelection);
+  const showCredential = Boolean(savedSelection?.credentialReference || configuration.modelSelection?.credentialReference);
   const setTask = (taskKind: ModelTaskKind, reference: string | null, effort: ReasoningEffort | null) => {
     const overrides = configuration.modelTaskOverrides ?? [];
     const previous = overrides.find((item) => item.taskKind === taskKind);
@@ -35,12 +59,7 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false 
         <div className="v1-inline-form">
           <Field label="Default model reference">
             <Input value={configuration.modelSelection?.reference ?? ''} readOnly={readOnly}
-              onChange={(_, data) => onChange({
-                ...configuration,
-                modelSelection: data.value || configuration.modelSelection
-                  ? { ...configuration.modelSelection, reference: data.value }
-                  : null,
-              })} />
+              onChange={(_, data) => setModelReference(data.value)} />
           </Field>
           <Field label="Default reasoning effort">
             <Select value={configuration.modelSelection?.reasoningEffort ?? ''} disabled={readOnly || !configuration.modelSelection}
@@ -56,6 +75,19 @@ export function ConfigurationFields({ configuration, onChange, readOnly = false 
             </Select>
           </Field>
         </div>
+        {showCredential && (
+          <div className="v1-inline-form">
+            <Field label="Model credential ID" validationState={missingCredential ? 'error' : 'none'}
+              validationMessage={missingCredential ? 'Choose a credential for this model.' : undefined}>
+              <Input value={configuration.modelSelection?.credentialReference?.id ?? ''} readOnly={readOnly}
+                onChange={(_, data) => setCredential('id', data.value)} />
+            </Field>
+            <Field label="Model credential version">
+              <Input value={configuration.modelSelection?.credentialReference?.version ?? ''} readOnly={readOnly}
+                onChange={(_, data) => setCredential('version', data.value)} />
+            </Field>
+          </div>
+        )}
       </PageSection>
       <PageSection title="Models by task" description="Leave a field empty to inherit its default. The service validates references and supported reasoning levels.">
         {TASKS.map(({ value, label }) => {
