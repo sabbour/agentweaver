@@ -194,7 +194,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                     });
                 await page.GetByRole(
                     AriaRole.Button,
-                    new() { Name = "Continue with Identity Broker" }).ClickAsync();
+                    new() { Name = "Sign in", Exact = true }).ClickAsync();
                 await page.GetByRole(
                     AriaRole.Heading,
                     new() { Name = "Review access" }).WaitForAsync();
@@ -203,12 +203,12 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
 
                 var configurationPath =
                     $"/api/v1/projects/{Uri.EscapeDataString(project.ProjectId)}/configuration";
-                await page.GetByRole(
-                    AriaRole.Link,
-                    new() { Name = projectName, Exact = true }).ClickAsync();
+                await page.GetByText(projectName, new() { Exact = true }).ClickAsync();
+                await page.WaitForURLAsync(
+                    $"**/projects/{Uri.EscapeDataString(project.ProjectId)}");
                 await page.GetByRole(
                     AriaRole.Heading,
-                    new() { Name = projectName, Exact = true }).WaitForAsync();
+                    new() { Name = "Dashboard", Exact = true }).WaitForAsync();
                 var configurationResponseTask = page.WaitForResponseAsync(response =>
                     response.Request.Method == "GET" &&
                     new Uri(response.Url).AbsolutePath.Equals(
@@ -220,7 +220,8 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 Assert.Equal((int)HttpStatusCode.OK, configurationResponse.Status);
                 await page.GetByRole(
                     AriaRole.Heading,
-                    new() { Name = "Project configuration" }).WaitForAsync();
+                    new() { Name = "Project settings", Exact = true }).WaitForAsync();
+                await page.GetByText("Advanced: edit configuration JSON").ClickAsync();
                 await page.GetByLabel("Typed ProjectConfiguration JSON").WaitForAsync();
                 await page.GetByText(
                     "No GitHub Repo App connection is available for this identity.")

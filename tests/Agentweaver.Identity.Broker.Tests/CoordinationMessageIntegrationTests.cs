@@ -5601,7 +5601,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
             }
             try
             {
-                await page.GetByRole(AriaRole.Button, new() { Name = "Continue with Identity Broker" }).ClickAsync();
+                await page.GetByRole(AriaRole.Button, new() { Name = "Sign in", Exact = true }).ClickAsync();
                 if (await WaitForConsentPromptOrTokenAsync(page, reverseProxy))
                     await page.GetByRole(AriaRole.Button, new() { Name = "Approve" }).ClickAsync();
                 await page.GetByRole(AriaRole.Button, new() { Name = "Sign in for this project and run" }).WaitForAsync();
