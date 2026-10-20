@@ -202,7 +202,7 @@ public static class GatewayRouteCatalog
         // Interactive creation precedes the existing run-bound coordination routes.
         Add("POST", GatewayOwner.Orchestrator, "/projects/{projectId}/runs",
             "/api/projects/{projectId}/runs", "createProjectRun", "Create an interactive run",
-            body: true, forwardTenantSelector: true);
+            body: true, maximumRequestBodyBytes: 256 * 1024, forwardTenantSelector: true);
         Add("POST", GatewayOwner.Orchestrator, "/projects/{projectId}/runs/{runId}/start",
             "/api/projects/{projectId}/runs/{runId}/start", "startProjectRun", "Deliver the first run message",
             forwardTenantSelector: true);

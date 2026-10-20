@@ -478,6 +478,29 @@ public static class ProjectConfigEndpoints
             }
         });
 
+        // This owner-only helper applies the existing Orchestrator role gate without exposing platform defaults.
+        projects.MapPut("/{projectId}/runs/{runId}/interactive-selection", async (
+            string projectId,
+            string runId,
+            InteractiveRunSelectionRequest request,
+            HttpContext context,
+            ProjectsConfigService service,
+            ProjectAuthorizationOwner authorizationOwner,
+            CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                context.Response.Headers.CacheControl = "no-store";
+                return Results.Ok(await service.AcceptInteractiveRunSelectionAsync(
+                    await ResolveCallerAsync(context, authorizationOwner, cancellationToken).ConfigureAwait(false),
+                    projectId, runId, request, cancellationToken).ConfigureAwait(false));
+            }
+            catch (ProjectConfigException exception)
+            {
+                return ToProblem(exception);
+            }
+        });
+
         projects.MapPut("/{projectId}/runs/{runId}/selection", async (
             string projectId,
             string runId,
