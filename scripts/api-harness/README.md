@@ -182,10 +182,15 @@ selection is retained as `retainedPending` with its grants still active.
 Supply an `executionIntent: "execute"` JSON manifest with the direct Environment
 identity metadata, pinned provider/runtime/storage/source/image receipts, and
 `deploymentEvidence` paths named `publicationPath`, `manifestPath`,
-`agentHostArchivePath`, and `integrationDeploymentReceiptPath`. The deployment
+`agentHostArchivePath`, and either `integrationDeploymentReceiptPath` (an
+images-only integration publication) or `releaseTag` (a published release).
+The integration deployment
 receipt must come from `release:deploy-integration` and match the source,
 manifest, publication, target namespace, image identities, and service
-readbacks. `fixturePlan` requires a positive
+readbacks. For a published release, `agentHostArchivePath` is the exact
+AgentHost OCI archive from that release's images artifact. The runner measures
+it against the published source commit, so you can run acceptance from a newer
+reviewed checkout that still contains that commit. `fixturePlan` requires a positive
 `expectedPlatformRuntimeRevision` alongside the selection context, a distinct
 denied actor, and only the gate or message content needed by the selected
 journey. The runner passes the expected revision through the existing
