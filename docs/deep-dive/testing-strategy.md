@@ -161,16 +161,22 @@ not sufficient evidence.
 
 ## Understand CI boundaries
 
-`v1-ci.yml` runs on `v1` pull requests and pushes. It records tested-source
-identity, validates release composition, restores locked dependencies, builds
-.NET, and runs Web coverage, build, and lint. It also builds source-bound
-Probe, Broker, and AgentHost images, checks the pinned native runtime, and
-runs isolated native prompt-capacity tests.
+`v1-ci.yml` runs on `v1` pull requests, pushes and manual dispatches. Its
+always-reported `foundation` aggregate gates independently running image,
+Web, Node and .NET jobs. Path classification selects expensive suites; release
+composition, controlled P1 journeys and CI contract checks remain mandatory.
+The image job retains source-bound Probe, Broker and AgentHost image checks,
+the pinned native runtime and isolated native prompt-capacity tests.
 
-The workflow installs Chromium, runs .NET and Node coverage, tests controlled
-P1 journeys and coverage guards, and checks the issue-to-merge workflow. It
-uploads source-bound coverage artifacts and publishes a summary. Controlled
-journeys are not automatic deployed acceptance.
+.NET projects run concurrently, with four deterministic method shards for
+Broker and verified per-shard TRX receipts. NuGet and Chromium caches avoid
+repeated downloads, without caching mutable databases or browser contexts.
+PRs run without coverage; pushes and manual runs collect it in the same
+single test invocation and combine reports without a second pass.
+The [testing guide](../guide/testing.md#understand-v1-pull-request-ci)
+describes path dependencies, cache invalidation, retained skip behavior and
+the measured performance acceptance criteria. Controlled journeys are not
+automatic deployed acceptance.
 
 `v1-docs-ci.yml` builds VitePress, checks links and source coverage, and
 validates diagram provenance and readability. On a `v1` push it stages a

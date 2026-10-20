@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const output = join(root, 'artifacts', 'coverage', 'dotnet');
 const manifest = join(root, '.config', 'dotnet-tools.json');
-const suites = [
+export const suites = [
   ['orchestrator-core', 'Agentweaver.Orchestrator.Core.Tests'],
   ['source-control', 'Agentweaver.SourceControl.Tests'],
   ['providers', 'Agentweaver.Providers.Tests'],
@@ -77,14 +77,15 @@ export function reportsIn(directory) {
 
 /** Run every configured test suite and verify its TRX, coverage, and combined assembly reports. */
 function main() {
-  rmSync(output, { recursive: true, force: true });
+  const combineOnly = process.argv.includes('--combine');
+  if (!combineOnly) rmSync(output, { recursive: true, force: true });
   mkdirSync(output, { recursive: true });
 
   if (run(['tool', 'restore', '--tool-manifest', manifest])) process.exit(1);
 
   let failed = false;
   const reports = [];
-  for (const [name, project] of suites) {
+  for (const [name, project] of combineOnly ? [] : suites) {
     const directory = join(output, name);
     const code = run([
       'test', join('tests', project, `${project}.csproj`),
@@ -108,6 +109,22 @@ function main() {
       failed = true;
     }
     reports.push(...found);
+  }
+
+  if (combineOnly) {
+    for (const [name] of suites) {
+      const directories = name === 'identity-broker'
+        ? Array.from({ length: 4 }, (_, index) => `${name}-${index + 1}`)
+        : [name];
+      for (const directory of directories) {
+        const found = reportsIn(join(output, directory));
+        if (found.length !== 1) {
+          console.error(`Expected one coverage report for ${directory}, found ${found.length}`);
+          failed = true;
+        }
+        reports.push(...found);
+      }
+    }
   }
 
   if (reports.length) {

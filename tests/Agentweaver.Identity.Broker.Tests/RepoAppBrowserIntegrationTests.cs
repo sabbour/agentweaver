@@ -141,7 +141,7 @@ public sealed partial class ProjectsConfigBrokerAuthorizationTests
                 webCallback);
             reverseProxy.UseIdentityProvider(fakeIdpProxy);
 
-            using var playwright = await Playwright.CreateAsync();
+            var playwright = await postgres.GetPlaywrightAsync();
             await using var browser = await playwright.Chromium.LaunchAsync(
                 new BrowserTypeLaunchOptions
                 {

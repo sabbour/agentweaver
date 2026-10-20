@@ -1,0 +1,125 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import test from 'node:test';
+import { runInNewContext } from 'node:vm';
+import { classify } from '../v1-changes.mjs';
+import { brokerShardCount, partitionMethods, testMatrix, verifyTrx } from '../v1-test-plan.mjs';
+import { suites } from '../../coverage/dotnet.mjs';
+
+const workflow = readFileSync(new URL('../../../.github/workflows/v1-ci.yml', import.meta.url), 'utf8');
+
+test('metadata-only and unrelated workflows skip expensive validation; unknown inputs fail safe', () => {
+  assert.deepEqual(classify(['docs/guide/testing.md', 'README.md']), { dotnet: false, web: false, node: false, images: false });
+  assert.deepEqual(classify(['.github/workflows/other.yml']), classify([]));
+  for (const path of ['.github/workflows/v1-ci.yml', 'scripts/ci/v1-changes.mjs', 'package-lock.json', 'new-input']) {
+    assert.ok(Object.values(classify([path])).every(Boolean), path);
+  }
+  assert.ok(Object.values(classify([], true)).every(Boolean));
+});
+
+test('source, lockfile, Docker, browser and harness changes select all dependent validation', () => {
+  for (const path of ['services/gateway/File.cs', 'tests/Broker/Test.cs', 'Directory.Build.props',
+    'global.json', 'NuGet.Config', 'packages/Library/packages.lock.json', 'deploy/k8s/test.yaml']) {
+    const result = classify([path]);
+    assert.equal(result.dotnet, true, path);
+    assert.equal(result.web, true, path);
+    assert.equal(result.images, true, path);
+  }
+  assert.equal(classify(['apps/web/src/v1/test.ts']).dotnet, true);
+  assert.equal(classify(['scripts/harness-shared/run-p1.mjs']).node, true);
+  assert.equal(classify(['scripts/release/validate.mjs']).images, true);
+  assert.equal(classify(['deploy/k8s/profiles/events-and-sessions/render.mjs']).node, true);
+});
+
+test('matrix includes every suite and exactly four unique Broker shards', () => {
+  assert.equal(new Set(testMatrix.map((entry) => entry.name)).size, testMatrix.length);
+  assert.deepEqual(new Set(testMatrix.map((entry) => entry.project)), new Set(suites.map(([, project]) => project)));
+  assert.equal(testMatrix.filter((entry) => entry.shard).length, brokerShardCount);
+  const solution = readFileSync(new URL('../../../Agentweaver.slnx', import.meta.url), 'utf8');
+  const solutionTests = [...solution.matchAll(/tests\\([^\\]+)\\[^"]+\.csproj/g)].map((match) => match[1]);
+  assert.deepEqual(new Set(solutionTests), new Set(testMatrix.map((entry) => entry.project)));
+});
+
+test('discovered methods and theory cases are partitioned once, deterministically, without splitting cases', () => {
+  const names = Array.from({ length: 200 }, (_, index) => `Agentweaver.Broker.Tests.Class.Method${index}`);
+  const discovery = `Some VSTest banner\n${names.map((name) => `    ${name}(value: "test")\n    ${name}(value: "other")`).join('\n')}`;
+  const partitions = partitionMethods(discovery);
+  assert.deepEqual(partitionMethods(discovery), partitions);
+  assert.deepEqual(partitions.flat().sort(), names.sort());
+  assert.ok(partitions.every((partition) => partition.length > 0));
+  assert.throws(() => partitionMethods('No tests found'), /no Agentweaver/);
+  assert.throws(() => partitionMethods('    Agentweaver.Tests.One.Test'), /empty Broker shard/);
+});
+
+test('TRX receipts reject zero execution, missing counters and failures while preserving explicit opt-in skips', () => {
+  verifyTrx('<Counters total="2" executed="2" passed="2" failed="0" />');
+  verifyTrx('<Counters total="3" executed="2" passed="2" failed="0" notExecuted="1" />');
+  for (const xml of ['', '<Counters total="0" executed="0" passed="0" failed="0" />',
+    '<Counters total="2" executed="1" passed="1" failed="0" />',
+    '<Counters total="2" executed="2" passed="1" failed="1" />']) {
+    assert.throws(() => verifyTrx(xml), /TRX receipt/);
+  }
+});
+
+test('workflow preserves aggregate name, source provenance, native checks, release validation and P1', async () => {
+  const { parse } = await import('yaml');
+  const parsed = parse(workflow);
+  const jobs = parsed.jobs;
+  assert.deepEqual(jobs.foundation.needs, ['changes', 'images', 'node', 'web', 'dotnet', 'coverage']);
+  assert.equal(jobs.foundation.if, '${{ always() }}');
+  assert.equal(jobs.dotnet.strategy['fail-fast'], false);
+  assert.match(parsed.concurrency['cancel-in-progress'], /pull_request/);
+  assert.match(parsed.concurrency.group, /github.run_id/);
+  assert.match(parsed.env.COLLECT_COVERAGE, /!= 'pull_request'/);
+  assert.ok(jobs.images.steps.some((step) => step.name === 'Run pinned native prompt-capacity tests in an isolated AMD64 container'));
+  assert.ok(jobs.node.steps.some((step) => step.name === 'Validate release composition'));
+  assert.ok(jobs.node.steps.some((step) => step.name === 'Test controlled P1 API, MCP, and UI journeys'));
+  assert.match(workflow, /org.opencontainers.image.revision/);
+  assert.match(workflow, /io.agentweaver.source-tree/);
+  assert.ok(jobs.dotnet.steps.some((step) => step.run?.includes('install --with-deps chromium')));
+  assert.ok(jobs.dotnet.steps.some((step) => step.with?.path === '~/.cache/ms-playwright'));
+  assert.match(jobs.coverage.if, /!= 'pull_request'/);
+  assert.ok(jobs.coverage.steps.some((step) => step.run === 'node scripts/coverage/dotnet.mjs --combine'));
+});
+
+test('Broker fixture keeps one PostgreSQL container, lazy shared driver and test-owned browser contexts', () => {
+  const fixture = readFileSync(new URL('../../../tests/Agentweaver.Identity.Broker.Tests/PostgresContainerFixture.cs', import.meta.url), 'utf8');
+  assert.match(fixture, /ICollectionFixture<PostgresContainerFixture>/);
+  assert.match(fixture, /Lazy<Task<IPlaywright>>/);
+  assert.match(fixture, /finally[\s\S]*_container.DisposeAsync/);
+  assert.match(fixture, /CREATE DATABASE/);
+  for (const file of ['ProjectsConfigBrokerAuthorizationTests.cs', 'RepoAppBrowserIntegrationTests.cs']) {
+    const source = readFileSync(new URL(`../../../tests/Agentweaver.Identity.Broker.Tests/${file}`, import.meta.url), 'utf8');
+    assert.match(source, /var playwright = await postgres.GetPlaywrightAsync/);
+    assert.match(source, /await using var browser = await playwright.Chromium.LaunchAsync/);
+    assert.match(source, /browser.NewContextAsync/);
+    assert.doesNotMatch(source, /using var playwright/);
+  }
+});
+
+test('the real foundation gate rejects failures, cancellation and unexpected skips while accepting scoped PRs', async () => {
+  const { parse } = await import('yaml');
+  const gate = parse(workflow).jobs.foundation.steps[0].run.match(/-e '([\s\S]*)'\s*$/)[1];
+  function execute(results, event = 'pull_request') {
+    return runInNewContext(gate, { process: { env: { RESULTS: JSON.stringify(results), EVENT_NAME: event } } });
+  }
+  const full = Object.fromEntries(['changes', 'images', 'node', 'web', 'dotnet', 'coverage']
+    .map((name) => [name, { result: name === 'coverage' ? 'skipped' : 'success' }]));
+  full.changes.outputs = { images: 'true', web: 'true', dotnet: 'true' };
+  execute(full);
+  for (const name of ['images', 'node', 'web', 'dotnet', 'changes']) {
+    for (const result of ['failure', 'cancelled', 'skipped']) {
+      const broken = structuredClone(full);
+      broken[name].result = result;
+      assert.throws(() => execute(broken), new RegExp(name));
+    }
+  }
+  assert.throws(() => execute(full, 'push'), /coverage/);
+  const push = structuredClone(full);
+  push.coverage.result = 'success';
+  execute(push, 'push');
+  const scoped = structuredClone(full);
+  scoped.changes.outputs = { images: 'false', web: 'false', dotnet: 'false' };
+  for (const name of ['images', 'web', 'dotnet']) scoped[name].result = 'skipped';
+  execute(scoped);
+});

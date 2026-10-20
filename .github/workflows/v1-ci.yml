@@ -5,12 +5,45 @@ on:
     branches: [v1, sabbour-v1-opentelemetry-core]
   push:
     branches: [v1]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: v1-ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  COLLECT_COVERAGE: ${{ github.event_name != 'pull_request' }}
+
 jobs:
-  foundation:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      dotnet: ${{ steps.paths.outputs.dotnet }}
+      web: ${{ steps.paths.outputs.web }}
+      node: ${{ steps.paths.outputs.node }}
+      images: ${{ steps.paths.outputs.images }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - id: paths
+        env:
+          CI_DIFF_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: node scripts/ci/v1-changes.mjs
+      - id: matrix
+        run: echo "matrix=$(node scripts/ci/v1-test-plan.mjs matrix)" >> "$GITHUB_OUTPUT"
+
+  images:
+    name: v1 image and native runtime validation
+    needs: changes
+    if: needs.changes.outputs.images == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,30 +52,17 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: v1-nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('global.json', '**/packages.lock.json', '**/*.csproj', '**/*.props', '**/*.targets', '**/NuGet.Config') }}
+          restore-keys: v1-nuget-${{ runner.os }}-${{ runner.arch }}-
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
       - name: Install locked root Node.js tooling dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Record coverage candidate
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: |
-          mkdir -p artifacts/coverage
-          node --input-type=module -e 'import fs from "node:fs"; fs.writeFileSync("artifacts/coverage/source.json", JSON.stringify({ testedSourceSha: process.env.GITHUB_SHA, headSha: process.env.PR_HEAD_SHA, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT }, null, 2) + "\n");'
-      - name: Install locked web dependencies
-        run: npm ci --prefix apps/web --no-audit --no-fund
-      - name: Test v1 web client with coverage
-        run: npm --prefix apps/web run coverage
-      - name: Build and lint v1 web client
-        run: |
-          npm --prefix apps/web run build
-          npm --prefix apps/web run lint
-      - name: Validate release composition
-        env:
-          RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          RELEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
-        run: npm run release:validate -- --ci
       - name: Restore locked dependencies
         run: dotnet restore Agentweaver.slnx --locked-mode
       - name: Build foundation
@@ -346,27 +366,191 @@ jobs:
             exit "$test_status"
           fi
           exit "$verification_status"
-      - name: Install Chromium for broker browser integration tests
-        run: pwsh tests/Agentweaver.Identity.Broker.Tests/bin/Release/net10.0/playwright.ps1 install chromium
-      - name: Test .NET foundations, Identity broker, Projects & Config, and Foundation Probe with coverage
-        run: npm run coverage:dotnet
-      - name: Preload pinned ASP.NET runtime image for release validator
+      - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
+        with:
+          name: v1-local-image-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/images/
+          if-no-files-found: error
+          retention-days: 30
+
+  node:
+    name: v1 release and P1 contracts
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install locked root Node.js tooling dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Validate release composition
+        env:
+          RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          RELEASE_HEAD_SHA: ${{ github.event.pull_request.head.sha || '' }}
+        run: npm run release:validate -- --ci
+      - name: Preload pinned ASP.NET runtime image for release validator
+        if: ${{ !cancelled() && needs.changes.outputs.node == 'true' }}
         run: docker pull --platform linux/amd64 mcr.microsoft.com/dotnet/aspnet:10.0@sha256:222759b391a1aaf241166672c8f99b2d4ada452e7b5319f3c6e8f265a37b5ad4
       - name: Test release validator with coverage
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.COLLECT_COVERAGE == 'true' }}
         run: npm run coverage:node
+      - name: Test release and Azure tooling without coverage
+        if: ${{ !cancelled() && env.COLLECT_COVERAGE != 'true' && needs.changes.outputs.node == 'true' }}
+        run: node --test scripts/release/tests/*.test.mjs scripts/azure/tests/*.test.mjs
       - name: Test controlled P1 API, MCP, and UI journeys
         if: ${{ !cancelled() }}
         run: node --test scripts/api-harness/test/p1-journey.test.mjs scripts/harness-shared/test/run-p1.test.mjs scripts/harness-shared/test/p1-deployment-evidence.test.mjs
       - name: Test coverage report guards
         if: ${{ !cancelled() }}
-        run: node --test scripts/coverage/tests/*.test.mjs
+        run: node --test scripts/coverage/tests/*.test.mjs scripts/ci/tests/*.test.mjs
       - name: Test project issue-to-merge workflow
         if: ${{ !cancelled() }}
         run: node --test .github/extensions/agentweaver-issue-to-merge/workflow.test.mjs
-      - name: Publish coverage summary
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && env.COLLECT_COVERAGE == 'true' }}
+        with:
+          name: v1-node-coverage
+          path: artifacts/coverage/node/
+          if-no-files-found: error
+          retention-days: 30
+
+  web:
+    name: v1 web validation
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci --prefix apps/web --no-audit --no-fund
+      - name: Test web once with optional coverage
+        run: |
+          if [ "$COLLECT_COVERAGE" = true ]; then
+            npm --prefix apps/web run coverage
+          else
+            npm --prefix apps/web test
+          fi
+      - name: Build and lint v1 web client
+        run: |
+          npm --prefix apps/web run build
+          npm --prefix apps/web run lint
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v1-web-dist
+          path: apps/web/dist/
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() && env.COLLECT_COVERAGE == 'true' }}
+        with:
+          name: v1-web-coverage
+          path: artifacts/coverage/web/
+          if-no-files-found: error
+          retention-days: 30
+
+  dotnet:
+    name: v1 .NET tests (${{ matrix.name }})
+    needs: [changes, web]
+    if: ${{ !cancelled() && needs.changes.outputs.dotnet == 'true' && needs.web.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: v1-nuget-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('global.json', '**/packages.lock.json', '**/*.csproj', '**/*.props', '**/*.targets', '**/NuGet.Config') }}
+          restore-keys: v1-nuget-${{ runner.os }}-${{ runner.arch }}-
+      - name: Restore and build test project
+        env:
+          TEST_PROJECT: ${{ matrix.project }}
+        run: |
+          dotnet restore "tests/$TEST_PROJECT/$TEST_PROJECT.csproj" --locked-mode
+          dotnet build "tests/$TEST_PROJECT/$TEST_PROJECT.csproj" --no-restore --configuration Release
+      - uses: actions/download-artifact@v4
+        if: matrix.shard > 0
+        with:
+          name: v1-web-dist
+          path: apps/web/dist/
+      - name: Cache Playwright browsers
+        if: matrix.shard > 0
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: v1-playwright-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tests/Agentweaver.Identity.Broker.Tests/packages.lock.json') }}
+      - name: Install Chromium and system dependencies
+        if: matrix.shard > 0
+        run: pwsh tests/Agentweaver.Identity.Broker.Tests/bin/Release/net10.0/playwright.ps1 install --with-deps chromium
+      - name: Run tests and verify shard receipt
+        env:
+          TEST_SUITE: ${{ matrix.name }}
+        run: node scripts/ci/v1-test-plan.mjs run "$TEST_SUITE"
+      - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
+        with:
+          name: v1-dotnet-${{ matrix.name }}
+          path: artifacts/coverage/dotnet/${{ matrix.name }}/
+          if-no-files-found: error
+          retention-days: 30
+
+  coverage:
+    name: v1 coverage summary
+    needs: [dotnet, web, node]
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.dotnet.result == 'success' && needs.web.result == 'success' && needs.node.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: v1-dotnet-*
+          path: artifacts/downloads/
+      - name: Restore suite directory layout
+        run: |
+          mkdir -p artifacts/coverage/dotnet
+          for suite in artifacts/downloads/v1-dotnet-*; do
+            mv "$suite" "artifacts/coverage/dotnet/${suite##*/v1-dotnet-}"
+          done
+      - uses: actions/download-artifact@v4
+        with:
+          name: v1-node-coverage
+          path: artifacts/coverage/node/
+      - uses: actions/download-artifact@v4
+        with:
+          name: v1-web-coverage
+          path: artifacts/coverage/web/
+      - name: Combine coverage without rerunning tests
+        run: node scripts/coverage/dotnet.mjs --combine
+      - name: Record coverage candidate
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          node --input-type=module -e 'import fs from "node:fs"; fs.writeFileSync("artifacts/coverage/source.json", JSON.stringify({ testedSourceSha: process.env.GITHUB_SHA, headSha: process.env.PR_HEAD_SHA, runId: process.env.GITHUB_RUN_ID, runAttempt: process.env.GITHUB_RUN_ATTEMPT }, null, 2) + "\n");'
+      - name: Publish coverage summary
         run: |
           {
             echo "## Coverage for tested candidate \`$GITHUB_SHA\`"
@@ -396,14 +580,34 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: v1-local-image-${{ github.sha }}-${{ github.run_attempt }}
-          path: artifacts/images/
-          if-no-files-found: warn
-          retention-days: 30
-      - uses: actions/upload-artifact@v4
-        if: ${{ !cancelled() }}
-        with:
           name: v1-coverage-${{ github.sha }}-${{ github.run_attempt }}
           path: artifacts/coverage/
           if-no-files-found: error
           retention-days: 30
+
+  foundation:
+    needs: [changes, images, node, web, dotnet, coverage]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Preserve the foundation gate and reject failed or unexpectedly skipped work
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          node --input-type=module -e '
+            const jobs = JSON.parse(process.env.RESULTS);
+            const expected = {
+              changes: true, node: true,
+              images: jobs.changes.outputs.images === "true",
+              web: jobs.changes.outputs.web === "true",
+              dotnet: jobs.changes.outputs.dotnet === "true",
+              coverage: process.env.EVENT_NAME !== "pull_request"
+            };
+            for (const [name, required] of Object.entries(expected)) {
+              const actual = jobs[name].result;
+              if (actual !== (required ? "success" : "skipped")) {
+                throw Error(`${name}: expected ${required ? "success" : "skipped"}, got ${actual}`);
+              }
+            }
+          '

@@ -61,6 +61,70 @@ source identity alongside the test output. Match a result to the exact source
 SHA, pull request head, workflow run, and attempt. A compiled test or a green
 run from an older revision is not evidence that the current revision passed.
 
+## Understand v1 pull request CI
+
+The `v1 foundation CI` workflow keeps the required `foundation` check as an
+always-reported aggregate. It fails if any selected job fails, is cancelled,
+or is unexpectedly skipped. Release composition validation, controlled P1
+journeys, CI/coverage guards, and issue-to-merge contracts still run on every
+candidate. `v1-docs-ci.yml` remains the separate documentation check.
+
+Changed-path detection skips expensive .NET, Web, image, and tooling suites
+for documentation/metadata-only PRs. Unrelated workflow edits do not run those
+suites. Unknown paths and edits to `v1-ci.yml` or CI helpers select everything.
+.NET inputs select Web validation too: Broker browser tests consume the exact
+candidate's built Web artifact. Service/package/test, lockfile and deployment
+inputs select image checks, including source receipts and isolated native
+prompt-capacity verification; no images are published by this workflow.
+
+Each .NET project runs on its own runner. The Broker suite has four stable
+SHA-256 method shards, derived from the built assembly's VSTest discovery.
+All theory cases for a method stay together, including methods in large
+partial classes. Every Broker shard saves the complete partition and checks
+its TRX method set against its assigned partition. Empty discovery, empty
+shards, missing receipts and failed tests fail CI. Existing explicitly
+opt-in native cases retain their skip behavior; isolated image-native checks
+remain separate and mandatory when image validation is selected.
+
+The PostgreSQL collection already shares one container per test process;
+each test retains a fresh database. Browser-backed Projects tests also share
+a lazily created Playwright driver, but not browsers, resolver arguments,
+contexts or cookies. NuGet caches are keyed by SDK/project/lock inputs.
+Chromium caches are keyed by OS, architecture and Broker package lock; the
+installer still runs on cache hits to install required Linux libraries.
+
+PR test invocations do not collect coverage. Pushes to `v1` and manual
+dispatches run full coverage, instrumenting the same single test pass per
+suite. The coverage job merges downloaded .NET shard reports without rerunning
+tests, checks the expected production assemblies, and uploads the existing
+source-bound `v1-coverage-*` artifact with Web and Node reports. Local
+`npm run coverage:dotnet` retains its full sequential diagnostic behavior.
+Only superseded runs for the same PR are cancelled; pushes and manual runs
+have independent concurrency groups.
+
+Run the workflow regression guards locally:
+
+```powershell
+npm ci --ignore-scripts --no-audit --no-fund
+node --test scripts\ci\tests\*.test.mjs scripts\coverage\tests\*.test.mjs
+node scripts\ci\v1-test-plan.mjs matrix
+```
+
+After restoring/building a test project, use
+`node scripts\ci\v1-test-plan.mjs run identity-broker-1` to reproduce a
+Broker shard (Docker, Chromium and built Web assets are required). Set
+`COLLECT_COVERAGE=true` to instrument that invocation. Each shard's summary
+and artifact include test/discovery elapsed time; Actions job durations also
+include setup, restore and build.
+
+The historical comparison baseline was approximately 29 minutes median for
+v1 PR CI versus 15 minutes for dev, with Broker alone taking 13m46s.
+Performance acceptance requires at least three representative successful PR
+runs, a median total duration of at most 20 minutes and a longest Broker shard
+of at most 8 minutes. Record run URLs, cache warmth and runner/queue caveats
+on the tracking issue before closing it; configuration changes alone do not
+prove those timing targets.
+
 ## Run focused database checks
 
 Run the Broker migration/grant and read-only bootstrap regressions against
