@@ -7,6 +7,16 @@ describes source receipts, target guards, and the separate #1784 runtime gate.
 
 ## Offline validation
 
+Orchestrator migration `026_backlog_task_content.sql` adds task content,
+open/closed lifecycle and a unique repository issue identity. It takes an
+`ACCESS EXCLUSIVE` lock on `backlog_tasks` and blocks writes until commit.
+It adds no tables or runtime privileges: existing `SELECT, INSERT, UPDATE`
+grants on `backlog_tasks` and `backlog_projects` remain sufficient.
+The Core version list changes the PostgreSQL plan hash. Applying migration
+026, reconciling existing grants, and accepting the new exact plan hash are
+separate, unapplied operator steps that require approval. Source checks do
+not authorize or perform them.
+
 Run these commands from the repository root:
 
 ```powershell

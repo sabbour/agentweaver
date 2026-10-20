@@ -110,7 +110,7 @@ public static class BacklogReadinessEvaluator
             .ToHashSet(StringComparer.Ordinal);
         var blockers = ImmutableArray.CreateBuilder<BacklogIssue>();
 
-        if (task.IsArchived || task.IsAutomationInvocationPending ||
+        if (task.Lifecycle == BacklogTaskLifecycle.Closed || task.IsArchived || task.IsAutomationInvocationPending ||
             task.State == BacklogTaskState.Claimed)
             Add(blockers, BacklogIssueCode.TaskNotEligible, "task",
                 "Only an unclaimed, unarchived task that is not held by an automation invocation can become ready or be claimed.");
