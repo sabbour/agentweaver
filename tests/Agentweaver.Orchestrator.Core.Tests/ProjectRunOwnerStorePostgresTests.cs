@@ -124,7 +124,7 @@ public sealed class ProjectRunOwnerStorePostgresTests : IAsyncLifetime
         var row = await Create("resend", new CreateProjectRunRequest("Resend me", 1));
         var selection = Selection(row.RunId);
         var identity = new SessionIdentity(Project, row.RunId, row.RootSessionId);
-        var ownerMessageIds = new List<string>();
+        var ownerMessageIds = new List<Guid>();
         async Task Deliver(CoordinationOwnerStore.ProjectRunRequestRow pending, CancellationToken token)
         {
             await _store.AcceptRootAsync(_actor, selection, pending.RootSessionId, token);
