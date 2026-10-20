@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Http;
+using Agentweaver.Abstractions;
 
 namespace Agentweaver.Orchestrator;
 
@@ -16,8 +17,33 @@ public static class ProjectRunEndpoints
     public static IEndpointRouteBuilder MapProjectRunEndpoints(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/projects/{projectId}/runs", ListRunsAsync).RequireAuthorization();
+        // Metrics use the same fresh authority and run-bound narrowing as the run list.
+        app.MapGet("/api/projects/{projectId}/metrics", ReadMetricsAsync).RequireAuthorization();
         return app;
     }
+
+    /// <summary>Reads bounded UTC project metrics without caching or changing owner state.</summary>
+    private static Task<IResult> ReadMetricsAsync(
+        string projectId, HttpContext context, ProjectsRunSelectionClient projects,
+        ProjectRunReadStore store, TimeProvider timeProvider, CancellationToken cancellationToken) =>
+        CoordinationEndpoints.ExecuteAsync(async () =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var query = ReadSingleValuedQuery(context.Request.Query, new(["from", "to", "bucket"], StringComparer.Ordinal));
+            ProjectMetricsRange range;
+            try
+            {
+                range = ProjectMetricsRange.Parse(query.GetValueOrDefault("from"), query.GetValueOrDefault("to"),
+                    query.GetValueOrDefault("bucket"), timeProvider.GetUtcNow());
+            }
+            catch (ArgumentException)
+            {
+                throw new CoordinationException("query_invalid", StatusCodes.Status400BadRequest);
+            }
+            var authority = await projects.ReadProjectReadAuthorityAsync(context, projectId, cancellationToken);
+            return Results.Ok(await store.ReadMetricsAsync(
+                authority.TenantId, projectId, authority.BoundRunId, range, cancellationToken));
+        }, cancellationToken);
 
     /// <summary>
     /// Lists the project's runs newest first after a fresh Projects read-authority check.

@@ -150,6 +150,35 @@ Projects & Config. A run-bound token sees only its own run. The list reads
 persisted run records only. `title` and `goal` are `null` until a run start
 request stores them.
 
+## Read project metrics and usage
+
+Send `GET /api/v1/projects/{projectId}/metrics` for run counts and a daily
+series. Send `GET /api/v1/projects/{projectId}/usage` for usage grouped by
+model and agent. The Gateway forwards these requests to Orchestrator and
+Events & Sessions, respectively. It does not aggregate the responses.
+
+Use the same explicit `from` and `to` values for aligned intervals. Bounds
+are inclusive and exclusive, respectively, and use UTC. ISO dates and
+timestamps with explicit offsets are accepted. If omitted, `to` is now and
+`from` is 30 days earlier. The maximum interval is 92 days. Metrics supports
+only `bucket=day`; usage does not accept a bucket. Unknown or repeated query
+keys return `400`.
+
+Both routes require `api.read`, the owning service and Projects audiences,
+and current project or tenant read permission. Run-bound callers see only
+their own run. Responses use `Cache-Control: no-store`. No live database
+changes occur during a read.
+
+Read the [metrics definitions](../reference/api.md#project-metrics-and-usage)
+before comparing v1 with the 0.x dashboard. Run success uses completed runs,
+not agent dependencies. Usage retains unknown values and separate cost units.
+These routes do not price usage or change budgets. Cross-project overview
+is out of scope.
+
+Before deploying this source, obtain separate approval for Events migration
+009, which adds the project/time usage index. G2's Orchestrator migration 022
+must also be present. The existing Events ledger read grant is sufficient;
+these routes do not introduce a new grant.
 ## Review project casting
 
 Casting routes use the Projects & Config owner. The Gateway forwards the

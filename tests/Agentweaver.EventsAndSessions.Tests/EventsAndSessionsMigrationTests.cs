@@ -23,6 +23,7 @@ public sealed partial class EventsAndSessionsMigrationTests : IAsyncLifetime
         await command.ExecuteNonQueryAsync();
     }
 
+    /// <summary>Applies the full migration chain, including the project reporting index, idempotently.</summary>
     [Fact]
     public async Task FreshSchemaAppliesAddressedMessagesProjectFactsExplicitForksAndUsage()
     {
@@ -35,9 +36,16 @@ public sealed partial class EventsAndSessionsMigrationTests : IAsyncLifetime
         await using var command = new NpgsqlCommand($"""
             SELECT count(*) FROM "{_schema}".sessions_schema_migrations
             """, connection);
-        Assert.Equal(8, Convert.ToInt32(await command.ExecuteScalarAsync()));
+        Assert.Equal(9, Convert.ToInt32(await command.ExecuteScalarAsync()));
+        await using var index = new NpgsqlCommand("""
+            SELECT indexdef FROM pg_indexes WHERE schemaname = @schema
+                AND indexname = 'ix_usage_ledger_project_occurred'
+            """, connection);
+        index.Parameters.AddWithValue("schema", _schema);
+        Assert.Contains("(tenant_id, project_id, occurred_at)", (string)(await index.ExecuteScalarAsync())!);
     }
 
+    /// <summary>Preserves legacy facts while adding the current usage and project reporting migrations.</summary>
     [Fact]
     public async Task LegacyProjectFactsAtVersionTwoUpgradesWithoutReapplyingFactsMigration()
     {
@@ -67,9 +75,10 @@ public sealed partial class EventsAndSessionsMigrationTests : IAsyncLifetime
         await using var reader = await verify.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(7L, reader.GetInt64(0));
-        Assert.Equal(8L, reader.GetInt64(1));
+        Assert.Equal(9L, reader.GetInt64(1));
     }
 
+    /// <summary>Preserves admitted owner records and migration history while upgrading to project reporting.</summary>
     [Theory]
     [InlineData(3)]
     [InlineData(4)]
@@ -121,12 +130,13 @@ public sealed partial class EventsAndSessionsMigrationTests : IAsyncLifetime
         await using var reader = await verify.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         Assert.Equal(9L, reader.GetInt64(0));
-        Assert.Equal(8L, reader.GetInt64(1));
+        Assert.Equal(9L, reader.GetInt64(1));
         Assert.True(reader.GetBoolean(2));
         Assert.True(reader.GetBoolean(3));
         Assert.True(reader.GetBoolean(4));
     }
 
+    /// <summary>Rejects every noncontiguous migration chain, including the project reporting version.</summary>
     [Theory]
     [InlineData(3)]
     [InlineData(4)]
@@ -134,6 +144,7 @@ public sealed partial class EventsAndSessionsMigrationTests : IAsyncLifetime
     [InlineData(6)]
     [InlineData(7)]
     [InlineData(8)]
+    [InlineData(9)]
     public async Task MigrationRejectsVersionGaps(int lastVersion)
     {
         await using (var connection = await _fixture.DataSource.OpenConnectionAsync())

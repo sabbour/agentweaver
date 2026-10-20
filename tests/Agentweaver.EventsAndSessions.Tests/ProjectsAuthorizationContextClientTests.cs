@@ -15,6 +15,104 @@ public sealed class ProjectsAuthorizationContextClientTests
     private const string Audience = "agentweaver.projects";
     private const string ActorId = "33333333-3333-3333-3333-333333333333";
 
+    /// <summary>Rechecks project permission on every call rather than caching a previously granted read.</summary>
+    [Fact]
+    public async Task ProjectReadObservesRevokedAuthorityOnNextCall()
+    {
+        var owner = ValidContext() with { EffectiveAuthority = [new("project", "project-1", [new("readProjects", 1)])] };
+        var calls = 0;
+        var handler = new CaptureHandler(_ =>
+        {
+            calls++;
+            return Success(owner);
+        });
+        var context = CreateRequestContext();
+        ((ClaimsIdentity)context.User.Identity!).AddClaims([new("aud", "events"), new("scope", "api.read")]);
+        var client = CreateClient(handler);
+        await client.GetProjectReadAsync(context, "project-1", "events", default);
+        owner = owner with { EffectiveAuthority = [] };
+        await Assert.ThrowsAsync<ProjectsAuthorizationContextException>(
+            () => client.GetProjectReadAsync(context, "project-1", "events", default));
+        Assert.Equal(2, calls);
+    }
+
+    /// <summary>Accepts current project or tenant read grants and preserves optional run narrowing.</summary>
+    [Theory]
+    [InlineData("project", "readProjects", null, null, true)]
+    [InlineData("project", "readRunSelection", "project-1", null, true)]
+    [InlineData("tenant", "readProjects", "project-1", "run-1", true)]
+    [InlineData("project", "writeProjects", null, null, false)]
+    [InlineData("tenant", "readRunSelection", null, null, false)]
+    public async Task ProjectReadRequiresCurrentReadPermission(
+        string resource, string permission, string? project, string? run, bool allowed)
+    {
+        var owner = ValidContext() with
+        {
+            BoundProjectId = project, BoundRunId = run,
+            EffectiveAuthority = [new(resource, resource == "tenant" ? "tenant-1" : "project-1",
+                [new(permission, 1)])]
+        };
+        var handler = new CaptureHandler(_ => Success(owner));
+        var context = CreateRequestContext();
+        context.User = new(new ClaimsIdentity(
+            new[] { new Claim("sub", ActorId), new("aud", Audience), new("aud", "events"), new("scope", "api.read") }
+                .Concat(project is null ? [] : new[] { new Claim("project_id", project) })
+                .Concat(run is null ? [] : new[] { new Claim("run_id", run) }), "validated"));
+        if (allowed)
+        {
+            var result = await CreateClient(handler).GetProjectReadAsync(context, "project-1", "events", default);
+            Assert.Equal(run, result.BoundRunId);
+            Assert.Equal("tenant-1", result.TenantId);
+        }
+        else
+            Assert.Equal(HttpStatusCode.Forbidden, (await Assert.ThrowsAsync<ProjectsAuthorizationContextException>(
+                () => CreateClient(handler).GetProjectReadAsync(context, "project-1", "events", default))).StatusCode);
+    }
+
+    /// <summary>Rejects missing scopes, either missing audience, or conflicting bindings before sending a request.</summary>
+    [Theory]
+    [InlineData("projects.orchestrator", Audience, "events", "project-1", "run-1")]
+    [InlineData("api.read", "other", "events", "project-1", "run-1")]
+    [InlineData("api.read", Audience, "other", "project-1", "run-1")]
+    [InlineData("api.read", Audience, "events", "other-project", "run-1")]
+    [InlineData("api.read", Audience, "events", null, "run-1")]
+    public async Task ProjectReadRejectsInvalidCallerBeforeOwnerCall(
+        string scope, string projectsAudience, string eventsAudience, string? project, string? run)
+    {
+        var handler = new CaptureHandler(_ => throw new InvalidOperationException("Must not call Projects."));
+        var context = CreateRequestContext();
+        context.User = new(new ClaimsIdentity(
+            new[] { new Claim("sub", ActorId), new("aud", projectsAudience), new("aud", eventsAudience), new("scope", scope) }
+                .Concat(project is null ? [] : new[] { new Claim("project_id", project) })
+                .Concat(run is null ? [] : new[] { new Claim("run_id", run) }), "validated"));
+        await Assert.ThrowsAsync<ProjectsAuthorizationContextException>(
+            () => CreateClient(handler).GetProjectReadAsync(context, "project-1", "events", default));
+        Assert.Null(handler.RequestUri);
+    }
+
+    /// <summary>Does not accept changed tenant, caller, binding, or a cacheable response on the project-read path.</summary>
+    [Theory]
+    [InlineData("tenant")]
+    [InlineData("actor")]
+    [InlineData("binding")]
+    [InlineData("cache")]
+    public async Task ProjectReadRejectsStaleOrMismatchedContext(string change)
+    {
+        var owner = ValidContext() with { EffectiveAuthority = [new("project", "project-1", [new("readProjects", 1)])] };
+        owner = change switch
+        {
+            "tenant" => owner with { TenantId = "tenant-2" },
+            "actor" => owner with { ActorId = Guid.NewGuid().ToString("D") },
+            "binding" => owner with { BoundRunId = "run-2" },
+            _ => owner
+        };
+        var handler = new CaptureHandler(_ => Success(owner, noStore: change != "cache"));
+        var context = CreateRequestContext();
+        ((ClaimsIdentity)context.User.Identity!).AddClaims([new("aud", "events"), new("scope", "api.read")]);
+        await Assert.ThrowsAsync<ProjectsAuthorizationContextException>(
+            () => CreateClient(handler).GetProjectReadAsync(context, "project-1", "events", default));
+    }
+
     [Fact]
     public async Task ForwardsCurrentCallerAndCheckedTenantToFixedNoStoreOwnerEndpoint()
     {
