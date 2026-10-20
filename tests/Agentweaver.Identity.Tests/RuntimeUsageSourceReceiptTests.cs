@@ -1371,6 +1371,87 @@ public sealed class RuntimeUsageSourceReceiptTests
                 RuntimeUsageSourceReceiptContract.ValidateUsage(registration, invalid));
     }
 
+    private static RuntimeUsageSourceReceipt AzureByokReceipt(string providerType = "azure")
+    {
+        var hosted = Receipt();
+        var registration = hosted.Registration with
+        {
+            Binding = hosted.Registration.Binding with
+            {
+                ModelSourceMode = ModelSourceMode.Byok,
+                ModelBindingPin = new(1, hosted.Usage.SdkSource!.ModelSelectionReference,
+                    hosted.Usage.SdkSource.ModelId, ModelSourceMode.Byok, "byok-bindings-v1", new string('a', 64))
+                {
+                    ProviderType = providerType
+                }
+            }
+        };
+        var source = hosted.Usage.SdkSource! with
+        {
+            SourceMode = "byok", MeterSource = SdkMeterSources.ByokTokens, ModelMultiplier = null,
+            ByokProvider = new(providerType, hosted.Usage.SdkSource.ModelId, new string('a', 64)),
+            ModelBindingPin = registration.Binding.ModelBindingPin,
+            ResolvedModelBindingPin = registration.Binding.ModelBindingPin
+        };
+        var eventId = Guid.NewGuid().ToString("D");
+        var observation = new SdkUsageObservation(
+            SdkUsageIdentity.Create(source.RuntimeInstanceId, source.SdkSessionId, eventId),
+            eventId, source.SdkSessionId, DateTimeOffset.UtcNow, source.ModelId,
+            17, 11, null, null, null, null, 12.5m);
+        var usage = RuntimeUsageSourceReceiptContract.CreateUsage(registration, source, observation) with
+        {
+            A2AMessageId = hosted.Usage.A2AMessageId
+        };
+        return new(1, Guid.NewGuid(), registration, usage,
+            RuntimeUsageSourceReceiptContract.Hash(registration, usage), DateTimeOffset.UtcNow);
+    }
+
+    private static RuntimeUsageSourceReceipt Reseal(RuntimeUsageSourceReceipt receipt) =>
+        receipt with { CanonicalPayloadHash = RuntimeUsageSourceReceiptContract.Hash(receipt.Registration, receipt.Usage) };
+
+    [Fact]
+    public void TrustedAzureByokProvenanceReturnsDispatchAndPinnedConfiguration()
+    {
+        var receipt = AzureByokReceipt();
+        Assert.True(RuntimeUsageSourceReceiptContract.ClaimsAzureByok(receipt));
+
+        var trusted = RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(receipt);
+
+        Assert.Equal(receipt.ReceiptId, trusted.SourceReceiptId);
+        Assert.Equal(receipt.Registration.RuntimeInstanceId, trusted.RuntimeInstanceId);
+        Assert.Equal(receipt.Registration.Revision, trusted.RegistrationRevision);
+        Assert.Equal(receipt.Usage.A2AMessageId, trusted.DispatchId);
+        Assert.Equal(receipt.Usage.ModelBinding.ModelId, trusted.DeploymentId);
+        Assert.Equal("byok-bindings-v1", trusted.ConfigurationRevision);
+        Assert.Equal(new string('a', 64), trusted.ConfigurationHash);
+        Assert.Equal(receipt.CanonicalPayloadHash, trusted.SourcePayloadHash);
+    }
+
+    [Fact]
+    public void TrustedAzureByokProvenanceRejectsOtherProvidersHostedUsageAndTampering()
+    {
+        var receipt = AzureByokReceipt();
+        var openAi = AzureByokReceipt("openai");
+        Assert.False(RuntimeUsageSourceReceiptContract.ClaimsAzureByok(openAi));
+        Assert.Equal("runtime_byok_azure_provenance_invalid", Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(openAi)).Code);
+        Assert.Equal("runtime_byok_azure_provenance_invalid", Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(Receipt())).Code);
+        Assert.Throws<RuntimeAuthorizationException>(() =>
+            RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(receipt with { CanonicalPayloadHash = new string('c', 64) }));
+        Assert.Throws<RuntimeAuthorizationException>(() => RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(
+            Reseal(receipt with { Usage = receipt.Usage with { A2AMessageId = Guid.Empty } })));
+        var source = receipt.Usage.SdkSource!;
+        foreach (var tampered in new[]
+        {
+            source with { ByokProvider = source.ByokProvider! with { DeploymentId = "foreign" } },
+            source with { ByokProvider = source.ByokProvider! with { ConfigurationHash = new string('b', 64) } },
+            source with { ByokProvider = source.ByokProvider! with { Type = "openai" } }
+        })
+            Assert.Throws<RuntimeAuthorizationException>(() => RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(
+                Reseal(receipt with { Usage = receipt.Usage with { SdkSource = tampered } })));
+    }
+
     private static string LegacyHash(RuntimeRegistration registration, UsageSubmission usage)
     {
         var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)

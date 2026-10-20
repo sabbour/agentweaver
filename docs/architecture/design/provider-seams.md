@@ -796,9 +796,10 @@ The standalone Azure BYOK cost adapter accepts an explicitly configured, version
 Azure Retail Prices card with model-scoped standard input/output token rates and a
 declared currency. It does not fetch live prices or quote BYOK work. Missing token
 counts, unsupported cache categories, unknown models, and changed bindings remain
-`unpriced`, not zero-cost. Its receipt-consumer integration must also verify trusted
-Azure provider and deployment facts bound to the accepted runtime model pin; until
-that source contract is admitted, Events must keep BYOK usage unpriced. Provisioned
+`unpriced`, not zero-cost. Events verifies trusted Azure provider and deployment
+facts bound to the accepted runtime model pin with `RequireTrustedAzureByok` and
+rejects any Azure BYOK claim that fails the check. Without a configured Azure Cost
+provider, admitted Azure BYOK usage stays `unpriced`. Provisioned
 throughput remains `unpriced` until trusted resource- and time-window-level usage
 share supplies its denominator. Other meter sources provide their own pricing.
 Sandbox compute cost is a later meter source, not part of the 1.0 model-cost

@@ -171,6 +171,9 @@ internal sealed class NativeUsageReceiptConsumer(
         CancellationToken cancellationToken)
     {
         RuntimeUsageSourceReceiptContract.Validate(receipt);
+        // An Azure BYOK claim enters the ledger only with full owner-proven provenance.
+        if (RuntimeUsageSourceReceiptContract.ClaimsAzureByok(receipt))
+            RuntimeUsageSourceReceiptContract.RequireTrustedAzureByok(receipt);
         var sourceJson = JsonSerializer.Serialize(receipt, JsonOptions);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);

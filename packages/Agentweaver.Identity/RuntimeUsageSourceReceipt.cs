@@ -15,6 +15,25 @@ public sealed record RuntimeUsageSourceReceipt(
     string CanonicalPayloadHash,
     DateTimeOffset RecordedAt);
 
+/// <summary>Azure BYOK provenance that an owner-issued usage receipt proves for one dispatch.</summary>
+/// <param name="SourceReceiptId">The owner receipt ID.</param>
+/// <param name="RuntimeInstanceId">The registered runtime instance that produced the usage.</param>
+/// <param name="RegistrationRevision">The registration revision that was active for the usage.</param>
+/// <param name="DispatchId">The A2A dispatch message ID that the usage belongs to.</param>
+/// <param name="DeploymentId">The Azure deployment ID. It equals the pinned model ID.</param>
+/// <param name="ConfigurationRevision">The pinned BYOK configuration revision.</param>
+/// <param name="ConfigurationHash">The pinned BYOK configuration hash.</param>
+/// <param name="SourcePayloadHash">The canonical payload hash of the owner receipt.</param>
+public sealed record TrustedAzureByokUsage(
+    Guid SourceReceiptId,
+    Guid RuntimeInstanceId,
+    long RegistrationRevision,
+    Guid DispatchId,
+    string DeploymentId,
+    string ConfigurationRevision,
+    string ConfigurationHash,
+    string SourcePayloadHash);
+
 /// <summary>Request to retrieve one stored usage receipt by its exact receipt ID.</summary>
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record RuntimeUsageReceiptReferenceRequest(Guid ReceiptId);
@@ -720,6 +739,39 @@ public static class RuntimeUsageSourceReceiptContract
         RequireText(source.SdkVersion);
         RequireText(source.RuntimeVersion);
         RequireText(source.ModelId);
+    }
+
+    /// <summary>Reports whether a receipt claims Azure BYOK provenance without validating the claim.</summary>
+    public static bool ClaimsAzureByok(RuntimeUsageSourceReceipt receipt) =>
+        receipt?.Usage?.SdkSource is { SourceMode: "byok", ByokProvider.Type: "azure" } ||
+        receipt?.Registration?.Binding?.ModelBindingPin?.ProviderType == "azure";
+
+    /// <summary>Proves that an owner-issued receipt is trusted Azure BYOK usage for one dispatch.</summary>
+    /// <remarks>
+    /// The receipt must pass <see cref="Validate"/>. The registration must use BYOK with an Azure model
+    /// binding pin. The SDK source must report the same Azure provider type, deployment ID, model ID,
+    /// configuration hash, and the <c>byok.tokens</c> meter. The usage must carry its dispatch message ID.
+    /// Events calls this check before it prices any Azure BYOK usage.
+    /// </remarks>
+    /// <returns>The provenance facts that Azure pricing and budget exposure use.</returns>
+    /// <exception cref="RuntimeAuthorizationException">Thrown with <c>runtime_byok_azure_provenance_invalid</c> when any fact does not match.</exception>
+    public static TrustedAzureByokUsage RequireTrustedAzureByok(RuntimeUsageSourceReceipt receipt)
+    {
+        Validate(receipt);
+        var binding = receipt.Registration.Binding;
+        var usage = receipt.Usage;
+        if (binding.ModelSourceMode != ModelSourceMode.Byok ||
+            binding.ModelBindingPin is not { ProviderType: "azure", SourceMode: ModelSourceMode.Byok } pin ||
+            usage.SdkSource is not { SourceMode: "byok", ByokProvider: { Type: "azure" } provider } source ||
+            source.MeterSource != SdkMeterSources.ByokTokens || source.ModelMultiplier is not null ||
+            usage.ModelBinding.MeterSource != SdkMeterSources.ByokTokens ||
+            provider.DeploymentId != pin.ModelId || usage.ModelBinding.ModelId != pin.ModelId ||
+            provider.ConfigurationHash != pin.ConfigurationHash ||
+            usage.A2AMessageId is not { } dispatchId || dispatchId == Guid.Empty)
+            throw new RuntimeAuthorizationException("runtime_byok_azure_provenance_invalid");
+        return new(receipt.ReceiptId, receipt.Registration.RuntimeInstanceId, receipt.Registration.Revision,
+            dispatchId, provider.DeploymentId, pin.ConfigurationRevision, pin.ConfigurationHash,
+            receipt.CanonicalPayloadHash);
     }
 
     private static bool MatchesSourceMode(ModelSourceMode? mode, SdkSessionFacts source) => mode switch
