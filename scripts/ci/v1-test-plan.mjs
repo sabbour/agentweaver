@@ -11,17 +11,55 @@ export const testMatrix = suites.flatMap(([name, project]) =>
     ? Array.from({ length: brokerShardCount }, (_, index) => ({ name: `${name}-${index + 1}`, project, shard: index + 1 }))
     : [{ name, project, shard: 0 }]);
 
-export function partitionMethods(discovery) {
+export const brokerWeightsPath = fileURLToPath(new URL('./broker-test-weights.json', import.meta.url));
+
+export function loadBrokerWeights(path = brokerWeightsPath) {
+  return JSON.parse(readFileSync(path, 'utf8'));
+}
+
+// Weights are measured seconds per test method (all theory cases summed). They only steer
+// placement: every discovered method is still assigned to exactly one shard, and a method
+// without a recorded weight uses defaultSeconds.
+export function partitionMethods(discovery, weights = { defaultSeconds: 1, methods: {} }) {
   const methods = [...new Set([...discovery.matchAll(/^\s+(Agentweaver\.[\w.+`]+)(?:\(|\s*$)/gm)]
     .map((match) => match[1]))].sort();
   if (!methods.length) throw new Error('Test discovery produced no Agentweaver test methods');
+  const weightOf = (method) => weights.methods?.[method] ?? weights.defaultSeconds ?? 1;
+  const tieBreak = (method) => createHash('sha256').update(method).digest().readUInt32BE();
+  // Longest-processing-time-first: place the heaviest remaining method on the least-loaded shard.
+  // Ties use a stable hash, then the lowest shard index, so the result is deterministic.
+  const ordered = methods.toSorted((a, b) => weightOf(b) - weightOf(a) || tieBreak(a) - tieBreak(b) || a.localeCompare(b));
   const partitions = Array.from({ length: brokerShardCount }, () => []);
-  for (const method of methods) {
-    const index = createHash('sha256').update(method).digest().readUInt32BE() % brokerShardCount;
+  const loads = Array(brokerShardCount).fill(0);
+  for (const method of ordered) {
+    const index = loads.indexOf(Math.min(...loads));
     partitions[index].push(method);
+    loads[index] += weightOf(method);
   }
   if (partitions.some((partition) => !partition.length)) throw new Error('Test discovery produced an empty Broker shard');
-  return partitions;
+  return partitions.map((partition) => partition.sort());
+}
+
+export function measureWeights(trxDocuments, { thresholdSeconds = 1, source = '' } = {}) {
+  const seconds = new Map();
+  for (const xml of trxDocuments) {
+    const methodById = new Map([...xml.matchAll(/<UnitTest\b[^>]*\bid="([^"]+)"[\s\S]*?<TestMethod\b[^>]*className="([^"]+)"[^>]*name="([^"]+)"/g)]
+      .map((match) => [match[1], `${match[2]}.${match[3]}`]));
+    for (const match of xml.matchAll(/<UnitTestResult\b[^>]*testId="([^"]+)"[^>]*duration="(\d+):(\d+):([\d.]+)"/g)) {
+      const method = methodById.get(match[1]);
+      if (!method) throw new Error(`TRX result ${match[1]} has no test definition`);
+      seconds.set(method, (seconds.get(method) ?? 0) + Number(match[2]) * 3600 + Number(match[3]) * 60 + Number(match[4]));
+    }
+  }
+  if (!seconds.size) throw new Error('TRX receipts contained no test results');
+  const light = [...seconds.values()].filter((value) => value < thresholdSeconds);
+  const round = (value) => Math.round(value * 10) / 10;
+  return {
+    source,
+    defaultSeconds: round(light.length ? light.reduce((sum, value) => sum + value, 0) / light.length : thresholdSeconds) || 0.1,
+    methods: Object.fromEntries([...seconds].filter(([, value]) => value >= thresholdSeconds)
+      .sort(([a], [b]) => a.localeCompare(b)).map(([method, value]) => [method, round(value)])),
+  };
 }
 
 export function verifyTrx(xml) {
@@ -50,6 +88,14 @@ function main([command, name]) {
     console.log(JSON.stringify({ include: testMatrix }));
     return;
   }
+  if (command === 'weights') {
+    const [, source, ...files] = process.argv.slice(2);
+    if (!source || !files.length) throw new Error('Usage: v1-test-plan.mjs weights <source description> <shard.trx>...');
+    const weights = measureWeights(files.map((file) => readFileSync(file, 'utf8')), { source });
+    writeFileSync(brokerWeightsPath, `${JSON.stringify(weights, null, 2)}\n`);
+    console.log(`Wrote ${Object.keys(weights.methods).length} weighted methods to ${brokerWeightsPath}`);
+    return;
+  }
   const entry = testMatrix.find((item) => item.name === name);
   if (command !== 'run' || !entry) throw new Error('Usage: v1-test-plan.mjs matrix | run <matrix name>');
   const started = Date.now();
@@ -60,7 +106,7 @@ function main([command, name]) {
   mkdirSync(directory, { recursive: true });
   let methods;
   if (entry.shard) {
-    const partitions = partitionMethods(run([...args, '--list-tests'], true));
+    const partitions = partitionMethods(run([...args, '--list-tests'], true), loadBrokerWeights());
     methods = partitions[entry.shard - 1];
     writeFileSync(`${directory}/partition.json`, JSON.stringify(partitions, null, 2));
     args.push('--filter', methods.map((method) => `FullyQualifiedName=${method}`).join('|'));
