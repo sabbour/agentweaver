@@ -212,12 +212,31 @@ For a one-account operator run, use the sign-in launcher:
 npm run harness:p1:signin-run -- --surface api --input <manifest.json> --output <evidence.jsonl>
 ```
 
+To run API and MCP journeys after one sign-in, use `--surface api,mcp`:
+
+```powershell
+npm run harness:p1:signin-run -- --surface api,mcp --input <manifest.json> --output <evidence.jsonl>
+```
+
+The launcher runs the surfaces sequentially in the requested order. Both use
+the same setup token and fresh browser session, but each creates its own
+fixture and obtains its own run-bound token. Each surface keeps a separate
+resumable invocation: `evidence.api.jsonl` and `evidence.mcp.jsonl`. The
+unsuffixed output path is not written in a multi-surface run. A single-surface
+run keeps the supplied output path unchanged. Both surfaces run even if the
+first returns a blocked or failed result; the command returns the highest exit
+code. Cancellation stops remaining work. UI cannot be combined with API or MCP.
+
 The launcher uses the existing public `agentweaver-web` client and one
 interactive TenantAdmin sign-in. It creates a fresh empty headed-Chrome profile
 and removes it on success, failure, or cancellation; it never reads or copies
 an existing browser profile, cookie store, or credential cache. The same
 in-memory browser session authorizes the unbound setup token and the subsequent
-run-bound token. Token values stay in memory and are not written to output,
+run-bound tokens. Chrome request-stage interception blocks the registered Portal
+callback before its document loads, including callbacks reached through
+server-side redirect hops. The launcher validates the callback state and issuer,
+then redeems the code with its PKCE verifier. The Portal does not consume it.
+Token values stay in memory and are not written to output,
 logs, or evidence. Omit `fixturePlan.deniedActor` when using this launcher; it
 does not ask for a second Broker account. Distinct-actor coverage is
 unavailable in this one-account operator flow, so the denied-actor

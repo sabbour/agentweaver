@@ -392,6 +392,8 @@ async function authorizeP1InContext({
   fetchImpl,
 }) {
   const page = context.pages()[0] ?? await context.newPage();
+  let callbackSession;
+  let onResponse;
   try {
       page.setDefaultTimeout?.(timeoutMs);
       page.setDefaultNavigationTimeout?.(timeoutMs);
@@ -399,24 +401,47 @@ async function authorizeP1InContext({
       const prompt = deferred();
       let callbackObserved = false;
 
-      await page.route(candidate => {
+      // Broker consent can also arrive on a redirect hop that skips page.route.
+      onResponse = async response => {
+        if (!isAuthorizeUrl(response.url(), request)
+          || response.status() !== 200
+          || !(response.headers()['content-type'] ?? '').includes('application/json')) return;
         try {
-          const target = new URL(request.redirectUri);
-          const url = new URL(candidate);
-          return url.origin === target.origin && url.pathname === target.pathname;
+          const payload = await response.json();
+          if (payload?.consent_required === true) {
+            prompt.resolve(validateConsentPrompt(payload, request));
+          } else {
+            throw new Error('The Identity Broker authorization was not completed.');
+          }
         } catch {
-          return false;
-        }
-      }, async route => {
-        try {
-          const code = callbackCode(route.request().url(), request);
-          callbackObserved = true;
-          callback.resolve(code);
-        } catch (error) {
-          callbackObserved = true;
+          const error = new Error('The Identity Broker authorization was not completed.');
+          prompt.reject(error);
           callback.reject(error);
         }
-        await route.abort().catch(() => {});
+      };
+      context.on('response', onResponse);
+
+      // CDP pauses every matching request, including redirect hops that page.route skips.
+      // Fail the navigation before releasing the code to its only consumer: this launcher.
+      callbackSession = await context.newCDPSession(page);
+      callbackSession.on('Fetch.requestPaused', async ({ requestId, request: pausedRequest }) => {
+        try {
+          const code = callbackCode(pausedRequest.url, request);
+          if (code === null) {
+            await callbackSession.send('Fetch.continueRequest', { requestId });
+            return;
+          }
+          callbackObserved = true;
+          await callbackSession.send('Fetch.failRequest', { requestId, errorReason: 'Aborted' });
+          callback.resolve(code);
+        } catch {
+          callbackObserved = true;
+          // Never resume an invalid callback. Closing the page releases paused requests.
+          callback.reject(new Error('The Identity Broker callback could not be captured safely.'));
+        }
+      });
+      await callbackSession.send('Fetch.enable', {
+        patterns: [{ urlPattern: `${request.redirectUri}*`, requestStage: 'Request' }],
       });
 
       await page.route(candidate => isAuthorizeUrl(candidate, request), async route => {
@@ -458,11 +483,17 @@ async function authorizeP1InContext({
       });
 
       io.log?.('Complete the requested Broker authorization in the headed Chrome window. Review the scopes before approving consent.');
-      await page.goto(request.authorizeUrl, {
+      // A CDP-aborted redirect can leave Playwright's navigation pending. The
+      // captured callback, not a navigation lifecycle event, completes sign-in.
+      const navigation = page.goto(request.authorizeUrl, {
         waitUntil: 'domcontentloaded',
         timeout: timeoutMs,
       }).catch(() => {
-        if (!callbackObserved) throw new Error('The Identity Broker sign-in could not be started.');
+        if (!callbackObserved) {
+          const error = new Error('The Identity Broker sign-in could not be started.');
+          callback.reject(error);
+          prompt.reject(error);
+        }
       });
 
       let code;
@@ -473,6 +504,7 @@ async function authorizeP1InContext({
       if (initial.kind === 'code') {
         code = initial.value;
       } else {
+        await raceWithAbort(navigation, signal, timeoutMs);
         const decision = await renderConsentPrompt(page, initial.value, request, { signal, timeoutMs });
         if (!decision) throw new Error('Broker consent was declined.');
         code = await raceWithAbort(callback.promise, signal, timeoutMs);
@@ -480,14 +512,17 @@ async function authorizeP1InContext({
       if (signal?.aborted) throw new Error('P1 sign-in was cancelled.');
       return await exchangeCode({ ...request, issuer: environment.issuer, audience: environment.audience, actorId }, code, fetchImpl);
   } finally {
+    if (onResponse) context.off('response', onResponse);
     await page.close().catch(() => {});
+    await callbackSession?.detach().catch(() => {});
   }
 }
 
 /**
  * Complete a public-client flow in the caller's fresh Chrome context. Callers may
  * reuse that context for setup and run-bound tokens so one user login supplies both.
- * The registered callback route is aborted before the page can consume its code.
+ * Request-stage CDP interception blocks the registered callback, including redirect
+ * hops, before the Portal can consume its code. No Portal script is allowed to run.
  */
 export async function authorizeP1InBrowser({
   chromium,

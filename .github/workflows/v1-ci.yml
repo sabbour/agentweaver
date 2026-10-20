@@ -10,6 +10,23 @@ permissions:
   contents: read
 
 jobs:
+  harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install locked harness dependencies
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm ci --prefix scripts/mcp-harness --ignore-scripts --no-audit --no-fund
+      - name: Install Chromium for loopback sign-in regression
+        run: npx playwright install --with-deps chromium
+      - name: Test harness contracts and redirect-hop callback capture
+        run: |
+          npm run test:harness
+          npm run test:harness:signin-browser
   foundation:
     runs-on: ubuntu-latest
     steps:
