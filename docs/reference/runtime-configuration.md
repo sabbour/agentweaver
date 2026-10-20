@@ -87,6 +87,16 @@ approved maintenance window:
    kubectl rollout status deployment/knowledge -n agentweaver
    ```
 
+Kubelet caches immutable ConfigMap data per node and does not watch it for
+changes. If a pod that references the ConfigMap keeps running on a node while
+you delete and recreate the ConfigMap under the same name, new pods on that
+node can still receive the old values. A `rollout restart` does not clear this
+cache. If the restarted pods still show old values, scale every workload that
+references the ConfigMap to `0` and wait for its pods to terminate. Then scale
+it back up. Before you rely on the new value, check it inside the new pod with
+`kubectl exec deployment/<name> -n agentweaver -- printenv` or by reading the
+mounted file.
+
 Deleting the ConfigMap creates a short interval when a replacement pod cannot
 start. Keep existing pods running, apply the bundle promptly, and verify the
 new ConfigMap before restarting the Deployment. Do not use a broad delete or
@@ -313,7 +323,7 @@ The `projects-config-runtime-config.json` map contains:
 | `ProjectsConfig__Authentication__Audience` | Required token audience for Projects & Config. |
 | `ProjectsConfig__PrivilegedSetup__ApprovedIssuer` | Exact issuer approved for the privileged project-setup command: `https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/`. |
 | `ProjectsConfig__PrivilegedSetup__ApprovedTenantId` | Exact approved Entra tenant: `72f988bf-86f1-41af-91ab-2d7cd011db47`. |
-| `ProjectsConfig__PrivilegedSetup__ApprovedSubject` | Exact approved caller subject: `c4279823-a7c7-477e-982e-f4145bb0a83d`. Do not add another subject or role. |
+| `ProjectsConfig__PrivilegedSetup__ApprovedSubject` | Exact approved caller subject: `518f1ce8-8eb0-4f5f-a719-f742b8ed9ed0`. This is the approved user's Identity Broker user ID, which the Broker issues as the token `sub` claim. It is not the Entra object ID. Do not add another subject or role. |
 
 The following settings are supplied only to the explicit migration or first
 TenantAdmin command. They are not part of the runtime ConfigMap:

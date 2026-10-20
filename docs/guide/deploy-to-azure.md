@@ -480,13 +480,32 @@ and the [Kubernetes operator guide](https://github.com/sabbour/agentweaver/blob/
 ### Bootstrap the first Projects & Config TenantAdmin
 
 Run this command once after the Projects & Config Deployment is ready and
-before the approved user opens the Projects page. The database is private.
+the approved user has signed in through the Identity Broker once. Until the
+command succeeds, the Projects page returns `403`. The database is private.
 Run the command in a one-shot Job inside the cluster network. Use the exact
 Projects & Config image digest already approved for this deployment.
 
 The command uses the issuer, subject, and tenant in
 `projects-config-runtime-config`. It does not accept identity arguments.
-Provide the separate migration/schema-owner connection and a short-lived
+The approved subject is the `sub` claim in tokens issued by the Identity
+Broker. The Broker replaces the Entra identity with its own local user ID, so
+this value is not the user's Entra object ID. The Broker creates the user
+record on first sign-in. After that sign-in, read the ID from the Broker
+database. Use the Identity Broker migration/schema-owner role, or another role
+with `SELECT` on `identity_broker.broker_users`. The Projects & Config
+migration role cannot read the `identity_broker` schema. `Email` is optional and
+can be empty, so confirm the row by display name and creation time:
+
+```sql
+SELECT "Id", "Email", "DisplayName", "CreatedAt"
+FROM identity_broker.broker_users
+WHERE "Disabled" = false
+ORDER BY "CreatedAt";
+```
+
+Set that ID as `ProjectsConfig__PrivilegedSetup__ApprovedSubject` before
+running the command.
+Provide the separate Projects & Config migration/schema-owner connection and a short-lived
 PostgreSQL Entra access token through a Kubernetes Secret. Do not put the
 token in a command argument or log.
 
@@ -512,8 +531,22 @@ kubectl create secret generic projects-config-first-admin `
 
 Create a Job with the approved Projects & Config image. Copy the pod labels
 selected by the existing Projects & Config network policy so the Job can reach
-the private PostgreSQL server. Disable service-account token mounting. Set the
-container command and environment to:
+the private PostgreSQL server. Disable service-account token mounting. The
+network policy allows DNS lookups only for exact approved names, so set the
+pod's DNS `ndots` option to `1`. Otherwise the resolver can try cluster
+search-domain names first and fail before it reaches the PostgreSQL name:
+
+```yaml
+dnsConfig:
+  options:
+    - name: ndots
+      value: "1"
+```
+
+Set the container command and environment to the following. The namespace
+LimitRange requires at least `25m` CPU and `32Mi` memory for every container,
+including init or helper containers. A container that requests less is
+rejected, and the Job never creates a pod.
 
 ```yaml
 command:

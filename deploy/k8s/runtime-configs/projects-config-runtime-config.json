@@ -16,6 +16,6 @@
     "ProjectsConfig__Authentication__Audience": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
     "ProjectsConfig__PrivilegedSetup__ApprovedIssuer": "https://agentweaver.6ad4aaa13923a30001c83518.eastus2euap.aksapp.io/",
     "ProjectsConfig__PrivilegedSetup__ApprovedTenantId": "72f988bf-86f1-41af-91ab-2d7cd011db47",
-    "ProjectsConfig__PrivilegedSetup__ApprovedSubject": "c4279823-a7c7-477e-982e-f4145bb0a83d"
+    "ProjectsConfig__PrivilegedSetup__ApprovedSubject": "518f1ce8-8eb0-4f5f-a719-f742b8ed9ed0"
   }
 }
