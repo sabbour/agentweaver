@@ -51,9 +51,13 @@ runs, and that the saved settings match the requested project and run. This
 permission alone does not give you project access or a role.
 
 To start a new chat, the app first calls create with a token that is not bound
-to a run. It then signs in again for the new project and run, and calls start
-and cancel with that run-bound token. A project owner assigns the Orchestrator
-role through the project role assignments API.
+to a run. It persists the pending run ID across a top-level PKCE redirect with
+`prompt=none`, `project_id`, and `run_id`, then exchanges the code for a
+run-bound token and calls start. With an existing Broker session and matching
+consent, this needs no UI. On `login_required` or `consent_required`, the client
+falls back to interactive sign-in without retrying silently. Cancel also
+requires the run-bound token. A tenant admin grants the caller the project
+Orchestrator role through the project role assignments API.
 
 ## OpenID Connect references
 

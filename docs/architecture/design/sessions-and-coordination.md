@@ -698,7 +698,18 @@ sequenceDiagram
     O->>O: Save request, mint runId and rootSessionId
     O->>PC: PUT interactive-selection for runId
     O-->>B: 201 awaiting_binding with binding selectors
-    B->>BR: Sign in for project and run
+    B->>B: Persist pending runId across the redirect
+    B->>BR: Top-level PKCE authorize (prompt=none, project_id, run_id)
+    BR->>PC: Verify broker-run-binding for the fresh selection
+    PC-->>BR: Current Orchestrator role and selection proof
+    alt Existing session and matching consent
+        BR-->>B: Authorization code (no UI)
+    else login_required or consent_required
+        BR-->>B: Authorization error
+        B->>BR: Interactive sign-in (no silent retry)
+        BR-->>B: Authorization code
+    end
+    B->>BR: Exchange code with PKCE verifier
     BR-->>B: Run-bound token
     B->>GW: POST /projects/{p}/runs/{runId}/start
     GW->>O: Forward start

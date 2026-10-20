@@ -285,6 +285,28 @@ public sealed class GatewayKnowledgeOpenApiRegressionTests
             item => item.GetProperty("name").GetString() == "runId");
         Assert.False(existingProjectQuery.GetProperty("required").GetBoolean());
 
+        var runList = FindOperation(paths, "listProjectRuns");
+        var runListQuery = runList.GetProperty("parameters").EnumerateArray()
+            .Where(parameter => parameter.GetProperty("in").GetString() == "query")
+            .ToArray();
+        Assert.Equal(
+            new[] { "state", "cursor", "pageSize" },
+            runListQuery.Select(parameter => parameter.GetProperty("name").GetString()).ToArray());
+        Assert.All(runListQuery, parameter => Assert.False(parameter.GetProperty("required").GetBoolean()));
+        var runPageSize = runListQuery.Single(parameter => parameter.GetProperty("name").GetString() == "pageSize")
+            .GetProperty("schema");
+        Assert.Equal(100, runPageSize.GetProperty("maximum").GetInt32());
+        Assert.Equal(25, runPageSize.GetProperty("default").GetInt32());
+        Assert.True(runList.GetProperty("responses").TryGetProperty("400", out _));
+        Assert.Contains("run-bound token sees only its own run",
+            runList.GetProperty("description").GetString(), StringComparison.Ordinal);
+        var runSummary = document.RootElement.GetProperty("components").GetProperty("schemas")
+            .GetProperty("ProjectRunSummary");
+        Assert.False(runSummary.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(
+            new[] { "runId", "rootSessionId", "title", "goal", "state", "createdAt", "updatedAt", "completedAt", "startedBy" },
+            runSummary.GetProperty("required").EnumerateArray().Select(item => item.GetString()).ToArray());
+
         var schemas = document.RootElement.GetProperty("components").GetProperty("schemas");
         var inventoryPage = schemas.GetProperty("ProjectSkillInventoryPage");
         Assert.False(inventoryPage.GetProperty("additionalProperties").GetBoolean());

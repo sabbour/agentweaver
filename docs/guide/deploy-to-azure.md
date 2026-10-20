@@ -232,6 +232,13 @@ private `session-material` container only. If an existing target is missing
 that container or grant, use the separately approved
 [focused repair procedure](https://github.com/sabbour/agentweaver/blob/v1/scripts/azure/README.md#session-material-container-repair);
 do not redeploy the full foundation to repair these resources.
+Orchestrator migration 023 adds interactive run requests and cancellation
+receipts. The reviewed P1 plan includes that migration and grants
+`SELECT, INSERT, UPDATE` on `project_run_requests` and `SELECT, INSERT` on
+`project_run_cancellations`. These changes produce a new plan hash. Approve
+that exact hash, the migration, and the runtime grants separately before any
+live apply or P1 retry. A source change does not authorize those actions.
+
 Then review and run the source-bound PostgreSQL initializer:
 
 ```powershell

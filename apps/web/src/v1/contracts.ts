@@ -591,6 +591,45 @@ export interface SkillContentInventoryPage {
   nextCursor: string | null;
 }
 
+/** Derived run state reported by the project run list. */
+export type ProjectRunState =
+  | 'idle'
+  | 'active'
+  | 'blocked'
+  | 'completed'
+  | 'failed'
+  | 'indeterminate'
+  | 'cancelled';
+
+/** Run-list state filter: one or more states, or the `open` and `terminal` aliases. */
+export type ProjectRunStateFilter = ProjectRunState | 'open' | 'terminal';
+
+/** Actor whose accepted run selection created the run. */
+export interface ProjectRunStartedBy {
+  issuer: string;
+  subject: string;
+}
+
+/** One run in a project run list. Title and goal stay null until a start request stores them. */
+export interface ProjectRunSummary {
+  runId: string;
+  rootSessionId: string | null;
+  title: string | null;
+  goal: string | null;
+  state: ProjectRunState;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  startedBy: ProjectRunStartedBy;
+}
+
+/** One newest-first page of project runs. Pass `nextCursor` back with the same filter and page size. */
+export interface ProjectRunPage {
+  projectId: string;
+  items: ProjectRunSummary[];
+  nextCursor: string | null;
+}
+
 /** Revision-fenced skill assignment update sent to the Projects owner. */
 export interface SkillAssignmentRequest {
   expectedProjectConfigurationRevision: number;

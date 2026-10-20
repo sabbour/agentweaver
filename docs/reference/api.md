@@ -215,7 +215,8 @@ Gateway prefix: `/api/v1/projects/{projectId}/runs`.
 
 These routes start a new chat run, deliver its first message, and cancel it.
 The caller needs an Orchestrator role assignment on the project, which grants
-`acceptRunSelection`. Project role assignments are managed through
+`acceptRunSelection`. A tenant admin grants the caller the project
+Orchestrator role through
 `/api/v1/projects/{projectId}/role-assignments`.
 
 | Method | Suffix | Token | Purpose | Gateway |
@@ -235,6 +236,25 @@ The create request body has `firstMessage` (1–32,768 UTF-8 bytes),
 `expectedProjectConfigRevision`, and optional `title` and `workflowId`. The
 Gateway accepts create bodies up to 256 KiB. Responses never include the first
 message.
+
+### Run list
+
+Native path: `/api/projects/{projectId}/runs`.
+Gateway path: `/api/v1/projects/{projectId}/runs`.
+
+| Method | Query | Auth | Purpose | Gateway |
+| --- | --- | --- | --- | --- |
+| GET | `state`, `cursor`, `pageSize` | Read | List accepted runs, newest first. | Yes, `listProjectRuns` |
+
+The caller needs the `api.read` scope and project or tenant read permission.
+A run-bound token sees only its own run. `pageSize` defaults to 25 and accepts
+1–100. `state` takes a comma-separated list of `idle`, `active`, `blocked`,
+`completed`, `failed`, `indeterminate`, and `cancelled`, or the `open` and
+`terminal` aliases. Unknown or repeated query parameters return
+`400 query_invalid`. A bad filter, cursor, or page size returns
+`400 run_state_filter_invalid`, `cursor_invalid`, or `page_size_invalid`.
+Pass `nextCursor` back with the same filter and page size.
+`title` and `goal` are `null` until a run start request stores them.
 
 ### Coordination
 

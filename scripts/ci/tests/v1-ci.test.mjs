@@ -89,6 +89,16 @@ test('workflow preserves aggregate name, source provenance, native checks, relea
   assert.ok(jobs.node.steps.some((step) => step.with?.name === 'v1-web-dist'));
   assert.ok(jobs.node.steps.some((step) => step.run?.includes('dotnet restore services/agenthost/Agentweaver.AgentHost/Agentweaver.AgentHost.csproj --locked-mode')));
   assert.ok(jobs.node.steps.some((step) => step.run?.includes('dotnet restore apps/web/host/Agentweaver.Web.Host.csproj --locked-mode')));
+  // Earlier release validation failures must not skip prerequisites for tests that still execute.
+  const prerequisiteCondition = "${{ !cancelled() && needs.changes.outputs.node == 'true' }}";
+  for (const prerequisite of jobs.node.steps.filter((step) =>
+    step.uses === 'actions/setup-dotnet@v4' ||
+    step.name === 'Cache NuGet packages for executable tooling fixtures' ||
+    step.name === 'Restore dependencies required by Linux collector and Web image contracts' ||
+    step.uses === 'actions/download-artifact@v4' ||
+    step.name === 'Preload pinned ASP.NET runtime image for release validator')) {
+    assert.equal(prerequisite.if, prerequisiteCondition);
+  }
   assert.match(workflow, /org.opencontainers.image.revision/);
   assert.match(workflow, /io.agentweaver.source-tree/);
   assert.ok(jobs.dotnet.steps.some((step) => step.run?.includes('install --with-deps chromium')));

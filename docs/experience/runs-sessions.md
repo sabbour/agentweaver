@@ -7,7 +7,7 @@ is a node in the run's owner-reported tree.
 ## Prerequisites
 
 - Know the exact project ID, and the run ID for an existing run.
-- Have the Orchestrator role on the project. A project owner assigns it through
+- Have the Orchestrator role on the project. A tenant admin grants it through
   `/api/v1/projects/{projectId}/role-assignments`.
 - Sign in with a Broker token that requests `api.read` and
   `projects.orchestrator`. Start, cancel, and run pages need a token bound to
@@ -26,8 +26,13 @@ two-step flow, because the run ID does not exist until create returns.
    `expectedProjectConfigRevision`, and optional `title` and `workflowId`.
 2. Read `runId`, `rootSessionId`, and `binding` from the `201` response. The
    run state is `awaiting_binding`.
-3. Sign in again with `binding.projectId` and `binding.runId` to get a
-   run-bound token.
+3. Persist the pending `runId` and `rootSessionId` across the redirect. Use a
+   top-level PKCE authorize redirect with `prompt=none`, `project_id` set to
+   `binding.projectId`, and `run_id` set to `binding.runId`. With an existing
+   Broker session and consent for the same scopes, this returns a code without
+   UI. Exchange it for a run-bound token. On `login_required` or
+   `consent_required`, fall back to interactive sign-in instead of retrying
+   silently.
 4. Send `POST /api/v1/projects/{projectId}/runs/{runId}/start` with no body.
 
 **Expected result:** Start returns `started`. The Orchestrator accepts the root
