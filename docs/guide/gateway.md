@@ -158,7 +158,10 @@ To transfer a team, read `/casting/export` under the project path, optionally
 with a positive `revision`. Send the returned transfer to `/casting/import`
 with the target `expectedConfigurationRevision`. Import checks the format and
 digest and stages a proposal for review. It does not apply the team. Both the
-Gateway and owner limit import request bodies to 1 MiB. Transfer version or
+Gateway and owner limit import request bodies to 1 MiB. The Gateway checks
+the complete body before forwarding, including requests without
+`Content-Length`. Larger bodies return `413` without contacting the owner.
+Transfer version or
 team incompatibility returns `422`. These source routes do not establish
 deployment or a browser wizard.
 

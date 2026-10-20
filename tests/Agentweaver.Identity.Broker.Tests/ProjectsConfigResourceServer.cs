@@ -39,15 +39,16 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         NpgsqlDataSource privilegedDataSource,
         string runtimeRole,
         Uri baseAddress,
-        X509Certificate2? brokerRunBindingServerCertificate)
+        X509Certificate2? brokerRunBindingServerCertificate,
+        bool useKestrel)
     {
         _host = host;
         _dataSource = dataSource;
         _privilegedDataSource = privilegedDataSource;
         _runtimeRole = runtimeRole;
-        _client = brokerRunBindingServerCertificate is null
-            ? host.GetTestClient()
-            : new HttpClient(CreatePinnedTestHandler(brokerRunBindingServerCertificate));
+        _client = brokerRunBindingServerCertificate is not null
+            ? new HttpClient(CreatePinnedTestHandler(brokerRunBindingServerCertificate))
+            : useKestrel ? new HttpClient() : host.GetTestClient();
         _client.BaseAddress = baseAddress;
     }
 
@@ -58,6 +59,7 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
     public NpgsqlDataSource RuntimeDataSource => _dataSource;
     public NpgsqlDataSource PrivilegedFixtureDataSource => _privilegedDataSource;
 
+    /// <summary>Hosts Projects with restricted runtime grants; optional Kestrel exercises transport request limits.</summary>
     public static async Task<ProjectsConfigResourceServer> StartAsync(
         string connectionString,
         SecurityKey signingKey,
@@ -67,7 +69,8 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
         IObjectStore? skillContentObjects = null,
         bool usePublicWriterFixture = false,
         string? brokerRunBindingAudience = null,
-        X509Certificate2? brokerRunBindingServerCertificate = null)
+        X509Certificate2? brokerRunBindingServerCertificate = null,
+        bool useKestrel = false)
     {
         if ((brokerRunBindingAudience is null) != (brokerRunBindingServerCertificate is null))
             throw new ArgumentException(
@@ -124,15 +127,18 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
 
         var host = await new HostBuilder().ConfigureWebHost(web =>
         {
-            if (brokerRunBindingServerCertificate is null)
+            if (brokerRunBindingServerCertificate is null && !useKestrel)
                 web.UseTestServer();
             else
             {
                 web.UseKestrel();
                 web.ConfigureKestrel(server =>
                     server.Listen(IPAddress.Loopback, 0, listen =>
-                        listen.UseHttps(brokerRunBindingServerCertificate, https =>
-                            https.SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13)));
+                    {
+                        if (brokerRunBindingServerCertificate is not null)
+                            listen.UseHttps(brokerRunBindingServerCertificate, https =>
+                                https.SslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13);
+                    }));
             }
             web.ConfigureServices(services =>
             {
@@ -233,12 +239,12 @@ internal sealed class ProjectsConfigResourceServer : IAsyncDisposable
             });
         }).StartAsync();
 
-        var baseAddress = brokerRunBindingServerCertificate is null
+        var baseAddress = brokerRunBindingServerCertificate is null && !useKestrel
             ? new Uri("https://projects.test")
             : GetKestrelBaseAddress(host);
         return new ProjectsConfigResourceServer(
             host, dataSource, privilegedDataSource, runtimeRole, baseAddress,
-            brokerRunBindingServerCertificate);
+            brokerRunBindingServerCertificate, useKestrel);
     }
 
     private static Uri GetKestrelBaseAddress(IHost host)

@@ -168,6 +168,68 @@ public sealed class GatewayCastingRegressionTests
         Assert.Equal(Routes.Length, calls.Count);
     }
 
+    /// <summary>Rejects oversized imports before contacting Projects, including bodies without a length header.</summary>
+    [Theory]
+    [InlineData(-1, false)]
+    [InlineData(0, false)]
+    [InlineData(1, false)]
+    [InlineData(-1, true)]
+    [InlineData(0, true)]
+    [InlineData(1, true)]
+    public async Task CastingImportEnforcesBodyLimitBeforeForwarding(int sizeOffset, bool unknownLength)
+    {
+        const int maximumBytes = 1_048_576;
+        using var rsa = RSA.Create(2048);
+        var signingKey = new RsaSecurityKey(rsa);
+        var token = new JwtSecurityToken(new Uri(IdentityBrokerWebApplicationFactory.Issuer).AbsoluteUri,
+            "https://api.test", [new Claim("sub", "casting-import-actor"), new Claim("scope", "api.read projects.admin")],
+            DateTime.UtcNow.AddMinutes(-1), DateTime.UtcNow.AddMinutes(5),
+            new SigningCredentials(signingKey, SecurityAlgorithms.RsaSha256));
+        var calls = 0;
+        var body = Encoding.UTF8.GetBytes("{}" + new string(' ', maximumBytes + sizeOffset - 2));
+        await using var gateway = await GatewayResourceServer.StartAsync(signingKey,
+            () => new RecordingProjectsHandler(async (request, cancellationToken) =>
+            {
+                calls++;
+                Assert.Equal(body, await request.Content!.ReadAsByteArrayAsync(cancellationToken));
+                return new HttpResponseMessage(HttpStatusCode.Created)
+                {
+                    Content = new StringContent("{}", Encoding.UTF8, "application/json"),
+                };
+            }),
+            (_, _, _) => throw new InvalidOperationException("Casting must call Projects only."));
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/v1/projects/project-1/casting/import")
+        {
+            Content = new ImportBodyContent(body, unknownLength),
+        };
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", new JwtSecurityTokenHandler().WriteToken(token));
+        using var response = await gateway.Client.SendAsync(request);
+        Assert.Equal(sizeOffset > 0 ? HttpStatusCode.RequestEntityTooLarge : HttpStatusCode.Created, response.StatusCode);
+        Assert.Equal(sizeOffset > 0 ? 0 : 1, calls);
+        if (sizeOffset > 0)
+        {
+            Assert.True(response.Headers.CacheControl?.NoStore);
+            using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal("request_body_too_large", problem.RootElement.GetProperty("code").GetString());
+        }
+    }
+
+    /// <summary>Streams the same JSON bytes with or without a computable Content-Length.</summary>
+    private sealed class ImportBodyContent(byte[] body, bool unknownLength) : HttpContent
+    {
+        /// <summary>Writes the exact boundary payload to the outgoing request.</summary>
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
+            stream.WriteAsync(body).AsTask();
+
+        /// <summary>Exercises both declared-length and streaming request limits.</summary>
+        protected override bool TryComputeLength(out long length)
+        {
+            length = body.Length;
+            return !unknownLength;
+        }
+    }
+
     /// <summary>Reads the shared JSON response or request schema reference.</summary>
     private static string? SchemaReference(JsonElement value) =>
         value.GetProperty("content").GetProperty("application/json").GetProperty("schema").GetProperty("$ref").GetString();
