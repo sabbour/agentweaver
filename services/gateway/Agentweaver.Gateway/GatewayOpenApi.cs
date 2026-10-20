@@ -23,6 +23,19 @@ internal static partial class GatewayOpenApi
             ["updateProject"] = C("UpdateProjectRequest", "ProjectSummary", "200"),
             ["getProjectConfiguration"] = C(null, "VersionedProjectConfiguration", "200"),
             ["updateProjectConfiguration"] = C("UpdateProjectConfigurationRequest", "VersionedProjectConfiguration", "200"),
+            // Casting contracts mirror Projects, including draft and configuration revision fences.
+            ["createProjectCastingProposal"] = C("CreateProjectCastingProposalRequest", "ProjectCastingProposal", "201"),
+            ["createScenarioProjectCastingProposal"] = C("CreateScenarioProjectCastingProposalRequest", "ProjectCastingProposal", "201"),
+            ["createManualProjectCastingProposal"] = C("CreateManualProjectCastingProposalRequest", "ProjectCastingProposal", "201"),
+            ["listProjectCastingProposals"] = C(null, "ProjectCastingProposalList", "200"),
+            ["getProjectCastingProposal"] = C(null, "ProjectCastingProposal", "200"),
+            ["updateProjectCastingProposal"] = C("UpdateProjectCastingProposalRequest", "ProjectCastingProposal", "200"),
+            ["confirmProjectCastingProposal"] = C("TransitionProjectCastingProposalRequest", "ProjectCastingProposal", "200"),
+            ["rejectProjectCastingProposal"] = C("TransitionProjectCastingProposalRequest", "ProjectCastingProposal", "200"),
+            ["exportProjectCasting"] = C(null, "ProjectCastingTransfer", "200"),
+            ["importProjectCasting"] = C("ImportProjectCastingTransferRequest", "ProjectCastingProposal", "201"),
+            ["listProjectCastingTemplates"] = C(null, "ProjectCastingTemplateList", "200"),
+            ["listProjectCastingRoles"] = C(null, "ProjectCastingRoleList", "200"),
             ["listMarketplaceSources"] = C(null, "MarketplaceSourceList", "200"),
             ["createMarketplaceSource"] = C("CreateMarketplaceSourceRequest", "MarketplaceSource", "201"),
             ["updateMarketplaceSource"] = C("UpdateMarketplaceSourceRequest", "MarketplaceSource", "200"),
@@ -259,6 +272,18 @@ internal static partial class GatewayOpenApi
         {
             responses["400"] = ProblemResponse("The event cursor is invalid or ambiguous.");
         }
+        else if (route.OperationId.Contains("Casting", StringComparison.Ordinal) &&
+            route.OperationId is not ("listProjectCastingTemplates" or "listProjectCastingRoles"))
+        {
+            responses["400"] = ProblemResponse("The owner rejected an invalid casting request.");
+            responses["404"] = ProblemResponse("The owner did not find an accessible project or proposal.");
+            responses["409"] = ProblemResponse("The configuration revision, draft revision, or proposal state conflicts.");
+            if (route.OperationId == "importProjectCasting")
+            {
+                responses["413"] = ProblemResponse("The casting import request exceeds 1 MiB.");
+                responses["422"] = ProblemResponse("The transfer version or imported team is incompatible.");
+            }
+        }
         else if (route.OperationId == "listProjectSkillInventory")
         {
             responses["400"] = ProblemResponse(
@@ -294,6 +319,18 @@ internal static partial class GatewayOpenApi
                 "after the read and permits archived projects. The opaque cursor uses stable SkillId-ascending " +
                 "order in C collation, then revision-descending order. It does not make multiple pages a " +
                 "snapshot. Query rejection and authorization statuses remain owner-defined and pass through unchanged.";
+        }
+        else if (route.OperationId.Contains("Casting", StringComparison.Ordinal))
+        {
+            description += route.OperationId switch
+            {
+                "listProjectCastingTemplates" or "listProjectCastingRoles" =>
+                    " Catalog reads require an authenticated Broker bearer.",
+                "listProjectCastingProposals" or "getProjectCastingProposal" =>
+                    " The owner requires current ReadProjects authority.",
+                _ => " The owner requires current WriteProjects authority, including api.read and projects.admin. " +
+                    "Revision comparisons remain in request bodies; no Idempotency-Key header is required.",
+            };
         }
         else if (route.OperationId is "previewMarketplaceSkill" or "importMarketplaceSkill")
         {
@@ -397,6 +434,9 @@ internal static partial class GatewayOpenApi
 
     private static object QuerySchema(string operationId, string name)
     {
+        if (operationId == "listProjectCastingProposals" && name == "limit")
+            return new { type = "integer", minimum = 1, maximum = 100, @default = 50 };
+
         if (operationId == "listProjectSkillInventory" && name == "pageSize")
             return new { type = "integer", minimum = 1, maximum = 50, @default = 25 };
 
@@ -488,6 +528,42 @@ internal static partial class GatewayOpenApi
             ("updatedByActorId", Str()), ("createdAt", Date())),
         ["UpdateProjectConfigurationRequest"] = Obj(["expectedRevision", "configuration"],
             ("expectedRevision", Int()), ("configuration", Ref("ProjectConfiguration"))),
+        ["CreateProjectCastingProposalRequest"] = StrictObj(["expectedConfigurationRevision", "draft"],
+            ("expectedConfigurationRevision", Int()), ("draft", Ref("ProjectConfiguration"))),
+        ["CreateScenarioProjectCastingProposalRequest"] = StrictObj(["expectedConfigurationRevision", "templateId"],
+            ("expectedConfigurationRevision", Int()), ("templateId", Str())),
+        ["CreateManualProjectCastingProposalRequest"] = StrictObj(["expectedConfigurationRevision", "roleIds"],
+            ("expectedConfigurationRevision", Int()), ("roleIds", Arr(Str()))),
+        ["UpdateProjectCastingProposalRequest"] = StrictObj(["expectedDraftRevision", "draft"],
+            ("expectedDraftRevision", Int()), ("draft", Ref("ProjectConfiguration"))),
+        ["TransitionProjectCastingProposalRequest"] = StrictObj(["expectedDraftRevision"], ("expectedDraftRevision", Int())),
+        ["ImportProjectCastingTransferRequest"] = StrictObj(["expectedConfigurationRevision", "transfer"],
+            ("expectedConfigurationRevision", Int()), ("transfer", Ref("ProjectCastingTransfer"))),
+        ["ProjectCastingProposal"] = StrictObj(
+            ["proposalId", "projectId", "baseConfigurationRevision", "draftRevision", "state", "draft",
+                "confirmedConfigurationRevision", "result", "transferProvenance", "createdByActorId", "createdAt",
+                "updatedByActorId", "updatedAt"],
+            ("proposalId", Uuid()), ("projectId", Str()), ("baseConfigurationRevision", Int()),
+            ("draftRevision", Int()), ("state", Enum("pending", "confirmed", "rejected")),
+            ("draft", Ref("ProjectConfiguration")), ("confirmedConfigurationRevision", Nullable(Int())),
+            ("result", NullableRef("ProjectConfiguration")), ("transferProvenance", NullableRef("ProjectCastingTransferProvenance")),
+            ("createdByActorId", Str()), ("createdAt", Date()), ("updatedByActorId", Str()), ("updatedAt", Date())),
+        ["ProjectCastingProposalList"] = Arr(Ref("ProjectCastingProposal")),
+        ["ProjectCastingTransfer"] = StrictObj(
+            ["formatVersion", "sourceProjectId", "sourceConfigurationRevision", "agentCharters", "casting", "contentDigest"],
+            ("formatVersion", new { type = "integer", @const = 1 }), ("sourceProjectId", Str()),
+            ("sourceConfigurationRevision", Int()), ("agentCharters", Arr(Ref("ProjectAgentCharter"))),
+            ("casting", Arr(Ref("ProjectAgentCast"))), ("contentDigest", Str())),
+        ["ProjectCastingTransferProvenance"] = StrictObj(
+            ["formatVersion", "sourceProjectId", "sourceConfigurationRevision", "contentDigest"],
+            ("formatVersion", new { type = "integer", @const = 1 }), ("sourceProjectId", Str()),
+            ("sourceConfigurationRevision", Int()), ("contentDigest", Str())),
+        ["ProjectCastingTemplateDefinition"] = StrictObj(["id", "title", "description", "roleIds"],
+            ("id", Str()), ("title", Str()), ("description", Str()), ("roleIds", Arr(Str()))),
+        ["ProjectCastingTemplateList"] = Arr(Ref("ProjectCastingTemplateDefinition")),
+        ["ProjectCastingRoleDefinition"] = StrictObj(["id", "title", "summary", "responsibilities", "boundaries"],
+            ("id", Str()), ("title", Str()), ("summary", Str()), ("responsibilities", Arr(Str())), ("boundaries", Arr(Str()))),
+        ["ProjectCastingRoleList"] = Arr(Ref("ProjectCastingRoleDefinition")),
         ["MarketplaceSource"] = Obj(
             ["sourceId", "name", "repository", "requestedRef", "subpath", "revision", "state"],
             ("sourceId", Uuid()), ("name", Str()), ("repository", Str()), ("requestedRef", Str()),

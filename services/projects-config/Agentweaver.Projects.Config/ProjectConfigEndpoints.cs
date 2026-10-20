@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Mvc;
 
 namespace Agentweaver.Projects.Config;
 
@@ -452,6 +453,7 @@ public static class ProjectConfigEndpoints
             }
         });
 
+        // Match the public Gateway bound before binding a transfer payload.
         projects.MapPost("/{projectId}/casting/import", async (
             string projectId,
             ImportProjectCastingTransferRequest request,
@@ -476,7 +478,7 @@ public static class ProjectConfigEndpoints
             {
                 return ToProblem(exception);
             }
-        });
+        }).WithMetadata(new RequestSizeLimitAttribute(1024 * 1024));
 
         projects.MapPut("/{projectId}/runs/{runId}/selection", async (
             string projectId,

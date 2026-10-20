@@ -127,6 +127,41 @@ content validation, and persistence. A returned Skill assignment or inventory
 record does not prove that a runtime loaded the Skill. The current public API
 does not provide actor-safe runtime-loaded status.
 
+## Review project casting
+
+Casting routes use the Projects & Config owner. The Gateway forwards the
+validated bearer and optional `X-Agentweaver-Tenant` selector without granting
+authority. Proposal reads require current `ReadProjects`; mutations and export
+require current `WriteProjects`, including `api.read` and `projects.admin`.
+Catalog reads require an authenticated bearer.
+
+1. Read `GET /api/v1/casting/templates` or `GET /api/v1/catalog/roles`.
+2. Read the current project configuration revision.
+3. Send `POST /api/v1/projects/{projectId}/casting/proposals/scenario` with
+   `expectedConfigurationRevision` and `templateId`. For manual selection, use
+   `/proposals/manual` with `roleIds`. To supply a complete draft, use
+   `/proposals` with `draft`.
+4. Review the returned pending proposal. List proposals with `GET /proposals`
+   and optional `limit` (1 through 100, default 50). Read or patch one at
+   `/proposals/{proposalId}`; patch requires `expectedDraftRevision` and `draft`.
+5. Send `POST /proposals/{proposalId}/confirm` or `/reject` with
+   `expectedDraftRevision`. Confirmation appends a configuration revision;
+   rejection leaves configuration unchanged.
+
+The proposal paths in steps 4 and 5 are relative to
+`/api/v1/projects/{projectId}/casting`. A stale draft or base configuration
+revision returns `409`. Read the latest state and review it again; do not
+automatically confirm a replacement draft. Casting uses revision checks in
+request bodies, not an `Idempotency-Key` header.
+
+To transfer a team, read `/casting/export` under the project path, optionally
+with a positive `revision`. Send the returned transfer to `/casting/import`
+with the target `expectedConfigurationRevision`. Import checks the format and
+digest and stages a proposal for review. It does not apply the team. Both the
+Gateway and owner limit import request bodies to 1 MiB. Transfer version or
+team incompatibility returns `422`. These source routes do not establish
+deployment or a browser wizard.
+
 ## Send Knowledge writes
 
 The following Knowledge operations require exactly one `Idempotency-Key`
