@@ -1,5 +1,6 @@
-import { Avatar, Badge, Button, MessageBar, MessageBarBody, Popover, PopoverSurface, PopoverTrigger } from '@fluentui/react-components';
-import { PersonRegular, SignOutRegular } from '@fluentui/react-icons';
+import { Badge, Button, Divider, MessageBar, MessageBarBody, Popover, PopoverSurface, PopoverTrigger, Text, mergeClasses } from '@fluentui/react-components';
+import { ChevronDownRegular, PersonRegular, SignOutRegular } from '@fluentui/react-icons';
+import { useIdentityMenuStyles } from '../components/identityMenuStyles';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useLocation, useMatch } from 'react-router-dom';
 import { LeftNavView } from '../components/shell/LeftNav';
@@ -14,22 +15,53 @@ import type { ProjectSummary } from './contracts';
 import packageInfo from '../../package.json';
 
 /**
- * Keeps the 0.x persona menu without requesting legacy identity APIs. The 0.x
- * status dot polls a legacy health route, so the menu shows only the version.
+ * Keeps the 0.x persona trigger and menu layout without requesting legacy identity APIs.
+ * The Broker token carries no display name, so the label stays "Account". The 0.x status
+ * dot polls a legacy health route, so the menu footer shows only the version badge.
  */
-function BrokerIdentity({ collapsed }: { collapsed: boolean }) {
+export function BrokerIdentity({ collapsed }: { collapsed: boolean }) {
   const { signOut } = useAuth();
+  const styles = useIdentityMenuStyles();
   return (
     <Popover positioning="above-start">
       <PopoverTrigger disableButtonEnhancement>
-        <Button appearance="subtle" icon={<Avatar icon={<PersonRegular />} size={28} />} aria-label="Account">
-          {!collapsed && 'Account'}
+        <Button
+          appearance="transparent"
+          type="button"
+          aria-label="Account"
+          className={collapsed ? mergeClasses(styles.trigger, styles.triggerCollapsed) : styles.trigger}
+        >
+          <span className={collapsed ? mergeClasses(styles.triggerInner, styles.triggerInnerCollapsed) : styles.triggerInner}>
+            <span className={styles.fallbackAvatar} aria-hidden="true"><PersonRegular /></span>
+            {!collapsed && (
+              <>
+                <Text className={styles.label}>Account</Text>
+                <ChevronDownRegular className={styles.chevron} aria-hidden="true" />
+              </>
+            )}
+          </span>
         </Button>
       </PopoverTrigger>
-      <PopoverSurface className="v1-stack">
-        <strong>Signed in</strong>
-        <Button appearance="subtle" icon={<SignOutRegular />} onClick={signOut}>Sign out</Button>
-        <Badge appearance="tint" color="warning" title="Agentweaver is alpha software under active development.">v{packageInfo.version}</Badge>
+      <PopoverSurface>
+        <div className={styles.popover}>
+          <div className={styles.section}>
+            <Text weight="semibold">Signed in</Text>
+          </div>
+          <Divider />
+          <div className={styles.footer} data-testid="identity-menu-footer">
+            <Button appearance="subtle" icon={<SignOutRegular />} onClick={signOut} className={styles.signOut}>Sign out</Button>
+            <div className={styles.footerMeta}>
+              <Badge
+                className="aw-identity-menu-footer__version"
+                appearance="tint"
+                color="warning"
+                title={`Agentweaver is alpha software under active development. Full version: v${packageInfo.version}`}
+              >
+                <span className="aw-identity-menu-footer__version-text">v{packageInfo.version}</span>
+              </Badge>
+            </div>
+          </div>
+        </div>
       </PopoverSurface>
     </Popover>
   );

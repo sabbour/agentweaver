@@ -11,117 +11,16 @@ import {
   Spinner,
   Text,
   Tooltip,
-  makeStyles,
   mergeClasses,
-  tokens,
 } from '@fluentui/react-components';
 import { ChevronDownRegular, PersonRegular, SignOutRegular } from '@fluentui/react-icons';
 import { useEffect, useState } from 'react';
 import { clearSessionAuth } from '../config';
+import { useIdentityMenuStyles } from './identityMenuStyles';
 import type { AuthSessionResponse, ProjectCopilotConnection } from '../api/types';
 import type { ReactNode } from 'react';
 
-const useStyles = makeStyles({
-  trigger: {
-    cursor: 'pointer',
-    minWidth: 0,
-    width: '100%',
-    justifyContent: 'flex-start',
-  },
-  triggerCollapsed: {
-    justifyContent: 'center',
-  },
-  triggerInner: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    minWidth: 0,
-    width: '100%',
-  },
-  triggerInnerCollapsed: {
-    justifyContent: 'center',
-  },
-  avatar: {
-    width: '28px',
-    height: '28px',
-    borderRadius: '50%',
-    objectFit: 'cover',
-    flexShrink: 0,
-  },
-  fallbackAvatar: {
-    width: '28px',
-    height: '28px',
-    borderRadius: '50%',
-    backgroundColor: tokens.colorNeutralBackground4,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-    color: tokens.colorNeutralForeground2,
-  },
-  label: {
-    minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-    flex: 1,
-  },
-  chevron: {
-    color: tokens.colorNeutralForeground3,
-    flexShrink: 0,
-  },
-  popover: {
-    width: '320px',
-    maxWidth: 'calc(100vw - 32px)',
-    display: 'flex',
-    flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
-    padding: tokens.spacingHorizontalM,
-  },
-  identity: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalS,
-    minWidth: 0,
-  },
-  identityDetails: {
-    display: 'flex',
-    flexDirection: 'column',
-    minWidth: 0,
-  },
-  secondary: {
-    color: tokens.colorNeutralForeground2,
-  },
-  truncate: {
-    minWidth: 0,
-    overflow: 'hidden',
-    textOverflow: 'ellipsis',
-    whiteSpace: 'nowrap',
-  },
-  section: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'flex-start',
-    gap: tokens.spacingVerticalS,
-  },
-  footer: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: tokens.spacingHorizontalS,
-    minWidth: 0,
-  },
-  signOut: {
-    justifyContent: 'flex-start',
-  },
-  footerMeta: {
-    display: 'inline-flex',
-    alignItems: 'center',
-    gap: tokens.spacingHorizontalXS,
-    minWidth: 0,
-    marginLeft: 'auto',
-  },
-});
+const useStyles = useIdentityMenuStyles;
 
 function identityLabel(session: AuthSessionResponse | null): string {
   if (session?.authenticated === false) return 'Not signed in';
