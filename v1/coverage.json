@@ -1,9 +1,9 @@
 {
-  "sha": "075f36375847c35ab79e4143d91fcc4acfe62dfd",
-  "ref": "sabbour-v1-coverage-verify",
-  "runUrl": "https://github.com/sabbour/agentweaver/actions/runs/39452000511",
-  "artifact": "v1-coverage-075f36375847c35ab79e4143d91fcc4acfe62dfd-1",
-  "measuredAt": "2026-10-20T16:03:47.370Z",
+  "sha": "834acf5461d50f8864f4d42ab8592f98e98629ed",
+  "ref": "v1",
+  "runUrl": "https://github.com/sabbour/agentweaver/actions/runs/39459165856",
+  "artifact": "v1-coverage-834acf5461d50f8864f4d42ab8592f98e98629ed-1",
+  "measuredAt": "2026-10-20T16:52:24.340Z",
   "surfaces": {
     "dotnet": {
       "covered": 104913,
@@ -48,7 +48,7 @@
       ]
     },
     "web": {
-      "covered": 2188,
+      "covered": 2189,
       "total": 2892,
       "pct": 75.6,
       "gaps": [
@@ -67,18 +67,18 @@
           "missed": 362
         },
         {
-          "name": "apps/web/src/v1/SkillsMarketplacePanel.tsx",
-          "covered": 341,
-          "total": 477,
-          "pct": 71.4,
-          "missed": 136
-        },
-        {
           "name": "apps/web/src/v1/api.ts",
           "covered": 113,
           "total": 158,
           "pct": 71.5,
           "missed": 45
+        },
+        {
+          "name": "apps/web/src/v1/SkillsMarketplacePanel.tsx",
+          "covered": 342,
+          "total": 477,
+          "pct": 71.6,
+          "missed": 135
         },
         {
           "name": "apps/web/src/v1/CopilotUserConnectionPanel.tsx",
@@ -90,9 +90,9 @@
       ]
     },
     "node": {
-      "covered": 8948,
+      "covered": 8938,
       "total": 10119,
-      "pct": 88.4,
+      "pct": 88.3,
       "gaps": [
         {
           "name": "scripts/release/merge-packs.mjs",

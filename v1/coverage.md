@@ -7,10 +7,10 @@ instrumented scope. The surfaces are not combined into one percentage.
 | Surface | Line coverage | Covered / coverable lines |
 | --- | ---: | ---: |
 | .NET | 82.9% | 104913 / 126543 |
-| Web | 75.6% | 2188 / 2892 |
-| Node release tooling | 88.4% | 8948 / 10119 |
+| Web | 75.6% | 2189 / 2892 |
+| Node release tooling | 88.3% | 8938 / 10119 |
 
-- Source: `075f36375847c35ab79e4143d91fcc4acfe62dfd` on `sabbour-v1-coverage-verify`
-- Run: https://github.com/sabbour/agentweaver/actions/runs/39452000511
-- Artifact: `v1-coverage-075f36375847c35ab79e4143d91fcc4acfe62dfd-1` (retained 30 days)
-- Measured: 2026-10-20T16:03:47.370Z
+- Source: `834acf5461d50f8864f4d42ab8592f98e98629ed` on `v1`
+- Run: https://github.com/sabbour/agentweaver/actions/runs/39459165856
+- Artifact: `v1-coverage-834acf5461d50f8864f4d42ab8592f98e98629ed-1` (retained 30 days)
+- Measured: 2026-10-20T16:52:24.340Z
